@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Gatherlight.Server</RootNamespace>
+    <AssemblyName>Gatherlight.Server</AssemblyName>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.72" />
+    <PackageReference Include="FluentMigrator.Runner.SQLite" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <!-- Direct pin: Microsoft.Data.Sqlite 10.0.0 pulls SQLitePCLRaw 2.1.11 whose bundled
+         e_sqlite3 has a known CVE (GHSA-2m69-gcr7-jv3q); 3.0.x ships the patched build
+         (no stable 2.1.12 exists). Runtime-verified against Microsoft.Data.Sqlite 10. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+  </ItemGroup>
+
+  <!-- Built client (src/client `npm run build` outputs here; gitignored). Copied next to the exe
+       so `dotnet run` and any future host serve the same bundle. Absent = dev via Vite. -->
+  <ItemGroup>
+    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
