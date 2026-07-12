@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useCallback, useState, memo } from 'react';
-import { Button, Input, Alert, Tag, Spin, Switch, Tooltip, IconButton, Stepper as StepperBar } from '@/shared/components/visual';
+import { Button, Input, Alert, Tag, Spin, Tooltip, IconButton, Stepper as StepperBar } from '@/shared/components/visual';
 import {
   SendOutlined,
   RobotOutlined,
@@ -239,7 +239,6 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
   const [state, dispatch] = useReducer(reducer, initialState);
   const [draft, setDraft] = useState('');
   const [cancelling, setCancelling] = useState(false);
-  const [systemMode, setSystemMode] = useState(false);
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -332,7 +331,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       if (!message && attachments.length === 0) return;
       const outgoing = message || '请阅读我上传的附件,并据此帮我规划 / 填写行程。';
       closeRef.current?.();
-      const { id } = await startChat(outgoing, systemMode ? 'system' : 'plan', attachments);
+      const { id } = await startChat(outgoing, attachments);
       localStorage.setItem(SESSION_KEY, id);
       dispatch({ type: 'reset', sessionId: id, message: outgoing });
       setDraft('');
@@ -341,7 +340,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
     } catch (err: any) {
       dispatch({ type: 'event', ev: { kind: 'error', text: err?.message ?? '发送失败' } });
     }
-  }, [draft, systemMode, onEvent, state, attachments]);
+  }, [draft, onEvent, state, attachments]);
 
   const act = useCallback(
     async (fn: (id: string) => Promise<unknown>) => {
@@ -475,21 +474,6 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       </div>
 
       <div className="chat-composer">
-        <div className="chat-mode-row">
-          <Tooltip title="开启后,本次对话可修改界面代码(viewer/frontend),改完自动验证构建,构建不过不提交">
-            <label className={`chat-mode-label ${systemMode ? 'on' : ''}`}>
-              <Switch
-                size="small"
-                checked={systemMode}
-                disabled={inFlow}
-                onChange={setSystemMode}
-              />
-              系统模式 · 改界面
-            </label>
-          </Tooltip>
-          {systemMode && <span className="chat-mode-hint">AI 将编辑前端代码并自检构建</span>}
-        </div>
-
         {attachments.length > 0 && (
           <div className="chat-attachments">
             {attachments.map((a) => (
@@ -542,9 +526,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
                   ? '可批准,或在此回答问题 / 补充信息 → 我据此改计划'
                   : state.phase === 'awaiting-diff-approval'
                     ? '可批准,或在此说明要怎么调整 → 我据此改文件'
-                    : systemMode
-                      ? '想怎么改界面?(Enter 发送)'
-                      : '要改什么?(Enter 发送,Shift+Enter 换行)'
+                    : '要改什么?(Enter 发送,Shift+Enter 换行)'
             }
             autoSize={{ minRows: 2, maxRows: 8 }}
             disabled={active}

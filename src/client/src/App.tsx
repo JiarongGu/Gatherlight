@@ -15,7 +15,7 @@ import {
   PlanActionsMenu,
   type ActionTarget
 } from '@/shared/components/composite';
-import { collectFiles, collectTripAssets, type PlanFile } from './lib/collectFiles';
+import { loadPlanData, type PlanData, type PlanFile, type TripAsset } from './lib/collectFiles';
 import { extractHeadings, stripFirstH1 } from './lib/markdown';
 import { buildTripExport, downloadAsFile, downloadTripPDF, isTripFile } from './lib/export';
 import { pushRecent } from './lib/recentFiles';
@@ -31,10 +31,22 @@ const SHOW_GALLERY =
 const { Sider, Content } = Layout;
 const { useBreakpoint } = Grid;
 
+const EMPTY_FILES: PlanFile[] = [];
+const EMPTY_ASSETS: TripAsset[] = [];
+
 export function App() {
   if (SHOW_GALLERY) return <Gallery />;
-  const files = useMemo(() => collectFiles(), []);
-  const tripAssets = useMemo(() => collectTripAssets(), []);
+  // Plan data now arrives from the server (the data folder is server-side) — loaded once at
+  // startup; edits land via chat/fs endpoints which re-index server-side.
+  const [planData, setPlanData] = useState<PlanData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  useEffect(() => {
+    loadPlanData().then(setPlanData, (err: unknown) =>
+      setLoadError(err instanceof Error ? err.message : String(err))
+    );
+  }, []);
+  const files = planData?.files ?? EMPTY_FILES;
+  const tripAssets = planData?.tripAssets ?? EMPTY_ASSETS;
   const { mode, toggle } = useTheme();
 
   // Land on the Home dashboard (not a raw file).
@@ -273,6 +285,16 @@ export function App() {
       onAskAI={askAI}
     />
   );
+
+  if (loadError) {
+    return (
+      <div style={{ padding: 48, textAlign: 'center', color: 'var(--text)' }}>
+        <h2>加载计划数据失败</h2>
+        <p style={{ opacity: 0.7 }}>{loadError}</p>
+        <p style={{ opacity: 0.5 }}>请确认 Gatherlight 服务正在运行,然后刷新。</p>
+      </div>
+    );
+  }
 
   return (
     <Layout style={{ height: '100vh' }}>

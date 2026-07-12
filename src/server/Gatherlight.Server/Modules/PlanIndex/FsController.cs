@@ -4,9 +4,9 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Gatherlight.Server.Modules.PlanIndex;
 
-public sealed record DeleteRequest(List<string>? Paths, List<string>? Dirs, string? Subject);
-public sealed record RetitleRequest(string Path, string Title, string? Subject);
-public sealed record RenameRequest(List<RenamePair> Renames, string? Subject);
+public sealed record DeleteRequest(List<string>? Paths, List<string>? Dirs, string? Label);
+public sealed record RetitleRequest(string Path, string Title);
+public sealed record RenameRequest(List<RenamePair> Renames, string? Label);
 public sealed record RenamePair(string From, string To);
 
 [ApiController]
@@ -33,9 +33,9 @@ public sealed class FsController : ControllerBase
         if (BusyCheck() is { } busy) return busy;
         try
         {
-            var (sha, removed) = await _fs.DeleteEntriesAsync(
-                req.Paths ?? new(), req.Dirs ?? new(), req.Subject ?? "delete files", ct);
-            return Ok(new { sha, removed });
+            var subject = $"删除:{req.Label ?? req.Paths?.FirstOrDefault() ?? req.Dirs?.FirstOrDefault() ?? ""}";
+            var (sha, removed) = await _fs.DeleteEntriesAsync(req.Paths ?? new(), req.Dirs ?? new(), subject, ct);
+            return Ok(new { ok = true, sha, removed });
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }
@@ -46,8 +46,8 @@ public sealed class FsController : ControllerBase
         if (BusyCheck() is { } busy) return busy;
         try
         {
-            var sha = await _fs.RetitleAsync(req.Path, req.Title, req.Subject ?? $"retitle {req.Path}", ct);
-            return Ok(new { sha });
+            var sha = await _fs.RetitleAsync(req.Path, req.Title, $"改标题:{req.Title}", ct);
+            return Ok(new { ok = true, sha });
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         catch (FileNotFoundException) { return NotFound(); }
@@ -60,8 +60,8 @@ public sealed class FsController : ControllerBase
         try
         {
             var sha = await _fs.RenameEntriesAsync(
-                req.Renames.Select(r => (r.From, r.To)).ToList(), req.Subject ?? "rename files", ct);
-            return Ok(new { sha, renamed = req.Renames });
+                req.Renames.Select(r => (r.From, r.To)).ToList(), $"重命名:{req.Label ?? ""}", ct);
+            return Ok(new { ok = true, sha, renamed = req.Renames });
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }

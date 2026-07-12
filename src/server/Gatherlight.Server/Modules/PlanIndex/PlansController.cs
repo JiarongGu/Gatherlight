@@ -16,9 +16,10 @@ public sealed class PlansController : ControllerBase
         _data = data;
     }
 
-    /// <summary>Index tree (no content — content loads lazily per file).</summary>
+    /// <summary>Index tree. <c>content=1</c> inlines each file's markdown — the client's
+    /// startup load (family-scale data, one request beats 80 round-trips).</summary>
     [HttpGet("api/plans")]
-    public IActionResult List() => Ok(new
+    public IActionResult List([FromQuery] int content = 0) => Ok(new
     {
         files = _index.List().Select(e => new
         {
@@ -30,6 +31,7 @@ public sealed class PlansController : ControllerBase
             planDate = e.PlanDate,
             sizeBytes = e.SizeBytes,
             updatedAt = e.UpdatedAt,
+            content = content == 1 ? ReadContent(e.Path) : null,
         }),
         assets = _index.ListAssets().Select(a => new
         {
@@ -42,6 +44,14 @@ public sealed class PlansController : ControllerBase
             url = $"/api/assets/{a.Path}",
         }),
     });
+
+    private string? ReadContent(string rel)
+    {
+        var abs = _data.ResolveDataPath(rel);
+        if (abs is null || !System.IO.File.Exists(abs)) return null;
+        try { return System.IO.File.ReadAllText(abs); }
+        catch (IOException) { return null; } // mid-write; watcher rescan follows
+    }
 
     /// <summary>Raw markdown of one indexed file.</summary>
     [HttpGet("api/plans/content")]
