@@ -6,6 +6,7 @@ using Gatherlight.Server.Modules.Files.Services;
 using Gatherlight.Server.Modules.Fluent.Services;
 using Gatherlight.Server.Modules.Llm.Services;
 using Gatherlight.Server.Modules.PlanIndex.Services;
+using Gatherlight.Server.Modules.Seed.Services;
 using Gatherlight.Server.Modules.Tools.Models;
 using Gatherlight.Server.Modules.Tools.Services;
 using Gatherlight.Server.Modules.Tools.Services.Tools;
@@ -56,9 +57,13 @@ public static class GatherlightApp
             // Uploads (chat attachments)
             .AddSingleton<IUploadService, UploadService>()
             // Tools — one registry, two surfaces (HTTP + MCP for the spawned agent)
+            .AddSingleton<IPlaywrightHost, PlaywrightHost>()
             .AddSingleton<IGatherlightTool, ExtractTool>()
-            .AddSingleton<IGatherlightTool, ScrapeTool>()
-            .AddSingleton<IToolRegistry, ToolRegistry>();
+            .AddSingleton<IGatherlightTool, WebFetchTool>()   // registers as "scrape" (Playwright-native)
+            .AddSingleton<IGatherlightTool, WikiInfoTool>()
+            .AddSingleton<IToolRegistry, ToolRegistry>()
+            // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
+            .AddSingleton<IZhikuSeeder, ZhikuSeeder>();
 
         builder.Services.AddHttpClient();
 
@@ -89,6 +94,9 @@ public static class GatherlightApp
             if (sha is not null)
                 app.Services.GetRequiredService<IDataCommitRepository>().Record(sha, "data: initial import", "import");
         }
+        // Seed/upgrade the knowledge base BEFORE indexing so a fresh data folder scaffolds fully.
+        app.Services.GetRequiredService<IZhikuSeeder>().SeedAsync().GetAwaiter().GetResult();
+
         app.Services.GetRequiredService<IPlanIndexService>().RescanAsync().GetAwaiter().GetResult();
 
         // Chat runtime files (settings.chat.json + scope-guard hook); a newly-seeded scope guard

@@ -16,6 +16,9 @@
     <PackageReference Include="Dapper" Version="2.1.72" />
     <PackageReference Include="FluentMigrator.Runner.SQLite" Version="8.0.1" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <!-- Headless-browser tooling (web-fetch/scrape + future scraper ports). Browser binaries are
+         fetched once via `node devtools/dev.mjs fetch-tools`, never at server startup. -->
+    <PackageReference Include="Microsoft.Playwright" Version="1.49.0" />
     <!-- Direct pin: Microsoft.Data.Sqlite 10.0.0 pulls SQLitePCLRaw 2.1.11 whose bundled
          e_sqlite3 has a known CVE (GHSA-2m69-gcr7-jv3q); 3.0.x ships the patched build
          (no stable 2.1.12 exists). Runtime-verified against Microsoft.Data.Sqlite 10. -->
@@ -26,6 +29,8 @@
        so `dotnet run` and any future host serve the same bundle. Absent = dev via Vite. -->
   <ItemGroup>
     <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Shipped knowledge-base template — ZhikuSeeder copies it into new data folders. -->
+    <Content Include="Assets\DataTemplate\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

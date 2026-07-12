@@ -6,13 +6,23 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Privacy/repo reset: user data → untracked `local/` (own private git repo), pre-reset history archived to `local/archive/`, fresh main-repo history, sensitive-info pre-commit guard | ✅ 2026-07-13 |
-| 1 | .NET skeleton: `Gatherlight.slnx`, `src/server/Gatherlight.Server` (ASP.NET Core net10.0), data-folder context, SQLite + Dapper + FluentMigrator initial schema, `/api/health`, devtools dispatcher | — |
-| 2 | Read side: data-repo git service, plan index (SQLite-backed browse/search, zero-LLM), plans/content/assets API, fs ops (delete/retitle/rename) with auto-commit | — |
-| 3 | LLM core: claude CLI runner (stream-json), two-gate chat state machine, SSE streaming, scope guard, uploads | — |
-| 4 | Frontend port: `viewer/frontend` → `src/client` on the .NET API; delete legacy `viewer/` | — |
-| 5 | C# tool registry (`IAssistantTool` + schema builder) + HTTP MCP endpoint for the spawned agent; legacy Node tools wrapped as leaf subprocesses | — |
-| 6 | Knowledge-base split: scrubbed product template (`Assets/DataTemplate/`) + seeder with hash-based upgrades; repo `.claude/` becomes 2-tier dev rules | — |
-| 7 | C#-native tool ports: wiki-info (HttpClient), web-fetch/scrape (Playwright .NET), scrapers one-by-one with golden-JSON verification, PDF AcroForm spike; zero-LLM endpoints (ICS export, budget rollups) | — |
+| 1 | .NET skeleton: `Gatherlight.slnx`, `src/server/Gatherlight.Server` (ASP.NET Core net10.0), data-folder context, SQLite + Dapper + FluentMigrator initial schema, `/api/health`, devtools dispatcher | ✅ 2026-07-13 |
+| 2 | Read side: data-repo git service, plan index (SQLite-backed browse/search, zero-LLM), plans/content/assets API, fs ops (delete/retitle/rename) with auto-commit | ✅ 2026-07-13 (e2e-p1) |
+| 3 | LLM core: claude CLI runner (stream-json), two-gate chat state machine, SSE streaming, scope guard, uploads | ✅ 2026-07-13 (e2e-p2 + real-claude smoke) |
+| 4 | Frontend port: `viewer/frontend` → `src/client` on the .NET API; delete legacy `viewer/` | ✅ 2026-07-13 |
+| 5 | C# tool registry + HTTP MCP endpoint (hand-rolled JSON-RPC) for the spawned agent; Node tools wrapped as leaf subprocesses | ✅ 2026-07-13 (e2e-p3 + real-CLI MCP probe) |
+| 6 | Knowledge-base split: scrubbed product template (`Assets/DataTemplate/`) + seeder with hash-based upgrades; repo `.claude/` becomes dev rules | ✅ 2026-07-13 (e2e-p4) |
+| 7 | C#-native tool ports — incremental, one tool per commit | 🔶 in progress |
+
+### Phase 7 progress
+
+| Tool | Status |
+|---|---|
+| `wiki_info` (Wikipedia REST + Wikidata official-site, pure HttpClient) | ✅ 2026-07-13, live-verified |
+| `scrape` (Playwright .NET headless chromium via `PlaywrightHost`; replaces the Node puppeteer leaf; `dev.mjs fetch-tools` installs the browser) | ✅ 2026-07-13, live-verified on a JS-rendered Google Flights deeplink |
+| `policy-check`, `hotel-info`, `restaurant-info`, `flight-schedule`, `flight-prices`, `hotel-prices` | ⏳ port on the Playwright base one at a time; each verified against the Node leaf (golden JSON) before the leaf is deleted. Until then the Node leaves stay reachable from `local/` via the tools junction. |
+| `pdf-form/fill-itinerary` → PDFsharp spike (AcroForm fill + flatten + CJK embedding) | ⏳ if the spike fails, the Node leaf stays permanently (rare-use, honors the JSON contract) |
+| Zero-LLM endpoints: ICS export, budget rollups in the index | ⏳ |
 
 ## Architecture decisions of record
 

@@ -49,6 +49,19 @@ switch (cmd) {
     run('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), ...args]);
     break;
 
+  case 'fetch-tools': {
+    // Playwright chromium for the browser-backed tools (web_fetch + scraper ports).
+    // One-time per machine; the server NEVER downloads browsers at startup.
+    const script = path.join(repo, config.serverProject, 'bin', 'Debug', 'net10.0', 'playwright.ps1');
+    if (!fs.existsSync(script)) {
+      console.error('build first (dotnet build) — playwright.ps1 lands in the server bin.');
+      process.exitCode = 1;
+      break;
+    }
+    run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, 'install', 'chromium']);
+    break;
+  }
+
   case 'install-hooks':
     // Point git at the tracked hooks dir so the sensitive-info pre-commit guard runs (a clone only
     // needs this once — core.hooksPath is local config, the hook script itself is versioned).

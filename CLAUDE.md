@@ -18,15 +18,18 @@ agent executes edits (scope-guarded to `plans/ household/ .claude/`) → user re
 commit to the data repo. Deterministic work (browsing, search, file ops, budget math, scraping)
 is server code / registered tools, never LLM calls — token spend is reserved for actual planning.
 
-## Current state (productization in progress)
+## Current state
 
-Porting from the legacy prototype per `docs/ROADMAP.md`:
+Phases 0–6 of `docs/ROADMAP.md` are done: the .NET server owns the product (plan index + fs ops,
+two-gate chat, SSE, uploads, tool registry over HTTP + MCP at `/mcp`, knowledge-base seeder), the
+React client lives in `src/client/`, and the legacy `viewer/` is deleted.
 
-- `viewer/` — **legacy** Node prototype (React frontend + Express backend + processors that spawn
-  claude CLI). Being replaced by `src/server/` + `src/client/`; delete after Phase 4 parity.
-- `tools/puppeteer/`, `tools/pdf-form/` — **legacy** Node tool leaves (scrapers, PDF form filler).
-  Wrapped by the C# tool registry, then ported to C#/Playwright one at a time (Phase 7).
-- `src/server/Gatherlight.Server/` — the .NET product server (Phases 1+).
+- `tools/puppeteer/`, `tools/pdf-form/` — **transition** Node tool leaves (scrapers, PDF filler),
+  reachable from `local/` via a junction; ported to C#/Playwright one at a time (Phase 7). The
+  registry wraps them (`NodeLeafTool`) so callers can't tell a leaf from a native tool.
+- The shipped planner knowledge base lives in `src/server/Gatherlight.Server/Assets/DataTemplate/`
+  (scrubbed, generic) and is seeded/upgraded into data folders by `ZhikuSeeder` — the live family
+  knowledge base in `local/.claude/` is user data and diverges freely.
 
 ## Rules
 
@@ -45,11 +48,12 @@ Porting from the legacy prototype per `docs/ROADMAP.md`:
 
 ## Dev loop
 
-- Server: `dotnet run --project src/server/Gatherlight.Server` (port 5317, data folder `./local`).
-- Client dev: `npm run dev` in `src/client` (port 5173, proxies `/api` → 5317).
-- Legacy viewer (until Phase 4): `cd viewer && npm run dev`.
-- Devtools dispatcher (`node devtools/dev.mjs <cmd>`) arrives with Phase 1; e2e suites run with a
-  stubbed claude CLI against isolated `devtools/_e2e-*` data folders.
+- `node devtools/dev.mjs server` — the .NET server (port 5317, data folder `./local`; serves the
+  built client from wwwroot when present).
+- `node devtools/dev.mjs vite` — client HMR on :5173 (proxies `/api` + `/mcp` → 5317).
+- `node devtools/dev.mjs build` — client build → wwwroot + dotnet build.
+- `node devtools/dev.mjs e2e [p1..p4|all]` — API e2e suites with a stubbed claude CLI against
+  isolated `devtools/_e2e-*` data folders. Keep them green; each phase of work lands with its suite.
 
 Interactive family planning happens in the data folder, not here: run `claude` from `local/`
 (its own CLAUDE.md + knowledge base apply there).
