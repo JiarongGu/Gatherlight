@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Fluent.Services;
+using Gatherlight.Server.Modules.PlanIndex.Services;
 
 namespace Gatherlight.Server;
 
@@ -28,7 +30,15 @@ public static class GatherlightApp
             .AddSingleton(config ?? new ServerConfigService(options))
             .AddSingleton<IDataContext, DataContext>()
             .AddSingleton<IDbConnectionFactory, SqliteConnectionFactory>()
-            .AddSingleton<IAppConfigService, AppConfigService>();
+            .AddSingleton<IAppConfigService, AppConfigService>()
+            // Data repo (the private git repo inside the data folder)
+            .AddSingleton<IGitCliService, GitCliService>()
+            .AddSingleton<DataWriteLock>()
+            .AddSingleton<IDataCommitRepository, DataCommitRepository>()
+            // Plan index — zero-LLM browse/search over the markdown tree
+            .AddSingleton<IPlanIndexService, PlanIndexService>()
+            .AddSingleton<IFsOpsService, FsOpsService>()
+            .AddHostedService<PlanIndexWatcher>();
 
         builder.Services.AddHttpClient();
 
@@ -47,6 +57,19 @@ public static class GatherlightApp
         // Migrations before anything touches the DB.
         var data = app.Services.GetRequiredService<IDataContext>();
         MigrationRunnerService.MigrateToLatest(data.DatabasePath);
+
+        // Data repo must exist before any fs op / chat commit; index fills before first request.
+        var git = app.Services.GetRequiredService<IGitCliService>();
+        if (git.EnsureRepoAsync().GetAwaiter().GetResult())
+        {
+            // Freshly initialized over existing content (import case): baseline commit so
+            // diffs/restores have a HEAD to work against. Never auto-commits on later boots —
+            // interrupted chat edits must stay reviewable, not get swallowed.
+            var sha = git.CommitAllAsync("data: initial import").GetAwaiter().GetResult();
+            if (sha is not null)
+                app.Services.GetRequiredService<IDataCommitRepository>().Record(sha, "data: initial import", "import");
+        }
+        app.Services.GetRequiredService<IPlanIndexService>().RescanAsync().GetAwaiter().GetResult();
 
         app.MapControllers();
 
