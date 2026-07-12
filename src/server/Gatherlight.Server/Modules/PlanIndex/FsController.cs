@@ -1,3 +1,4 @@
+using Gatherlight.Server.Modules.Chat.Services;
 using Gatherlight.Server.Modules.PlanIndex.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,12 +14,23 @@ public sealed record RenamePair(string From, string To);
 public sealed class FsController : ControllerBase
 {
     private readonly IFsOpsService _fs;
+    private readonly ChatSessionService _chat;
 
-    public FsController(IFsOpsService fs) => _fs = fs;
+    public FsController(IFsOpsService fs, ChatSessionService chat)
+    {
+        _fs = fs;
+        _chat = chat;
+    }
+
+    /// <summary>Direct fs ops are rejected while an AI task runs — its edits and a mechanical
+    /// rename interleaving would corrupt the review diff.</summary>
+    private IActionResult? BusyCheck() =>
+        _chat.IsBusy() ? Conflict(new { error = "有 AI 任务进行中,请等它完成后再操作。" }) : null;
 
     [HttpPost("delete")]
     public async Task<IActionResult> Delete([FromBody] DeleteRequest req, CancellationToken ct)
     {
+        if (BusyCheck() is { } busy) return busy;
         try
         {
             var (sha, removed) = await _fs.DeleteEntriesAsync(
@@ -31,6 +43,7 @@ public sealed class FsController : ControllerBase
     [HttpPost("retitle")]
     public async Task<IActionResult> Retitle([FromBody] RetitleRequest req, CancellationToken ct)
     {
+        if (BusyCheck() is { } busy) return busy;
         try
         {
             var sha = await _fs.RetitleAsync(req.Path, req.Title, req.Subject ?? $"retitle {req.Path}", ct);
@@ -43,6 +56,7 @@ public sealed class FsController : ControllerBase
     [HttpPost("rename")]
     public async Task<IActionResult> Rename([FromBody] RenameRequest req, CancellationToken ct)
     {
+        if (BusyCheck() is { } busy) return busy;
         try
         {
             var sha = await _fs.RenameEntriesAsync(

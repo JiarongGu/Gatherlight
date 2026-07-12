@@ -1,7 +1,10 @@
 using System.Text.Json;
+using Gatherlight.Server.Modules.Chat.Services;
 using Gatherlight.Server.Modules.Core.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
+using Gatherlight.Server.Modules.Files.Services;
 using Gatherlight.Server.Modules.Fluent.Services;
+using Gatherlight.Server.Modules.Llm.Services;
 using Gatherlight.Server.Modules.PlanIndex.Services;
 
 namespace Gatherlight.Server;
@@ -38,7 +41,17 @@ public static class GatherlightApp
             // Plan index — zero-LLM browse/search over the markdown tree
             .AddSingleton<IPlanIndexService, PlanIndexService>()
             .AddSingleton<IFsOpsService, FsOpsService>()
-            .AddHostedService<PlanIndexWatcher>();
+            .AddHostedService<PlanIndexWatcher>()
+            // LLM — spawn the authenticated claude CLI, never an API key
+            .AddSingleton<IClaudeCliRunner, ClaudeCliRunner>()
+            .AddSingleton<IPromptHarness, PromptHarness>()
+            .AddSingleton<IClaudeValidateService, ClaudeValidateService>()
+            // Chat — the two-gate flow
+            .AddSingleton<IChatRepository, ChatRepository>()
+            .AddSingleton<ChatEnvironmentService>()
+            .AddSingleton<ChatSessionService>()
+            // Uploads (chat attachments)
+            .AddSingleton<IUploadService, UploadService>();
 
         builder.Services.AddHttpClient();
 
@@ -70,6 +83,19 @@ public static class GatherlightApp
                 app.Services.GetRequiredService<IDataCommitRepository>().Record(sha, "data: initial import", "import");
         }
         app.Services.GetRequiredService<IPlanIndexService>().RescanAsync().GetAwaiter().GetResult();
+
+        // Chat runtime files (settings.chat.json + scope-guard hook); a newly-seeded scope guard
+        // is committed so the agent's own diffs stay clean.
+        var chatEnv = app.Services.GetRequiredService<ChatEnvironmentService>();
+        if (chatEnv.EnsureFiles() is { } seededHook)
+        {
+            var hookSha = git.CommitPathsAsync(new[] { seededHook }, "seed: chat scope-guard hook")
+                .GetAwaiter().GetResult();
+            app.Services.GetRequiredService<IDataCommitRepository>().Record(hookSha, "seed: chat scope-guard hook", "seed");
+        }
+
+        // Sessions left non-terminal by a previous server death → error (inspectable, not resumed).
+        app.Services.GetRequiredService<IChatRepository>().FailInterruptedSessionsAsync().GetAwaiter().GetResult();
 
         app.MapControllers();
 

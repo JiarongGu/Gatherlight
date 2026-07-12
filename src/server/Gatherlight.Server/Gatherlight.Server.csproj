@@ -7,6 +7,9 @@
     <RootNamespace>Gatherlight.Server</RootNamespace>
     <AssemblyName>Gatherlight.Server</AssemblyName>
     <InvariantGlobalization>false</InvariantGlobalization>
+    <!-- Sources are BOM-less UTF-8; without this, csc on a CJK-locale Windows machine reads
+         them via the ANSI codepage and every Chinese string literal becomes mojibake. -->
+    <CodePage>65001</CodePage>
   </PropertyGroup>
 
   <ItemGroup>
