@@ -1,0 +1,32 @@
+{
+  "$comment": "Isolated Claude Code settings for the chat console's EXECUTE phase. Passed via `claude --settings`. Pre-grants permissions so the headless run never stalls on a prompt; the real safety is (1) the PreToolUse scope-guard hook below and (2) the human plan+diff gates in the backend. Never used for interactive Claude Code — that uses .claude/settings.json.",
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "TodoWrite",
+      "WebFetch",
+      "WebSearch",
+      "Skill",
+      "Bash"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/viewer/processors/scope-guard.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,599 @@
+import { useEffect, useReducer, useRef, useCallback, useState, memo } from 'react';
+import { Button, Input, Alert, Tag, Spin, Switch, Tooltip, IconButton, Stepper as StepperBar } from '@/shared/components/visual';
+import {
+  SendOutlined,
+  RobotOutlined,
+  ToolOutlined,
+  CheckCircleFilled,
+  StopOutlined,
+  PaperClipOutlined
+} from '@ant-design/icons';
+import { MarkdownView } from './MarkdownView';
+import { PlanActions, DiffReview } from './ChatReview';
+import {
+  startChat,
+  openStream,
+  approvePlan,
+  rejectPlan,
+  approveDiff,
+  rejectDiff,
+  refinePlan,
+  refineDiff,
+  cancelChat,
+  uploadFiles
+} from '@/lib/chatApi';
+import {
+  type AgentEvent,
+  type Phase,
+  type ReviewPayload,
+  type UploadedFile,
+  PHASE_LABELS
+} from '@/lib/chatTypes';
+
+interface TranscriptItem {
+  id: number;
+  role: 'user' | 'assistant' | 'notice' | 'tool' | 'divider';
+  text?: string;
+  tool?: { name: string; detail?: string };
+}
+
+interface ChatState {
+  sessionId: string | null;
+  phase: Phase;
+  items: TranscriptItem[];
+  live: string; // streaming assistant text
+  thinking: string;
+  review: ReviewPayload | null;
+  commitSha: string | null;
+  error: string | null;
+  busy: boolean; // an approve/reject request is in flight
+}
+
+const initialState: ChatState = {
+  sessionId: null,
+  phase: 'idle',
+  items: [],
+  live: '',
+  thinking: '',
+  review: null,
+  commitSha: null,
+  error: null,
+  busy: false
+};
+
+let seq = 0;
+const nextId = () => ++seq;
+
+const SESSION_KEY = 'viewer-chat-session';
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+type Action =
+  | { type: 'reset'; sessionId: string; message: string }
+  | { type: 'rehydrate'; sessionId: string }
+  | { type: 'refine'; phase: Phase; message: string }
+  | { type: 'event'; ev: AgentEvent }
+  | { type: 'busy'; value: boolean };
+
+function flushLive(state: ChatState): TranscriptItem[] {
+  if (!state.live.trim()) return state.items;
+  return [...state.items, { id: nextId(), role: 'assistant', text: state.live }];
+}
+
+function reducer(state: ChatState, action: Action): ChatState {
+  switch (action.type) {
+    case 'reset':
+      // New turn — keep the visible conversation, just append a separator + the
+      // new user message. (Each turn still runs as a fresh CLI session server-side.)
+      return {
+        ...state,
+        sessionId: action.sessionId,
+        phase: 'planning',
+        items: [
+          ...state.items,
+          ...(state.items.length ? [{ id: nextId(), role: 'divider' as const }] : []),
+          { id: nextId(), role: 'user' as const, text: action.message }
+        ],
+        live: '',
+        thinking: '',
+        review: null,
+        commitSha: null,
+        error: null,
+        busy: false
+      };
+
+    case 'rehydrate':
+      // Reconnecting to a session after a reload — the backend replays its event
+      // log, which repopulates phase / transcript / review.
+      return { ...initialState, sessionId: action.sessionId };
+
+    case 'refine':
+      // Talking back at a gate: append the user's message and re-enter the
+      // working phase optimistically (the SSE phase event confirms it). Same
+      // session — the stream stays open; the old plan/review is now stale.
+      return {
+        ...state,
+        phase: action.phase,
+        items: [...state.items, { id: nextId(), role: 'user' as const, text: action.message }],
+        live: '',
+        thinking: '',
+        review: null,
+        error: null,
+        busy: false
+      };
+
+    case 'busy':
+      return { ...state, busy: action.value };
+
+    case 'event': {
+      const ev = action.ev;
+      switch (ev.kind) {
+        case 'text-delta':
+          return { ...state, live: state.live + (ev.text ?? '') };
+
+        case 'thinking':
+          return { ...state, thinking: state.thinking + (ev.text ?? '') };
+
+        case 'text': {
+          // Full block — authoritative; replaces whatever streamed into `live`.
+          const items = state.live.trim()
+            ? state.items
+            : [...state.items];
+          return {
+            ...state,
+            items: [...items, { id: nextId(), role: 'assistant', text: ev.text ?? '' }],
+            live: '',
+            thinking: ''
+          };
+        }
+
+        case 'tool':
+          return {
+            ...state,
+            items: [
+              ...flushLive(state),
+              { id: nextId(), role: 'tool', tool: ev.tool }
+            ],
+            live: ''
+          };
+
+        case 'notice':
+          return {
+            ...state,
+            items: [
+              ...flushLive(state),
+              { id: nextId(), role: 'notice', text: ev.text }
+            ],
+            live: ''
+          };
+
+        case 'phase': {
+          const phase = ev.phase ?? state.phase;
+          const next: ChatState = {
+            ...state,
+            phase,
+            busy: false,
+            items: flushLive(state),
+            live: ''
+          };
+          if (phase === 'awaiting-diff-approval' && ev.data) {
+            next.review = ev.data as ReviewPayload;
+          }
+          if (phase === 'committed' && ev.data) {
+            next.commitSha = (ev.data as { sha?: string }).sha ?? null;
+          }
+          return next;
+        }
+
+        case 'error':
+          return {
+            ...state,
+            error: ev.text ?? '出错了',
+            items: flushLive(state),
+            live: ''
+          };
+
+        case 'done':
+          return { ...state, busy: false };
+
+        default:
+          return state;
+      }
+    }
+
+    default:
+      return state;
+  }
+}
+
+const IN_PROGRESS: Phase[] = ['planning', 'executing', 'building', 'validating', 'committing'];
+const STEPS: { key: Phase; label: string }[] = [
+  { key: 'planning', label: '计划' },
+  { key: 'awaiting-plan-approval', label: '审计划' },
+  { key: 'executing', label: '执行' },
+  { key: 'awaiting-diff-approval', label: '审改动' },
+  { key: 'committed', label: '提交' }
+];
+const STEP_ORDER: Record<string, number> = {
+  planning: 0,
+  'awaiting-plan-approval': 1,
+  executing: 2,
+  building: 2,
+  validating: 2,
+  'awaiting-diff-approval': 3,
+  committing: 4,
+  committed: 4
+};
+
+function Stepper({ phase }: { phase: Phase }) {
+  if (phase === 'idle') return null;
+  const current = STEP_ORDER[phase] ?? -1;
+  return <StepperBar steps={STEPS} current={current} allDone={phase === 'committed'} />;
+}
+
+export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefillNonce?: number }) {
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const [draft, setDraft] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  const [systemMode, setSystemMode] = useState(false);
+  const [attachments, setAttachments] = useState<UploadedFile[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Dispatch an event + drop the persisted session id once it finishes.
+  const onEvent = useCallback((ev: AgentEvent) => {
+    if (ev.kind === 'done') localStorage.removeItem(SESSION_KEY);
+    dispatch({ type: 'event', ev });
+  }, []);
+
+  const closeRef = useRef<(() => void) | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Seed the input when an action routes here (user reviews, then sends).
+  useEffect(() => {
+    if (prefill) setDraft(prefill);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillNonce]);
+
+  // Reconnect to an in-flight session after a reload (e.g. a system-mode HMR
+  // reload of this very page). The backend replays its event log to rebuild state.
+  useEffect(() => {
+    const id = localStorage.getItem(SESSION_KEY);
+    if (!id) return;
+    dispatch({ type: 'rehydrate', sessionId: id });
+    closeRef.current = openStream(id, onEvent, () => localStorage.removeItem(SESSION_KEY));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-scroll to newest content.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [state.items, state.live, state.review, state.phase]);
+
+  useEffect(() => () => closeRef.current?.(), []);
+
+  // `inFlow` = a session is ongoing (locks the mode switch). `active` = the AI is
+  // actively working (input disabled; use 停止). At the two approval gates the
+  // input is ENABLED so the user can answer questions / request adjustments.
+  const inFlow = IN_PROGRESS.includes(state.phase) || state.phase === 'awaiting-plan-approval' || state.phase === 'awaiting-diff-approval';
+  const active = IN_PROGRESS.includes(state.phase);
+  // A fresh turn can be sent with text OR attachments alone (attachments-only
+  // falls back to a default instruction in send()).
+  const canSend =
+    !active && !state.busy && !uploading && (draft.trim().length > 0 || attachments.length > 0);
+
+  // Upload picked files → append their server references to the pending list.
+  const pickFiles = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      const uploaded = await uploadFiles(Array.from(files));
+      setAttachments((prev) => [...prev, ...uploaded]);
+    } catch (err: any) {
+      dispatch({ type: 'event', ev: { kind: 'error', text: err?.message ?? '上传失败' } });
+    } finally {
+      setUploading(false);
+    }
+  }, []);
+
+  const removeAttachment = useCallback((relPath: string) => {
+    setAttachments((prev) => prev.filter((a) => a.relPath !== relPath));
+  }, []);
+
+  const send = useCallback(async () => {
+    const message = draft.trim();
+    const { phase, sessionId } = state;
+    try {
+      // At a gate: talk back instead of starting a new turn — the agent revises
+      // and returns to the gate (same session, stream stays open). A typed
+      // message is required here; attachments aren't supported at gates yet.
+      if (phase === 'awaiting-plan-approval' && sessionId) {
+        if (!message) return;
+        dispatch({ type: 'refine', phase: 'planning', message });
+        setDraft('');
+        await refinePlan(sessionId, message);
+        return;
+      }
+      if (phase === 'awaiting-diff-approval' && sessionId) {
+        if (!message) return;
+        dispatch({ type: 'refine', phase: 'executing', message });
+        setDraft('');
+        await refineDiff(sessionId, message);
+        return;
+      }
+      // Otherwise (idle / terminal): a fresh turn on a new session. Allow an
+      // attachments-only send with a default instruction so the backend (which
+      // requires a message) still gets one.
+      if (!message && attachments.length === 0) return;
+      const outgoing = message || '请阅读我上传的附件,并据此帮我规划 / 填写行程。';
+      closeRef.current?.();
+      const { id } = await startChat(outgoing, systemMode ? 'system' : 'plan', attachments);
+      localStorage.setItem(SESSION_KEY, id);
+      dispatch({ type: 'reset', sessionId: id, message: outgoing });
+      setDraft('');
+      setAttachments([]);
+      closeRef.current = openStream(id, onEvent);
+    } catch (err: any) {
+      dispatch({ type: 'event', ev: { kind: 'error', text: err?.message ?? '发送失败' } });
+    }
+  }, [draft, systemMode, onEvent, state, attachments]);
+
+  const act = useCallback(
+    async (fn: (id: string) => Promise<unknown>) => {
+      if (!state.sessionId) return;
+      dispatch({ type: 'busy', value: true });
+      try {
+        await fn(state.sessionId);
+      } catch (err: any) {
+        dispatch({ type: 'event', ev: { kind: 'error', text: err?.message ?? '操作失败' } });
+        dispatch({ type: 'busy', value: false });
+      }
+    },
+    [state.sessionId]
+  );
+
+  const cancel = useCallback(async () => {
+    if (!state.sessionId) return;
+    setCancelling(true);
+    try {
+      await cancelChat(state.sessionId);
+    } catch (err: any) {
+      dispatch({ type: 'event', ev: { kind: 'error', text: err?.message ?? '停止失败' } });
+    }
+  }, [state.sessionId]);
+
+  // Reset the local "cancelling" flag once the task leaves the active state.
+  useEffect(() => {
+    if (!IN_PROGRESS.includes(state.phase)) setCancelling(false);
+  }, [state.phase]);
+
+  return (
+    <div className="chat-panel">
+      <div className="chat-head">
+        <RobotOutlined style={{ color: 'var(--accent)' }} />
+        <span className="chat-title">Claude 助手</span>
+        {state.phase !== 'idle' && (
+          <Tag
+            color={IN_PROGRESS.includes(state.phase) ? 'processing' : undefined}
+            style={{ marginLeft: 'auto' }}
+          >
+            {IN_PROGRESS.includes(state.phase) && <Spin size="small" style={{ marginRight: 6 }} />}
+            {PHASE_LABELS[state.phase]}
+          </Tag>
+        )}
+        {IN_PROGRESS.includes(state.phase) && (
+          <Button
+            danger
+            size="small"
+            icon={<StopOutlined />}
+            loading={cancelling}
+            onClick={() => void cancel()}
+            style={{ marginLeft: 8 }}
+          >
+            停止
+          </Button>
+        )}
+      </div>
+
+      <Stepper phase={state.phase} />
+
+      <div className="chat-scroll" ref={scrollRef}>
+        {state.items.length === 0 && state.phase === 'idle' && (
+          <div className="chat-empty">
+            <p>用大白话告诉我要改什么,比如:</p>
+            <ul>
+              <li>"把日本行程 Day 3 改成京都一日游"</li>
+              <li>"在 household 里记一下家人的饮食偏好"</li>
+              <li>"给 8 月日本之行建一个打包清单"</li>
+            </ul>
+            <p className="chat-empty-note">
+              我会先按家庭规则拟一份计划给你看 → 你批准 → 我改文件 → 你审改动 → 自动提交。
+              每个审阅环节,你都可以直接在下方输入框回话补充或提要求,我会据此修订。
+            </p>
+          </div>
+        )}
+
+        {state.items.map((it) => (
+          <TranscriptRow key={it.id} item={it} />
+        ))}
+
+        {state.live.trim() && (
+          <div className="chat-msg assistant">
+            <MarkdownView source={state.live} />
+          </div>
+        )}
+
+        {state.phase === 'awaiting-plan-approval' && (
+          <PlanActions
+            busy={state.busy}
+            onApprove={() => act(approvePlan)}
+            onReject={() => act(rejectPlan)}
+          />
+        )}
+
+        {state.phase === 'awaiting-diff-approval' && state.review && (
+          <DiffReview
+            review={state.review}
+            busy={state.busy}
+            onApprove={() => act(approveDiff)}
+            onReject={() => act(rejectDiff)}
+          />
+        )}
+
+        {state.phase === 'committed' && (
+          <Alert
+            type="success"
+            showIcon
+            icon={<CheckCircleFilled />}
+            style={{ margin: '8px 0' }}
+            message={`已提交 ${state.commitSha ?? ''}`}
+            description="改动已写入仓库,页面内容会自动刷新。"
+          />
+        )}
+
+        {state.phase === 'rejected' && (
+          <Alert type="info" showIcon style={{ margin: '8px 0' }} message="已取消,无改动落库。" />
+        )}
+
+        {state.phase === 'cancelled' && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ margin: '8px 0' }}
+            message="已强制停止,本次改动已还原。"
+          />
+        )}
+
+        {state.error && (
+          <Alert type="error" showIcon style={{ margin: '8px 0' }} message={state.error} />
+        )}
+      </div>
+
+      <div className="chat-composer">
+        <div className="chat-mode-row">
+          <Tooltip title="开启后,本次对话可修改界面代码(viewer/frontend),改完自动验证构建,构建不过不提交">
+            <label className={`chat-mode-label ${systemMode ? 'on' : ''}`}>
+              <Switch
+                size="small"
+                checked={systemMode}
+                disabled={inFlow}
+                onChange={setSystemMode}
+              />
+              系统模式 · 改界面
+            </label>
+          </Tooltip>
+          {systemMode && <span className="chat-mode-hint">AI 将编辑前端代码并自检构建</span>}
+        </div>
+
+        {attachments.length > 0 && (
+          <div className="chat-attachments">
+            {attachments.map((a) => (
+              <Tag
+                key={a.relPath}
+                closable
+                icon={<PaperClipOutlined />}
+                onClose={(e) => {
+                  e.preventDefault();
+                  removeAttachment(a.relPath);
+                }}
+              >
+                <span className="chat-attach-name">{a.name}</span>
+                <span className="chat-attach-size">{formatSize(a.size)}</span>
+              </Tag>
+            ))}
+          </div>
+        )}
+
+        <div className="chat-input">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf,image/*"
+            multiple
+            hidden
+            onChange={(e) => {
+              void pickFiles(e.target.files);
+              e.target.value = ''; // allow re-picking the same file
+            }}
+          />
+          <Tooltip title="上传 PDF / 图片附件 — 我会先读取内容再规划">
+            <span>
+              <IconButton
+                className="chat-attach-btn"
+                icon={uploading ? <Spin size="small" /> : <PaperClipOutlined />}
+                ariaLabel="上传附件"
+                disabled={inFlow || uploading}
+                onClick={() => fileInputRef.current?.click()}
+              />
+            </span>
+          </Tooltip>
+          <Input.TextArea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={
+              active
+                ? '任务进行中…(可点「停止」中断)'
+                : state.phase === 'awaiting-plan-approval'
+                  ? '可批准,或在此回答问题 / 补充信息 → 我据此改计划'
+                  : state.phase === 'awaiting-diff-approval'
+                    ? '可批准,或在此说明要怎么调整 → 我据此改文件'
+                    : systemMode
+                      ? '想怎么改界面?(Enter 发送)'
+                      : '要改什么?(Enter 发送,Shift+Enter 换行)'
+            }
+            autoSize={{ minRows: 2, maxRows: 8 }}
+            disabled={active}
+            onPressEnter={(e) => {
+              if (!e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <Button
+            type="primary"
+            icon={<SendOutlined />}
+            disabled={!canSend}
+            onClick={() => void send()}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Memoized: a chat turn streams many `text-delta` events; each re-renders
+// ChatPanel. Without memo, every finished message (each a MarkdownView) would
+// re-parse its markdown on every delta. `item` is referentially stable per id,
+// so finished rows stay static and only the live streaming block re-renders.
+const TranscriptRow = memo(function TranscriptRow({ item }: { item: TranscriptItem }) {
+  if (item.role === 'divider') {
+    return <div className="chat-divider" aria-hidden />;
+  }
+  if (item.role === 'user') {
+    return <div className="chat-msg user">{item.text}</div>;
+  }
+  if (item.role === 'assistant') {
+    return (
+      <div className="chat-msg assistant">
+        <MarkdownView source={item.text ?? ''} />
+      </div>
+    );
+  }
+  if (item.role === 'tool') {
+    return (
+      <div className="chat-tool">
+        <ToolOutlined />
+        <span className="chat-tool-name">{item.tool?.name}</span>
+        {item.tool?.detail && <span className="chat-tool-detail">{item.tool.detail}</span>}
+      </div>
+    );
+  }
+  // notice
+  return <div className="chat-notice">{item.text}</div>;
+});

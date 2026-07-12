@@ -1,0 +1,28 @@
+{
+  "name": "@daily-planner/puppeteer-tool",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Browser automation tool for daily-planner — generic scrape + flight price comparison via headless Chromium.",
+  "scripts": {
+    "scrape": "tsx src/scrape.ts",
+    "flight-prices": "tsx src/flight-prices.ts",
+    "hotel-prices": "tsx src/hotel-prices.ts",
+    "wiki-info": "tsx src/wiki-info.ts",
+    "restaurant-info": "tsx src/restaurant-info.ts",
+    "hotel-info": "tsx src/hotel-info.ts",
+    "flight-schedule": "tsx src/flight-schedule.ts",
+    "policy-check": "tsx src/policy-check.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "puppeteer": "^23.6.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@daily-planner/viewer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Family planner viewer — static plan browser (frontend) + Claude chat console (backend + processors).",
+  "workspaces": [
+    "frontend",
+    "backend",
+    "processors"
+  ],
+  "scripts": {
+    "dev": "npm -w @daily-planner/backend run dev",
+    "build": "npm -w @daily-planner/frontend run build",
+    "start": "npm run dev"
+  }
+}

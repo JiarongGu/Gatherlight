@@ -1,0 +1,50 @@
+# .NET
+bin/
+obj/
+publish/
+*.user
+
+# Node / client
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+*.log
+
+# data folder — ALL user data (plans, household, SQLite, uploads, caches, history archive).
+# Default GATHERLIGHT_DATA location; has its own private git repo inside. Never tracked here.
+local/
+
+# built client (src/client `npm run build` output)
+src/server/Gatherlight.Server/wwwroot/
+
+# devtools throwaways + captures + generated fixtures
+devtools/screenshots/
+devtools/_*
+devtools/.cdp-port
+
+# legacy viewer runtime leftovers (until viewer/ is deleted in Phase 4)
+.uploads/
+.tmp/
+.tmp-*
+.puppeteer-cache/
+.cache/
+.env
+.env.local
+.env.*.local
+
+# Claude Code personal settings (rules/skills ARE tracked)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/plans/
+
+# OS / IDE
+Thumbs.db
+.DS_Store
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
