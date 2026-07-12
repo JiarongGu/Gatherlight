@@ -6,6 +6,9 @@ using Gatherlight.Server.Modules.Files.Services;
 using Gatherlight.Server.Modules.Fluent.Services;
 using Gatherlight.Server.Modules.Llm.Services;
 using Gatherlight.Server.Modules.PlanIndex.Services;
+using Gatherlight.Server.Modules.Tools.Models;
+using Gatherlight.Server.Modules.Tools.Services;
+using Gatherlight.Server.Modules.Tools.Services.Tools;
 
 namespace Gatherlight.Server;
 
@@ -51,7 +54,11 @@ public static class GatherlightApp
             .AddSingleton<ChatEnvironmentService>()
             .AddSingleton<ChatSessionService>()
             // Uploads (chat attachments)
-            .AddSingleton<IUploadService, UploadService>();
+            .AddSingleton<IUploadService, UploadService>()
+            // Tools — one registry, two surfaces (HTTP + MCP for the spawned agent)
+            .AddSingleton<IGatherlightTool, ExtractTool>()
+            .AddSingleton<IGatherlightTool, ScrapeTool>()
+            .AddSingleton<IToolRegistry, ToolRegistry>();
 
         builder.Services.AddHttpClient();
 
@@ -98,6 +105,7 @@ public static class GatherlightApp
         app.Services.GetRequiredService<IChatRepository>().FailInterruptedSessionsAsync().GetAwaiter().GetResult();
 
         app.MapControllers();
+        McpEndpoint.Map(app);
 
         // The built web client (src/client `npm run build` → wwwroot, copied next to the exe).
         // Explicit file provider: the exe's base dir is the one place it always exists,

@@ -19,6 +19,7 @@ public interface IPromptHarness
     string ReviseExecutePrompt(string feedback);
     string ValidatePrompt(IReadOnlyList<string> claudePaths, string diff);
     string CommitMessage(string userMessage, IReadOnlyList<string> files);
+    string ProcessFilePrompt(string absPath, string instruction);
 }
 
 public sealed class PromptHarness : IPromptHarness
@@ -165,6 +166,24 @@ public sealed class PromptHarness : IPromptHarness
         var body = string.Join('\n', files.Select(f => $"- {f}"));
         return $"{subject}\n\nVia family chat console. Human-approved (plan + diff gates).\n\nFiles:\n{body}\n\nCo-Authored-By: Claude <noreply@anthropic.com>";
     }
+
+    private const string ProcessFileTemplate = """
+        You are a one-shot FILE PROCESSOR. Read ONE file and return the requested result as your FINAL message. You are read-only — do NOT edit / create / delete anything, and do NOT explore any other files.
+
+        STEPS:
+        1. Use the Read tool on this path (it ingests PDFs and images natively): {absPath}
+        2. Do exactly what the INSTRUCTION says, using ONLY the file's actual contents. Never fabricate — if the file doesn't contain something the instruction asks for, say so plainly.
+        3. Your FINAL message IS the result handed back to the caller — no "here is the result" preamble, no meta commentary. Output only the result itself (plain text / markdown / JSON as the instruction requests).
+
+        INSTRUCTION:
+        {instruction}
+        """;
+
+    /// <summary>One-shot file-processor prompt (the `extract` tool) — deliberately lean: no
+    /// knowledge-base gate, no exploration, absolute path so it runs from a neutral cwd
+    /// (no CLAUDE.md token load).</summary>
+    public string ProcessFilePrompt(string absPath, string instruction) =>
+        Render("processFile", ProcessFileTemplate, new() { ["absPath"] = absPath, ["instruction"] = instruction });
 
     /// <summary>Attachments block — data-root-relative paths of files the user uploaded for this
     /// turn. The claude CLI's Read tool ingests PDFs and images natively.</summary>

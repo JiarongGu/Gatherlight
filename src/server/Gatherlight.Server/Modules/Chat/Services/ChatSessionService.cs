@@ -5,6 +5,7 @@ using Gatherlight.Server.Modules.Core.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Llm.Models;
 using Gatherlight.Server.Modules.Llm.Services;
+using Gatherlight.Server.Modules.Tools.Services;
 
 namespace Gatherlight.Server.Modules.Chat.Services;
 
@@ -76,13 +77,14 @@ public sealed class ChatSessionService
     private readonly IAppConfigService _appConfig;
     private readonly ChatEnvironmentService _env;
     private readonly DataWriteLock _writeLock;
+    private readonly IToolRegistry _tools;
     private readonly ILogger<ChatSessionService> _log;
 
     public ChatSessionService(
         IClaudeCliRunner runner, IPromptHarness harness, IClaudeValidateService validator,
         IGitCliService git, IDataCommitRepository commits, IChatRepository repo,
         IDataContext data, IAppConfigService appConfig, ChatEnvironmentService env,
-        DataWriteLock writeLock, ILogger<ChatSessionService> log)
+        DataWriteLock writeLock, IToolRegistry tools, ILogger<ChatSessionService> log)
     {
         _runner = runner;
         _harness = harness;
@@ -94,6 +96,7 @@ public sealed class ChatSessionService
         _appConfig = appConfig;
         _env = env;
         _writeLock = writeLock;
+        _tools = tools;
         _log = log;
     }
 
@@ -221,6 +224,8 @@ public sealed class ChatSessionService
         ReadOnly = readOnly,
         Model = _appConfig.Get("llm.model.chat"),
         McpConfigPath = File.Exists(_env.McpConfigPath) ? _env.McpConfigPath : null,
+        // Pre-approve registry tools so the headless run never stalls on a permission prompt.
+        AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : null,
         OnEvent = ev => Emit(s, ev),
     };
 
