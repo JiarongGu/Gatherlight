@@ -72,6 +72,15 @@ let seq = 0;
 const nextId = () => ++seq;
 
 const SESSION_KEY = 'viewer-chat-session';
+// Persist the unsent input so closing/reopening the chat drawer (or a reload) doesn't lose it.
+const DRAFT_KEY = 'viewer-chat-draft';
+
+// Clickable starter prompts for the empty chat — a new user's fastest way in.
+const CHAT_STARTERS = [
+  '把日本行程 Day 3 改成京都一日游',
+  '在 household 里记一下家人的饮食偏好',
+  '给 8 月日本之行建一个打包清单',
+];
 
 type Action =
   | { type: 'reset'; sessionId: string; message: string }
@@ -270,7 +279,10 @@ function UsageLine({ usage }: { usage: ChatState['usage'] }) {
 
 export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefillNonce?: number }) {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const [draft, setDraft] = useState('');
+  // Restore any unsent draft (closing the drawer unmounts this component).
+  const [draft, setDraft] = useState(() => {
+    try { return localStorage.getItem(DRAFT_KEY) ?? ''; } catch { return ''; }
+  });
   const [cancelling, setCancelling] = useState(false);
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -293,6 +305,11 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
     if (prefill) setDraft(prefill);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefillNonce]);
+
+  // Persist the unsent draft (cleared when send() sets it to '').
+  useEffect(() => {
+    try { if (draft) localStorage.setItem(DRAFT_KEY, draft); else localStorage.removeItem(DRAFT_KEY); } catch { /* storage disabled */ }
+  }, [draft]);
 
   // Reconnect to an in-flight session after a reload (e.g. a system-mode HMR
   // reload of this very page). The backend replays its event log to rebuild state.
@@ -441,11 +458,13 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       <div className="chat-scroll" ref={scrollRef} role="log" aria-live="polite" aria-relevant="additions text">
         {state.items.length === 0 && state.phase === 'idle' && (
           <div className="chat-empty">
-            <p>用大白话告诉我要改什么,比如:</p>
-            <ul>
-              <li>"把日本行程 Day 3 改成京都一日游"</li>
-              <li>"在 household 里记一下家人的饮食偏好"</li>
-              <li>"给 8 月日本之行建一个打包清单"</li>
+            <p>用大白话告诉我要改什么,点一条试试:</p>
+            <ul className="chat-starters">
+              {CHAT_STARTERS.map((s) => (
+                <li key={s}>
+                  <button type="button" onClick={() => setDraft(s)}>{s}</button>
+                </li>
+              ))}
             </ul>
             <p className="chat-empty-note">
               我会先按家庭规则拟一份计划给你看 → 你批准 → 我改文件 → 你审改动 → 自动提交。

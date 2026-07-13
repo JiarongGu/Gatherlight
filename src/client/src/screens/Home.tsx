@@ -154,6 +154,27 @@ export function Home({ files, onSelect, onOpenPalette, onAfterAction, onAskAI, l
         </section>
       )}
 
+      {!loading && files.length === 0 && (
+        <section className="home-section">
+          <div className="home-firstrun">
+            <div className="home-firstrun-seal">拾</div>
+            <h2>欢迎使用拾光 · Gatherlight</h2>
+            <p>
+              还没有任何计划。用 AI 助手开始 —— 用大白话说要规划什么(旅行 / 日程 / 预算 / 打包),
+              它会按你的家庭情况拟一份给你看,你审核后自动落库。
+            </p>
+            <div className="home-firstrun-actions">
+              <button className="home-firstrun-cta" onClick={() => onAskAI('')}>
+                <CompassOutlined /> 打开 AI 助手开始规划
+              </button>
+              <button className="home-firstrun-alt" onClick={onOpenPalette}>
+                <SearchOutlined /> 搜索 / 浏览
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
       {cards.length > 0 && (
         <section className="home-section">
           <h2 className="home-section-title">
