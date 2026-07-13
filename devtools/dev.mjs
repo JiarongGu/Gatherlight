@@ -162,14 +162,25 @@ switch (cmd) {
     const all = fs.readdirSync(path.join(repo, 'devtools', 'scripts'))
       .filter((f) => /^e2e-p\d+\.mjs$/.test(f))
       .map((f) => f.slice(4, -4))
-      .sort();
+      // NUMERIC order (p2 before p10) — a plain .sort() is lexicographic, which puts p3–p9 LAST
+      // (after p23) and makes the run order unreadable.
+      .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
     const suites = which === 'all' ? all : [which];
     if (suites.length === 0) { console.log('no e2e suites yet'); break; }
+    // Run EVERY suite and summarize at the end — never bail on the first failure. The old loop
+    // `break`ed on non-zero, so a mid-run crash (e.g. a Windows libuv `UV_HANDLE_CLOSING` teardown
+    // abort, which surfaces as a signal/non-zero status) silently dropped every later suite while
+    // the tail still looked green. A suite counts as passed only on a clean exit-0 (no signal).
+    const results = [];
     for (const suite of suites) {
       const r = spawnSync('node', [path.join(repo, 'devtools', 'scripts', `e2e-${suite}.mjs`)],
         { stdio: 'inherit', cwd: repo });
-      if (r.status !== 0) { process.exitCode = r.status ?? 1; break; }
+      results.push({ suite, passed: r.status === 0 && !r.signal, status: r.status, signal: r.signal });
     }
+    const failed = results.filter((r) => !r.passed);
+    console.log(`\ne2e: ${results.length - failed.length}/${results.length} suites passed`);
+    for (const f of failed) console.log(`  ✗ ${f.suite} — ${f.signal ? `signal ${f.signal}` : `exit ${f.status}`}`);
+    if (failed.length) process.exitCode = 1;
     break;
   }
 
