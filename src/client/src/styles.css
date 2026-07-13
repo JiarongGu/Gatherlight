@@ -2242,6 +2242,88 @@ kbd, .topbar-kbd {
 .cx-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 @media (max-width: 560px) { .cx-models { grid-template-columns: 1fr; } }
 
+/* ===== Management console — polish layer =====
+   Motion + at-a-glance status + hover/focus refinements over the base .mng/.eval/.cx rules above.
+   All additive: no base layout changes, so it degrades gracefully. */
+
+/* Wider console on large high-DPI desktop windows (the WebView2 shell is resizable) — the base is
+   860px; give the metric/model grids more room without letting them sprawl. */
+@media (min-width: 1500px) { .mng { max-width: 940px; } }
+@media (min-width: 2000px) { .mng { max-width: 1040px; } }
+
+/* At-a-glance health dot in the header — visible on every tab, not just Overview. */
+.mng-top-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  margin-left: auto; flex: 0 0 auto;
+  background: var(--muted);
+  transition: background 0.3s, box-shadow 0.3s;
+}
+.mng-top .ver { margin-left: 10px; }
+.mng-top-dot.ok { background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 18%, transparent); animation: mng-pulse 2.6s ease-in-out infinite; }
+.mng-top-dot.bad { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 22%, transparent); }
+
+/* View fade — every tab body eases in when mounted. */
+.mng-view { animation: mng-fade 0.34s ease both; }
+@keyframes mng-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Orchestrated first paint — the overview's cards rise + fade in sequence (one composed moment,
+   not scattered micro-animations). Plays on mount and on each return to the tab; in-place polls
+   don't retrigger it. */
+.mng-overview > * { animation: mng-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.mng-overview > *:nth-child(1) { animation-delay: 0.02s; }
+.mng-overview > *:nth-child(2) { animation-delay: 0.07s; }
+.mng-overview > *:nth-child(3) { animation-delay: 0.12s; }
+.mng-overview > *:nth-child(4) { animation-delay: 0.17s; }
+.mng-overview > *:nth-child(5) { animation-delay: 0.22s; }
+.mng-overview > *:nth-child(6) { animation-delay: 0.27s; }
+.mng-overview > *:nth-child(7) { animation-delay: 0.32s; }
+.mng-overview > *:nth-child(n + 8) { animation-delay: 0.36s; }
+@keyframes mng-rise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+
+/* Metric + eval-stat cards now respond to hover like the action buttons do (was static). */
+.mng-metric, .eval-stat {
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+.mng-metric:hover, .eval-stat:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+}
+
+/* In-page toast — replaces alert()/confirm() (which block the WebView2 bridge). */
+.mng-toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 60;
+  display: flex; align-items: center; gap: 10px; max-width: min(560px, 88vw);
+  padding: 12px 18px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  color: var(--text); font-size: 13px; line-height: 1.45;
+  animation: mng-toast-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.mng-toast::before {
+  content: ""; flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--success); box-shadow: 0 0 9px var(--success);
+}
+.mng-toast.err { border-color: color-mix(in srgb, var(--danger) 52%, var(--border)); }
+.mng-toast.err::before { background: var(--danger); box-shadow: 0 0 9px var(--danger); }
+@keyframes mng-toast-in { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* Keyboard focus — a visible ring on every interactive console control (mouse users unaffected). */
+.mng-tab:focus-visible, .mng-btn:focus-visible, .mng-toast:focus-visible,
+.eval-export:focus-visible, .cx-seg-b:focus-visible, .cx-btn:focus-visible,
+.cx-prompt-head:focus-visible, .eval-row.clickable:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm);
+}
+
+/* Respect reduced-motion — kill the reveals/pulse for users who ask for it. */
+@media (prefers-reduced-motion: reduce) {
+  .mng-view, .mng-overview > *, .mng-toast { animation: none; }
+  .mng-top-dot.ok { animation: none; }
+}
+
 /* Sidebar 知识库 nav pin */
 .side-lib {
   display: flex;

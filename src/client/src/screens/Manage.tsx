@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 // The desktop host injects window.__gatherlightHost + a WebView2 message bridge for native actions
 // (restart / open data folder / open planner in browser / exit / memory file dialogs). Opened in a
@@ -21,6 +21,15 @@ function fmtUptime(ms: number): string {
   return `${s}s`;
 }
 
+// Human-friendly summary of a memory-import result (vs. dumping raw JSON at the user).
+function summarizeImported(im: { library?: number; knowledge?: number; cortex?: number } | undefined): string {
+  const parts: string[] = [];
+  if (im?.library) parts.push(`知识库 +${im.library}`);
+  if (im?.knowledge) parts.push(`事实 +${im.knowledge}`);
+  if (im?.cortex) parts.push(`校准 +${im.cortex}`);
+  return parts.length ? parts.join(' · ') : '无新增(已是最新)';
+}
+
 export function Manage() {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [latency, setLatency] = useState(0);
@@ -30,6 +39,17 @@ export function Manage() {
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [view, setView] = useState<'overview' | 'eval' | 'cortex'>('overview');
   const started = useRef(Date.now());
+
+  // Lightweight in-page toast — replaces alert()/confirm(), which in the WebView2 host block the
+  // native message bridge (and look nothing like the rest of the console).
+  const [notice, setNotice] = useState<{ text: string; kind?: 'ok' | 'err' } | null>(null);
+  const noticeTimer = useRef<number | null>(null);
+  const toast = useCallback((text: string, kind?: 'ok' | 'err') => {
+    setNotice({ text, kind });
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(null), kind === 'err' ? 5200 : 3400);
+  }, []);
+  useEffect(() => () => { if (noticeTimer.current) window.clearTimeout(noticeTimer.current); }, []);
 
   useEffect(() => {
     fetch('/api/auth/status')
@@ -75,6 +95,7 @@ export function Manage() {
   const exportMemory = () => {
     if (inHost) host('exportMemory');
     else window.open('/api/memory/export', '_blank');
+    toast('正在导出记忆(知识库 + 事实 + 校准)…');
   };
   const importMemory = () => {
     if (inHost) { host('importMemory'); return; }
@@ -87,13 +108,15 @@ export function Manage() {
       try {
         const res = await fetch('/api/memory/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: await file.text() });
         const j = await res.json();
-        alert(res.ok ? `已导入:${JSON.stringify(j.imported)}` : `导入失败:${j.error ?? res.status}`);
+        if (res.ok) toast(`已导入记忆:${summarizeImported(j.imported)}`);
+        else toast(`导入失败:${j.error ?? res.status}`, 'err');
       } catch (e) {
-        alert('导入失败:' + (e instanceof Error ? e.message : String(e)));
+        toast('导入失败:' + (e instanceof Error ? e.message : String(e)), 'err');
       }
     };
     input.click();
   };
+  const restart = () => { host('restart'); toast('已发送重启指令,服务将很快恢复…'); };
 
   const hColor = healthy === null ? 'var(--muted)' : healthy ? 'var(--success)' : 'var(--danger)';
   const statusText = healthy === null ? '检查中…' : healthy ? '运行正常 · Healthy' : '无响应 · Not responding';
@@ -108,6 +131,11 @@ export function Manage() {
           <h1>管理控制台</h1>
           <span className="sub">GATHERLIGHT · CONSOLE</span>
         </div>
+        <span
+          className={`mng-top-dot${healthy ? ' ok' : healthy === false ? ' bad' : ''}`}
+          title={statusText}
+          aria-label={statusText}
+        />
         <span className="ver">拾光</span>
       </div>
 
@@ -121,7 +149,7 @@ export function Manage() {
       {view === 'cortex' && <CortexView />}
 
       {view === 'overview' && (
-      <>
+      <div className="mng-view mng-overview">
       <div className={`mng-health${healthy ? ' ok' : ''}`} style={{ ['--h' as any]: hColor }}>
         <div className="mng-health-row">
           <span className="mng-lantern" />
@@ -160,7 +188,7 @@ export function Manage() {
           </button>
         )}
         {inHost && (
-          <button className="mng-btn" onClick={() => host('restart')}>
+          <button className="mng-btn" onClick={restart}>
             重启服务<span className="sub">recycle the in-process server</span>
           </button>
         )}
@@ -193,7 +221,13 @@ export function Manage() {
         规划界面在浏览器中打开;此页监控本机服务的健康。数据(计划/家庭/知识库/SQLite)在数据文件夹,数据库不进 git,请随数据文件夹备份。
       </div>
       {!inHost && <div className="mng-hint">提示:部分主机操作(重启 / 数据文件夹 / 退出)仅在桌面管理端可用。</div>}
-      </>
+      </div>
+      )}
+
+      {notice && (
+        <div className={`mng-toast${notice.kind === 'err' ? ' err' : ''}`} role="status" aria-live="polite">
+          {notice.text}
+        </div>
       )}
     </div>
   );
@@ -325,7 +359,7 @@ function EvalView() {
   const distByStar = (n: number) => stats?.distribution.find((d) => d.rating === n)?.count ?? 0;
 
   return (
-    <div>
+    <div className="mng-view">
       <div className="eval-stats">
         <div className="eval-stat"><div className="n">{stats?.total ?? '—'}</div><div className="l">对话总数 Conversations</div></div>
         <div className="eval-stat"><div className="n">{stats?.rated ?? '—'}</div><div className="l">已评分 Rated</div></div>
@@ -682,7 +716,7 @@ function CortexView() {
   if (loading) return <div className="eval-empty">加载中…</div>;
 
   return (
-    <div className="cx">
+    <div className="cx mng-view">
       <div className="cx-lead">
         校准“cortex”——每次 LLM 调用所用的提示词与模型都在这里调,存入 <code>app_config</code>,下次调用即时生效,无需重启。
         与「对话评估」形成闭环:先评分收集数据,再回到这里调提示词/模型。
