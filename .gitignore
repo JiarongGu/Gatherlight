@@ -15,6 +15,8 @@ build/
 # data folder — ALL user data (plans, household, SQLite, uploads, caches, history archive).
 # Default GATHERLIGHT_DATA location; has its own private git repo inside. Never tracked here.
 local/
+local-clean/
+local-*/
 
 # SQLite app state — NEVER tracked, anywhere (belt-and-suspenders; the data folder is already
 # ignored above + the data repo ignores state/). The DB now also holds the knowledge library, so
