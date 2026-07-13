@@ -25,33 +25,48 @@ public sealed class ToolRegistry : IToolRegistry
     private static readonly TimeSpan ToolTimeout = TimeSpan.FromSeconds(120);
     private static readonly string[] AllSurfaces = { "http", "mcp" };
 
-    private readonly Dictionary<string, IGatherlightTool> _tools;
+    private readonly Dictionary<string, IGatherlightTool> _builtins;
+    private readonly IScriptToolProvider _scripts;
 
-    public ToolRegistry(IEnumerable<IGatherlightTool> tools) =>
-        _tools = tools.ToDictionary(t => t.Name);
+    public ToolRegistry(IEnumerable<IGatherlightTool> tools, IScriptToolProvider scripts)
+    {
+        _builtins = tools.ToDictionary(t => t.Name);
+        _scripts = scripts;
+    }
 
     public string McpServerName => "planner-tools";
 
     private static IReadOnlyList<string> SurfacesOf(IGatherlightTool t) =>
         t.Surfaces is { Count: > 0 } s ? s : AllSurfaces;
 
+    /// <summary>Effective tool set, resolved at call time so hot-loaded script tools appear
+    /// immediately. Built-ins win on a name collision.</summary>
+    private Dictionary<string, IGatherlightTool> Resolve()
+    {
+        var all = new Dictionary<string, IGatherlightTool>(_builtins);
+        foreach (var t in _scripts.Current)
+            all.TryAdd(t.Name, t);
+        return all;
+    }
+
     public List<ToolDefinition> List(string? surface = null) =>
-        _tools.Values
+        Resolve().Values
             .Where(t => surface is null || SurfacesOf(t).Contains(surface))
             .Select(t => new ToolDefinition(t.Name, t.Description, JsonDocument.Parse(t.InputSchema).RootElement))
             .ToList();
 
     public string[] McpAllowedToolNames() =>
-        _tools.Values
+        Resolve().Values
             .Where(t => SurfacesOf(t).Contains("mcp"))
             .Select(t => $"mcp__{McpServerName}__{t.Name}")
             .ToArray();
 
     public async Task<string> RunAsync(string name, JsonElement args, string? surface, CancellationToken ct)
     {
-        if (!_tools.TryGetValue(name, out var tool))
+        var tools = Resolve();
+        if (!tools.TryGetValue(name, out var tool))
         {
-            var known = _tools.Count > 0 ? string.Join(", ", _tools.Keys) : "(无)";
+            var known = tools.Count > 0 ? string.Join(", ", tools.Keys) : "(无)";
             throw new ToolException(400, $"未知工具:\"{name}\"。可用:{known}");
         }
         if (surface is not null && !SurfacesOf(tool).Contains(surface))

@@ -62,6 +62,10 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, ExtractTool>()
             .AddSingleton<IGatherlightTool, WebFetchTool>()   // registers as "scrape" (Playwright-native)
             .AddSingleton<IGatherlightTool, WikiInfoTool>()
+            // Hot-loadable script tools ({data}/tools/<name>/tool.json — no rebuild needed)
+            .AddSingleton<ScriptToolProvider>()
+            .AddSingleton<IScriptToolProvider>(sp => sp.GetRequiredService<ScriptToolProvider>())
+            .AddHostedService(sp => sp.GetRequiredService<ScriptToolProvider>())
             .AddSingleton<IToolRegistry, ToolRegistry>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>();

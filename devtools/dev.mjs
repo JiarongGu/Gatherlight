@@ -49,6 +49,45 @@ switch (cmd) {
     run('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), ...args]);
     break;
 
+  case 'new-tool': {
+    // Scaffold a hot-loadable script tool into the data folder (see docs/TOOLS.md).
+    const name = args[0];
+    if (!name || !/^[a-z0-9_-]+$/.test(name)) {
+      console.error('usage: node devtools/dev.mjs new-tool <kebab-or-snake-name> [dataDir]');
+      process.exitCode = 1;
+      break;
+    }
+    const dataDir = path.resolve(repo, args[1] ?? process.env.GATHERLIGHT_DATA ?? 'local');
+    const dir = path.join(dataDir, 'tools', name);
+    if (fs.existsSync(path.join(dir, 'tool.json'))) {
+      console.error(`already exists: ${dir}`);
+      process.exitCode = 1;
+      break;
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'tool.json'), JSON.stringify({
+      name,
+      description: `TODO: what ${name} does (shown to the agent + in /api/tools)`,
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string', description: 'TODO: describe the argument' } },
+        required: ['text'],
+      },
+      command: { exe: 'node', args: ['run.mjs'] },
+      timeoutSeconds: 60,
+    }, null, 2) + '\n');
+    fs.writeFileSync(path.join(dir, 'run.mjs'), [
+      '// Args arrive as JSON on stdin; print the result to stdout (stderr = logs). Exit 0 = ok.',
+      "const chunks = [];",
+      "for await (const c of process.stdin) chunks.push(c);",
+      "const args = JSON.parse(Buffer.concat(chunks).toString('utf8'));",
+      "process.stdout.write(JSON.stringify({ echo: args.text }));",
+      '',
+    ].join('\n'));
+    console.log(`scaffolded ${dir} — the running server hot-loads it (no rebuild); edit tool.json + run.mjs.`);
+    break;
+  }
+
   case 'fetch-tools': {
     // Playwright chromium for the browser-backed tools (web_fetch + scraper ports).
     // One-time per machine; the server NEVER downloads browsers at startup.
