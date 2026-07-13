@@ -64,6 +64,9 @@ it to the network without auth is unauthenticated control of both. The access mo
   beyond loopback *without* a token, the server **refuses to start** (fail closed).
 - A remote browser is shown a token prompt; a correct token drops an httpOnly cookie. The token can
   also be sent as `Authorization: Bearer <token>` or an `X-Gatherlight-Token` header (for scripts).
+- **Brute-force lockout** — after 5 failed logins from an IP within 10 min that IP is locked out for
+  5 min (the only barrier is the token, so guessing is throttled); already-authenticated sessions
+  are unaffected.
 - Behind a **same-host reverse proxy** (e.g. nginx → `127.0.0.1`), every request looks like
   loopback — set `trustLoopback: false` so the token is enforced anyway.
 - HTTP only carries the token in the clear; put a TLS-terminating proxy (or a VPN/tunnel) in front

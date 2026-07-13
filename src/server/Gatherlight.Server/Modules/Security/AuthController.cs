@@ -12,7 +12,12 @@ namespace Gatherlight.Server.Modules.Security;
 public sealed class AuthController : ControllerBase
 {
     private readonly ISecurityGuard _guard;
-    public AuthController(ISecurityGuard guard) => _guard = guard;
+    private readonly ILoginThrottle _throttle;
+    public AuthController(ISecurityGuard guard, ILoginThrottle throttle)
+    {
+        _guard = guard;
+        _throttle = throttle;
+    }
 
     [HttpGet("api/auth/status")]
     public IActionResult Status() =>
@@ -24,7 +29,23 @@ public sealed class AuthController : ControllerBase
     public IActionResult Login([FromBody] LoginBody? body)
     {
         if (!_guard.Enabled) return Ok(new { ok = true });        // nothing to log into
-        if (!_guard.ValidateToken(body?.Token)) return Unauthorized(new { error = "访问令牌无效" });
+
+        var key = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        if (_throttle.IsLocked(key, out var retry))
+        {
+            var seconds = (int)Math.Ceiling(retry.TotalSeconds);
+            Response.Headers.RetryAfter = seconds.ToString();
+            return StatusCode(StatusCodes.Status429TooManyRequests,
+                new { error = "尝试次数过多,请稍后再试", retryAfterSeconds = seconds });
+        }
+
+        if (!_guard.ValidateToken(body?.Token))
+        {
+            _throttle.RecordFailure(key);
+            return Unauthorized(new { error = "访问令牌无效" });
+        }
+
+        _throttle.RecordSuccess(key);
         _guard.IssueCookie(HttpContext);
         return Ok(new { ok = true });
     }

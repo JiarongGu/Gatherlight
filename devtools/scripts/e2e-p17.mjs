@@ -74,6 +74,19 @@ try {
   ok('B: cookie authenticates /api → 200', status(await fetch(`${baseB}/api/plans`, { headers: { cookie } })) === 200);
   const stAuthed = await (await fetch(`${baseB}/api/auth/status`, { headers: { cookie } })).json();
   ok('B: status with cookie → authed', stAuthed.authed === true);
+
+  // brute-force throttle: the good login above cleared the counter; 5 wrong attempts lock the IP,
+  // and once locked even the CORRECT token is refused (429) until the cooldown.
+  let lastWrong;
+  for (let i = 0; i < 5; i++) {
+    lastWrong = await fetch(`${baseB}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: `guess-${i}` }) });
+  }
+  ok('B: 5th wrong login is still 401 (lock arms on it)', status(lastWrong) === 401, String(status(lastWrong)));
+  const locked = await fetch(`${baseB}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: TOKEN }) });
+  ok('B: locked out → 429 + Retry-After even with the correct token', status(locked) === 429 && !!locked.headers.get('retry-after'),
+    `${status(locked)} retry-after=${locked.headers.get('retry-after')}`);
+  // an already-authenticated cookie is unaffected by the login lockout
+  ok('B: existing cookie still works during lockout', status(await fetch(`${baseB}/api/plans`, { headers: { cookie } })) === 200);
   b.kill(); b = null;
   await new Promise((r) => setTimeout(r, 1200));
 
