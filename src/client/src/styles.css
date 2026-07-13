@@ -1994,7 +1994,25 @@ kbd, .topbar-kbd {
 .eval-row-rating .on { color: var(--accent); }
 .eval-row-rating .off { color: var(--border); }
 .eval-row-rating.unrated { color: var(--muted); font-size: 11px; font-style: italic; }
+.eval-row-meta .score { color: var(--accent-2); font-weight: 600; }
 .eval-empty { text-align: center; color: var(--muted); padding: 50px 20px; }
+
+/* automated-scorer panel */
+.eval-scorers { margin-top: 20px; }
+.eval-scorer-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.eval-scorer {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px;
+  position: relative; overflow: hidden;
+}
+.eval-scorer.guard::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: linear-gradient(var(--accent-2), transparent); }
+.eval-scorer-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.eval-scorer-top .nm { font-size: 12.5px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; }
+.eval-scorer-top .nm .llm { font-size: 8.5px; font-weight: 700; letter-spacing: 0.05em; color: var(--accent); background: var(--accent-soft); padding: 1px 4px; border-radius: 4px; }
+.eval-scorer-top .v { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--accent-2); }
+.eval-scorer-bar { height: 6px; border-radius: 3px; background: var(--surface-2); margin: 8px 0 5px; overflow: hidden; }
+.eval-scorer-bar > span { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent-2), color-mix(in srgb, var(--accent-2) 60%, var(--accent))); transition: width 0.4s; }
+.eval-scorer-sub { font-size: 10.5px; color: var(--muted); }
+@media (max-width: 720px) { .eval-scorer-grid { grid-template-columns: repeat(2, 1fr); } }
 
 /* ===================== /manage — lantern control room ===================== */
 .mng { max-width: 860px; margin: 0 auto; padding: 34px 26px 52px; }

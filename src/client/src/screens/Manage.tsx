@@ -210,6 +210,8 @@ interface Conversation {
   createdAt: string;
   rating?: number | null;
   note?: string | null;
+  avgScore?: number | null;
+  scoreCount?: number;
 }
 interface Stats {
   total: number;
@@ -217,21 +219,40 @@ interface Stats {
   avgRating: number;
   distribution: { rating: number; count: number }[];
 }
+interface ScorerMeta {
+  id: string;
+  name: string;
+  description: string;
+  group: string;
+  isLlm: boolean;
+}
+interface ScoreAgg {
+  scorerId: string;
+  avgScore: number;
+  count: number;
+}
 
 function EvalView() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [rows, setRows] = useState<Conversation[]>([]);
+  const [scorers, setScorers] = useState<ScorerMeta[]>([]);
+  const [agg, setAgg] = useState<ScoreAgg[]>([]);
+  const [scoring, setScoring] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [s, c] = await Promise.all([
+      const [s, c, sc, a] = await Promise.all([
         fetch('/api/manage/stats').then((r) => r.json()),
         fetch('/api/manage/conversations?limit=100').then((r) => r.json()),
+        fetch('/api/manage/scores/scorers').then((r) => r.json()),
+        fetch('/api/manage/scores/aggregate').then((r) => r.json()),
       ]);
       setStats(s);
       setRows(c.conversations ?? []);
+      setScorers(sc.scorers ?? []);
+      setAgg(a.scorers ?? []);
     } catch {
       /* leave empty */
     } finally {
@@ -241,6 +262,18 @@ function EvalView() {
   useEffect(() => {
     load();
   }, []);
+
+  const runScorers = async () => {
+    setScoring(true);
+    try {
+      await fetch('/api/manage/scores/run-all', { method: 'POST' });
+      // batch scoring runs in the background — give the judges a moment, then refresh.
+      await new Promise((r) => setTimeout(r, 2500));
+      await load();
+    } finally {
+      setScoring(false);
+    }
+  };
 
   const maxDist = Math.max(1, ...(stats?.distribution ?? []).map((d) => d.count));
   const distByStar = (n: number) => stats?.distribution.find((d) => d.rating === n)?.count ?? 0;
@@ -263,6 +296,31 @@ function EvalView() {
         </div>
       </div>
 
+      {scorers.length > 0 && (
+        <div className="eval-scorers">
+          <div className="eval-toolbar">
+            <h2>自动评分 · Scorers</h2>
+            <button className="eval-export" onClick={runScorers} disabled={scoring}>{scoring ? '评分中…' : '运行评分(未评分对话)'}</button>
+          </div>
+          <div className="eval-scorer-grid">
+            {scorers.map((s) => {
+              const a = agg.find((x) => x.scorerId === s.id);
+              const pct = a ? Math.round(a.avgScore * 100) : 0;
+              return (
+                <div className={`eval-scorer${s.group === 'guardrails' ? ' guard' : ''}`} key={s.id} title={s.description}>
+                  <div className="eval-scorer-top">
+                    <span className="nm">{s.name}{s.isLlm && <span className="llm">LLM</span>}</span>
+                    <span className="v">{a ? a.avgScore.toFixed(2) : '—'}</span>
+                  </div>
+                  <div className="eval-scorer-bar"><span style={{ width: `${pct}%` }} /></div>
+                  <div className="eval-scorer-sub">{a ? `${a.count} 次评分` : '未评分'}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="eval-toolbar">
         <h2>对话记录</h2>
         <button className="eval-export" onClick={() => window.open('/api/manage/eval/export', '_blank')}>导出评估数据集 (JSONL)</button>
@@ -282,6 +340,9 @@ function EvalView() {
                   <span className="phase">{c.phase}</span>
                   {c.mode === 'system' && <span>系统模式</span>}
                   {c.commitSha && <span className="k">{c.commitSha.slice(0, 7)}</span>}
+                  {!!c.scoreCount && c.avgScore != null && (
+                    <span className="score" title={`${c.scoreCount} 个维度自动评分`}>评分 {c.avgScore.toFixed(2)}</span>
+                  )}
                   <span>{c.createdAt.slice(0, 16).replace('T', ' ')}</span>
                 </div>
                 {c.note && <div className="eval-row-note">“{c.note}”</div>}
