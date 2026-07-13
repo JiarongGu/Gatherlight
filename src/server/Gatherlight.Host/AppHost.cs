@@ -56,7 +56,7 @@ public sealed class AppHost : Form
         Font = new Font("Segoe UI", 9f);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
-        ClientSize = new Size(468, 486);
+        ClientSize = new Size(468, 524);
         StartPosition = FormStartPosition.CenterScreen;
 
         BuildUi();
@@ -111,13 +111,15 @@ public sealed class AppHost : Form
         Controls.Add(open);
         Controls.Add(Btn("打开数据文件夹", 20, 292, 209, onClick: () => OpenExternal(_options.DataPath)));
         Controls.Add(Btn("重启服务", 239, 292, 209, onClick: Restart));
+        Controls.Add(Btn("导出记忆…", 20, 332, 209, onClick: ExportMemory));
+        Controls.Add(Btn("导入记忆…", 239, 332, 209, onClick: ImportMemory));
 
-        _autoRestart = new CheckBox { Text = "无响应时自动重启服务", Location = new Point(22, 340), AutoSize = true, ForeColor = Text2, BackColor = Bg };
+        _autoRestart = new CheckBox { Text = "无响应时自动重启服务", Location = new Point(22, 380), AutoSize = true, ForeColor = Text2, BackColor = Bg };
         Controls.Add(_autoRestart);
 
-        Controls.Add(Btn("退出(停止服务)", 20, 372, 428, onClick: ExitApp));
+        Controls.Add(Btn("退出(停止服务)", 20, 410, 428, onClick: ExitApp));
 
-        _footer = Lbl("", 22, 424, 8f, Muted);
+        _footer = Lbl("", 22, 462, 8f, Muted);
         _footer.AutoSize = false; _footer.Size = new Size(428, 40);
         _footer.Text = $"端口 {_options.Port}\n数据 {_options.DataPath}";
         Controls.Add(_footer);
@@ -222,6 +224,42 @@ public sealed class AppHost : Form
 
     private static string FormatUptime(TimeSpan t) =>
         t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes}m" : t.TotalMinutes >= 1 ? $"{t.Minutes}m {t.Seconds}s" : $"{t.Seconds}s";
+
+    // ---- memory transfer (export/import the DB knowledge to move it between installs) ----
+    private async void ExportMemory()
+    {
+        using var dlg = new SaveFileDialog
+        {
+            Filter = "Gatherlight 记忆 (*.json)|*.json",
+            FileName = $"gatherlight-memory-{DateTime.Now:yyyyMMdd}.json",
+            Title = "导出记忆",
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var bytes = await _http.GetByteArrayAsync("api/memory/export");
+            await File.WriteAllBytesAsync(dlg.FileName, bytes);
+            MessageBox.Show(this, $"已导出记忆到:\n{dlg.FileName}\n\n把它拷到新机器,用「导入记忆」或 GATHERLIGHT_SEED_MEMORY 载入。",
+                "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex) { MessageBox.Show(this, "导出失败:" + ex.Message, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
+
+    private async void ImportMemory()
+    {
+        using var dlg = new OpenFileDialog { Filter = "Gatherlight 记忆 (*.json)|*.json", Title = "导入记忆" };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            using var content = new StringContent(await File.ReadAllTextAsync(dlg.FileName), System.Text.Encoding.UTF8, "application/json");
+            using var res = await _http.PostAsync("api/memory/import", content);
+            var body = await res.Content.ReadAsStringAsync();
+            if (!res.IsSuccessStatusCode) throw new Exception(body);
+            MessageBox.Show(this, "已导入记忆(合并 upsert)。\n" + body, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            await RefreshStatsAsync();
+        }
+        catch (Exception ex) { MessageBox.Show(this, "导入失败:" + ex.Message, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
 
     // ---- tray + window ----
     private ContextMenuStrip BuildTrayMenu()

@@ -6,6 +6,7 @@
 //   node devtools/dev.mjs publish [rid]     - client build + self-contained single-file exe -> dist/
 //   node devtools/dev.mjs e2e [p1..|all]    - API-level end-to-end suites (isolated data folders)
 //   node devtools/dev.mjs smoke             - real-claude two-gate smoke (opt-in; needs auth CLI)
+//   node devtools/dev.mjs memory <export|import> [file] - transfer DB memory (needs a running server)
 //   node devtools/dev.mjs test-data         - regenerate the synthetic fixture data folder
 //   node devtools/dev.mjs install-hooks     - git core.hooksPath -> devtools/hooks (pre-commit guard)
 //   node devtools/dev.mjs check-sensitive   - scan staged changes (--tree for all tracked files)
@@ -119,6 +120,11 @@ switch (cmd) {
     run('node', [path.join(repo, 'devtools', 'scripts', 'smoke-real-claude.mjs')]);
     break;
 
+  case 'memory':
+    // export/import the DB memory (knowledge library + facts) against a running server.
+    run('node', [path.join(repo, 'devtools', 'scripts', 'memory.mjs'), ...args]);
+    break;
+
   case 'host': {
     // The desktop management console (hosts the server in-process + monitors health). This is the
     // "proper" way to run Gatherlight; `server` (dotnet run) stays for dev iteration.
@@ -183,6 +189,6 @@ switch (cmd) {
   }
 
   default:
-    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|e2e|smoke|test-data|install-hooks|check-sensitive>');
+    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|e2e|smoke|memory|test-data|install-hooks|check-sensitive>');
     process.exitCode = cmd ? 1 : 0;
 }

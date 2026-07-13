@@ -99,6 +99,8 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibrarySearchTool>()
             .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryImportTool>()
             .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryDeleteTool>()
+            // Portable memory transfer (export/import the DB knowledge between installs)
+            .AddSingleton<Modules.Memory.Services.IMemoryService, Modules.Memory.Services.MemoryService>()
             // Hot-loadable script tools ({data}/tools/<name>/tool.json — no rebuild needed)
             .AddSingleton<ScriptToolProvider>()
             .AddSingleton<IScriptToolProvider>(sp => sp.GetRequiredService<ScriptToolProvider>())
@@ -140,6 +142,29 @@ public static class GatherlightApp
         app.Services.GetRequiredService<IZhikuSeeder>().SeedAsync().GetAwaiter().GetResult();
 
         app.Services.GetRequiredService<IPlanIndexService>().RescanAsync().GetAwaiter().GetResult();
+
+        // Optional startup memory seed (testing / new installs): point GATHERLIGHT_SEED_MEMORY at a
+        // bundle exported from another install and it's merged in on boot (idempotent upsert).
+        if (Environment.GetEnvironmentVariable("GATHERLIGHT_SEED_MEMORY") is { Length: > 0 } seedPath
+            && File.Exists(seedPath))
+        {
+            try
+            {
+                var bundle = JsonSerializer.Deserialize<Modules.Memory.Services.MemoryBundle>(
+                    File.ReadAllText(seedPath), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                if (bundle is { GatherlightMemory: >= 1 })
+                {
+                    var r = app.Services.GetRequiredService<Modules.Memory.Services.IMemoryService>()
+                        .ImportAsync(bundle).GetAwaiter().GetResult();
+                    app.Logger.LogInformation("Seeded memory from {Path}: {Lib} library, {Kn} knowledge, {Ent} entities",
+                        seedPath, r.Library, r.Knowledge, r.Entities);
+                }
+            }
+            catch (Exception ex)
+            {
+                app.Logger.LogWarning("Memory seed from {Path} failed: {Msg}", seedPath, ex.Message);
+            }
+        }
 
         // Chat runtime files (settings.chat.json + scope-guard hook); a newly-seeded scope guard
         // is committed so the agent's own diffs stay clean.

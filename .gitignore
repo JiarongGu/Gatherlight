@@ -25,6 +25,9 @@ local/
 *.sqlite
 *.sqlite3
 
+# Exported memory bundles — contain user knowledge (library/facts); transfer them, don't commit.
+gatherlight-memory*.json
+
 # built client (src/client `npm run build` output)
 src/server/Gatherlight.Server/wwwroot/
 
