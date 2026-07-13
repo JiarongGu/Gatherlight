@@ -69,12 +69,28 @@ it to the network without auth is unauthenticated control of both. The access mo
   are unaffected.
 - Behind a **same-host reverse proxy** (e.g. nginx → `127.0.0.1`), every request looks like
   loopback — set `trustLoopback: false` so the token is enforced anyway.
-- HTTP only carries the token in the clear; put a TLS-terminating proxy (or a VPN/tunnel) in front
-  before exposing it on an untrusted network.
+
+**Encryption (HTTPS).** Plain HTTP carries the token in the clear. Turn on `security.tls.enabled`
+(or `GATHERLIGHT_TLS=1`) and Kestrel terminates TLS itself:
+
+- **Self-signed by default** — a certificate is generated once and reused from
+  `{data}/state/gatherlight-tls.pfx`. The connection is encrypted, but browsers show an "untrusted
+  certificate" warning (the desktop host accepts its own loopback cert automatically).
+- **Bring your own cert** — point `security.tls.certPath` at a PFX/PKCS#12 bundle (e.g. from
+  Let's Encrypt), plus `security.tls.certPassword` if it has one, to remove the warning.
+- Or terminate TLS at a reverse proxy / tunnel in front and leave Kestrel on HTTP loopback with
+  `trustLoopback: false`.
 
 ```jsonc
 // {data}/state/settings.json
-{ "security": { "accessToken": "a-long-random-string", "bindAddress": "0.0.0.0", "trustLoopback": true } }
+{
+  "security": {
+    "accessToken": "a-long-random-string",
+    "bindAddress": "0.0.0.0",
+    "trustLoopback": true,
+    "tls": { "enabled": true, "certPath": "C:/certs/gatherlight.pfx", "certPassword": "…" }
+  }
+}
 ```
 
 ### Configuration
@@ -86,6 +102,8 @@ it to the network without auth is unauthenticated control of both. The access mo
 | Bind address | `GATHERLIGHT_BIND` env var, or `security.bindAddress` | `127.0.0.1` (loopback) |
 | Access token | `GATHERLIGHT_ACCESS_TOKEN` env var, or `security.accessToken` | *(none — loopback only)* |
 | Trust loopback | `GATHERLIGHT_TRUST_LOOPBACK=0` env var, or `security.trustLoopback` | `true` |
+| TLS / HTTPS | `GATHERLIGHT_TLS=1` env var, or `security.tls.enabled` | `false` (HTTP) |
+| TLS certificate | `GATHERLIGHT_TLS_CERT`(+`_PASSWORD`) env var, or `security.tls.certPath` | *(self-signed, generated)* |
 
 The **data folder** holds all user data (plans, household, SQLite state, uploads, the live
 knowledge base) in its **own private git repo** — back *that* up, not the exe. Point

@@ -25,6 +25,15 @@ public sealed class GatherlightServerOptions
     /// same-host reverse proxy. <c>GATHERLIGHT_TRUST_LOOPBACK=0</c> wins.</summary>
     public bool TrustLoopback { get; init; } = ResolveTrustLoopback(true);
 
+    /// <summary>Serve HTTPS directly from Kestrel (self-signed cert by default). <c>GATHERLIGHT_TLS=1</c> wins.</summary>
+    public bool TlsEnabled { get; init; } = ResolveTlsEnabled(false);
+
+    /// <summary>PFX certificate path; null = generate/reuse a self-signed one. <c>GATHERLIGHT_TLS_CERT</c> wins.</summary>
+    public string? TlsCertPath { get; init; } = ResolveTlsCertPath(null);
+
+    /// <summary>Password for <see cref="TlsCertPath"/>. <c>GATHERLIGHT_TLS_CERT_PASSWORD</c> wins.</summary>
+    public string? TlsCertPassword { get; init; } = ResolveTlsCertPassword(null);
+
     /// <summary>
     /// Data folder root: markdown plans/household + planner knowledge base (its own private git
     /// repo) and app state (SQLite, settings, uploads, caches) under <c>state/</c>. Default is
@@ -95,6 +104,22 @@ public sealed class GatherlightServerOptions
         Environment.GetEnvironmentVariable("GATHERLIGHT_TRUST_LOOPBACK") is { Length: > 0 } e
             ? e is not ("0" or "false" or "False")
             : settingValue;
+
+    /// <summary>Effective TLS toggle: <c>GATHERLIGHT_TLS=1/true</c> wins, else the persisted setting.</summary>
+    public static bool ResolveTlsEnabled(bool settingValue) =>
+        Environment.GetEnvironmentVariable("GATHERLIGHT_TLS") is { Length: > 0 } e
+            ? e is "1" or "true" or "True"
+            : settingValue;
+
+    /// <summary>Effective TLS cert path: <c>GATHERLIGHT_TLS_CERT</c> wins, else the persisted setting.</summary>
+    public static string? ResolveTlsCertPath(string? settingValue) =>
+        Environment.GetEnvironmentVariable("GATHERLIGHT_TLS_CERT") is { Length: > 0 } e ? e
+        : string.IsNullOrWhiteSpace(settingValue) ? null : settingValue;
+
+    /// <summary>Effective TLS cert password: <c>GATHERLIGHT_TLS_CERT_PASSWORD</c> wins, else the setting.</summary>
+    public static string? ResolveTlsCertPassword(string? settingValue) =>
+        Environment.GetEnvironmentVariable("GATHERLIGHT_TLS_CERT_PASSWORD") is { Length: > 0 } e ? e
+        : string.IsNullOrWhiteSpace(settingValue) ? null : settingValue;
 
     /// <summary>True when the address only ever accepts local connections (no token needed).</summary>
     public static bool IsLoopbackAddress(string address) =>

@@ -32,9 +32,13 @@ public sealed class AppHost : Form
     public AppHost(GatherlightServerOptions options)
     {
         _options = options;
-        _url = $"http://127.0.0.1:{options.Port}/";
+        _url = $"{(options.TlsEnabled ? "https" : "http")}://127.0.0.1:{options.Port}/";
         _manageUrl = _url + "manage";
-        _http = new HttpClient { BaseAddress = new Uri(_url), Timeout = TimeSpan.FromSeconds(4) };
+        // With TLS on we talk to our own loopback endpoint, whose cert may be self-signed — trust it
+        // (loopback only, so there's no MITM surface to protect against here).
+        var handler = new HttpClientHandler();
+        if (options.TlsEnabled) handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+        _http = new HttpClient(handler) { BaseAddress = new Uri(_url), Timeout = TimeSpan.FromSeconds(4) };
 
         Text = "Gatherlight · 拾光 — 管理控制台";
         Icon = Theme.SealIcon();
@@ -85,6 +89,14 @@ public sealed class AppHost : Form
             var core = _web.CoreWebView2;
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.IsStatusBarEnabled = false;
+            // Under TLS the loopback endpoint may present a self-signed cert — accept it, but only
+            // for loopback hosts (the WebView2 only ever loads our own /manage; external links open
+            // in the system browser via NewWindowRequested).
+            core.ServerCertificateErrorDetected += (_, e) =>
+            {
+                try { if (new Uri(e.RequestUri).IsLoopback) e.Action = CoreWebView2ServerCertificateErrorAction.AlwaysAllow; }
+                catch { /* leave default (reject) */ }
+            };
             // Tell the page it's inside the host (so it renders host-only actions), and wire the bridge.
             await core.AddScriptToExecuteOnDocumentCreatedAsync("window.__gatherlightHost = true;");
             core.WebMessageReceived += OnHostMessage;

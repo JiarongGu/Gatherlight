@@ -41,6 +41,27 @@ public sealed class SecurityConfig
     /// 127.0.0.1), where every request arrives from loopback and trusting it would bypass auth
     /// entirely. <c>GATHERLIGHT_TRUST_LOOPBACK=0</c> overrides.</summary>
     public bool TrustLoopback { get; set; } = true;
+
+    /// <summary>HTTPS/TLS termination in Kestrel itself.</summary>
+    public TlsConfig Tls { get; set; } = new();
+}
+
+/// <summary>
+/// TLS for direct HTTPS (no proxy). Off by default. When on, Kestrel serves HTTPS using
+/// <see cref="CertPath"/> (a PKCS#12/PFX bundle) — or, when that's unset, a self-signed certificate
+/// generated once and persisted to <c>{data}/state/gatherlight-tls.pfx</c>. A self-signed cert
+/// encrypts the connection (so the access token isn't sent in the clear) but browsers will warn;
+/// point <see cref="CertPath"/> at a real cert (e.g. Let's Encrypt) to remove the warning.
+/// </summary>
+public sealed class TlsConfig
+{
+    public bool Enabled { get; set; }
+    /// <summary>Path to a PFX/PKCS#12 certificate. Null = generate + reuse a self-signed one.
+    /// <c>GATHERLIGHT_TLS_CERT</c> overrides.</summary>
+    public string? CertPath { get; set; }
+    /// <summary>Password for <see cref="CertPath"/> (if any). <c>GATHERLIGHT_TLS_CERT_PASSWORD</c>
+    /// overrides.</summary>
+    public string? CertPassword { get; set; }
 }
 
 /// <summary>

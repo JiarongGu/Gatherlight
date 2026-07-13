@@ -32,7 +32,13 @@ public static class GatherlightApp
             throw new InvalidOperationException(
                 $"Refusing to bind {options.BindAddress} without an access token. Set security.accessToken " +
                 "in settings.json (or GATHERLIGHT_ACCESS_TOKEN) before exposing Gatherlight on the network.");
-        builder.WebHost.UseUrls($"http://{options.BindAddress}:{options.Port}");
+
+        var cert = Modules.Security.Services.TlsCertificate.Resolve(options);
+        if (cert is null)
+            builder.WebHost.UseUrls($"http://{options.BindAddress}:{options.Port}");
+        else
+            builder.WebHost.ConfigureKestrel(k =>
+                k.Listen(ParseBindAddress(options.BindAddress), options.Port, lo => lo.UseHttps(cert)));
         builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
 
         builder.Services
@@ -210,4 +216,13 @@ public static class GatherlightApp
 
         return app;
     }
+
+    /// <summary>Maps a bind-address string to the IP Kestrel should listen on for the HTTPS path.</summary>
+    private static System.Net.IPAddress ParseBindAddress(string address) => address switch
+    {
+        "0.0.0.0" => System.Net.IPAddress.Any,
+        "::" or "[::]" => System.Net.IPAddress.IPv6Any,
+        "localhost" => System.Net.IPAddress.Loopback,
+        _ => System.Net.IPAddress.TryParse(address, out var ip) ? ip : System.Net.IPAddress.Loopback,
+    };
 }

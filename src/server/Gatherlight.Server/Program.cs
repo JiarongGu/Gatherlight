@@ -12,9 +12,12 @@ var options = new GatherlightServerOptions
     BindAddress = GatherlightServerOptions.ResolveBindAddress(config.Current.Security.BindAddress),
     AccessToken = GatherlightServerOptions.ResolveAccessToken(config.Current.Security.AccessToken),
     TrustLoopback = GatherlightServerOptions.ResolveTrustLoopback(config.Current.Security.TrustLoopback),
+    TlsEnabled = GatherlightServerOptions.ResolveTlsEnabled(config.Current.Security.Tls.Enabled),
+    TlsCertPath = GatherlightServerOptions.ResolveTlsCertPath(config.Current.Security.Tls.CertPath),
+    TlsCertPassword = GatherlightServerOptions.ResolveTlsCertPassword(config.Current.Security.Tls.CertPassword),
 };
 var app = GatherlightApp.Build(options, args: args, config: config);
-app.Logger.LogInformation("Gatherlight server on http://{Bind}:{Port} (data: {Data}, auth: {Auth})",
-    options.BindAddress, options.Port, options.DataPath,
+app.Logger.LogInformation("Gatherlight server on {Scheme}://{Bind}:{Port} (data: {Data}, auth: {Auth})",
+    options.TlsEnabled ? "https" : "http", options.BindAddress, options.Port, options.DataPath,
     string.IsNullOrEmpty(options.AccessToken) ? "off · loopback-trusted" : "token required for remote");
 app.Run();
