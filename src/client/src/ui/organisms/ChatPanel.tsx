@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useCallback, useState, memo } from 'react';
-import { Button, Input, Alert, Tag, Spin, Tooltip, IconButton, Stepper as StepperBar } from '@/shared/components/visual';
+import { Button, Input, Alert, Tag, Spin, Tooltip, IconButton, Stepper as StepperBar } from '@/ui/atoms';
 import {
   SendOutlined,
   RobotOutlined,

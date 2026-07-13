@@ -1,4 +1,4 @@
-// L3 configured layer — higher-order, configurable wrappers L2 composes.
+// Molecules — configured/composed wrappers that organisms compose.
 export { Carousel } from './Carousel';
 export { Collapsible, revealAndScroll } from './Collapsible';
 export { MapCanvas, type MapMarker } from './MapCanvas';

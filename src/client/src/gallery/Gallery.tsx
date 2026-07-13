@@ -12,8 +12,8 @@ import {
   DiffBlock,
   Highlight,
   Stepper
-} from '@/shared/components/visual';
-import { Carousel } from '@/shared/components/configured';
+} from '@/ui/atoms';
+import { Carousel } from '@/ui/molecules';
 import { RobotOutlined, DeleteOutlined } from '@ant-design/icons';
 
 // Each atom in its own anchored block, shown in dark + light side by side, so a

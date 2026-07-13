@@ -1,4 +1,4 @@
-import { Tooltip } from '@/shared/components/visual';
+import { Tooltip } from '@/ui/atoms';
 import {
   MenuOutlined,
   OrderedListOutlined,

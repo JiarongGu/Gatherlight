@@ -1,6 +1,6 @@
 import { memo, useMemo, useState } from 'react';
-import { Menu, Empty } from '@/shared/components/visual';
-import type { MenuProps } from '@/shared/components/visual';
+import { Menu, Empty } from '@/ui/atoms';
+import type { MenuProps } from '@/ui/atoms';
 import { useTheme } from '@/lib/theme';
 import {
   CompassOutlined,

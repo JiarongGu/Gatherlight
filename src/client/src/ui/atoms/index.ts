@@ -1,4 +1,4 @@
-// L1 visual layer — display-only atoms. Import from '@/shared/components/visual'.
+// Atoms — display-only visual primitives. Import from '@/ui/atoms'.
 export * from './primitives';
 export { IconButton } from './IconButton';
 export { CatBadge, StatusBadge, Kbd, type TripStatus } from './Badges';

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Space, Tag, Alert, Collapse, DiffBlock } from '@/shared/components/visual';
+import { Button, Space, Tag, Alert, Collapse, DiffBlock } from '@/ui/atoms';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,

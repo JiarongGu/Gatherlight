@@ -2,8 +2,8 @@ import { Children, isValidElement, memo, useMemo, type ComponentProps, type Reac
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-import { Image } from '@/shared/components/visual';
-import { Collapsible } from '@/shared/components/configured';
+import { Image } from '@/ui/atoms';
+import { Collapsible } from '@/ui/molecules';
 import { TripMap } from './TripMap';
 import { CityMap } from './CityMap';
 

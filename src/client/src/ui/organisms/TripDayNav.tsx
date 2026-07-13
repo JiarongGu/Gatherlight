@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Heading } from '@/lib/markdown';
-import { DayChip } from '@/shared/components/visual';
-import { Carousel, revealAndScroll } from '@/shared/components/configured';
+import { DayChip } from '@/ui/atoms';
+import { Carousel, revealAndScroll } from '@/ui/molecules';
 
 interface Props {
   headings: Heading[];

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Dropdown, Modal, Input, App, type MenuProps } from '@/shared/components/visual';
+import { Dropdown, Modal, Input, App, type MenuProps } from '@/ui/atoms';
 import {
   MoreOutlined,
   EditOutlined,

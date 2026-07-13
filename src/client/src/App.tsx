@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import { Layout, Grid } from 'antd';
-import { Drawer, Button, Space, Tooltip, CatBadge } from '@/shared/components/visual';
+import { Drawer, Button, Space, Tooltip, CatBadge } from '@/ui/atoms';
 import { DownloadOutlined, PrinterOutlined, FilePdfOutlined } from '@ant-design/icons';
 import {
   Sidebar,
@@ -11,10 +11,10 @@ import {
   ChatPanel,
   TopBar,
   CommandPalette,
-  Home,
   PlanActionsMenu,
   type ActionTarget
-} from '@/shared/components/composite';
+} from '@/ui/organisms';
+import { Home } from '@/screens';
 import { loadPlanData, type PlanData, type PlanFile, type TripAsset } from './lib/collectFiles';
 import { extractHeadings, stripFirstH1 } from './lib/markdown';
 import { buildTripExport, downloadAsFile, downloadTripPDF, isTripFile } from './lib/export';

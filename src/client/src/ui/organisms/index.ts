@@ -1,9 +1,10 @@
-// L2 composite layer — feature components built from L1 (+ L3) + business logic.
+// Organisms — feature blocks built from atoms (+ molecules) + business logic.
 export { MarkdownView } from './MarkdownView';
 export { TripDayNav } from './TripDayNav';
 export { TOC } from './TOC';
 export { Sidebar } from './Sidebar';
-export { Home } from './Home';
+// Home is a screen (routed surface) — re-exported here so legacy barrel imports keep working.
+export { Home } from '@/screens';
 export { TopBar } from './TopBar';
 export { CommandPalette } from './CommandPalette';
 export { ChatPanel } from './ChatPanel';

@@ -101,7 +101,7 @@ PDF 通过 `marked`(md→html)+ `html2pdf.js`(html→pdf)生成,A4 纵向,含目
 - **只读** — 编辑通过 Claude 的工具或你的编辑器;viewer 永远不加编辑 UI。
 - **无后端** — Vite `import.meta.glob` 直接读 markdown,无 API、无数据库。
 - **无规划逻辑** — viewer 只负责渲染,不计算预算/日期/天气。
-- **目录派生于路径前缀** — 加新类别 = 改 [`src/lib/collectFiles.ts`](src/lib/collectFiles.ts) 的 `categorise()` + 中文标签加到 [`src/lib/categories.ts`](src/lib/categories.ts) + (如需在侧栏出现) 改 [`src/shared/components/composite/Sidebar.tsx`](src/shared/components/composite/Sidebar.tsx) 的 category-order 数组。
+- **目录派生于路径前缀** — 加新类别 = 改 [`src/lib/collectFiles.ts`](src/lib/collectFiles.ts) 的 `categorise()` + 中文标签加到 [`src/lib/categories.ts`](src/lib/categories.ts) + (如需在侧栏出现) 改 [`src/ui/organisms/Sidebar.tsx`](src/ui/organisms/Sidebar.tsx) 的 category-order 数组。
 
 ## 技术栈
 

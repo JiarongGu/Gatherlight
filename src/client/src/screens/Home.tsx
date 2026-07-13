@@ -10,11 +10,11 @@ import {
   ClockCircleOutlined,
   FileTextOutlined
 } from '@ant-design/icons';
-import { StatusBadge, type TripStatus } from '@/shared/components/visual';
+import { StatusBadge, type TripStatus } from '@/ui/atoms';
 import type { PlanFile } from '@/lib/collectFiles';
 import { buildDestinationGroups, extractTripMeta, type TripVariant } from '@/lib/tripGroups';
 import { getRecent } from '@/lib/recentFiles';
-import { PlanActionsMenu, type ActionTarget } from './PlanActionsMenu';
+import { PlanActionsMenu, type ActionTarget } from '@/ui/organisms/PlanActionsMenu';
 
 interface AfterAction {
   (info: { removed?: string[]; renamed?: { from: string; to: string } }): void;

@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Input } from '@/shared/components/visual';
+import { Modal, Input } from '@/ui/atoms';
 import {
   SearchOutlined,
   FileTextOutlined,

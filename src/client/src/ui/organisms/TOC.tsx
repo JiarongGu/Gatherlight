@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Heading } from '@/lib/markdown';
-import { revealAndScroll } from '@/shared/components/configured';
+import { revealAndScroll } from '@/ui/molecules';
 
 interface Props {
   headings: Heading[];

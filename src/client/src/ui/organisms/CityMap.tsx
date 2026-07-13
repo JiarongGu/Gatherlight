@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { MapCanvas, type MapMarker } from '@/shared/components/configured';
+import { MapCanvas, type MapMarker } from '@/ui/molecules';
 
 interface Props {
   pointsRaw: string;

@@ -1,4 +1,4 @@
-import { Card, Button, Space, Typography } from '@/shared/components/visual';
+import { Card, Button, Space, Typography } from '@/ui/atoms';
 import { FilePdfOutlined, FileTextOutlined, DownloadOutlined } from '@ant-design/icons';
 import type { PlanFile, TripAsset } from '@/lib/collectFiles';
 
