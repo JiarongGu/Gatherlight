@@ -94,6 +94,13 @@ try {
   // run-all (background)
   const all = await post('/api/manage/scores/run-all');
   ok('run-all starts a batch', all.status === 200 && all.body.started === true);
+
+  // run trace (Mastra observability) — the committed conversation has phases + a Write tool + usage
+  const trace = (await j(`/api/manage/trace/${id}`)).body;
+  ok('trace: phase timeline incl. committed', trace.steps.some((s) => s.kind === 'phase' && s.label === 'committed'));
+  ok('trace: tool call recorded with a duration field', trace.toolCalls >= 1 && trace.steps.some((s) => s.kind === 'tool' && 'durationMs' in s), `tools=${trace.toolCalls}`);
+  ok('trace: usage rolled up into token totals', trace.steps.some((s) => s.kind === 'usage') && (trace.inputTokens > 0 || trace.outputTokens > 0), JSON.stringify({ i: trace.inputTokens, o: trace.outputTokens }));
+  ok('trace: total duration computed', typeof trace.totalDurationMs === 'number' && trace.totalDurationMs >= 0);
 } catch (err) {
   console.error('e2e-p21 fatal:', err.message);
   console.error(log.slice(-3000));

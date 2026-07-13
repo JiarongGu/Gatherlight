@@ -231,6 +231,34 @@ interface ScoreAgg {
   avgScore: number;
   count: number;
 }
+interface StoredScore {
+  scorerId: string;
+  score: number;
+  reason?: string | null;
+  isLlm: boolean;
+}
+interface TraceStep {
+  seq: number;
+  kind: string;
+  label: string;
+  detail?: string | null;
+  durationMs: number;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  costUsd?: number | null;
+}
+interface RunTrace {
+  totalDurationMs: number;
+  toolCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  costUsd: number;
+  steps: TraceStep[];
+}
+
+const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
+const fmtNum = (n: number) => n.toLocaleString();
 
 function EvalView() {
   const [stats, setStats] = useState<Stats | null>(null);
@@ -272,6 +300,24 @@ function EvalView() {
       await load();
     } finally {
       setScoring(false);
+    }
+  };
+
+  // Expand a conversation → load its run trace + per-dimension scores.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<{ trace: RunTrace; scores: StoredScore[] } | null>(null);
+  const toggle = async (id: string) => {
+    if (openId === id) { setOpenId(null); return; }
+    setOpenId(id);
+    setDetail(null);
+    try {
+      const [t, s] = await Promise.all([
+        fetch(`/api/manage/trace/${id}`).then((r) => r.json()),
+        fetch(`/api/manage/scores/${id}`).then((r) => r.json()),
+      ]);
+      setDetail({ trace: t, scores: s.scores ?? [] });
+    } catch {
+      /* leave detail null */
     }
   };
 
@@ -333,28 +379,74 @@ function EvalView() {
       ) : (
         <div className="eval-list">
           {rows.map((c) => (
-            <div className="eval-row" key={c.id}>
-              <div className="eval-row-main">
-                <div className="eval-row-msg">{c.userMessage || '(空)'}</div>
-                <div className="eval-row-meta">
-                  <span className="phase">{c.phase}</span>
-                  {c.mode === 'system' && <span>系统模式</span>}
-                  {c.commitSha && <span className="k">{c.commitSha.slice(0, 7)}</span>}
-                  {!!c.scoreCount && c.avgScore != null && (
-                    <span className="score" title={`${c.scoreCount} 个维度自动评分`}>评分 {c.avgScore.toFixed(2)}</span>
-                  )}
-                  <span>{c.createdAt.slice(0, 16).replace('T', ' ')}</span>
+            <div className="eval-item" key={c.id}>
+              <div className={`eval-row clickable${openId === c.id ? ' open' : ''}`} onClick={() => toggle(c.id)}>
+                <span className="eval-caret">{openId === c.id ? '▾' : '▸'}</span>
+                <div className="eval-row-main">
+                  <div className="eval-row-msg">{c.userMessage || '(空)'}</div>
+                  <div className="eval-row-meta">
+                    <span className="phase">{c.phase}</span>
+                    {c.mode === 'system' && <span>系统模式</span>}
+                    {c.commitSha && <span className="k">{c.commitSha.slice(0, 7)}</span>}
+                    {!!c.scoreCount && c.avgScore != null && (
+                      <span className="score" title={`${c.scoreCount} 个维度自动评分`}>评分 {c.avgScore.toFixed(2)}</span>
+                    )}
+                    <span>{c.createdAt.slice(0, 16).replace('T', ' ')}</span>
+                  </div>
+                  {c.note && <div className="eval-row-note">“{c.note}”</div>}
                 </div>
-                {c.note && <div className="eval-row-note">“{c.note}”</div>}
+                {c.rating ? (
+                  <div className="eval-row-rating">
+                    <span className="on">{'★'.repeat(c.rating)}</span>
+                    <span className="off">{'★'.repeat(5 - c.rating)}</span>
+                  </div>
+                ) : (
+                  <div className="eval-row-rating unrated">未评分</div>
+                )}
               </div>
-              {c.rating ? (
-                <div className="eval-row-rating">
-                  <span className="on">{'★'.repeat(c.rating)}</span>
-                  <span className="off">{'★'.repeat(5 - c.rating)}</span>
-                </div>
-              ) : (
-                <div className="eval-row-rating unrated">未评分</div>
-              )}
+              {openId === c.id && <ConversationDetail detail={detail} scorers={scorers} />}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Conversation detail: run trace (phase timeline + tools + LLM runs) + per-dimension scores ----
+function ConversationDetail({ detail, scorers }: { detail: { trace: RunTrace; scores: StoredScore[] } | null; scorers: ScorerMeta[] }) {
+  if (!detail) return <div className="eval-detail loading">加载运行轨迹…</div>;
+  const { trace, scores } = detail;
+  const nameOf = (id: string) => scorers.find((s) => s.id === id)?.name ?? id;
+  return (
+    <div className="eval-detail">
+      <div className="eval-trace-totals">
+        <span>耗时 <b>{fmtMs(trace.totalDurationMs)}</b></span>
+        <span>工具 <b>{trace.toolCalls}</b></span>
+        <span>输入 <b>{fmtNum(trace.inputTokens)}</b> tok</span>
+        <span>输出 <b>{fmtNum(trace.outputTokens)}</b> tok</span>
+        {trace.costUsd > 0 && <span>成本 <b>${trace.costUsd.toFixed(4)}</b></span>}
+      </div>
+      <div className="eval-trace">
+        {trace.steps.map((s, i) => (
+          <div className={`eval-tstep ${s.kind}`} key={i}>
+            <span className="k">{s.kind}</span>
+            <span className="lb">{s.label}{s.detail ? <em> · {s.detail}</em> : null}</span>
+            {s.kind === 'usage' ? (
+              <span className="d">{fmtNum(s.inputTokens ?? 0)}/{fmtNum(s.outputTokens ?? 0)} tok</span>
+            ) : s.durationMs > 0 ? (
+              <span className="d">{fmtMs(s.durationMs)}</span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {scores.length > 0 && (
+        <div className="eval-detail-scores">
+          {scores.map((sc) => (
+            <div className="eval-dscore" key={sc.scorerId} title={sc.reason ?? ''}>
+              <span className="nm">{nameOf(sc.scorerId)}{sc.isLlm && <span className="llm">LLM</span>}</span>
+              <span className="bar"><span className={sc.score >= 0.75 ? 'ok' : sc.score >= 0.4 ? 'mid' : 'low'} style={{ width: `${Math.round(sc.score * 100)}%` }} /></span>
+              <span className="v">{sc.score.toFixed(2)}</span>
             </div>
           ))}
         </div>
