@@ -3,6 +3,7 @@
 //   node devtools/dev.mjs vite              - run the client dev server (HMR, proxies /api)
 //   node devtools/dev.mjs build             - client build -> wwwroot + dotnet build
 //   node devtools/dev.mjs e2e [p1..|all]    - API-level end-to-end suites (isolated data folders)
+//   node devtools/dev.mjs smoke             - real-claude two-gate smoke (opt-in; needs auth CLI)
 //   node devtools/dev.mjs test-data         - regenerate the synthetic fixture data folder
 //   node devtools/dev.mjs install-hooks     - git core.hooksPath -> devtools/hooks (pre-commit guard)
 //   node devtools/dev.mjs check-sensitive   - scan staged changes (--tree for all tracked files)
@@ -112,6 +113,10 @@ switch (cmd) {
     run('node', [path.join(repo, 'devtools', 'scripts', 'check-sensitive.mjs'), ...args]);
     break;
 
+  case 'smoke':
+    run('node', [path.join(repo, 'devtools', 'scripts', 'smoke-real-claude.mjs')]);
+    break;
+
   case 'e2e': {
     const which = args[0] ?? 'all';
     const all = fs.readdirSync(path.join(repo, 'devtools', 'scripts'))
@@ -129,6 +134,6 @@ switch (cmd) {
   }
 
   default:
-    console.log('usage: node devtools/dev.mjs <server|vite|build|e2e|test-data|install-hooks|check-sensitive>');
+    console.log('usage: node devtools/dev.mjs <server|vite|build|e2e|smoke|test-data|install-hooks|check-sensitive>');
     process.exitCode = cmd ? 1 : 0;
 }
