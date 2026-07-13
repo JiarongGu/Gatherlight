@@ -46,6 +46,10 @@ public sealed class GatherlightServerOptions
     {
         var env = Environment.GetEnvironmentVariable("GATHERLIGHT_DATA");
         if (!string.IsNullOrEmpty(env)) return env;
+        // Structured production bundle: the exe lives in libs/, with res/ + data/ as siblings.
+        if (Directory.Exists(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "res"))))
+            return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "data"));
+        // Dev: walk up from cwd to the repo root (Gatherlight.slnx) and use {root}/local.
         for (var d = new DirectoryInfo(Environment.CurrentDirectory); d is not null; d = d.Parent)
             if (File.Exists(Path.Combine(d.FullName, "Gatherlight.slnx")))
                 return Path.Combine(d.FullName, "local");

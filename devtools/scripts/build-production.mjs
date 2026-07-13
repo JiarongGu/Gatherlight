@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// build-production.mjs — produce the shippable Gatherlight desktop bundle.
+// build-production.mjs — produce the shippable Gatherlight desktop bundle in a clear layout:
 //
-// Output: dist/  (self-contained single-file management host + loose resources + update manifest)
-//   Gatherlight.Host.exe   the tray management console; hosts the server in-process + monitors health
-//   wwwroot/               the built React planner (served to browsers)
-//   Assets/DataTemplate/   knowledge-base template (ZhikuSeeder scaffolds new data folders from it)
-//   playwright.ps1         one-time chromium install for the scraper tools
-//   manifest.json          sha256 of every file (version + rid) — for update verification
-// plus a sibling zip:  dist/Gatherlight-<version>-<rid>.zip
+//   dist/Gatherlight/
+//     Gatherlight.cmd     launcher — double-click to run (sets data path + optional memory seed)
+//     README.txt          how to run / transfer memory / prerequisites
+//     manifest.json       sha256 of every shipped file (for update verification)
+//     libs/               the self-contained single-file host (runtime + assemblies) + playwright.ps1
+//     res/                wwwroot (web planner) + template (knowledge-base seed)
+//     data/               the data folder — user data lands here (back this up)
+//   dist/Gatherlight-<version>-<rid>.zip   the whole bundle, zipped
 //
 //   node devtools/scripts/build-production.mjs [rid] [--skip-client]
 // The .NET runtime is embedded (target machine needs nothing). The authenticated `claude` CLI and
@@ -24,7 +25,13 @@ const args = process.argv.slice(2);
 const rid = args.find((a) => !a.startsWith('--')) ?? 'win-x64';
 const skipClient = args.includes('--skip-client');
 const version = config.version ?? '0.0.0';
-const outDir = path.join(repo, 'dist');
+
+const dist = path.join(repo, 'dist');
+const bundle = path.join(dist, 'Gatherlight');
+const stage = path.join(dist, '_stage');
+const libs = path.join(bundle, 'libs');
+const res = path.join(bundle, 'res');
+const data = path.join(bundle, 'data');
 
 const step = (n, msg) => console.log(`\x1b[36m[${n}]\x1b[0m ${msg}`);
 const die = (msg) => { console.error(`\x1b[31m✖ ${msg}\x1b[0m`); process.exit(1); };
@@ -33,7 +40,7 @@ const runOr = (exe, argv, opts, err) => {
   if (r.status !== 0) die(err);
 };
 
-console.log(`\n\x1b[1mGatherlight production build\x1b[0m  v${version} · ${rid} · self-contained\n`);
+console.log(`\n\x1b[1mGatherlight production bundle\x1b[0m  v${version} · ${rid}\n`);
 
 // 1. client → src/server/Gatherlight.Server/wwwroot
 if (!skipClient) {
@@ -44,11 +51,10 @@ if (!fs.existsSync(path.join(repo, config.serverProject, 'wwwroot', 'index.html'
   die('client build missing (wwwroot/index.html) — run without --skip-client');
 }
 
-// 2. clean + publish the Host (single file embeds assemblies + native libs; wwwroot / DataTemplate /
-//    playwright.ps1 land loose beside the exe via AppContext.BaseDirectory).
+// 2. publish the host (self-contained single-file) into a staging dir
 step(2, 'publishing host (self-contained single-file)…');
-fs.rmSync(outDir, { recursive: true, force: true });
-runOr('dotnet', ['publish', config.hostProject, '-c', 'Release', '-r', rid, '-o', outDir,
+fs.rmSync(dist, { recursive: true, force: true });
+runOr('dotnet', ['publish', config.hostProject, '-c', 'Release', '-r', rid, '-o', stage,
   '--self-contained',
   '-p:PublishSingleFile=true',
   '-p:IncludeNativeLibrariesForSelfExtract=true',
@@ -58,53 +64,87 @@ runOr('dotnet', ['publish', config.hostProject, '-c', 'Release', '-r', rid, '-o'
   `-p:Version=${version}`,
 ], {}, 'dotnet publish failed');
 
-// 3. tidy: drop the referenced Server's stray apphost + debug/doc files — the one obvious app exe
-//    is Gatherlight.Host.exe.
-step(3, 'tidying output…');
-for (const stray of ['Gatherlight.Server.exe', 'Gatherlight.Server.pdb', 'Gatherlight.Host.pdb',
-  'Gatherlight.Server.runtimeconfig.json']) {
-  fs.rmSync(path.join(outDir, stray), { force: true });
-}
-for (const f of fs.readdirSync(outDir)) {
-  if (f.endsWith('.xml') || f.endsWith('.pdb')) fs.rmSync(path.join(outDir, f), { force: true });
-}
-for (const need of ['Gatherlight.Host.exe', 'wwwroot/index.html', 'Assets/DataTemplate']) {
-  if (!fs.existsSync(path.join(outDir, need))) die(`expected in bundle but missing: ${need}`);
+// 3. reorganize the flat publish into libs/ res/ data/
+step(3, 'arranging libs / res / data…');
+fs.mkdirSync(libs, { recursive: true });
+fs.mkdirSync(res, { recursive: true });
+fs.mkdirSync(data, { recursive: true });
+
+const move = (from, to) => { if (fs.existsSync(from)) fs.renameSync(from, to); };
+move(path.join(stage, 'Gatherlight.Host.exe'), path.join(libs, 'Gatherlight.Host.exe'));
+move(path.join(stage, 'playwright.ps1'), path.join(libs, 'playwright.ps1'));
+move(path.join(stage, 'wwwroot'), path.join(res, 'wwwroot'));
+move(path.join(stage, 'Assets', 'DataTemplate'), path.join(res, 'template'));
+fs.writeFileSync(path.join(data, '.gitkeep'), '');
+fs.rmSync(stage, { recursive: true, force: true });
+
+for (const need of [path.join(libs, 'Gatherlight.Host.exe'), path.join(res, 'wwwroot', 'index.html'), path.join(res, 'template', 'CLAUDE.md')]) {
+  if (!fs.existsSync(need)) die(`expected in bundle but missing: ${path.relative(bundle, need)}`);
 }
 
-// 4. update manifest — sha256 of every file (relative), written last so it doesn't hash itself.
-step(4, 'writing update manifest…');
+// 4. launcher + README
+step(4, 'writing launcher + README…');
+fs.writeFileSync(path.join(bundle, 'Gatherlight.cmd'),
+  '@echo off\r\n' +
+  'setlocal\r\n' +
+  'set "ROOT=%~dp0"\r\n' +
+  'set "GATHERLIGHT_DATA=%ROOT%data"\r\n' +
+  'if exist "%ROOT%seed-memory.json" set "GATHERLIGHT_SEED_MEMORY=%ROOT%seed-memory.json"\r\n' +
+  'start "" "%ROOT%libs\\Gatherlight.Host.exe" %*\r\n');
+
+fs.writeFileSync(path.join(bundle, 'README.txt'), [
+  'Gatherlight · 拾光 — 桌面管理端 / Desktop management host',
+  '',
+  '启动 / Run:',
+  '  双击 Gatherlight.cmd。托盘出现「拾」图标 + 管理控制台窗口;规划界面在浏览器中打开。',
+  '  Double-click Gatherlight.cmd. A tray icon + the management console open; the planner opens in a browser.',
+  '',
+  '结构 / Layout:',
+  '  Gatherlight.cmd   启动器 / launcher',
+  '  libs\\             程序(自包含,含 .NET 运行时) / the self-contained app',
+  '  res\\              资源:网页客户端 + 知识库模板 / web client + knowledge-base template',
+  '  data\\             你的数据(计划/家庭/知识库/SQLite)—— 备份这个文件夹 / your data — back this up',
+  '',
+  '迁移记忆 / Transfer memory:',
+  '  把导出的记忆文件改名为 seed-memory.json 放在本目录,启动时自动导入;或在控制台点「导入记忆」。',
+  '  Put an exported memory bundle here as seed-memory.json → auto-imported on startup; or use the console.',
+  '',
+  '前置(不随包分发) / Prerequisites (not bundled):',
+  '  · 已登录的 claude CLI —— AI 规划 / an authenticated claude CLI for AI planning',
+  '  · chromium(仅网页抓取工具,一次性): pwsh libs\\playwright.ps1 install chromium',
+  '',
+  `v${version} · ${rid}`,
+  '',
+].join('\r\n'));
+
+// 5. manifest — sha256 of every shipped file (excludes data/ + the manifest itself)
+step(5, 'writing manifest…');
 const files = {};
 const walk = (dir) => {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const abs = path.join(dir, e.name);
+    const rel = path.relative(bundle, abs).split(path.sep).join('/');
+    if (rel === 'manifest.json' || rel === 'data' || rel.startsWith('data/')) continue;
     if (e.isDirectory()) walk(abs);
-    else {
-      const rel = path.relative(outDir, abs).split(path.sep).join('/');
-      if (rel === 'manifest.json') continue;
-      files[rel] = crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex');
-    }
+    else files[rel] = crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex');
   }
 };
-walk(outDir);
-fs.writeFileSync(path.join(outDir, 'manifest.json'),
+walk(bundle);
+fs.writeFileSync(path.join(bundle, 'manifest.json'),
   JSON.stringify({ product: config.name, version, rid, files }, null, 2) + '\n');
 
-// 5. zip the bundle for distribution (PowerShell Compress-Archive — Windows target).
-step(5, 'zipping…');
-const zip = path.join(repo, 'dist', `${config.name}-${version}-${rid}.zip`);
-fs.rmSync(zip, { force: true });
+// 6. zip the bundle folder
+step(6, 'zipping…');
+const zip = path.join(dist, `${config.name}-${version}-${rid}.zip`);
 const zr = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
-  `Compress-Archive -Path '${outDir}\\*' -DestinationPath '${zip}' -Force`], { stdio: 'inherit' });
+  `Compress-Archive -Path '${bundle}' -DestinationPath '${zip}' -Force`], { stdio: 'inherit' });
 const zipped = zr.status === 0 && fs.existsSync(zip);
 
 // summary
-const exe = path.join(outDir, 'Gatherlight.Host.exe');
-const mb = (fs.statSync(exe).size / 1048576).toFixed(0);
-const fileCount = Object.keys(files).length;
-console.log(`\n\x1b[32m✔ built\x1b[0m  dist/  (${fileCount} files, exe ${mb} MB, manifest sha256 x${fileCount})`);
+const exeMb = (fs.statSync(path.join(libs, 'Gatherlight.Host.exe')).size / 1048576).toFixed(0);
+console.log(`\n\x1b[32m✔ bundle\x1b[0m  dist/Gatherlight/  (exe ${exeMb} MB, ${Object.keys(files).length} files, sha256 manifest)`);
+console.log('  layout:   Gatherlight.cmd · libs/ · res/ · data/');
 if (zipped) console.log(`  package:  dist/${path.basename(zip)}  (${(fs.statSync(zip).size / 1048576).toFixed(0)} MB)`);
-else console.log('  (zip step skipped/failed — the dist/ folder is still complete)');
-console.log(`  run:      dist/Gatherlight.Host.exe   (tray management console; hosts the web app)`);
-console.log('  scrapers: pwsh dist/playwright.ps1 install chromium   (once)');
+console.log('  run:      dist/Gatherlight/Gatherlight.cmd   (or the exe in libs/)');
+console.log('  seed:     drop an exported memory bundle as dist/Gatherlight/seed-memory.json');
 console.log('  see docs/DEPLOYMENT.md\n');

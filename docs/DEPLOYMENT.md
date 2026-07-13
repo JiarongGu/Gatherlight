@@ -17,14 +17,27 @@ node devtools/dev.mjs publish            # win-x64 by default
 node devtools/dev.mjs publish linux-x64  # or another RID
 ```
 
-This builds the client into `wwwroot`, then runs a self-contained single-file `dotnet publish` of
-the **Host** into `dist/` (gitignored): `Gatherlight.Host.exe` + `wwwroot/` +
-`Assets/DataTemplate/` + `playwright.ps1`.
+This builds the client, publishes the **Host** as a self-contained single-file exe, and arranges a
+clean bundle in `dist/Gatherlight/` (gitignored) + a matching `.zip`:
+
+```
+dist/Gatherlight/
+  Gatherlight.cmd    launcher — double-click to run (sets the data path + optional memory seed)
+  README.txt         run / transfer-memory / prerequisites
+  manifest.json      sha256 of every shipped file
+  libs/              the self-contained app (runtime + assemblies) + playwright.ps1
+  res/               wwwroot (web planner) + template (knowledge-base seed)
+  data/              the data folder — user data lands here (back this up)
+```
+
+The server resolves `wwwroot` + the knowledge template from `res/`, and defaults its data folder to
+`data/` — so the bundle is self-locating; move or rename the `Gatherlight/` folder freely.
 
 ## Run it
 
-Launch `dist/Gatherlight.Host.exe` (or `node devtools/dev.mjs host` in dev). A tray icon appears and
-a small **management console** opens:
+Launch `dist/Gatherlight/Gatherlight.cmd` (or the exe in `libs/`; `node devtools/dev.mjs host` in
+dev). A tray icon appears and the **management console** opens (a resizable, DPI-correct WebView2
+window rendering the `/manage` dashboard):
 
 - **Health monitor** — polls `/api/health` on a rolling strip (green/red), with latency + uptime,
   and (optionally) auto-restarts the server if it stops responding.

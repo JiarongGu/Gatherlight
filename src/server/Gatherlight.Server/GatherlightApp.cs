@@ -182,10 +182,9 @@ public static class GatherlightApp
         app.MapControllers();
         McpEndpoint.Map(app);
 
-        // The built web client (src/client `npm run build` → wwwroot, copied next to the exe).
-        // Explicit file provider: the exe's base dir is the one place it always exists,
-        // regardless of content root. Absent = dev via Vite.
-        var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+        // The built web client (src/client `npm run build` → wwwroot). Resolved across the flat
+        // output layout and the structured bundle (res/wwwroot) by ResourcePaths. Absent = dev via Vite.
+        var wwwroot = ResourcePaths.Wwwroot;
         if (File.Exists(Path.Combine(wwwroot, "index.html")))
         {
             var files = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(wwwroot);

@@ -47,7 +47,7 @@ public sealed class ZhikuSeeder : IZhikuSeeder
         _log = log;
     }
 
-    public static string TemplateRoot => Path.Combine(AppContext.BaseDirectory, "Assets", "DataTemplate");
+    public static string TemplateRoot => ResourcePaths.DataTemplate;
 
     public async Task<ZhikuStatus?> SeedAsync(CancellationToken ct = default)
     {
