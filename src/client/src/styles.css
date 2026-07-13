@@ -2064,6 +2064,23 @@ kbd, .topbar-kbd {
 .mng-sec { color: var(--muted); }
 .mng-sec.on { color: var(--accent-2); }
 
+/* /manage — self-update card */
+.mng-update-row {
+  display: flex; align-items: center; gap: 14px; padding: 14px 17px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm); position: relative; overflow: hidden;
+}
+.mng-update-row.on::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: linear-gradient(var(--accent), transparent); }
+.mng-update-msg { flex: 1; min-width: 0; font-size: 13.5px; color: var(--text); }
+.mng-update-msg b { color: var(--accent-2); font-family: var(--font-display); }
+.mng-update-msg .sub { display: block; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+.mng-update-msg .sub code { font-family: var(--font-mono); font-size: 11px; color: var(--accent); background: var(--accent-soft); padding: 1px 5px; border-radius: 5px; }
+.mng-update-msg a { color: var(--accent); }
+.mng-update-hint { font-size: 11.5px; color: var(--muted); }
+.mng-btn.compact { grid-column: auto; flex: 0 0 auto; width: auto; padding: 9px 18px; font-size: 13px; }
+.mng-update-bar { display: block; height: 6px; border-radius: 3px; background: var(--surface-2); margin-top: 8px; overflow: hidden; }
+.mng-update-bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-strong), var(--accent)); transition: width 0.3s; }
+
 /* ===================== auth gate (remote access token) ===================== */
 .auth-checking { position: fixed; inset: 0; background: var(--bg); }
 .auth-gate {

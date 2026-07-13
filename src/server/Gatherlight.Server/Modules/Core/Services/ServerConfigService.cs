@@ -17,6 +17,9 @@ public sealed class ServerConfig
 
     /// <summary>Remote-access hardening (binding + auth). All values applied at startup.</summary>
     public SecurityConfig Security { get; set; } = new();
+
+    /// <summary>Self-update source (GitHub releases).</summary>
+    public UpdateConfig SelfUpdate { get; set; } = new();
 }
 
 /// <summary>
@@ -44,6 +47,20 @@ public sealed class SecurityConfig
 
     /// <summary>HTTPS/TLS termination in Kestrel itself.</summary>
     public TlsConfig Tls { get; set; } = new();
+}
+
+/// <summary>
+/// Where the app looks for updates. Set <see cref="GithubRepo"/> to <c>owner/name</c> and the app
+/// checks that repo's latest GitHub release; the desktop console can then download + stage an update
+/// which the native launcher applies on the next restart. <see cref="ApiUrl"/> overrides the release
+/// API endpoint outright (self-hosted mirror, or a test double). Empty = updates disabled.
+/// </summary>
+public sealed class UpdateConfig
+{
+    /// <summary><c>owner/name</c> of the GitHub repo to pull releases from. <c>GATHERLIGHT_UPDATE_REPO</c> overrides.</summary>
+    public string? GithubRepo { get; set; }
+    /// <summary>Explicit release-API URL (wins over <see cref="GithubRepo"/>). <c>GATHERLIGHT_UPDATE_API</c> overrides.</summary>
+    public string? ApiUrl { get; set; }
 }
 
 /// <summary>

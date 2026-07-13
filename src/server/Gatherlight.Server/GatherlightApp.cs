@@ -119,6 +119,8 @@ public static class GatherlightApp
             // Remote-access gate: loopback trusted, remote needs the shared token
             .AddSingleton<Modules.Security.Services.ISecurityGuard, Modules.Security.Services.SecurityGuard>()
             .AddSingleton<Modules.Security.Services.ILoginThrottle, Modules.Security.Services.LoginThrottle>()
+            // Self-update: check GitHub releases + download/stage (launcher applies on restart)
+            .AddSingleton<Modules.Update.Services.IUpdateService, Modules.Update.Services.UpdateService>()
             // Hot-loadable script tools ({data}/tools/<name>/tool.json — no rebuild needed)
             .AddSingleton<ScriptToolProvider>()
             .AddSingleton<IScriptToolProvider>(sp => sp.GetRequiredService<ScriptToolProvider>())

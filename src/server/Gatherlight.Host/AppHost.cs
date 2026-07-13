@@ -122,6 +122,7 @@ public sealed class AppHost : Form
             case "openPlanner": OpenExternal(_url); break;
             case "openDataFolder": OpenExternal(_options.DataPath); break;
             case "restart": Restart(); break;
+            case "applyUpdate": RestartForUpdate(); break;
             case "exit": ExitApp(); break;
             case "exportMemory": await ExportMemoryAsync(); break;
             case "importMemory": await ImportMemoryAsync(); break;
@@ -206,6 +207,22 @@ public sealed class AppHost : Form
     {
         var exe = Environment.ProcessPath ?? Application.ExecutablePath;
         try { Process.Start(new ProcessStartInfo(exe, "--restarted") { UseShellExecute = true }); } catch { return; }
+        ExitApp();
+    }
+
+    // Restart THROUGH the native launcher (Gatherlight.exe at the install root, a sibling of libs/)
+    // so it applies the staged update before relaunching the host. Falls back to a plain restart when
+    // there is no launcher (dev / bare-exe run) — the staged update then applies whenever the launcher
+    // is next used.
+    private void RestartForUpdate()
+    {
+        var launcher = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Gatherlight.exe"));
+        if (!File.Exists(launcher)) { Restart(); return; }
+        try
+        {
+            Process.Start(new ProcessStartInfo(launcher) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(launcher)! });
+        }
+        catch { Restart(); return; }
         ExitApp();
     }
 
