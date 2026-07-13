@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import { Layout, Grid } from 'antd';
 import { Drawer, Button, Space, Tooltip, CatBadge } from '@/ui/atoms';
-import { DownloadOutlined, PrinterOutlined, FilePdfOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PrinterOutlined, FilePdfOutlined, CalendarOutlined } from '@ant-design/icons';
 import {
   Sidebar,
   MarkdownView,
@@ -224,6 +224,11 @@ export function App() {
     }
   }, [active, files]);
   const handlePrint = () => window.print();
+  // ICS (calendar) is a zero-LLM server export — one all-day event per dated day.
+  const handleExportIcs = () => {
+    if (!active) return;
+    window.open(`/api/plans/ics?path=${encodeURIComponent(active.path)}`, '_blank');
+  };
 
   const exportNode = canExport ? (
     <Space size={4} className="no-print">
@@ -231,6 +236,9 @@ export function App() {
         <Button icon={<FilePdfOutlined />} onClick={handleExportPDF} size="small" type="primary" loading={pdfBusy}>
           {!isMobile && 'PDF'}
         </Button>
+      </Tooltip>
+      <Tooltip title="导出日历 (.ics) — 每天一个全天事件,可导入 Google/Apple 日历">
+        <Button icon={<CalendarOutlined />} onClick={handleExportIcs} size="small" />
       </Tooltip>
       <Tooltip title="单文件 Markdown">
         <Button icon={<DownloadOutlined />} onClick={handleExportMarkdown} size="small" />

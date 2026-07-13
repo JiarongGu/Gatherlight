@@ -20,9 +20,10 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 |---|---|
 | `wiki_info` (Wikipedia REST + Wikidata official-site, pure HttpClient) | ✅ 2026-07-13, live-verified |
 | `scrape` (Playwright .NET headless chromium via `PlaywrightHost`; replaces the Node puppeteer leaf; `dev.mjs fetch-tools` installs the browser) | ✅ 2026-07-13, live-verified on a JS-rendered Google Flights deeplink |
-| `policy-check`, `hotel-info`, `restaurant-info`, `flight-schedule`, `flight-prices`, `hotel-prices` | ⏳ port on the Playwright base one at a time; each verified against the Node leaf (golden JSON) before the leaf is deleted. Until then the Node leaves stay reachable from `local/` via the tools junction. |
-| `pdf-form/fill-itinerary` → PDFsharp spike (AcroForm fill + flatten + CJK embedding) | ⏳ if the spike fails, the Node leaf stays permanently (rare-use, honors the JSON contract) |
-| Zero-LLM endpoints: ICS export, budget rollups in the index | ⏳ |
+| `policy_check`, `hotel_info`, `restaurant_info`, `flight_schedule`, `flight_prices`, `hotel_prices` | ✅ exposed as registry tools (HTTP + MCP) via `NodeLeafTool` wrappers over the working Node code. Full C#/Playwright ports (golden-JSON vs the leaf) remain the eventual goal; leaves are fine meanwhile. |
+| `fill_itinerary` (visa AcroForm) | ✅ exposed as a registry tool (Node pdf-form leaf; data-relative paths). PDFsharp CJK/flatten port is a later spike — if it fails, the leaf stays permanently (rare-use, honors the JSON contract). |
+| Zero-LLM ICS export — trip/daily plan → `.ics` (`GET /api/plans/ics`, one all-day event per dated Day heading; changelog dates excluded) + client download button | ✅ 2026-07-13, live-verified on the real 17-day trip (17 events) |
+| Zero-LLM budget rollups in the index | ⏳ |
 
 ## Architecture decisions of record
 

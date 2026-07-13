@@ -9,11 +9,13 @@ public sealed class PlansController : ControllerBase
 {
     private readonly IPlanIndexService _index;
     private readonly IDataContext _data;
+    private readonly IIcsExportService _ics;
 
-    public PlansController(IPlanIndexService index, IDataContext data)
+    public PlansController(IPlanIndexService index, IDataContext data, IIcsExportService ics)
     {
         _index = index;
         _data = data;
+        _ics = ics;
     }
 
     /// <summary>Index tree. <c>content=1</c> inlines each file's markdown — the client's
@@ -69,6 +71,18 @@ public sealed class PlansController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(q)) return Ok(new { results = Array.Empty<object>() });
         return Ok(new { results = _index.Search(q) });
+    }
+
+    /// <summary>Deterministic (zero-LLM) iCalendar export of a plan's dated entries.</summary>
+    [HttpGet("api/plans/ics")]
+    public IActionResult Ics([FromQuery] string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !path.EndsWith(".md"))
+            return BadRequest(new { error = "path must be a .md plan" });
+        var ics = _ics.BuildIcs(path);
+        if (ics is null) return NotFound(new { error = "no dated entries to export" });
+        var name = Path.GetFileNameWithoutExtension(path);
+        return File(System.Text.Encoding.UTF8.GetBytes(ics), "text/calendar; charset=utf-8", $"{name}.ics");
     }
 
     /// <summary>Trip-paired binary assets (visa PDFs, data JSON) — download/preview.</summary>
