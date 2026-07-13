@@ -149,7 +149,12 @@ app from starting:
    ```bash
    pwsh dist/playwright.ps1 install chromium
    ```
-   The rest of the product (plans, budget, ICS, images, memory) needs no browser.
+   The rest of the product (plans, budget, ICS, images, memory) needs no browser. (WebView2 was
+   rejected here — it needs a UI thread/window in a headless server and lacks Playwright's automation
+   API.) **Known limitation:** in the single-file production bundle, Playwright's Node *driver* isn't
+   resolved (`Driver not found: …/.playwright/node/...`), so scrapers don't yet run from the bundle —
+   they work in dev (`dotnet run`). Making scrapers work in the bundle needs the `.playwright` driver
+   shipped + path-resolved (tracked separately); it does not affect any non-scraper feature.
 3. **Node.js on PATH** — only for the PDF *form* tools (`pdf_fill` / `pdf_merge` / `fill_itinerary`),
    which shell out to the `tools/pdf-form` pdf-lib leaf via `npx`. (`pdf_extract_text` / `pdf_inspect`
    and the image tools are native — no Node needed.) Nothing else requires Node at runtime.
