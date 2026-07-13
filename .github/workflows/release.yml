@@ -57,6 +57,12 @@ jobs:
         working-directory: src/client
         run: npm ci
 
+      # Gate the release on the full e2e suite: CI runs it on every push to main, but a tag can be
+      # pushed independently, so the exact commit we're about to bundle + publish must be re-verified
+      # here. --build guarantees a fresh client+server first; a red suite fails the release.
+      - name: e2e gate
+        run: node devtools/dev.mjs e2e all --build
+
       # Builds client -> self-contained host -> native C++ launcher -> dist/Gatherlight/ + zip.
       # GitHub Actions sets CI=true, so Gatherlight.Launcher.vcxproj selects the v143 toolset.
       - name: Build production bundle

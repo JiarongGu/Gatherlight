@@ -4,8 +4,10 @@
 // {install}/.update/ (staged/ + ready.json), because a running .NET app can't replace its own exe.
 // On the next startup the launcher — which runs BEFORE the host — applies that staged update here:
 //   1. If {install}/.update/ready.json is absent, do nothing (no network, no prompt).
-//   2. Otherwise overlay {install}/.update/staged over the install with robocopy, EXCEPT the launcher
-//      itself, delete files dropped from the new manifest, and clear the staging dir.
+//   2. Otherwise back up the current program files, overlay {install}/.update/staged over the install
+//      with robocopy (EXCEPT the launcher itself), and — on success — delete files dropped from the new
+//      manifest. If the overlay fails partway, restore the backup so the install stays bootable. Then
+//      clear the staging dir.
 // The launcher never checks GitHub or prompts — that's the app's job (UpdateService). Non-fatal
 // throughout: any failure still launches the host on the current version.
 #include "updater.h"
@@ -87,6 +89,16 @@ int RunHidden(const std::wstring& cmdLine)
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     return (int)code;
+}
+
+// Mirror `src` into `dst` (recursive, overwriting) with robocopy, plus any extra exclude args.
+// robocopy exit codes < 8 = success (0 = nothing to copy, 1–7 = copied/extra/mismatch, all fine).
+bool RobocopyTree(const std::wstring& src, const std::wstring& dst, const std::wstring& extra)
+{
+    std::wstring cmd = L"robocopy \"" + src + L"\" \"" + dst + L"\" /E " + extra +
+        L" /NJH /NJS /NP /NFL /NDL /R:2 /W:1";
+    int rc = RunHidden(cmd);
+    return rc >= 0 && rc < 8;
 }
 
 void DeleteDirRecursive(const std::wstring& dir)
@@ -184,10 +196,20 @@ bool ApplyPendingUpdate(const std::wstring& installDir)
 
     CloseRunningHost(installDir);
 
-    // 2. Overlay staged files onto the install, EXCLUDING the running launcher's own image (it can't
+    std::wstring launcherName = OwnExeBasename();
+
+    // 2. Back up the current program files — everything EXCEPT the (untouched) user data, the staging
+    //    dir, and the launcher — so a failed overlay can be rolled back. Without this, a robocopy that
+    //    dies partway (disk full, a locked DLL) would leave a half-updated, possibly unbootable install
+    //    with no way back. The backup lives under .update/ so step 5 clears it with everything else.
+    const std::wstring backupDir = stagingRoot + L"\\backup";
+    DeleteDirRecursive(backupDir);
+    std::wstring backupExcl = L"/XD \"" + stagingRoot + L"\" \"" + installDir + L"\\data\" /XF \"" + launcherName + L"\"";
+    bool backedUp = RobocopyTree(installDir, backupDir, backupExcl);
+
+    // 3. Overlay staged files onto the install, EXCLUDING the running launcher's own image (it can't
     //    be overwritten while running, and never self-updates). robocopy /E mirrors subdirs; /XF
     //    excludes; exit codes < 8 = success.
-    std::wstring launcherName = OwnExeBasename();
     std::wstring copy = L"robocopy \"" + stagedDir + L"\" \"" + installDir +
         L"\" /E /XF \"" + launcherName + L"\" /NJH /NJS /NP /NFL /NDL /R:3 /W:1";
     int rc = RunHidden(copy);
@@ -195,7 +217,7 @@ bool ApplyPendingUpdate(const std::wstring& installDir)
 
     if (ok)
     {
-        // 3. Removals: files the old manifest listed but the new one no longer does (never the
+        // 4. Removals: files the old manifest listed but the new one no longer does (never the
         //    launcher or the manifest itself — those are handled separately).
         std::set<std::string> oldPaths = ExtractPaths(oldManifest);
         std::set<std::string> newPaths = ExtractPaths(newManifest);
@@ -215,8 +237,15 @@ bool ApplyPendingUpdate(const std::wstring& installDir)
             DeleteFileW(full.c_str());
         }
     }
+    else if (backedUp)
+    {
+        // Overlay failed partway → restore the pre-overlay program files from the backup so the
+        // current version still starts cleanly. (The removal step is skipped when !ok, so restoring
+        // the overwritten files is enough; any extra files the partial overlay added are harmless.)
+        RobocopyTree(backupDir, installDir, L"/XF \"" + launcherName + L"\"");
+    }
 
-    // 4. Clear staging regardless (avoid re-applying on every launch).
+    // 5. Clear staging (backup included) regardless (avoid re-applying on every launch).
     DeleteDirRecursive(stagingRoot);
     if (status) DestroyWindow(status);
 
