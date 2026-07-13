@@ -125,6 +125,11 @@ switch (cmd) {
     run('node', [path.join(repo, 'devtools', 'scripts', 'memory.mjs'), ...args]);
     break;
 
+  case 'eval':
+    // prompt/agent playground: run scenarios through a dry plan + score them (against a running server).
+    run('node', [path.join(repo, 'devtools', 'scripts', 'eval.mjs'), ...args]);
+    break;
+
   case 'host': {
     // The desktop management console (hosts the server in-process + monitors health). This is the
     // "proper" way to run Gatherlight; `server` (dotnet run) stays for dev iteration.
@@ -169,6 +174,6 @@ switch (cmd) {
   }
 
   default:
-    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|e2e|smoke|memory|test-data|install-hooks|check-sensitive>');
+    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|e2e|smoke|memory|eval|test-data|install-hooks|check-sensitive>');
     process.exitCode = cmd ? 1 : 0;
 }

@@ -127,6 +127,8 @@ public static class GatherlightApp
             .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.FaithfulnessScorer>()
             // Run traces (Mastra observability): structure the chat_event stream into a run timeline
             .AddSingleton<Modules.Trace.Services.ITraceService, Modules.Trace.Services.TraceService>()
+            // Prompt/agent playground (Mastra runEvals): score dry plans over a scenario set (CLI)
+            .AddSingleton<Modules.Playground.Services.IPlaygroundService, Modules.Playground.Services.PlaygroundService>()
             // Remote-access gate: loopback trusted, remote needs the shared token
             .AddSingleton<Modules.Security.Services.ISecurityGuard, Modules.Security.Services.SecurityGuard>()
             .AddSingleton<Modules.Security.Services.ILoginThrottle, Modules.Security.Services.LoginThrottle>()

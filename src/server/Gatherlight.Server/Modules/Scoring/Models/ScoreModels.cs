@@ -41,3 +41,13 @@ public sealed class ScoreAggregate
     public double AvgScore { get; set; }
     public int Count { get; set; }
 }
+
+/// <summary>An in-memory scorer verdict (before persistence) — used by the playground eval harness,
+/// which scores dry runs without writing them to chat_score.</summary>
+public sealed class ScoredResult
+{
+    public string ScorerId { get; set; } = "";
+    public bool IsLlm { get; set; }
+    public double Score { get; set; }
+    public string? Reason { get; set; }
+}

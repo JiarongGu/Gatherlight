@@ -12,6 +12,9 @@ namespace Gatherlight.Server.Modules.Scoring.Services;
 /// </summary>
 public interface IScoringService
 {
+    /// <summary>Run every applicable scorer over the context and return the verdicts WITHOUT persisting
+    /// (the playground eval harness scores dry runs this way).</summary>
+    Task<List<ScoredResult>> EvaluateAsync(ScoreContext ctx, CancellationToken ct = default);
     /// <summary>Run every applicable scorer over the given context and store the results.</summary>
     Task<int> ScoreAsync(ScoreContext ctx, CancellationToken ct = default);
     /// <summary>Rebuild the context from persisted data and score it (manual re-score).</summary>
@@ -40,24 +43,31 @@ public sealed class ScoringService : IScoringService
 
     public IReadOnlyList<IScorer> Scorers => _scorers;
 
-    public async Task<int> ScoreAsync(ScoreContext ctx, CancellationToken ct = default)
+    public async Task<List<ScoredResult>> EvaluateAsync(ScoreContext ctx, CancellationToken ct = default)
     {
-        var n = 0;
+        var results = new List<ScoredResult>();
         foreach (var scorer in _scorers)
         {
             try
             {
-                var result = await scorer.ScoreAsync(ctx, ct);
-                if (result is null) continue;   // not applicable
-                await _repo.UpsertAsync(ctx.SessionId, scorer.Id, Math.Clamp(result.Score, 0, 1), result.Reason, scorer.IsLlm);
-                n++;
+                var r = await scorer.ScoreAsync(ctx, ct);
+                if (r is null) continue;   // not applicable
+                results.Add(new ScoredResult { ScorerId = scorer.Id, IsLlm = scorer.IsLlm, Score = Math.Clamp(r.Score, 0, 1), Reason = r.Reason });
             }
             catch (Exception ex)
             {
                 _log.LogWarning("Scorer {Scorer} failed for {Session}: {Msg}", scorer.Id, ctx.SessionId, ex.Message);
             }
         }
-        return n;
+        return results;
+    }
+
+    public async Task<int> ScoreAsync(ScoreContext ctx, CancellationToken ct = default)
+    {
+        var results = await EvaluateAsync(ctx, ct);
+        foreach (var r in results)
+            await _repo.UpsertAsync(ctx.SessionId, r.ScorerId, r.Score, r.Reason, r.IsLlm);
+        return results.Count;
     }
 
     public async Task<int> ScoreSessionAsync(string sessionId, CancellationToken ct = default)

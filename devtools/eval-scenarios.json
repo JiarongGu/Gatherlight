@@ -1,0 +1,6 @@
+[
+  { "name": "weekend-trip", "message": "帮我规划一个附近城市的周末两日游,家庭出行,节奏轻松。" },
+  { "name": "daily-plan", "message": "给明天安排一个高效又不紧张的日程。" },
+  { "name": "trip-budget", "message": "为一次三天的家庭短途旅行做一个分类预算表。" },
+  { "name": "packing", "message": "为一次海边度假做一份打包清单。" }
+]
