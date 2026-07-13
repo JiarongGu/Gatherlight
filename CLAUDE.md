@@ -20,9 +20,15 @@ is server code / registered tools, never LLM calls — token spend is reserved f
 
 ## Current state
 
-Phases 0–6 of `docs/ROADMAP.md` are done: the .NET server owns the product (plan index + fs ops,
-two-gate chat, SSE, uploads, tool registry over HTTP + MCP at `/mcp`, knowledge-base seeder), the
-React client lives in `src/client/`, and the legacy `viewer/` is deleted.
+All roadmap phases (0–7) plus the post-phase-7 production track of `docs/ROADMAP.md` are done: the
+.NET server owns the product (plan index + fs ops, two-gate chat, SSE, uploads, tool registry over
+HTTP + MCP at `/mcp`, knowledge-base seeder), the React client lives in `src/client/`, and the
+legacy `viewer/` is deleted. On top of that: an **LLM-ops loop** (per-conversation ratings +
+automated scorers + run traces + cortex prompt/model tuning + an eval playground), **FTS5 trigram
+search**, portable **memory transfer**, **remote-access hardening** (access-token gate + TLS +
+security headers + brute-force lockout), a **native C++ launcher** with two-phase **auto-update**,
+and **CI/release** packaging. New server modules: `Modules/{Scoring,Trace,Cortex,Update,Security,
+Playground,Memory}`.
 
 - `tools/pdf-form/` — a Node utility (pdf-lib + fontkit) for PDF AcroForm inspect/fill/merge,
   invoked by the C# document tools via `NodeLeafTool` (reliable on real + CJK PDFs where PDFsharp
@@ -53,8 +59,12 @@ React client lives in `src/client/`, and the legacy `viewer/` is deleted.
   built client from wwwroot when present).
 - `node devtools/dev.mjs vite` — client HMR on :5173 (proxies `/api` + `/mcp` → 5317).
 - `node devtools/dev.mjs build` — client build → wwwroot + dotnet build.
-- `node devtools/dev.mjs e2e [p1..p4|all]` — API e2e suites with a stubbed claude CLI against
+- `node devtools/dev.mjs e2e [pN|all]` — API e2e suites with a stubbed claude CLI against
   isolated `devtools/_e2e-*` data folders. Keep them green; each phase of work lands with its suite.
+- `node devtools/dev.mjs host` — the desktop management console (hosts the server in-process +
+  monitors health); `publish` builds the shippable bundle (self-contained host + native launcher).
+- `node devtools/dev.mjs eval [scenarios.json]` — the prompt/agent playground (dry-plan + auto-score,
+  a quality benchmark to run before/after tuning); `memory <export|import>` transfers DB memory.
 
 Interactive family planning happens in the data folder, not here: run `claude` from `local/`
 (its own CLAUDE.md + knowledge base apply there).

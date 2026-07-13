@@ -52,6 +52,12 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 | **Build + CI** — root `build.ps1`; `.github/workflows/ci.yml` (build + e2e on push/PR) + `release.yml` (bundle → GitHub Release zip on `v*` tag). | ✅ 2026-07-13 |
 | **Auto-update** — two-phase (D3dx-style): server checks the configured GitHub release + downloads/stages `{install}/.update/staged` (sha256-verified against the release manifest); the native launcher overlays it on the next restart. `/manage` 更新 card drives it; `selfUpdate.githubRepo` config. | ✅ 2026-07-13 (e2e-p19 apply + e2e-p20 check/stage) |
 
+## Optional / future
+
+| Idea | What it's for | Why deferred |
+|---|---|---|
+| **Semantic recall (embeddings)** — 🔲 optional | Library + fact search is FTS5 **trigram** today — *lexical*: it matches shared characters/keywords. Embeddings would make recall *semantic* (retrieve by MEANING): a query like "peaceful garden" would surface a "Zen temple" entry with no shared words, and a paraphrased fact would still match. Approach: a **local ONNX embedding model** (e.g. Mastra's `fastembed` / a bge-small model) — no API key, fully offline — writing a vector per `library_item`/fact into a `*_embedding` table, ranked by cosine similarity (optionally `sqlite-vec` for speed, with a managed cosine fallback). | Adds `Microsoft.ML.OnnxRuntime` + a ~130 MB model file, ~**doubling the bundle size** — the main tension with Gatherlight's offline/lightweight ethos. FTS5 already covers most real recall, so this is a "nice, not needed" upgrade. |
+
 ## Architecture decisions of record
 
 - **Hybrid data model**: markdown artifacts + private git repo in the data folder (the AI edits

@@ -141,7 +141,10 @@ repo (versioned); the library is the one knowledge surface whose durability ride
    ```bash
    pwsh dist/playwright.ps1 install chromium
    ```
-   The rest of the product (plans, budget, ICS, documents, memory) needs no browser.
+   The rest of the product (plans, budget, ICS, images, memory) needs no browser.
+3. **Node.js on PATH** — only for the PDF *form* tools (`pdf_fill` / `pdf_merge` / `fill_itinerary`),
+   which shell out to the `tools/pdf-form` pdf-lib leaf via `npx`. (`pdf_extract_text` / `pdf_inspect`
+   and the image tools are native — no Node needed.) Nothing else requires Node at runtime.
 
 ## Updating
 

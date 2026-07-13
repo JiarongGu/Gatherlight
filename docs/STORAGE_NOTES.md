@@ -32,9 +32,12 @@ already share the storage tech.
    BLOB + explicit `dims` + `model_id`, loads the optional **`sqlite-vec`** native extension for ANN,
    and **falls back to brute-force C# cosine** when it's absent
    (`Modules/Embedding/Services/SqliteVecLoader.cs`). Gatherlight's `recall_facts` / `library_search`
-   are `LIKE`-based — they miss paraphrases. Adding a small `*_embedding` table + the same
-   optional-native-with-cosine-fallback pattern would make recall semantic without a hard dependency.
-   Embeddings would come from a cheap local model or a `claude`-CLI utility call.
+   are now **FTS5 trigram** (BM25-ranked, CJK substring — migration `202607130006` + `FtsQuery`;
+   LIKE only as the `<3`-char fallback), so the *lexical* gap is closed — but that's still keyword
+   matching and misses paraphrases. Adding a small `*_embedding` table + the same
+   optional-native (`sqlite-vec`)-with-cosine-fallback pattern would make recall *semantic*. Embeddings
+   would come from a local ONNX model (offline, no API key) — see the "Optional / future" row in
+   [ROADMAP.md](ROADMAP.md) for the bundle-size tradeoff.
 2. **Bounded context injection** — Vidora caps injected memory at `MaxContextEntries = 40` +
    `MaxEntryLength = 400` (`AssistantMemoryService`). If chat threads ever inject learned facts /
    library entries into the prompt, cap them the same way so a small local model doesn't choke.
