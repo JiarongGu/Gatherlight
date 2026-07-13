@@ -2,6 +2,7 @@
 //   node devtools/dev.mjs server [port]     - run the headless server (dotnet; data folder ./local)
 //   node devtools/dev.mjs vite              - run the client dev server (HMR, proxies /api)
 //   node devtools/dev.mjs build             - client build -> wwwroot + dotnet build
+//   node devtools/dev.mjs publish [rid]     - client build + self-contained single-file exe -> dist/
 //   node devtools/dev.mjs e2e [p1..|all]    - API-level end-to-end suites (isolated data folders)
 //   node devtools/dev.mjs smoke             - real-claude two-gate smoke (opt-in; needs auth CLI)
 //   node devtools/dev.mjs test-data         - regenerate the synthetic fixture data folder
@@ -117,6 +118,30 @@ switch (cmd) {
     run('node', [path.join(repo, 'devtools', 'scripts', 'smoke-real-claude.mjs')]);
     break;
 
+  case 'publish': {
+    // Installable artifact: client bundle + a self-contained single-file exe that carries the
+    // .NET runtime (the target machine needs nothing installed). The authenticated `claude` CLI
+    // and — for the scraper tools — a Playwright chromium are host prerequisites, not bundled.
+    const outDir = path.join(repo, 'dist');
+    const clientDir = path.join(repo, config.clientDir);
+    if (fs.existsSync(path.join(clientDir, 'package.json'))) {
+      const c = spawnSync('npm', ['run', 'build'], { cwd: clientDir, stdio: 'inherit', shell: true });
+      if (c.status !== 0) { process.exitCode = c.status ?? 1; break; }
+    }
+    const rid = args[0] ?? 'win-x64';
+    const r = spawnSync('dotnet', ['publish', config.serverProject, '-c', 'Release', '-r', rid,
+      '--self-contained', '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
+      '-o', outDir], { stdio: 'inherit', cwd: repo });
+    if (r.status === 0) {
+      console.log(`\n✔ published → dist/  (self-contained ${rid}, no .NET runtime needed)`);
+      console.log('  run:      dist/Gatherlight.Server.exe   (data folder ./local, or set GATHERLIGHT_DATA)');
+      console.log('  scrapers: pwsh dist/playwright.ps1 install chromium   (once, for web-scraper tools)');
+      console.log('  see docs/DEPLOYMENT.md');
+    }
+    process.exitCode = r.status ?? 1;
+    break;
+  }
+
   case 'e2e': {
     const which = args[0] ?? 'all';
     const all = fs.readdirSync(path.join(repo, 'devtools', 'scripts'))
@@ -134,6 +159,6 @@ switch (cmd) {
   }
 
   default:
-    console.log('usage: node devtools/dev.mjs <server|vite|build|e2e|smoke|test-data|install-hooks|check-sensitive>');
+    console.log('usage: node devtools/dev.mjs <server|vite|build|publish|e2e|smoke|test-data|install-hooks|check-sensitive>');
     process.exitCode = cmd ? 1 : 0;
 }
