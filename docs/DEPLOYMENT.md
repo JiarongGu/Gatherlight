@@ -114,6 +114,7 @@ it to the network without auth is unauthenticated control of both. The access mo
 | Trust loopback | `GATHERLIGHT_TRUST_LOOPBACK=0` env var, or `security.trustLoopback` | `true` |
 | TLS / HTTPS | `GATHERLIGHT_TLS=1` env var, or `security.tls.enabled` | `false` (HTTP) |
 | TLS certificate | `GATHERLIGHT_TLS_CERT`(+`_PASSWORD`) env var, or `security.tls.certPath` | *(self-signed, generated)* |
+| Update source | `GATHERLIGHT_UPDATE_REPO` env var, or `selfUpdate.githubRepo` (`owner/name`) | *(none — updates off)* |
 
 The **data folder** holds all user data (plans, household, SQLite state, uploads, the live
 knowledge base) in its **own private git repo** — back *that* up, not the exe. Point
@@ -144,9 +145,23 @@ repo (versioned); the library is the one knowledge surface whose durability ride
 
 ## Updating
 
-Re-run `node devtools/dev.mjs publish` and replace the exe. Data folders are upgraded in place on
-next boot: `ZhikuSeeder` re-seeds template files that the user hasn't modified (hash-guarded) and
-migrations advance the SQLite schema — user edits and app state are preserved.
+**Auto-update** (recommended). Set `selfUpdate.githubRepo` to `owner/name` in `settings.json` (or
+`GATHERLIGHT_UPDATE_REPO`). The `/manage` console then shows an **更新 · Updates** card that checks
+the repo's latest GitHub release; **下载更新** downloads the release zip, extracts it to
+`{install}/.update/staged`, and verifies every file against the release `manifest.json` (sha256)
+before marking it ready. **重启并安装** restarts through the native launcher, which overlays the
+staged files onto the install (a running exe can't replace itself), deletes files the new manifest
+drops, and relaunches. The two-phase split — app stages, launcher applies — is why the C++ launcher
+exists. The launcher never self-updates (it's excluded from the overlay); a launcher change is a
+manual re-download.
+
+> The self-contained host is one ~100 MB file, so each update re-downloads it in full (no deltas).
+> `release.yml` publishes the zip + `manifest.json` as release assets on a `v*` tag.
+
+**Manual.** Re-run `.\build.ps1` (or `node devtools/dev.mjs publish`) and replace the folder. Data
+folders are upgraded in place on next boot regardless of update path: `ZhikuSeeder` re-seeds template
+files the user hasn't modified (hash-guarded) and migrations advance the SQLite schema — user edits
+and app state are preserved.
 
 ## Notes
 
