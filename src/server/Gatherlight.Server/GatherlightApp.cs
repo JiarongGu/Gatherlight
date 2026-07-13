@@ -26,8 +26,13 @@ public static class GatherlightApp
         options ??= new GatherlightServerOptions();
 
         var builder = WebApplication.CreateBuilder(args ?? Array.Empty<string>());
-        // Loopback only until there is an auth story — the data folder is a family's private life.
-        builder.WebHost.UseUrls($"http://127.0.0.1:{options.Port}");
+        // Fail closed: exposing beyond loopback without a token = unauthenticated control of the
+        // claude CLI + the family's private data. Refuse rather than silently open the door.
+        if (!GatherlightServerOptions.IsLoopbackAddress(options.BindAddress) && string.IsNullOrEmpty(options.AccessToken))
+            throw new InvalidOperationException(
+                $"Refusing to bind {options.BindAddress} without an access token. Set security.accessToken " +
+                "in settings.json (or GATHERLIGHT_ACCESS_TOKEN) before exposing Gatherlight on the network.");
+        builder.WebHost.UseUrls($"http://{options.BindAddress}:{options.Port}");
         builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
 
         builder.Services
@@ -105,6 +110,8 @@ public static class GatherlightApp
             .AddSingleton<Modules.Eval.Services.IFeedbackStore, Modules.Eval.Services.FeedbackStore>()
             // Cortex tuning: runtime prompt-template + model-routing overrides (write side of LLM-ops)
             .AddSingleton<Modules.Cortex.Services.ICortexConfigService, Modules.Cortex.Services.CortexConfigService>()
+            // Remote-access gate: loopback trusted, remote needs the shared token
+            .AddSingleton<Modules.Security.Services.ISecurityGuard, Modules.Security.Services.SecurityGuard>()
             // Hot-loadable script tools ({data}/tools/<name>/tool.json — no rebuild needed)
             .AddSingleton<ScriptToolProvider>()
             .AddSingleton<IScriptToolProvider>(sp => sp.GetRequiredService<ScriptToolProvider>())
@@ -182,6 +189,9 @@ public static class GatherlightApp
 
         // Sessions left non-terminal by a previous server death → error (inspectable, not resumed).
         app.Services.GetRequiredService<IChatRepository>().FailInterruptedSessionsAsync().GetAwaiter().GetResult();
+
+        // Gate /api + /mcp before the endpoints run (no-op unless an access token is configured).
+        app.UseMiddleware<Modules.Security.AccessGateMiddleware>();
 
         app.MapControllers();
         McpEndpoint.Map(app);

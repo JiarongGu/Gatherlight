@@ -52,6 +52,10 @@ tools. The model is spent only on genuine planning — and the chat panel shows 
   `fill_itinerary`, `pdf_*`/`image_*`, `budget_scan`, `remember_fact`/`recall_facts`, `library_*`).
   Add your own with **zero rebuild** — drop a `tool.json` into `{data}/tools/<name>/` (see
   `docs/TOOLS.md`).
+- **Remote-access hardening** — loopback by default; to reach it from another device set an access
+  token (`security.accessToken`) and bind address — remote clients get a login gate, the local
+  machine stays frictionless, and exposing the port without a token fails closed. See
+  `docs/DEPLOYMENT.md`.
 
 ## Run (development)
 

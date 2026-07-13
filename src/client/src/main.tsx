@@ -15,6 +15,7 @@ import '@fontsource/instrument-sans/600.css';
 import '@fontsource/ibm-plex-mono/400.css';
 import '@fontsource/ibm-plex-mono/500.css';
 import { App } from './App';
+import { AuthGate } from './screens';
 import { ThemeProvider, useTheme, antdThemeConfig } from './lib/theme';
 import './styles.css';
 
@@ -23,7 +24,9 @@ function ThemedApp() {
   return (
     <ConfigProvider locale={zhCN} theme={antdThemeConfig(mode)}>
       <AntApp>
-        <App />
+        <AuthGate>
+          <App />
+        </AuthGate>
       </AntApp>
     </ConfigProvider>
   );

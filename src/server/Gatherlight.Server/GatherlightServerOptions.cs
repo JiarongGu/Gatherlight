@@ -10,8 +10,20 @@ public sealed class GatherlightServerOptions
 {
     public const int DefaultPort = 5317;
 
-    /// <summary>HTTP port Kestrel binds on loopback. LAN exposure waits for an auth story.</summary>
+    /// <summary>HTTP port Kestrel binds.</summary>
     public int Port { get; init; } = ResolvePort(DefaultPort);
+
+    /// <summary>Address Kestrel binds. <c>127.0.0.1</c> (default) = loopback only; <c>0.0.0.0</c>
+    /// exposes on the network (requires <see cref="AccessToken"/>). <c>GATHERLIGHT_BIND</c> wins.</summary>
+    public string BindAddress { get; init; } = ResolveBindAddress("127.0.0.1");
+
+    /// <summary>Shared secret required for remote (non-loopback) access; null = open (loopback only).
+    /// <c>GATHERLIGHT_ACCESS_TOKEN</c> wins over the persisted setting.</summary>
+    public string? AccessToken { get; init; } = ResolveAccessToken(null);
+
+    /// <summary>Whether loopback requests bypass the token (default true). Set false behind a
+    /// same-host reverse proxy. <c>GATHERLIGHT_TRUST_LOOPBACK=0</c> wins.</summary>
+    public bool TrustLoopback { get; init; } = ResolveTrustLoopback(true);
 
     /// <summary>
     /// Data folder root: markdown plans/household + planner knowledge base (its own private git
@@ -64,4 +76,27 @@ public sealed class GatherlightServerOptions
             return env;
         return settingPort is > 0 and < 65536 ? settingPort : DefaultPort;
     }
+
+    /// <summary>Effective bind address: <c>GATHERLIGHT_BIND</c> wins, else the persisted setting,
+    /// else loopback.</summary>
+    public static string ResolveBindAddress(string settingAddress) =>
+        Environment.GetEnvironmentVariable("GATHERLIGHT_BIND") is { Length: > 0 } e ? e.Trim()
+        : string.IsNullOrWhiteSpace(settingAddress) ? "127.0.0.1" : settingAddress.Trim();
+
+    /// <summary>Effective access token: <c>GATHERLIGHT_ACCESS_TOKEN</c> wins, else the persisted
+    /// setting, else null (no token → loopback-only enforced by the binding check).</summary>
+    public static string? ResolveAccessToken(string? settingToken) =>
+        Environment.GetEnvironmentVariable("GATHERLIGHT_ACCESS_TOKEN") is { Length: > 0 } e ? e
+        : string.IsNullOrWhiteSpace(settingToken) ? null : settingToken;
+
+    /// <summary>Effective loopback-trust: <c>GATHERLIGHT_TRUST_LOOPBACK=0/false</c> forces the token
+    /// even on loopback (same-host reverse proxy); otherwise the persisted setting.</summary>
+    public static bool ResolveTrustLoopback(bool settingValue) =>
+        Environment.GetEnvironmentVariable("GATHERLIGHT_TRUST_LOOPBACK") is { Length: > 0 } e
+            ? e is not ("0" or "false" or "False")
+            : settingValue;
+
+    /// <summary>True when the address only ever accepts local connections (no token needed).</summary>
+    public static bool IsLoopbackAddress(string address) =>
+        address is "127.0.0.1" or "::1" or "[::1]" or "localhost";
 }

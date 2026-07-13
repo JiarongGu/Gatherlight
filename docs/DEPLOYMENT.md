@@ -48,10 +48,31 @@ window rendering the `/manage` dashboard):
 
 The planner itself is served on `http://127.0.0.1:5317` — **open it in a browser**.
 
-- **Loopback only** — there is no auth story yet, and the data folder is a family's private life.
-  Do not expose the port; run it on the machine that uses it (or behind your own tunnel/VPN).
+- **Loopback by default** — the server binds `127.0.0.1` only, so nothing is reachable off the
+  machine until you deliberately change the bind address (see [Remote access](#remote-access)).
 - On first launch against an empty data folder it runs migrations, seeds the knowledge-base
   template, initializes the data git repo, and indexes plans.
+
+### Remote access
+
+Gatherlight can spawn the authenticated `claude` CLI and holds a family's private life, so exposing
+it to the network without auth is unauthenticated control of both. The access model is
+**loopback is trusted, remote needs a token**:
+
+- The local machine (desktop host, `localhost` browser) is always trusted — no prompt.
+- To reach it from another device, set an **access token** and change the **bind address**. Bound
+  beyond loopback *without* a token, the server **refuses to start** (fail closed).
+- A remote browser is shown a token prompt; a correct token drops an httpOnly cookie. The token can
+  also be sent as `Authorization: Bearer <token>` or an `X-Gatherlight-Token` header (for scripts).
+- Behind a **same-host reverse proxy** (e.g. nginx → `127.0.0.1`), every request looks like
+  loopback — set `trustLoopback: false` so the token is enforced anyway.
+- HTTP only carries the token in the clear; put a TLS-terminating proxy (or a VPN/tunnel) in front
+  before exposing it on an untrusted network.
+
+```jsonc
+// {data}/state/settings.json
+{ "security": { "accessToken": "a-long-random-string", "bindAddress": "0.0.0.0", "trustLoopback": true } }
+```
 
 ### Configuration
 
@@ -59,6 +80,9 @@ The planner itself is served on `http://127.0.0.1:5317` — **open it in a brows
 |---|---|---|
 | Data folder | `GATHERLIGHT_DATA` env var, or `state/settings.json` | `./local` next to the exe |
 | Port | `GATHERLIGHT_PORT` env var, or `state/settings.json` | `5317` |
+| Bind address | `GATHERLIGHT_BIND` env var, or `security.bindAddress` | `127.0.0.1` (loopback) |
+| Access token | `GATHERLIGHT_ACCESS_TOKEN` env var, or `security.accessToken` | *(none — loopback only)* |
+| Trust loopback | `GATHERLIGHT_TRUST_LOOPBACK=0` env var, or `security.trustLoopback` | `true` |
 
 The **data folder** holds all user data (plans, household, SQLite state, uploads, the live
 knowledge base) in its **own private git repo** — back *that* up, not the exe. Point

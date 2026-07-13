@@ -27,8 +27,16 @@ export function Manage() {
   const [strip, setStrip] = useState<boolean[]>([]);
   const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
   const [uptime, setUptime] = useState('0s');
+  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [view, setView] = useState<'overview' | 'eval' | 'cortex'>('overview');
   const started = useRef(Date.now());
+
+  useEffect(() => {
+    fetch('/api/auth/status')
+      .then((r) => r.json())
+      .then((s) => setAuthRequired(!!s.required))
+      .catch(() => setAuthRequired(null));
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -171,6 +179,14 @@ export function Manage() {
 
       <div className="mng-meta">
         端口 {location.port || '5317'} · 站点 {plannerUrl}
+        {authRequired !== null && (
+          <>
+            {' · '}
+            <span className={`mng-sec${authRequired ? ' on' : ''}`}>
+              {authRequired ? '🔒 远程访问已启用访问令牌' : '🏠 仅本机 · loopback'}
+            </span>
+          </>
+        )}
         <br />
         规划界面在浏览器中打开;此页监控本机服务的健康。数据(计划/家庭/知识库/SQLite)在数据文件夹,数据库不进 git,请随数据文件夹备份。
       </div>

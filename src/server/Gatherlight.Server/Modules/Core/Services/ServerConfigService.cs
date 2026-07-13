@@ -14,6 +14,33 @@ public sealed class ServerConfig
     /// <summary>HTTP port Kestrel binds. Applied at startup (a change needs a server restart);
     /// the <c>GATHERLIGHT_PORT</c> env var overrides it for dev/e2e.</summary>
     public int Port { get; set; } = GatherlightServerOptions.DefaultPort;
+
+    /// <summary>Remote-access hardening (binding + auth). All values applied at startup.</summary>
+    public SecurityConfig Security { get; set; } = new();
+}
+
+/// <summary>
+/// Access controls for exposing Gatherlight beyond localhost. The data folder is a family's
+/// private life AND the server can spawn the authenticated <c>claude</c> CLI, so remote exposure
+/// without a token is unauthenticated control of both — the binding fails closed on that.
+/// </summary>
+public sealed class SecurityConfig
+{
+    /// <summary>Shared secret required for remote (non-loopback) API/MCP access. Null/empty = no
+    /// token (the server must then stay loopback-bound). <c>GATHERLIGHT_ACCESS_TOKEN</c> overrides.
+    /// Loopback requests are always trusted — the local machine already controls the server.</summary>
+    public string? AccessToken { get; set; }
+
+    /// <summary>Address Kestrel binds. Default <c>127.0.0.1</c> (loopback only). Set <c>0.0.0.0</c>
+    /// to expose on the network — which requires <see cref="AccessToken"/> or the server refuses to
+    /// start. <c>GATHERLIGHT_BIND</c> overrides.</summary>
+    public string BindAddress { get; set; } = "127.0.0.1";
+
+    /// <summary>Whether loopback requests bypass the token. Default true (the local machine already
+    /// controls the server). Set false when running behind a SAME-HOST reverse proxy (nginx →
+    /// 127.0.0.1), where every request arrives from loopback and trusting it would bypass auth
+    /// entirely. <c>GATHERLIGHT_TRUST_LOOPBACK=0</c> overrides.</summary>
+    public bool TrustLoopback { get; set; } = true;
 }
 
 /// <summary>

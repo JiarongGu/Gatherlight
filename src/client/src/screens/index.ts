@@ -2,3 +2,4 @@
 export { Home } from './Home';
 export { Library } from './Library';
 export { Manage } from './Manage';
+export { AuthGate } from './AuthGate';

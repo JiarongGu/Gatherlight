@@ -9,8 +9,12 @@ var options = new GatherlightServerOptions
 {
     DataPath = dataPath,
     Port = GatherlightServerOptions.ResolvePort(config.Current.Port),
+    BindAddress = GatherlightServerOptions.ResolveBindAddress(config.Current.Security.BindAddress),
+    AccessToken = GatherlightServerOptions.ResolveAccessToken(config.Current.Security.AccessToken),
+    TrustLoopback = GatherlightServerOptions.ResolveTrustLoopback(config.Current.Security.TrustLoopback),
 };
 var app = GatherlightApp.Build(options, args: args, config: config);
-app.Logger.LogInformation("Gatherlight server on http://127.0.0.1:{Port} (data: {Data})",
-    options.Port, options.DataPath);
+app.Logger.LogInformation("Gatherlight server on http://{Bind}:{Port} (data: {Data}, auth: {Auth})",
+    options.BindAddress, options.Port, options.DataPath,
+    string.IsNullOrEmpty(options.AccessToken) ? "off · loopback-trusted" : "token required for remote");
 app.Run();

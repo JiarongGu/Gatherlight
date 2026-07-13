@@ -36,6 +36,9 @@ internal static class Program
         {
             DataPath = dataPath,
             Port = GatherlightServerOptions.ResolvePort(config.Current.Port),
+            BindAddress = GatherlightServerOptions.ResolveBindAddress(config.Current.Security.BindAddress),
+            AccessToken = GatherlightServerOptions.ResolveAccessToken(config.Current.Security.AccessToken),
+            TrustLoopback = GatherlightServerOptions.ResolveTrustLoopback(config.Current.Security.TrustLoopback),
         };
 
         WebApplication? server = null;
