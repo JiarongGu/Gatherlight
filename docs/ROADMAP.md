@@ -23,7 +23,7 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 | `policy_check`, `hotel_info`, `restaurant_info`, `flight_schedule`, `flight_prices`, `hotel_prices` | ✅ exposed as registry tools (HTTP + MCP) via `NodeLeafTool` wrappers over the working Node code. Full C#/Playwright ports (golden-JSON vs the leaf) remain the eventual goal; leaves are fine meanwhile. |
 | `fill_itinerary` (visa AcroForm) | ✅ exposed as a registry tool (Node pdf-form leaf; data-relative paths). PDFsharp CJK/flatten port is a later spike — if it fails, the leaf stays permanently (rare-use, honors the JSON contract). |
 | Zero-LLM ICS export — trip/daily plan → `.ics` (`GET /api/plans/ics`, one all-day event per dated Day heading; changelog dates excluded) + client download button | ✅ 2026-07-13, live-verified on the real 17-day trip (17 events) |
-| Zero-LLM budget rollups in the index | ⏳ |
+| Zero-LLM budget scan — `GET /api/plans/budget` + `budget_scan` tool: author-declared caps/totals, per-currency mention counts, excluded/rejected lines flagged. Honest by design (budgets are free-form: options, per-person vs total, "不计入预算" — so it never fabricates a net sum) | ✅ 2026-07-13, live-verified on the real budget (found cap AUD 12,000 + Path-A hit 12,200) |
 
 ## Architecture decisions of record
 

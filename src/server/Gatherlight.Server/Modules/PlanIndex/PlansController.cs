@@ -10,12 +10,14 @@ public sealed class PlansController : ControllerBase
     private readonly IPlanIndexService _index;
     private readonly IDataContext _data;
     private readonly IIcsExportService _ics;
+    private readonly IBudgetService _budget;
 
-    public PlansController(IPlanIndexService index, IDataContext data, IIcsExportService ics)
+    public PlansController(IPlanIndexService index, IDataContext data, IIcsExportService ics, IBudgetService budget)
     {
         _index = index;
         _data = data;
         _ics = ics;
+        _budget = budget;
     }
 
     /// <summary>Index tree. <c>content=1</c> inlines each file's markdown — the client's
@@ -83,6 +85,16 @@ public sealed class PlansController : ControllerBase
         if (ics is null) return NotFound(new { error = "no dated entries to export" });
         var name = Path.GetFileNameWithoutExtension(path);
         return File(System.Text.Encoding.UTF8.GetBytes(ics), "text/calendar; charset=utf-8", $"{name}.ics");
+    }
+
+    /// <summary>Zero-LLM budget figures scan (honest — never a fabricated net total).</summary>
+    [HttpGet("api/plans/budget")]
+    public IActionResult Budget([FromQuery] string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !path.EndsWith(".md"))
+            return BadRequest(new { error = "path must be a .md plan" });
+        var s = _budget.Scan(path);
+        return s is null ? NotFound(new { error = "no money figures found" }) : Ok(s);
     }
 
     /// <summary>Trip-paired binary assets (visa PDFs, data JSON) — download/preview.</summary>

@@ -46,6 +46,7 @@ public static class GatherlightApp
             .AddSingleton<IPlanIndexService, PlanIndexService>()
             .AddSingleton<IFsOpsService, FsOpsService>()
             .AddSingleton<IIcsExportService, IcsExportService>()
+            .AddSingleton<IBudgetService, BudgetService>()
             .AddHostedService<PlanIndexWatcher>()
             // LLM — spawn the authenticated claude CLI, never an API key
             .AddSingleton<IClaudeCliRunner, ClaudeCliRunner>()
@@ -73,6 +74,7 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, FlightPricesTool>()
             .AddSingleton<IGatherlightTool, HotelPricesTool>()
             .AddSingleton<IGatherlightTool, FillItineraryTool>()
+            .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.BudgetScanTool>()
             // Generalized stores + agent-writable cross-session memory
             .AddSingleton<Modules.Knowledge.Services.IEntityStore, Modules.Knowledge.Services.EntityStore>()
             .AddSingleton<Modules.Knowledge.Services.IKnowledgeStore, Modules.Knowledge.Services.KnowledgeStore>()
