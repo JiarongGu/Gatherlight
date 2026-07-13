@@ -26,12 +26,15 @@ public sealed class AppHost : Form
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _trayStatus;
     private readonly WebView2 _web;
+    private readonly Func<Task> _restartServer;
     private EventWaitHandle? _showSignal;
     private bool _exiting;
+    private bool _restarting;
 
-    public AppHost(GatherlightServerOptions options)
+    public AppHost(GatherlightServerOptions options, Func<Task> restartServer)
     {
         _options = options;
+        _restartServer = restartServer;
         _url = $"{(options.TlsEnabled ? "https" : "http")}://127.0.0.1:{options.Port}/";
         _manageUrl = _url + "manage";
         // With TLS on we talk to our own loopback endpoint, whose cert may be self-signed — trust it
@@ -62,7 +65,7 @@ public sealed class AppHost : Form
             ShowWindow = ShowWindow,
             OpenBrowser = () => OpenExternal(_url),
             OpenDataFolder = () => OpenExternal(_options.DataPath),
-            Restart = Restart,
+            Restart = () => _ = RestartServerInProcessAsync(),
             Exit = ExitApp,
         };
         var (menu, status) = TrayMenu.Build(_ctx);
@@ -121,7 +124,7 @@ public sealed class AppHost : Form
         {
             case "openPlanner": OpenExternal(_url); break;
             case "openDataFolder": OpenExternal(_options.DataPath); break;
-            case "restart": Restart(); break;
+            case "restart": await RestartServerInProcessAsync(); break;
             case "applyUpdate": RestartForUpdate(); break;
             case "exit": ExitApp(); break;
             case "exportMemory": await ExportMemoryAsync(); break;
@@ -203,6 +206,32 @@ public sealed class AppHost : Form
         return Theme.SealIcon();
     }
 
+    // Recycle the in-process server — the /manage "重启服务" action + the tray "重启". Rebuilds Kestrel
+    // off the UI thread (keeping the window), waits for the fresh server to answer, then reloads the
+    // management view so it reconnects. Any failure falls back to a clean full process relaunch.
+    private async Task RestartServerInProcessAsync()
+    {
+        if (_restarting || _exiting) return;
+        _restarting = true;
+        try
+        {
+            await Task.Run(_restartServer);
+            for (var i = 0; i < 30; i++)
+            {
+                try { using var r = await _http.GetAsync("api/health"); if (r.IsSuccessStatusCode) break; } catch { /* not up yet */ }
+                await Task.Delay(300);
+            }
+            try { _web.CoreWebView2?.Reload(); } catch { /* the view recovers on its own */ }
+        }
+        catch
+        {
+            Restart(); // in-process recycle failed (rare) → clean full relaunch
+        }
+        finally { _restarting = false; }
+    }
+
+    // Full process relaunch — the fallback for RestartServerInProcessAsync, and the path
+    // RestartForUpdate uses (via the launcher).
     private void Restart()
     {
         var exe = Environment.ProcessPath ?? Application.ExecutablePath;

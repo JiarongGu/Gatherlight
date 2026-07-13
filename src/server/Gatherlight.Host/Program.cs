@@ -45,11 +45,37 @@ internal static class Program
         };
 
         WebApplication? server = null;
+        var gate = new SemaphoreSlim(1, 1);
+
+        // Recycle the in-process Kestrel server on request — the desktop app's "restart server": stop +
+        // dispose the running one, rebuild from the same composition root (re-reading settings/data),
+        // and start fresh on the same port. The management window stays open; only the server bounces.
+        // Also serves as "start" if the server isn't currently up (a prior start/restart failed).
+        async Task RestartServerAsync()
+        {
+            await gate.WaitAsync();
+            try
+            {
+                var old = server;
+                server = null;
+                if (old is not null)
+                {
+                    try { await old.StopAsync(TimeSpan.FromSeconds(5)); } catch { /* force on */ }
+                    try { await old.DisposeAsync(); } catch { /* force on */ }
+                    await Task.Delay(400); // let Kestrel release the port before rebinding
+                }
+                var fresh = GatherlightApp.Build(options, args: args, config: config);
+                await fresh.StartAsync();
+                server = fresh;
+            }
+            finally { gate.Release(); }
+        }
+
         try
         {
             server = GatherlightApp.Build(options, args: args, config: config);
             server.Start(); // Kestrel in-process, non-blocking; the form owns shutdown
-            Application.Run(new AppHost(options));
+            Application.Run(new AppHost(options, RestartServerAsync));
         }
         catch (Exception ex)
         {
