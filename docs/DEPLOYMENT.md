@@ -12,17 +12,22 @@ for development only.
 
 ## Build the artifact
 
-```bash
-node devtools/dev.mjs publish            # win-x64 by default
-node devtools/dev.mjs publish linux-x64  # or another RID
+```powershell
+.\build.ps1                 # win-x64 bundle (root entry point)
+.\build.ps1 -Rid win-arm64  # another runtime
+.\build.ps1 -SkipClient     # reuse an existing client build
 ```
 
-This builds the client, publishes the **Host** as a self-contained single-file exe, and arranges a
-clean bundle in `dist/Gatherlight/` (gitignored) + a matching `.zip`:
+`build.ps1` is a thin wrapper over `node devtools/scripts/build-production.mjs` (also reachable as
+`node devtools/dev.mjs publish`). It builds the client, publishes the **Host** as a self-contained
+single-file exe, compiles the **native C++ launcher** (`Gatherlight.exe`, if the MSVC toolchain is
+present — otherwise it falls back to `Gatherlight.cmd`), and arranges a clean bundle in
+`dist/Gatherlight/` (gitignored) + a matching `.zip`:
 
 ```
 dist/Gatherlight/
-  Gatherlight.cmd    launcher — double-click to run (sets the data path + optional memory seed)
+  Gatherlight.exe    native launcher (carries the app icon) — double-click to run
+  Gatherlight.cmd    fallback launcher (script)
   README.txt         run / transfer-memory / prerequisites
   manifest.json      sha256 of every shipped file
   libs/              the self-contained app (runtime + assemblies) + playwright.ps1
@@ -30,12 +35,17 @@ dist/Gatherlight/
   data/              the data folder — user data lands here (back this up)
 ```
 
-The server resolves `wwwroot` + the knowledge template from `res/`, and defaults its data folder to
-`data/` — so the bundle is self-locating; move or rename the `Gatherlight/` folder freely.
+The launcher points the app at `data/` and launches `libs/Gatherlight.Host.exe`; the server resolves
+`wwwroot` + the knowledge template from `res/` and defaults its data folder to `data/` — so the
+bundle is self-locating; move or rename the `Gatherlight/` folder freely.
+
+**CI** (`.github/workflows/`): `ci.yml` builds + runs the e2e suites on every push/PR; `release.yml`
+builds the bundle and attaches the zip to a GitHub Release on a `v*` tag (or as a workflow artifact
+on manual dispatch). GitHub Actions builds the launcher with the v143 toolset (v145 locally).
 
 ## Run it
 
-Launch `dist/Gatherlight/Gatherlight.cmd` (or the exe in `libs/`; `node devtools/dev.mjs host` in
+Launch `dist/Gatherlight/Gatherlight.exe` (or `Gatherlight.cmd`; `node devtools/dev.mjs host` in
 dev). A tray icon appears and the **management console** opens (a resizable, DPI-correct WebView2
 window rendering the `/manage` dashboard):
 

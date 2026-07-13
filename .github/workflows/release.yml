@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Create the GitHub release as a draft'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # create releases + tags
+
+jobs:
+  package:
+    name: Build bundle + release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # full history for release notes
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: src/client/package-lock.json
+
+      - name: Setup MSBuild (native launcher)
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref }}"
+          if ($ref -like 'refs/tags/v*') {
+            $version = $ref -replace '^refs/tags/v', ''
+          } else {
+            $version = node -e "import('./devtools/project.config.mjs').then(m=>process.stdout.write(m.default.version))"
+          }
+          Write-Host "version: $version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install client deps
+        working-directory: src/client
+        run: npm ci
+
+      # Builds client -> self-contained host -> native C++ launcher -> dist/Gatherlight/ + zip.
+      # GitHub Actions sets CI=true, so Gatherlight.Launcher.vcxproj selects the v143 toolset.
+      - name: Build production bundle
+        env:
+          GATHERLIGHT_VERSION: ${{ steps.version.outputs.version }}
+        run: node devtools/scripts/build-production.mjs win-x64
+
+      - name: Locate artifact
+        id: artifact
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem "dist\*.zip" | Select-Object -First 1
+          if (-not $zip) { Write-Host "::error::no bundle zip produced"; exit 1 }
+          Write-Host "artifact: $($zip.FullName) ($([math]::Round($zip.Length/1MB,1)) MB)"
+          "path=$($zip.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatherlight-win-x64
+          path: |
+            ${{ steps.artifact.outputs.path }}
+            dist/Gatherlight/manifest.json
+
+      - name: Generate release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        id: notes
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $prev = git describe --tags --abbrev=0 "$tag^" 2>$null
+          if ($prev) { $log = git log "$prev..$tag" --pretty=format:"- %s" --no-merges }
+          else { $log = git log --pretty=format:"- %s" --no-merges }
+          $notes = @("## Gatherlight $tag", "", $log, "", "---",
+            "Download the zip, extract, and run **Gatherlight.exe**. Windows 10/11 (x64).") -join "`n"
+          $notes | Out-File release-notes.md -Encoding utf8
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Gatherlight ${{ steps.version.outputs.tag }}
+          body_path: release-notes.md
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+          files: |
+            ${{ steps.artifact.outputs.path }}
+            dist/Gatherlight/manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

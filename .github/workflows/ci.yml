@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build + e2e
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: src/client/package-lock.json
+
+      - name: Install client deps
+        working-directory: src/client
+        run: npm ci
+
+      - name: Build client
+        working-directory: src/client
+        run: npm run build
+
+      - name: Build server + host
+        run: dotnet build Gatherlight.slnx -c Debug
+
+      # The e2e suites self-host the server against isolated fixture data folders with a stubbed
+      # claude CLI (GATHERLIGHT_CLAUDE_CMD) — no real LLM, no network. dev.mjs runs each e2e-pN.mjs.
+      - name: Run e2e suites
+        run: node devtools/dev.mjs e2e all
+
+      - name: Sensitive-info guard (tree scan)
+        run: node devtools/scripts/check-sensitive.mjs --tree
