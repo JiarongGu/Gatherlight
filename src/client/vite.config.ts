@@ -21,6 +21,21 @@ export default defineConfig({
   },
   build: {
     outDir: path.resolve(__dirname, '..', 'server', 'Gatherlight.Server', 'wwwroot'),
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Split the big vendors into separately-cacheable chunks (they change far less
+        // often than app code). Leaflet is only reached via a dynamic import (the map),
+        // so it is left unassigned and Rollup keeps it in its own async chunk.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('leaflet')) return; // stays in the lazy map chunk
+          if (id.includes('/antd/') || id.includes('@ant-design/')) return 'antd';
+          if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) return 'react';
+          if (/[\\/](react-markdown|remark|rehype|micromark|mdast|hast|unist|unified|vfile|marked|property-information|character-entities|decode-named-character-reference|space-separated-tokens|comma-separated-tokens|trim-lines|zwitch|html-void-elements|bail|is-plain-obj|trough|estree)/.test(id)) return 'markdown';
+          return 'vendor';
+        }
+      }
+    }
   }
 });

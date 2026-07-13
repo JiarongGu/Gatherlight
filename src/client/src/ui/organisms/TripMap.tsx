@@ -1,6 +1,10 @@
-import { useMemo } from 'react';
-import { MapCanvas, type MapMarker } from '@/ui/molecules';
+import { lazy, Suspense, useMemo } from 'react';
+import type { MapMarker } from '@/ui/molecules/MapCanvas';
 import { lookupCity } from '@/lib/cityCoords';
+
+// Lazy so the leaflet stack (map + tiles + arrowheads) is fetched only when a route
+// actually renders, keeping it out of the initial bundle.
+const MapCanvas = lazy(() => import('@/ui/molecules/MapCanvas').then((m) => ({ default: m.MapCanvas })));
 
 interface Props {
   cities: string[]; // ordered slugs, e.g. ["osaka","kanazawa","tokyo"]
@@ -36,19 +40,21 @@ export function TripMap({ cities, height = 400 }: Props) {
   }
 
   return (
-    <MapCanvas
-      markers={markers}
-      connect
-      numbered
-      height={height}
-      ariaLabel="路线图"
-      footer={
-        unknown.length > 0 ? (
-          <span>
-            ⚠️ 未识别城市:<code>{unknown.join(', ')}</code>(加坐标到 <code>cityCoords.ts</code>)
-          </span>
-        ) : undefined
-      }
-    />
+    <Suspense fallback={<div className="map-fallback">🗺️ 加载路线图…</div>}>
+      <MapCanvas
+        markers={markers}
+        connect
+        numbered
+        height={height}
+        ariaLabel="路线图"
+        footer={
+          unknown.length > 0 ? (
+            <span>
+              ⚠️ 未识别城市:<code>{unknown.join(', ')}</code>(加坐标到 <code>cityCoords.ts</code>)
+            </span>
+          ) : undefined
+        }
+      />
+    </Suspense>
   );
 }

@@ -1,5 +1,8 @@
-import { useMemo } from 'react';
-import { MapCanvas, type MapMarker } from '@/ui/molecules';
+import { lazy, Suspense, useMemo } from 'react';
+import type { MapMarker } from '@/ui/molecules/MapCanvas';
+
+// Lazy so leaflet is fetched only when a city map actually renders (off the initial bundle).
+const MapCanvas = lazy(() => import('@/ui/molecules/MapCanvas').then((m) => ({ default: m.MapCanvas })));
 
 interface Props {
   pointsRaw: string;
@@ -34,5 +37,9 @@ export function CityMap({ pointsRaw, height = 340, connect = false, title }: Pro
     return <div className="map-fallback">🗺️ 城市地图:无效数据(需要至少 1 个 `lat,lng|label` 点)。</div>;
   }
 
-  return <MapCanvas markers={markers} connect={connect} numbered height={height} footer={title} ariaLabel="城市地图" />;
+  return (
+    <Suspense fallback={<div className="map-fallback">🗺️ 加载城市地图…</div>}>
+      <MapCanvas markers={markers} connect={connect} numbered height={height} footer={title} ariaLabel="城市地图" />
+    </Suspense>
+  );
 }
