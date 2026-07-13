@@ -11,8 +11,9 @@ public sealed record DataCommitInfo(string Sha, string Subject, string Date);
 /// <summary>
 /// Git operations on the DATA repo (the private repo inside the data folder — never this code
 /// repo). Shells out to the git CLI: behavior parity with the prototype depends on CLI semantics
-/// (`cat-file -e`, `diff --no-index` against NUL) and git is already a prerequisite alongside the
-/// claude CLI. All paths are data-root-relative with forward slashes.
+/// (`cat-file -e`, `diff --no-index` against NUL). The CLI is resolved by <see cref="GitExe"/> —
+/// a bundled portable git ships with the app, so no separate git install is needed on the host.
+/// All paths are data-root-relative with forward slashes.
 /// </summary>
 public interface IGitCliService
 {
@@ -50,6 +51,21 @@ public sealed record GitResult(int ExitCode, string Stdout, string Stderr)
 public class GitCliService : IGitCliService
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);
+
+    // The git executable, resolved once. An explicit GATHERLIGHT_GIT override wins (tests/dev); else a
+    // portable git bundled next to the host (libs/git/cmd/git.exe — shipped by build-production.mjs so
+    // a fresh machine needs no separate git install); else "git" from PATH. Git is the data repo's
+    // engine (init + diff + commit + restore), so bundling it makes the app self-sufficient.
+    internal static readonly string GitExe = ResolveGit();
+    private static string ResolveGit()
+    {
+        var env = Environment.GetEnvironmentVariable("GATHERLIGHT_GIT");
+        if (!string.IsNullOrWhiteSpace(env) && File.Exists(env)) return env;
+        var bundled = Path.Combine(AppContext.BaseDirectory, "git", "cmd", "git.exe");
+        if (File.Exists(bundled)) return bundled;
+        return "git";
+    }
+
     private readonly string _root;
     private readonly ILogger _log;
 
@@ -65,7 +81,7 @@ public class GitCliService : IGitCliService
     {
         var psi = new ProcessStartInfo
         {
-            FileName = "git",
+            FileName = GitExe,
             WorkingDirectory = _root,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -86,6 +102,7 @@ public class GitCliService : IGitCliService
 
     public async Task<bool> EnsureRepoAsync(CancellationToken ct = default)
     {
+        _log.LogInformation("Data repo git: {Git}", GitExe);
         var fresh = !Directory.Exists(Path.Combine(_root, ".git"));
         if (fresh)
         {

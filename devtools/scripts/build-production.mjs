@@ -120,6 +120,39 @@ if (rid === 'win-x64') {
   console.log(`  (native launcher is win-x64 only; ${rid} uses Gatherlight.cmd)`);
 }
 
+// 3.6 bundle a portable git (MinGit) → libs/git/ so the host's data-repo engine (init/diff/commit/
+// restore — the two-gate audit trail) works on a machine with NO git installed. The server resolves
+// libs/git/cmd/git.exe (GitCliService.ResolveGit). Cached under devtools/_cache/; skipped with a
+// warning if the download is unavailable (the host then falls back to git on PATH).
+step(3.6, 'bundling portable git (MinGit)…');
+const MINGIT_VER = '2.55.0.2';
+const MINGIT_URL = `https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.2/MinGit-${MINGIT_VER}-64-bit.zip`;
+let gitBundled = false;
+if (rid === 'win-x64') {
+  const cacheDir = path.join(repo, 'devtools', '_cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const zip = path.join(cacheDir, `MinGit-${MINGIT_VER}-64-bit.zip`);
+  try {
+    if (!fs.existsSync(zip)) {
+      console.log(`  downloading ${path.basename(zip)} (~37 MB)…`);
+      const dl = spawnSync('curl', ['-fsSL', '-o', zip, MINGIT_URL], { stdio: 'inherit' });
+      if (dl.status !== 0 || !fs.existsSync(zip)) throw new Error('download failed');
+    }
+    const gitDir = path.join(libs, 'git');
+    const ex = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+      `Expand-Archive -Path '${zip}' -DestinationPath '${gitDir}' -Force`], { stdio: 'inherit' });
+    if (ex.status !== 0 || !fs.existsSync(path.join(gitDir, 'cmd', 'git.exe'))) throw new Error('extract failed');
+    gitBundled = true;
+    const mb = (spawnSync('powershell', ['-NoProfile', '-Command',
+      `'{0:N0}' -f ((Get-ChildItem -Recurse '${gitDir}' | Measure-Object Length -Sum).Sum/1MB)`], { encoding: 'utf8' }).stdout || '').trim();
+    console.log(`  \x1b[32m✔\x1b[0m libs/git/  (MinGit ${MINGIT_VER}, ~${mb} MB)`);
+  } catch (e) {
+    console.log(`  \x1b[33m⚠ portable git not bundled (${e.message}) — the host will need git on PATH.\x1b[0m`);
+  }
+} else {
+  console.log(`  (portable git is win-x64 only; ${rid} needs git on PATH)`);
+}
+
 // 4. launcher + README
 step(4, 'writing launcher + README…');
 fs.writeFileSync(path.join(bundle, 'Gatherlight.cmd'),
@@ -141,7 +174,7 @@ fs.writeFileSync(path.join(bundle, 'README.txt'), [
   '结构 / Layout:',
   '  Gatherlight.exe   启动器(原生,带图标) / native launcher (with icon)',
   '  Gatherlight.cmd   启动器(备用) / launcher (fallback)',
-  '  libs\\             程序(自包含,含 .NET 运行时) / the self-contained app',
+  '  libs\\             程序(自包含,含 .NET 运行时' + (gitBundled ? ' + 内置 git' : '') + ') / the self-contained app' + (gitBundled ? ' + bundled git' : ''),
   '  res\\              资源:网页客户端 + 知识库模板 / web client + knowledge-base template',
   '  data\\             你的数据(计划/家庭/知识库/SQLite)—— 备份这个文件夹 / your data — back this up',
   '',
@@ -149,8 +182,11 @@ fs.writeFileSync(path.join(bundle, 'README.txt'), [
   '  把导出的记忆文件改名为 seed-memory.json 放在本目录,启动时自动导入;或在控制台点「导入记忆」。',
   '  Put an exported memory bundle here as seed-memory.json → auto-imported on startup; or use the console.',
   '',
-  '前置(不随包分发) / Prerequisites (not bundled):',
-  '  · 已登录的 claude CLI —— AI 规划 / an authenticated claude CLI for AI planning',
+  '前置 / Prerequisites:',
+  '  · git —— ' + (gitBundled
+    ? '已内置于 libs\\git(数据仓库引擎,无需另装) / bundled in libs\\git (the data-repo engine; no install needed)'
+    : '⚠ 本次未打包,需系统已装 git / not bundled this build — needs git on PATH'),
+  '  · 已登录的 claude CLI —— 仅 AI 规划需要,浏览/导入无需 / an authenticated claude CLI — only for AI planning (browsing/import work without it)',
   '  · chromium(仅网页抓取工具,一次性): pwsh libs\\playwright.ps1 install chromium',
   '',
   `v${version} · ${rid}`,
@@ -187,7 +223,8 @@ const zipped = zr.status === 0 && fs.existsSync(zip);
 // summary
 const exeMb = (fs.statSync(path.join(libs, 'Gatherlight.Host.exe')).size / 1048576).toFixed(0);
 console.log(`\n\x1b[32m✔ bundle\x1b[0m  dist/Gatherlight/  (exe ${exeMb} MB, ${files.length} files, sha256 manifest)`);
-console.log(`  layout:   ${launcherBuilt ? 'Gatherlight.exe · ' : ''}Gatherlight.cmd · libs/ · res/ · data/`);
+console.log(`  layout:   ${launcherBuilt ? 'Gatherlight.exe · ' : ''}Gatherlight.cmd · libs/${gitBundled ? ' (+git)' : ''} · res/ · data/`);
+console.log(`  git:      ${gitBundled ? 'bundled (libs/git) — no host git install needed' : '⚠ NOT bundled — host needs git on PATH'}`);
 if (zipped) console.log(`  package:  dist/${path.basename(zip)}  (${(fs.statSync(zip).size / 1048576).toFixed(0)} MB)`);
 console.log(`  run:      dist/Gatherlight/${launcherBuilt ? 'Gatherlight.exe' : 'Gatherlight.cmd'}`);
 console.log('  seed:     drop an exported memory bundle as dist/Gatherlight/seed-memory.json');

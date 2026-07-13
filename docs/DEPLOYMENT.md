@@ -130,12 +130,20 @@ index. That means the git audit trail does **not** cover it: include `{data}/sta
 backups (or copy the DB while the server is stopped). Plans/household stay markdown in the data
 repo (versioned); the library is the one knowledge surface whose durability rides on your backup.
 
-## Host prerequisites (not bundled — by design)
+## Host prerequisites
 
-1. **The authenticated `claude` CLI.** The chat/planning core spawns the local `claude` CLI
-   (never an API key). Install Claude Code and sign in on the host once; the server resolves the
-   executable via `where`/`which` at runtime. Without it, browsing/plans/documents still work but
-   the AI chat gate errors.
+**git is bundled.** A portable git (MinGit) ships in `libs/git/` and is the data repo's engine
+(init / diff / commit / restore — the two-gate audit trail, which the app runs at first boot). The
+server resolves it automatically (`GitCliService.ResolveGit`: `GATHERLIGHT_GIT` override → bundled
+`libs/git/cmd/git.exe` → `git` on PATH), so a fresh machine needs **no separate git install**. The
+three items below are the only remaining setup — each gates one optional feature, and none blocks the
+app from starting:
+
+1. **The authenticated `claude` CLI** — only for the AI chat/planning gate. The core spawns the local
+   `claude` CLI (never an API key). Install Claude Code and sign in on the host once; the server
+   resolves the executable via `where`/`which` at runtime. Without it, browsing / plans / documents /
+   library import all still work — only the AI chat gate errors. It's the one per-user step (an
+   authenticated login can't be shipped in a bundle).
 2. **Playwright chromium** — only for the web-scraper tools (`scrape`, `flight_*`, `hotel_*`,
    `restaurant_*`, `policy_check`). Install once:
    ```bash
