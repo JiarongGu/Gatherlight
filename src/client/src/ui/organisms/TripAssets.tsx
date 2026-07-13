@@ -1,6 +1,7 @@
 import { Card, Button, Space, Typography } from '@/ui/atoms';
 import { FilePdfOutlined, FileTextOutlined, DownloadOutlined } from '@ant-design/icons';
 import type { PlanFile, TripAsset } from '@/lib/collectFiles';
+import { formatFileSize } from '@/lib/format';
 
 const { Text, Title } = Typography;
 
@@ -20,12 +21,6 @@ function tripSlug(active: PlanFile | null): string | null {
   return null;
 }
 
-function formatSize(bytes: number | undefined): string {
-  if (!bytes) return '';
-  if (bytes > 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  if (bytes > 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${bytes} B`;
-}
 
 /**
  * Shows trip-paired non-markdown assets (currently visa PDFs + data JSON).
@@ -174,7 +169,7 @@ export function TripAssets({ active, assets, onSelect }: Props) {
                   <span style={filenameStyle}>
                     {a.filename}
                     <span style={{ marginLeft: 8, color: 'var(--muted)', fontFamily: 'inherit', fontSize: 11 }}>
-                      {formatSize(a.sizeBytes)}
+                      {formatFileSize(a.sizeBytes)}
                     </span>
                   </span>
                   <Button

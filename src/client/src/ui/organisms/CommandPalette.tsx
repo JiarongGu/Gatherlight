@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import type { PlanFile } from '@/lib/collectFiles';
 import { extractSnippet, type Snippet } from '@/lib/markdown';
+import { SnippetText } from '@/ui/molecules';
 import { getRecent } from '@/lib/recentFiles';
 import { CATEGORY_LABEL } from '@/lib/categories';
 
@@ -200,7 +201,7 @@ export function CommandPalette({ open, files, onClose, onSelect, onGoHome, onOpe
                           <div className="cmdk-row-main">
                             <div className="cmdk-row-title">{row.file.title}</div>
                             <div className="cmdk-row-path">{row.file.path}</div>
-                            {row.snippet && <SnippetText snippet={row.snippet} />}
+                            {row.snippet && <SnippetText snippet={row.snippet} className="cmdk-snippet" />}
                           </div>
                         </>
                       )}
@@ -223,12 +224,3 @@ export function CommandPalette({ open, files, onClose, onSelect, onGoHome, onOpe
   );
 }
 
-function SnippetText({ snippet }: { snippet: Snippet }) {
-  return (
-    <div className="cmdk-snippet">
-      {snippet.text.slice(0, snippet.matchStart)}
-      <mark>{snippet.text.slice(snippet.matchStart, snippet.matchEnd)}</mark>
-      {snippet.text.slice(snippet.matchEnd)}
-    </div>
-  );
-}

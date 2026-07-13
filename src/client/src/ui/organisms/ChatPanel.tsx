@@ -30,6 +30,7 @@ import {
   type UploadedFile,
   PHASE_LABELS
 } from '@/lib/chatTypes';
+import { formatFileSize } from '@/lib/format';
 
 interface TranscriptItem {
   id: number;
@@ -71,12 +72,6 @@ let seq = 0;
 const nextId = () => ++seq;
 
 const SESSION_KEY = 'viewer-chat-session';
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
 
 type Action =
   | { type: 'reset'; sessionId: string; message: string }
@@ -541,7 +536,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
                 }}
               >
                 <span className="chat-attach-name">{a.name}</span>
-                <span className="chat-attach-size">{formatSize(a.size)}</span>
+                <span className="chat-attach-size">{formatFileSize(a.size)}</span>
               </Tag>
             ))}
           </div>

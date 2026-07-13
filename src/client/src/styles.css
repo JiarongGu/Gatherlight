@@ -1502,6 +1502,9 @@ kbd, .topbar-kbd {
   padding: 0 2px;
   border-radius: 2px;
 }
+/* Sidebar search-result snippet (was inline styles on the old SnippetText). */
+.side-snippet { font-size: 11px; color: var(--muted); line-height: 1.3; margin-top: 2px; white-space: normal; word-break: break-word; }
+.side-snippet mark { background: var(--mark-bg); color: var(--mark-fg); padding: 0 2px; border-radius: 2px; font-weight: 600; }
 .cmdk-row-enter { color: var(--accent); font-size: 13px; }
 
 .cmdk-foot {

@@ -72,10 +72,7 @@ public sealed class MemoryService : IMemoryService
     {
         using var conn = _db.Open();
         var library = (await conn.QueryAsync<LibraryItem>(
-            "SELECT id, kind, key, name, name_local, region, summary, url, image_url, " +
-            "CAST(lat AS REAL) AS lat, CAST(lng AS REAL) AS lng, tags, source, " +
-            "CAST(confidence AS REAL) AS confidence, verified_at, created_at, updated_at " +
-            "FROM library_item ORDER BY kind, key")).ToList();
+            $"SELECT {LibraryRepository.Cols} FROM library_item ORDER BY kind, key")).ToList();
         var knowledge = (await conn.QueryAsync<KnowledgeExport>(
             "SELECT kind, topic, content, source, CAST(confidence AS REAL) AS confidence FROM knowledge ORDER BY id")).ToList();
         var entities = (await conn.QueryAsync<EntityExport>(

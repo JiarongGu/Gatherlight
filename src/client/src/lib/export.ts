@@ -1,5 +1,6 @@
 import { marked } from 'marked';
 import type { PlanFile } from './collectFiles';
+import { stripFirstH1 } from './markdown';
 
 /**
  * Build a single combined-markdown document for a trip:
@@ -60,11 +61,6 @@ export function buildTripExport(active: PlanFile, allFiles: PlanFile[]): {
     filename: `${slug}-export-${today}.md`,
     content: parts.join('')
   };
-}
-
-/** Remove the first H1 since we add our own section title above each part. */
-function stripFirstH1(content: string): string {
-  return content.replace(/^#\s+.+\n+/, '');
 }
 
 /** Trigger a browser download of a string as a file. */

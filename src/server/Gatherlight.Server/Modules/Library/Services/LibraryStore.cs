@@ -53,7 +53,8 @@ public interface ILibraryRepository
 public sealed class LibraryRepository : ILibraryRepository
 {
     // SQLite integer affinity: doubles stored as INTEGER materialize wrong unless CAST to REAL.
-    private const string Cols =
+    // internal: MemoryService reuses this exact column list for its library export (schema-sync).
+    internal const string Cols =
         "id, kind, key, name, name_local, region, summary, url, image_url, " +
         "CAST(lat AS REAL) AS lat, CAST(lng AS REAL) AS lng, tags, source, " +
         "CAST(confidence AS REAL) AS confidence, verified_at, created_at, updated_at";

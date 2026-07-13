@@ -209,12 +209,7 @@ public class GitCliService : IGitCliService
             .ToList();
     }
 
-    private static string Norm(string rel)
-    {
-        var s = rel.Replace('\\', '/');
-        while (s.StartsWith("./", StringComparison.Ordinal)) s = s[2..];
-        return s;
-    }
+    private static string Norm(string rel) => PathText.Norm(rel);
 
     private static bool IsClaudeInfra(string rel) => rel == ".claude" || rel.StartsWith(".claude/");
 }

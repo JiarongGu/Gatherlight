@@ -318,6 +318,5 @@ public sealed class UpdateService : IUpdateService
 
     private static string Pad(string v) => v.Count(ch => ch == '.') >= 1 ? v : v + ".0";
 
-    private static string Str(JsonElement el, string prop) =>
-        el.TryGetProperty(prop, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() ?? "" : "";
+    private static string Str(JsonElement el, string prop) => JsonEl.Str(el, prop);
 }

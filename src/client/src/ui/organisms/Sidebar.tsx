@@ -22,7 +22,8 @@ import {
   ReadOutlined
 } from '@ant-design/icons';
 import type { PlanFile } from '@/lib/collectFiles';
-import { extractSnippet, type Snippet } from '@/lib/markdown';
+import { extractSnippet } from '@/lib/markdown';
+import { SnippetText } from '@/ui/molecules';
 import { buildDestinationGroups } from '@/lib/tripGroups';
 import { CATEGORY_LABEL } from '@/lib/categories';
 import { PlanActionsMenu, type ActionTarget } from './PlanActionsMenu';
@@ -86,35 +87,6 @@ const CATEGORY_ICON: Record<string, React.ReactNode> = {
   Skills: <ToolOutlined />,
   Other: <FolderOutlined />
 };
-
-function SnippetText({ snippet }: { snippet: Snippet }) {
-  return (
-    <div
-      style={{
-        fontSize: 11,
-        color: 'var(--muted)',
-        lineHeight: 1.3,
-        marginTop: 2,
-        whiteSpace: 'normal',
-        wordBreak: 'break-word'
-      }}
-    >
-      {snippet.text.slice(0, snippet.matchStart)}
-      <mark
-        style={{
-          background: 'var(--mark-bg)',
-          color: 'var(--mark-fg)',
-          padding: '0 2px',
-          borderRadius: 2,
-          fontWeight: 600
-        }}
-      >
-        {snippet.text.slice(snippet.matchStart, snippet.matchEnd)}
-      </mark>
-      {snippet.text.slice(snippet.matchEnd)}
-    </div>
-  );
-}
 
 // Memoized: props are referentially stable (files memoized, callbacks
 // useCallback'd, activePath only changes on selection), so toggling shell state
@@ -234,7 +206,7 @@ export const Sidebar = memo(function Sidebar({
             >
               {displayName}
             </div>
-            {snippet && !matchedInName && <SnippetText snippet={snippet} />}
+            {snippet && !matchedInName && <SnippetText snippet={snippet} className="side-snippet" />}
           </div>
           <PlanActionsMenu
             target={actionTargetFor(f)}

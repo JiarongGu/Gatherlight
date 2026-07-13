@@ -131,12 +131,7 @@ public sealed partial class FsOpsService : IFsOpsService
         return sha;
     }
 
-    private static string Norm(string rel)
-    {
-        var s = rel.Replace('\\', '/');
-        while (s.StartsWith("./", StringComparison.Ordinal)) s = s[2..];
-        return s;
-    }
+    private static string Norm(string rel) => PathText.Norm(rel);
 
     private static void AssertInScope(string rel)
     {
