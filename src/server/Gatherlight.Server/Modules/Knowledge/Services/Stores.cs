@@ -106,7 +106,9 @@ public sealed class KnowledgeStore : IKnowledgeStore
                 "SELECT k.id, k.kind, k.topic, k.content, k.source, k.confidence, k.hits, k.created_at, k.updated_at " +
                 "FROM knowledge_fts JOIN knowledge k ON k.id = knowledge_fts.rowid " +
                 "WHERE knowledge_fts MATCH @match AND (@kind IS NULL OR k.kind = @kind) " +
-                "ORDER BY bm25(knowledge_fts) LIMIT @limit",
+                // Confidence first (verified facts surface first — the established contract), bm25
+                // relevance as the tiebreaker among equally-trusted matches.
+                "ORDER BY CAST(k.confidence AS REAL) DESC, bm25(knowledge_fts) LIMIT @limit",
                 new { match, kind, limit })
             : await conn.QueryAsync(
                 "SELECT id, kind, topic, content, source, confidence, hits, created_at, updated_at " +

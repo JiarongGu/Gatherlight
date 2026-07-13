@@ -108,7 +108,7 @@ public sealed class LibraryRepository : ILibraryRepository
                 WHERE library_fts MATCH @match
                   AND (@kind IS NULL OR li.kind = @kind)
                   AND (@region IS NULL OR li.region = @region)
-                ORDER BY bm25(library_fts)
+                ORDER BY CAST(li.confidence AS REAL) DESC, bm25(library_fts)
                 LIMIT @limit
                 """,
                 new { match, kind, region, limit })).ToList();
