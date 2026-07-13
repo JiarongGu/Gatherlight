@@ -2,23 +2,14 @@
 // e2e P8 — zero-LLM ICS export + tool coverage. Trip plan → one VEVENT per dated Day heading;
 // changelog headings that merely cite a date are ignored; daily plan → one event; the six
 // puppeteer verifiers + fill_itinerary are registered on both surfaces.
-import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p8-data');
-const PORT = 5398;
-const base = `http://127.0.0.1:${PORT}`;
+const dataDir = dataDirFor('p8');
+const { ok, fail, done } = makeReporter('p8');
 
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
-
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
+makeTestData(dataDir);
 
 // Overwrite the fixture trip with a known heading set: a changelog heading (a date that must NOT
 // become an event) + exactly 3 dated Day headings — covers day-vs-note discrimination.
@@ -33,30 +24,16 @@ fs.writeFileSync(path.join(dataDir, 'plans', 'trips', '2026-08-kyoto.md'), [
 fs.mkdirSync(path.join(dataDir, 'plans', 'daily'), { recursive: true });
 fs.writeFileSync(path.join(dataDir, 'plans', 'daily', '2026-08-01.md'), '# 2026-08-01 — 周六\n\n- 验证\n');
 
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
-  env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(PORT) },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-let serverLog = '';
-server.stdout.on('data', (d) => (serverLog += d));
-server.stderr.on('data', (d) => (serverLog += d));
+const srv = startServer({ dataDir, port: 5398 });
+const base = srv.base;
 
-const until = async (fn, ms = 30000) => {
-  const t0 = Date.now();
-  for (;;) {
-    try { const r = await fn(); if (r) return r; } catch {}
-    if (Date.now() - t0 > ms) throw new Error('timeout');
-    await new Promise((r) => setTimeout(r, 300));
-  }
-};
 const text = async (p) => {
   const res = await fetch(base + p);
   return { status: res.status, ctype: res.headers.get('content-type') ?? '', body: await res.text() };
 };
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
 
   // --- ICS: trip → 3 day events, changelog date excluded --------------------------------
   const trip = await text('/api/plans/ics?path=plans/trips/2026-08-kyoto.md');
@@ -96,12 +73,9 @@ try {
   const fi = tools.tools.find((t) => t.name === 'fill_itinerary');
   ok('fill_itinerary schema requires paths', ['templatePath', 'dataPath', 'outPath'].every((k) => fi?.inputSchema?.required?.includes(k)));
 } catch (err) {
-  console.error('e2e-p8 fatal:', err.message);
-  console.error(serverLog.slice(-3000));
-  failures++;
+  fail('e2e-p8 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
 } finally {
-  server.kill();
+  srv.stop();
 }
-
-console.log(failures === 0 ? '\ne2e-p8 PASS' : `\ne2e-p8 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

@@ -2,25 +2,17 @@
 // e2e P13 — the DB-backed knowledge library. Agent tools (library_upsert/search/delete) write to
 // the library_item table; the browse read side (/api/library) serves it zero-LLM. No claude, no
 // browser — pure DB round-trips.
-import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dataDirFor, makeReporter, makeTestData, startServer, until, makeClient } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p13-data');
+const dataDir = dataDirFor('p13');
+const { ok, fail, done } = makeReporter('p13');
 const PORT = 5393;
 const IMG_PORT = 5394;
-const base = `http://127.0.0.1:${PORT}`;
 
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
-
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
+makeTestData(dataDir);
 
 // Fixture upstream for the image-cache proxy: a 1x1 PNG (counting hits) + a non-image route.
 const PNG_1x1 = Buffer.from(
@@ -44,36 +36,12 @@ const imgFixture = http.createServer((req, res) => {
 await new Promise((r) => imgFixture.listen(IMG_PORT, r));
 const imgBase = `http://127.0.0.1:${IMG_PORT}`;
 
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
-  // allow the loopback fixture through the SSRF guard (production keeps it on).
-  env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(PORT), GATHERLIGHT_IMAGE_ALLOW_PRIVATE: '1' },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-let serverLog = '';
-server.stdout.on('data', (d) => (serverLog += d));
-server.stderr.on('data', (d) => (serverLog += d));
-
-const until = async (fn, ms = 40000) => {
-  const t0 = Date.now();
-  for (;;) {
-    try { const r = await fn(); if (r) return r; } catch {}
-    if (Date.now() - t0 > ms) throw new Error('timeout');
-    await new Promise((r) => setTimeout(r, 400));
-  }
-};
-const call = async (name, args) => {
-  const res = await fetch(`${base}/api/tools/call`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, arguments: args }),
-  });
-  const body = await res.json().catch(() => null);
-  return { status: res.status, result: body?.result ? JSON.parse(body.result) : body };
-};
-const getJson = async (p) => (await (await fetch(`${base}${p}`)).json());
+// allow the loopback fixture through the SSRF guard (production keeps it on).
+const srv = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_IMAGE_ALLOW_PRIVATE: '1' } });
+const { call, getJson } = makeClient(srv.base);
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await until(() => fetch(`${srv.base}/api/health`).then((r) => r.ok));
 
   const tools = (await getJson('/api/tools')).tools;
   for (const n of ['library_upsert', 'library_search', 'library_delete'])
@@ -193,23 +161,20 @@ try {
   ok('library_import idempotent (no dupes)', reimport.items.length === imported.items.length, `${imported.items.length}→${reimport.items.length}`);
 
   // --- image cache proxy (offline-safe cover images) ---
-  const img1 = await fetch(`${base}/api/library/image?url=${encodeURIComponent(imgBase + '/img.png')}`);
+  const img1 = await fetch(`${srv.base}/api/library/image?url=${encodeURIComponent(imgBase + '/img.png')}`);
   ok('image proxy: 200 + image/png', img1.status === 200 && (img1.headers.get('content-type') ?? '').startsWith('image/png'),
     `${img1.status} ${img1.headers.get('content-type')}`);
   ok('image proxy: upstream hit once', imgHits === 1, `hits=${imgHits}`);
-  const img2 = await fetch(`${base}/api/library/image?url=${encodeURIComponent(imgBase + '/img.png')}`);
+  const img2 = await fetch(`${srv.base}/api/library/image?url=${encodeURIComponent(imgBase + '/img.png')}`);
   ok('image proxy: second call served', img2.status === 200);
   ok('image proxy: cache hit (no 2nd upstream fetch)', imgHits === 1, `hits=${imgHits}`);
-  const nonImg = await fetch(`${base}/api/library/image?url=${encodeURIComponent(imgBase + '/not-image')}`);
+  const nonImg = await fetch(`${srv.base}/api/library/image?url=${encodeURIComponent(imgBase + '/not-image')}`);
   ok('image proxy: non-image → 404', nonImg.status === 404, String(nonImg.status));
 } catch (err) {
-  console.error('e2e-p13 fatal:', err.message);
-  console.error(serverLog.slice(-3000));
-  failures++;
+  fail('e2e-p13 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
 } finally {
-  server.kill();
+  srv.stop();
   imgFixture.close();
 }
-
-console.log(failures === 0 ? '\ne2e-p13 PASS' : `\ne2e-p13 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

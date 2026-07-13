@@ -3,56 +3,18 @@
 // is auto-scored on every applicable dimension: deterministic (scope-adherence / plan-structure /
 // outcome / citations) computed in code, and LLM (answer-relevancy / faithfulness) from the stub
 // judge. Then check the aggregate + manual re-run + run-all endpoints.
-import { spawn, spawnSync } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p21-data');
-const PORT = 5461;
-const base = `http://127.0.0.1:${PORT}`;
+const dataDir = dataDirFor('p21');
+const { ok, fail, done } = makeReporter('p21');
+makeTestData(dataDir);
+const srv = startServer({ dataDir, port: 5461, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const { j, post, waitPhase } = makeClient(srv.base);
 
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
-
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
-
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
-  env: {
-    ...process.env,
-    GATHERLIGHT_DATA: dataDir,
-    GATHERLIGHT_PORT: String(PORT),
-    GATHERLIGHT_CLAUDE_CMD: `node ${path.join(repo, 'devtools', 'scripts', 'claude-stub.mjs')}`,
-  },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-let log = '';
-server.stdout.on('data', (d) => (log += d));
-server.stderr.on('data', (d) => (log += d));
-
-const j = async (p, init) => { const r = await fetch(base + p, init); return { status: r.status, body: await r.json().catch(() => null) }; };
-const post = (p, body) => j(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-const until = async (fn, ms = 30000) => {
-  const t0 = Date.now();
-  for (;;) {
-    try { const r = await fn(); if (r) return r; } catch {}
-    if (Date.now() - t0 > ms) throw new Error('timeout');
-    await new Promise((r) => setTimeout(r, 250));
-  }
-};
-const waitPhase = (id, phase) => until(async () => {
-  const s = await j(`/api/chat/${id}`);
-  if (s.body?.phase === 'error' && phase !== 'error') throw new Error('session errored: ' + s.body?.error);
-  return s.body?.phase === phase ? s.body : null;
-});
 const scoreOf = (scores, id) => scores.find((s) => s.scorerId === id);
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
 
   // scorer registry
   const scorers = (await j('/api/manage/scores/scorers')).body.scorers;
@@ -102,12 +64,9 @@ try {
   ok('trace: usage rolled up into token totals', trace.steps.some((s) => s.kind === 'usage') && (trace.inputTokens > 0 || trace.outputTokens > 0), JSON.stringify({ i: trace.inputTokens, o: trace.outputTokens }));
   ok('trace: total duration computed', typeof trace.totalDurationMs === 'number' && trace.totalDurationMs >= 0);
 } catch (err) {
-  console.error('e2e-p21 fatal:', err.message);
-  console.error(log.slice(-3000));
-  failures++;
+  fail('e2e-p21 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
 } finally {
-  server.kill();
+  srv.stop();
 }
-
-console.log(failures === 0 ? '\ne2e-p21 PASS' : `\ne2e-p21 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

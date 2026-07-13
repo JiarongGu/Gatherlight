@@ -2,23 +2,15 @@
 // e2e P10 — general document/media processing: pdf_inspect / pdf_extract_text / pdf_fill /
 // pdf_merge (PdfPig + PDFsharp) and image_info / image_resize / image_convert (ImageSharp).
 // Fixtures: a form PDF built with pdf-lib (from tools/pdf-form), a BMP built by hand.
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { repo, dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, onDisk } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p10-data');
-const PORT = 5390;
-const base = `http://127.0.0.1:${PORT}`;
+const dataDir = dataDirFor('p10');
+const { ok, fail, done } = makeReporter('p10');
 
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
-
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
+makeTestData(dataDir);
 const up = path.join(dataDir, 'uploads');
 fs.mkdirSync(up, { recursive: true });
 
@@ -61,35 +53,11 @@ function bmp(w, h) {
 }
 fs.writeFileSync(path.join(up, 'pic.bmp'), bmp(8, 8));
 
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
-  env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(PORT) },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-let serverLog = '';
-server.stdout.on('data', (d) => (serverLog += d));
-server.stderr.on('data', (d) => (serverLog += d));
-
-const until = async (fn, ms = 30000) => {
-  const t0 = Date.now();
-  for (;;) {
-    try { const r = await fn(); if (r) return r; } catch {}
-    if (Date.now() - t0 > ms) throw new Error('timeout');
-    await new Promise((r) => setTimeout(r, 300));
-  }
-};
-const call = async (name, args) => {
-  const res = await fetch(`${base}/api/tools/call`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, arguments: args }),
-  });
-  const body = await res.json().catch(() => null);
-  return { status: res.status, result: body?.result ? JSON.parse(body.result) : body };
-};
-const onDisk = (rel) => fs.existsSync(path.join(dataDir, rel));
+const srv = startServer({ dataDir, port: 5390 });
+const { call } = makeClient(srv.base);
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
 
   // --- PDF ---
   const inspect = await call('pdf_inspect', { path: 'uploads/form.pdf' });
@@ -104,7 +72,7 @@ try {
     templatePath: 'uploads/form.pdf', values: { applicant: 'Test Name' }, outPath: 'uploads/filled.pdf',
   });
   ok('pdf_fill: set applicant', fill.status === 200 && fill.result.fieldsSet.includes('applicant'));
-  ok('pdf_fill: wrote output', onDisk('uploads/filled.pdf'));
+  ok('pdf_fill: wrote output', onDisk(dataDir, 'uploads/filled.pdf'));
   const reinspect = await call('pdf_inspect', { path: 'uploads/filled.pdf' });
   ok('pdf_fill: value round-trips', reinspect.result.fields?.find((f) => f.name === 'applicant')?.value === 'Test Name',
     reinspect.result.fields?.find((f) => f.name === 'applicant')?.value);
@@ -117,7 +85,7 @@ try {
     && (await call('pdf_inspect', { path: 'uploads/flat.pdf' })).result.fields.length === 0);
 
   const merge = await call('pdf_merge', { paths: ['uploads/form.pdf', 'uploads/filled.pdf'], outPath: 'uploads/merged.pdf' });
-  ok('pdf_merge: 2 pages', merge.status === 200 && merge.result?.pages === 2 && onDisk('uploads/merged.pdf'),
+  ok('pdf_merge: 2 pages', merge.status === 200 && merge.result?.pages === 2 && onDisk(dataDir, 'uploads/merged.pdf'),
     JSON.stringify(merge.result));
 
   // --- image ---
@@ -125,15 +93,15 @@ try {
   ok('image_info: 8x8 bmp', iinfo.result.width === 8 && iinfo.result.height === 8, JSON.stringify(iinfo.result));
 
   const resize = await call('image_resize', { path: 'uploads/pic.bmp', outPath: 'uploads/small.png', maxWidth: 4, maxHeight: 4 });
-  ok('image_resize: fits box', resize.result.width <= 4 && resize.result.height <= 4 && onDisk('uploads/small.png'));
+  ok('image_resize: fits box', resize.result.width <= 4 && resize.result.height <= 4 && onDisk(dataDir, 'uploads/small.png'));
 
   const conv = await call('image_convert', { path: 'uploads/pic.bmp', outPath: 'uploads/pic.webp', format: 'webp' });
-  ok('image_convert: webp written', conv.status === 200 && onDisk('uploads/pic.webp'));
+  ok('image_convert: webp written', conv.status === 200 && onDisk(dataDir, 'uploads/pic.webp'));
   const webpInfo = await call('image_info', { path: 'uploads/pic.webp' });
   ok('converted webp is valid', webpInfo.result.format?.toLowerCase().includes('webp'), JSON.stringify(webpInfo.result));
 
   // --- registered on both surfaces ---
-  const tools = (await (await fetch(`${base}/api/tools`)).json()).tools.map((t) => t.name);
+  const tools = (await (await fetch(`${srv.base}/api/tools`)).json()).tools.map((t) => t.name);
   const docTools = ['pdf_inspect', 'pdf_extract_text', 'pdf_fill', 'pdf_merge', 'image_info', 'image_resize', 'image_convert'];
   ok('all document tools registered', docTools.every((n) => tools.includes(n)), docTools.filter((n) => !tools.includes(n)).join(','));
 
@@ -141,12 +109,9 @@ try {
   const bad = await call('pdf_inspect', { path: '../CLAUDE.md' });
   ok('traversal guarded', bad.status >= 400);
 } catch (err) {
-  console.error('e2e-p10 fatal:', err.message);
-  console.error(serverLog.slice(-3000));
-  failures++;
+  fail('e2e-p10 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
 } finally {
-  server.kill();
+  srv.stop();
 }
-
-console.log(failures === 0 ? '\ne2e-p10 PASS' : `\ne2e-p10 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

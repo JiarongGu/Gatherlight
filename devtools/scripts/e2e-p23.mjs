@@ -3,37 +3,16 @@
 // server runs a DRY plan per scenario (read-only, no commit) and auto-scores the output on the
 // quality dimensions WITHOUT persisting. Asserts per-scenario scores + aggregate, and that nothing
 // was written to the scores table.
-import { spawn, spawnSync } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p23-data');
-const PORT = 5472;
-const base = `http://127.0.0.1:${PORT}`;
-
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
-
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
-
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
-  env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(PORT), GATHERLIGHT_CLAUDE_CMD: `node ${path.join(repo, 'devtools', 'scripts', 'claude-stub.mjs')}` },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-let log = '';
-server.stdout.on('data', (d) => (log += d));
-server.stderr.on('data', (d) => (log += d));
-
-const j = async (p, init) => { const r = await fetch(base + p, init); return { status: r.status, body: await r.json().catch(() => null) }; };
-const until = async (fn, ms = 30000) => { const t0 = Date.now(); for (;;) { try { const r = await fn(); if (r) return r; } catch {} if (Date.now() - t0 > ms) throw new Error('timeout'); await new Promise((r) => setTimeout(r, 250)); } };
+const dataDir = dataDirFor('p23');
+const { ok, fail, done } = makeReporter('p23');
+makeTestData(dataDir);
+const srv = startServer({ dataDir, port: 5472, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const { j } = makeClient(srv.base);
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
 
   const scenarios = [
     { name: 'weekend', message: '规划一个附近城市的周末两日游' },
@@ -62,12 +41,9 @@ try {
   const agg = (await j('/api/manage/scores/aggregate')).body.scorers;
   ok('scores table untouched by the dry run', agg.length === 0, `${agg.length} scorers aggregated`);
 } catch (err) {
-  console.error('e2e-p23 fatal:', err.message);
-  console.error(log.slice(-3000));
-  failures++;
+  fail('e2e-p23 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
 } finally {
-  server.kill();
+  srv.stop();
 }
-
-console.log(failures === 0 ? '\ne2e-p23 PASS' : `\ne2e-p23 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

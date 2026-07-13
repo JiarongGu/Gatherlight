@@ -3,35 +3,20 @@
 // "GitHub" (release JSON + zip + manifest), points the server's update endpoint at it, and drives
 // check → download → poll-state, asserting the staged files + ready.json land under the install dir
 // and verify against the manifest sha256. The launcher apply phase is e2e-p19.
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { repo, dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, until } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p20-data');
+const dataDir = dataDirFor('p20');
 const installDir = path.join(repo, 'devtools', '_e2e-p20-install');
 const scratch = path.join(repo, 'devtools', '_e2e-p20-src');
 const PORT = 5452, FAKE = 5451;
-const base = `http://127.0.0.1:${PORT}`;
 
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
+const { ok, fail, done } = makeReporter('p20');
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
-const until = async (fn, ms = 30000) => {
-  const t0 = Date.now();
-  for (;;) {
-    try { const r = await fn(); if (r) return r; } catch {}
-    if (Date.now() - t0 > ms) throw new Error('timeout');
-    await new Promise((r) => setTimeout(r, 300));
-  }
-};
-const j = async (p, init) => { const r = await fetch(base + p, init); return { status: r.status, body: await r.json().catch(() => null) }; };
 
 // --- build a fake release zip (files + manifest) ---
 fs.rmSync(scratch, { recursive: true, force: true });
@@ -71,27 +56,22 @@ const fakeSrv = http.createServer((req, res) => {
 });
 await new Promise((r) => fakeSrv.listen(FAKE, r));
 
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
+makeTestData(dataDir);
 fs.rmSync(installDir, { recursive: true, force: true });
 fs.mkdirSync(installDir, { recursive: true });
 
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
+const srv = startServer({
+  dataDir,
+  port: PORT,
   env: {
-    ...process.env,
-    GATHERLIGHT_DATA: dataDir,
-    GATHERLIGHT_PORT: String(PORT),
     GATHERLIGHT_INSTALL_DIR: installDir,
     GATHERLIGHT_UPDATE_API: `http://127.0.0.1:${FAKE}/releases/latest`,
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
 });
-let log = '';
-server.stdout.on('data', (d) => (log += d));
-server.stderr.on('data', (d) => (log += d));
+const { j } = makeClient(srv.base);
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
 
   const check = (await j('/api/manage/update/check')).body;
   ok('check: configured + update available (9.9.9)', check.configured === true && check.updateAvailable === true && check.latestVersion === '9.9.9', JSON.stringify({ c: check.configured, a: check.updateAvailable, v: check.latestVersion }));
@@ -119,16 +99,13 @@ try {
   // not-configured path: a fresh check with the env cleared would report configured=false — covered by
   // the endpoint returning configured based on ApiUrl(); here we assert the download endpoint guards it.
 } catch (err) {
-  console.error('e2e-p20 fatal:', err.message);
-  console.error(log.slice(-2500));
-  failures++;
+  fail('e2e-p20 fatal: ' + err.message);
+  console.error(srv.log().slice(-2500));
 } finally {
-  server.kill();
+  srv.stop();
   fakeSrv.close();
   fs.rmSync(scratch, { recursive: true, force: true });
   fs.rmSync(zipPath, { force: true });
   fs.rmSync(installDir, { recursive: true, force: true });
 }
-
-console.log(failures === 0 ? '\ne2e-p20 PASS' : `\ne2e-p20 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

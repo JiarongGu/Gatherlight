@@ -2,46 +2,19 @@
 // e2e P22 — full-text search (FTS5 trigram) for the knowledge library + fact store. Verifies
 // BM25-ranked matching on Latin + CJK (trigram substring), the <3-char LIKE fallback, and that the
 // sync triggers keep the FTS index correct across update + delete.
-import { spawn, spawnSync } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p22-data');
-const PORT = 5471;
-const base = `http://127.0.0.1:${PORT}`;
+const dataDir = dataDirFor('p22');
+const { ok, fail, done } = makeReporter('p22');
+makeTestData(dataDir);
+const srv = startServer({ dataDir, port: 5471, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const { call } = makeClient(srv.base);
 
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
-
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
-
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
-  env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(PORT), GATHERLIGHT_CLAUDE_CMD: `node ${path.join(repo, 'devtools', 'scripts', 'claude-stub.mjs')}` },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-let log = '';
-server.stdout.on('data', (d) => (log += d));
-server.stderr.on('data', (d) => (log += d));
-
-const until = async (fn, ms = 30000) => {
-  const t0 = Date.now();
-  for (;;) { try { const r = await fn(); if (r) return r; } catch {} if (Date.now() - t0 > ms) throw new Error('timeout'); await new Promise((r) => setTimeout(r, 250)); }
-};
-const call = async (name, args) => {
-  const res = await fetch(`${base}/api/tools/call`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, arguments: args }) });
-  const b = await res.json().catch(() => null);
-  return b?.result ? JSON.parse(b.result) : b;
-};
-const lib = async (q) => (await (await fetch(`${base}/api/library?q=${encodeURIComponent(q)}&limit=50`)).json()).items;
+const lib = async (q) => (await (await fetch(`${srv.base}/api/library?q=${encodeURIComponent(q)}&limit=50`)).json()).items;
 const keys = (items) => items.map((i) => i.key);
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
 
   // seed the library (CJK + Latin)
   await call('library_upsert', { kind: 'attraction', key: 'kinkakuji', name: 'Kinkaku-ji', nameLocal: '金阁寺', region: 'Kyoto, Japan', summary: 'The Golden Pavilion, a famous Zen temple.', tags: 'temple,zen', confidence: 0.9 });
@@ -60,24 +33,21 @@ try {
   ok('update trigger: "pagoda" now matches kinkakuji', keys(await lib('pagoda')).includes('kinkakuji'));
 
   // delete trigger: removing the diner drops it from the FTS index
-  const del = await call('library_delete', { kind: 'restaurant', key: 'diner' });
+  const del = (await call('library_delete', { kind: 'restaurant', key: 'diner' })).result;
   ok('library_delete ok', del && del.deleted !== false, JSON.stringify(del));
   ok('delete trigger: "sushi" returns nothing', keys(await lib('sushi')).length === 0);
 
   // fact store FTS
   await call('remember_fact', { kind: 'venue-url', topic: 'Kinkaku-ji official site', content: 'https://www.shokoku-ji.jp opening hours 09:00-17:00 verified', source: 'https://www.shokoku-ji.jp', confidence: 0.95 });
   await call('remember_fact', { kind: 'policy', topic: '日本签证政策', content: '中国护照赴日需办理短期签证,有效期视类型而定。', source: 'https://mofa.go.jp', confidence: 0.9 });
-  const r1 = await call('recall_facts', { query: 'opening hours' });
+  const r1 = (await call('recall_facts', { query: 'opening hours' })).result;
   ok('facts FTS Latin: "opening hours" recalls the venue fact', (r1.facts ?? []).some((f) => f.topic.includes('Kinkaku-ji')), JSON.stringify((r1.facts ?? []).map((f) => f.topic)));
-  const r2 = await call('recall_facts', { query: '签证政策' });
+  const r2 = (await call('recall_facts', { query: '签证政策' })).result;
   ok('facts FTS CJK trigram: "签证政策" recalls the visa fact', (r2.facts ?? []).some((f) => f.topic.includes('签证')));
 } catch (err) {
-  console.error('e2e-p22 fatal:', err.message);
-  console.error(log.slice(-3000));
-  failures++;
+  fail('e2e-p22 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
 } finally {
-  server.kill();
+  srv.stop();
 }
-
-console.log(failures === 0 ? '\ne2e-p22 PASS' : `\ne2e-p22 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

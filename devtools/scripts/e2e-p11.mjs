@@ -2,24 +2,14 @@
 // e2e P11 — native C#/Playwright scraper ports. Points the scraper base URLs at a local fixture
 // server serving canned FlightAware/FlightStats HTML, so the full navigate + parse path is tested
 // deterministically (no live sites). Verifies the schedule is extracted and claims cross-checked.
-import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p11-data');
-const PORT = 5389;
+const dataDir = dataDirFor('p11');
 const FIXTURE_PORT = 5388;
-const base = `http://127.0.0.1:${PORT}`;
+const { ok, fail, done } = makeReporter('p11');
 
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
-
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
+makeTestData(dataDir);
 
 // --- fixture site: FlightAware + FlightStats pages for a fictional flight XY99 -------------------
 const fixture = http.createServer((req, res) => {
@@ -56,44 +46,21 @@ const fixture = http.createServer((req, res) => {
 await new Promise((r) => fixture.listen(FIXTURE_PORT, r));
 const fixtureBase = `http://127.0.0.1:${FIXTURE_PORT}`;
 
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
+const srv = startServer({
+  dataDir, port: 5389,
   env: {
-    ...process.env,
-    GATHERLIGHT_DATA: dataDir,
-    GATHERLIGHT_PORT: String(PORT),
     GATHERLIGHT_BASE_FLIGHTAWARE: fixtureBase,
     GATHERLIGHT_BASE_FLIGHTSTATS: fixtureBase,
     GATHERLIGHT_BASE_MOFA: fixtureBase,
   },
-  stdio: ['ignore', 'pipe', 'pipe'],
 });
-let serverLog = '';
-server.stdout.on('data', (d) => (serverLog += d));
-server.stderr.on('data', (d) => (serverLog += d));
-
-const until = async (fn, ms = 40000) => {
-  const t0 = Date.now();
-  for (;;) {
-    try { const r = await fn(); if (r) return r; } catch {}
-    if (Date.now() - t0 > ms) throw new Error('timeout');
-    await new Promise((r) => setTimeout(r, 400));
-  }
-};
-const call = async (name, args) => {
-  const res = await fetch(`${base}/api/tools/call`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, arguments: args }),
-  });
-  const body = await res.json().catch(() => null);
-  return { status: res.status, result: body?.result ? JSON.parse(body.result) : body };
-};
+const { call } = makeClient(srv.base);
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
 
   // native tool registered (not the leaf)
-  const tools = (await (await fetch(`${base}/api/tools`)).json()).tools;
+  const tools = (await (await fetch(`${srv.base}/api/tools`)).json()).tools;
   const fsTool = tools.find((t) => t.name === 'flight_schedule');
   ok('flight_schedule registered', !!fsTool);
   ok('native single-flight schema', fsTool?.inputSchema?.required?.includes('carrierIATA')
@@ -128,13 +95,10 @@ try {
   ok('policy_check native single-query schema', pcTool && !pcTool.inputSchema.properties.queries
     && pcTool.inputSchema.required.includes('passportCountry'));
 } catch (err) {
-  console.error('e2e-p11 fatal:', err.message);
-  console.error(serverLog.slice(-3000));
-  failures++;
+  fail('e2e-p11 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
 } finally {
-  server.kill();
+  srv.stop();
   fixture.close();
 }
-
-console.log(failures === 0 ? '\ne2e-p11 PASS' : `\ne2e-p11 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

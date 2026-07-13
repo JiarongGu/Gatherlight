@@ -2,52 +2,19 @@
 // e2e P3 — tool registry over both surfaces: GET/POST /api/tools (HTTP) and the /mcp
 // JSON-RPC endpoint (initialize / tools/list / tools/call); extract runs through the
 // claude stub; chat runs carry the MCP allowlist + config.
-import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p3-data');
+const dataDir = dataDirFor('p3');
 const PORT = 5393;
-const base = `http://127.0.0.1:${PORT}`;
+const { ok, fail, done } = makeReporter('p3');
+makeTestData(dataDir);
+const srv = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const { j } = makeClient(srv.base);
 
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
-
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
-
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
-  env: {
-    ...process.env,
-    GATHERLIGHT_DATA: dataDir,
-    GATHERLIGHT_PORT: String(PORT),
-    GATHERLIGHT_CLAUDE_CMD: `node ${path.join(repo, 'devtools', 'scripts', 'claude-stub.mjs')}`,
-  },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-let serverLog = '';
-server.stdout.on('data', (d) => (serverLog += d));
-server.stderr.on('data', (d) => (serverLog += d));
-
-const until = async (fn, ms = 30000) => {
-  const t0 = Date.now();
-  for (;;) {
-    try { const r = await fn(); if (r) return r; } catch {}
-    if (Date.now() - t0 > ms) throw new Error('timeout');
-    await new Promise((r) => setTimeout(r, 300));
-  }
-};
-const j = async (p, init) => {
-  const res = await fetch(base + p, init);
-  return { status: res.status, body: await res.json().catch(() => null) };
-};
 const rpc = async (payload) => {
-  const res = await fetch(`${base}/mcp`, {
+  const res = await fetch(`${srv.base}/mcp`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
     body: JSON.stringify(payload),
@@ -56,7 +23,7 @@ const rpc = async (payload) => {
 };
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
   console.log('server up');
 
   // --- HTTP surface -----------------------------------------------------------------
@@ -100,7 +67,7 @@ try {
   ok('mcp initialize', init.status === 200 && init.body?.result?.serverInfo?.name === 'planner-tools');
   ok('mcp session id header', !!init.headers.get('mcp-session-id'));
 
-  const notified = await fetch(`${base}/mcp`, {
+  const notified = await fetch(`${srv.base}/mcp`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
   });
@@ -125,12 +92,9 @@ try {
     mcpCfg.mcpServers?.['planner-tools']?.type === 'http'
     && mcpCfg.mcpServers?.['planner-tools']?.url === `http://127.0.0.1:${PORT}/mcp`);
 } catch (err) {
-  console.error('e2e-p3 fatal:', err.message);
-  console.error(serverLog.slice(-3000));
-  failures++;
+  fail('e2e-p3 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
 } finally {
-  server.kill();
+  srv.stop();
 }
-
-console.log(failures === 0 ? '\ne2e-p3 PASS' : `\ne2e-p3 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

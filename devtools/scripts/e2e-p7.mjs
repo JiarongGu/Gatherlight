@@ -2,25 +2,17 @@
 // e2e P7 — 系统模式 (UI-update chat): plan/execute target the CODE repo (not the data repo),
 // the build gate runs before diff, an approved change commits to the code repo, and a failing
 // build blocks the commit. Uses a throwaway fixture code repo so the real repo is untouched.
-import { spawn, spawnSync, execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { repo, dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p7-data');
+const dataDir = dataDirFor('p7');
 const codeDir = path.join(repo, 'devtools', '_e2e-p7-code');
-const PORT = 5397;
-const base = `http://127.0.0.1:${PORT}`;
-
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
+const { ok, fail, done } = makeReporter('p7');
 
 // --- fixtures ------------------------------------------------------------------------
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
+makeTestData(dataDir);
 
 // Fixture CODE repo: a git repo with src/client + a controllable `npm run build`.
 fs.rmSync(codeDir, { recursive: true, force: true });
@@ -37,46 +29,12 @@ git('config', 'user.name', 'e2e'); git('config', 'user.email', 'e2e@localhost');
 git('config', 'core.autocrlf', 'false');
 git('add', '-A'); git('commit', '-q', '-m', 'fixture seed');
 
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
-  env: {
-    ...process.env,
-    GATHERLIGHT_DATA: dataDir,
-    GATHERLIGHT_CODE_ROOT: codeDir,
-    GATHERLIGHT_PORT: String(PORT),
-    GATHERLIGHT_CLAUDE_CMD: `node ${path.join(repo, 'devtools', 'scripts', 'claude-stub.mjs')}`,
-  },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-let serverLog = '';
-server.stdout.on('data', (d) => (serverLog += d));
-server.stderr.on('data', (d) => (serverLog += d));
-
-const j = async (p, init) => {
-  const res = await fetch(base + p, init);
-  return { status: res.status, body: await res.json().catch(() => null) };
-};
-const post = (p, body) => j(p, {
-  method: 'POST', headers: { 'content-type': 'application/json' },
-  body: body ? JSON.stringify(body) : undefined,
-});
-const until = async (fn, ms = 45000) => {
-  const t0 = Date.now();
-  for (;;) {
-    try { const r = await fn(); if (r) return r; } catch {}
-    if (Date.now() - t0 > ms) throw new Error('timeout');
-    await new Promise((r) => setTimeout(r, 300));
-  }
-};
-const waitPhase = (id, phase) => until(async () => {
-  const s = await j(`/api/chat/${id}`);
-  if (s.body?.phase === 'error' && phase !== 'error') throw new Error(`errored: ${s.body?.error}`);
-  return s.body?.phase === phase ? s.body : null;
-});
+const srv = startServer({ dataDir, port: 5397, env: { GATHERLIGHT_CODE_ROOT: codeDir, GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const { j, post, waitPhase } = makeClient(srv.base);
 const codeLog = () => git('log', '--oneline').trim().split('\n').filter(Boolean);
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
 
   // --- happy path: plan → approve → build passes → diff → commit to CODE repo ----------
   const start = await post('/api/chat', { message: '把界面调一下(stub)', mode: 'system' });
@@ -116,12 +74,9 @@ try {
   await post(`/api/chat/${id2}/diff/reject`);
   await waitPhase(id2, 'rejected');
 } catch (err) {
-  console.error('e2e-p7 fatal:', err.message);
-  console.error(serverLog.slice(-4000));
-  failures++;
+  fail('e2e-p7 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
 } finally {
-  server.kill();
+  srv.stop();
 }
-
-console.log(failures === 0 ? '\ne2e-p7 PASS' : `\ne2e-p7 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

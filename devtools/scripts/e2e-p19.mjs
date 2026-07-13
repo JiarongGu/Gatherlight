@@ -6,17 +6,12 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { repo, makeReporter } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sandbox = path.join(repo, 'devtools', '_e2e-p19-install');
 let launcher = path.join(repo, 'src', 'launcher', 'bin', 'x64', 'Release', 'Gatherlight.exe');
 
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
+const { ok, fail, done } = makeReporter('p19');
 
 // Build the launcher if it isn't there yet + MSVC is available; otherwise skip the whole suite.
 const findMsBuild = () => {
@@ -80,11 +75,9 @@ try {
   const r2 = spawnSync(path.join(sandbox, 'Gatherlight.exe'), ['--apply-and-exit'], { cwd: sandbox, timeout: 30000 });
   ok('second run is a no-op (nothing staged)', r2.status === 0 && read('new.txt') === 'brand-new');
 } catch (err) {
-  console.error('e2e-p19 fatal:', err.message);
-  failures++;
+  fail('e2e-p19 fatal: ' + err.message);
 } finally {
   fs.rmSync(sandbox, { recursive: true, force: true });
 }
 
-console.log(failures === 0 ? '\ne2e-p19 PASS' : `\ne2e-p19 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();

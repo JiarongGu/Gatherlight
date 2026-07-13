@@ -1,23 +1,14 @@
 #!/usr/bin/env node
 // e2e P9 — zero-LLM budget scan: declared caps/totals surfaced, excluded/rejected lines flagged,
 // per-currency mention counts, honest (no fabricated net total); budget_scan tool on both surfaces.
-import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient } from './_e2e-common.mjs';
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const dataDir = path.join(repo, 'devtools', '_e2e-p9-data');
-const PORT = 5399;
-const base = `http://127.0.0.1:${PORT}`;
+const dataDir = dataDirFor('p9');
+const { ok, fail, done } = makeReporter('p9');
 
-let failures = 0;
-const ok = (name, cond, extra = '') => {
-  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
-  if (!cond) failures++;
-};
-
-spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
+makeTestData(dataDir);
 
 // Controlled budget fixture: a declared cap, a per-person line (both per + total figures), a
 // rejected/excluded option, and a JPY conversion.
@@ -30,30 +21,11 @@ fs.writeFileSync(path.join(dataDir, 'plans', 'budgets', '2026-08-kyoto.md'), [
   '',
 ].join('\n'));
 
-const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
-  cwd: repo,
-  env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(PORT) },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-let serverLog = '';
-server.stdout.on('data', (d) => (serverLog += d));
-server.stderr.on('data', (d) => (serverLog += d));
-
-const until = async (fn, ms = 30000) => {
-  const t0 = Date.now();
-  for (;;) {
-    try { const r = await fn(); if (r) return r; } catch {}
-    if (Date.now() - t0 > ms) throw new Error('timeout');
-    await new Promise((r) => setTimeout(r, 300));
-  }
-};
-const j = async (p, init) => {
-  const res = await fetch(base + p, init);
-  return { status: res.status, body: await res.json().catch(() => null) };
-};
+const srv = startServer({ dataDir, port: 5399 });
+const { j, call } = makeClient(srv.base);
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
 
   const r = await j('/api/plans/budget?path=plans/budgets/2026-08-kyoto.md');
   ok('budget scan 200', r.status === 200);
@@ -79,25 +51,18 @@ try {
   // tool surfaces
   const tools = await j('/api/tools');
   ok('budget_scan tool registered (HTTP)', tools.body.tools.some((t) => t.name === 'budget_scan'));
-  const call = await j('/api/tools/call', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name: 'budget_scan', arguments: { path: 'plans/budgets/2026-08-kyoto.md' } }),
-  });
-  const parsed = JSON.parse(call.body.result);
-  ok('budget_scan tool runs', call.status === 200 && parsed.totalMentions === 6, `mentions ${parsed?.totalMentions}`);
-  ok('budget_scan carries honesty note', typeof parsed.note === 'string' && parsed.note.includes('不是净额合计'));
-  const mcp = await (await fetch(`${base}/mcp`, {
+  const scan = await call('budget_scan', { path: 'plans/budgets/2026-08-kyoto.md' });
+  ok('budget_scan tool runs', scan.status === 200 && scan.result.totalMentions === 6, `mentions ${scan.result?.totalMentions}`);
+  ok('budget_scan carries honesty note', typeof scan.result.note === 'string' && scan.result.note.includes('不是净额合计'));
+  const mcp = await (await fetch(`${srv.base}/mcp`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   })).json();
   ok('budget_scan on MCP', mcp.result.tools.some((t) => t.name === 'budget_scan'));
 } catch (err) {
-  console.error('e2e-p9 fatal:', err.message);
-  console.error(serverLog.slice(-3000));
-  failures++;
+  fail('e2e-p9 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
 } finally {
-  server.kill();
+  srv.stop();
 }
-
-console.log(failures === 0 ? '\ne2e-p9 PASS' : `\ne2e-p9 FAIL (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+done();
