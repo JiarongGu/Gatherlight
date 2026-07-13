@@ -3,12 +3,14 @@
 // the library_item table; the browse read side (/api/library) serves it zero-LLM. No claude, no
 // browser — pure DB round-trips.
 import { spawn, spawnSync } from 'node:child_process';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const dataDir = path.join(repo, 'devtools', '_e2e-p13-data');
 const PORT = 5393;
+const IMG_PORT = 5394;
 const base = `http://127.0.0.1:${PORT}`;
 
 let failures = 0;
@@ -19,9 +21,32 @@ const ok = (name, cond, extra = '') => {
 
 spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
 
+// Fixture upstream for the image-cache proxy: a 1x1 PNG (counting hits) + a non-image route.
+const PNG_1x1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64'
+);
+let imgHits = 0;
+const imgFixture = http.createServer((req, res) => {
+  if ((req.url ?? '').startsWith('/img.png')) {
+    imgHits++;
+    res.setHeader('content-type', 'image/png');
+    res.end(PNG_1x1);
+  } else if ((req.url ?? '').startsWith('/not-image')) {
+    res.setHeader('content-type', 'text/plain');
+    res.end('nope');
+  } else {
+    res.statusCode = 404;
+    res.end('nf');
+  }
+});
+await new Promise((r) => imgFixture.listen(IMG_PORT, r));
+const imgBase = `http://127.0.0.1:${IMG_PORT}`;
+
 const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
   cwd: repo,
-  env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(PORT) },
+  // allow the loopback fixture through the SSRF guard (production keeps it on).
+  env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(PORT), GATHERLIGHT_IMAGE_ALLOW_PRIVATE: '1' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let serverLog = '';
@@ -105,12 +130,24 @@ try {
   ok('library_delete removes the item', del.result.removed === true, JSON.stringify(del.result));
   const afterDelete = await getJson('/api/library');
   ok('after delete → 2 items', afterDelete.items.length === 2, String(afterDelete.items.length));
+
+  // --- image cache proxy (offline-safe cover images) ---
+  const img1 = await fetch(`${base}/api/library/image?url=${encodeURIComponent(imgBase + '/img.png')}`);
+  ok('image proxy: 200 + image/png', img1.status === 200 && (img1.headers.get('content-type') ?? '').startsWith('image/png'),
+    `${img1.status} ${img1.headers.get('content-type')}`);
+  ok('image proxy: upstream hit once', imgHits === 1, `hits=${imgHits}`);
+  const img2 = await fetch(`${base}/api/library/image?url=${encodeURIComponent(imgBase + '/img.png')}`);
+  ok('image proxy: second call served', img2.status === 200);
+  ok('image proxy: cache hit (no 2nd upstream fetch)', imgHits === 1, `hits=${imgHits}`);
+  const nonImg = await fetch(`${base}/api/library/image?url=${encodeURIComponent(imgBase + '/not-image')}`);
+  ok('image proxy: non-image → 404', nonImg.status === 404, String(nonImg.status));
 } catch (err) {
   console.error('e2e-p13 fatal:', err.message);
   console.error(serverLog.slice(-3000));
   failures++;
 } finally {
   server.kill();
+  imgFixture.close();
 }
 
 console.log(failures === 0 ? '\ne2e-p13 PASS' : `\ne2e-p13 FAIL (${failures})`);

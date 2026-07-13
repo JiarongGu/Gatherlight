@@ -94,6 +94,7 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, Modules.Knowledge.Tools.RecallFactsTool>()
             // Knowledge library — DB-backed reference entities (browse read side + agent write tools)
             .AddSingleton<Modules.Library.Services.ILibraryRepository, Modules.Library.Services.LibraryRepository>()
+            .AddSingleton<Modules.Library.Services.IImageCache, Modules.Library.Services.ImageCache>()
             .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryUpsertTool>()
             .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibrarySearchTool>()
             .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryDeleteTool>()

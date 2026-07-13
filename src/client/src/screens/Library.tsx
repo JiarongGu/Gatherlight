@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { SearchOutlined, EnvironmentOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons';
 import { loadLibrary, KIND_LABEL, type LibraryItem, type LibraryFacets } from '@/lib/libraryApi';
 
+// Route cover images through the server proxy — fetch-once, disk-cached, offline-safe.
+const proxied = (url: string) => `/api/library/image?url=${encodeURIComponent(url)}`;
+
 // The 知识库 gallery — verified reference entities from the DB, browsed read-only. Family-scale, so
 // we load everything once and filter client-side (snappy chips + search, no round-trips).
 export function Library() {
@@ -165,12 +168,15 @@ function LibraryCard({ item }: { item: LibraryItem }) {
     .filter(Boolean)
     .slice(0, 3);
   const href = item.url ?? undefined;
+  // If the proxied image fails (dead URL / offline first load), fall back to the glyph.
+  const [imgOk, setImgOk] = useState(true);
+  const showImg = !!item.imageUrl && imgOk;
 
   const inner = (
     <>
-      <div className={`lib-card-media${item.imageUrl ? '' : ' empty'}`}>
-        {item.imageUrl ? (
-          <img src={item.imageUrl} alt={item.name} loading="lazy" />
+      <div className={`lib-card-media${showImg ? '' : ' empty'}`}>
+        {showImg ? (
+          <img src={proxied(item.imageUrl!)} alt={item.name} loading="lazy" onError={() => setImgOk(false)} />
         ) : (
           <span className="lib-card-glyph">{glyph}</span>
         )}
