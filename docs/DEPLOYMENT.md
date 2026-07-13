@@ -39,9 +39,11 @@ The launcher points the app at `data/` and launches `libs/Gatherlight.Host.exe`;
 `wwwroot` + the knowledge template from `res/` and defaults its data folder to `data/` — so the
 bundle is self-locating; move or rename the `Gatherlight/` folder freely.
 
-**CI** (`.github/workflows/`): `ci.yml` builds + runs the e2e suites on every push/PR; `release.yml`
-builds the bundle and attaches the zip to a GitHub Release on a `v*` tag (or as a workflow artifact
-on manual dispatch). GitHub Actions builds the launcher with the v143 toolset (v145 locally).
+**Release** (`.github/workflows/release.yml`): a **manual-trigger** (`workflow_dispatch`) workflow —
+there is deliberately no auto CI on push/PR. Run it from the Actions tab: it bumps the version
+(`patch`/`minor`/`major`, or an explicit value), runs the full e2e suite as a gate, builds the
+bundle, optionally tags, and attaches the zip + `manifest.json` to a GitHub Release (draft by
+default). GitHub Actions builds the launcher with the v143 toolset (v145 locally).
 
 ## Run it
 

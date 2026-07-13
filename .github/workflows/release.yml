@@ -1,17 +1,43 @@
 name: Release
 
+# Manual-trigger only. There is intentionally NO auto CI on push/PR and NO tag-push trigger — cutting
+# a release is a deliberate act you start from the Actions tab (Run workflow). Mirrors the sibling
+# D3dxSkinManager release model. The full e2e suite still gates every release below.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
-      draft:
-        description: 'Create the GitHub release as a draft'
+      version:
+        description: 'Version (e.g. 0.2.0) — leave empty to bump from the current version'
+        required: false
+        type: string
+      bump:
+        description: 'Version bump type (ignored when an explicit version is given)'
+        required: false
+        type: choice
+        default: 'patch'
+        options:
+          - none
+          - patch
+          - minor
+          - major
+      create_tag:
+        description: 'Create + push a git tag for this version'
+        required: false
         type: boolean
         default: true
+      draft:
+        description: 'Create the GitHub release as a draft (review before publishing)'
+        required: false
+        type: boolean
+        default: true
+      prerelease:
+        description: 'Mark as a pre-release'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
-  contents: write   # create releases + tags
+  contents: write   # create releases + tags, push the version-bump commit
 
 jobs:
   package:
@@ -22,7 +48,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0   # full history for release notes
+          fetch-depth: 0   # full history for release notes + tag diffs
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
@@ -39,34 +65,64 @@ jobs:
       - name: Setup MSBuild (native launcher)
         uses: microsoft/setup-msbuild@v2
 
+      # Version source of truth = devtools/project.config.mjs. An explicit `version` input wins;
+      # otherwise `bump` steps the current semver (patch/minor/major). A changed version is written
+      # back + committed so the repo, the bundle, and the tag all agree.
       - name: Determine version
         id: version
         shell: pwsh
         run: |
-          $ref = "${{ github.ref }}"
-          if ($ref -like 'refs/tags/v*') {
-            $version = $ref -replace '^refs/tags/v', ''
-          } else {
-            $version = node -e "import('./devtools/project.config.mjs').then(m=>process.stdout.write(m.default.version))"
+          $current = node -e "import('./devtools/project.config.mjs').then(m=>process.stdout.write(String(m.default.version)))"
+          Write-Host "current version: $current"
+
+          $final = $current
+          if ("${{ inputs.version }}" -ne "") {
+            $final = "${{ inputs.version }}"
+            Write-Host "explicit version: $final"
+          } elseif ("${{ inputs.bump }}" -ne "none") {
+            if ($current -match '^(\d+)\.(\d+)\.(\d+)') {
+              $maj = [int]$matches[1]; $min = [int]$matches[2]; $pat = [int]$matches[3]
+              switch ("${{ inputs.bump }}") {
+                "major" { $maj++; $min = 0; $pat = 0 }
+                "minor" { $min++; $pat = 0 }
+                "patch" { $pat++ }
+              }
+              $final = "$maj.$min.$pat"
+              Write-Host "bumped ${{ inputs.bump }}: $current -> $final"
+            } else {
+              Write-Host "::error::version '$current' is not X.Y.Z — pass an explicit version input"
+              exit 1
+            }
           }
-          Write-Host "version: $version"
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+          if ($final -ne $current) {
+            $p = "devtools/project.config.mjs"
+            $c = Get-Content $p -Raw
+            $c = $c -replace "(version:\s*')[^']*'", ('${1}' + $final + "'")
+            Set-Content $p $c -NoNewline -Encoding utf8
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add $p
+            git commit -m "chore: release v$final"
+            git push
+          }
+
+          "version=$final" >> $env:GITHUB_OUTPUT
+          "tag=v$final" >> $env:GITHUB_OUTPUT
 
       - name: Install client deps
         working-directory: src/client
         run: npm ci
 
-      # Gate the release on the full e2e suite: CI runs it on every push to main, but a tag can be
-      # pushed independently, so the exact commit we're about to bundle + publish must be re-verified
-      # here. --build guarantees a fresh client+server first; a red suite fails the release.
+      # Gate the release on the full e2e suite against the exact commit we're about to bundle.
+      # --build guarantees a fresh client + server first; a red suite fails the release.
       - name: e2e gate
         run: node devtools/dev.mjs e2e all --build
 
       # Builds client -> self-contained host -> native C++ launcher -> dist/Gatherlight/ + zip.
-      # GitHub Actions sets CI=true, so Gatherlight.Launcher.vcxproj selects the v143 toolset.
-      # --zip: the release packages the runnable folder into the shippable .zip (local `dev.mjs
-      # publish` leaves just the folder). The bundle carries git + the Playwright driver + chromium.
+      # GitHub Actions sets CI=true, so Gatherlight.Launcher.vcxproj selects the v143 toolset. --zip
+      # packages the runnable folder into the shippable .zip. The bundle carries git + the Playwright
+      # driver + chromium.
       - name: Build production bundle
         env:
           GATHERLIGHT_VERSION: ${{ steps.version.outputs.version }}
@@ -89,27 +145,37 @@ jobs:
             ${{ steps.artifact.outputs.path }}
             dist/Gatherlight/manifest.json
 
+      # Only tag AFTER a green e2e + a successful bundle, so tags always point at shippable commits.
+      - name: Create git tag
+        if: inputs.create_tag
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
       - name: Generate release notes
-        if: startsWith(github.ref, 'refs/tags/')
         id: notes
         shell: pwsh
         run: |
           $tag = "${{ steps.version.outputs.tag }}"
           $prev = git describe --tags --abbrev=0 "$tag^" 2>$null
-          if ($prev) { $log = git log "$prev..$tag" --pretty=format:"- %s" --no-merges }
+          if ($prev) { $log = git log "$prev..HEAD" --pretty=format:"- %s" --no-merges }
           else { $log = git log --pretty=format:"- %s" --no-merges }
           $notes = @("## Gatherlight $tag", "", $log, "", "---",
             "Download the zip, extract, and run **Gatherlight.exe**. Windows 10/11 (x64).") -join "`n"
           $notes | Out-File release-notes.md -Encoding utf8
+          Write-Host $notes
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Gatherlight ${{ steps.version.outputs.tag }}
           body_path: release-notes.md
-          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+          draft: ${{ inputs.draft }}
+          prerelease: ${{ inputs.prerelease }}
           files: |
             ${{ steps.artifact.outputs.path }}
             dist/Gatherlight/manifest.json

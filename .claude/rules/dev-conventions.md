@@ -61,7 +61,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - **Auto-update is two-phase**: the server (`Modules/Update`) checks the configured GitHub release +
   downloads/sha256-verifies into `{install}/.update/staged`; the C++ launcher overlays it on the next
   restart (a running exe can't replace itself) and is itself excluded from the overlay. That split is
-  the whole reason the launcher exists. CI: `.github/workflows/{ci,release}.yml`.
+  the whole reason the launcher exists. Release: a single **manual-trigger**
+  `.github/workflows/release.yml` (`workflow_dispatch`; version bump → e2e gate → bundle → optional
+  tag → GitHub Release) — no auto CI on push/PR (D3dx-style).
 
 ## Data folder discipline
 
