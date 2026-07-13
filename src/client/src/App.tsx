@@ -14,7 +14,7 @@ import {
   PlanActionsMenu,
   type ActionTarget
 } from '@/ui/organisms';
-import { Home, Library } from '@/screens';
+import { Home, Library, Manage } from '@/screens';
 import { loadPlanData, type PlanData, type PlanFile, type TripAsset } from './lib/collectFiles';
 import { extractHeadings, stripFirstH1 } from './lib/markdown';
 import { buildTripExport, downloadAsFile, downloadTripPDF, isTripFile } from './lib/export';
@@ -36,6 +36,8 @@ const EMPTY_ASSETS: TripAsset[] = [];
 
 export function App() {
   if (SHOW_GALLERY) return <Gallery />;
+  // The desktop management console renders this admin dashboard (WebView2 loads /manage).
+  if (typeof location !== 'undefined' && location.pathname.replace(/\/+$/, '') === '/manage') return <Manage />;
   // Plan data now arrives from the server (the data folder is server-side) — loaded once at
   // startup; edits land via chat/fs endpoints which re-index server-side.
   const [planData, setPlanData] = useState<PlanData | null>(null);

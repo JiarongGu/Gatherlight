@@ -1,0 +1,168 @@
+import { useEffect, useRef, useState } from 'react';
+
+// The desktop host injects window.__gatherlightHost + a WebView2 message bridge for native actions
+// (restart / open data folder / open planner in browser / exit / memory file dialogs). Opened in a
+// plain browser, the page still monitors health + counts and does what it can in-page.
+const inHost = typeof window !== 'undefined' && (window as { __gatherlightHost?: boolean }).__gatherlightHost === true;
+function host(action: string) {
+  try {
+    (window as unknown as { chrome?: { webview?: { postMessage(m: string): void } } }).chrome?.webview?.postMessage(action);
+  } catch {
+    /* not in the host */
+  }
+}
+
+const STRIP = 44;
+
+function fmtUptime(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s >= 3600) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  if (s >= 60) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${s}s`;
+}
+
+export function Manage() {
+  const [healthy, setHealthy] = useState<boolean | null>(null);
+  const [latency, setLatency] = useState(0);
+  const [strip, setStrip] = useState<boolean[]>([]);
+  const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
+  const [uptime, setUptime] = useState('0s');
+  const started = useRef(Date.now());
+
+  useEffect(() => {
+    let mounted = true;
+    let tick = 0;
+    const refreshCounts = async () => {
+      const num = async (path: string, pick: (d: any) => number) => {
+        try { return pick(await (await fetch(path)).json()); } catch { return undefined; }
+      };
+      const [plans, library, tools] = await Promise.all([
+        num('/api/plans', (d) => (d.files || []).length),
+        num('/api/library', (d) => d.facets?.total ?? 0),
+        num('/api/tools', (d) => (d.tools || []).length),
+      ]);
+      if (mounted) setCounts({ plans, library, tools });
+    };
+    const poll = async () => {
+      const t0 = performance.now();
+      let ok = false;
+      try { ok = (await fetch('/api/health')).ok; } catch { ok = false; }
+      if (!mounted) return;
+      setHealthy(ok);
+      setLatency(Math.round(performance.now() - t0));
+      setStrip((s) => [...s, ok].slice(-STRIP));
+      setUptime(fmtUptime(Date.now() - started.current));
+      if (ok && tick % 3 === 0) refreshCounts();
+      tick++;
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => { mounted = false; clearInterval(id); };
+  }, []);
+
+  const plannerUrl = `${location.origin}/`;
+  const openPlanner = () => (inHost ? host('openPlanner') : window.open(plannerUrl, '_blank'));
+
+  const exportMemory = () => {
+    if (inHost) host('exportMemory');
+    else window.open('/api/memory/export', '_blank');
+  };
+  const importMemory = () => {
+    if (inHost) { host('importMemory'); return; }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const res = await fetch('/api/memory/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: await file.text() });
+        const j = await res.json();
+        alert(res.ok ? `已导入:${JSON.stringify(j.imported)}` : `导入失败:${j.error ?? res.status}`);
+      } catch (e) {
+        alert('导入失败:' + (e instanceof Error ? e.message : String(e)));
+      }
+    };
+    input.click();
+  };
+
+  const hColor = healthy === null ? 'var(--muted)' : healthy ? 'var(--success)' : 'var(--danger)';
+  const statusText = healthy === null ? '检查中…' : healthy ? '运行正常 · Healthy' : '无响应 · Not responding';
+
+  const N = (v?: number) => (v === undefined ? '—' : v.toLocaleString());
+
+  return (
+    <div className="mng" style={{ minHeight: '100vh' }}>
+      <div className="mng-top">
+        <span className="seal">拾</span>
+        <div>
+          <h1>管理控制台</h1>
+          <span className="sub">GATHERLIGHT · CONSOLE</span>
+        </div>
+        <span className="ver">拾光</span>
+      </div>
+
+      <div className={`mng-health${healthy ? ' ok' : ''}`} style={{ ['--h' as any]: hColor }}>
+        <div className="mng-health-row">
+          <span className="mng-lantern" />
+          <div className="mng-status">
+            <div className="t" style={{ color: healthy === false ? 'var(--danger)' : 'var(--text)' }}>{statusText}</div>
+            <div className="d">
+              {healthy ? `延迟 ${latency} ms · 站点自检每 2 秒` : healthy === null ? '连接本地服务…' : '本地服务未响应,可尝试「重启服务」'}
+            </div>
+          </div>
+          <div className="mng-uptime">
+            <div className="n">{uptime}</div>
+            <div className="l">运行时长</div>
+          </div>
+        </div>
+        <div className="mng-strip">
+          {Array.from({ length: STRIP }).map((_, i) => {
+            const idx = i - (STRIP - strip.length);
+            const v = idx >= 0 ? strip[idx] : undefined;
+            return <i key={i} className={v === undefined ? '' : v ? 'ok' : 'bad'} />;
+          })}
+        </div>
+      </div>
+
+      <div className="mng-metrics">
+        <div className="mng-metric"><div className="n">{N(counts.plans)}</div><div className="l">计划 Plans</div></div>
+        <div className="mng-metric"><div className="n">{N(counts.library)}</div><div className="l">知识库 Library</div></div>
+        <div className="mng-metric"><div className="n">{N(counts.tools)}</div><div className="l">工具 Tools</div></div>
+      </div>
+
+      <div className="mng-title">操作 · Controls</div>
+      <div className="mng-actions">
+        <button className="mng-btn primary" onClick={openPlanner}>在浏览器打开规划界面</button>
+        {inHost && (
+          <button className="mng-btn" onClick={() => host('openDataFolder')}>
+            打开数据文件夹<span className="sub">plans · household · 知识库 · SQLite</span>
+          </button>
+        )}
+        {inHost && (
+          <button className="mng-btn" onClick={() => host('restart')}>
+            重启服务<span className="sub">recycle the in-process server</span>
+          </button>
+        )}
+        <button className="mng-btn" onClick={exportMemory}>
+          导出记忆<span className="sub">知识库 + 事实 → 可迁移文件</span>
+        </button>
+        <button className="mng-btn" onClick={importMemory}>
+          导入记忆<span className="sub">合并另一台机器的记忆</span>
+        </button>
+        {inHost && (
+          <button className="mng-btn danger" onClick={() => host('exit')}>
+            退出<span className="sub">stop the server + quit</span>
+          </button>
+        )}
+      </div>
+
+      <div className="mng-meta">
+        端口 {location.port || '5317'} · 站点 {plannerUrl}
+        <br />
+        规划界面在浏览器中打开;此页监控本机服务的健康。数据(计划/家庭/知识库/SQLite)在数据文件夹,数据库不进 git,请随数据文件夹备份。
+      </div>
+      {!inHost && <div className="mng-hint">提示:部分主机操作(重启 / 数据文件夹 / 退出)仅在桌面管理端可用。</div>}
+    </div>
+  );
+}

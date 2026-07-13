@@ -14,10 +14,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The Host hosts Kestrel in-process (GatherlightApp.Build + server.Start), so it needs the
-         ASP.NET Core shared framework in addition to WinForms. It's a MANAGEMENT console — it does
-         not render the planner UI (users open that in a browser), so no WebView2 is needed. -->
+    <!-- Hosts Kestrel in-process (GatherlightApp.Build + server.Start) → needs the ASP.NET Core
+         shared framework alongside WinForms. The MANAGEMENT console renders as a web page in a
+         WebView2 (crisp at any DPI, resizable, same lantern-paper design) — it's still not the
+         planner UI (users open that in a browser); it's the /manage admin surface. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3800.47" />
   </ItemGroup>
 
   <ItemGroup>
