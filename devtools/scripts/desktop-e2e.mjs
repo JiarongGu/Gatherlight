@@ -57,6 +57,10 @@ try {
   await c.evalJs("[...document.querySelectorAll('.mng-tab')].find(t=>/Cortex/.test(t.textContent))?.click()");
   await new Promise((r) => setTimeout(r, 400));
   ok('tab switch (Cortex) works', (await c.evalJs("!!document.querySelector('.cx, .cx-lead, .cx-models')")) === true);
+  // Settings tab renders its config form (the surface for editing settings.json)
+  await c.evalJs("[...document.querySelectorAll('.mng-tab')].find(t=>/Settings/.test(t.textContent))?.click()");
+  await new Promise((r) => setTimeout(r, 700));
+  ok('Settings tab renders config form', (await c.evalJs("!!document.querySelector('.set-group')")) === true);
   await c.evalJs("[...document.querySelectorAll('.mng-tab')].find(t=>/Overview/.test(t.textContent))?.click()");
   await new Promise((r) => setTimeout(r, 300));
 
