@@ -4,14 +4,15 @@
 //   node devtools/dev.mjs vite              - run the client dev server (HMR, proxies /api)
 //   node devtools/dev.mjs build             - client build -> wwwroot + dotnet build
 //   node devtools/dev.mjs publish [rid]     - client build + self-contained single-file exe -> dist/
-//   node devtools/dev.mjs e2e [p1..|all]    - API-level end-to-end suites (isolated data folders)
+//   node devtools/dev.mjs e2e [all|pN|pN-pM|p1,p3] [--build] [--parallel[=N]] - API e2e suites
 //   node devtools/dev.mjs smoke             - real-claude two-gate smoke (opt-in; needs auth CLI)
 //   node devtools/dev.mjs memory <export|import> [file] - transfer DB memory (needs a running server)
 //   node devtools/dev.mjs test-data         - regenerate the synthetic fixture data folder
 //   node devtools/dev.mjs install-hooks     - git core.hooksPath -> devtools/hooks (pre-commit guard)
 //   node devtools/dev.mjs check-sensitive   - scan staged changes (--tree for all tracked files)
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import config from './project.config.mjs';
@@ -158,27 +159,108 @@ switch (cmd) {
     break;
 
   case 'e2e': {
-    const which = args[0] ?? 'all';
-    const all = fs.readdirSync(path.join(repo, 'devtools', 'scripts'))
+    const scriptsDir = path.join(repo, 'devtools', 'scripts');
+    const all = fs.readdirSync(scriptsDir)
       .filter((f) => /^e2e-p\d+\.mjs$/.test(f))
       .map((f) => f.slice(4, -4))
-      // NUMERIC order (p2 before p10) — a plain .sort() is lexicographic, which puts p3–p9 LAST
-      // (after p23) and makes the run order unreadable.
+      // NUMERIC order (p2 before p10) — a plain .sort() is lexicographic, which puts p3–p9 LAST.
       .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
-    const suites = which === 'all' ? all : [which];
-    if (suites.length === 0) { console.log('no e2e suites yet'); break; }
-    // Run EVERY suite and summarize at the end — never bail on the first failure. The old loop
-    // `break`ed on non-zero, so a mid-run crash (e.g. a Windows libuv `UV_HANDLE_CLOSING` teardown
-    // abort, which surfaces as a signal/non-zero status) silently dropped every later suite while
-    // the tail still looked green. A suite counts as passed only on a clean exit-0 (no signal).
-    const results = [];
-    for (const suite of suites) {
-      const r = spawnSync('node', [path.join(repo, 'devtools', 'scripts', `e2e-${suite}.mjs`)],
-        { stdio: 'inherit', cwd: repo });
-      results.push({ suite, passed: r.status === 0 && !r.signal, status: r.status, signal: r.signal });
+
+    // Selector + flags. Selector: all | pN | pN-pM (range) | p1,p3,p9 (list).
+    //   --build             `dev.mjs build` first — closes the `--no-build` stale-bin footgun.
+    //   --parallel[=N] / -p  run up to N suites at once (default serial). Scheduling is
+    //                        port-disjoint (below), so parallel runs can't collide.
+    const flags = args.filter((a) => a.startsWith('-'));
+    const sel = args.find((a) => !a.startsWith('-')) ?? 'all';
+    const doBuild = flags.includes('--build');
+    const pFlag = flags.find((f) => f === '--parallel' || f.startsWith('--parallel=') || f === '-p' || f.startsWith('-p='));
+    let limit = 1;
+    if (pFlag) {
+      const n = pFlag.includes('=') ? Number(pFlag.split('=')[1]) : NaN;
+      limit = Number.isFinite(n) && n > 0 ? n : Math.max(2, Math.min(6, (os.cpus().length || 4) - 2));
     }
+
+    const expand = (s) => {
+      if (s === 'all') return all;
+      if (s.includes(',')) return s.split(',').map((x) => x.trim());
+      const range = s.match(/^p(\d+)-p?(\d+)$/);
+      if (range) {
+        const [lo, hi] = [Number(range[1]), Number(range[2])];
+        return all.filter((x) => { const n = Number(x.slice(1)); return n >= lo && n <= hi; });
+      }
+      return [s];
+    };
+    const suites = expand(sel).filter((s) => all.includes(s));
+    if (suites.length === 0) { console.log(`no e2e suites match "${sel}"`); break; }
+
+    if (doBuild) {
+      console.log('e2e: building server + client first…');
+      const b = spawnSync('node', [path.join(repo, 'devtools', 'dev.mjs'), 'build'], { stdio: 'inherit', cwd: repo });
+      if (b.status !== 0) { console.error('e2e: build failed — aborting'); process.exitCode = b.status ?? 1; break; }
+    }
+
+    // A suite's "port footprint" = every 5xxx literal in its source (server + fixture ports).
+    // Over-inclusive on purpose: a stray non-port 5xxx only makes scheduling more conservative,
+    // never causes a collision. Suites that share a port (e.g. p7/p15 both 5397) just won't run
+    // at the same time — so parallel scheduling stays correct without touching any suite.
+    const footprint = (suite) =>
+      new Set([...fs.readFileSync(path.join(scriptsDir, `e2e-${suite}.mjs`), 'utf8').matchAll(/\b5\d{3}\b/g)].map((m) => m[0]));
+    const ports = new Map(suites.map((s) => [s, footprint(s)]));
+
+    // Run a suite as a child. Serial → inherit stdio (live output); parallel → buffer + dump on
+    // finish (interleaved live logs from N servers would be unreadable). Pass only on a clean
+    // exit-0 with no signal (a libuv teardown abort surfaces as a signal → counts as failure).
+    const runOne = (suite, capture) => new Promise((resolve) => {
+      const t0 = Date.now();
+      const child = spawn('node', [path.join(scriptsDir, `e2e-${suite}.mjs`)],
+        { cwd: repo, stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit' });
+      let out = '';
+      child.stdout?.on('data', (d) => (out += d));
+      child.stderr?.on('data', (d) => (out += d));
+      child.on('close', (code, signal) => resolve({ suite, passed: code === 0 && !signal, status: code, signal, out, ms: Date.now() - t0 }));
+    });
+
+    const results = [];
+    const wallStart = Date.now();
+
+    if (limit <= 1) {
+      for (const suite of suites) results.push(await runOne(suite, false));
+    } else {
+      console.log(`e2e: ${suites.length} suites, up to ${limit} at once (port-disjoint)…`);
+      const pending = [...suites];
+      const running = [];       // { suite, promise }
+      const busy = new Set();   // ports held by currently-running suites
+      const launch = (suite) => {
+        for (const p of ports.get(suite)) busy.add(p);
+        const entry = { suite, promise: runOne(suite, true).then((rec) => {
+          for (const p of ports.get(suite)) busy.delete(p);
+          running.splice(running.findIndex((e) => e.suite === suite), 1);
+          results.push(rec);
+          process.stdout.write(rec.out);
+          console.log(`  ${rec.passed ? '✓' : '✗'} ${rec.suite} (${(rec.ms / 1000).toFixed(0)}s)`);
+          return rec;
+        }) };
+        running.push(entry);
+      };
+      while (pending.length || running.length) {
+        for (let i = 0; i < pending.length && running.length < limit; i++) {
+          const fp = ports.get(pending[i]);
+          if ([...fp].some((p) => busy.has(p))) continue;  // a port it needs is in use → hold
+          launch(pending.splice(i, 1)[0]); i--;
+        }
+        // Nothing running and nothing launchable would deadlock; can't happen (busy empties when
+        // running does), but force the head if it ever did.
+        if (running.length === 0 && pending.length) launch(pending.shift());
+        if (running.length) await Promise.race(running.map((e) => e.promise));
+      }
+    }
+
+    results.sort((a, b) => Number(a.suite.slice(1)) - Number(b.suite.slice(1)));
+    const wall = ((Date.now() - wallStart) / 1000).toFixed(0);
     const failed = results.filter((r) => !r.passed);
-    console.log(`\ne2e: ${results.length - failed.length}/${results.length} suites passed`);
+    const slow = [...results].sort((a, b) => b.ms - a.ms).slice(0, 3).map((r) => `${r.suite} ${(r.ms / 1000).toFixed(0)}s`);
+    console.log(`\ne2e: ${results.length - failed.length}/${results.length} suites passed in ${wall}s${limit > 1 ? ` (parallel ×${limit})` : ''}`);
+    if (slow.length) console.log(`  slowest: ${slow.join(' · ')}`);
     for (const f of failed) console.log(`  ✗ ${f.suite} — ${f.signal ? `signal ${f.signal}` : `exit ${f.status}`}`);
     if (failed.length) process.exitCode = 1;
     break;
