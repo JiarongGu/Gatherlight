@@ -41,7 +41,7 @@ public sealed class AppHost : Form
         _http = new HttpClient(handler) { BaseAddress = new Uri(_url), Timeout = TimeSpan.FromSeconds(4) };
 
         Text = "Gatherlight · 拾光 — 管理控制台";
-        Icon = Theme.SealIcon();
+        Icon = LoadAppIcon();
         BackColor = Theme.Bg;
         // Resizable + DPI-correct (PerMonitorV2 is set in the csproj; WebView2 renders crisp).
         FormBorderStyle = FormBorderStyle.Sizable;
@@ -187,6 +187,19 @@ public sealed class AppHost : Form
     private static void OpenExternal(string target)
     {
         try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true }); } catch { /* best effort */ }
+    }
+
+    // The shipped multi-resolution app icon (amber 拾 seal), embedded in the exe; falls back to the
+    // hand-drawn seal if the resource is somehow unavailable.
+    private static Icon LoadAppIcon()
+    {
+        try
+        {
+            using var stream = typeof(AppHost).Assembly.GetManifestResourceStream("Gatherlight.Host.gatherlight.ico");
+            if (stream is not null) return new Icon(stream);
+        }
+        catch { /* fall back */ }
+        return Theme.SealIcon();
     }
 
     private void Restart()

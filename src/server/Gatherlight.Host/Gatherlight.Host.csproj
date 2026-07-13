@@ -11,7 +11,13 @@
     <!-- BOM-less UTF-8 sources with CJK literals (tray menu labels) — same guard as the server. -->
     <CodePage>65001</CodePage>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- The shipped app icon (amber 拾 seal) — sets the exe icon; also embedded for the window/tray. -->
+    <ApplicationIcon>..\..\assets\gatherlight.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\gatherlight.ico" LogicalName="Gatherlight.Host.gatherlight.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Hosts Kestrel in-process (GatherlightApp.Build + server.Start) → needs the ASP.NET Core
