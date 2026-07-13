@@ -45,6 +45,8 @@ public sealed class CortexConfigService : ICortexConfigService
             "两道闸的交互式规划智能体(cwd = 数据文件夹,加载智库)。留空则用 claude CLI 默认模型。", null),
         ("extract", "文件提取 · Extract",
             "一次性文件提取工具(中性 cwd,廉价调用)。默认 sonnet。", "sonnet"),
+        ("scorer", "自动评分 · Scorer",
+            "自动评分的 LLM 评判(切题 / 事实可靠等维度,中性 cwd,廉价调用)。默认 haiku。", "haiku"),
     };
 
     // Ordered from cheapest to most capable; "" = fall back to the CLI/consumer default.

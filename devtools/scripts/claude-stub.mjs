@@ -35,6 +35,15 @@ const usage = { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens:
 const done = (text) =>
   emit({ type: 'result', result: text, usage, total_cost_usd: 0.012 });
 
+// LLM scorer judge (Modules/Scoring): return a canned {score, reason} verdict JSON so the automated
+// scorers produce a deterministic result under the stub.
+if (prompt.includes('SCORING TASK')) {
+  const verdict = JSON.stringify({ score: 0.8, reason: 'stub judge verdict' });
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
+  done(verdict);
+  process.exit(0);
+}
+
 if (readOnly) {
   // Surface whether the server pre-routed discovery (e2e asserts the marker).
   const routed = prompt.includes('SERVER PRE-ROUTING') ? '[pre-routed]' : '[full-gate]';

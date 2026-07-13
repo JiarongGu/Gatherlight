@@ -116,6 +116,15 @@ public static class GatherlightApp
             .AddSingleton<Modules.Eval.Services.IFeedbackStore, Modules.Eval.Services.FeedbackStore>()
             // Cortex tuning: runtime prompt-template + model-routing overrides (write side of LLM-ops)
             .AddSingleton<Modules.Cortex.Services.ICortexConfigService, Modules.Cortex.Services.CortexConfigService>()
+            // Automated scorers (Mastra-style): grade each committed conversation on 智库-rule dimensions
+            .AddSingleton<Modules.Scoring.Services.IScoreRepository, Modules.Scoring.Services.ScoreRepository>()
+            .AddSingleton<Modules.Scoring.Services.IScoringService, Modules.Scoring.Services.ScoringService>()
+            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.ScopeAdherenceScorer>()
+            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.PlanStructureScorer>()
+            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.OutcomeScorer>()
+            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.CitationScorer>()
+            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.AnswerRelevancyScorer>()
+            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.FaithfulnessScorer>()
             // Remote-access gate: loopback trusted, remote needs the shared token
             .AddSingleton<Modules.Security.Services.ISecurityGuard, Modules.Security.Services.SecurityGuard>()
             .AddSingleton<Modules.Security.Services.ILoginThrottle, Modules.Security.Services.LoginThrottle>()

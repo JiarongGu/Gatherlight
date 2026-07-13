@@ -85,6 +85,7 @@ public sealed class ChatSessionService
     private readonly CodeRepoGit _codeGit;
     private readonly BuildVerifyService _buildVerify;
     private readonly GatherlightServerOptions _options;
+    private readonly Modules.Scoring.Services.IScoringService _scoring;
     private readonly ILogger<ChatSessionService> _log;
 
     private const int MaxBuildRepair = 2;
@@ -95,8 +96,9 @@ public sealed class ChatSessionService
         IDataContext data, IAppConfigService appConfig, ChatEnvironmentService env,
         DataWriteLock writeLock, IToolRegistry tools, IZhikuRouter router,
         CodeRepoGit codeGit, BuildVerifyService buildVerify, GatherlightServerOptions options,
-        ILogger<ChatSessionService> log)
+        Modules.Scoring.Services.IScoringService scoring, ILogger<ChatSessionService> log)
     {
+        _scoring = scoring;
         _router = router;
         _codeGit = codeGit;
         _buildVerify = buildVerify;
@@ -482,6 +484,14 @@ public sealed class ChatSessionService
             Emit(s, new AgentEvent { Kind = "notice", Text = $"✅ 已提交 {sha}" });
             SetPhase(s, ChatPhase.Committed, new { sha, files = paths });
             Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Committed, Data = new { sha } });
+            // Auto-score the committed conversation (Mastra-style) off the request path — the LLM
+            // judges take a few seconds; per-scorer failures are swallowed inside the service.
+            var scoreCtx = new Modules.Scoring.Models.ScoreContext
+            {
+                SessionId = s.Id, UserMessage = s.UserMessage, PlanText = s.PlanText,
+                Phase = s.Phase, Mode = s.Mode, CommitSha = s.CommitSha, ChangedFiles = paths,
+            };
+            _ = Task.Run(() => _scoring.ScoreAsync(scoreCtx));
         }
         catch (Exception ex)
         {
