@@ -18,10 +18,12 @@ async function post<T = unknown>(url: string, body?: unknown): Promise<T> {
 
 export async function startChat(
   message: string,
-  attachments: UploadedFile[] = []
+  attachments: UploadedFile[] = [],
+  mode: 'plan' | 'system' = 'plan'
 ): Promise<{ id: string; phase: string }> {
   return post('/api/chat', {
     message,
+    mode,
     // Send just the server-side references; the server validates each path is
     // inside the uploads dir before handing it to the agent.
     attachments: attachments.map((a) => a.relPath)

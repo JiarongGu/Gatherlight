@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useCallback, useState, memo } from 'react';
-import { Button, Input, Alert, Tag, Spin, Tooltip, IconButton, Stepper as StepperBar } from '@/ui/atoms';
+import { Button, Input, Alert, Tag, Spin, Switch, Tooltip, IconButton, Stepper as StepperBar } from '@/ui/atoms';
 import {
   SendOutlined,
   RobotOutlined,
@@ -278,6 +278,9 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
   const [cancelling, setCancelling] = useState(false);
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
+  // 系统模式: the agent edits the app's OWN UI code (src/client), builds it, and the
+  // approved change ships on the next refresh. Off = normal planning on the data workspace.
+  const [systemMode, setSystemMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Dispatch an event + drop the persisted session id once it finishes.
@@ -368,7 +371,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       if (!message && attachments.length === 0) return;
       const outgoing = message || '请阅读我上传的附件,并据此帮我规划 / 填写行程。';
       closeRef.current?.();
-      const { id } = await startChat(outgoing, attachments);
+      const { id } = await startChat(outgoing, attachments, systemMode ? 'system' : 'plan');
       localStorage.setItem(SESSION_KEY, id);
       dispatch({ type: 'reset', sessionId: id, message: outgoing });
       setDraft('');
@@ -377,7 +380,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
     } catch (err: any) {
       dispatch({ type: 'event', ev: { kind: 'error', text: err?.message ?? '发送失败' } });
     }
-  }, [draft, onEvent, state, attachments]);
+  }, [draft, onEvent, state, attachments, systemMode]);
 
   const act = useCallback(
     async (fn: (id: string) => Promise<unknown>) => {
@@ -512,6 +515,16 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       </div>
 
       <div className="chat-composer">
+        <div className="chat-mode-row">
+          <Tooltip title="开启后,本次对话改的是 Gatherlight 界面本身(src/client 代码),改完自动构建验证,构建不过不能提交;批准后刷新即生效。">
+            <label className={`chat-mode-label ${systemMode ? 'on' : ''}`}>
+              <Switch size="small" checked={systemMode} disabled={inFlow} onChange={setSystemMode} />
+              系统模式 · 改界面
+            </label>
+          </Tooltip>
+          {systemMode && <span className="chat-mode-hint">AI 将编辑前端代码并自检构建</span>}
+        </div>
+
         {attachments.length > 0 && (
           <div className="chat-attachments">
             {attachments.map((a) => (

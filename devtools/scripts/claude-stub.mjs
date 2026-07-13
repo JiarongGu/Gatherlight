@@ -29,26 +29,33 @@ if (prompt.includes('SLOW')) {
   await new Promise((r) => setTimeout(r, 8000));
 }
 
+// 系统模式 (UI editing) is distinguished by the system prompt; it writes to src/client.
+const systemMode = prompt.includes('系统模式') || prompt.includes('src/client');
+const usage = { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens: 800 };
+const done = (text) =>
+  emit({ type: 'result', result: text, usage, total_cost_usd: 0.012 });
+
 if (readOnly) {
   // Surface whether the server pre-routed discovery (e2e asserts the marker).
   const routed = prompt.includes('SERVER PRE-ROUTING') ? '[pre-routed]' : '[full-gate]';
-  const text = prompt.includes("HUMAN'S FEEDBACK")
-    ? `## 修订后的计划(stub)${routed}\n\n1. **What the user asked** — 修订版\n2. **Files to change** — plans/daily/2026-07-14.md`
-    : `## 计划(stub)${routed}\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none`;
+  const text = systemMode
+    ? `## UI 改动计划(stub)\n\n- **Files to change** — src/client/src/stub-touch.txt`
+    : prompt.includes("HUMAN'S FEEDBACK")
+      ? `## 修订后的计划(stub)${routed}\n\n1. **What the user asked** — 修订版\n2. **Files to change** — plans/daily/2026-07-14.md`
+      : `## 计划(stub)${routed}\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none`;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
-  emit({ type: 'result', result: text, usage: { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens: 800 }, total_cost_usd: 0.012 });
+  done(text);
 } else {
-  const rel = 'plans/daily/2026-07-14.md';
+  const rel = systemMode ? 'src/client/src/stub-touch.txt' : 'plans/daily/2026-07-14.md';
   const abs = path.resolve(process.cwd(), rel);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const marker = prompt.includes("HUMAN'S FEEDBACK") ? 'revised-by-stub' : 'written-by-stub';
-  fs.writeFileSync(abs, `# 2026-07-14 计划(fixture)\n\n- ${marker}\n`, 'utf8');
+  // system-mode content varies per process so consecutive sessions produce a real diff.
+  fs.writeFileSync(abs, systemMode ? `stub UI edit ${marker} ${process.pid}\n` : `# 2026-07-14 计划(fixture)\n\n- ${marker}\n`, 'utf8');
   emit({
     type: 'assistant',
     message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: abs } }] },
   });
   emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
-  const text = `已按计划创建 ${rel}(stub)`;
-  emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
-  emit({ type: 'result', result: text, usage: { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens: 800 }, total_cost_usd: 0.012 });
+  done(systemMode ? `已修改 ${rel}(stub)` : `已按计划创建 ${rel}(stub)`);
 }

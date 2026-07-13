@@ -20,6 +20,11 @@ public interface IPromptHarness
     string ValidatePrompt(IReadOnlyList<string> claudePaths, string diff);
     string CommitMessage(string userMessage, IReadOnlyList<string> files);
     string ProcessFilePrompt(string absPath, string instruction);
+    string SystemPlanPrompt(string userMessage, string? threadContext);
+    string SystemRevisePlanPrompt(string prevPlan, string feedback);
+    string SystemExecutePrompt(string approvedPlan);
+    string SystemReviseExecutePrompt(string feedback);
+    string RepairPrompt(string buildOutput);
 }
 
 public sealed class PromptHarness : IPromptHarness
@@ -125,9 +130,109 @@ public sealed class PromptHarness : IPromptHarness
         {diff}
         """;
 
+    // ------------------------------------------------------------------------------------
+    // 系统模式 — the agent iterates Gatherlight's OWN web UI (cwd = the CODE repo).
+    // ------------------------------------------------------------------------------------
+
+    private const string SystemCommon = """
+        You are the embedded developer for the Gatherlight family-planner web app, working through its own chat in 系统模式 (system mode) to improve the INTERFACE. You are NOT in a terminal; a human reviews your work through a UI before anything is committed.
+
+        NON-NEGOTIABLE RULES:
+        - Your knowledge base is docs/UI_ARCHITECTURE.md — read it FIRST (atomic tiers: ui/atoms|molecules|organisms + screens; the one-atom rule; design tokens in src/client/src/styles.css + lib/theme.ts). docs/TOOLS.md covers the tool registry if relevant.
+        - You may create or edit files ONLY under `src/client/` (the UI). NOT src/server, NOT docs, NOT devtools, NOT the data folder. A hook enforces this — attempts elsewhere are blocked, so don't.
+        - The app is React 18 + Vite + antd (v6) + TypeScript. Match the existing 清爽极简 design system: use the CSS variables / tokens (var(--bg), --surface, --text, --accent …) and dark+light theming — never hard-code colors that break a theme.
+        - Keep changes minimal, focused on the request, and type-safe. Your code MUST pass `npm run build` (tsc -b && vite build — noUnusedLocals is on, no unused imports, no broken paths).
+        - NEVER run git or destructive shell. The system builds + the human commits.
+        - NEVER use interactive / flow-control tools (AskUserQuestion, ExitPlanMode, EnterPlanMode) — no UI can answer them. Present choices in your plan with a recommended default.
+        - DISCOVER with Read / Glob / Grep — never crawl the filesystem with Bash.
+        - Respond to the user in Simplified Chinese (代码/路径/标识符保持原样).
+        """;
+
+    private const string SystemPlanTemplate = SystemCommon + """
+
+
+        {context}CURRENT PHASE: PLANNING (read-only). Do NOT edit files. Work in this ORDER:
+        1. FIRST read docs/UI_ARCHITECTURE.md — one line confirming you read it.
+        2. Using that map, open the specific files that own the behavior with Read/Glob/Grep.
+        3. Then write the PLAN in Markdown:
+           - **What the user wants** — one line (restate the UX problem, not just the literal words).
+           - **Files to change** — each src/client path + what changes.
+           - **Approach** — components/styles touched, how it fits the design system + tokens.
+        Be concrete and concise; the human approves this, then you implement it verbatim.
+
+        THE USER'S REQUEST:
+        {userMessage}
+        """;
+
+    private const string SystemRevisePlanTemplate = SystemCommon + """
+
+
+        CURRENT PHASE: PLANNING (read-only) — REVISION.
+        The human reviewed your previous UI-change plan and has NOT approved it. Fold in their feedback below and output a REVISED plan in the SAME structure (What the user wants / Files to change / Approach). Do NOT edit files. If still ambiguous, note it with a recommended default.
+
+        YOUR PREVIOUS PLAN:
+        {prevPlan}
+
+        THE HUMAN'S FEEDBACK / ANSWERS:
+        {feedback}
+        """;
+
+    private const string SystemExecuteTemplate = SystemCommon + """
+
+
+        CURRENT PHASE: EXECUTING. Implement the approved plan now by editing src/client files.
+        Make minimal, type-safe edits that build cleanly. When done, briefly summarize what you changed (one bullet per file).
+
+        APPROVED PLAN:
+        {approvedPlan}
+        """;
+
+    private const string SystemReviseExecuteTemplate = SystemCommon + """
+
+
+        CURRENT PHASE: EXECUTING — REVISION.
+        The human reviewed your frontend changes and asked for adjustments BEFORE committing (feedback below). Adjust the edits now by editing src/client files. Keep it minimal, type-safe, and building cleanly; don't redo what's already correct. When done, briefly summarize what changed.
+
+        THE HUMAN'S FEEDBACK:
+        {feedback}
+        """;
+
+    private const string RepairTemplate = SystemCommon + """
+
+
+        CURRENT PHASE: BUILD REPAIR. Your last edits FAILED the build (`npm run build` = tsc -b && vite build). Read the errors below and fix them by editing src/client files. Do not start over — just fix what's broken. Keep the intended change.
+
+        BUILD OUTPUT (tail):
+        {buildOutput}
+        """;
+
     private readonly IAppConfigService _appConfig;
 
     public PromptHarness(IAppConfigService appConfig) => _appConfig = appConfig;
+
+    public string SystemPlanPrompt(string userMessage, string? threadContext)
+    {
+        var context = string.IsNullOrWhiteSpace(threadContext)
+            ? ""
+            : "RECENT REQUESTS IN THIS CONVERSATION (context only):\n" + threadContext.Trim() + "\n\n";
+        return Render("systemPlan", SystemPlanTemplate, new()
+        {
+            ["context"] = context,
+            ["userMessage"] = userMessage,
+        });
+    }
+
+    public string SystemRevisePlanPrompt(string prevPlan, string feedback) =>
+        Render("systemRevisePlan", SystemRevisePlanTemplate, new() { ["prevPlan"] = prevPlan, ["feedback"] = feedback });
+
+    public string SystemExecutePrompt(string approvedPlan) =>
+        Render("systemExecute", SystemExecuteTemplate, new() { ["approvedPlan"] = approvedPlan });
+
+    public string SystemReviseExecutePrompt(string feedback) =>
+        Render("systemReviseExecute", SystemReviseExecuteTemplate, new() { ["feedback"] = feedback });
+
+    public string RepairPrompt(string buildOutput) =>
+        Render("repair", RepairTemplate, new() { ["buildOutput"] = buildOutput });
 
     public string PlanPrompt(string userMessage, string? threadContext, IReadOnlyList<string> attachments, string? routedBlock = null)
     {

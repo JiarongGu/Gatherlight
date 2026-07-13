@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Gatherlight.Server.Modules.Chat;
 
-public sealed record StartChatRequest(string? Message, List<string>? Attachments);
+public sealed record StartChatRequest(string? Message, List<string>? Attachments, string? Mode);
 public sealed record RefineRequest(string? Message);
 
 [ApiController]
@@ -42,7 +42,8 @@ public sealed class ChatController : ControllerBase
 
         try
         {
-            var s = await _chat.StartChatAsync(message, attachments);
+            var mode = req.Mode == "system" ? "system" : "plan";
+            var s = await _chat.StartChatAsync(message, attachments, mode);
             return Ok(new { id = s.Id, phase = s.Phase });
         }
         catch (InvalidOperationException ex) when (ex.Message == "BUSY")
@@ -61,6 +62,7 @@ public sealed class ChatController : ControllerBase
         {
             id = s.Id,
             phase = s.Phase,
+            mode = s.Mode,
             userMessage = s.UserMessage,
             plan = s.PlanText.Length > 0 ? s.PlanText : null,
             review = s.Review,

@@ -18,6 +18,7 @@ public static class ChatPhase
     public const string Validating = "validating";
     public const string AwaitingDiffApproval = "awaiting-diff-approval";
     public const string Committing = "committing";
+    public const string Building = "building";
     public const string Committed = "committed";
     public const string Rejected = "rejected";
     public const string Cancelled = "cancelled";
@@ -26,12 +27,14 @@ public static class ChatPhase
     public static readonly string[] Terminal = { Committed, Rejected, Cancelled, Error };
 }
 
-public sealed record ReviewPayload(List<DiffFile> Files, bool HasClaudeInfra, ClaudeValidation? Validation);
+public sealed record ReviewPayload(List<DiffFile> Files, bool HasClaudeInfra, ClaudeValidation? Validation, BuildResult? Build = null);
 
 public sealed class ChatSession
 {
     public required string Id { get; init; }
     public string Phase { get; set; } = ChatPhase.Idle;
+    /// <summary>"plan" (data workspace) or "system" (系统模式 — the agent edits src/client).</summary>
+    public required string Mode { get; init; }
     public required string UserMessage { get; init; }
     public required List<string> Attachments { get; init; }
     public string? ClaudeSessionId { get; set; }
@@ -79,15 +82,25 @@ public sealed class ChatSessionService
     private readonly DataWriteLock _writeLock;
     private readonly IToolRegistry _tools;
     private readonly IZhikuRouter _router;
+    private readonly CodeRepoGit _codeGit;
+    private readonly BuildVerifyService _buildVerify;
+    private readonly GatherlightServerOptions _options;
     private readonly ILogger<ChatSessionService> _log;
+
+    private const int MaxBuildRepair = 2;
 
     public ChatSessionService(
         IClaudeCliRunner runner, IPromptHarness harness, IClaudeValidateService validator,
         IGitCliService git, IDataCommitRepository commits, IChatRepository repo,
         IDataContext data, IAppConfigService appConfig, ChatEnvironmentService env,
-        DataWriteLock writeLock, IToolRegistry tools, IZhikuRouter router, ILogger<ChatSessionService> log)
+        DataWriteLock writeLock, IToolRegistry tools, IZhikuRouter router,
+        CodeRepoGit codeGit, BuildVerifyService buildVerify, GatherlightServerOptions options,
+        ILogger<ChatSessionService> log)
     {
         _router = router;
+        _codeGit = codeGit;
+        _buildVerify = buildVerify;
+        _options = options;
         _runner = runner;
         _harness = harness;
         _validator = validator;
@@ -135,7 +148,7 @@ public sealed class ChatSessionService
     {
         s.PersistChain = s.PersistChain.ContinueWith(
             _ => _repo.UpsertSessionAsync(
-                s.Id, s.Phase, "plan", s.UserMessage,
+                s.Id, s.Phase, s.Mode, s.UserMessage,
                 JsonSerializer.Serialize(s.Attachments), s.PlanText, s.ClaudeSessionId,
                 s.CommitSha, s.Error, s.ThreadContext, s.CreatedAt.ToString("o")),
             TaskContinuationOptions.ExecuteSynchronously).Unwrap();
@@ -200,16 +213,18 @@ public sealed class ChatSessionService
 
     // --- gate 0: start ------------------------------------------------------------------
 
-    public async Task<ChatSession> StartChatAsync(string userMessage, IReadOnlyList<string> attachments)
+    public async Task<ChatSession> StartChatAsync(string userMessage, IReadOnlyList<string> attachments, string mode = "plan")
     {
         if (IsBusy()) throw new InvalidOperationException("BUSY");
         var threadContext = await PrepareThreadContextAsync();
+        var isSystem = mode == "system";
         var s = new ChatSession
         {
             Id = $"s{DateTime.UtcNow.Ticks:x}_{Interlocked.Increment(ref _counter)}",
+            Mode = isSystem ? "system" : "plan",
             UserMessage = userMessage,
             Attachments = attachments.ToList(),
-            Tracker = new EditTracker(_data.RootPath),
+            Tracker = new EditTracker(isSystem ? _options.CodeRootPath : _data.RootPath),
             ThreadContext = threadContext,
         };
         _sessions[s.Id] = s;
@@ -219,10 +234,14 @@ public sealed class ChatSessionService
         return s;
     }
 
+    private bool IsSystem(ChatSession s) => s.Mode == "system";
+    private IGitCliService GitFor(ChatSession s) => IsSystem(s) ? _codeGit : _git;
+    private string WorkRootFor(ChatSession s) => IsSystem(s) ? _options.CodeRootPath : _data.RootPath;
+
     private ClaudeRunOptions BaseRunOptions(ChatSession s, string prompt, bool readOnly) => new()
     {
         Prompt = prompt,
-        Cwd = _data.RootPath,
+        Cwd = WorkRootFor(s),
         ReadOnly = readOnly,
         Model = _appConfig.Get("llm.model.chat"),
         McpConfigPath = File.Exists(_env.McpConfigPath) ? _env.McpConfigPath : null,
@@ -234,22 +253,30 @@ public sealed class ChatSessionService
     private async Task RunPlanningAsync(ChatSession s)
     {
         SetPhase(s, ChatPhase.Planning);
-        // Deterministic pre-routing: for recognizable categories the discovery gate runs
-        // server-side (zero tokens) and the routed docs ride in with the prompt.
-        var routed = _router.Route(s.UserMessage);
-        Emit(s, new AgentEvent
+        string prompt;
+        if (IsSystem(s))
         {
-            Kind = "notice",
-            Text = routed is null
-                ? "🧭 正在按 CLAUDE.md gate 调研 + 拟定计划…"
-                : $"⚡ 已按「{routed.CategoryKey}」预路由知识库(免调研)— 正在拟定计划…",
-        });
+            Emit(s, new AgentEvent { Kind = "notice", Text = "🔧 系统模式:正在分析界面代码 + 拟定改动计划…" });
+            prompt = _harness.SystemPlanPrompt(s.UserMessage, s.ThreadContext);
+        }
+        else
+        {
+            // Deterministic pre-routing: for recognizable categories the discovery gate runs
+            // server-side (zero tokens) and the routed docs ride in with the prompt.
+            var routed = _router.Route(s.UserMessage);
+            Emit(s, new AgentEvent
+            {
+                Kind = "notice",
+                Text = routed is null
+                    ? "🧭 正在按 CLAUDE.md gate 调研 + 拟定计划…"
+                    : $"⚡ 已按「{routed.CategoryKey}」预路由知识库(免调研)— 正在拟定计划…",
+            });
+            prompt = _harness.PlanPrompt(s.UserMessage, s.ThreadContext, s.Attachments, routed?.PromptBlock);
+        }
         s.Abort = new CancellationTokenSource();
         try
         {
-            var res = await _runner.RunAsync(
-                BaseRunOptions(s, _harness.PlanPrompt(s.UserMessage, s.ThreadContext, s.Attachments, routed?.PromptBlock), readOnly: true),
-                s.Abort.Token);
+            var res = await _runner.RunAsync(BaseRunOptions(s, prompt, readOnly: true), s.Abort.Token);
             if (s.Cancelled) return; // cancel() owns the terminal state
             s.ClaudeSessionId = res.SessionId;
             s.PlanText = res.FinalText.Trim();
@@ -287,21 +314,66 @@ public sealed class ChatSessionService
         s.Abort = new CancellationTokenSource();
         try
         {
-            var res = await _runner.RunAsync(BaseRunOptions(s, _harness.ExecutePrompt(s.PlanText), readOnly: false) with
+            var res = await _runner.RunAsync(BaseRunOptions(s,
+                IsSystem(s) ? _harness.SystemExecutePrompt(s.PlanText) : _harness.ExecutePrompt(s.PlanText),
+                readOnly: false) with
             {
                 ResumeSessionId = s.ClaudeSessionId,
-                SettingsPath = _env.SettingsPath,
+                SettingsPath = IsSystem(s) ? _env.SystemSettingsPath : _env.SettingsPath,
                 Tracker = s.Tracker,
             }, s.Abort.Token);
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
-            await PresentDiffAsync(s);
+
+            BuildResult? build = null;
+            if (IsSystem(s))
+            {
+                build = await BuildWithRepairAsync(s);
+                if (s.Cancelled) return;
+            }
+            await PresentDiffAsync(s, build);
         }
         catch (OperationCanceledException) when (s.Cancelled) { }
         catch (Exception ex)
         {
             if (s.Cancelled) return;
             Fail(s, $"执行阶段失败:{ex.Message}");
+        }
+    }
+
+    /// <summary>系统模式 build gate with auto-repair: feed failing output back to the agent,
+    /// up to <see cref="MaxBuildRepair"/> attempts (behavioral port of the legacy repair loop).</summary>
+    private async Task<BuildResult> BuildWithRepairAsync(ChatSession s)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            SetPhase(s, ChatPhase.Building);
+            Emit(s, new AgentEvent
+            {
+                Kind = "notice",
+                Text = attempt == 0 ? "🔧 构建验证中…" : $"🔧 重新构建(修复尝试 {attempt}/{MaxBuildRepair})…",
+            });
+            var result = await _buildVerify.BuildClientAsync(s.Abort?.Token ?? default);
+            if (s.Cancelled) return result;
+            if (result.Ok)
+            {
+                Emit(s, new AgentEvent { Kind = "notice", Text = "✅ 构建通过" });
+                return result;
+            }
+            if (attempt >= MaxBuildRepair)
+            {
+                Emit(s, new AgentEvent { Kind = "notice", Text = "⚠️ 构建仍未通过,已停止自动修复 — 不能提交,请审阅错误。" });
+                return result;
+            }
+            Emit(s, new AgentEvent { Kind = "notice", Text = $"❌ 构建失败,让 AI 修复(第 {attempt + 1} 次)…" });
+            SetPhase(s, ChatPhase.Executing);
+            await _runner.RunAsync(BaseRunOptions(s, _harness.RepairPrompt(result.Output), readOnly: false) with
+            {
+                ResumeSessionId = s.ClaudeSessionId,
+                SettingsPath = _env.SystemSettingsPath,
+                Tracker = s.Tracker,
+            }, s.Abort?.Token ?? default);
+            if (s.Cancelled) return result;
         }
     }
 
@@ -313,8 +385,11 @@ public sealed class ChatSessionService
         s.Abort = new CancellationTokenSource();
         try
         {
+            var revisePrompt = IsSystem(s)
+                ? _harness.SystemRevisePlanPrompt(s.PlanText, feedback)
+                : _harness.RevisePlanPrompt(s.PlanText, feedback);
             var res = await _runner.RunAsync(
-                BaseRunOptions(s, _harness.RevisePlanPrompt(s.PlanText, feedback), readOnly: true) with
+                BaseRunOptions(s, revisePrompt, readOnly: true) with
                 {
                     ResumeSessionId = s.ClaudeSessionId,
                 }, s.Abort.Token);
@@ -339,8 +414,9 @@ public sealed class ChatSessionService
 
     // --- diff presentation (shared tail of execute / re-execute) ---------------------------
 
-    private async Task PresentDiffAsync(ChatSession s)
+    private async Task PresentDiffAsync(ChatSession s, BuildResult? build = null)
     {
+        var git = GitFor(s);
         var tracked = s.Tracker.List();
         List<DiffFile> files;
         if (tracked.Count == 0)
@@ -350,7 +426,7 @@ public sealed class ChatSessionService
         else
         {
             using var _ = await _writeLock.AcquireAsync();
-            files = await _git.BuildDiffAsync(tracked);
+            files = await git.BuildDiffAsync(tracked);
         }
         // `files` is the REAL-change set (BuildDiff drops denied / no-op edits).
         if (files.Count == 0)
@@ -362,7 +438,9 @@ public sealed class ChatSessionService
             return;
         }
 
-        var claudeFiles = files.Where(f => f.IsClaudeInfra).ToList();
+        // 智库 (.claude) consistency validation only applies to the data workspace, not to
+        // UI code edits in 系统模式.
+        var claudeFiles = IsSystem(s) ? new List<DiffFile>() : files.Where(f => f.IsClaudeInfra).ToList();
         ClaudeValidation? validation = null;
         if (claudeFiles.Count > 0)
         {
@@ -371,7 +449,7 @@ public sealed class ChatSessionService
             if (s.Cancelled) return;
         }
 
-        s.Review = new ReviewPayload(files, claudeFiles.Count > 0, validation);
+        s.Review = new ReviewPayload(files, claudeFiles.Count > 0, validation, build);
         SetPhase(s, ChatPhase.AwaitingDiffApproval, s.Review);
     }
 
@@ -380,6 +458,12 @@ public sealed class ChatSessionService
     public async Task ApproveDiffAsync(string id)
     {
         var s = RequirePhase(id, ChatPhase.AwaitingDiffApproval);
+        // 系统模式: a failing build must never be committed (the diff gate showed the error).
+        if (s.Review?.Build is { Ok: false })
+        {
+            Emit(s, new AgentEvent { Kind = "error", Text = "构建未通过,不能提交。请「拒绝并还原」或让 AI 继续修复。" });
+            return;
+        }
         SetPhase(s, ChatPhase.Committing);
         try
         {
@@ -389,10 +473,11 @@ public sealed class ChatSessionService
             string sha;
             using (await _writeLock.AcquireAsync())
             {
-                sha = await _git.CommitPathsAsync(paths, _harness.CommitMessage(s.UserMessage, paths));
+                sha = await GitFor(s).CommitPathsAsync(paths, _harness.CommitMessage(s.UserMessage, paths));
             }
             s.CommitSha = sha;
-            _commits.Record(sha, s.UserMessage, "chat", s.Id);
+            // System-mode commits land in the code repo, not the data-commit audit index.
+            if (!IsSystem(s)) _commits.Record(sha, s.UserMessage, "chat", s.Id);
             RecordOutcome(s, $"已提交 {sha}");
             Emit(s, new AgentEvent { Kind = "notice", Text = $"✅ 已提交 {sha}" });
             SetPhase(s, ChatPhase.Committed, new { sha, files = paths });
@@ -411,7 +496,7 @@ public sealed class ChatSessionService
         {
             using (await _writeLock.AcquireAsync())
             {
-                await _git.RestorePathsAsync(s.Tracker.List());
+                await GitFor(s).RestorePathsAsync(s.Tracker.List());
             }
             RecordOutcome(s, "已撤销改动");
             Emit(s, new AgentEvent { Kind = "notice", Text = "已撤销改动,工作区已还原。" });
@@ -434,15 +519,24 @@ public sealed class ChatSessionService
         try
         {
             var res = await _runner.RunAsync(
-                BaseRunOptions(s, _harness.ReviseExecutePrompt(feedback), readOnly: false) with
+                BaseRunOptions(s,
+                    IsSystem(s) ? _harness.SystemReviseExecutePrompt(feedback) : _harness.ReviseExecutePrompt(feedback),
+                    readOnly: false) with
                 {
                     ResumeSessionId = s.ClaudeSessionId,
-                    SettingsPath = _env.SettingsPath,
+                    SettingsPath = IsSystem(s) ? _env.SystemSettingsPath : _env.SettingsPath,
                     Tracker = s.Tracker,
                 }, s.Abort.Token);
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
-            await PresentDiffAsync(s);
+
+            BuildResult? build = null;
+            if (IsSystem(s))
+            {
+                build = await BuildWithRepairAsync(s);
+                if (s.Cancelled) return;
+            }
+            await PresentDiffAsync(s, build);
         }
         catch (OperationCanceledException) when (s.Cancelled) { }
         catch (Exception ex)
@@ -471,7 +565,7 @@ public sealed class ChatSessionService
             try
             {
                 using var _ = await _writeLock.AcquireAsync();
-                await _git.RestorePathsAsync(tracked);
+                await GitFor(s).RestorePathsAsync(tracked);
                 Emit(s, new AgentEvent { Kind = "notice", Text = "已还原本次产生的改动。" });
             }
             catch (Exception ex)

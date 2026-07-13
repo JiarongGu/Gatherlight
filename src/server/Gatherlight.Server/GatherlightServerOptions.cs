@@ -21,6 +21,22 @@ public sealed class GatherlightServerOptions
     public string DataPath { get; init; } = ResolveDefaultDataPath();
 
     /// <summary>
+    /// The Gatherlight CODE repo root — where 系统模式 (the UI-update chat mode) edits
+    /// src/client and commits. Default: walk up from cwd to Gatherlight.slnx; e2e overrides
+    /// with <c>GATHERLIGHT_CODE_ROOT</c> to point at a fixture.
+    /// </summary>
+    public string CodeRootPath { get; init; } =
+        Environment.GetEnvironmentVariable("GATHERLIGHT_CODE_ROOT") ?? ResolveRepoRoot();
+
+    private static string ResolveRepoRoot()
+    {
+        for (var d = new DirectoryInfo(Environment.CurrentDirectory); d is not null; d = d.Parent)
+            if (File.Exists(Path.Combine(d.FullName, "Gatherlight.slnx")))
+                return d.FullName;
+        return Environment.CurrentDirectory;
+    }
+
+    /// <summary>
     /// <c>GATHERLIGHT_DATA</c> env wins; else walk up from cwd to the repo root (marked by
     /// Gatherlight.slnx) and use <c>{root}/local</c> — `dotnet run` sets the app's cwd to the
     /// PROJECT directory, so a plain <c>{cwd}/local</c> would land inside src/server/. Falls back

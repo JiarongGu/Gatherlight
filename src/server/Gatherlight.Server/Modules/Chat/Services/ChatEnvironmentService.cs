@@ -21,6 +21,7 @@ public sealed class ChatEnvironmentService
     }
 
     public string SettingsPath => Path.Combine(_data.StatePath, "settings.chat.json");
+    public string SystemSettingsPath => Path.Combine(_data.StatePath, "settings.system.json");
     public string McpConfigPath => Path.Combine(_data.StatePath, "mcp.chat.json");
     public string ScopeGuardPath => Path.Combine(_data.ZhikuPath, "hooks", "scope-guard.mjs");
 
@@ -29,6 +30,14 @@ public sealed class ChatEnvironmentService
     public string? EnsureFiles()
     {
         File.WriteAllText(SettingsPath, SettingsChatJson);
+        // 系统模式 settings: same acceptEdits shape, but the PreToolUse hook is the code repo's
+        // tracked system scope guard (allow-list src/client only), referenced absolutely since
+        // the run's $CLAUDE_PROJECT_DIR is the code repo.
+        var systemGuard = Path.Combine(_options.CodeRootPath, "devtools", "scripts", "system-scope-guard.mjs")
+            .Replace('\\', '/');
+        File.WriteAllText(SystemSettingsPath, SettingsChatJson.Replace(
+            "node \\\"$CLAUDE_PROJECT_DIR/.claude/hooks/scope-guard.mjs\\\"",
+            $"node \\\"{systemGuard}\\\""));
         // MCP over HTTP from this same server — the spawned agent calls registry tools mid-run.
         File.WriteAllText(McpConfigPath,
             $$"""

@@ -47,15 +47,17 @@ public sealed record GitResult(int ExitCode, string Stdout, string Stderr)
     }
 }
 
-public sealed class GitCliService : IGitCliService
+public class GitCliService : IGitCliService
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);
-    private readonly IDataContext _data;
-    private readonly ILogger<GitCliService> _log;
+    private readonly string _root;
+    private readonly ILogger _log;
 
-    public GitCliService(IDataContext data, ILogger<GitCliService> log)
+    public GitCliService(IDataContext data, ILogger<GitCliService> log) : this(data.RootPath, log) { }
+
+    protected GitCliService(string root, ILogger log)
     {
-        _data = data;
+        _root = Path.GetFullPath(root);
         _log = log;
     }
 
@@ -64,7 +66,7 @@ public sealed class GitCliService : IGitCliService
         var psi = new ProcessStartInfo
         {
             FileName = "git",
-            WorkingDirectory = _data.RootPath,
+            WorkingDirectory = _root,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             StandardOutputEncoding = Utf8NoBom,
@@ -84,12 +86,12 @@ public sealed class GitCliService : IGitCliService
 
     public async Task<bool> EnsureRepoAsync(CancellationToken ct = default)
     {
-        var fresh = !Directory.Exists(Path.Combine(_data.RootPath, ".git"));
+        var fresh = !Directory.Exists(Path.Combine(_root, ".git"));
         if (fresh)
         {
             (await RunAsync(new[] { "init" }, ct)).ThrowOnError("init");
             EnsureDataGitignore();
-            _log.LogInformation("Initialized data repo at {Root}", _data.RootPath);
+            _log.LogInformation("Initialized data repo at {Root}", _root);
         }
         // Commits must work on a fresh machine with no global identity, and CRLF churn must not
         // pollute diffs. Local (repo-level) settings only.
@@ -104,7 +106,7 @@ public sealed class GitCliService : IGitCliService
     /// <summary>App state must never enter the data repo's audit trail.</summary>
     private void EnsureDataGitignore()
     {
-        var path = Path.Combine(_data.RootPath, ".gitignore");
+        var path = Path.Combine(_root, ".gitignore");
         if (File.Exists(path)) return;
         File.WriteAllText(path,
             "# Gatherlight data folder — private repo. App state/caches stay out of the audit trail.\n" +
@@ -125,7 +127,7 @@ public sealed class GitCliService : IGitCliService
         {
             var rel = Norm(raw);
             var inHead = await ExistsInHeadAsync(rel, ct);
-            var abs = _data.ResolveDataPath(rel);
+            var abs = Path.Combine(_root, rel.Replace('/', Path.DirectorySeparatorChar));
             var onDisk = abs is not null && File.Exists(abs);
 
             string status;
@@ -187,7 +189,7 @@ public sealed class GitCliService : IGitCliService
             }
             else
             {
-                var abs = _data.ResolveDataPath(rel);
+                var abs = Path.Combine(_root, rel.Replace('/', Path.DirectorySeparatorChar));
                 if (abs is not null && File.Exists(abs)) File.Delete(abs);
             }
         }
