@@ -1,7 +1,9 @@
+using System.Drawing.Drawing2D;
+
 namespace Gatherlight.Host;
 
-/// <summary>A warm-themed tray context menu (dark bg, amber hover, brand header + live health line
-/// + grouped actions with glyphs) — matches the app instead of the default gray Windows menu.</summary>
+/// <summary>A crafted warm tray menu: no image gutter, inset rounded amber hover, roomy padding,
+/// a brand header + live health line + grouped actions — not the default gray Windows menu.</summary>
 internal static class TrayMenu
 {
     public static (ContextMenuStrip Menu, ToolStripMenuItem Status) Build(HostContext ctx)
@@ -11,33 +13,34 @@ internal static class TrayMenu
             Renderer = new TrayRenderer(),
             BackColor = Theme.Surface,
             ForeColor = Theme.Text,
-            Font = Theme.UI(9f),
-            ShowImageMargin = true,
+            Font = Theme.UI(9.5f),
+            ShowImageMargin = false,
+            ShowCheckMargin = false,
+            Padding = new Padding(6, 6, 6, 6),
         };
 
         var header = new ToolStripMenuItem("Gatherlight · 拾光")
         {
             Enabled = false,
-            Image = Theme.Seal(18),
-            Font = Theme.UI(10f, FontStyle.Bold),
+            Font = Theme.UI(10.5f, FontStyle.Bold),
             ForeColor = Theme.Text,
+            Padding = new Padding(2, 3, 2, 1),
         };
-        var status = new ToolStripMenuItem("●  检查中…") { Enabled = false, ForeColor = Theme.Muted };
+        var status = new ToolStripMenuItem("●  检查中…") { Enabled = false, ForeColor = Theme.Muted, Padding = new Padding(2, 0, 2, 4) };
 
         menu.Items.Add(header);
         menu.Items.Add(status);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(Item("管理控制台", ctx.ShowWindow));
-        menu.Items.Add(Item("在浏览器打开", ctx.OpenBrowser));
+        menu.Items.Add(Item("在浏览器打开规划界面", ctx.OpenBrowser));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(Item("打开数据文件夹", ctx.OpenDataFolder));
         menu.Items.Add(Item("重启服务", ctx.Restart));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(Item("退出(停止服务)", ctx.Exit));
+        menu.Items.Add(Item("退出", ctx.Exit));
         return (menu, status);
     }
 
-    /// <summary>Update the live health line (called from the shell's poll).</summary>
     public static void SetStatus(ToolStripMenuItem status, bool healthy, long latencyMs)
     {
         status.Text = healthy ? $"●  运行正常 · {latencyMs} ms" : "●  无响应";
@@ -46,37 +49,48 @@ internal static class TrayMenu
 
     private static ToolStripMenuItem Item(string text, Action onClick)
     {
-        var it = new ToolStripMenuItem(text) { ForeColor = Theme.Text };
+        var it = new ToolStripMenuItem(text) { ForeColor = Theme.Text, Padding = new Padding(2, 4, 2, 4) };
         it.Click += (_, _) => onClick();
         return it;
     }
 }
 
-/// <summary>Dark warm palette for the tray menu.</summary>
-internal sealed class TrayColors : ProfessionalColorTable
+internal sealed class TrayRenderer : ToolStripRenderer
 {
-    public override Color ToolStripDropDownBackground => Theme.Surface;
-    public override Color MenuBorder => Theme.Border;
-    public override Color MenuItemBorder => Theme.Accent;
-    public override Color MenuItemSelected => ColorTranslator.FromHtml("#312619");
-    public override Color MenuItemSelectedGradientBegin => MenuItemSelected;
-    public override Color MenuItemSelectedGradientEnd => MenuItemSelected;
-    public override Color ImageMarginGradientBegin => Theme.Surface;
-    public override Color ImageMarginGradientMiddle => Theme.Surface;
-    public override Color ImageMarginGradientEnd => Theme.Surface;
-    public override Color SeparatorDark => Theme.Border;
-    public override Color SeparatorLight => Theme.Border;
-}
+    protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+    {
+        e.Graphics.Clear(Theme.Surface);
+    }
 
-internal sealed class TrayRenderer : ToolStripProfessionalRenderer
-{
-    public TrayRenderer() : base(new TrayColors()) { RoundedEdges = true; }
+    protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+    {
+        using var pen = new Pen(Theme.Border);
+        var r = e.AffectedBounds;
+        e.Graphics.DrawRectangle(pen, 0, 0, r.Width - 1, r.Height - 1);
+    }
+
+    protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+    {
+        if (!e.Item.Selected || !e.Item.Enabled) return;
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        var r = new Rectangle(3, 1, e.Item.Width - 6, e.Item.Height - 2);
+        using var path = Theme.RoundRect(r, 7);
+        using var fill = new SolidBrush(ColorTranslator.FromHtml("#312619"));
+        e.Graphics.FillPath(fill, path);
+    }
 
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
     {
-        // Enabled items: amber on hover, warm-white otherwise. Disabled items keep their own
-        // ForeColor (the header stays warm, the status line stays green/red).
         e.TextColor = e.Item.Enabled ? (e.Item.Selected ? Theme.AccentHi : Theme.Text) : e.Item.ForeColor;
+        e.TextRectangle = new Rectangle(e.TextRectangle.X + 10, e.TextRectangle.Y, e.TextRectangle.Width - 12, e.TextRectangle.Height);
+        e.TextFormat |= TextFormatFlags.VerticalCenter | TextFormatFlags.Left;
         base.OnRenderItemText(e);
+    }
+
+    protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+    {
+        using var pen = new Pen(Theme.Border);
+        var y = e.Item.Height / 2;
+        e.Graphics.DrawLine(pen, 10, y, e.Item.Width - 10, y);
     }
 }

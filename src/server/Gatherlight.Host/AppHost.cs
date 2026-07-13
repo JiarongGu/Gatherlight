@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http;
+using System.Text.Json;
 using Gatherlight.Server;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -44,6 +45,7 @@ public sealed class AppHost : Form
         MinimumSize = new Size(720, 520);
         ClientSize = new Size(940, 640);
         StartPosition = FormStartPosition.CenterScreen;
+        LoadWindowState(); // restore the last position + size
 
         _web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Theme.Bg };
         Controls.Add(_web);
@@ -184,6 +186,7 @@ public sealed class AppHost : Form
 
     private void OnClosing(object? sender, FormClosingEventArgs e)
     {
+        SaveWindowState();
         if (!_exiting && e.CloseReason == CloseReason.UserClosing)
         {
             e.Cancel = true;
@@ -194,10 +197,60 @@ public sealed class AppHost : Form
 
     private void ExitApp()
     {
+        SaveWindowState();
         _exiting = true;
         _tray.Visible = false;
         _showSignal?.Dispose();
         Application.Exit();
+    }
+
+    // ---- window position + size persistence ----
+    private string WindowStateFile => Path.Combine(_options.DataPath, "state", "host-window.json");
+
+    private void LoadWindowState()
+    {
+        try
+        {
+            if (!File.Exists(WindowStateFile)) return;
+            var s = JsonSerializer.Deserialize<WinState>(File.ReadAllText(WindowStateFile));
+            if (s is null) return;
+            var b = new Rectangle(s.X, s.Y, s.W, s.H);
+            if (s.W >= MinimumSize.Width && s.H >= MinimumSize.Height && OnAnyScreen(b))
+            {
+                StartPosition = FormStartPosition.Manual;
+                Bounds = b;
+            }
+            if (s.Max) WindowState = FormWindowState.Maximized;
+        }
+        catch { /* first run / bad file → default bounds */ }
+    }
+
+    private void SaveWindowState()
+    {
+        try
+        {
+            var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            var s = new WinState { X = b.X, Y = b.Y, W = b.Width, H = b.Height, Max = WindowState == FormWindowState.Maximized };
+            Directory.CreateDirectory(Path.GetDirectoryName(WindowStateFile)!);
+            File.WriteAllText(WindowStateFile, JsonSerializer.Serialize(s));
+        }
+        catch { /* best effort */ }
+    }
+
+    private static bool OnAnyScreen(Rectangle b)
+    {
+        foreach (var sc in Screen.AllScreens)
+            if (sc.WorkingArea.IntersectsWith(b)) return true;
+        return false;
+    }
+
+    private sealed class WinState
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int W { get; set; }
+        public int H { get; set; }
+        public bool Max { get; set; }
     }
 
     private void StartShowListener()
