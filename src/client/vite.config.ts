@@ -25,15 +25,17 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // Split the big vendors into separately-cacheable chunks (they change far less
-        // often than app code). Leaflet is only reached via a dynamic import (the map),
-        // so it is left unassigned and Rollup keeps it in its own async chunk.
+        // often than app code). Each chunk is a COHESIVE ecosystem so no circular
+        // dependency spans a chunk boundary (a forced catch-all "vendor" did — it caused
+        // a "Cannot access X before initialization" TDZ crash at runtime). Anything not
+        // matched here is left to Rollup (usually the entry chunk), which keeps init order
+        // correct. Leaflet is only reached via a dynamic import, so it stays a lazy chunk.
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
-          if (id.includes('leaflet')) return; // stays in the lazy map chunk
-          if (id.includes('/antd/') || id.includes('@ant-design/')) return 'antd';
-          if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) return 'react';
-          if (/[\\/](react-markdown|remark|rehype|micromark|mdast|hast|unist|unified|vfile|marked|property-information|character-entities|decode-named-character-reference|space-separated-tokens|comma-separated-tokens|trim-lines|zwitch|html-void-elements|bail|is-plain-obj|trough|estree)/.test(id)) return 'markdown';
-          return 'vendor';
+          if (id.includes('leaflet')) return;
+          if (/[\\/](antd|@ant-design|@rc-component|rc-[a-z-]+|dayjs)[\\/]/.test(id)) return 'antd';
+          if (/[\\/](react|react-dom|scheduler|react-is)[\\/]/.test(id)) return 'react';
+          if (/[\\/](react-markdown|remark|rehype|micromark|mdast|hast|unist|unified|vfile|marked|property-information|character-entities|decode-named-character-reference|space-separated-tokens|comma-separated-tokens|trim-lines|zwitch|html-void-elements|bail|is-plain-obj|trough)[\\/]/.test(id)) return 'markdown';
         }
       }
     }
