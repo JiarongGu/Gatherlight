@@ -647,7 +647,19 @@ h1, h2, h3, .u-display { font-family: var(--font-display); letter-spacing: -0.01
   height: 100%;
   background: var(--panel);
   color: var(--text);
+  position: relative;
 }
+
+/* "Jump to latest" — floats above the composer when the user has scrolled up mid-stream. */
+.chat-jump {
+  position: absolute; left: 50%; bottom: 108px; transform: translateX(-50%); z-index: 5;
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  padding: 6px 13px; font-size: 12px; font-weight: 500; font-family: var(--font-body);
+  color: #fff8ee; background: var(--accent); border: 1px solid var(--accent);
+  border-radius: 999px; box-shadow: 0 4px 14px var(--glow);
+}
+.chat-jump:hover { background: var(--accent-strong); }
+.chat-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .chat-head {
   display: flex;

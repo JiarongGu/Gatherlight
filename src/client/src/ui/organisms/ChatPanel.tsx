@@ -299,6 +299,23 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
 
   const closeRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Track whether the transcript is scrolled to the bottom so streaming updates don't yank the user
+  // back when they've scrolled up to re-read; a "jump to latest" button appears when they have.
+  const atBottomRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  const onScrollList = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    atBottomRef.current = near;
+    setShowJump(!near); // show the jump button only when scrolled away from the bottom
+  }, []);
+  const jumpToLatest = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    atBottomRef.current = true;
+    setShowJump(false);
+  }, []);
 
   // Seed the input when an action routes here (user reviews, then sends).
   useEffect(() => {
@@ -321,10 +338,11 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-scroll to newest content.
+  // Auto-scroll to newest content — but only when the user is already near the bottom, so scrolling
+  // up to re-read mid-stream isn't yanked back (the jump button handles the return).
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [state.items, state.live, state.review, state.phase]);
 
   useEffect(() => () => closeRef.current?.(), []);
@@ -455,7 +473,12 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       <Stepper phase={state.phase} />
       <UsageLine usage={state.usage} />
 
-      <div className="chat-scroll" ref={scrollRef} role="log" aria-live="polite" aria-relevant="additions text">
+      {showJump && (
+        <button className="chat-jump" onClick={jumpToLatest} aria-label="滚动到最新">
+          ↓ 最新
+        </button>
+      )}
+      <div className="chat-scroll" ref={scrollRef} onScroll={onScrollList} role="log" aria-live="polite" aria-relevant="additions text">
         {state.items.length === 0 && state.phase === 'idle' && (
           <div className="chat-empty">
             <p>用大白话告诉我要改什么,点一条试试:</p>
