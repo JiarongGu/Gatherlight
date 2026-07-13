@@ -83,7 +83,8 @@ try {
   const tools = await (await fetch(`${base}/api/tools`)).json();
   const names = tools.tools.map((t) => t.name);
   const expected = ['extract', 'scrape', 'wiki_info', 'policy_check', 'hotel_info', 'restaurant_info',
-    'flight_schedule', 'flight_prices', 'hotel_prices', 'fill_itinerary', 'remember_fact', 'recall_facts'];
+    'flight_schedule', 'flight_prices', 'hotel_prices', 'fill_itinerary', 'remember_fact', 'recall_facts',
+    'library_upsert', 'library_search', 'library_delete'];
   ok('all built-in tools registered (HTTP)', expected.every((n) => names.includes(n)),
     expected.filter((n) => !names.includes(n)).join(',') || 'ok');
   const mcp = await (await fetch(`${base}/mcp`, {

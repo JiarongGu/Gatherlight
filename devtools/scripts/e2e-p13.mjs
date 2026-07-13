@@ -1,0 +1,117 @@
+#!/usr/bin/env node
+// e2e P13 — the DB-backed knowledge library. Agent tools (library_upsert/search/delete) write to
+// the library_item table; the browse read side (/api/library) serves it zero-LLM. No claude, no
+// browser — pure DB round-trips.
+import { spawn, spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const dataDir = path.join(repo, 'devtools', '_e2e-p13-data');
+const PORT = 5393;
+const base = `http://127.0.0.1:${PORT}`;
+
+let failures = 0;
+const ok = (name, cond, extra = '') => {
+  console.log(`${cond ? '  ✓' : '  ✗'} ${name}${cond || !extra ? '' : ` — ${extra}`}`);
+  if (!cond) failures++;
+};
+
+spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
+
+const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
+  cwd: repo,
+  env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(PORT) },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+let serverLog = '';
+server.stdout.on('data', (d) => (serverLog += d));
+server.stderr.on('data', (d) => (serverLog += d));
+
+const until = async (fn, ms = 40000) => {
+  const t0 = Date.now();
+  for (;;) {
+    try { const r = await fn(); if (r) return r; } catch {}
+    if (Date.now() - t0 > ms) throw new Error('timeout');
+    await new Promise((r) => setTimeout(r, 400));
+  }
+};
+const call = async (name, args) => {
+  const res = await fetch(`${base}/api/tools/call`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, arguments: args }),
+  });
+  const body = await res.json().catch(() => null);
+  return { status: res.status, result: body?.result ? JSON.parse(body.result) : body };
+};
+const getJson = async (p) => (await (await fetch(`${base}${p}`)).json());
+
+try {
+  await until(() => fetch(`${base}/api/health`).then((r) => r.ok));
+
+  const tools = (await getJson('/api/tools')).tools;
+  for (const n of ['library_upsert', 'library_search', 'library_delete'])
+    ok(`${n} registered`, tools.some((t) => t.name === n));
+
+  // upsert two attractions + one restaurant
+  const up1 = await call('library_upsert', {
+    kind: 'attraction', key: 'kinkaku-ji', name: 'Kinkaku-ji', nameLocal: '金閣寺',
+    region: 'Kyoto, Japan', summary: 'The golden pavilion.', url: 'https://example.org/kinkakuji',
+    lat: 35.0394, lng: 135.7292, tags: 'temple,unesco,garden', source: 'wikipedia', confidence: 0.95,
+  });
+  ok('library_upsert returns ok + id', up1.result.ok === true && up1.result.id > 0, JSON.stringify(up1.result));
+  await call('library_upsert', {
+    kind: 'attraction', key: 'fushimi-inari', name: 'Fushimi Inari Taisha', region: 'Kyoto, Japan',
+    summary: 'Thousands of torii gates.', tags: 'shrine,torii', confidence: 0.9,
+  });
+  await call('library_upsert', {
+    kind: 'restaurant', key: 'fixture-sushi', name: 'Fixture Sushi', region: 'Osaka, Japan',
+    summary: 'Omakase counter.', confidence: 0.8,
+  });
+
+  // read side: list + facets
+  const all = await getJson('/api/library');
+  ok('GET /api/library returns 3 items', all.items.length === 3, String(all.items.length));
+  ok('facets: total 3', all.facets.total === 3, JSON.stringify(all.facets.total));
+  ok('facets: 2 kinds (attraction, restaurant)', all.facets.kinds.length === 2,
+    JSON.stringify(all.facets.kinds.map((k) => k.value)));
+  ok('facets: attraction count 2', all.facets.kinds.find((k) => k.value === 'attraction')?.count === 2);
+  ok('confidence sort — Kinkaku-ji first', all.items[0].key === 'kinkaku-ji', all.items[0].key);
+  ok('doubles materialize (lat ~35.04)', Math.abs((all.items.find((i) => i.key === 'kinkaku-ji').lat ?? 0) - 35.0394) < 0.001);
+
+  // filter by kind + region
+  const kyoto = await getJson('/api/library?kind=attraction&region=' + encodeURIComponent('Kyoto, Japan'));
+  ok('filter kind+region → 2 Kyoto attractions', kyoto.items.length === 2, String(kyoto.items.length));
+
+  // search via tool + via API
+  const searched = await call('library_search', { query: 'golden' });
+  ok('library_search finds "golden" → Kinkaku-ji', searched.result.count === 1 && searched.result.items[0].key === 'kinkaku-ji',
+    JSON.stringify(searched.result.count));
+  const apiSearch = await getJson('/api/library?q=torii');
+  ok('GET /api/library?q=torii → Fushimi Inari', apiSearch.items.length === 1 && apiSearch.items[0].key === 'fushimi-inari');
+
+  // idempotent upsert (same kind+key updates in place, no duplicate)
+  await call('library_upsert', { kind: 'attraction', key: 'kinkaku-ji', name: 'Kinkaku-ji (Rokuon-ji)', confidence: 0.97 });
+  const afterReupsert = await getJson('/api/library');
+  ok('re-upsert updates in place (still 3 items)', afterReupsert.items.length === 3, String(afterReupsert.items.length));
+  ok('re-upsert changed the name', afterReupsert.items.find((i) => i.key === 'kinkaku-ji').name === 'Kinkaku-ji (Rokuon-ji)');
+
+  // detail endpoint
+  const detail = await getJson('/api/library/item?kind=attraction&key=fushimi-inari');
+  ok('detail endpoint returns the item', detail.name === 'Fushimi Inari Taisha', detail.name);
+
+  // delete
+  const del = await call('library_delete', { kind: 'restaurant', key: 'fixture-sushi' });
+  ok('library_delete removes the item', del.result.removed === true, JSON.stringify(del.result));
+  const afterDelete = await getJson('/api/library');
+  ok('after delete → 2 items', afterDelete.items.length === 2, String(afterDelete.items.length));
+} catch (err) {
+  console.error('e2e-p13 fatal:', err.message);
+  console.error(serverLog.slice(-3000));
+  failures++;
+} finally {
+  server.kill();
+}
+
+console.log(failures === 0 ? '\ne2e-p13 PASS' : `\ne2e-p13 FAIL (${failures})`);
+process.exit(failures === 0 ? 0 : 1);
