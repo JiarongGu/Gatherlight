@@ -154,7 +154,7 @@ export function Home({ files, onSelect, onOpenPalette, onAfterAction, onAskAI, l
         </section>
       )}
 
-      {!loading && files.length === 0 && (
+      {!loading && !files.some((f) => f.path.startsWith('plans/')) && (
         <section className="home-section">
           <div className="home-firstrun">
             <div className="home-firstrun-seal">拾</div>
