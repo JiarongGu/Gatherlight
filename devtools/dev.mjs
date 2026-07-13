@@ -186,11 +186,20 @@ switch (cmd) {
     // WebView2 /manage UI (restart, tab switches) via desktop-e2e.mjs, then tear down. Verifies the
     // desktop-only interactions the API/browser e2e can't reach.
     const port = 5350, cdp = 9420;
+    const udfName = '_desktop-e2e-webview';
     const dataDir = path.join(repo, 'devtools', '_desktop-e2e-data');
-    const udf = path.join(repo, 'devtools', '_desktop-e2e-webview');
+    const udf = path.join(repo, 'devtools', udfName);
     const exe = path.join(repo, config.hostProject, 'bin', 'Debug', config.hostTfm, `${config.hostProcess}.exe`);
+    // Scoped teardown — NEVER a blanket `Stop-Process -Name msedgewebview2` (that kills every WebView2
+    // app on the machine). Kill this test's host, and only the WebView2 child launched with OUR
+    // isolated user-data folder (matched on its --user-data-dir command line).
     const killAll = () => spawnSync('powershell', ['-NoProfile', '-Command',
-      'Stop-Process -Name Gatherlight.Host,msedgewebview2 -Force -ErrorAction SilentlyContinue'], { stdio: 'ignore' });
+      `Get-CimInstance Win32_Process -Filter "Name='${config.hostProcess}.exe'" -ErrorAction SilentlyContinue | ` +
+      `Where-Object { $_.ExecutablePath -eq '${exe}' } | ` +
+      `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; ` +
+      `Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue | ` +
+      `Where-Object { $_.CommandLine -like '*${udfName}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`],
+      { stdio: 'ignore' });
     if (!fs.existsSync(exe)) { console.error(`host exe not found — run \`node devtools/dev.mjs build\` first (${exe})`); process.exitCode = 1; break; }
     killAll();
     await new Promise((r) => setTimeout(r, 800));
