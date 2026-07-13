@@ -63,15 +63,6 @@ public abstract class QueryBatchLeafTool : PuppeteerLeafTool
     }
 }
 
-public sealed class PolicyCheckTool : QueryBatchLeafTool
-{
-    public PolicyCheckTool(IHostEnvironment env, IDataContext data) : base(env, data) { }
-    public override string Name => "policy_check";
-    public override string Description =>
-        "核验签证/护照/入境政策(护照国 × 目的地国),抓取官方来源(如 MOFA)。写入计划前必须核验政策类事实 — 模型记忆会静默过期。";
-    protected override string Entry => "src/policy-check.ts";
-}
-
 public sealed class HotelInfoTool : QueryBatchLeafTool
 {
     public HotelInfoTool(IHostEnvironment env, IDataContext data) : base(env, data) { }
@@ -88,15 +79,6 @@ public sealed class RestaurantInfoTool : QueryBatchLeafTool
     public override string Description =>
         "批量核验餐厅:验证声称的目录页 URL 是否对应该店,坏链自动搜索可信替代(Tabelog/TableCheck/Michelin 个店页)。模型记忆的餐厅目录 ID 系统性不可靠 — 必须逐条核验。";
     protected override string Entry => "src/restaurant-info.ts";
-}
-
-public sealed class FlightScheduleTool : QueryBatchLeafTool
-{
-    public FlightScheduleTool(IHostEnvironment env, IDataContext data) : base(env, data) { }
-    public override string Name => "flight_schedule";
-    public override string Description =>
-        "核验航班时刻(承运人 IATA 代码 + 航班号 + 日期,FlightAware/FlightStats 交叉)。能发现编造的承运人代码 — 写入计划前必须核验。";
-    protected override string Entry => "src/flight-schedule.ts";
 }
 
 public sealed class FlightPricesTool : PuppeteerLeafTool
