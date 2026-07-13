@@ -9,7 +9,7 @@ both.
 
 Implement `IGatherlightTool` (`Name` / `Description` / `InputSchema` via the `ToolSchema` builder /
 `RunAsync`), register in `GatherlightApp.cs`. Use a built-in when the tool needs server services
-(LLM runner, uploads, DB) or heavy dependencies. Current set (23):
+(LLM runner, uploads, DB) or heavy dependencies. Current set (24):
 
 - **AI / web**: `extract` (one-shot Claude over an uploaded file), `scrape` (Playwright headless
   chromium), `wiki_info` (Wikipedia REST + Wikidata).
@@ -24,7 +24,7 @@ Implement `IGatherlightTool` (`Name` / `Description` / `InputSchema` via the `To
   `image_convert` (ImageSharp). `fill_itinerary` is the visa-specific convenience over `pdf_fill`.
 - **Zero-LLM planner**: `budget_scan` (honest budget figures).
 - **Cross-session memory**: `remember_fact` / `recall_facts`.
-- **Knowledge library** (`Modules/Library`): `library_upsert` / `library_search` / `library_delete` —
+- **Knowledge library** (`Modules/Library`): `library_upsert` / `library_search` / `library_import` / `library_delete` —
   verified reference entities (attractions/venues/hotels: name, coords, official URL, image,
   confidence) in the first-class `library_item` table, browsed read-only at `GET /api/library`.
   Replaces the old hand-written `ATTRACTIONS.md` pattern: knowledge is queryable data, not a

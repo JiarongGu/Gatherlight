@@ -62,6 +62,7 @@ plan artefact** — they live in the **DB knowledge library**, browsable in the 
 | `library_upsert` | `mcp__planner-tools__library_upsert` | Save one verified entity (name, region, summary, coords, official URL, image, confidence). Same kind+key updates in place. |
 | `library_search` | `mcp__planner-tools__library_search` | Check the library BEFORE researching — a hit means it's already verified; don't re-scrape. |
 | `library_import` | `mcp__planner-tools__library_import` `{path}` | One-time migrate an old `*_ATTRACTIONS.md` / `*_INDEX.md` markdown library into the DB. Idempotent. |
+| `library_delete` | `mcp__planner-tools__library_delete` `{kind, key}` | Remove an entity that's confirmed closed / relocated / wrong. |
 
 So the flow for a reference library is now: **verify with `scrape`/WebSearch → `library_upsert`** (not
 "write a big markdown file"). A legacy `.claude/workflows/<DEST>_ATTRACTIONS.md` should be migrated

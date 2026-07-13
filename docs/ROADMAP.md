@@ -35,7 +35,10 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 | **Client bundle** — `manualChunks` (react/antd/markdown/vendor) + lazy-loaded leaflet map + dropped dead `html2pdf.js`. First-load gzip ~433kB → ~381kB, map deferred, >500kB warning gone | ✅ 2026-07-13 |
 | **Packaging** — `dev.mjs publish` → self-contained single-file exe (runtime + client + template + native libs bundled). See [DEPLOYMENT.md](DEPLOYMENT.md) | ✅ 2026-07-13, published exe verified booting (health + client + 20 tools) |
 | **Knowledge library** — DB-backed `library_item` + browse gallery (知识库) + agent tools (upsert/search/import); migrated the markdown attractions library (48 entries) into the DB, dropping trip/family lines. The SQLite DB stays outside git (source of truth → back up the data folder). | ✅ 2026-07-13 (e2e-p13, 34 checks) |
-| **Desktop management host** — `Gatherlight.Host` (WinForms, Sonora pattern): hosts the server in-process via `GatherlightApp.Build()`, monitors `/api/health` (rolling strip + latency + uptime + optional auto-restart), live counts, tray controls. The shippable app; users open the planner in a browser. `dev.mjs host` / `publish`. | ✅ 2026-07-13, verified hosting + monitoring |
+| **Desktop management host** — `Gatherlight.Host` (WinForms + WebView2, resizable/DPI-correct) renders the `/manage` "lantern control room" (health monitor + counts + controls) with a polished native tray + window-position persistence; hosts the server in-process. Users open the planner in a browser. `dev.mjs host`. | ✅ 2026-07-13, verified |
+| **Memory transfer** — `/api/memory/export|import` (portable bundle: library + facts + entities) + `GATHERLIGHT_SEED_MEMORY` startup seeding; console + `dev.mjs memory`. | ✅ 2026-07-13 (e2e-p14) |
+| **Eval / LLM-ops** — per-conversation 1–5 ranking (chat_feedback) + `/manage` observability tab (stats / transcripts / JSONL tuning-dataset export). | ✅ 2026-07-13 (e2e-p15) |
+| **Structured publish** — `dev.mjs publish` → `dist/Gatherlight/` (launcher · libs/ · res/ · data/) + zip + sha256 manifest; the server self-locates `res/` + `data/`. | ✅ 2026-07-13, verified |
 
 ## Architecture decisions of record
 

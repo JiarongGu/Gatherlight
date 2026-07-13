@@ -24,9 +24,10 @@ Phases 0–6 of `docs/ROADMAP.md` are done: the .NET server owns the product (pl
 two-gate chat, SSE, uploads, tool registry over HTTP + MCP at `/mcp`, knowledge-base seeder), the
 React client lives in `src/client/`, and the legacy `viewer/` is deleted.
 
-- `tools/puppeteer/`, `tools/pdf-form/` — **transition** Node tool leaves (scrapers, PDF filler),
-  reachable from `local/` via a junction; ported to C#/Playwright one at a time (Phase 7). The
-  registry wraps them (`NodeLeafTool`) so callers can't tell a leaf from a native tool.
+- `tools/pdf-form/` — a Node utility (pdf-lib + fontkit) for PDF AcroForm inspect/fill/merge,
+  invoked by the C# document tools via `NodeLeafTool` (reliable on real + CJK PDFs where PDFsharp
+  threw). The former `tools/puppeteer/` scrapers are fully ported to C#/Playwright and removed —
+  Phase 7 is done; the registry can't tell a Node leaf from a native tool.
 - The shipped planner knowledge base lives in `src/server/Gatherlight.Server/Assets/DataTemplate/`
   (scrubbed, generic) and is seeded/upgraded into data folders by `ZhikuSeeder` — the live family
   knowledge base in `local/.claude/` is user data and diverges freely.
