@@ -467,6 +467,8 @@ h1, h2, h3, .u-display { font-family: var(--font-display); letter-spacing: -0.01
   margin: 12px 0;
 }
 .map-fallback code, .map-footer code { background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+/* Height-stable shimmer while the leaflet map chunk loads (uses .sk-shimmer). */
+.map-skeleton { display: grid; place-items: center; border-radius: var(--radius); margin: 12px 0; color: var(--muted); font-size: 12.5px; }
 
 /* Numbered route pin / accent dot (L.divIcon) */
 .map-pin { background: none !important; border: none !important; }

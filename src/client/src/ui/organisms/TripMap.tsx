@@ -40,7 +40,7 @@ export function TripMap({ cities, height = 400 }: Props) {
   }
 
   return (
-    <Suspense fallback={<div className="map-fallback">🗺️ 加载路线图…</div>}>
+    <Suspense fallback={<div className="map-skeleton sk-shimmer" style={{ height }} aria-hidden="true"><span>🗺️ 加载路线图…</span></div>}>
       <MapCanvas
         markers={markers}
         connect

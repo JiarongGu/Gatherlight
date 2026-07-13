@@ -38,7 +38,7 @@ export function CityMap({ pointsRaw, height = 340, connect = false, title }: Pro
   }
 
   return (
-    <Suspense fallback={<div className="map-fallback">🗺️ 加载城市地图…</div>}>
+    <Suspense fallback={<div className="map-skeleton sk-shimmer" style={{ height }} aria-hidden="true"><span>🗺️ 加载城市地图…</span></div>}>
       <MapCanvas markers={markers} connect={connect} numbered height={height} footer={title} ariaLabel="城市地图" />
     </Suspense>
   );
