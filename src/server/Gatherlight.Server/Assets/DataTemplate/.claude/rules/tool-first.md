@@ -51,6 +51,23 @@ This is not a fix — it's a warning. The fix is "verify against live sources an
 - Subjective content the model owns ("this pace suits a family with young kids" — judgment, not fact)
 - Quick scaffolding that will be tool-verified within the same session
 
+### Where verified reference entities go — the DB knowledge library
+
+Reusable reference entities (attractions, restaurants, hotels, experiences) are **knowledge, not a
+plan artefact** — they live in the **DB knowledge library**, browsable in the Gatherlight UI under
+知识库, not in a markdown blob. Once you've verified an entity, store it:
+
+| Tool | Call as | Use for |
+|---|---|---|
+| `library_upsert` | `mcp__planner-tools__library_upsert` | Save one verified entity (name, region, summary, coords, official URL, image, confidence). Same kind+key updates in place. |
+| `library_search` | `mcp__planner-tools__library_search` | Check the library BEFORE researching — a hit means it's already verified; don't re-scrape. |
+| `library_import` | `mcp__planner-tools__library_import` `{path}` | One-time migrate an old `*_ATTRACTIONS.md` / `*_INDEX.md` markdown library into the DB. Idempotent. |
+
+So the flow for a reference library is now: **verify with `scrape`/WebSearch → `library_upsert`** (not
+"write a big markdown file"). A legacy `.claude/workflows/<DEST>_ATTRACTIONS.md` should be migrated
+once with `library_import`, after which the DB library is the source of truth. Trip plans then
+*reference* library entities rather than re-listing their facts.
+
 ## Examples
 
 ✗ Generating a 40-entry attractions library from memory with claims like "founded 1839", "USD 6/person", "fully step-free" — these are fact claims, not judgment.

@@ -97,6 +97,7 @@ public static class GatherlightApp
             .AddSingleton<Modules.Library.Services.IImageCache, Modules.Library.Services.ImageCache>()
             .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryUpsertTool>()
             .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibrarySearchTool>()
+            .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryImportTool>()
             .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryDeleteTool>()
             // Hot-loadable script tools ({data}/tools/<name>/tool.json — no rebuild needed)
             .AddSingleton<ScriptToolProvider>()

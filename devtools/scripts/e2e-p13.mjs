@@ -4,6 +4,7 @@
 // browser — pure DB round-trips.
 import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -130,6 +131,66 @@ try {
   ok('library_delete removes the item', del.result.removed === true, JSON.stringify(del.result));
   const afterDelete = await getJson('/api/library');
   ok('after delete → 2 items', afterDelete.items.length === 2, String(afterDelete.items.length));
+
+  // --- markdown reference-library import (the JAPAN_ATTRACTIONS.md → DB migration) ---
+  // fictional fixture in the same ## region / ### entry / bullet format, with a trip/family line
+  // that MUST be dropped (适合).
+  const refMd = `# Fixture Attractions Library
+
+## 🏙️ Testville
+
+### 🐠 测试馆 Test Aquarium / Fixture Aquarium
+
+![Fixture Aquarium](https://example.org/aq.png)
+
+> **Wikipedia** (verified 2026-01-01): The Fixture Aquarium is a large public aquarium in Testville, opened in 1990.
+
+- **类型**: 水族馆(室内) · **位置**: 港区 (34.6545°N, 135.4289°E)
+- **🎯 适合**: SECRET-FAMILY-NOTE should not migrate
+- **🔗 Official**: [example.org](https://www.example.org/aq) · **🗺️ Wiki**: [Fixture Aquarium](https://en.wikipedia.org/wiki/Fixture_Aquarium)
+- **📅 Day 2**
+
+### 🍣 寿司太郎 Sushi Taro(米其林 ★)
+
+> ⚠️ No Wikipedia article — hand-curated.
+
+- **类型**: 寿司 · **位置**: 中央区
+- **🔗 Official**: [example.org/sushi](https://www.example.org/sushi)
+
+## 📖 How to Use This Library
+
+### Regenerating
+
+- run the wiki tool then import.
+
+### Updating
+
+- edit and re-import.
+`;
+  fs.mkdirSync(path.join(dataDir, 'reference'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'reference', 'fixture-lib.md'), refMd, 'utf8');
+
+  const imp = await call('library_import', { path: 'reference/fixture-lib.md' });
+  ok('library_import: imported 2', imp.result.imported === 2, JSON.stringify(imp.result.imported));
+  ok('library_import: detects restaurant + attraction', imp.result.byKind.attraction === 1 && imp.result.byKind.restaurant === 1,
+    JSON.stringify(imp.result.byKind));
+
+  const imported = await getJson('/api/library');
+  const aq = imported.items.find((i) => (i.name ?? '').includes('Aquarium') || (i.nameLocal ?? '').includes('测试馆'));
+  ok('import: parsed name + local', !!aq && aq.nameLocal === '测试馆', aq?.nameLocal);
+  ok('import: region from ## heading', aq?.region === 'Testville', aq?.region);
+  ok('import: coordinates parsed', aq && Math.abs((aq.lat ?? 0) - 34.6545) < 0.001 && Math.abs((aq.lng ?? 0) - 135.4289) < 0.001);
+  ok('import: official url (not wikipedia)', aq?.url === 'https://www.example.org/aq', aq?.url);
+  ok('import: image parsed', aq?.imageUrl === 'https://example.org/aq.png', aq?.imageUrl);
+  ok('import: summary from wiki blockquote', (aq?.summary ?? '').includes('aquarium'), aq?.summary);
+  ok('import: DROPS family/trip lines (适合/📅)', !JSON.stringify(imported.items).includes('SECRET-FAMILY-NOTE'));
+  const sushi = imported.items.find((i) => (i.name ?? '').includes('Sushi Taro'));
+  ok('import: restaurant kind + warning → no summary', sushi?.kind === 'restaurant' && !sushi?.summary, `${sushi?.kind}/${sushi?.summary}`);
+  ok('import: skips meta section (How to Use)', !imported.items.some((i) => ['regenerating', 'updating'].includes(i.key)));
+  // idempotent — re-import doesn't duplicate
+  await call('library_import', { path: 'reference/fixture-lib.md' });
+  const reimport = await getJson('/api/library');
+  ok('library_import idempotent (no dupes)', reimport.items.length === imported.items.length, `${imported.items.length}→${reimport.items.length}`);
 
   // --- image cache proxy (offline-safe cover images) ---
   const img1 = await fetch(`${base}/api/library/image?url=${encodeURIComponent(imgBase + '/img.png')}`);

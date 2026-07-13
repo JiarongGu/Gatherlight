@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Gatherlight.Server.Modules.Core.Services;
 using Gatherlight.Server.Modules.Library.Services;
 using Gatherlight.Server.Modules.Tools.Models;
 
@@ -90,6 +91,58 @@ public sealed class LibrarySearchTool : IGatherlightTool
             });
         return new JsonObject { ["count"] = items.Count, ["items"] = arr }
             .ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+}
+
+/// <summary>One-time migration: import an old markdown reference library (## region / ### entry /
+/// bullet fields — the JAPAN_ATTRACTIONS.md pattern) into the DB library. Deterministic + zero
+/// token; pulls only durable reference facts (name/summary/coords/url/image/type), never the
+/// trip/family planning lines. Idempotent (upsert by kind+key), so re-running is safe.</summary>
+public sealed class LibraryImportTool : IGatherlightTool
+{
+    private readonly ILibraryRepository _repo;
+    private readonly IDataContext _data;
+    public LibraryImportTool(ILibraryRepository repo, IDataContext data)
+    {
+        _repo = repo;
+        _data = data;
+    }
+
+    public string Name => "library_import";
+    public string Description =>
+        "把旧的 Markdown 参考库(## 地区 / ### 条目 / 字段 的格式,如 JAPAN_ATTRACTIONS.md)一次性导入到数据库知识库。确定性解析,零 token;只提取可复用的参考事实(名称/简介/坐标/官网/图片/类型),不含行程或家庭规划信息。按 kind+key 幂等 upsert,可安全重跑。";
+    public string InputSchema => ToolSchema.Of(b => b
+        .Str("path", "参考库 Markdown 的数据目录相对路径", required: true)
+        .Str("kind", "默认条目类型(攻略里未识别出的用它),默认 attraction",
+            options: new[] { "attraction", "restaurant", "hotel", "experience", "other" })
+        .Str("region", "覆盖地区(可选;默认用 ## 标题作地区)"));
+
+    public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
+    {
+        var rel = LibraryUpsertTool.Req(args, "path");
+        var abs = _data.ResolveDataPath(rel) ?? throw new ToolException(400, $"路径越界:{rel}");
+        if (!File.Exists(abs)) throw new ToolException(400, $"文件不存在:{rel}");
+
+        var md = await File.ReadAllTextAsync(abs, ct);
+        var items = MarkdownLibraryImporter.Parse(md,
+            LibraryUpsertTool.Opt(args, "kind") ?? "attraction", LibraryUpsertTool.Opt(args, "region"));
+
+        var byKind = new Dictionary<string, int>();
+        foreach (var it in items)
+        {
+            await _repo.UpsertAsync(it);
+            byKind[it.Kind] = byKind.GetValueOrDefault(it.Kind) + 1;
+        }
+
+        var breakdown = new JsonObject();
+        foreach (var (k, n) in byKind.OrderByDescending(p => p.Value)) breakdown[k] = n;
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["imported"] = items.Count,
+            ["byKind"] = breakdown,
+            ["sample"] = new JsonArray(items.Take(5).Select(i => (JsonNode)$"{i.Kind}:{i.Key}").ToArray()),
+        }.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 }
 
