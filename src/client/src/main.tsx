@@ -16,6 +16,7 @@ import '@fontsource/ibm-plex-mono/400.css';
 import '@fontsource/ibm-plex-mono/500.css';
 import { App } from './App';
 import { AuthGate } from './screens';
+import { ErrorBoundary } from './ui/ErrorBoundary';
 import { ThemeProvider, useTheme, antdThemeConfig } from './lib/theme';
 import './styles.css';
 
@@ -25,7 +26,9 @@ function ThemedApp() {
     <ConfigProvider locale={zhCN} theme={antdThemeConfig(mode)}>
       <AntApp>
         <AuthGate>
-          <App />
+          <ErrorBoundary>
+            <App />
+          </ErrorBoundary>
         </AuthGate>
       </AntApp>
     </ConfigProvider>
