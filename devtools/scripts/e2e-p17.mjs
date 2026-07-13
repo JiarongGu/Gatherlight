@@ -44,6 +44,13 @@ try {
   const stA = await (await fetch(`${baseA}/api/auth/status`)).json();
   ok('A: no token → auth not required', stA.required === false && stA.authed === true, JSON.stringify(stA));
   ok('A: API open without a token', status(await fetch(`${baseA}/api/plans`)) === 200);
+
+  // defense-in-depth response headers (verified not to break rendering via a headless CSP render)
+  const hdr = await fetch(`${baseA}/`);
+  const csp = hdr.headers.get('content-security-policy') ?? '';
+  ok("A: CSP present (script-src 'self' + frame-ancestors 'none')", /script-src 'self'/.test(csp) && /frame-ancestors 'none'/.test(csp), csp.slice(0, 48));
+  ok('A: nosniff + frame-deny + referrer + permissions headers', hdr.headers.get('x-content-type-options') === 'nosniff'
+    && hdr.headers.get('x-frame-options') === 'DENY' && !!hdr.headers.get('referrer-policy') && !!hdr.headers.get('permissions-policy'));
   a.kill(); a = null;
   await new Promise((r) => setTimeout(r, 1200));
 

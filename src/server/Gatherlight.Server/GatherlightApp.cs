@@ -197,6 +197,8 @@ public static class GatherlightApp
         // Sessions left non-terminal by a previous server death → error (inspectable, not resumed).
         app.Services.GetRequiredService<IChatRepository>().FailInterruptedSessionsAsync().GetAwaiter().GetResult();
 
+        // Defense-in-depth response headers (CSP + framing/sniffing) on everything.
+        app.UseMiddleware<Modules.Security.SecurityHeadersMiddleware>();
         // Gate /api + /mcp before the endpoints run (no-op unless an access token is configured).
         app.UseMiddleware<Modules.Security.AccessGateMiddleware>();
 
