@@ -31,8 +31,6 @@ public abstract class NodeLeafTool : IGatherlightTool
 
         var psi = new ProcessStartInfo
         {
-            // npx resolves via the cmd shim on Windows; use cmd-safe direct start of npx.cmd.
-            FileName = OperatingSystem.IsWindows() ? "npx.cmd" : "npx",
             WorkingDirectory = LeafDirectory,
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -41,6 +39,19 @@ public abstract class NodeLeafTool : IGatherlightTool
             StandardOutputEncoding = Utf8NoBom,
             StandardErrorEncoding = Utf8NoBom,
         };
+        // Launch npx through cmd.exe on Windows: invoking npx.cmd directly via CreateProcess breaks
+        // its %~dp0 self-location (it then can't find node/tsx and throws MODULE_NOT_FOUND) — same
+        // class of bug as npm.cmd. (Data paths are space-free in normal setups.)
+        if (OperatingSystem.IsWindows())
+        {
+            psi.FileName = "cmd.exe";
+            psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add("npx");
+        }
+        else
+        {
+            psi.FileName = "npx";
+        }
         foreach (var a in BuildArgv(args)) psi.ArgumentList.Add(a);
 
         using var proc = Process.Start(psi) ?? throw new ToolException(500, "无法启动工具进程");
@@ -64,4 +75,18 @@ public abstract class NodeLeafTool : IGatherlightTool
         }
         return stdout.Trim();
     }
+}
+
+/// <summary>A NodeLeafTool with a caller-fixed directory + argv — for tools that resolve their own
+/// paths and just need to run a specific leaf script (e.g. pdf_fill, fill_itinerary).</summary>
+public sealed class FixedNodeLeaf : NodeLeafTool
+{
+    private readonly string _dir;
+    private readonly string[] _argv;
+    public FixedNodeLeaf(string dir, string[] argv) { _dir = dir; _argv = argv; }
+    public override string Name => "_fixed";
+    public override string Description => "";
+    public override string InputSchema => "{}";
+    protected override string LeafDirectory => _dir;
+    protected override IEnumerable<string> BuildArgv(JsonElement args) => _argv;
 }

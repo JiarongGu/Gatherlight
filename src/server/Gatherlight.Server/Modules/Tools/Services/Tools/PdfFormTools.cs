@@ -42,11 +42,10 @@ public sealed class FillItineraryTool : IGatherlightTool
         var outAbs = Resolve(args, "outPath", mustExist: false);
         Directory.CreateDirectory(Path.GetDirectoryName(outAbs)!);
 
-        var leaf = new InlineLeaf(_leafDir, new[]
+        return await new FixedNodeLeaf(_leafDir, new[]
         {
             "tsx", "src/fill-itinerary.ts", "--in", tmpl, "--data", data, "--out", outAbs,
-        });
-        return await leaf.RunAsync(args, ct);
+        }).RunAsync(args, ct);
     }
 
     private string Resolve(JsonElement args, string key, bool mustExist)
@@ -55,18 +54,5 @@ public sealed class FillItineraryTool : IGatherlightTool
         var abs = _data.ResolveDataPath(rel) ?? throw new ToolException(400, $"{key} 路径越界:{rel}");
         if (mustExist && !File.Exists(abs)) throw new ToolException(400, $"{key} 文件不存在:{rel}");
         return abs;
-    }
-
-    /// <summary>NodeLeafTool with a fixed argv (the tool already resolved everything).</summary>
-    private sealed class InlineLeaf : NodeLeafTool
-    {
-        private readonly string _dir;
-        private readonly string[] _argv;
-        public InlineLeaf(string dir, string[] argv) { _dir = dir; _argv = argv; }
-        public override string Name => "fill_itinerary";
-        public override string Description => "";
-        public override string InputSchema => "{}";
-        protected override string LeafDirectory => _dir;
-        protected override IEnumerable<string> BuildArgv(JsonElement args) => _argv;
     }
 }

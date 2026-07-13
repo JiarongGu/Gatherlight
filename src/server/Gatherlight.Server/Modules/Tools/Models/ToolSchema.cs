@@ -14,7 +14,8 @@ namespace Gatherlight.Server.Modules.Tools.Models;
 /// </summary>
 public sealed class ToolSchema
 {
-    private readonly List<(string Name, string Type, string Desc, string[]? Enum)> _props = new();
+    // Shape: "scalar" | "strArray" (array of strings) | "strMap" (object, string values).
+    private readonly List<(string Name, string Type, string Desc, string[]? Enum, string Shape)> _props = new();
     private readonly List<string> _required = new();
 
     public ToolSchema Str(string name, string description, bool required = false, string[]? options = null)
@@ -25,10 +26,16 @@ public sealed class ToolSchema
         => Add(name, "boolean", description, required, null);
     public ToolSchema Num(string name, string description, bool required = false)
         => Add(name, "number", description, required, null);
+    /// <summary>An array of strings.</summary>
+    public ToolSchema StrArray(string name, string description, bool required = false)
+        => Add(name, "array", description, required, null, "strArray");
+    /// <summary>A free-form object with string values (e.g. an AcroForm field→value map).</summary>
+    public ToolSchema StrMap(string name, string description, bool required = false)
+        => Add(name, "object", description, required, null, "strMap");
 
-    private ToolSchema Add(string name, string type, string description, bool required, string[]? options)
+    private ToolSchema Add(string name, string type, string description, bool required, string[]? options, string shape = "scalar")
     {
-        _props.Add((name, type, description, options));
+        _props.Add((name, type, description, options, shape));
         if (required) _required.Add(name);
         return this;
     }
@@ -51,6 +58,18 @@ public sealed class ToolSchema
                     w.WriteStartArray("enum");
                     foreach (var e in p.Enum) w.WriteStringValue(e);
                     w.WriteEndArray();
+                }
+                if (p.Shape == "strArray")
+                {
+                    w.WriteStartObject("items");
+                    w.WriteString("type", "string");
+                    w.WriteEndObject();
+                }
+                else if (p.Shape == "strMap")
+                {
+                    w.WriteStartObject("additionalProperties");
+                    w.WriteString("type", "string");
+                    w.WriteEndObject();
                 }
                 w.WriteEndObject();
             }

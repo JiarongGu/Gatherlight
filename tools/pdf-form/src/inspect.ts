@@ -10,7 +10,18 @@
  *   { pages: [{ width, height }], hasForm: bool, fields: [{ name, type, page, rect }] }
  */
 import fs from 'node:fs';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFTextField, PDFCheckBox, PDFDropdown, PDFRadioGroup } from 'pdf-lib';
+
+function fieldValue(f: unknown): string | null {
+  try {
+    if (f instanceof PDFTextField) return f.getText() ?? null;
+    if (f instanceof PDFCheckBox) return f.isChecked() ? 'true' : 'false';
+    if (f instanceof PDFDropdown || f instanceof PDFRadioGroup) return f.getSelected()?.join(',') ?? null;
+  } catch {
+    // ignore
+  }
+  return null;
+}
 
 async function main() {
   const input = process.argv[2];
@@ -22,31 +33,28 @@ async function main() {
   const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
   const pages = pdf.getPages().map((p, i) => ({
     index: i,
-    width: p.getWidth(),
-    height: p.getHeight()
+    width: Math.round(p.getWidth()),
+    height: Math.round(p.getHeight())
   }));
   const form = pdf.getForm();
-  const fields = form.getFields().map((f) => {
-    const name = f.getName();
-    const type = f.constructor.name;
-    let widget: { page: number; x: number; y: number; w: number; h: number } | null = null;
-    try {
-      const w = (f as unknown as { acroField: { getWidgets: () => Array<{ getRectangle: () => { x: number; y: number; width: number; height: number }; P?: () => unknown }> } }).acroField.getWidgets();
-      if (w[0]) {
-        const r = w[0].getRectangle();
-        widget = { page: -1, x: r.x, y: r.y, w: r.width, h: r.height };
-      }
-    } catch {
-      // ignore
-    }
-    return { name, type, widget };
-  });
+  const fields = form.getFields().map((f) => ({
+    name: f.getName(),
+    type: f.constructor.name.replace(/^PDF/, ''),
+    value: fieldValue(f)
+  }));
+  const t = pdf.getTitle();
+  const a = pdf.getAuthor();
+  const metadata: Record<string, string> = {};
+  if (t) metadata.title = t;
+  if (a) metadata.author = a;
   process.stdout.write(JSON.stringify({
     input,
+    pageCount: pages.length,
     pages,
     hasForm: fields.length > 0,
     fieldCount: fields.length,
-    fields
+    fields,
+    metadata
   }, null, 2) + '\n');
 }
 

@@ -7,11 +7,26 @@ both.
 
 ## Built-in tools (C#, compiled)
 
-`src/server/Gatherlight.Server/Modules/Tools/Services/Tools/` — implement `IGatherlightTool`
-(`Name` / `Description` / `InputSchema` via the `ToolSchema` builder / `RunAsync`), register in
-`GatherlightApp.cs`. Current set: `extract` (one-shot Claude over an uploaded file), `scrape`
-(Playwright headless chromium), `wiki_info` (Wikipedia REST + Wikidata). Use a built-in when the
-tool needs server services (LLM runner, uploads, DB) or heavy dependencies (Playwright).
+Implement `IGatherlightTool` (`Name` / `Description` / `InputSchema` via the `ToolSchema` builder /
+`RunAsync`), register in `GatherlightApp.cs`. Use a built-in when the tool needs server services
+(LLM runner, uploads, DB) or heavy dependencies. Current set (20):
+
+- **AI / web**: `extract` (one-shot Claude over an uploaded file), `scrape` (Playwright headless
+  chromium), `wiki_info` (Wikipedia REST + Wikidata).
+- **Travel verifiers** (Node puppeteer leaves, wrapped): `policy_check`, `hotel_info`,
+  `restaurant_info`, `flight_schedule`, `flight_prices`, `hotel_prices`.
+- **Documents / media** (`Modules/Documents`): `pdf_inspect` (pages + AcroForm fields + values +
+  metadata), `pdf_extract_text` (PdfPig, zero-LLM), `pdf_fill` (fill any AcroForm from a field map,
+  optional flatten + CJK font — pdf-lib), `pdf_merge`, `image_info`, `image_resize`,
+  `image_convert` (ImageSharp). `fill_itinerary` is the visa-specific convenience over `pdf_fill`.
+- **Zero-LLM planner**: `budget_scan` (honest budget figures).
+- **Cross-session memory**: `remember_fact` / `recall_facts`.
+
+Library split (each does what it's reliable at): **PdfPig** (MIT) for PDF text extraction;
+**pdf-lib** (Node leaves in `tools/pdf-form`) for AcroForm inspect / fill / merge — robust on real
++ CJK PDFs where PDFsharp's appearance/import paths throw; **ImageSharp** 3.1.x (Apache-2.0) for
+images. Node leaves are launched via `cmd.exe /c npx` on Windows (invoking `npx.cmd` directly
+breaks its `%~dp0` self-location).
 
 ## Script tools (hot-loadable — no rebuild)
 
