@@ -1,20 +1,5 @@
 import type { AgentEvent, UploadedFile } from './chatTypes';
-
-// All requests go through the Vite proxy in dev (/api → Gatherlight server on :5317);
-// in production the server serves the built client itself, so paths are same-origin.
-
-async function post<T = unknown>(url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error((data as { error?: string }).error ?? `请求失败 (${res.status})`);
-  }
-  return data as T;
-}
+import { post } from './apiClient';
 
 export async function startChat(
   message: string,

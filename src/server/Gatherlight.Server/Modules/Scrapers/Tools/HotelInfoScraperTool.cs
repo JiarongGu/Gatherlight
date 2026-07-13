@@ -143,28 +143,10 @@ public sealed partial class HotelInfoScraperTool : IGatherlightTool
 
     private static string Digits(string s) => new(s.Where(char.IsDigit).ToArray());
 
-    private static List<Query> ParseQueries(JsonElement args)
-    {
-        var raw = args.GetProperty("queries").GetString() ?? "";
-        JsonDocument doc;
-        try { doc = JsonDocument.Parse(raw); }
-        catch (JsonException) { throw new ToolException(400, "queries 必须是合法 JSON"); }
-        using (doc)
-        {
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) throw new ToolException(400, "queries 必须是 JSON 数组");
-            var list = new List<Query>();
-            foreach (var e in doc.RootElement.EnumerateArray())
-            {
-                var name = Str(e, "name") ?? throw new ToolException(400, "每个 query 需要 name");
-                list.Add(new Query(name, Str(e, "city"), Str(e, "claimedPhone"), Str(e, "claimedAddress")));
-            }
-            if (list.Count == 0) throw new ToolException(400, "queries 为空");
-            return list;
-        }
-    }
-
-    private static string? Str(JsonElement e, string key) =>
-        e.TryGetProperty(key, out var v) && v.GetString() is { Length: > 0 } s ? s : null;
+    private static List<Query> ParseQueries(JsonElement args) => ScraperArgs.ParseArray(args, "queries", e =>
+        new Query(
+            ScraperArgs.Str(e, "name") ?? throw new ToolException(400, "每个 query 需要 name"),
+            ScraperArgs.Str(e, "city"), ScraperArgs.Str(e, "claimedPhone"), ScraperArgs.Str(e, "claimedAddress")));
 
     // Japanese phone: +81-X-XXXX-XXXX / 0X-XXXX-XXXX etc.
     [GeneratedRegex(@"(?:\+81[-\s]?|0)\d{1,4}[-\s]\d{2,4}[-\s]\d{3,4}")] private static partial Regex PhoneRegex();

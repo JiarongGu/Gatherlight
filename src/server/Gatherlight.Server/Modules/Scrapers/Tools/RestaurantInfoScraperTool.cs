@@ -148,7 +148,7 @@ public sealed partial class RestaurantInfoScraperTool : IGatherlightTool
         var name = page.H1.Length > 0 ? page.H1 : SplitTitle(page.Title);
         var looks404 = GenericNotFound().IsMatch(page.Title);
         return new Verify(name, null, null, null, null, looks404 ? "404" : "active",
-            $"generic-verify (h1=\"{Trunc(page.H1, 60)}\", title=\"{Trunc(page.Title, 60)}\")");
+            $"generic-verify (h1=\"{ScraperArgs.Trunc(page.H1, 60)}\", title=\"{ScraperArgs.Trunc(page.Title, 60)}\")");
     }
 
     private static string? SplitTitle(string title)
@@ -219,30 +219,10 @@ public sealed partial class RestaurantInfoScraperTool : IGatherlightTool
         NonWord().Replace(s.ToLowerInvariant(), " ").Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .Where(t => t.Length >= 2).ToList();
 
-    private static List<Query> ParseQueries(JsonElement args)
-    {
-        var raw = args.GetProperty("queries").GetString() ?? "";
-        JsonDocument doc;
-        try { doc = JsonDocument.Parse(raw); }
-        catch (JsonException) { throw new ToolException(400, "queries 必须是合法 JSON"); }
-        using (doc)
-        {
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) throw new ToolException(400, "queries 必须是 JSON 数组");
-            var list = new List<Query>();
-            foreach (var e in doc.RootElement.EnumerateArray())
-            {
-                var name = Str(e, "name") ?? throw new ToolException(400, "每个 query 需要 name");
-                list.Add(new Query(name, Str(e, "area"), Str(e, "cuisine"), Str(e, "claimedUrl")));
-            }
-            if (list.Count == 0) throw new ToolException(400, "queries 为空");
-            return list;
-        }
-    }
-
-    private static string? Str(JsonElement e, string key) =>
-        e.TryGetProperty(key, out var v) && v.GetString() is { Length: > 0 } s ? s : null;
-
-    private static string Trunc(string s, int n) => s.Length <= n ? s : s[..n];
+    private static List<Query> ParseQueries(JsonElement args) => ScraperArgs.ParseArray(args, "queries", e =>
+        new Query(
+            ScraperArgs.Str(e, "name") ?? throw new ToolException(400, "每个 query 需要 name"),
+            ScraperArgs.Str(e, "area"), ScraperArgs.Str(e, "cuisine"), ScraperArgs.Str(e, "claimedUrl")));
 
     [GeneratedRegex(@"このページを表示することができません|page is not displayed|page not found", RegexOptions.IgnoreCase)] private static partial Regex TabelogNotFound();
     [GeneratedRegex(@"掲載保留|on hold|closure period|relocated|permanently closed", RegexOptions.IgnoreCase)] private static partial Regex OnHoldRegex();

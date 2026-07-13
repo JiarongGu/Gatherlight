@@ -33,9 +33,9 @@ public sealed partial class FlightScheduleScraperTool : IGatherlightTool
         var carrier = args.GetProperty("carrierIATA").GetString()?.Trim().ToUpperInvariant() ?? "";
         var num = args.GetProperty("flightNumber").GetString()?.Trim() ?? "";
         if (carrier.Length == 0 || num.Length == 0) throw new ToolException(400, "carrierIATA 和 flightNumber 必填");
-        var claimedDepart = Str(args, "claimedDepartTime");
-        var claimedOrigin = Str(args, "claimedOrigin");
-        var claimedDest = Str(args, "claimedDest");
+        var claimedDepart = ScraperArgs.Str(args, "claimedDepartTime");
+        var claimedOrigin = ScraperArgs.Str(args, "claimedOrigin");
+        var claimedDest = ScraperArgs.Str(args, "claimedDest");
 
         var sources = new JsonArray();
         var faUrl = $"{ScraperBases.FlightAware}/live/flight/{carrier}{num}";
@@ -119,8 +119,6 @@ public sealed partial class FlightScheduleScraperTool : IGatherlightTool
     };
 
     private static string? First(string? a, string? b) => !string.IsNullOrEmpty(a) ? a : (!string.IsNullOrEmpty(b) ? b : null);
-    private static string? Str(JsonElement args, string key) =>
-        args.TryGetProperty(key, out var v) && v.GetString() is { Length: > 0 } s ? s : null;
 
     [GeneratedRegex(@"Departure[^\d]{0,40}(\d{1,2}:\d{2})", RegexOptions.IgnoreCase)]
     private static partial Regex FaDepartRegex();

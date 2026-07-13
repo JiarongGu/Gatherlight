@@ -59,30 +59,16 @@ public sealed partial class HotelPricesScraperTool : IGatherlightTool
 
     internal sealed record Stay(string Name, string Checkin, string Checkout, int Guests);
 
-    private static List<Stay> ParseStays(JsonElement args)
+    private static List<Stay> ParseStays(JsonElement args) => ScraperArgs.ParseArray(args, "queries", e =>
     {
-        var raw = args.GetProperty("queries").GetString() ?? "";
-        JsonDocument doc;
-        try { doc = JsonDocument.Parse(raw); }
-        catch (JsonException) { throw new ToolException(400, "queries 必须是合法 JSON"); }
-        using (doc)
-        {
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) throw new ToolException(400, "queries 必须是 JSON 数组");
-            var stays = new List<Stay>();
-            foreach (var e in doc.RootElement.EnumerateArray())
-            {
-                var name = Str(e, "name");
-                var ci = Str(e, "checkin");
-                var co = Str(e, "checkout");
-                if (name is null || ci is null || co is null)
-                    throw new ToolException(400, "每个 stay 需要 name / checkin / checkout");
-                var guests = e.TryGetProperty("guests", out var g) && g.TryGetInt32(out var gi) ? gi : 3;
-                stays.Add(new Stay(name, ci, co, guests));
-            }
-            if (stays.Count == 0) throw new ToolException(400, "queries 为空");
-            return stays;
-        }
-    }
+        var name = ScraperArgs.Str(e, "name");
+        var ci = ScraperArgs.Str(e, "checkin");
+        var co = ScraperArgs.Str(e, "checkout");
+        if (name is null || ci is null || co is null)
+            throw new ToolException(400, "每个 stay 需要 name / checkin / checkout");
+        var guests = e.TryGetProperty("guests", out var g) && g.TryGetInt32(out var gi) ? gi : 3;
+        return new Stay(name, ci, co, guests);
+    });
 
     internal static string BookingUrl(Stay s) =>
         $"{ScraperBases.Booking}/searchresults.html?ss={Uri.EscapeDataString(s.Name)}" +
@@ -99,8 +85,8 @@ public sealed partial class HotelPricesScraperTool : IGatherlightTool
     /// <summary>First plausible AUD total appearing after the hotel name → per-night = total/nights.</summary>
     internal static (int? PerNight, string Notes) ParsePrice(string text, string title, string hotelName, int nights)
     {
-        if (text.Length == 0) return (null, $"empty page (title={Trunc(title, 60)})");
-        if (BlockedRegex().IsMatch(title)) return (null, $"Blocked (title={Trunc(title, 60)})");
+        if (text.Length == 0) return (null, $"empty page (title={ScraperArgs.Trunc(title, 60)})");
+        if (BlockedRegex().IsMatch(title)) return (null, $"Blocked (title={ScraperArgs.Trunc(title, 60)})");
         if (nights <= 0) return (null, "invalid nights (checkin/checkout unparseable)");
 
         var idx = text.IndexOf(hotelName, StringComparison.OrdinalIgnoreCase);
@@ -114,21 +100,10 @@ public sealed partial class HotelPricesScraperTool : IGatherlightTool
         if (!m.Success) { m = PlainDollarRegex().Match(window); parser = "fallback plain $"; }
         if (!m.Success) return (null, "Hotel name found but no price within 1500 chars after");
 
-        var total = ToInt(m.Groups[1].Value);
+        var total = ScraperArgs.Digits(m.Groups[1].Value);
         if (total is not (>= 50 and <= 30000)) return (null, $"Implausible price {total}");
         return ((int)Math.Round(total.Value / (double)nights), $"total {total} AUD over {nights} nights ({parser})");
     }
-
-    private static int? ToInt(string raw)
-    {
-        var digits = new string(raw.Where(char.IsDigit).ToArray());
-        return int.TryParse(digits, out var n) ? n : null;
-    }
-
-    private static string? Str(JsonElement e, string key) =>
-        e.TryGetProperty(key, out var v) && v.GetString() is { Length: > 0 } s ? s : null;
-
-    private static string Trunc(string s, int n) => s.Length <= n ? s : s[..n];
 
     [GeneratedRegex(@"captcha|access denied|verify|are you human|blocked", RegexOptions.IgnoreCase)] private static partial Regex BlockedRegex();
     [GeneratedRegex(@"AUD\s?\d+\s*-\s*AUD\s?\d+\+?", RegexOptions.IgnoreCase)] private static partial Regex RangeRegex();

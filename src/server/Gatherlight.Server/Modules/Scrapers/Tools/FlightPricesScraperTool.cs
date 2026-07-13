@@ -83,27 +83,19 @@ public sealed partial class FlightPricesScraperTool : IGatherlightTool
     /// <summary>Cheapest plausible AUD figure on the page (200..20000), or null with a reason.</summary>
     internal static (int? Price, string Notes) ParsePrice(string text, string title)
     {
-        if (text.Length == 0) return (null, $"empty page (title={Trunc(title, 60)})");
+        if (text.Length == 0) return (null, $"empty page (title={ScraperArgs.Trunc(title, 60)})");
         if (CaptchaRegex().IsMatch(title)) return (null, "CAPTCHA hit — verify manually on site");
 
         var prices = new List<int>();
         foreach (var re in new[] { AUDollarRegex(), AUDCodeRegex(), PlainDollarRegex() })
             foreach (Match m in re.Matches(text))
             {
-                var n = ToInt(m.Groups[1].Value);
+                var n = ScraperArgs.Digits(m.Groups[1].Value);
                 if (n is >= 200 and <= 20000) prices.Add(n.Value);
             }
-        if (prices.Count == 0) return (null, $"No prices parsed (title={Trunc(title, 60)})");
+        if (prices.Count == 0) return (null, $"No prices parsed (title={ScraperArgs.Trunc(title, 60)})");
         return (prices.Min(), $"cheapest of {prices.Count} prices on page");
     }
-
-    private static int? ToInt(string raw)
-    {
-        var digits = new string(raw.Where(char.IsDigit).ToArray());
-        return int.TryParse(digits, out var n) ? n : null;
-    }
-
-    private static string Trunc(string s, int n) => s.Length <= n ? s : s[..n];
 
     [GeneratedRegex(@"captcha|verify|robot|are you human", RegexOptions.IgnoreCase)] private static partial Regex CaptchaRegex();
     [GeneratedRegex(@"A\$\s?([\d,]+)")] private static partial Regex AUDollarRegex();

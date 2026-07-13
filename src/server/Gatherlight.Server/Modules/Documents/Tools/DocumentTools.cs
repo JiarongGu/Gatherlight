@@ -85,12 +85,7 @@ public sealed class PdfFillTool : DocumentToolBase
 {
     private readonly string _leafDir;
     public PdfFillTool(IDataContext data, IHostEnvironment env) : base(data)
-    {
-        var dir = new DirectoryInfo(env.ContentRootPath);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "tools", "pdf-form")))
-            dir = dir.Parent!;
-        _leafDir = dir is not null ? Path.Combine(dir.FullName, "tools", "pdf-form") : "";
-    }
+        => _leafDir = ResolveLeafDir(env, "pdf-form");
 
     public override string Name => "pdf_fill";
     public override string Description =>

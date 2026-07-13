@@ -18,7 +18,7 @@ public abstract class NodeLeafTool : IGatherlightTool
     public abstract string Description { get; }
     public abstract string InputSchema { get; }
 
-    /// <summary>Working directory of the leaf (e.g. tools/puppeteer) — resolved by subclass.</summary>
+    /// <summary>Working directory of the leaf (e.g. tools/pdf-form) — resolved by subclass.</summary>
     protected abstract string LeafDirectory { get; }
 
     /// <summary>Map validated JSON args to the leaf's argv (after "npx tsx src/<entry>.ts").</summary>
