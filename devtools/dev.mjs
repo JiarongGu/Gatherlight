@@ -146,31 +146,11 @@ switch (cmd) {
     break;
   }
 
-  case 'publish': {
-    // Installable artifact: the desktop MANAGEMENT HOST as a self-contained single-file exe that
-    // carries the .NET runtime + the built client + knowledge-base template (the target machine
-    // needs nothing installed). It hosts the server in-process and monitors health; users open the
-    // planner in a browser. The authenticated `claude` CLI and — for the scraper tools — a
-    // Playwright chromium are host prerequisites, not bundled.
-    const outDir = path.join(repo, 'dist');
-    const clientDir = path.join(repo, config.clientDir);
-    if (fs.existsSync(path.join(clientDir, 'package.json'))) {
-      const c = spawnSync('npm', ['run', 'build'], { cwd: clientDir, stdio: 'inherit', shell: true });
-      if (c.status !== 0) { process.exitCode = c.status ?? 1; break; }
-    }
-    const rid = args[0] ?? 'win-x64';
-    const r = spawnSync('dotnet', ['publish', config.hostProject, '-c', 'Release', '-r', rid,
-      '--self-contained', '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
-      '-o', outDir], { stdio: 'inherit', cwd: repo });
-    if (r.status === 0) {
-      console.log(`\n✔ published → dist/  (self-contained ${rid}, no .NET runtime needed)`);
-      console.log(`  run:      dist/${config.hostProcess}.exe   (tray management console; hosts the web app)`);
-      console.log('  scrapers: pwsh dist/playwright.ps1 install chromium   (once, for web-scraper tools)');
-      console.log('  see docs/DEPLOYMENT.md');
-    }
-    process.exitCode = r.status ?? 1;
+  case 'publish':
+    // Full production bundle: self-contained single-file management host + loose resources +
+    // sha256 update manifest + zip. See devtools/scripts/build-production.mjs.
+    run('node', [path.join(repo, 'devtools', 'scripts', 'build-production.mjs'), ...args]);
     break;
-  }
 
   case 'e2e': {
     const which = args[0] ?? 'all';

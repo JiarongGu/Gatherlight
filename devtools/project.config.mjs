@@ -4,6 +4,8 @@
 // with sibling projects). To reuse this toolkit elsewhere, copy devtools/ and edit THIS file.
 export default {
   name: 'Gatherlight',
+  /** Product version — stamped into the published assemblies, manifest, and the zip name. */
+  version: '0.1.0',
   /** Backend project: `server` runs it headless (dev); e2e suites spawn it. */
   serverProject: 'src/server/Gatherlight.Server',
   /** Desktop management host — hosts the server in-process + monitors health. The shippable app. */
