@@ -38,6 +38,16 @@ The **data folder** holds all user data (plans, household, SQLite state, uploads
 knowledge base) in its **own private git repo** — back *that* up, not the exe. Point
 `GATHERLIGHT_DATA` at a stable location outside the install dir.
 
+### The database is untracked — back it up
+
+The SQLite DB lives at `{data}/state/gatherlight.db` and is deliberately **outside every git repo**
+(the code repo ignores `local/`; the data repo ignores `state/`; `.gitignore` also blocks `*.db*`
+everywhere as defense-in-depth). It never goes to GitHub — it's app state and now also holds the
+**knowledge library** (verified attractions/venues), so it is a *source of truth*, not a derived
+index. That means the git audit trail does **not** cover it: include `{data}/state/` in your file
+backups (or copy the DB while the server is stopped). Plans/household stay markdown in the data
+repo (versioned); the library is the one knowledge surface whose durability rides on your backup.
+
 ## Host prerequisites (not bundled — by design)
 
 1. **The authenticated `claude` CLI.** The chat/planning core spawns the local `claude` CLI

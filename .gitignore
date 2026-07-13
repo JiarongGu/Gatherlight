@@ -16,6 +16,15 @@ build/
 # Default GATHERLIGHT_DATA location; has its own private git repo inside. Never tracked here.
 local/
 
+# SQLite app state — NEVER tracked, anywhere (belt-and-suspenders; the data folder is already
+# ignored above + the data repo ignores state/). The DB now also holds the knowledge library, so
+# it is a source of truth — but it stays OUT of git and is backed up with the data folder, not here.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
 # built client (src/client `npm run build` output)
 src/server/Gatherlight.Server/wwwroot/
 
