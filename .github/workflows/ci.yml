@@ -28,6 +28,14 @@ jobs:
           cache: 'npm'
           cache-dependency-path: src/client/package-lock.json
 
+      - name: Setup MSBuild (native launcher, for the update-apply e2e)
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build native launcher
+        env:
+          CI: true   # select the v143 toolset
+        run: msbuild src/launcher/Gatherlight.Launcher.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build /v:minimal /nologo
+
       - name: Install client deps
         working-directory: src/client
         run: npm ci

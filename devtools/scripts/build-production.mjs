@@ -157,16 +157,20 @@ fs.writeFileSync(path.join(bundle, 'README.txt'), [
   '',
 ].join('\r\n'));
 
-// 5. manifest — sha256 of every shipped file (excludes data/ + the manifest itself)
+// 5. manifest — { path, sha256, size } per shipped file (excludes data/, .update/, and the manifest
+// itself). Array shape so the auto-updater (C++ launcher apply + C# staged-file verify) can diff it.
 step(5, 'writing manifest…');
-const files = {};
+const files = [];
 const walk = (dir) => {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const abs = path.join(dir, e.name);
     const rel = path.relative(bundle, abs).split(path.sep).join('/');
-    if (rel === 'manifest.json' || rel === 'data' || rel.startsWith('data/')) continue;
+    if (rel === 'manifest.json' || rel === 'data' || rel.startsWith('data/') || rel === '.update' || rel.startsWith('.update/')) continue;
     if (e.isDirectory()) walk(abs);
-    else files[rel] = crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex');
+    else {
+      const buf = fs.readFileSync(abs);
+      files.push({ path: rel, sha256: crypto.createHash('sha256').update(buf).digest('hex'), size: buf.length });
+    }
   }
 };
 walk(bundle);
@@ -182,7 +186,7 @@ const zipped = zr.status === 0 && fs.existsSync(zip);
 
 // summary
 const exeMb = (fs.statSync(path.join(libs, 'Gatherlight.Host.exe')).size / 1048576).toFixed(0);
-console.log(`\n\x1b[32m✔ bundle\x1b[0m  dist/Gatherlight/  (exe ${exeMb} MB, ${Object.keys(files).length} files, sha256 manifest)`);
+console.log(`\n\x1b[32m✔ bundle\x1b[0m  dist/Gatherlight/  (exe ${exeMb} MB, ${files.length} files, sha256 manifest)`);
 console.log(`  layout:   ${launcherBuilt ? 'Gatherlight.exe · ' : ''}Gatherlight.cmd · libs/ · res/ · data/`);
 if (zipped) console.log(`  package:  dist/${path.basename(zip)}  (${(fs.statSync(zip).size / 1048576).toFixed(0)} MB)`);
 console.log(`  run:      dist/Gatherlight/${launcherBuilt ? 'Gatherlight.exe' : 'Gatherlight.cmd'}`);

@@ -55,9 +55,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="updater.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
+    <ClInclude Include="updater.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="launcher.rc" />

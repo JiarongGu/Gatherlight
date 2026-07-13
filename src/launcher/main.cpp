@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <shlwapi.h>
 #include <string>
+#include "updater.h"
 
 #pragma comment(lib, "shlwapi.lib")
 
@@ -36,6 +37,19 @@ int WINAPI wWinMain(
 
     const std::wstring root = LauncherDir();
     const std::wstring hostPath = root + L"\\" + HOST_EXE;
+
+    // Test/diagnostic seam: apply any staged update against this dir and exit WITHOUT launching the
+    // host (no MessageBox on the happy path). Lets a harness exercise the real apply on a sandbox
+    // install (devtools/scripts/e2e-p19). Not used in normal launches.
+    if (lpCmdLine != nullptr && wcsstr(lpCmdLine, L"--apply-and-exit") != nullptr)
+    {
+        ApplyPendingUpdate(root);
+        return 0;
+    }
+
+    // Apply a pending update the host already downloaded + staged (before launching it). No-op if
+    // nothing is staged; the launcher never checks GitHub itself (the host does).
+    ApplyPendingUpdate(root);
 
     if (!PathFileExistsW(hostPath.c_str()))
     {
