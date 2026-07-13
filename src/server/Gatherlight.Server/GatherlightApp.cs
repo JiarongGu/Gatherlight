@@ -160,8 +160,8 @@ public static class GatherlightApp
                 {
                     var r = app.Services.GetRequiredService<Modules.Memory.Services.IMemoryService>()
                         .ImportAsync(bundle).GetAwaiter().GetResult();
-                    app.Logger.LogInformation("Seeded memory from {Path}: {Lib} library, {Kn} knowledge, {Ent} entities",
-                        seedPath, r.Library, r.Knowledge, r.Entities);
+                    app.Logger.LogInformation("Seeded memory from {Path}: {Lib} library, {Kn} knowledge, {Ent} entities, {Cx} cortex",
+                        seedPath, r.Library, r.Knowledge, r.Entities, r.Cortex);
                 }
             }
             catch (Exception ex)

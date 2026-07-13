@@ -40,8 +40,9 @@ tools. The model is spent only on genuine planning — and the chat panel shows 
 - **Knowledge library (知识库)** — verified reference entities (attractions/venues/hotels) live in a
   DB table, browsable as a card gallery, curated by the agent (`library_*` tools) instead of a
   markdown blob. Import a legacy `ATTRACTIONS.md` with `library_import`.
-- **Memory transfer** — export the DB knowledge (`/api/memory/export`) and move it to another
-  install, or seed a fresh one at startup with `GATHERLIGHT_SEED_MEMORY`.
+- **Memory transfer** — export the DB knowledge and the tuned cortex config
+  (`/api/memory/export`) and move it to another install, or seed a fresh one at startup with
+  `GATHERLIGHT_SEED_MEMORY`.
 - **Eval / LLM-ops** — users rank each conversation (1–5 + note); the `/manage` console shows
   aggregate stats, transcripts, and a JSONL tuning-dataset export. Its **校准 (Cortex)** tab closes
   the loop: edit the agent's prompt templates and per-consumer model routing live (stored in

@@ -33,6 +33,6 @@ public sealed class MemoryController : ControllerBase
         if (bundle is null || bundle.GatherlightMemory < 1)
             return BadRequest(new { error = "not a Gatherlight memory bundle" });
         var r = await _memory.ImportAsync(bundle);
-        return Ok(new { ok = true, imported = new { library = r.Library, knowledge = r.Knowledge, entities = r.Entities } });
+        return Ok(new { ok = true, imported = new { library = r.Library, knowledge = r.Knowledge, entities = r.Entities, cortex = r.Cortex } });
     }
 }

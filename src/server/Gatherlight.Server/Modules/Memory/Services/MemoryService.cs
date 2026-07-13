@@ -24,8 +24,10 @@ public sealed class EntityExport
 }
 
 /// <summary>A portable snapshot of the durable DB "memory" — the knowledge library + learned facts
-/// + generic entity store. Transferable between installs (export here → import there). Markdown
-/// plans/household ride along in the data folder's git repo; this bundle is the DB half.</summary>
+/// + generic entity store + the tuned cortex config. Transferable between installs (export here →
+/// import there). Markdown plans/household ride along in the data folder's git repo; this bundle is
+/// the DB half. <see cref="Cortex"/> carries the LLM-ops tuning (app_config prompt-template + model
+/// overrides) so a tuned cortex travels with the memory instead of being lost on transfer.</summary>
 public sealed class MemoryBundle
 {
     public int GatherlightMemory { get; set; } = 1;
@@ -33,9 +35,10 @@ public sealed class MemoryBundle
     public List<LibraryItem> Library { get; set; } = new();
     public List<KnowledgeExport> Knowledge { get; set; } = new();
     public List<EntityExport> Entities { get; set; } = new();
+    public Dictionary<string, string> Cortex { get; set; } = new();
 }
 
-public sealed record MemoryImportResult(int Library, int Knowledge, int Entities);
+public sealed record MemoryImportResult(int Library, int Knowledge, int Entities, int Cortex);
 
 public interface IMemoryService
 {
@@ -46,17 +49,23 @@ public interface IMemoryService
 
 public sealed class MemoryService : IMemoryService
 {
+    // Only these app_config prefixes are memory (the tuned cortex) — never export/import arbitrary
+    // config (ports, machine-local paths, feature flags don't travel between installs).
+    private static readonly string[] CortexPrefixes = { "cortex.prompt.", "llm.model." };
+
     private readonly IDbConnectionFactory _db;
     private readonly ILibraryRepository _library;
     private readonly IKnowledgeStore _knowledge;
     private readonly IEntityStore _entity;
+    private readonly IAppConfigService _config;
 
-    public MemoryService(IDbConnectionFactory db, ILibraryRepository library, IKnowledgeStore knowledge, IEntityStore entity)
+    public MemoryService(IDbConnectionFactory db, ILibraryRepository library, IKnowledgeStore knowledge, IEntityStore entity, IAppConfigService config)
     {
         _db = db;
         _library = library;
         _knowledge = knowledge;
         _entity = entity;
+        _config = config;
     }
 
     public async Task<MemoryBundle> ExportAsync()
@@ -71,12 +80,17 @@ public sealed class MemoryService : IMemoryService
             "SELECT kind, topic, content, source, CAST(confidence AS REAL) AS confidence FROM knowledge ORDER BY id")).ToList();
         var entities = (await conn.QueryAsync<EntityExport>(
             "SELECT kind, key, value_json FROM entity ORDER BY kind, key")).ToList();
+        var cortexRows = await conn.QueryAsync(
+            "SELECT key, value FROM app_config WHERE key LIKE 'cortex.prompt.%' OR key LIKE 'llm.model.%' ORDER BY key");
+        var cortex = new Dictionary<string, string>();
+        foreach (var r in cortexRows) cortex[(string)r.key] = (string)r.value;
         return new MemoryBundle
         {
             ExportedAt = DateTime.UtcNow.ToString("o"),
             Library = library,
             Knowledge = knowledge,
             Entities = entities,
+            Cortex = cortex,
         };
     }
 
@@ -105,6 +119,15 @@ public sealed class MemoryService : IMemoryService
             await _entity.SetAsync(e.Kind, e.Key, e.ValueJson);
             ent++;
         }
-        return new MemoryImportResult(lib, kn, ent);
+        var cx = 0;
+        foreach (var (key, value) in bundle.Cortex ?? new())
+        {
+            // Prefix-guard: never let a hand-edited bundle inject arbitrary app_config keys.
+            if (string.IsNullOrEmpty(key) || value is null) continue;
+            if (!CortexPrefixes.Any(key.StartsWith)) continue;
+            _config.Set(key, value);
+            cx++;
+        }
+        return new MemoryImportResult(lib, kn, ent, cx);
     }
 }
