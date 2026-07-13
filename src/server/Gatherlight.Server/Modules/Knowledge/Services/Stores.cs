@@ -99,14 +99,23 @@ public sealed class KnowledgeStore : IKnowledgeStore
     public async Task<List<KnowledgeRow>> RecallAsync(string query, string? kind, int limit)
     {
         using var conn = _db.Open();
-        var like = $"%{query}%";
+        // FTS5 (BM25-ranked, trigram) when the query has a usable ≥3-char token; else LIKE.
+        var match = FtsQuery.Build(query);
+        var raw = match is not null
+            ? await conn.QueryAsync(
+                "SELECT k.id, k.kind, k.topic, k.content, k.source, k.confidence, k.hits, k.created_at, k.updated_at " +
+                "FROM knowledge_fts JOIN knowledge k ON k.id = knowledge_fts.rowid " +
+                "WHERE knowledge_fts MATCH @match AND (@kind IS NULL OR k.kind = @kind) " +
+                "ORDER BY bm25(knowledge_fts) LIMIT @limit",
+                new { match, kind, limit })
+            : await conn.QueryAsync(
+                "SELECT id, kind, topic, content, source, confidence, hits, created_at, updated_at " +
+                "FROM knowledge WHERE (topic LIKE @like OR content LIKE @like) AND (@kind IS NULL OR kind = @kind) " +
+                "ORDER BY CAST(confidence AS REAL) DESC, updated_at DESC LIMIT @limit",
+                new { like = $"%{query}%", kind, limit });
         // Manual mapping: SQLite's dynamic typing (NUMERIC/BLOB affinity surprises) breaks
         // Dapper's strict positional-record materialization — coerce each column explicitly.
-        var rows = (await conn.QueryAsync(
-            "SELECT id, kind, topic, content, source, confidence, hits, created_at, updated_at " +
-            "FROM knowledge WHERE (topic LIKE @like OR content LIKE @like) AND (@kind IS NULL OR kind = @kind) " +
-            "ORDER BY CAST(confidence AS REAL) DESC, updated_at DESC LIMIT @limit",
-            new { like, kind, limit }))
+        var rows = raw
             .Select(d => new KnowledgeRow(
                 Convert.ToInt64(d.id), (string)d.kind, (string)d.topic, (string)d.content,
                 (string?)d.source, CoerceDouble((object)d.confidence), Convert.ToInt32(d.hits),

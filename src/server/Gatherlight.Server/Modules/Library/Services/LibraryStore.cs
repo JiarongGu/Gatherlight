@@ -58,6 +58,12 @@ public sealed class LibraryRepository : ILibraryRepository
         "CAST(lat AS REAL) AS lat, CAST(lng AS REAL) AS lng, tags, source, " +
         "CAST(confidence AS REAL) AS confidence, verified_at, created_at, updated_at";
 
+    // Same columns, qualified with the library_item alias `li` for the FTS join.
+    private const string ColsLi =
+        "li.id, li.kind, li.key, li.name, li.name_local, li.region, li.summary, li.url, li.image_url, " +
+        "CAST(li.lat AS REAL) AS lat, CAST(li.lng AS REAL) AS lng, li.tags, li.source, " +
+        "CAST(li.confidence AS REAL) AS confidence, li.verified_at, li.created_at, li.updated_at";
+
     private readonly IDbConnectionFactory _db;
     public LibraryRepository(IDbConnectionFactory db) => _db = db;
 
@@ -90,6 +96,24 @@ public sealed class LibraryRepository : ILibraryRepository
     public async Task<List<LibraryItem>> QueryAsync(string? kind, string? region, string? q, int limit)
     {
         using var conn = _db.Open();
+        limit = Math.Clamp(limit, 1, 500);
+
+        // FTS5 (BM25-ranked, trigram) when the query has a usable ≥3-char token; else LIKE.
+        var match = FtsQuery.Build(q);
+        if (match is not null)
+        {
+            return (await conn.QueryAsync<LibraryItem>(
+                $"""
+                SELECT {ColsLi} FROM library_fts JOIN library_item li ON li.id = library_fts.rowid
+                WHERE library_fts MATCH @match
+                  AND (@kind IS NULL OR li.kind = @kind)
+                  AND (@region IS NULL OR li.region = @region)
+                ORDER BY bm25(library_fts)
+                LIMIT @limit
+                """,
+                new { match, kind, region, limit })).ToList();
+        }
+
         var like = q is { Length: > 0 } ? $"%{q}%" : null;
         return (await conn.QueryAsync<LibraryItem>(
             $"""
@@ -100,7 +124,7 @@ public sealed class LibraryRepository : ILibraryRepository
             ORDER BY CAST(confidence AS REAL) DESC, name ASC
             LIMIT @limit
             """,
-            new { kind, region, like, limit = Math.Clamp(limit, 1, 500) })).ToList();
+            new { kind, region, like, limit })).ToList();
     }
 
     public async Task<LibraryItem?> GetAsync(string kind, string key)
