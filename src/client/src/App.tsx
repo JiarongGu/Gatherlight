@@ -34,6 +34,25 @@ const { useBreakpoint } = Grid;
 const EMPTY_FILES: PlanFile[] = [];
 const EMPTY_ASSETS: TripAsset[] = [];
 
+// Planner view ⇄ URL. Query params keep the desktop-hosted app on the same surface across reloads
+// and let the management console deep-link into it (e.g. `?view=library`, `?path=plans/…`). The
+// `/manage` console and `?gallery` surface are separate top-level routes, handled before this.
+type PlannerView = { path: string | null; library: boolean };
+function readView(): PlannerView {
+  if (typeof location === 'undefined') return { path: null, library: false };
+  const p = new URLSearchParams(location.search);
+  if (p.get('view') === 'library') return { path: null, library: true };
+  const path = p.get('path');
+  return { path: path && path.trim() ? path.trim() : null, library: false };
+}
+function viewToUrl(v: PlannerView): string {
+  const p = new URLSearchParams();
+  if (v.library) p.set('view', 'library');
+  else if (v.path) p.set('path', v.path);
+  const qs = p.toString();
+  return qs ? `${location.pathname}?${qs}` : location.pathname;
+}
+
 export function App() {
   if (SHOW_GALLERY) return <Gallery />;
   // The desktop management console renders this admin dashboard (WebView2 loads /manage).
@@ -53,10 +72,11 @@ export function App() {
   const { mode, toggle } = useTheme();
   const { message } = AntApp.useApp();
 
-  // Land on the Home dashboard (not a raw file).
-  const [activePath, setActivePath] = useState<string | null>(null);
+  // Initial view comes from the URL (deep-link / reload); default is the Home dashboard.
+  const initialView = useMemo(readView, []);
+  const [activePath, setActivePath] = useState<string | null>(initialView.path);
   // The 知识库 is a DB-backed top-level surface, distinct from the markdown plan reader.
-  const [showLibrary, setShowLibrary] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(initialView.library);
 
   const screens = useBreakpoint();
   const isMobile = !screens.md; // md = 768px
@@ -185,6 +205,24 @@ export function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Reflect the current planner view in the URL (push a history entry per navigation) so reloads
+  // land on the same surface and back/forward work. pushState keeps the pathname (`/`) unchanged, so
+  // the `/manage`·`?gallery` route guards above stay stable.
+  useEffect(() => {
+    const url = viewToUrl({ path: activePath, library: showLibrary });
+    if (url !== location.pathname + location.search) window.history.pushState(null, '', url);
+  }, [activePath, showLibrary]);
+  // Back/forward → restore the view the URL encodes.
+  useEffect(() => {
+    const onPop = () => {
+      const v = readView();
+      setActivePath(v.path);
+      setShowLibrary(v.library);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
   }, []);
 
   const active = files.find((f) => f.path === activePath) ?? null;
