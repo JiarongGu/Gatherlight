@@ -150,6 +150,8 @@ export function Manage() {
 
       {view === 'overview' && (
       <div className="mng-view mng-overview">
+      <div className="mng-grid">
+      <div className="mng-col">
       <div className={`mng-health${healthy ? ' ok' : ''}`} style={{ ['--h' as any]: hColor }}>
         <div className="mng-health-row">
           <span className="mng-lantern" />
@@ -178,7 +180,9 @@ export function Manage() {
         <div className="mng-metric"><div className="n">{N(counts.library)}</div><div className="l">知识库 Library</div></div>
         <div className="mng-metric"><div className="n">{N(counts.tools)}</div><div className="l">工具 Tools</div></div>
       </div>
+      </div>
 
+      <div className="mng-col">
       <div className="mng-title">操作 · Controls</div>
       <div className="mng-actions">
         <button className="mng-btn primary" onClick={openPlanner}>在浏览器打开规划界面</button>
@@ -206,6 +210,8 @@ export function Manage() {
       </div>
 
       <UpdateCard inHost={inHost} />
+      </div>
+      </div>
 
       <div className="mng-meta">
         端口 {location.port || '5317'} · 站点 {plannerUrl}

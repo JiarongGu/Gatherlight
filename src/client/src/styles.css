@@ -2141,7 +2141,12 @@ kbd, .topbar-kbd {
 .eval-dscore .v { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-2); }
 
 /* ===================== /manage — lantern control room ===================== */
-.mng { max-width: 860px; margin: 0 auto; padding: 34px 26px 52px; }
+.mng { max-width: 1040px; margin: 0 auto; padding: 28px 26px 40px; }
+/* Desktop-shaped Overview: two columns (health+metrics · controls+updates) so a management window
+   shows it without scrolling, instead of one long web-style column. Collapses to one on a narrow view. */
+.mng-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 22px; align-items: start; }
+.mng-col > :first-child { margin-top: 0; }
+@media (max-width: 840px) { .mng-grid { grid-template-columns: 1fr; } }
 .mng-top { display: flex; align-items: center; gap: 13px; margin-bottom: 22px; }
 .mng-top .seal {
   width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center;
@@ -2335,8 +2340,8 @@ kbd, .topbar-kbd {
 
 /* Wider console on large high-DPI desktop windows (the WebView2 shell is resizable) — the base is
    860px; give the metric/model grids more room without letting them sprawl. */
-@media (min-width: 1500px) { .mng { max-width: 940px; } }
-@media (min-width: 2000px) { .mng { max-width: 1040px; } }
+@media (min-width: 1500px) { .mng { max-width: 1160px; } }
+@media (min-width: 2000px) { .mng { max-width: 1280px; } }
 
 /* At-a-glance health dot in the header — visible on every tab, not just Overview. */
 .mng-top-dot {
