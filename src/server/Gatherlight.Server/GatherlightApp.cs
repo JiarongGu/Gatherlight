@@ -62,6 +62,12 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, ExtractTool>()
             .AddSingleton<IGatherlightTool, WebFetchTool>()   // registers as "scrape" (Playwright-native)
             .AddSingleton<IGatherlightTool, WikiInfoTool>()
+            // Generalized stores + agent-writable cross-session memory
+            .AddSingleton<Modules.Knowledge.Services.IEntityStore, Modules.Knowledge.Services.EntityStore>()
+            .AddSingleton<Modules.Knowledge.Services.IKnowledgeStore, Modules.Knowledge.Services.KnowledgeStore>()
+            .AddSingleton<Modules.Knowledge.Services.IProcessLog, Modules.Knowledge.Services.ProcessLog>()
+            .AddSingleton<IGatherlightTool, Modules.Knowledge.Tools.RememberFactTool>()
+            .AddSingleton<IGatherlightTool, Modules.Knowledge.Tools.RecallFactsTool>()
             // Hot-loadable script tools ({data}/tools/<name>/tool.json — no rebuild needed)
             .AddSingleton<ScriptToolProvider>()
             .AddSingleton<IScriptToolProvider>(sp => sp.GetRequiredService<ScriptToolProvider>())

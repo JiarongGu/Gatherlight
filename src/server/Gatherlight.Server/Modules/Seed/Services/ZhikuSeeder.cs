@@ -30,12 +30,15 @@ public sealed class ZhikuSeeder : IZhikuSeeder
     private readonly IGitCliService _git;
     private readonly IDataCommitRepository _commits;
     private readonly DataWriteLock _writeLock;
+    private readonly Knowledge.Services.IProcessLog _processLog;
     private readonly ILogger<ZhikuSeeder> _log;
 
     public ZhikuSeeder(
         IDataContext data, IDbConnectionFactory db, IGitCliService git,
-        IDataCommitRepository commits, DataWriteLock writeLock, ILogger<ZhikuSeeder> log)
+        IDataCommitRepository commits, DataWriteLock writeLock,
+        Knowledge.Services.IProcessLog processLog, ILogger<ZhikuSeeder> log)
     {
+        _processLog = processLog;
         _data = data;
         _db = db;
         _git = git;
@@ -106,6 +109,9 @@ public sealed class ZhikuSeeder : IZhikuSeeder
 
         var status = new ZhikuStatus(version, DateTime.UtcNow.ToString("o"), seeded, upgraded, skipped);
         await SetStateAsync("last_report", JsonSerializer.Serialize(status));
+        await _processLog.RecordAsync("zhiku-seed",
+            seeded.Count + upgraded.Count > 0 ? "applied" : "no-op",
+            version[..8], JsonSerializer.Serialize(status));
 
         var written = seeded.Concat(upgraded).ToList();
         if (written.Count > 0)

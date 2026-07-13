@@ -33,6 +33,7 @@ public sealed class PromptHarness : IPromptHarness
         - Consult the knowledge base before acting: run the CLAUDE.md per-task gate + scan .claude/rules/RULES_INDEX.md (read matching rules).
         - DISCOVER with the right tools: use Read / Glob / Grep and the Skill tool (the workspace's discovery skills). NEVER crawl the filesystem with Bash (no `dir`, `ls -R`, `find`) — Glob a pattern or Grep instead.
         - When you spot a recurring pattern or a correction worth keeping, evolve the knowledge base (a rule / workflow / template / household update) rather than letting it evaporate.
+        - CROSS-SESSION FACT MEMORY: before re-researching a venue / price / policy you may have verified before, call the recall_facts MCP tool; after verifying a granular fact (a working URL, a scraped price with date, a venue's status), store it with remember_fact (kind + topic + source + confidence). Rules and preferences still belong in the markdown knowledge base — the fact store is only for fine-grained verified facts.
         - NEVER use interactive / flow-control tools (AskUserQuestion, ExitPlanMode, EnterPlanMode) — there is no UI to answer them here and it will hang the task. If you hit a fork or need a choice, DON'T ask: present the options IN YOUR PLAN with a clear recommended default, and the human decides at the approval gate.
         """;
 
