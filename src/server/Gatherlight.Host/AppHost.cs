@@ -46,13 +46,19 @@ public sealed class AppHost : Form
         Text = "Gatherlight · 拾光 — 管理控制台";
         Icon = LoadAppIcon();
         BackColor = Theme.Bg;
-        // Resizable + DPI-correct (PerMonitorV2 is set in the csproj; WebView2 renders crisp).
+        // Resizable + DPI-correct (PerMonitorV2 is set in the csproj; WebView2 renders crisp). Window
+        // size/position set in code is DEVICE px and is NOT auto-scaled, so the LOGICAL defaults +
+        // persisted (logical) state are converted to physical for THIS monitor's DPI — a window saved at
+        // 200% must not open giant at 100%. DPI is resolved fresh each start (each launch a possibly
+        // different monitor). See Load/SaveWindowState + DpiHelper (ported from the D3dx pattern).
+        var dpi = DpiHelper.GetScaleFactor();
+        int Phys(int logical) => (int)Math.Round(logical * dpi);
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true;
-        MinimumSize = new Size(720, 520);
-        ClientSize = new Size(940, 640);
+        MinimumSize = new Size(Phys(720), Phys(520));
+        ClientSize = new Size(Phys(960), Phys(660)); // logical default until LoadWindowState overrides
         StartPosition = FormStartPosition.CenterScreen;
-        LoadWindowState(); // restore the last position + size
+        LoadWindowState(dpi); // restore the last position + size (logical → physical)
 
         _web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Theme.Bg };
         Controls.Add(_web);
@@ -86,7 +92,11 @@ public sealed class AppHost : Form
     {
         try
         {
-            var userData = Path.Combine(Path.GetTempPath(), "gatherlight-webview2");
+            // A dedicated user-data folder can be forced (GATHERLIGHT_WEBVIEW_USERDATA) so `host --dev`
+            // gets its OWN browser process — WebView2 shares one across instances with the same folder,
+            // and a pre-existing one would ignore the CDP debug-port arg.
+            var userData = Environment.GetEnvironmentVariable("GATHERLIGHT_WEBVIEW_USERDATA")
+                ?? Path.Combine(Path.GetTempPath(), "gatherlight-webview2");
             var env = await CoreWebView2Environment.CreateAsync(userDataFolder: userData);
             await _web.EnsureCoreWebView2Async(env);
             var core = _web.CoreWebView2;
@@ -278,30 +288,41 @@ public sealed class AppHost : Form
     // ---- window position + size persistence ----
     private string WindowStateFile => Path.Combine(_options.DataPath, "state", "host-window.json");
 
-    private void LoadWindowState()
+    // Stored state is LOGICAL px (DPI-independent) → convert to PHYSICAL for the current monitor DPI.
+    private void LoadWindowState(double dpi)
     {
         try
         {
             if (!File.Exists(WindowStateFile)) return;
             var s = JsonSerializer.Deserialize<WinState>(File.ReadAllText(WindowStateFile));
             if (s is null) return;
-            var b = new Rectangle(s.X, s.Y, s.W, s.H);
-            if (s.W >= MinimumSize.Width && s.H >= MinimumSize.Height && OnAnyScreen(b))
+            int w = (int)Math.Round(s.W * dpi), h = (int)Math.Round(s.H * dpi);
+            int x = (int)Math.Round(s.X * dpi), y = (int)Math.Round(s.Y * dpi);
+            if (w >= MinimumSize.Width && h >= MinimumSize.Height)
             {
-                StartPosition = FormStartPosition.Manual;
-                Bounds = b;
+                var b = new Rectangle(x, y, w, h);
+                if (OnAnyScreen(b)) { StartPosition = FormStartPosition.Manual; Bounds = b; }
+                else Size = new Size(w, h); // valid size, off-screen position (monitor unplugged) → keep centered
             }
             if (s.Max) WindowState = FormWindowState.Maximized;
         }
         catch { /* first run / bad file → default bounds */ }
     }
 
+    // Persist LOGICAL px (÷ this monitor's DPI) so the window restores correctly at ANY DPI next launch;
+    // the DPI itself is never stored.
     private void SaveWindowState()
     {
         try
         {
             var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
-            var s = new WinState { X = b.X, Y = b.Y, W = b.Width, H = b.Height, Max = WindowState == FormWindowState.Maximized };
+            double scale = DpiHelper.ScaleFromDeviceDpi(DeviceDpi);
+            var s = new WinState
+            {
+                X = (int)Math.Round(b.X / scale), Y = (int)Math.Round(b.Y / scale),
+                W = (int)Math.Round(b.Width / scale), H = (int)Math.Round(b.Height / scale),
+                Max = WindowState == FormWindowState.Maximized,
+            };
             Directory.CreateDirectory(Path.GetDirectoryName(WindowStateFile)!);
             File.WriteAllText(WindowStateFile, JsonSerializer.Serialize(s));
         }

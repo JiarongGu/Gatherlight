@@ -1,6 +1,8 @@
 // Gatherlight devtools dispatcher (family pattern: one entry, allow-listed once).
 //   node devtools/dev.mjs server [port]     - run the headless server (dotnet; DEV only)
-//   node devtools/dev.mjs host [start|kill|restart] - desktop management console (hosts + monitors)
+//   node devtools/dev.mjs host [start|kill|restart] [--dev] - desktop console (hosts + monitors);
+//                                            --dev exposes the WebView2 over CDP for UI automation
+//   node devtools/dev.mjs shot [name]       - capture the desktop host window (PrintWindow) -> devtools/_shots/
 //   node devtools/dev.mjs vite              - run the client dev server (HMR, proxies /api)
 //   node devtools/dev.mjs build             - client build -> wwwroot + dotnet build
 //   node devtools/dev.mjs publish [rid] [--zip] [--skip-chromium] - build the runnable bundle folder
@@ -147,10 +149,30 @@ switch (cmd) {
       process.exitCode = 1;
       break;
     }
+    // --dev: expose the embedded WebView2 over CDP (Chrome DevTools Protocol) so the desktop UI can be
+    // driven for tests. A UNIQUE user-data-folder per run is required — WebView2 shares the browser
+    // process across instances with the same folder, and a pre-existing one ignores these args.
+    const env = { ...process.env };
+    if (args.includes('--dev')) {
+      const port = 9333 + Math.floor(Math.random() * 400);
+      env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${port}`;
+      env.GATHERLIGHT_WEBVIEW_USERDATA = path.join(repo, 'devtools', `_webview2-dev`);
+      fs.writeFileSync(path.join(repo, 'devtools', '_cdp-port'), String(port));
+      console.log(`host --dev: WebView2 CDP on ${port} (devtools/_cdp-port)`);
+    }
     // Detached so the tray app keeps running after this command returns.
-    const child = spawn(exe, args.slice(1), { detached: true, stdio: 'ignore', cwd: repo });
+    const child = spawn(exe, args.filter((a) => a !== '--dev').slice(1), { detached: true, stdio: 'ignore', cwd: repo, env });
     child.unref();
     console.log(`launched ${config.hostProcess} (management console + in-process server). Look for the tray icon.`);
+    break;
+  }
+
+  case 'shot': {
+    const name = args[0] ?? `host-${new Date().toISOString().slice(11, 19).replaceAll(':', '')}`;
+    run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass',
+      '-File', path.join(repo, 'devtools', 'scripts', 'shot-window.ps1'),
+      '-ProcessName', config.hostProcess,
+      '-OutFile', path.join(repo, 'devtools', '_shots', `${name}.png`)]);
     break;
   }
 
