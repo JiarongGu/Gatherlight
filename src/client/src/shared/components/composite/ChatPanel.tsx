@@ -47,7 +47,11 @@ interface ChatState {
   commitSha: string | null;
   error: string | null;
   busy: boolean; // an approve/reject request is in flight
+  // Cumulative session usage (one 'usage' event per CLI run: plan / execute / refine…).
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; costUsd: number };
 }
+
+const ZERO_USAGE = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0 };
 
 const initialState: ChatState = {
   sessionId: null,
@@ -58,7 +62,8 @@ const initialState: ChatState = {
   review: null,
   commitSha: null,
   error: null,
-  busy: false
+  busy: false,
+  usage: ZERO_USAGE
 };
 
 let seq = 0;
@@ -103,7 +108,8 @@ function reducer(state: ChatState, action: Action): ChatState {
         review: null,
         commitSha: null,
         error: null,
-        busy: false
+        busy: false,
+        usage: ZERO_USAGE
       };
 
     case 'rehydrate':
@@ -134,6 +140,19 @@ function reducer(state: ChatState, action: Action): ChatState {
       switch (ev.kind) {
         case 'text-delta':
           return { ...state, live: state.live + (ev.text ?? '') };
+
+        case 'usage': {
+          const u = (ev.data ?? {}) as Partial<ChatState['usage']>;
+          return {
+            ...state,
+            usage: {
+              inputTokens: state.usage.inputTokens + (u.inputTokens ?? 0),
+              outputTokens: state.usage.outputTokens + (u.outputTokens ?? 0),
+              cacheReadTokens: state.usage.cacheReadTokens + (u.cacheReadTokens ?? 0),
+              costUsd: state.usage.costUsd + (u.costUsd ?? 0)
+            }
+          };
+        }
 
         case 'thinking':
           return { ...state, thinking: state.thinking + (ev.text ?? '') };
@@ -233,6 +252,24 @@ function Stepper({ phase }: { phase: Phase }) {
   if (phase === 'idle') return null;
   const current = STEP_ORDER[phase] ?? -1;
   return <StepperBar steps={STEPS} current={current} allDone={phase === 'committed'} />;
+}
+
+const fmtTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+/** Cumulative session token usage — one line under the stepper, updates live via SSE. */
+function UsageLine({ usage }: { usage: ChatState['usage'] }) {
+  const total = usage.inputTokens + usage.outputTokens;
+  if (total === 0) return null;
+  return (
+    <Tooltip
+      title={`输入 ${usage.inputTokens.toLocaleString()} · 输出 ${usage.outputTokens.toLocaleString()} · 缓存读取 ${usage.cacheReadTokens.toLocaleString()}`}
+    >
+      <div className="chat-usage" style={{ fontSize: 12, color: 'var(--text-3, #999)', padding: '2px 0 0' }}>
+        ⚡ {fmtTokens(usage.inputTokens)} in · {fmtTokens(usage.outputTokens)} out
+        {usage.costUsd > 0 && <> · ~USD {usage.costUsd.toFixed(3)}</>}
+      </div>
+    </Tooltip>
+  );
 }
 
 export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefillNonce?: number }) {
@@ -400,6 +437,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       </div>
 
       <Stepper phase={state.phase} />
+      <UsageLine usage={state.usage} />
 
       <div className="chat-scroll" ref={scrollRef}>
         {state.items.length === 0 && state.phase === 'idle' && (

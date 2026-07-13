@@ -271,6 +271,23 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
                         Text = finalText ?? "claude reported an error",
                     });
                 }
+                // Per-run usage/cost — the UI accumulates these per session (one event per CLI run).
+                if (msg.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+                {
+                    opts.OnEvent(new AgentEvent
+                    {
+                        Kind = "usage",
+                        Data = new
+                        {
+                            inputTokens = Int64OrZero(usage, "input_tokens"),
+                            outputTokens = Int64OrZero(usage, "output_tokens"),
+                            cacheReadTokens = Int64OrZero(usage, "cache_read_input_tokens"),
+                            cacheCreationTokens = Int64OrZero(usage, "cache_creation_input_tokens"),
+                            costUsd = msg.TryGetProperty("total_cost_usd", out var cost)
+                                && cost.ValueKind == JsonValueKind.Number ? cost.GetDouble() : 0d,
+                        },
+                    });
+                }
                 break;
         }
         return (sessionId, finalText);
@@ -306,6 +323,9 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
     };
 
     private static string? Truncate(string? s, int n) => s is null || s.Length <= n ? s : s[..n];
+
+    private static long Int64OrZero(JsonElement obj, string key) =>
+        obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : 0;
 
     /// <summary>Resolve the real `claude` executable once and cache it. On Windows `claude` is
     /// usually a `.cmd` shim on PATH; starting the resolved path directly means .NET (not a shell)

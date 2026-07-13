@@ -34,7 +34,7 @@ if (readOnly) {
     ? '## 修订后的计划(stub)\n\n1. **What the user asked** — 修订版\n2. **Files to change** — plans/daily/2026-07-14.md'
     : '## 计划(stub)\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none';
   emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
-  emit({ type: 'result', result: text });
+  emit({ type: 'result', result: text, usage: { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens: 800 }, total_cost_usd: 0.012 });
 } else {
   const rel = 'plans/daily/2026-07-14.md';
   const abs = path.resolve(process.cwd(), rel);
@@ -48,5 +48,5 @@ if (readOnly) {
   emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
   const text = `已按计划创建 ${rel}(stub)`;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
-  emit({ type: 'result', result: text });
+  emit({ type: 'result', result: text, usage: { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens: 800 }, total_cost_usd: 0.012 });
 }

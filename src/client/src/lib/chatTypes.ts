@@ -26,6 +26,7 @@ export interface AgentEvent {
     | 'system'
     | 'notice'
     | 'error'
+    | 'usage'
     | 'done';
   phase?: Phase;
   text?: string;
