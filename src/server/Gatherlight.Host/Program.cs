@@ -32,7 +32,9 @@ internal static class Program
         var dataPath = GatherlightServerOptions.ResolveDefaultDataPath();
         // Load config first so the persisted port applies before Kestrel binds (env still overrides).
         var config = new ServerConfigService(new GatherlightServerOptions { DataPath = dataPath });
-        var options = new GatherlightServerOptions
+        // Recompute options from the (possibly just-edited) settings on every build, so a Settings-tab
+        // change applies on the next restart. Env vars still override the file.
+        GatherlightServerOptions BuildOptions() => new()
         {
             DataPath = dataPath,
             Port = GatherlightServerOptions.ResolvePort(config.Current.Port),
@@ -43,15 +45,17 @@ internal static class Program
             TlsCertPath = GatherlightServerOptions.ResolveTlsCertPath(config.Current.Security.Tls.CertPath),
             TlsCertPassword = GatherlightServerOptions.ResolveTlsCertPassword(config.Current.Security.Tls.CertPassword),
         };
+        static string BaseUrl(GatherlightServerOptions o) => $"{(o.TlsEnabled ? "https" : "http")}://127.0.0.1:{o.Port}/";
+        var options = BuildOptions();
 
         WebApplication? server = null;
         var gate = new SemaphoreSlim(1, 1);
 
         // Recycle the in-process Kestrel server on request — the desktop app's "restart server": stop +
-        // dispose the running one, rebuild from the same composition root (re-reading settings/data),
-        // and start fresh on the same port. The management window stays open; only the server bounces.
-        // Also serves as "start" if the server isn't currently up (a prior start/restart failed).
-        async Task RestartServerAsync()
+        // dispose the running one, recompute options from the current settings, rebuild, and start. The
+        // window stays open. Returns the (possibly new) base URL so the host re-points the WebView when
+        // the port/scheme changed. Also serves as "start" if the server isn't currently up.
+        async Task<string> RestartServerAsync()
         {
             await gate.WaitAsync();
             try
@@ -64,9 +68,11 @@ internal static class Program
                     try { await old.DisposeAsync(); } catch { /* force on */ }
                     await Task.Delay(400); // let Kestrel release the port before rebinding
                 }
+                options = BuildOptions();
                 var fresh = GatherlightApp.Build(options, args: args, config: config);
                 await fresh.StartAsync();
                 server = fresh;
+                return BaseUrl(options);
             }
             finally { gate.Release(); }
         }

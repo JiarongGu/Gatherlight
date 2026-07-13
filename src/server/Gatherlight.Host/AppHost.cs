@@ -19,19 +19,19 @@ public sealed class AppHost : Form
     private const string ShowSignalName = "Gatherlight.Host.Show";
 
     private readonly GatherlightServerOptions _options;
-    private readonly string _url;
-    private readonly string _manageUrl;
-    private readonly HttpClient _http;
+    private string _url;         // mutable: a Settings restart can change the port/scheme
+    private string _manageUrl;
+    private HttpClient _http;
     private readonly HostContext _ctx;
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _trayStatus;
     private readonly WebView2 _web;
-    private readonly Func<Task> _restartServer;
+    private readonly Func<Task<string>> _restartServer; // recycles the server, returns its (maybe new) base URL
     private EventWaitHandle? _showSignal;
     private bool _exiting;
     private bool _restarting;
 
-    public AppHost(GatherlightServerOptions options, Func<Task> restartServer)
+    public AppHost(GatherlightServerOptions options, Func<Task<string>> restartServer)
     {
         _options = options;
         _restartServer = restartServer;
@@ -231,13 +231,24 @@ public sealed class AppHost : Form
         _restarting = true;
         try
         {
-            await Task.Run(_restartServer);
-            for (var i = 0; i < 30; i++)
+            var newUrl = await Task.Run(_restartServer);
+            // A Settings restart can change the port/scheme — re-point the host client + WebView.
+            var urlChanged = !string.Equals(newUrl, _url, StringComparison.Ordinal);
+            if (urlChanged)
+            {
+                _url = newUrl;
+                _manageUrl = _url + "manage";
+                var handler = new HttpClientHandler();
+                if (_url.StartsWith("https", StringComparison.Ordinal)) handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+                _http.Dispose();
+                _http = new HttpClient(handler) { BaseAddress = new Uri(_url), Timeout = TimeSpan.FromSeconds(4) };
+            }
+            for (var i = 0; i < 40; i++)
             {
                 try { using var r = await _http.GetAsync("api/health"); if (r.IsSuccessStatusCode) break; } catch { /* not up yet */ }
                 await Task.Delay(300);
             }
-            try { _web.CoreWebView2?.Reload(); } catch { /* the view recovers on its own */ }
+            try { if (urlChanged) _web.CoreWebView2?.Navigate(_manageUrl); else _web.CoreWebView2?.Reload(); } catch { /* the view recovers on its own */ }
         }
         catch
         {
