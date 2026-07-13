@@ -264,7 +264,7 @@ function UsageLine({ usage }: { usage: ChatState['usage'] }) {
     <Tooltip
       title={`输入 ${usage.inputTokens.toLocaleString()} · 输出 ${usage.outputTokens.toLocaleString()} · 缓存读取 ${usage.cacheReadTokens.toLocaleString()}`}
     >
-      <div className="chat-usage" style={{ fontSize: 12, color: 'var(--text-3, #999)', padding: '2px 0 0' }}>
+      <div className="chat-usage">
         ⚡ {fmtTokens(usage.inputTokens)} in · {fmtTokens(usage.outputTokens)} out
         {usage.costUsd > 0 && <> · ~USD {usage.costUsd.toFixed(3)}</>}
       </div>

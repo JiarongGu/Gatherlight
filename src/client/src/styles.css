@@ -629,6 +629,15 @@ html, body, #root {
   color: var(--muted);
   overflow-x: auto;
 }
+/* Live cumulative token/cost usage — its own quiet strip under the stepper. */
+.chat-usage {
+  padding: 6px 12px 7px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
 .chat-step {
   display: flex;
   align-items: center;
