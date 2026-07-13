@@ -1,8 +1,14 @@
 # Deployment — running Gatherlight as an installed product
 
-Gatherlight ships as a **self-contained single-file executable**: the .NET runtime, the built
-React client, the knowledge-base template, and the native libraries (SQLite, Playwright) are all
-carried inside one `Gatherlight.Server.exe`. The target machine needs **no .NET install**.
+Gatherlight ships as a **desktop management console** — `Gatherlight.Host`, a self-contained
+single-file executable that carries the .NET runtime, the built React client, the knowledge-base
+template, and the native libraries (SQLite, Playwright). The target machine needs **no .NET
+install**.
+
+The Host is not the planner UI. It **hosts the Gatherlight server in-process** and **monitors its
+health**; the family opens the actual planner in a **web browser** at the URL the console shows.
+This is the proper way to run Gatherlight — the headless `dotnet run` / `dev.mjs server` path is
+for development only.
 
 ## Build the artifact
 
@@ -11,20 +17,27 @@ node devtools/dev.mjs publish            # win-x64 by default
 node devtools/dev.mjs publish linux-x64  # or another RID
 ```
 
-This builds the client into `wwwroot`, then runs a self-contained single-file `dotnet publish`
-into `dist/` (gitignored). Output (~190 MB): `Gatherlight.Server.exe` + `wwwroot/` +
+This builds the client into `wwwroot`, then runs a self-contained single-file `dotnet publish` of
+the **Host** into `dist/` (gitignored): `Gatherlight.Host.exe` + `wwwroot/` +
 `Assets/DataTemplate/` + `playwright.ps1`.
 
 ## Run it
 
-```bash
-dist/Gatherlight.Server.exe
-```
+Launch `dist/Gatherlight.Host.exe` (or `node devtools/dev.mjs host` in dev). A tray icon appears and
+a small **management console** opens:
 
-- Serves the API **and** the client on `http://127.0.0.1:5317` (open it in a browser).
+- **Health monitor** — polls `/api/health` on a rolling strip (green/red), with latency + uptime,
+  and (optionally) auto-restarts the server if it stops responding.
+- **Live counts** — plans indexed, library entries, tools registered.
+- **Controls** — open the planner in a browser, open the data folder, restart, or stop.
+- Closing the window **minimizes to the tray**; the server keeps serving. "退出" stops everything.
+- One instance per machine (a second launch just surfaces the console).
+
+The planner itself is served on `http://127.0.0.1:5317` — **open it in a browser**.
+
 - **Loopback only** — there is no auth story yet, and the data folder is a family's private life.
   Do not expose the port; run it on the machine that uses it (or behind your own tunnel/VPN).
-- On first boot against an empty data folder it runs migrations, seeds the knowledge-base
+- On first launch against an empty data folder it runs migrations, seeds the knowledge-base
   template, initializes the data git repo, and indexes plans.
 
 ### Configuration

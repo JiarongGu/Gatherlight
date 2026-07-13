@@ -33,7 +33,9 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 |---|---|
 | **Real-claude smoke** — `dev.mjs smoke` drives the full two-gate loop against the actual authenticated CLI (no stub) on an isolated data folder; the one path the deterministic e2e can't cover | ✅ 2026-07-13, verified (real plan + execute → scoped `plans/` commit; MCP reachable) |
 | **Client bundle** — `manualChunks` (react/antd/markdown/vendor) + lazy-loaded leaflet map + dropped dead `html2pdf.js`. First-load gzip ~433kB → ~381kB, map deferred, >500kB warning gone | ✅ 2026-07-13 |
-| **Packaging** — `dev.mjs publish` → self-contained single-file `Gatherlight.Server.exe` (runtime + client + template + native libs bundled). See [DEPLOYMENT.md](DEPLOYMENT.md) | ✅ 2026-07-13, published exe verified booting (health + client + 20 tools) |
+| **Packaging** — `dev.mjs publish` → self-contained single-file exe (runtime + client + template + native libs bundled). See [DEPLOYMENT.md](DEPLOYMENT.md) | ✅ 2026-07-13, published exe verified booting (health + client + 20 tools) |
+| **Knowledge library** — DB-backed `library_item` + browse gallery (知识库) + agent tools (upsert/search/import); migrated the markdown attractions library (48 entries) into the DB, dropping trip/family lines. The SQLite DB stays outside git (source of truth → back up the data folder). | ✅ 2026-07-13 (e2e-p13, 34 checks) |
+| **Desktop management host** — `Gatherlight.Host` (WinForms, Sonora pattern): hosts the server in-process via `GatherlightApp.Build()`, monitors `/api/health` (rolling strip + latency + uptime + optional auto-restart), live counts, tray controls. The shippable app; users open the planner in a browser. `dev.mjs host` / `publish`. | ✅ 2026-07-13, verified hosting + monitoring |
 
 ## Architecture decisions of record
 
