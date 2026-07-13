@@ -37,7 +37,7 @@ export function Manage() {
   const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
   const [uptime, setUptime] = useState('0s');
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
-  const [view, setView] = useState<'overview' | 'eval' | 'cortex'>('overview');
+  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'settings'>('overview');
   const started = useRef(Date.now());
 
   // Lightweight in-page toast — replaces alert()/confirm(), which in the WebView2 host block the
@@ -143,10 +143,12 @@ export function Manage() {
         <button className={`mng-tab${view === 'overview' ? ' on' : ''}`} onClick={() => setView('overview')}>概览 · Overview</button>
         <button className={`mng-tab${view === 'eval' ? ' on' : ''}`} onClick={() => setView('eval')}>对话评估 · Eval</button>
         <button className={`mng-tab${view === 'cortex' ? ' on' : ''}`} onClick={() => setView('cortex')}>校准 · Cortex</button>
+        <button className={`mng-tab${view === 'settings' ? ' on' : ''}`} onClick={() => setView('settings')}>设置 · Settings</button>
       </div>
 
       {view === 'eval' && <EvalView />}
       {view === 'cortex' && <CortexView />}
+      {view === 'settings' && <SettingsView inHost={inHost} toast={toast} onRestart={restart} />}
 
       {view === 'overview' && (
       <div className="mng-view mng-overview">
@@ -816,6 +818,145 @@ function CortexView() {
             ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ---- Settings view (edit state/settings.json — port / remote access / TLS / update source) ----
+interface SettingsData {
+  serverName: string;
+  port: number;
+  bindAddress: string;
+  trustLoopback: boolean;
+  hasAccessToken: boolean;
+  tls: { enabled: boolean; certPath: string | null; hasCertPassword: boolean };
+  selfUpdate: { githubRepo: string | null; apiUrl: string | null };
+  envOverrides: string[];
+}
+
+function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void }) {
+  const [data, setData] = useState<SettingsData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [serverName, setServerName] = useState('');
+  const [port, setPort] = useState('');
+  const [network, setNetwork] = useState(false);
+  const [trustLoopback, setTrustLoopback] = useState(true);
+  const [token, setToken] = useState('');
+  const [clearToken, setClearToken] = useState(false);
+  const [tlsEnabled, setTlsEnabled] = useState(false);
+  const [certPath, setCertPath] = useState('');
+  const [repo, setRepo] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const d: SettingsData = await (await fetch('/api/manage/settings')).json();
+      setData(d);
+      setServerName(d.serverName);
+      setPort(String(d.port));
+      setNetwork(d.bindAddress !== '127.0.0.1' && d.bindAddress !== '::1');
+      setTrustLoopback(d.trustLoopback);
+      setTlsEnabled(d.tls.enabled);
+      setCertPath(d.tls.certPath ?? '');
+      setRepo(d.selfUpdate.githubRepo ?? '');
+      setToken('');
+      setClearToken(false);
+    } catch {
+      /* leave empty */
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { load(); }, []);
+
+  const save = async () => {
+    setBusy(true);
+    setSaved(false);
+    const body: Record<string, unknown> = {
+      serverName,
+      port: Number(port) || undefined,
+      bindAddress: network ? '0.0.0.0' : '127.0.0.1',
+      trustLoopback,
+      tls: { enabled: tlsEnabled, certPath: certPath || null },
+      selfUpdate: { githubRepo: repo || null },
+    };
+    if (clearToken) body.clearAccessToken = true;
+    else if (token) body.accessToken = token;
+    try {
+      const res = await fetch('/api/manage/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const j = await res.json();
+      if (res.ok) { setSaved(true); toast('设置已保存 · 重启后生效'); await load(); }
+      else toast(j.error ?? '保存失败', 'err');
+    } catch (e) {
+      toast('保存失败:' + (e instanceof Error ? e.message : String(e)), 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loading || !data) return <div className="eval-empty">加载中…</div>;
+  const envWarn = (field: string) => data.envOverrides.includes(field);
+
+  return (
+    <div className="mng-view set">
+      <div className="set-lead">
+        编辑本机服务配置(<code>state/settings.json</code>)。大多数项在<b>重启服务后</b>生效 —— 保存后点「重启服务」。
+        {data.envOverrides.length > 0 && (
+          <div className="set-envwarn">⚠ 这些项被环境变量覆盖,改此处暂不生效:<code>{data.envOverrides.join(', ')}</code></div>
+        )}
+      </div>
+
+      <div className="set-grid">
+        <div className="set-group">
+          <div className="set-group-h">基本 · General</div>
+          <label className="set-field"><span>实例名称 · Server name</span>
+            <input value={serverName} onChange={(e) => setServerName(e.target.value)} />
+          </label>
+          <label className="set-field"><span>端口 · Port {envWarn('port') && <em>(env)</em>}</span>
+            <input value={port} inputMode="numeric" onChange={(e) => setPort(e.target.value.replace(/[^0-9]/g, ''))} />
+          </label>
+        </div>
+
+        <div className="set-group">
+          <div className="set-group-h">更新源 · Updates</div>
+          <label className="set-field"><span>GitHub 仓库 {envWarn('selfUpdate.githubRepo') && <em>(env)</em>}</span>
+            <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/name(留空 = 关闭)" />
+          </label>
+          <div className="set-group-h" style={{ marginTop: 14 }}>HTTPS / TLS</div>
+          <label className="set-check"><input type="checkbox" checked={tlsEnabled} onChange={(e) => setTlsEnabled(e.target.checked)} /> 启用 HTTPS(默认自签,浏览器会提示)</label>
+          <label className="set-field"><span>证书 · Cert (PFX)</span>
+            <input value={certPath} onChange={(e) => setCertPath(e.target.value)} placeholder="留空 = 自签" />
+          </label>
+        </div>
+
+        <div className="set-group set-span">
+          <div className="set-group-h">远程访问 · Remote access</div>
+          <div className="set-field"><span>绑定 · Bind {envWarn('bindAddress') && <em>(env)</em>}</span>
+            <div className="cx-seg">
+              <button className={`cx-seg-b${!network ? ' on' : ''}`} onClick={() => setNetwork(false)}>仅本机 127.0.0.1</button>
+              <button className={`cx-seg-b${network ? ' on' : ''}`} onClick={() => setNetwork(true)}>局域网 0.0.0.0</button>
+            </div>
+          </div>
+          <label className="set-field"><span>访问令牌 · Token {envWarn('accessToken') && <em>(env)</em>}</span>
+            <input type="password" autoComplete="off" value={token}
+              placeholder={data.hasAccessToken ? '已设置(留空不改)' : '未设置'}
+              onChange={(e) => { setToken(e.target.value); setClearToken(false); }} />
+          </label>
+          {data.hasAccessToken && (
+            <label className="set-check"><input type="checkbox" checked={clearToken} onChange={(e) => { setClearToken(e.target.checked); if (e.target.checked) setToken(''); }} /> 清除令牌(改回仅本机)</label>
+          )}
+          {network && !data.hasAccessToken && !token && <div className="set-hint danger">对外网开放必须设置访问令牌。</div>}
+          <label className="set-check"><input type="checkbox" checked={trustLoopback} onChange={(e) => setTrustLoopback(e.target.checked)} /> 信任本机请求(同机反代时关闭)</label>
+        </div>
+      </div>
+
+      <div className="set-actions">
+        <button className="cx-btn primary" onClick={save} disabled={busy}>{busy ? '保存中…' : '保存设置'}</button>
+        {saved && inHost && <button className="cx-btn" onClick={onRestart}>立即重启以生效</button>}
+        {saved && <span className="set-saved">✓ 已保存,重启后生效</span>}
+      </div>
     </div>
   );
 }
