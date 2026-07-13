@@ -78,4 +78,4 @@ A self-contained bundle (no .NET install needed) — double-click `Gatherlight.c
 
 ## License
 
-[MIT](LICENSE) © the Gatherlight authors
+[MIT](LICENSE) © Jiarong Gu
