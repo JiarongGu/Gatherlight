@@ -23,26 +23,46 @@ function initialMode(): ThemeMode {
   return prefersLight ? 'light' : 'dark';
 }
 
-const FONT =
-  '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
+// Lantern-paper faces — kept in sync with the CSS variables in styles.css.
+const FONT_BODY =
+  '"Instrument Sans", "Noto Sans SC", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+const FONT_MONO = '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
 
 /** antd token overrides per mode — kept in sync with the CSS variables in styles.css. */
 export function antdThemeConfig(mode: ThemeMode): ThemeConfig {
   const dark = mode === 'dark';
+  const accent = dark ? '#e6a057' : '#b85c1c';
   return {
     algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
     token: {
-      colorPrimary: dark ? '#6ea8fe' : '#3b6fe0',
-      colorBgBase: dark ? '#0b0d10' : '#f7f8fa',
-      colorBgContainer: dark ? '#14171c' : '#ffffff',
-      colorBgElevated: dark ? '#1b1f26' : '#ffffff',
-      colorBorder: dark ? '#262b34' : '#e3e6eb',
-      colorBorderSecondary: dark ? '#1e232b' : '#eef0f3',
-      colorText: dark ? '#e8eaed' : '#1a1d22',
-      colorTextSecondary: dark ? '#b6bcc6' : '#4a515c',
-      colorTextTertiary: dark ? '#7d8694' : '#8a93a0',
-      borderRadius: 8,
-      fontFamily: FONT
+      colorPrimary: accent,
+      colorLink: accent,
+      colorInfo: accent,
+      colorBgBase: dark ? '#15110d' : '#f3ecdf',
+      colorBgContainer: dark ? '#1e1811' : '#fbf6ec',
+      colorBgElevated: dark ? '#281f17' : '#fbf6ec',
+      colorBorder: dark ? '#382c22' : '#e2d6c0',
+      colorBorderSecondary: dark ? '#271f18' : '#eadfcd',
+      colorText: dark ? '#f1e9db' : '#2b2119',
+      colorTextSecondary: dark ? '#c6b9a4' : '#5c5044',
+      colorTextTertiary: dark ? '#8d8069' : '#8a7d64',
+      borderRadius: 11,
+      wireframe: false,
+      fontFamily: FONT_BODY,
+      fontFamilyCode: FONT_MONO
+    },
+    components: {
+      Menu: {
+        itemSelectedBg: dark ? 'rgba(230,160,87,0.16)' : 'rgba(184,92,28,0.12)',
+        itemSelectedColor: accent,
+        itemHoverColor: accent,
+        itemBorderRadius: 9,
+        activeBarBorderWidth: 0
+      },
+      Card: { borderRadiusLG: 16 },
+      Modal: { borderRadiusLG: 18 },
+      Button: { borderRadius: 10, fontWeight: 500 },
+      Tooltip: { borderRadius: 9 }
     }
   };
 }

@@ -18,7 +18,8 @@ import {
   PaperClipOutlined,
   DatabaseOutlined,
   SafetyCertificateOutlined,
-  CodeOutlined
+  CodeOutlined,
+  ReadOutlined
 } from '@ant-design/icons';
 import type { PlanFile } from '@/lib/collectFiles';
 import { extractSnippet, type Snippet } from '@/lib/markdown';
@@ -33,6 +34,8 @@ interface Props {
   actionTargetFor: (f: PlanFile) => ActionTarget;
   onAfterAction: (info: { removed?: string[]; renamed?: { from: string; to: string } }) => void;
   onAskAI: (message: string) => void;
+  onOpenLibrary: () => void;
+  libraryActive: boolean;
 }
 
 // Trip grouping (slug parsing, destination labels, variant numbering) lives in
@@ -122,7 +125,9 @@ export const Sidebar = memo(function Sidebar({
   onSelect,
   actionTargetFor,
   onAfterAction,
-  onAskAI
+  onAskAI,
+  onOpenLibrary,
+  libraryActive
 }: Props) {
   const { mode } = useTheme();
   const trimmedSearch = ''; // sidebar tree-filter removed; global ⌘K palette is the search
@@ -358,7 +363,20 @@ export const Sidebar = memo(function Sidebar({
   const hasContent = destinationGroups.length > 0 || groupedUser.length > 0 || groupedKB.length > 0;
 
   return (
-    <div style={{ padding: '14px 10px' }}>
+    <div style={{ padding: '12px 10px 16px' }}>
+      {/* 知识库 — the DB-backed knowledge surface, pinned above the markdown plan tree. */}
+      <button
+        className={`side-lib${libraryActive ? ' active' : ''}`}
+        onClick={onOpenLibrary}
+        aria-current={libraryActive ? 'page' : undefined}
+      >
+        <ReadOutlined className="side-lib-icon" />
+        <span className="side-lib-text">
+          <span className="side-lib-zh">知识库</span>
+          <span className="side-lib-en">LIBRARY</span>
+        </span>
+      </button>
+      <div className="side-sep" />
       {!hasContent ? (
         <Empty description="无匹配" style={{ marginTop: 24 }} />
       ) : (

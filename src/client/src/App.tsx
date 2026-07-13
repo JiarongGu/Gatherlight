@@ -14,7 +14,7 @@ import {
   PlanActionsMenu,
   type ActionTarget
 } from '@/ui/organisms';
-import { Home } from '@/screens';
+import { Home, Library } from '@/screens';
 import { loadPlanData, type PlanData, type PlanFile, type TripAsset } from './lib/collectFiles';
 import { extractHeadings, stripFirstH1 } from './lib/markdown';
 import { buildTripExport, downloadAsFile, downloadTripPDF, isTripFile } from './lib/export';
@@ -51,6 +51,8 @@ export function App() {
 
   // Land on the Home dashboard (not a raw file).
   const [activePath, setActivePath] = useState<string | null>(null);
+  // The 知识库 is a DB-backed top-level surface, distinct from the markdown plan reader.
+  const [showLibrary, setShowLibrary] = useState(false);
 
   const screens = useBreakpoint();
   const isMobile = !screens.md; // md = 768px
@@ -189,12 +191,20 @@ export function App() {
     (path: string) => {
       pushRecent(path);
       setActivePath(path);
+      setShowLibrary(false);
       if (isMobile) setSidebarOpen(false);
     },
     [isMobile]
   );
 
   const handleHome = useCallback(() => {
+    setActivePath(null);
+    setShowLibrary(false);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
+  const handleOpenLibrary = useCallback(() => {
+    setShowLibrary(true);
     setActivePath(null);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
@@ -257,10 +267,14 @@ export function App() {
       actionTargetFor={actionTargetFor}
       onAfterAction={handleAfterAction}
       onAskAI={askAI}
+      onOpenLibrary={handleOpenLibrary}
+      libraryActive={showLibrary}
     />
   );
 
-  const contentNode = active ? (
+  const contentNode = showLibrary ? (
+    <Library />
+  ) : active ? (
     <>
       {canExport && <TripDayNav headings={headings} />}
       <div className="reading">

@@ -5,8 +5,7 @@ import {
   SearchOutlined,
   RobotOutlined,
   BulbOutlined,
-  BulbFilled,
-  CompassOutlined
+  BulbFilled
 } from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import type { ThemeMode } from '@/lib/theme';
@@ -45,8 +44,11 @@ export function TopBar({
       )}
 
       <button className="topbar-brand" onClick={onHome} aria-label="回到首页">
-        <CompassOutlined />
-        <span className="topbar-brand-text">日常规划</span>
+        <span className="brand-seal" aria-hidden="true">拾</span>
+        <span className="topbar-brand-text">
+          <span className="brand-zh">拾光</span>
+          <span className="brand-en">GATHERLIGHT</span>
+        </span>
       </button>
 
       <button className="topbar-search" onClick={onOpenPalette}>
