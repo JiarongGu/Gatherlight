@@ -438,7 +438,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       <Stepper phase={state.phase} />
       <UsageLine usage={state.usage} />
 
-      <div className="chat-scroll" ref={scrollRef}>
+      <div className="chat-scroll" ref={scrollRef} role="log" aria-live="polite" aria-relevant="additions text">
         {state.items.length === 0 && state.phase === 'idle' && (
           <div className="chat-empty">
             <p>用大白话告诉我要改什么,比如:</p>

@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import type { ThemeMode } from '@/lib/theme';
+import { modKeyLabel } from '@/lib/platform';
 
 interface Props {
   isMobile: boolean;
@@ -54,7 +55,7 @@ export function TopBar({
       <button className="topbar-search" onClick={onOpenPalette}>
         <SearchOutlined />
         <span className="topbar-search-text">搜索全部计划…</span>
-        <kbd className="topbar-kbd">⌘K</kbd>
+        <kbd className="topbar-kbd">{modKeyLabel}</kbd>
       </button>
 
       <div className="topbar-actions">

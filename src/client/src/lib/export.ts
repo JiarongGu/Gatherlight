@@ -138,8 +138,8 @@ export async function downloadTripPDF(active: PlanFile, allFiles: PlanFile[]): P
 
   const printWindow = window.open('', '_blank');
   if (!printWindow) {
-    alert('请允许浏览器弹窗以导出 PDF\n(Please allow popups to export PDF)');
-    return;
+    // No React context here — signal the caller (App), which shows a themed toast.
+    throw new Error('popup-blocked');
   }
 
   const printStyles = `

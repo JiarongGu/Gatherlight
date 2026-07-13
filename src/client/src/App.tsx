@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useCallback } from 'react';
-import { Layout, Grid } from 'antd';
+import { Layout, Grid, App as AntApp } from 'antd';
 import { Drawer, Button, Space, Tooltip, CatBadge } from '@/ui/atoms';
 import { DownloadOutlined, PrinterOutlined, FilePdfOutlined, CalendarOutlined } from '@ant-design/icons';
 import {
@@ -49,7 +49,9 @@ export function App() {
   }, []);
   const files = planData?.files ?? EMPTY_FILES;
   const tripAssets = planData?.tripAssets ?? EMPTY_ASSETS;
+  const planLoading = planData === null && loadError === null;
   const { mode, toggle } = useTheme();
+  const { message } = AntApp.useApp();
 
   // Land on the Home dashboard (not a raw file).
   const [activePath, setActivePath] = useState<string | null>(null);
@@ -170,10 +172,13 @@ export function App() {
     }
   }, [isMobile]);
 
-  // Global ⌘K / Ctrl-K → toggle command palette.
+  // Global ⌘K / Ctrl-K → toggle command palette. (⌘K/Ctrl-K isn't a common text shortcut, but
+  // guard against hijacking it while the user is typing in a field or contentEditable.)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        const t = e.target as HTMLElement | null;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
         e.preventDefault();
         setPaletteOpen((o) => !o);
       }
@@ -230,11 +235,16 @@ export function App() {
       await downloadTripPDF(active, files);
     } catch (err) {
       console.error('PDF export failed:', err);
-      alert('PDF 导出失败 — 请打开 console 查看,或改用"打印"按钮。');
+      const blocked = err instanceof Error && err.message === 'popup-blocked';
+      message.error(
+        blocked
+          ? '浏览器拦截了弹窗 — 请允许本站弹窗后重试,或改用「打印」。'
+          : 'PDF 导出失败 — 请查看控制台,或改用「打印」。'
+      );
     } finally {
       setPdfBusy(false);
     }
-  }, [active, files]);
+  }, [active, files, message]);
   const handlePrint = () => window.print();
   // ICS (calendar) is a zero-LLM server export — one all-day event per dated day.
   const handleExportIcs = () => {
@@ -307,6 +317,7 @@ export function App() {
       onOpenPalette={() => setPaletteOpen(true)}
       onAfterAction={handleAfterAction}
       onAskAI={askAI}
+      loading={planLoading}
     />
   );
 

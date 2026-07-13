@@ -14,6 +14,7 @@ import { StatusBadge, type TripStatus } from '@/ui/atoms';
 import type { PlanFile } from '@/lib/collectFiles';
 import { buildDestinationGroups, extractTripMeta, type TripVariant } from '@/lib/tripGroups';
 import { getRecent } from '@/lib/recentFiles';
+import { modKeyLabel } from '@/lib/platform';
 import { PlanActionsMenu, type ActionTarget } from '@/ui/organisms/PlanActionsMenu';
 
 interface AfterAction {
@@ -26,6 +27,7 @@ interface Props {
   onOpenPalette: () => void;
   onAfterAction: AfterAction;
   onAskAI: (message: string) => void;
+  loading?: boolean;
 }
 
 function pad(n: number): string {
@@ -59,7 +61,7 @@ interface TripCard {
   countdownDays?: number;
 }
 
-export function Home({ files, onSelect, onOpenPalette, onAfterAction, onAskAI }: Props) {
+export function Home({ files, onSelect, onOpenPalette, onAfterAction, onAskAI, loading }: Props) {
   const now = useMemo(() => new Date(), []);
   const today = todayStr(now);
   const week = isoWeek(now);
@@ -130,9 +132,27 @@ export function Home({ files, onSelect, onOpenPalette, onAfterAction, onAskAI }:
         <button className="home-search" onClick={onOpenPalette}>
           <SearchOutlined />
           <span>搜索全部计划…</span>
-          <kbd>⌘K</kbd>
+          <kbd>{modKeyLabel}</kbd>
         </button>
       </div>
+
+      {loading && files.length === 0 && (
+        <section className="home-section" aria-hidden="true">
+          <div className="home-skel-title sk-shimmer" />
+          <div className="home-grid">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div className="trip-card home-skel-card" key={i}>
+                <div className="home-skel-line lg sk-shimmer" />
+                <div className="home-skel-line sm sk-shimmer" />
+                <div className="home-skel-line sm sk-shimmer" style={{ width: '40%' }} />
+                <div className="home-skel-chips">
+                  <span className="sk-shimmer" /><span className="sk-shimmer" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {cards.length > 0 && (
         <section className="home-section">

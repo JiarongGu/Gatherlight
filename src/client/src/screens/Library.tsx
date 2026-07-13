@@ -71,7 +71,22 @@ export function Library() {
         </div>
       )}
 
-      {status !== 'error' && (
+      {status === 'loading' && (
+        <div className="lib-grid" aria-hidden="true" style={{ marginTop: 18 }}>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div className="lib-card lib-skel-card" key={i}>
+              <div className="lib-skel-media sk-shimmer" />
+              <div className="lib-card-body">
+                <div className="home-skel-line lg sk-shimmer" />
+                <div className="home-skel-line sm sk-shimmer" />
+                <div className="home-skel-line sm sk-shimmer" style={{ width: '55%' }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {status === 'ready' && (
         <>
           <div className="lib-toolbar">
             <label className="lib-search">

@@ -2324,6 +2324,42 @@ kbd, .topbar-kbd {
   .mng-top-dot.ok { animation: none; }
 }
 
+/* ===== Planner — a11y + loading polish ===== */
+
+/* Keyboard focus rings on the planner's custom (non-AntD) controls — mouse users unaffected. */
+.topbar-search:focus-visible, .topbar-brand:focus-visible, .topbar-icon-btn:focus-visible,
+.home-search:focus-visible, .home-quick-item:focus-visible, .home-recent-item:focus-visible,
+.trip-card-title:focus-visible, .trip-chip:focus-visible, .trip-day-chip:focus-visible,
+.carousel-arrow:focus-visible, .lib-chip:focus-visible, .lib-card:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm);
+}
+.carousel-arrow:hover { color: var(--accent); }
+
+/* The command-palette kbd hint now carries "Ctrl K" (wider than "⌘K") — keep it on one line. */
+.topbar-kbd, .home-search kbd { white-space: nowrap; }
+
+/* Skeleton shimmer for first-load placeholders (Home trip grid + Library grid). */
+.sk-shimmer { position: relative; overflow: hidden; background: var(--surface-2); border-radius: var(--radius-sm); }
+.sk-shimmer::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 9%, transparent), transparent);
+  animation: sk-sweep 1.4s ease-in-out infinite;
+}
+@keyframes sk-sweep { to { transform: translateX(100%); } }
+
+.home-skel-title { width: 120px; height: 20px; margin-bottom: 14px; }
+.home-skel-card { display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+.home-skel-line { height: 13px; border-radius: 5px; }
+.home-skel-line.lg { height: 18px; width: 70%; }
+.home-skel-line.sm { width: 85%; }
+.home-skel-chips { display: flex; gap: 8px; margin-top: 6px; }
+.home-skel-chips span { width: 64px; height: 26px; border-radius: 999px; display: inline-block; }
+
+.lib-skel-card { pointer-events: none; overflow: hidden; }
+.lib-skel-media { width: 100%; aspect-ratio: 3 / 2; }
+
+@media (prefers-reduced-motion: reduce) { .sk-shimmer::after { animation: none; } }
+
 /* Sidebar 知识库 nav pin */
 .side-lib {
   display: flex;
