@@ -79,6 +79,8 @@ try {
 
   let snap = await waitPhase(id1, 'awaiting-plan-approval');
   ok('plan produced', (snap.plan ?? '').includes('计划(stub)'));
+  // "给明天…日计划" matches the daily routing category → server pre-routed the discovery.
+  ok('discovery pre-routed server-side', (snap.plan ?? '').includes('[pre-routed]'), snap.plan?.slice(0, 60));
 
   const refine = await post(`/api/chat/${id1}/plan/refine`, { message: '加上晨跑' });
   ok('plan refine acked', refine.status === 200);

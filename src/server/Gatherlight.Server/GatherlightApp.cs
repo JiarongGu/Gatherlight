@@ -49,6 +49,7 @@ public static class GatherlightApp
             // LLM — spawn the authenticated claude CLI, never an API key
             .AddSingleton<IClaudeCliRunner, ClaudeCliRunner>()
             .AddSingleton<IPromptHarness, PromptHarness>()
+            .AddSingleton<IZhikuRouter, ZhikuRouter>()
             .AddSingleton<IClaudeValidateService, ClaudeValidateService>()
             // Chat — the two-gate flow
             .AddSingleton<IChatRepository, ChatRepository>()

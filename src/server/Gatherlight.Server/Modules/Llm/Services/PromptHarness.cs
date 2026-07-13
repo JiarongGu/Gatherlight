@@ -13,7 +13,7 @@ namespace Gatherlight.Server.Modules.Llm.Services;
 /// </summary>
 public interface IPromptHarness
 {
-    string PlanPrompt(string userMessage, string? threadContext, IReadOnlyList<string> attachments);
+    string PlanPrompt(string userMessage, string? threadContext, IReadOnlyList<string> attachments, string? routedBlock = null);
     string RevisePlanPrompt(string prevPlan, string feedback);
     string ExecutePrompt(string approvedPlan);
     string ReviseExecutePrompt(string feedback);
@@ -53,7 +53,7 @@ public sealed class PromptHarness : IPromptHarness
     private const string PlanTemplate = Common + """
 
 
-        {context}{attachments}CURRENT PHASE: PLANNING (read-only).
+        {context}{routing}{attachments}CURRENT PHASE: PLANNING (read-only).
         - Do NOT edit any files in this phase.
         - Explore as needed (read files, search, run the gate, web-search to verify facts).
         - Then your FINAL message must be the PLAN itself, in Markdown, structured as:
@@ -128,7 +128,7 @@ public sealed class PromptHarness : IPromptHarness
 
     public PromptHarness(IAppConfigService appConfig) => _appConfig = appConfig;
 
-    public string PlanPrompt(string userMessage, string? threadContext, IReadOnlyList<string> attachments)
+    public string PlanPrompt(string userMessage, string? threadContext, IReadOnlyList<string> attachments, string? routedBlock = null)
     {
         var context = string.IsNullOrWhiteSpace(threadContext)
             ? ""
@@ -137,6 +137,7 @@ public sealed class PromptHarness : IPromptHarness
         return Render("plan", PlanTemplate, new()
         {
             ["context"] = context,
+            ["routing"] = routedBlock ?? "",
             ["attachments"] = AttachmentsBlock(attachments),
             ["userMessage"] = userMessage,
         });

@@ -43,6 +43,19 @@ These surface prior plans and household entries. Loop in any relevant nuggets *b
 
 Only after steps 1-3 are complete may you write the plan, run a web search for time-sensitive facts, or invoke `Write`/`Edit`.
 
+## Server pre-routing (the lite gate)
+
+When the prompt contains a **SERVER PRE-ROUTING** block, the Gatherlight server already ran the
+discovery deterministically (keyword routing over `.claude/routing.json`, routed docs embedded or
+listed). In that case:
+
+- Do **NOT** invoke `/doc-loader` `/skill-loader` `/tool-loader` `/pattern-finder` — discovery is
+  done; re-running it duplicates work and wastes tokens. (`/caveman` still applies on request.)
+- Read what the block lists, scan `RULES_INDEX.md` for matching rules, then proceed.
+- A `LITE TASK` marker means single-file template work: plan directly after the routed reading.
+
+No pre-routing block = the full gate below applies unchanged.
+
 ## When to SKIP the gate
 
 - Pure conversation (questions, explanations, no plan changes).

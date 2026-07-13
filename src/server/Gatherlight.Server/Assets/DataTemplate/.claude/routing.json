@@ -1,0 +1,77 @@
+{
+  "$comment": "Server-side RAG pre-routing (read hot per chat request). First matching category wins — order specific before broad. When a category matches, the Gatherlight server embeds/lists these docs in the plan prompt and the agent SKIPS the discovery-skill round-trips; 'lite': true additionally marks single-file template tasks that plan directly after the routed reading. Edit freely; a broken file falls back to the full agent-side gate.",
+  "categories": [
+    {
+      "key": "daily",
+      "match": ["日计划", "今天的计划", "明天", "plan-day", "daily plan", "日程安排"],
+      "docs": [
+        ".claude/workflows/DAILY_PLANNING.md",
+        ".claude/templates/daily.md",
+        ".claude/workflows/STORAGE.md",
+        "household/constraints.md",
+        "household/recurring.md"
+      ],
+      "lite": true
+    },
+    {
+      "key": "weekly",
+      "match": ["周计划", "本周", "下周", "plan-week", "weekly", "周回顾"],
+      "docs": [
+        ".claude/workflows/WEEKLY_PLANNING.md",
+        ".claude/templates/weekly.md",
+        ".claude/workflows/STORAGE.md",
+        "household/constraints.md",
+        "household/recurring.md",
+        "household/preferences.md"
+      ],
+      "lite": true
+    },
+    {
+      "key": "budget",
+      "match": ["预算", "budget", "花费统计", "开销记录"],
+      "docs": [
+        ".claude/workflows/BUDGET_TRACKING.md",
+        ".claude/templates/budget.md",
+        ".claude/workflows/STORAGE.md",
+        "household/preferences.md"
+      ],
+      "lite": true
+    },
+    {
+      "key": "packing",
+      "match": ["打包", "行李", "packing", "带什么"],
+      "docs": [
+        ".claude/workflows/PACKING_LIST.md",
+        ".claude/templates/packing.md",
+        ".claude/workflows/STORAGE.md",
+        "household/people.md",
+        "household/preferences.md"
+      ],
+      "lite": true
+    },
+    {
+      "key": "household",
+      "match": ["household", "家庭成员", "饮食偏好", "记一下", "偏好记录"],
+      "docs": [
+        "household/README.md",
+        ".claude/rules/household-profile-first.md"
+      ],
+      "lite": true
+    },
+    {
+      "key": "trip",
+      "match": ["行程", "旅行", "旅游", "trip", "去日本", "去京都", "机票", "酒店", "签证"],
+      "docs": [
+        ".claude/workflows/TRIP_PLANNING.md",
+        ".claude/templates/trip.md",
+        ".claude/workflows/STORAGE.md",
+        ".claude/rules/link-verification.md",
+        ".claude/rules/verify-policy-info.md",
+        "household/people.md",
+        "household/preferences.md",
+        "household/constraints.md"
+      ],
+      "lite": false
+    }
+  ]
+}

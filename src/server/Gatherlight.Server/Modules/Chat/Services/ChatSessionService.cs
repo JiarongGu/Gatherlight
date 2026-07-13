@@ -78,14 +78,16 @@ public sealed class ChatSessionService
     private readonly ChatEnvironmentService _env;
     private readonly DataWriteLock _writeLock;
     private readonly IToolRegistry _tools;
+    private readonly IZhikuRouter _router;
     private readonly ILogger<ChatSessionService> _log;
 
     public ChatSessionService(
         IClaudeCliRunner runner, IPromptHarness harness, IClaudeValidateService validator,
         IGitCliService git, IDataCommitRepository commits, IChatRepository repo,
         IDataContext data, IAppConfigService appConfig, ChatEnvironmentService env,
-        DataWriteLock writeLock, IToolRegistry tools, ILogger<ChatSessionService> log)
+        DataWriteLock writeLock, IToolRegistry tools, IZhikuRouter router, ILogger<ChatSessionService> log)
     {
+        _router = router;
         _runner = runner;
         _harness = harness;
         _validator = validator;
@@ -232,12 +234,21 @@ public sealed class ChatSessionService
     private async Task RunPlanningAsync(ChatSession s)
     {
         SetPhase(s, ChatPhase.Planning);
-        Emit(s, new AgentEvent { Kind = "notice", Text = "🧭 正在按 CLAUDE.md gate 调研 + 拟定计划…" });
+        // Deterministic pre-routing: for recognizable categories the discovery gate runs
+        // server-side (zero tokens) and the routed docs ride in with the prompt.
+        var routed = _router.Route(s.UserMessage);
+        Emit(s, new AgentEvent
+        {
+            Kind = "notice",
+            Text = routed is null
+                ? "🧭 正在按 CLAUDE.md gate 调研 + 拟定计划…"
+                : $"⚡ 已按「{routed.CategoryKey}」预路由知识库(免调研)— 正在拟定计划…",
+        });
         s.Abort = new CancellationTokenSource();
         try
         {
             var res = await _runner.RunAsync(
-                BaseRunOptions(s, _harness.PlanPrompt(s.UserMessage, s.ThreadContext, s.Attachments), readOnly: true),
+                BaseRunOptions(s, _harness.PlanPrompt(s.UserMessage, s.ThreadContext, s.Attachments, routed?.PromptBlock), readOnly: true),
                 s.Abort.Token);
             if (s.Cancelled) return; // cancel() owns the terminal state
             s.ClaudeSessionId = res.SessionId;

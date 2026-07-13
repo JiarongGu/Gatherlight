@@ -30,9 +30,11 @@ if (prompt.includes('SLOW')) {
 }
 
 if (readOnly) {
+  // Surface whether the server pre-routed discovery (e2e asserts the marker).
+  const routed = prompt.includes('SERVER PRE-ROUTING') ? '[pre-routed]' : '[full-gate]';
   const text = prompt.includes("HUMAN'S FEEDBACK")
-    ? '## 修订后的计划(stub)\n\n1. **What the user asked** — 修订版\n2. **Files to change** — plans/daily/2026-07-14.md'
-    : '## 计划(stub)\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none';
+    ? `## 修订后的计划(stub)${routed}\n\n1. **What the user asked** — 修订版\n2. **Files to change** — plans/daily/2026-07-14.md`
+    : `## 计划(stub)${routed}\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none`;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
   emit({ type: 'result', result: text, usage: { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens: 800 }, total_cost_usd: 0.012 });
 } else {
