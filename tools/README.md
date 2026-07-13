@@ -17,8 +17,9 @@
 
 | 工具 | 用途 | 入口 |
 |---|---|---|
-| [puppeteer/](puppeteer/) | 浏览器自动化 + 验证数据获取 | `npm run scrape` / `flight-prices` / `hotel-prices` / `wiki-info` / `restaurant-info` |
-| [pdf-form/](pdf-form/) | PDF AcroForm 填充(签证 itinerary 等) | `npm run inspect` / `fill-itinerary` |
+| [pdf-form/](pdf-form/) | PDF AcroForm 检视/填充/合并(pdf-lib + fontkit,含 CJK) | `npm run inspect` / `fill` / `merge` |
+
+> 浏览器抓取(scrape / flight_schedule / policy_check / flight_prices / hotel_prices / hotel_info / restaurant_info / wiki_info)已全部移植为 **C#/Playwright 原生工具**,见 [`src/server/.../Modules/Scrapers`](../src/server/Gatherlight.Server/Modules/Scrapers/) 与 [`docs/TOOLS.md`](../docs/TOOLS.md)。原 `tools/puppeteer/` Node 叶子已删除。
 
 ## 加一个新工具
 

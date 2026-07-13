@@ -12,7 +12,7 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 | 4 | Frontend port: `viewer/frontend` → `src/client` on the .NET API; delete legacy `viewer/` | ✅ 2026-07-13 |
 | 5 | C# tool registry + HTTP MCP endpoint (hand-rolled JSON-RPC) for the spawned agent; Node tools wrapped as leaf subprocesses | ✅ 2026-07-13 (e2e-p3 + real-CLI MCP probe) |
 | 6 | Knowledge-base split: scrubbed product template (`Assets/DataTemplate/`) + seeder with hash-based upgrades; repo `.claude/` becomes dev rules | ✅ 2026-07-13 (e2e-p4) |
-| 7 | C#-native tool ports — incremental, one tool per commit | 🔶 in progress |
+| 7 | C#-native tool ports — incremental, one tool per commit | ✅ 2026-07-13 (all 8 scrapers ported; `tools/puppeteer` deleted) |
 
 ### Phase 7 progress
 
@@ -21,7 +21,7 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 | `wiki_info` (Wikipedia REST + Wikidata official-site, pure HttpClient) | ✅ 2026-07-13, live-verified |
 | `scrape` (Playwright .NET headless chromium via `PlaywrightHost`; replaces the Node puppeteer leaf; `dev.mjs fetch-tools` installs the browser) | ✅ 2026-07-13, live-verified on a JS-rendered Google Flights deeplink |
 | `flight_schedule`, `policy_check` → **C#/Playwright native** | ✅ 2026-07-13. Shared `PlaywrightScraper` (navigate+extract on the one browser) + deterministic parse tested end-to-end against a local fixture server (e2e-p11: schedule extraction + fabricated-code detection; visa-required + max-stay + types). Node leaves deleted. |
-| `hotel_info`, `restaurant_info`, `flight_prices`, `hotel_prices` | ⏳ still `NodeLeafTool` wrappers (work today); port onto the `PlaywrightScraper` base next, same fixture-tested pattern. |
+| `flight_prices`, `hotel_prices`, `hotel_info`, `restaurant_info` → **C#/Playwright native** | ✅ 2026-07-13 (e2e-p12, 23 checks). On the shared `PlaywrightScraper` (now also `FetchLinksAsync` for DuckDuckGo result anchors + an `H1`). `flight_prices`/`hotel_prices` parse Kayak/Booking price text; `hotel_info`/`restaurant_info` DDG-search → classify trusted domains → verify (Tabelog table / generic name). Fixture seam: `GATHERLIGHT_FIXTURE_ORIGIN` rewrites any real-domain navigation to a local server while tools still classify the original URL. **All Node puppeteer leaves + `tools/puppeteer/` deleted.** |
 | `fill_itinerary` (visa AcroForm) | ✅ registry tool; now one case of the general document subsystem |
 | **General document/media subsystem** — `Modules/Documents`: `pdf_inspect` / `pdf_extract_text` / `pdf_fill` / `pdf_merge` + `image_info` / `image_resize` / `image_convert`. Library split: PdfPig (extract), pdf-lib leaves (form inspect/fill/merge — reliable on real + CJK PDFs), ImageSharp (images). PDFsharp evaluated + dropped (its AcroForm fill + page-import both threw on real PDFs). | ✅ 2026-07-13 (e2e-p10, 14 checks) |
 | Zero-LLM ICS export — trip/daily plan → `.ics` (`GET /api/plans/ics`, one all-day event per dated Day heading; changelog dates excluded) + client download button | ✅ 2026-07-13, live-verified on the real 17-day trip (17 events) |

@@ -13,8 +13,11 @@ Implement `IGatherlightTool` (`Name` / `Description` / `InputSchema` via the `To
 
 - **AI / web**: `extract` (one-shot Claude over an uploaded file), `scrape` (Playwright headless
   chromium), `wiki_info` (Wikipedia REST + Wikidata).
-- **Travel verifiers** (Node puppeteer leaves, wrapped): `policy_check`, `hotel_info`,
-  `restaurant_info`, `flight_schedule`, `flight_prices`, `hotel_prices`.
+- **Travel verifiers** (C#/Playwright native — `Modules/Scrapers`, no Node): `flight_schedule` +
+  `policy_check` (single-query, cross-source), `flight_prices` + `hotel_prices` (Kayak/Booking
+  price snapshots), `hotel_info` + `restaurant_info` (DuckDuckGo search → trusted-source
+  verification). All share `PlaywrightScraper` (navigate+extract on the one browser); parse is
+  deterministic and fixture-tested (e2e-p11 + p12).
 - **Documents / media** (`Modules/Documents`): `pdf_inspect` (pages + AcroForm fields + values +
   metadata), `pdf_extract_text` (PdfPig, zero-LLM), `pdf_fill` (fill any AcroForm from a field map,
   optional flatten + CJK font — pdf-lib), `pdf_merge`, `image_info`, `image_resize`,
