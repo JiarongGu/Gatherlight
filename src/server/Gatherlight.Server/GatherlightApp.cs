@@ -101,6 +101,8 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryDeleteTool>()
             // Portable memory transfer (export/import the DB knowledge between installs)
             .AddSingleton<Modules.Memory.Services.IMemoryService, Modules.Memory.Services.MemoryService>()
+            // Eval / LLM-ops: per-conversation ranking + observability (tuning dataset)
+            .AddSingleton<Modules.Eval.Services.IFeedbackStore, Modules.Eval.Services.FeedbackStore>()
             // Hot-loadable script tools ({data}/tools/<name>/tool.json — no rebuild needed)
             .AddSingleton<ScriptToolProvider>()
             .AddSingleton<IScriptToolProvider>(sp => sp.GetRequiredService<ScriptToolProvider>())

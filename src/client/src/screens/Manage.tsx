@@ -27,6 +27,7 @@ export function Manage() {
   const [strip, setStrip] = useState<boolean[]>([]);
   const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
   const [uptime, setUptime] = useState('0s');
+  const [view, setView] = useState<'overview' | 'eval'>('overview');
   const started = useRef(Date.now());
 
   useEffect(() => {
@@ -102,6 +103,15 @@ export function Manage() {
         <span className="ver">拾光</span>
       </div>
 
+      <div className="mng-tabs">
+        <button className={`mng-tab${view === 'overview' ? ' on' : ''}`} onClick={() => setView('overview')}>概览 · Overview</button>
+        <button className={`mng-tab${view === 'eval' ? ' on' : ''}`} onClick={() => setView('eval')}>对话评估 · Eval</button>
+      </div>
+
+      {view === 'eval' && <EvalView />}
+
+      {view === 'overview' && (
+      <>
       <div className={`mng-health${healthy ? ' ok' : ''}`} style={{ ['--h' as any]: hColor }}>
         <div className="mng-health-row">
           <span className="mng-lantern" />
@@ -163,6 +173,111 @@ export function Manage() {
         规划界面在浏览器中打开;此页监控本机服务的健康。数据(计划/家庭/知识库/SQLite)在数据文件夹,数据库不进 git,请随数据文件夹备份。
       </div>
       {!inHost && <div className="mng-hint">提示:部分主机操作(重启 / 数据文件夹 / 退出)仅在桌面管理端可用。</div>}
+      </>
+      )}
+    </div>
+  );
+}
+
+// ---- Eval / observability view (conversation rankings + tuning dataset) ----
+interface Conversation {
+  id: string;
+  phase: string;
+  mode: string;
+  userMessage?: string | null;
+  commitSha?: string | null;
+  error?: string | null;
+  createdAt: string;
+  rating?: number | null;
+  note?: string | null;
+}
+interface Stats {
+  total: number;
+  rated: number;
+  avgRating: number;
+  distribution: { rating: number; count: number }[];
+}
+
+function EvalView() {
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [rows, setRows] = useState<Conversation[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [s, c] = await Promise.all([
+        fetch('/api/manage/stats').then((r) => r.json()),
+        fetch('/api/manage/conversations?limit=100').then((r) => r.json()),
+      ]);
+      setStats(s);
+      setRows(c.conversations ?? []);
+    } catch {
+      /* leave empty */
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    load();
+  }, []);
+
+  const maxDist = Math.max(1, ...(stats?.distribution ?? []).map((d) => d.count));
+  const distByStar = (n: number) => stats?.distribution.find((d) => d.rating === n)?.count ?? 0;
+
+  return (
+    <div>
+      <div className="eval-stats">
+        <div className="eval-stat"><div className="n">{stats?.total ?? '—'}</div><div className="l">对话总数 Conversations</div></div>
+        <div className="eval-stat"><div className="n">{stats?.rated ?? '—'}</div><div className="l">已评分 Rated</div></div>
+        <div className="eval-stat"><div className="n">{stats?.avgRating ? stats.avgRating.toFixed(2) : '—'}<small> / 5</small></div><div className="l">平均分 Avg rating</div></div>
+        <div className="eval-stat">
+          <div className="eval-bar">
+            {[5, 4, 3, 2, 1].map((n) => (
+              <span className="b" key={n} title={`${n}★ · ${distByStar(n)}`}>
+                <span style={{ ['--h' as any]: `${(distByStar(n) / maxDist) * 100}%` }} />
+              </span>
+            ))}
+          </div>
+          <div className="l">评分分布 5★→1★</div>
+        </div>
+      </div>
+
+      <div className="eval-toolbar">
+        <h2>对话记录</h2>
+        <button className="eval-export" onClick={() => window.open('/api/manage/eval/export', '_blank')}>导出评估数据集 (JSONL)</button>
+      </div>
+
+      {loading ? (
+        <div className="eval-empty">加载中…</div>
+      ) : rows.length === 0 ? (
+        <div className="eval-empty">还没有对话。用规划界面的 AI 助手对话,结束后为它打分,数据会出现在这里。</div>
+      ) : (
+        <div className="eval-list">
+          {rows.map((c) => (
+            <div className="eval-row" key={c.id}>
+              <div className="eval-row-main">
+                <div className="eval-row-msg">{c.userMessage || '(空)'}</div>
+                <div className="eval-row-meta">
+                  <span className="phase">{c.phase}</span>
+                  {c.mode === 'system' && <span>系统模式</span>}
+                  {c.commitSha && <span className="k">{c.commitSha.slice(0, 7)}</span>}
+                  <span>{c.createdAt.slice(0, 16).replace('T', ' ')}</span>
+                </div>
+                {c.note && <div className="eval-row-note">“{c.note}”</div>}
+              </div>
+              {c.rating ? (
+                <div className="eval-row-rating">
+                  <span className="on">{'★'.repeat(c.rating)}</span>
+                  <span className="off">{'★'.repeat(5 - c.rating)}</span>
+                </div>
+              ) : (
+                <div className="eval-row-rating unrated">未评分</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

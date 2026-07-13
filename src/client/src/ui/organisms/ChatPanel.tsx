@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { MarkdownView } from './MarkdownView';
 import { PlanActions, DiffReview } from './ChatReview';
+import { ChatRating } from './ChatRating';
 import {
   startChat,
   openStream,
@@ -512,6 +513,8 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
         {state.error && (
           <Alert type="error" showIcon style={{ margin: '8px 0' }} message={state.error} />
         )}
+
+        <ChatRating sessionId={state.sessionId} phase={state.phase} />
       </div>
 
       <div className="chat-composer">
