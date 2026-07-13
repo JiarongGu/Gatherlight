@@ -68,6 +68,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
           value={token}
           autoFocus
           spellCheck={false}
+          name="token"
+          autoComplete="off"
+          aria-label="访问令牌 / access token"
           onChange={(e) => setToken(e.target.value)}
         />
         {error && <div className="auth-err">{error}</div>}
