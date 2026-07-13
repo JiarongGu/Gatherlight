@@ -88,6 +88,43 @@ const CATEGORY_ICON: Record<string, React.ReactNode> = {
   Other: <FolderOutlined />
 };
 
+// Latin eyebrows under each top-level section — the bilingual treatment borrowed from the 知识库 pin.
+const CATEGORY_EN: Record<string, string> = {
+  TripUnits: 'TRAVEL',
+  Daily: 'DAILY',
+  Weekly: 'WEEKLY',
+  Household: 'HOUSEHOLD',
+  Budgets: 'BUDGET',
+  Packing: 'PACKING',
+  Other: 'OTHER',
+  KB: 'KNOWLEDGE BASE'
+};
+
+// A top-level section header styled like the 知识库 pin (boxed icon + serif 中文 over a mono Latin
+// eyebrow), one notch quieter so the pinned Library stays the primary surface. Sub-levels stay plain.
+function sectionLabel(opts: {
+  icon: React.ReactNode;
+  zh: React.ReactNode;
+  en: string;
+  count?: number;
+  note?: string;
+  muted?: boolean;
+}) {
+  return (
+    <div className={`side-cat${opts.muted ? ' muted' : ''}`}>
+      <span className="side-cat-icon">{opts.icon}</span>
+      <span className="side-cat-text">
+        <span className="side-cat-zh">
+          {opts.zh}
+          {opts.count !== undefined && <span className="side-cat-n">{opts.count}</span>}
+          {opts.note && <span className="side-cat-note">{opts.note}</span>}
+        </span>
+        <span className="side-cat-en">{opts.en}</span>
+      </span>
+    </div>
+  );
+}
+
 // Memoized: props are referentially stable (files memoized, callbacks
 // useCallback'd, activePath only changes on selection), so toggling shell state
 // (chat / ⌘K / resize / theme) no longer rebuilds the whole nested menu tree.
@@ -227,15 +264,12 @@ export const Sidebar = memo(function Sidebar({
       ? [
           {
             key: 'cat-TripUnits',
-            icon: <CompassOutlined />,
-            label: (
-              <span>
-                旅游
-                <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--muted)' }}>
-                  {totalVariants}
-                </span>
-              </span>
-            ),
+            label: sectionLabel({
+              icon: <CompassOutlined />,
+              zh: '旅游',
+              en: CATEGORY_EN.TripUnits,
+              count: totalVariants
+            }),
             children: destinationGroups.map((grp) => ({
               key: `dest-${grp.destination}`,
               label: (
@@ -282,15 +316,12 @@ export const Sidebar = memo(function Sidebar({
 
   const userCategoryItems: MenuProps['items'] = groupedUser.map(({ category, files: catFiles }) => ({
     key: `cat-${category}`,
-    icon: CATEGORY_ICON[category],
-    label: (
-      <span>
-        {SIDEBAR_LABEL[category] ?? category}
-        <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--muted)' }}>
-          {catFiles.length}
-        </span>
-      </span>
-    ),
+    label: sectionLabel({
+      icon: CATEGORY_ICON[category],
+      zh: SIDEBAR_LABEL[category] ?? category,
+      en: CATEGORY_EN[category] ?? category.toUpperCase(),
+      count: catFiles.length
+    }),
     children: catFiles.map((f) =>
       fileMenuItem(f, category === 'Household' ? { label: HOUSEHOLD_LABEL[f.name] ?? f.name } : {})
     )
@@ -301,18 +332,14 @@ export const Sidebar = memo(function Sidebar({
       ? [
           {
             key: 'cat-KB',
-            icon: <DatabaseOutlined />,
-            label: (
-              <span style={{ color: 'var(--text-2)' }}>
-                智库
-                <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--muted)' }}>
-                  {kbTotal}
-                </span>
-                <span style={{ marginLeft: 6, fontSize: 10, fontStyle: 'italic', color: 'var(--muted)' }}>
-                  AI 基础设施
-                </span>
-              </span>
-            ),
+            label: sectionLabel({
+              icon: <DatabaseOutlined />,
+              zh: '智库',
+              en: CATEGORY_EN.KB,
+              count: kbTotal,
+              note: 'AI 基础设施',
+              muted: true
+            }),
             children: groupedKB.map(({ category, files: catFiles }) => ({
               key: `cat-${category}`,
               icon: CATEGORY_ICON[category],
@@ -353,6 +380,7 @@ export const Sidebar = memo(function Sidebar({
         <Empty description="无匹配" style={{ marginTop: 24 }} />
       ) : (
         <Menu
+          className="side-menu"
           mode="inline"
           theme={mode}
           items={menuItems}

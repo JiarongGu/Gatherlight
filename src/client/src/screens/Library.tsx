@@ -183,17 +183,26 @@ function LibraryCard({ item }: { item: LibraryItem }) {
     .filter(Boolean)
     .slice(0, 3);
   const href = item.url ?? undefined;
-  // If the proxied image fails (dead URL / offline first load), fall back to the glyph.
+  // The glyph is always the backdrop; the cover image fades in over it once loaded, so a slow proxy
+  // fetch (cold disk cache) shows the warm seal — never an empty box or the browser's broken-image
+  // icon. A genuinely dead URL trips onError and we drop the img, leaving the glyph in place.
   const [imgOk, setImgOk] = useState(true);
+  const [imgLoaded, setImgLoaded] = useState(false);
   const showImg = !!item.imageUrl && imgOk;
 
   const inner = (
     <>
-      <div className={`lib-card-media${showImg ? '' : ' empty'}`}>
-        {showImg ? (
-          <img src={proxied(item.imageUrl!)} alt={item.name} loading="lazy" onError={() => setImgOk(false)} />
-        ) : (
-          <span className="lib-card-glyph">{glyph}</span>
+      <div className="lib-card-media">
+        <span className="lib-card-glyph">{glyph}</span>
+        {showImg && (
+          <img
+            src={proxied(item.imageUrl!)}
+            alt={item.name}
+            loading="lazy"
+            className={imgLoaded ? 'loaded' : ''}
+            onLoad={() => setImgLoaded(true)}
+            onError={() => setImgOk(false)}
+          />
         )}
         <span className="lib-kind-tag">{KIND_LABEL[item.kind] ?? item.kind}</span>
       </div>
