@@ -24,6 +24,10 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const args = process.argv.slice(2);
 const rid = args.find((a) => !a.startsWith('--')) ?? 'win-x64';
 const skipClient = args.includes('--skip-client');
+// The zip is a release/CI artifact — `dev.mjs publish` produces the runnable folder; `--zip` (CI)
+// also packages it. `--skip-chromium` skips the ~150 MB browser bundle for fast local iteration.
+const doZip = args.includes('--zip');
+const skipChromium = args.includes('--skip-chromium');
 // GATHERLIGHT_VERSION lets CI stamp the release tag without editing project.config.mjs.
 const version = process.env.GATHERLIGHT_VERSION || config.version || '0.0.0';
 
@@ -87,6 +91,25 @@ move(path.join(stage, 'Gatherlight.Host.exe'), path.join(libs, 'Gatherlight.Host
 move(path.join(stage, 'playwright.ps1'), path.join(libs, 'playwright.ps1'));
 move(path.join(stage, 'wwwroot'), path.join(res, 'wwwroot'));
 move(path.join(stage, 'Assets', 'DataTemplate'), path.join(res, 'template'));
+
+// Ship the Playwright driver next to the host so the browser-backed scrapers resolve it. The
+// single-file publish STRIPS the driver's native node.exe (into self-extract), leaving
+// .playwright/node incomplete → "Driver not found". Copy the COMPLETE driver from the non-single-file
+// Server Debug bin (build it if absent). node.exe (~80 MB) rides along.
+let playwrightBundled = false;
+const debugPw = path.join(repo, config.serverProject, 'bin', 'Debug', 'net10.0', '.playwright');
+if (!fs.existsSync(path.join(debugPw, 'node', 'win32_x64', 'node.exe'))) {
+  console.log('  (building Debug for the complete Playwright driver…)');
+  spawnSync('dotnet', ['build', config.serverProject, '-c', 'Debug', '--nologo', '-v', 'q'], { stdio: 'inherit', cwd: repo });
+}
+if (fs.existsSync(path.join(debugPw, 'node', 'win32_x64', 'node.exe'))) {
+  fs.cpSync(debugPw, path.join(libs, '.playwright'), { recursive: true });
+  playwrightBundled = true;
+  console.log('  \x1b[32m✔\x1b[0m libs/.playwright/  (driver + node.exe)');
+} else {
+  console.log('  \x1b[33m⚠ Playwright driver not bundled — scrapers will need it installed on the host.\x1b[0m');
+}
+
 fs.writeFileSync(path.join(data, '.gitkeep'), '');
 fs.rmSync(stage, { recursive: true, force: true });
 
@@ -153,6 +176,39 @@ if (rid === 'win-x64') {
   console.log(`  (portable git is win-x64 only; ${rid} needs git on PATH)`);
 }
 
+// 3.7 bundle Playwright's chromium → libs/browsers so the web-scraper tools run with NO separate
+// install on the host (PlaywrightHost points PLAYWRIGHT_BROWSERS_PATH here). Needs the bundled driver
+// (3 above). Default on; --skip-chromium keeps the bundle lean for local iteration. Uses the Debug
+// bin's playwright.ps1 (the bundled single-file exe can't self-install).
+step(3.7, 'bundling Playwright chromium…');
+let chromiumBundled = false;
+if (rid !== 'win-x64' || skipChromium || !playwrightBundled) {
+  console.log(`  (skipped — ${skipChromium ? '--skip-chromium' : !playwrightBundled ? 'no bundled driver' : rid}; host installs via playwright.ps1)`);
+} else {
+  const browsersDir = path.join(libs, 'browsers');
+  const ps1 = path.join(repo, config.serverProject, 'bin', 'Debug', 'net10.0', 'playwright.ps1');
+  if (!fs.existsSync(ps1)) {
+    console.log('  ⚠ Playwright driver (Debug bin) unavailable — skipping chromium.');
+  } else {
+    console.log('  installing chromium (~150 MB download)…');
+    const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1, 'install', 'chromium'],
+      { stdio: 'inherit', env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersDir } });
+    if (r.status === 0 && fs.existsSync(browsersDir) && fs.readdirSync(browsersDir).some((d) => d.startsWith('chromium'))) {
+      chromiumBundled = true;
+      // Scraping only ever launches Headless=true → the headless shell. Drop the full (headed)
+      // chromium (~280 MB) + ffmpeg (video capture) — verified the shell alone runs every scraper.
+      for (const d of fs.readdirSync(browsersDir))
+        if (d.startsWith('ffmpeg') || (d.startsWith('chromium-') && !d.includes('headless')))
+          fs.rmSync(path.join(browsersDir, d), { recursive: true, force: true });
+      const mb = (spawnSync('powershell', ['-NoProfile', '-Command',
+        `'{0:N0}' -f ((Get-ChildItem -Recurse '${browsersDir}' | Measure-Object Length -Sum).Sum/1MB)`], { encoding: 'utf8' }).stdout || '').trim();
+      console.log(`  \x1b[32m✔\x1b[0m libs/browsers/  (chromium, ~${mb} MB)`);
+    } else {
+      console.log('  \x1b[33m⚠ chromium not bundled (install failed) — run playwright.ps1 install on the host.\x1b[0m');
+    }
+  }
+}
+
 // 4. launcher + README
 step(4, 'writing launcher + README…');
 fs.writeFileSync(path.join(bundle, 'Gatherlight.cmd'),
@@ -187,7 +243,9 @@ fs.writeFileSync(path.join(bundle, 'README.txt'), [
     ? '已内置于 libs\\git(数据仓库引擎,无需另装) / bundled in libs\\git (the data-repo engine; no install needed)'
     : '⚠ 本次未打包,需系统已装 git / not bundled this build — needs git on PATH'),
   '  · 已登录的 claude CLI —— 仅 AI 规划需要,浏览/导入无需 / an authenticated claude CLI — only for AI planning (browsing/import work without it)',
-  '  · chromium(仅网页抓取工具,一次性): pwsh libs\\playwright.ps1 install chromium',
+  '  · chromium(仅网页抓取工具)—— ' + (chromiumBundled
+    ? '已内置于 libs\\browsers,无需安装 / bundled in libs\\browsers (no install needed)'
+    : '未打包,一次性安装: pwsh libs\\playwright.ps1 install chromium / not bundled — install once'),
   '',
   `v${version} · ${rid}`,
   '',
@@ -201,7 +259,10 @@ const walk = (dir) => {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const abs = path.join(dir, e.name);
     const rel = path.relative(bundle, abs).split(path.sep).join('/');
-    if (rel === 'manifest.json' || rel === 'data' || rel.startsWith('data/') || rel === '.update' || rel.startsWith('.update/')) continue;
+    // Exclude user data, staging, and the bundled-once Playwright runtime (driver ~80 MB + chromium
+    // ~150 MB — version-locked, changes only on a Playwright bump, i.e. a full reinstall).
+    if (rel === 'manifest.json' || rel === 'data' || rel.startsWith('data/') || rel === '.update' || rel.startsWith('.update/')
+      || rel.startsWith('libs/browsers/') || rel.startsWith('libs/.playwright/')) continue;
     if (e.isDirectory()) walk(abs);
     else {
       const buf = fs.readFileSync(abs);
@@ -213,19 +274,24 @@ walk(bundle);
 fs.writeFileSync(path.join(bundle, 'manifest.json'),
   JSON.stringify({ product: config.name, version, rid, files }, null, 2) + '\n');
 
-// 6. zip the bundle folder
-step(6, 'zipping…');
-const zip = path.join(dist, `${config.name}-${version}-${rid}.zip`);
-const zr = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
-  `Compress-Archive -Path '${bundle}' -DestinationPath '${zip}' -Force`], { stdio: 'inherit' });
-const zipped = zr.status === 0 && fs.existsSync(zip);
+// 6. zip the bundle folder — ONLY with --zip (a release/CI artifact). `dev.mjs publish` leaves the
+// runnable folder; the zip is what CI uploads to a GitHub release.
+let zip = null, zipped = false;
+if (doZip) {
+  step(6, 'zipping (release artifact)…');
+  zip = path.join(dist, `${config.name}-${version}-${rid}.zip`);
+  const zr = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+    `Compress-Archive -Path '${bundle}' -DestinationPath '${zip}' -Force`], { stdio: 'inherit' });
+  zipped = zr.status === 0 && fs.existsSync(zip);
+}
 
 // summary
 const exeMb = (fs.statSync(path.join(libs, 'Gatherlight.Host.exe')).size / 1048576).toFixed(0);
-console.log(`\n\x1b[32m✔ bundle\x1b[0m  dist/Gatherlight/  (exe ${exeMb} MB, ${files.length} files, sha256 manifest)`);
-console.log(`  layout:   ${launcherBuilt ? 'Gatherlight.exe · ' : ''}Gatherlight.cmd · libs/${gitBundled ? ' (+git)' : ''} · res/ · data/`);
+console.log(`\n\x1b[32m✔ bundle\x1b[0m  dist/Gatherlight/  (exe ${exeMb} MB, ${files.length} manifest files + bundled runtime, sha256 manifest)`);
+console.log(`  layout:   ${launcherBuilt ? 'Gatherlight.exe · ' : ''}Gatherlight.cmd · libs/${gitBundled ? ' +git' : ''}${chromiumBundled ? ' +chromium' : ''}${playwrightBundled ? ' +driver' : ''} · res/ · data/`);
 console.log(`  git:      ${gitBundled ? 'bundled (libs/git) — no host git install needed' : '⚠ NOT bundled — host needs git on PATH'}`);
-if (zipped) console.log(`  package:  dist/${path.basename(zip)}  (${(fs.statSync(zip).size / 1048576).toFixed(0)} MB)`);
+console.log(`  scrapers: ${playwrightBundled && chromiumBundled ? 'bundled driver + chromium — work out of the box' : playwrightBundled ? 'driver bundled; chromium via playwright.ps1 install' : 'dev-only (no driver bundled)'}`);
+if (doZip) console.log(zipped ? `  package:  dist/${path.basename(zip)}  (${(fs.statSync(zip).size / 1048576).toFixed(0)} MB)` : '  ⚠ zip failed');
+else console.log('  package:  (folder only — pass --zip for the release .zip)');
 console.log(`  run:      dist/Gatherlight/${launcherBuilt ? 'Gatherlight.exe' : 'Gatherlight.cmd'}`);
-console.log('  seed:     drop an exported memory bundle as dist/Gatherlight/seed-memory.json');
 console.log('  see docs/DEPLOYMENT.md\n');

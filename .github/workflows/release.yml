@@ -65,10 +65,12 @@ jobs:
 
       # Builds client -> self-contained host -> native C++ launcher -> dist/Gatherlight/ + zip.
       # GitHub Actions sets CI=true, so Gatherlight.Launcher.vcxproj selects the v143 toolset.
+      # --zip: the release packages the runnable folder into the shippable .zip (local `dev.mjs
+      # publish` leaves just the folder). The bundle carries git + the Playwright driver + chromium.
       - name: Build production bundle
         env:
           GATHERLIGHT_VERSION: ${{ steps.version.outputs.version }}
-        run: node devtools/scripts/build-production.mjs win-x64
+        run: node devtools/scripts/build-production.mjs win-x64 --zip
 
       - name: Locate artifact
         id: artifact

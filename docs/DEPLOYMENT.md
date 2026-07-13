@@ -144,17 +144,15 @@ app from starting:
    resolves the executable via `where`/`which` at runtime. Without it, browsing / plans / documents /
    library import all still work — only the AI chat gate errors. It's the one per-user step (an
    authenticated login can't be shipped in a bundle).
-2. **Playwright chromium** — only for the web-scraper tools (`scrape`, `flight_*`, `hotel_*`,
-   `restaurant_*`, `policy_check`). Install once:
-   ```bash
-   pwsh dist/playwright.ps1 install chromium
-   ```
-   The rest of the product (plans, budget, ICS, images, memory) needs no browser. (WebView2 was
-   rejected here — it needs a UI thread/window in a headless server and lacks Playwright's automation
-   API.) **Known limitation:** in the single-file production bundle, Playwright's Node *driver* isn't
-   resolved (`Driver not found: …/.playwright/node/...`), so scrapers don't yet run from the bundle —
-   they work in dev (`dotnet run`). Making scrapers work in the bundle needs the `.playwright` driver
-   shipped + path-resolved (tracked separately); it does not affect any non-scraper feature.
+2. **Playwright chromium** (web-scraper tools: `scrape`, `flight_*`, `hotel_*`, `restaurant_*`,
+   `policy_check`) — **bundled by default.** The production build ships the Playwright **driver** at
+   `libs/.playwright` (auto-resolved next to the host exe) and **chromium** at `libs/browsers`
+   (`PlaywrightHost` points `PLAYWRIGHT_BROWSERS_PATH` there), so scrapers run out of the box. Only if
+   the bundle was built `--skip-chromium` (leaner), install once on the host:
+   `pwsh libs/playwright.ps1 install chromium`. (WebView2 was rejected — it needs a UI thread/window in
+   a headless server and lacks Playwright's automation API.) Implementation note: single-file publish
+   strips the driver's native `node.exe`; the build restores a complete `.playwright` from a
+   non-single-file build so the driver resolves.
 3. **Node.js on PATH** — only for the PDF *form* tools (`pdf_fill` / `pdf_merge` / `fill_itinerary`),
    which shell out to the `tools/pdf-form` pdf-lib leaf via `npx`. (`pdf_extract_text` / `pdf_inspect`
    and the image tools are native — no Node needed.) Nothing else requires Node at runtime.

@@ -3,7 +3,9 @@
 //   node devtools/dev.mjs host [start|kill|restart] - desktop management console (hosts + monitors)
 //   node devtools/dev.mjs vite              - run the client dev server (HMR, proxies /api)
 //   node devtools/dev.mjs build             - client build -> wwwroot + dotnet build
-//   node devtools/dev.mjs publish [rid]     - client build + self-contained single-file exe -> dist/
+//   node devtools/dev.mjs publish [rid] [--zip] [--skip-chromium] - build the runnable bundle folder
+//                                            (dist/Gatherlight/: host + git + Playwright driver +
+//                                            chromium); --zip also packages the release .zip (CI)
 //   node devtools/dev.mjs e2e [all|pN|pN-pM|p1,p3] [--build] [--parallel[=N]] - API e2e suites
 //   node devtools/dev.mjs smoke             - real-claude two-gate smoke (opt-in; needs auth CLI)
 //   node devtools/dev.mjs memory <export|import> [file] - transfer DB memory (needs a running server)
