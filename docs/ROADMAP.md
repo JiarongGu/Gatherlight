@@ -27,6 +27,14 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 | Zero-LLM ICS export — trip/daily plan → `.ics` (`GET /api/plans/ics`, one all-day event per dated Day heading; changelog dates excluded) + client download button | ✅ 2026-07-13, live-verified on the real 17-day trip (17 events) |
 | Zero-LLM budget scan — `GET /api/plans/budget` + `budget_scan` tool: author-declared caps/totals, per-currency mention counts, excluded/rejected lines flagged. Honest by design (budgets are free-form: options, per-person vs total, "不计入预算" — so it never fabricates a net sum) | ✅ 2026-07-13, live-verified on the real budget (found cap AUD 12,000 + Path-A hit 12,200) |
 
+### Production readiness (post-phase-7)
+
+| Item | Status |
+|---|---|
+| **Real-claude smoke** — `dev.mjs smoke` drives the full two-gate loop against the actual authenticated CLI (no stub) on an isolated data folder; the one path the deterministic e2e can't cover | ✅ 2026-07-13, verified (real plan + execute → scoped `plans/` commit; MCP reachable) |
+| **Client bundle** — `manualChunks` (react/antd/markdown/vendor) + lazy-loaded leaflet map + dropped dead `html2pdf.js`. First-load gzip ~433kB → ~381kB, map deferred, >500kB warning gone | ✅ 2026-07-13 |
+| **Packaging** — `dev.mjs publish` → self-contained single-file `Gatherlight.Server.exe` (runtime + client + template + native libs bundled). See [DEPLOYMENT.md](DEPLOYMENT.md) | ✅ 2026-07-13, published exe verified booting (health + client + 20 tools) |
+
 ## Architecture decisions of record
 
 - **Hybrid data model**: markdown artifacts + private git repo in the data folder (the AI edits
