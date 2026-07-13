@@ -3,6 +3,7 @@
 //   node devtools/dev.mjs host [start|kill|restart] [--dev] - desktop console (hosts + monitors);
 //                                            --dev exposes the WebView2 over CDP for UI automation
 //   node devtools/dev.mjs shot [name]       - capture the desktop host window (PrintWindow) -> devtools/_shots/
+//   node devtools/dev.mjs desktop-e2e       - launch the host w/ CDP + drive its WebView2 UI end-to-end
 //   node devtools/dev.mjs vite              - run the client dev server (HMR, proxies /api)
 //   node devtools/dev.mjs build             - client build -> wwwroot + dotnet build
 //   node devtools/dev.mjs publish [rid] [--zip] [--skip-chromium] - build the runnable bundle folder
@@ -155,8 +156,12 @@ switch (cmd) {
     const env = { ...process.env };
     if (args.includes('--dev')) {
       const port = 9333 + Math.floor(Math.random() * 400);
-      env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${port}`;
-      env.GATHERLIGHT_WEBVIEW_USERDATA = path.join(repo, 'devtools', `_webview2-dev`);
+      env.GATHERLIGHT_WEBVIEW_CDP_PORT = String(port);
+      // Fresh user-data folder each --dev run → WebView2 spawns its OWN browser process (the debug
+      // port applies only to a newly-created process, never a shared/pre-existing one).
+      const udf = path.join(repo, 'devtools', '_webview2-dev');
+      fs.rmSync(udf, { recursive: true, force: true });
+      env.GATHERLIGHT_WEBVIEW_USERDATA = udf;
       fs.writeFileSync(path.join(repo, 'devtools', '_cdp-port'), String(port));
       console.log(`host --dev: WebView2 CDP on ${port} (devtools/_cdp-port)`);
     }
@@ -173,6 +178,49 @@ switch (cmd) {
       '-File', path.join(repo, 'devtools', 'scripts', 'shot-window.ps1'),
       '-ProcessName', config.hostProcess,
       '-OutFile', path.join(repo, 'devtools', '_shots', `${name}.png`)]);
+    break;
+  }
+
+  case 'desktop-e2e': {
+    // Orchestrated desktop test: launch the host with CDP against an isolated fixture, drive its
+    // WebView2 /manage UI (restart, tab switches) via desktop-e2e.mjs, then tear down. Verifies the
+    // desktop-only interactions the API/browser e2e can't reach.
+    const port = 5350, cdp = 9420;
+    const dataDir = path.join(repo, 'devtools', '_desktop-e2e-data');
+    const udf = path.join(repo, 'devtools', '_desktop-e2e-webview');
+    const exe = path.join(repo, config.hostProject, 'bin', 'Debug', config.hostTfm, `${config.hostProcess}.exe`);
+    const killAll = () => spawnSync('powershell', ['-NoProfile', '-Command',
+      'Stop-Process -Name Gatherlight.Host,msedgewebview2 -Force -ErrorAction SilentlyContinue'], { stdio: 'ignore' });
+    if (!fs.existsSync(exe)) { console.error(`host exe not found — run \`node devtools/dev.mjs build\` first (${exe})`); process.exitCode = 1; break; }
+    killAll();
+    await new Promise((r) => setTimeout(r, 800));
+    for (const d of [dataDir, udf]) fs.rmSync(d, { recursive: true, force: true });
+    spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'ignore' });
+    const host = spawn(exe, [], {
+      detached: true, stdio: 'ignore',
+      env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(port),
+        GATHERLIGHT_WEBVIEW_CDP_PORT: String(cdp), GATHERLIGHT_WEBVIEW_USERDATA: udf },
+    });
+    host.unref();
+    const health = `http://127.0.0.1:${port}/api/health`;
+    try {
+      let ready = false;
+      for (let i = 0; i < 60; i++) {
+        try {
+          if ((await fetch(health)).ok) {
+            const t = await (await fetch(`http://127.0.0.1:${cdp}/json/list`)).json();
+            if (t.some((x) => x.type === 'page' && /manage/.test(x.url))) { ready = true; break; }
+          }
+        } catch { /* not up yet */ }
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      if (!ready) { console.error('host + CDP did not come up'); process.exitCode = 1; break; }
+      const r = spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'desktop-e2e.mjs'), String(cdp), health], { stdio: 'inherit', cwd: repo });
+      process.exitCode = r.status ?? 1;
+    } finally {
+      killAll();
+      for (const d of [dataDir, udf]) fs.rmSync(d, { recursive: true, force: true });
+    }
     break;
   }
 

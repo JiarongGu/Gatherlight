@@ -97,7 +97,13 @@ public sealed class AppHost : Form
             // and a pre-existing one would ignore the CDP debug-port arg.
             var userData = Environment.GetEnvironmentVariable("GATHERLIGHT_WEBVIEW_USERDATA")
                 ?? Path.Combine(Path.GetTempPath(), "gatherlight-webview2");
-            var env = await CoreWebView2Environment.CreateAsync(userDataFolder: userData);
+            // Expose the WebView2 over CDP for automated desktop tests when a port is set. Passing the
+            // debug-port via AdditionalBrowserArguments (in code) is more reliable than the env var.
+            CoreWebView2EnvironmentOptions? opts = null;
+            var cdpPort = Environment.GetEnvironmentVariable("GATHERLIGHT_WEBVIEW_CDP_PORT");
+            if (!string.IsNullOrWhiteSpace(cdpPort))
+                opts = new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = $"--remote-debugging-port={cdpPort}" };
+            var env = await CoreWebView2Environment.CreateAsync(browserExecutableFolder: null, userDataFolder: userData, options: opts);
             await _web.EnsureCoreWebView2Async(env);
             var core = _web.CoreWebView2;
             core.Settings.AreDefaultContextMenusEnabled = false;
