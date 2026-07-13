@@ -43,7 +43,9 @@ tools. The model is spent only on genuine planning — and the chat panel shows 
 - **Memory transfer** — export the DB knowledge (`/api/memory/export`) and move it to another
   install, or seed a fresh one at startup with `GATHERLIGHT_SEED_MEMORY`.
 - **Eval / LLM-ops** — users rank each conversation (1–5 + note); the `/manage` console shows
-  aggregate stats, transcripts, and a JSONL tuning-dataset export.
+  aggregate stats, transcripts, and a JSONL tuning-dataset export. Its **校准 (Cortex)** tab closes
+  the loop: edit the agent's prompt templates and per-consumer model routing live (stored in
+  `app_config`, effective next call, one click to reset to the shipped default).
 - **Extensible tools** — 24 built in (`extract`, `scrape`, `wiki_info`, `policy_check`,
   `hotel_info`, `restaurant_info`, `flight_schedule`, `flight_prices`, `hotel_prices`,
   `fill_itinerary`, `pdf_*`/`image_*`, `budget_scan`, `remember_fact`/`recall_facts`, `library_*`).

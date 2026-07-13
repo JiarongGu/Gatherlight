@@ -27,7 +27,7 @@ export function Manage() {
   const [strip, setStrip] = useState<boolean[]>([]);
   const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
   const [uptime, setUptime] = useState('0s');
-  const [view, setView] = useState<'overview' | 'eval'>('overview');
+  const [view, setView] = useState<'overview' | 'eval' | 'cortex'>('overview');
   const started = useRef(Date.now());
 
   useEffect(() => {
@@ -106,9 +106,11 @@ export function Manage() {
       <div className="mng-tabs">
         <button className={`mng-tab${view === 'overview' ? ' on' : ''}`} onClick={() => setView('overview')}>概览 · Overview</button>
         <button className={`mng-tab${view === 'eval' ? ' on' : ''}`} onClick={() => setView('eval')}>对话评估 · Eval</button>
+        <button className={`mng-tab${view === 'cortex' ? ' on' : ''}`} onClick={() => setView('cortex')}>校准 · Cortex</button>
       </div>
 
       {view === 'eval' && <EvalView />}
+      {view === 'cortex' && <CortexView />}
 
       {view === 'overview' && (
       <>
@@ -278,6 +280,227 @@ function EvalView() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- Cortex tuning view (prompt-template + model-routing overrides) ----
+interface PromptItem {
+  name: string;
+  label: string;
+  description: string;
+  group: string;
+  placeholders: string[];
+  default: string;
+  override: string | null;
+  effective: string;
+  overridden: boolean;
+}
+interface ModelItem {
+  consumer: string;
+  label: string;
+  description: string;
+  default: string | null;
+  override: string | null;
+  effective: string | null;
+  overridden: boolean;
+  suggestions: string[];
+}
+
+const GROUP_LABELS: Record<string, string> = {
+  planner: '规划闸门 · Planner gates',
+  validation: '智库校验 · Validation',
+  utility: '工具 · Utility',
+  system: '系统模式 · System mode',
+};
+const GROUP_ORDER = ['planner', 'validation', 'utility', 'system'];
+const modelLabel = (v: string | null) => (v && v.length ? v : 'CLI 默认');
+
+function CortexView() {
+  const [prompts, setPrompts] = useState<PromptItem[]>([]);
+  const [models, setModels] = useState<ModelItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const d = await (await fetch('/api/manage/cortex')).json();
+      setPrompts(d.prompts ?? []);
+      setModels(d.models ?? []);
+    } catch {
+      /* leave empty */
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    load();
+  }, []);
+
+  const expand = (p: PromptItem) => {
+    if (open === p.name) {
+      setOpen(null);
+      return;
+    }
+    setOpen(p.name);
+    setDraft(p.effective);
+    setErr(null);
+  };
+
+  const savePrompt = async (p: PromptItem) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/manage/cortex/prompt/${p.name}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ value: draft }),
+      });
+      if (res.ok) {
+        setOpen(null);
+        await load();
+      } else {
+        const j = await res.json().catch(() => ({}));
+        setErr(
+          j.missing?.length
+            ? `缺少占位符:${j.missing.map((m: string) => `{${m}}`).join(' ')} — 覆写必须保留全部占位符,否则动态内容会丢失。`
+            : `保存失败:${j.error ?? res.status}`,
+        );
+      }
+    } catch (e) {
+      setErr('保存失败:' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetPrompt = async (p: PromptItem) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await fetch(`/api/manage/cortex/prompt/${p.name}`, { method: 'DELETE' });
+      setOpen(null);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setModel = async (m: ModelItem, value: string) => {
+    if ((m.override ?? '') === value) return;
+    setModels((prev) => prev.map((x) => (x.consumer === m.consumer ? { ...x, override: value || null, overridden: !!value, effective: value || m.default } : x)));
+    try {
+      await fetch(`/api/manage/cortex/model/${m.consumer}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ value }),
+      });
+    } finally {
+      load();
+    }
+  };
+
+  if (loading) return <div className="eval-empty">加载中…</div>;
+
+  return (
+    <div className="cx">
+      <div className="cx-lead">
+        校准“cortex”——每次 LLM 调用所用的提示词与模型都在这里调,存入 <code>app_config</code>,下次调用即时生效,无需重启。
+        与「对话评估」形成闭环:先评分收集数据,再回到这里调提示词/模型。
+      </div>
+
+      <div className="mng-title">模型路由 · Model routing</div>
+      <div className="cx-models">
+        {models.map((m) => (
+          <div className={`cx-model${m.overridden ? ' on' : ''}`} key={m.consumer}>
+            <div className="cx-model-head">
+              <span className="cx-model-name">{m.label}</span>
+              {m.overridden && <span className="cx-badge">已自定义</span>}
+            </div>
+            <div className="cx-model-desc">{m.description}</div>
+            <div className="cx-seg">
+              {m.suggestions.map((s) => {
+                const active = (m.override ?? '') === s;
+                return (
+                  <button
+                    key={s || 'default'}
+                    className={`cx-seg-b${active ? ' on' : ''}`}
+                    onClick={() => setModel(m, s)}
+                    title={s ? s : `使用默认(${modelLabel(m.default)})`}
+                  >
+                    {s ? s : '默认'}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="cx-model-eff">
+              生效:<b>{modelLabel(m.effective)}</b>
+              {m.default !== null && <span className="cx-dim"> · 默认 {modelLabel(m.default)}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mng-title">提示词模板 · Prompt templates</div>
+      {GROUP_ORDER.filter((g) => prompts.some((p) => p.group === g)).map((g) => (
+        <div className="cx-group" key={g}>
+          <div className="cx-group-h">{GROUP_LABELS[g] ?? g}</div>
+          {prompts
+            .filter((p) => p.group === g)
+            .map((p) => (
+              <div className={`cx-prompt${open === p.name ? ' open' : ''}${p.overridden ? ' on' : ''}`} key={p.name}>
+                <button className="cx-prompt-head" onClick={() => expand(p)}>
+                  <span className="cx-caret">{open === p.name ? '▾' : '▸'}</span>
+                  <span className="cx-prompt-main">
+                    <span className="cx-prompt-label">
+                      {p.label}
+                      {p.overridden && <span className="cx-badge">已自定义</span>}
+                    </span>
+                    <span className="cx-prompt-desc">{p.description}</span>
+                  </span>
+                  <span className="cx-chips">
+                    {p.placeholders.map((ph) => (
+                      <code key={ph}>{`{${ph}}`}</code>
+                    ))}
+                  </span>
+                </button>
+                {open === p.name && (
+                  <div className="cx-editor">
+                    <textarea
+                      value={draft}
+                      spellCheck={false}
+                      onChange={(e) => setDraft(e.target.value)}
+                      rows={Math.min(26, Math.max(8, draft.split('\n').length + 1))}
+                    />
+                    {err && <div className="cx-err">{err}</div>}
+                    <div className="cx-editor-bar">
+                      <span className="cx-hint">
+                        必须保留占位符:{p.placeholders.length ? p.placeholders.map((ph) => `{${ph}}`).join(' ') : '(无)'}
+                      </span>
+                      <div className="cx-editor-btns">
+                        <button className="cx-btn ghost" onClick={() => setOpen(null)} disabled={busy}>
+                          收起
+                        </button>
+                        {p.overridden && (
+                          <button className="cx-btn ghost" onClick={() => resetPrompt(p)} disabled={busy}>
+                            重置为默认
+                          </button>
+                        )}
+                        <button className="cx-btn primary" onClick={() => savePrompt(p)} disabled={busy || draft === p.effective}>
+                          保存
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+        </div>
+      ))}
     </div>
   );
 }

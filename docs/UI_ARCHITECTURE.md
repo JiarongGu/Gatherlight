@@ -8,8 +8,8 @@ The React client (`src/client/src/`) follows the atomic design pattern (sibling-
 |---|---|---|---|
 | **Atoms** | `src/client/src/ui/atoms/` | Visual primitives — the single source for every shared visual. Includes the in-house surface over AntD (`primitives.ts`) plus display-only pieces. | `IconButton`, `CatBadge`, `StatusBadge`, `DayChip`, `DiffLine`, `Highlight`, `Stepper`, `Kbd` |
 | **Molecules** | `src/client/src/ui/molecules/` | Configured / composed pieces built from atoms; reusable but not feature-specific. | `Carousel`, `Collapsible`, `MapCanvas` |
-| **Organisms** | `src/client/src/ui/organisms/` | Feature blocks with business logic, built from atoms + molecules. | `ChatPanel`, `Sidebar`, `MarkdownView`, `TopBar`, `TOC`, `CommandPalette`, `TripMap`, `CityMap`, `TripDayNav`, `TripAssets`, `PlanActionsMenu`, `ChatReview` |
-| **Screens** | `src/client/src/screens/` | Routed top-level surfaces composed of organisms. | `Home` |
+| **Organisms** | `src/client/src/ui/organisms/` | Feature blocks with business logic, built from atoms + molecules. | `ChatPanel`, `Sidebar`, `MarkdownView`, `TopBar`, `TOC`, `CommandPalette`, `TripMap`, `CityMap`, `TripDayNav`, `TripAssets`, `PlanActionsMenu`, `ChatReview`, `ChatRating` |
+| **Screens** | `src/client/src/screens/` | Routed top-level surfaces composed of organisms. | `Home`, `Manage` (`/manage` console: 概览 health · 对话评估 eval · 校准 cortex-tuning) |
 
 ## The one-atom rule
 

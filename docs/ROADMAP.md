@@ -38,6 +38,7 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 | **Desktop management host** — `Gatherlight.Host` (WinForms + WebView2, resizable/DPI-correct) renders the `/manage` "lantern control room" (health monitor + counts + controls) with a polished native tray + window-position persistence; hosts the server in-process. Users open the planner in a browser. `dev.mjs host`. | ✅ 2026-07-13, verified |
 | **Memory transfer** — `/api/memory/export|import` (portable bundle: library + facts + entities) + `GATHERLIGHT_SEED_MEMORY` startup seeding; console + `dev.mjs memory`. | ✅ 2026-07-13 (e2e-p14) |
 | **Eval / LLM-ops** — per-conversation 1–5 ranking (chat_feedback) + `/manage` observability tab (stats / transcripts / JSONL tuning-dataset export). | ✅ 2026-07-13 (e2e-p15) |
+| **Cortex tuning** — `/manage` 校准 tab + `/api/manage/cortex`: edit the prompt templates (`cortex.prompt.{name}`, placeholder-contract validated) + model routing (`llm.model.{chat,extract}`) live from `app_config`, reset to shipped default. The write side of the LLM-ops loop (rank → inspect → tune). | ✅ 2026-07-13 (e2e-p16, 19 checks) |
 | **Structured publish** — `dev.mjs publish` → `dist/Gatherlight/` (launcher · libs/ · res/ · data/) + zip + sha256 manifest; the server self-locates `res/` + `data/`. | ✅ 2026-07-13, verified |
 
 ## Architecture decisions of record

@@ -38,11 +38,15 @@ const done = (text) =>
 if (readOnly) {
   // Surface whether the server pre-routed discovery (e2e asserts the marker).
   const routed = prompt.includes('SERVER PRE-ROUTING') ? '[pre-routed]' : '[full-gate]';
+  // Echo a token planted in a cortex prompt override back into the plan text, so an e2e can prove
+  // a runtime override actually reached the spawned CLI (harmless when the token is absent).
+  const echo = (prompt.match(/CORTEX_ECHO:(\S+)/) ?? [])[1];
+  const echoTag = echo ? ` [echo:${echo}]` : '';
   const text = systemMode
     ? `## UI 改动计划(stub)\n\n- **Files to change** — src/client/src/stub-touch.txt`
     : prompt.includes("HUMAN'S FEEDBACK")
-      ? `## 修订后的计划(stub)${routed}\n\n1. **What the user asked** — 修订版\n2. **Files to change** — plans/daily/2026-07-14.md`
-      : `## 计划(stub)${routed}\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none`;
+      ? `## 修订后的计划(stub)${routed}${echoTag}\n\n1. **What the user asked** — 修订版\n2. **Files to change** — plans/daily/2026-07-14.md`
+      : `## 计划(stub)${routed}${echoTag}\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none`;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
   done(text);
 } else {

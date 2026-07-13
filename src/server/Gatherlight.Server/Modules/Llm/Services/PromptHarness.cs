@@ -1,6 +1,17 @@
+using System.Text.RegularExpressions;
 using Gatherlight.Server.Modules.Core.Services;
 
 namespace Gatherlight.Server.Modules.Llm.Services;
+
+/// <summary>
+/// A tunable prompt template in the cortex registry: its built-in default plus the metadata the
+/// management console needs to present + validate an override. <see cref="Placeholders"/> are the
+/// <c>{token}</c> slots the default fills at render time — an override MUST keep every one, or the
+/// corresponding dynamic content (the user's request, the diff, …) never reaches the agent.
+/// </summary>
+public sealed record PromptDescriptor(
+    string Name, string Label, string Description, string Group,
+    string Default, IReadOnlyList<string> Placeholders);
 
 /// <summary>
 /// The agent harness — instruction scaffolding wrapped around every claude CLI invocation so
@@ -10,6 +21,7 @@ namespace Gatherlight.Server.Modules.Llm.Services;
 ///
 /// Every template is overridable at runtime via app_config key <c>cortex.prompt.{name}</c>
 /// (PromptRegistry pattern) — placeholders like {userMessage} are filled after override lookup.
+/// The full set of tunable templates is published as <see cref="PromptHarness.Catalog"/>.
 /// </summary>
 public interface IPromptHarness
 {
@@ -205,6 +217,43 @@ public sealed class PromptHarness : IPromptHarness
         BUILD OUTPUT (tail):
         {buildOutput}
         """;
+
+    private static readonly Regex PlaceholderRe = new(@"\{([a-zA-Z]+)\}", RegexOptions.Compiled);
+
+    private static IReadOnlyList<string> Ph(string template) =>
+        PlaceholderRe.Matches(template).Select(m => m.Groups[1].Value).Distinct().ToArray();
+
+    /// <summary>
+    /// The tunable-prompt registry the management console drives — every template that
+    /// <see cref="Render"/> can override via <c>cortex.prompt.{name}</c>, with its default body,
+    /// placeholder contract, and a human label/description. Grouped for presentation:
+    /// <c>planner</c> (the two-gate chat), <c>validation</c>, <c>utility</c>, <c>system</c>.
+    /// </summary>
+    public static IReadOnlyList<PromptDescriptor> Catalog { get; } = new[]
+    {
+        new PromptDescriptor("plan", "规划 · Plan",
+            "闸门一:根据用户请求起草只读计划,交人审批。", "planner", PlanTemplate, Ph(PlanTemplate)),
+        new PromptDescriptor("revisePlan", "修订计划 · Revise plan",
+            "计划未获批准时,吸收反馈重拟计划。", "planner", RevisePlanTemplate, Ph(RevisePlanTemplate)),
+        new PromptDescriptor("execute", "执行 · Execute",
+            "计划批准后逐条落实文件改动。", "planner", ExecuteTemplate, Ph(ExecuteTemplate)),
+        new PromptDescriptor("reviseExecute", "修订执行 · Revise execute",
+            "提交前根据 diff 反馈调整已改文件。", "planner", ReviseExecuteTemplate, Ph(ReviseExecuteTemplate)),
+        new PromptDescriptor("validate", "智库校验 · Validate",
+            "校验 .claude/ 改动的一致性与索引完整性。", "validation", ValidateTemplate, Ph(ValidateTemplate)),
+        new PromptDescriptor("processFile", "文件提取 · Extract",
+            "一次性读取单个文件并返回结果(廉价工具调用,不加载智库)。", "utility", ProcessFileTemplate, Ph(ProcessFileTemplate)),
+        new PromptDescriptor("systemPlan", "系统模式 · 计划",
+            "系统模式:改本应用界面的计划闸门。", "system", SystemPlanTemplate, Ph(SystemPlanTemplate)),
+        new PromptDescriptor("systemRevisePlan", "系统模式 · 修订计划",
+            "系统模式:界面改动计划的修订。", "system", SystemRevisePlanTemplate, Ph(SystemRevisePlanTemplate)),
+        new PromptDescriptor("systemExecute", "系统模式 · 执行",
+            "系统模式:落实界面代码改动。", "system", SystemExecuteTemplate, Ph(SystemExecuteTemplate)),
+        new PromptDescriptor("systemReviseExecute", "系统模式 · 修订执行",
+            "系统模式:界面改动的修订。", "system", SystemReviseExecuteTemplate, Ph(SystemReviseExecuteTemplate)),
+        new PromptDescriptor("repair", "系统模式 · 构建修复",
+            "系统模式:构建失败后修复 src/client 代码。", "system", RepairTemplate, Ph(RepairTemplate)),
+    };
 
     private readonly IAppConfigService _appConfig;
 
