@@ -86,6 +86,10 @@ public sealed class ChatController : ControllerBase
         await Response.WriteAsync("retry: 3000\n\n", ct);
         await Response.Body.FlushAsync(ct);
 
+        // Resume: skip anything the client already received before a reconnect (browser EventSource
+        // sends the last id it saw). -1 = a fresh connection wants the full replay.
+        var lastSeen = int.TryParse(Request.Headers["Last-Event-ID"].ToString(), out var le) ? le : -1;
+
         var (replay, live, unsubscribe) = _chat.Subscribe(id);
         using var _ = unsubscribe;
 
@@ -98,13 +102,15 @@ public sealed class ChatController : ControllerBase
             try { await Response.WriteAsync(payload, ct); await Response.Body.FlushAsync(ct); }
             finally { writeGate.Release(); }
         }
-        static string Frame(AgentEvent ev) => $"data: {JsonSerializer.Serialize(ev, AgentEvent.WireJson)}\n\n";
+        // Each frame carries its seq as the SSE id so a reconnect can resume past it.
+        static string Frame(int seq, AgentEvent ev) => $"id: {seq}\ndata: {JsonSerializer.Serialize(ev, AgentEvent.WireJson)}\n\n";
 
         // Stop the heartbeat when the event loop ends, so it can't touch writeGate/Response after scope exit.
         using var hbCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
-            foreach (var ev in replay) await Write(Frame(ev));
+            for (var i = 0; i < replay.Count; i++)
+                if (i > lastSeen) await Write(Frame(i, replay[i]));
 
             // Heartbeat so proxies don't drop the idle connection.
             using var heartbeat = new PeriodicTimer(TimeSpan.FromSeconds(15));
@@ -116,7 +122,8 @@ public sealed class ChatController : ControllerBase
 
             try
             {
-                await foreach (var ev in live.ReadAllAsync(ct)) await Write(Frame(ev));
+                await foreach (var (seq, ev) in live.ReadAllAsync(ct))
+                    if (seq > lastSeen) await Write(Frame(seq, ev));
             }
             finally
             {

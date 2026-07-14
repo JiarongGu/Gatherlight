@@ -45,8 +45,9 @@ export const refineDiff = (id: string, message: string) =>
 
 /**
  * Subscribe to a session's event stream. Returns a close() fn.
- * Reconnects are handled by the browser's EventSource automatically; the server
- * replays buffered events on (re)connect so nothing is missed.
+ * Reconnects are handled by the browser's EventSource automatically: each frame carries an `id:`,
+ * so on reconnect the browser sends Last-Event-ID and the server resumes AFTER it — no duplicate
+ * replay of events already seen (which would otherwise double the transcript + token counts).
  */
 export function openStream(
   id: string,

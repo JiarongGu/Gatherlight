@@ -45,7 +45,9 @@ public sealed class ChatSession
     public string? Error { get; set; }
     public DateTime CreatedAt { get; } = DateTime.UtcNow;
     public List<AgentEvent> Log { get; } = new();
-    public ConcurrentDictionary<Channel<AgentEvent>, byte> Subscribers { get; } = new();
+    // Each delivered event carries its stable seq = its index in Log (append-only), so a reconnecting
+    // SSE client can resume past what it already saw (Last-Event-ID) instead of re-receiving everything.
+    public ConcurrentDictionary<Channel<(int Seq, AgentEvent Ev)>, byte> Subscribers { get; } = new();
     public CancellationTokenSource? Abort { get; set; }
     public bool Cancelled { get; set; }
     public required string ThreadContext { get; init; }
@@ -130,8 +132,15 @@ public sealed class ChatSessionService
 
     private void Emit(ChatSession s, AgentEvent ev)
     {
-        lock (s.Log) s.Log.Add(ev);
-        foreach (var ch in s.Subscribers.Keys) ch.Writer.TryWrite(ev);
+        // Append + fan out to subscribers under the SAME lock Subscribe snapshots under, so an event
+        // emitted between a reconnect's snapshot and its subscribe can't be lost, and every subscriber
+        // sees the same stable seq (the log index).
+        lock (s.Log)
+        {
+            s.Log.Add(ev);
+            var idx = s.Log.Count - 1;
+            foreach (var ch in s.Subscribers.Keys) ch.Writer.TryWrite((idx, ev));
+        }
         var seq = Interlocked.Increment(ref s.EventSeq);
         var payload = JsonSerializer.Serialize(ev, AgentEvent.WireJson);
         s.PersistChain = s.PersistChain.ContinueWith(
@@ -164,14 +173,18 @@ public sealed class ChatSessionService
         Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Error });
     }
 
-    /// <summary>SSE subscription: replay the buffered log, then live events. Dispose to detach.</summary>
-    public (List<AgentEvent> Replay, ChannelReader<AgentEvent> Live, IDisposable Unsubscribe) Subscribe(string id)
+    /// <summary>SSE subscription: replay the buffered log (index = seq), then live (seq, event) pairs.
+    /// Dispose to detach. Snapshot + subscribe happen under one lock so no event slips between them.</summary>
+    public (List<AgentEvent> Replay, ChannelReader<(int Seq, AgentEvent Ev)> Live, IDisposable Unsubscribe) Subscribe(string id)
     {
         var s = _sessions[id];
-        var ch = Channel.CreateUnbounded<AgentEvent>();
+        var ch = Channel.CreateUnbounded<(int, AgentEvent)>();
         List<AgentEvent> replay;
-        lock (s.Log) replay = s.Log.ToList();
-        s.Subscribers.TryAdd(ch, 0);
+        lock (s.Log)
+        {
+            replay = s.Log.ToList();
+            s.Subscribers.TryAdd(ch, 0);
+        }
         return (replay, ch.Reader, new Unsubscriber(() =>
         {
             s.Subscribers.TryRemove(ch, out _);
