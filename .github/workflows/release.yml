@@ -177,10 +177,18 @@ jobs:
         if: inputs.create_tag
         shell: pwsh
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
+          $tag = "${{ steps.version.outputs.tag }}"
+          # Idempotent so a RE-RUN (regenerating the release notes / re-cutting the same version) doesn't
+          # abort here on "tag already exists". If it exists, leave it where it is — the release body is
+          # refreshed below and softprops updates the existing release; only create+push when missing.
+          if (git tag -l $tag) {
+            Write-Host "tag $tag already exists — leaving it in place (re-run)."
+          } else {
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a $tag -m "Release $tag"
+            git push origin $tag
+          }
 
       - name: Generate release notes
         id: notes
