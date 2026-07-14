@@ -38,16 +38,16 @@ jobs:
           node-version: '22'
 
       # Builds the server Debug (to materialize the Playwright driver), assembles payload/, and packs
-      # dist/resources/*.nupkg.
+      # publish/resources/*.nupkg.
       - name: Pack
         run: node devtools/dev.mjs resources-pack ${{ inputs.version }}
 
       - name: Push to nuget.org
         if: ${{ !inputs.dry_run }}
-        run: dotnet nuget push "dist/resources/*.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push "publish/resources/*.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: gatherlight-resources-${{ inputs.version }}
-          path: dist/resources/*.nupkg
+          path: publish/resources/*.nupkg

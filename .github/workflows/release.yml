@@ -119,7 +119,7 @@ jobs:
       - name: e2e gate
         run: node devtools/dev.mjs e2e all --build
 
-      # Builds client -> self-contained host -> native C++ launcher -> dist/Gatherlight/ + zip.
+      # Builds client -> self-contained host -> native C++ launcher -> publish/Gatherlight/ + zip.
       # GitHub Actions sets CI=true, so Gatherlight.Launcher.vcxproj selects the v143 toolset. --zip
       # packages the runnable folder into the shippable .zip. The bundle carries git + the Playwright
       # driver + chromium.
@@ -132,7 +132,7 @@ jobs:
         id: artifact
         shell: pwsh
         run: |
-          $zip = Get-ChildItem "dist\*.zip" | Select-Object -First 1
+          $zip = Get-ChildItem "publish\*.zip" | Select-Object -First 1
           if (-not $zip) { Write-Host "::error::no bundle zip produced"; exit 1 }
           Write-Host "artifact: $($zip.FullName) ($([math]::Round($zip.Length/1MB,1)) MB)"
           "path=$($zip.FullName)" >> $env:GITHUB_OUTPUT
@@ -143,7 +143,7 @@ jobs:
           name: gatherlight-win-x64
           path: |
             ${{ steps.artifact.outputs.path }}
-            dist/Gatherlight/manifest.json
+            publish/Gatherlight/manifest.json
 
       # Only tag AFTER a green e2e + a successful bundle, so tags always point at shippable commits.
       - name: Create git tag
@@ -178,6 +178,6 @@ jobs:
           prerelease: ${{ inputs.prerelease }}
           files: |
             ${{ steps.artifact.outputs.path }}
-            dist/Gatherlight/manifest.json
+            publish/Gatherlight/manifest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -7,7 +7,7 @@
 //   node devtools/dev.mjs vite              - run the client dev server (HMR, proxies /api)
 //   node devtools/dev.mjs build             - client build -> wwwroot + dotnet build
 //   node devtools/dev.mjs publish [rid] [--zip] [--skip-chromium] - build the runnable bundle folder
-//                                            (dist/Gatherlight/: host + git + Playwright driver +
+//                                            (publish/Gatherlight/: host + git + Playwright driver +
 //                                            chromium); --zip also packages the release .zip (CI)
 //   node devtools/dev.mjs e2e [all|pN|pN-pM|p1,p3] [--build] [--parallel[=N]] - API e2e suites
 //   node devtools/dev.mjs smoke             - real-claude two-gate smoke (opt-in; needs auth CLI)
@@ -417,8 +417,8 @@ switch (cmd) {
     }
     console.log(`  chromium: ${dirMB(browsersOut)} MB`);
 
-    // 4. dotnet pack → dist/resources/*.nupkg  (payload/{playwright,git,browsers} -> content/*)
-    const out = path.join(repo, 'dist', 'resources');
+    // 4. dotnet pack → publish/resources/*.nupkg  (payload/{playwright,git,browsers} -> content/*)
+    const out = path.join(repo, 'publish', 'resources');
     fs.rmSync(out, { recursive: true, force: true });
     fs.mkdirSync(out, { recursive: true });
     const packArgs = ['pack', proj, '-c', 'Release', '-o', out, '-v', 'minimal'];

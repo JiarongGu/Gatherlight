@@ -42,14 +42,16 @@ The driver is paired with the `Microsoft.Playwright` NuGet version the app build
 
 ## Build & publish
 
-**Locally** — one PowerShell script packs (assembles driver + git + chromium headless-shell) and
-pushes, for when a payload changes (Playwright bump, new resource):
+**Locally** — root PowerShell scripts (matching the d3dx layout), for when a payload changes
+(Playwright bump, new resource):
 
 ```powershell
+./build-resource.ps1                         # collect driver + git + chromium -> publish/resources/*.nupkg (build only)
+
 # reserve the id 'Gatherlight.Resources' on nuget.org once, then:
 $env:NUGET_API_KEY = '<your-key>'            # or pass -ApiKey, or you'll be prompted (hidden)
-./devtools/publish-resources.ps1             # pack + push at the provisioner's version
-./devtools/publish-resources.ps1 -PackOnly   # build only; inspect dist/resources first
+./publish-resources.ps1                      # build (via build-resource.ps1) + push at the provisioner's version
+./publish-resources.ps1 -PackOnly            # build only; inspect publish/resources first
 ```
 
 **Bumping a version:** update `ResourceProvisioner.ResourcesPackageVersion` (the app fetches that

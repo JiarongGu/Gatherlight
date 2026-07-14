@@ -13,19 +13,20 @@ for development only.
 ## Build the artifact
 
 ```powershell
-.\build.ps1                 # win-x64 bundle (root entry point)
-.\build.ps1 -Rid win-arm64  # another runtime
-.\build.ps1 -SkipClient     # reuse an existing client build
+.\build-production.ps1                 # lean win-x64 bundle (root entry point)
+.\build-production.ps1 -Zip            # also produce the release .zip
+.\build-production.ps1 -Rid win-arm64  # another runtime
+.\build-production.ps1 -SkipClient     # reuse an existing client build
 ```
 
-`build.ps1` is a thin wrapper over `node devtools/scripts/build-production.mjs` (also reachable as
+`build-production.ps1` is a thin wrapper over `node devtools/scripts/build-production.mjs` (also reachable as
 `node devtools/dev.mjs publish`). It builds the client, publishes the **Host** as a self-contained
 single-file exe, compiles the **native C++ launcher** (`Gatherlight.exe`, if the MSVC toolchain is
 present — otherwise it falls back to `Gatherlight.cmd`), and arranges a clean bundle in
-`dist/Gatherlight/` (gitignored) + a matching `.zip`:
+`publish/Gatherlight/` (gitignored) + a matching `.zip`:
 
 ```
-dist/Gatherlight/
+publish/Gatherlight/
   Gatherlight.exe    native launcher (carries the app icon) — double-click to run
   Gatherlight.cmd    fallback launcher (script)
   README.txt         run / transfer-memory / prerequisites
@@ -47,7 +48,7 @@ default). GitHub Actions builds the launcher with the v143 toolset (v145 locally
 
 ## Run it
 
-Launch `dist/Gatherlight/Gatherlight.exe` (or `Gatherlight.cmd`; `node devtools/dev.mjs host` in
+Launch `publish/Gatherlight/Gatherlight.exe` (or `Gatherlight.cmd`; `node devtools/dev.mjs host` in
 dev). A tray icon appears and the **management console** opens (a resizable, DPI-correct WebView2
 window rendering the `/manage` dashboard):
 
@@ -178,7 +179,7 @@ manual re-download.
 > The self-contained host is one ~100 MB file, so each update re-downloads it in full (no deltas).
 > `release.yml` publishes the zip + `manifest.json` as release assets on a `v*` tag.
 
-**Manual.** Re-run `.\build.ps1` (or `node devtools/dev.mjs publish`) and replace the folder. Data
+**Manual.** Re-run `.\build-production.ps1` (or `node devtools/dev.mjs publish`) and replace the folder. Data
 folders are upgraded in place on next boot regardless of update path: `ZhikuSeeder` re-seeds template
 files the user hasn't modified (hash-guarded) and migrations advance the SQLite schema — user edits
 and app state are preserved.

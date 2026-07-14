@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // build-production.mjs — produce the shippable Gatherlight desktop bundle in a clear layout:
 //
-//   dist/Gatherlight/
+//   publish/Gatherlight/
 //     Gatherlight.cmd     launcher — double-click to run (sets data path + optional memory seed)
 //     README.txt          how to run / transfer memory / prerequisites
 //     manifest.json       sha256 of every shipped file (for update verification)
 //     libs/               the self-contained single-file host (runtime + assemblies) + playwright.ps1
 //     res/                wwwroot (web planner) + template (knowledge-base seed)
 //     data/               the data folder — user data lands here (back this up)
-//   dist/Gatherlight-<version>-<rid>.zip   the whole bundle, zipped
+//   publish/Gatherlight-<version>-<rid>.zip   the whole bundle, zipped
 //
 //   node devtools/scripts/build-production.mjs [rid] [--skip-client] [--offline] [--zip]
 // The .NET runtime is embedded (target machine needs nothing). By default the bundle is LEAN:
@@ -37,7 +37,7 @@ const offline = args.includes('--offline');
 // GATHERLIGHT_VERSION lets CI stamp the release tag without editing project.config.mjs.
 const version = process.env.GATHERLIGHT_VERSION || config.version || '0.0.0';
 
-const dist = path.join(repo, 'dist');
+const dist = path.join(repo, 'publish');
 const bundle = path.join(dist, 'Gatherlight');
 const stage = path.join(dist, '_stage');
 const libs = path.join(bundle, 'libs');
@@ -298,11 +298,11 @@ if (doZip) {
 
 // summary
 const exeMb = (fs.statSync(path.join(libs, 'Gatherlight.Host.exe')).size / 1048576).toFixed(0);
-console.log(`\n\x1b[32m✔ bundle\x1b[0m  dist/Gatherlight/  (exe ${exeMb} MB, ${files.length} manifest files + bundled runtime, sha256 manifest)`);
+console.log(`\n\x1b[32m✔ bundle\x1b[0m  publish/Gatherlight/  (exe ${exeMb} MB, ${files.length} manifest files + bundled runtime, sha256 manifest)`);
 console.log(`  layout:   ${launcherBuilt ? 'Gatherlight.exe · ' : ''}Gatherlight.cmd · libs/${gitBundled ? ' +git' : ''}${chromiumBundled ? ' +chromium' : ''}${playwrightBundled ? ' +driver' : ''} · res/ · data/`);
 console.log(`  git:      ${gitBundled ? 'bundled (libs/git) — no host git install needed' : '⚠ NOT bundled — host needs git on PATH'}`);
 console.log(`  scrapers: ${playwrightBundled && chromiumBundled ? 'bundled driver + chromium — work out of the box' : playwrightBundled ? 'driver bundled; chromium via playwright.ps1 install' : 'dev-only (no driver bundled)'}`);
-if (doZip) console.log(zipped ? `  package:  dist/${path.basename(zip)}  (${(fs.statSync(zip).size / 1048576).toFixed(0)} MB)` : '  ⚠ zip failed');
+if (doZip) console.log(zipped ? `  package:  publish/${path.basename(zip)}  (${(fs.statSync(zip).size / 1048576).toFixed(0)} MB)` : '  ⚠ zip failed');
 else console.log('  package:  (folder only — pass --zip for the release .zip)');
-console.log(`  run:      dist/Gatherlight/${launcherBuilt ? 'Gatherlight.exe' : 'Gatherlight.cmd'}`);
+console.log(`  run:      publish/Gatherlight/${launcherBuilt ? 'Gatherlight.exe' : 'Gatherlight.cmd'}`);
 console.log('  see docs/DEPLOYMENT.md\n');
