@@ -142,8 +142,11 @@ void CloseRunningHost(const std::wstring& installDir)
                 FALSE, pe.th32ProcessID);
             if (!hProc) continue;
 
-            wchar_t imgPath[MAX_PATH];
-            DWORD sz = MAX_PATH;
+            // Large buffer, not MAX_PATH: a deep install path (>260 chars) would otherwise truncate the
+            // query, the host wouldn't match, it wouldn't be killed, and the overlay would hit a locked
+            // exe and fail every launch. 32K covers any Windows path length.
+            wchar_t imgPath[32768];
+            DWORD sz = ARRAYSIZE(imgPath);
             bool match = QueryFullProcessImageNameW(hProc, 0, imgPath, &sz)
                 && _wcsicmp(imgPath, hostPath.c_str()) == 0;
             if (match && TerminateProcess(hProc, 0))
@@ -164,8 +167,8 @@ void CloseRunningHost(const std::wstring& installDir)
 
 std::wstring OwnExeBasename()
 {
-    wchar_t path[MAX_PATH];
-    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    wchar_t path[32768]; // long-path safe (see CloseRunningHost) so the basename isn't truncated
+    GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
     return std::wstring(PathFindFileNameW(path));
 }
 

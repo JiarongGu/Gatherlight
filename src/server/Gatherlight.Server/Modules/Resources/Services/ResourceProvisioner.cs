@@ -156,6 +156,13 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     }
 
     // ---- The runtime bundle: one .nupkg → driver + git + chromium into their install dirs ----
+    // Integrity model (why there's no sha256 pin here, unlike ProvisionZipAsync): the default source is
+    // nuget.org over TLS, where a published (id, version) is IMMUTABLE — that's the integrity guarantee,
+    // and pinning a sha would just add a value to bump on every package release (the drift class #7
+    // removed). GATHERLIGHT_RESOURCES_URL can point elsewhere, but that's a deliberate operator choice
+    // (mirror / local test), trusted like any other configured source. Extract only pulls the known
+    // content/{playwright,git,browsers} subpaths (below), and ZipFile.ExtractToDirectory guards against
+    // path-traversal entries on current .NET.
     private async Task ProvisionBundleAsync(ResourceSpec spec, Prog p)
     {
         if (string.IsNullOrEmpty(spec.Url)) throw new InvalidOperationException("no download url");

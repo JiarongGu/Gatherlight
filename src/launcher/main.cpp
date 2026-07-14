@@ -16,11 +16,13 @@
 // install root — the layout the host's path resolver expects).
 constexpr auto HOST_EXE = L"libs\\Gatherlight.Host.exe";
 
-// Directory the launcher exe lives in = the install root.
+// Directory the launcher exe lives in = the install root. Long-path-safe buffer: installDir is
+// derived from this and used to build every other path, so truncation here would break the whole
+// launch/update on a deep install path (>260 chars).
 static std::wstring LauncherDir()
 {
-    wchar_t path[MAX_PATH];
-    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    wchar_t path[32768];
+    GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
     PathRemoveFileSpecW(path);
     return std::wstring(path);
 }

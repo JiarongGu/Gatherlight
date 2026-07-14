@@ -442,6 +442,16 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
     if (!IN_PROGRESS.includes(state.phase)) setCancelling(false);
   }, [state.phase]);
 
+  // Safety net: `busy` is normally cleared by the confirming `phase`/`done` SSE event (which now
+  // reliably arrives — the stream resumes on reconnect). But a permanently-stuck gate button is worse
+  // than a re-enabled one, so force-clear after a grace period if no event ever lands. The phase-event
+  // path clears busy first, and this effect's cleanup cancels the timer, so it only fires on a true stall.
+  useEffect(() => {
+    if (!state.busy) return;
+    const t = window.setTimeout(() => dispatch({ type: 'busy', value: false }), 30000);
+    return () => window.clearTimeout(t);
+  }, [state.busy]);
+
   return (
     <div className="chat-panel">
       <div className="chat-head">
