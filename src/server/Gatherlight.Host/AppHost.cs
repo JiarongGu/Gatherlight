@@ -183,9 +183,13 @@ internal sealed class AppHost : Form
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         try
         {
-            using var http = LoopbackClient(_url, TimeSpan.FromMinutes(5));
-            var bytes = await http.GetByteArrayAsync("api/backup/export");
-            await File.WriteAllBytesAsync(dlg.FileName, bytes);
+            // Stream the response straight to disk — a full backup (git history + uploads) can be large;
+            // buffering it all in memory (GetByteArrayAsync) would risk OOM.
+            using var http = LoopbackClient(_url, TimeSpan.FromMinutes(10));
+            using var resp = await http.GetAsync("api/backup/export", HttpCompletionOption.ResponseHeadersRead);
+            resp.EnsureSuccessStatusCode();
+            await using (var fs = File.Create(dlg.FileName))
+                await resp.Content.CopyToAsync(fs);
             MessageBox.Show(this, $"已导出完整备份到:\n{dlg.FileName}\n\n(整个数据文件夹:计划 · 家庭 · 知识库 · git 历史 · 记忆)", "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex) { MessageBox.Show(this, "导出失败:" + ex.Message, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Error); }
@@ -199,8 +203,10 @@ internal sealed class AppHost : Form
             MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
         try
         {
-            using var http = LoopbackClient(_url, TimeSpan.FromMinutes(5));
-            using var content = new ByteArrayContent(await File.ReadAllBytesAsync(dlg.FileName));
+            // Stream the file up rather than reading it all into memory first.
+            using var http = LoopbackClient(_url, TimeSpan.FromMinutes(10));
+            await using var fs = File.OpenRead(dlg.FileName);
+            using var content = new StreamContent(fs);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/zip");
             using var res = await http.PostAsync("api/backup/import", content);
             var text = await res.Content.ReadAsStringAsync();

@@ -58,16 +58,20 @@ public sealed class BackupService : IBackupService
 
     public async Task ExportAsync(Stream output, CancellationToken ct = default)
     {
-        var mem = await _memory.ExportAsync();
         Directory.CreateDirectory(_data.CachePath);
         var tmp = Path.Combine(_data.CachePath, $"_export-{Guid.NewGuid():N}.zip");
         try
         {
-            // Build into a temp FILE (sync file IO is fine); Kestrel disallows sync IO on the response
-            // body, and ZipArchive writes synchronously.
-            using (var zfs = File.Create(tmp))
-            using (var zip = new ZipArchive(zfs, ZipArchiveMode.Create))
+            // Build the archive under the write lock so a concurrent commit / fs-op / seeder can't tear
+            // the .git tree or record files mid-read. The lock is released before the (slow) client
+            // stream at the bottom — we only serialize the snapshot, not the download.
+            using (await _writeLock.AcquireAsync(ct))
             {
+                var mem = await _memory.ExportAsync();
+                // Build into a temp FILE (sync file IO is fine); Kestrel disallows sync IO on the response
+                // body, and ZipArchive writes synchronously.
+                using var zfs = File.Create(tmp);
+                using var zip = new ZipArchive(zfs, ZipArchiveMode.Create);
                 var files = 0;
                 void AddFile(string abs, string entryPath)
                 {

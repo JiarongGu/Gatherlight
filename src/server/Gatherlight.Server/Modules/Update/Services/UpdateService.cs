@@ -306,8 +306,17 @@ public sealed class UpdateService : IUpdateService
     private static bool IsNewer(string latest, string current)
     {
         if (string.IsNullOrWhiteSpace(latest)) return false;
-        if (Version.TryParse(Pad(latest), out var l) && Version.TryParse(Pad(current), out var c)) return l > c;
-        return !string.Equals(latest, current, StringComparison.OrdinalIgnoreCase);
+        // Compare the numeric core, stripping any prerelease/build suffix (1.2.0-rc1 → 1.2.0). If either
+        // side still isn't a plain version, treat it as NOT newer — an unparseable tag must never flip
+        // UpdateAvailable=true on every check (which would loop re-download / downgrade-to-equal).
+        return Version.TryParse(Pad(NumericCore(latest)), out var l) && Version.TryParse(Pad(NumericCore(current)), out var c)
+            && l > c;
+    }
+
+    private static string NumericCore(string v)
+    {
+        var i = v.IndexOfAny(new[] { '-', '+' });
+        return i >= 0 ? v[..i] : v;
     }
 
     private static string Pad(string v) => v.Count(ch => ch == '.') >= 1 ? v : v + ".0";

@@ -23,6 +23,9 @@ public sealed class LoginThrottle : ILoginThrottle
     public const int Threshold = 5;
     public static readonly TimeSpan Window = TimeSpan.FromMinutes(10);
     public static readonly TimeSpan Lockout = TimeSpan.FromMinutes(5);
+    // Once the map grows past this, sweep out entries that are neither locked nor within their failure
+    // window, so an attacker rotating source IPs can't grow it without bound (memory-exhaustion DoS).
+    private const int SweepThreshold = 2048;
 
     private sealed class Entry
     {
@@ -58,7 +61,20 @@ public sealed class LoginThrottle : ILoginThrottle
                 e.Failures = 0;
             }
         }
+        if (_map.Count > SweepThreshold) Prune(now);
     }
 
     public void RecordSuccess(string key) => _map.TryRemove(key, out _);
+
+    // Drop entries that are neither locked nor within their failure window — they carry no state worth
+    // keeping and would otherwise accumulate one-per-IP forever.
+    private void Prune(DateTime now)
+    {
+        foreach (var (k, v) in _map)
+        {
+            var locked = v.LockedUntil is { } until && until > now;
+            var active = now - v.LastFailure <= Window;
+            if (!locked && !active) _map.TryRemove(k, out _);
+        }
+    }
 }
