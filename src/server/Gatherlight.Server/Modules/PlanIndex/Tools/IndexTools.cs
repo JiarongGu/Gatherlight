@@ -24,11 +24,10 @@ public sealed class IndexListTool : IGatherlightTool
 
     public Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var category = Opt(args, "category");
-        var limit = args.TryGetProperty("limit", out var l) && l.TryGetInt32(out var n) ? n : 200;
+        var category = ToolArgs.Str(args, "category");
         var items = _index.List()
             .Where(e => category is null || string.Equals(e.Category, category, StringComparison.OrdinalIgnoreCase))
-            .Take(limit).ToList();
+            .Take(ToolArgs.Int(args, "limit", 200)).ToList();
         return Task.FromResult(Render(items));
     }
 
@@ -44,9 +43,6 @@ public sealed class IndexListTool : IGatherlightTool
         return new JsonObject { ["count"] = items.Count, ["items"] = arr }
             .ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
-
-    internal static string? Opt(JsonElement a, string k) =>
-        a.TryGetProperty(k, out var v) && v.GetString() is { Length: > 0 } s ? s : null;
 }
 
 public sealed class IndexSearchTool : IGatherlightTool
@@ -63,9 +59,8 @@ public sealed class IndexSearchTool : IGatherlightTool
 
     public Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var q = IndexListTool.Opt(args, "query") ?? throw new ToolException(400, "query 必填");
-        var limit = args.TryGetProperty("limit", out var l) && l.TryGetInt32(out var n) ? n : 50;
-        return Task.FromResult(IndexListTool.Render(_index.Search(q, limit)));
+        var q = ToolArgs.Req(args, "query");
+        return Task.FromResult(IndexListTool.Render(_index.Search(q, ToolArgs.Int(args, "limit", 50))));
     }
 }
 

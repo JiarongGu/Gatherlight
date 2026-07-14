@@ -20,8 +20,15 @@ param([string]$Version)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
-Write-Host '==> Collecting runtime resources (driver + git + chromium headless-shell) + packing Gatherlight.Resources...' -ForegroundColor Cyan
-if ($Version) { node devtools/dev.mjs resources-pack $Version } else { node devtools/dev.mjs resources-pack }
+# Default to the version the app fetches (ResourceProvisioner.ResourcesPackageVersion).
+if (-not $Version) {
+    $provCs = 'src/server/Gatherlight.Server/Modules/Resources/Services/ResourceProvisioner.cs'
+    $Version = (Select-String -Path $provCs -Pattern 'ResourcesPackageVersion\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+    Write-Host "Version not given -> using ResourcesPackageVersion: $Version" -ForegroundColor DarkGray
+}
+
+Write-Host "==> Collecting runtime resources (driver + git + chromium headless-shell) + packing Gatherlight.Resources $Version ..." -ForegroundColor Cyan
+node devtools/dev.mjs resources-pack $Version
 if ($LASTEXITCODE -ne 0) { throw "resource pack failed (exit $LASTEXITCODE)" }
 
 $nupkg = Get-ChildItem 'publish/resources/*.nupkg' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1

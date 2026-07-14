@@ -39,25 +39,17 @@ public sealed class LibraryUpsertTool : IGatherlightTool
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
         var item = await _repo.UpsertAsync(new LibraryUpsert(
-            Req(args, "kind"), Req(args, "key"), Req(args, "name"),
-            Opt(args, "nameLocal"), Opt(args, "region"), Opt(args, "summary"),
-            Opt(args, "url"), Opt(args, "imageUrl"), Dbl(args, "lat"), Dbl(args, "lng"),
-            Opt(args, "tags"), Opt(args, "source"), Dbl(args, "confidence"),
-            Opt(args, "verifiedAt") ?? DateTime.UtcNow.ToString("o")));
+            ToolArgs.Req(args, "kind"), ToolArgs.Req(args, "key"), ToolArgs.Req(args, "name"),
+            ToolArgs.Str(args, "nameLocal"), ToolArgs.Str(args, "region"), ToolArgs.Str(args, "summary"),
+            ToolArgs.Str(args, "url"), ToolArgs.Str(args, "imageUrl"), ToolArgs.Dbl(args, "lat"), ToolArgs.Dbl(args, "lng"),
+            ToolArgs.Str(args, "tags"), ToolArgs.Str(args, "source"), ToolArgs.Dbl(args, "confidence"),
+            ToolArgs.Str(args, "verifiedAt") ?? DateTime.UtcNow.ToString("o")));
         return new JsonObject
         {
             ["ok"] = true, ["id"] = item.Id, ["kind"] = item.Kind, ["key"] = item.Key,
             ["confidence"] = Math.Round(item.Confidence, 3),
         }.ToJsonString();
     }
-
-    internal static string Req(JsonElement a, string k) =>
-        a.TryGetProperty(k, out var v) && v.GetString() is { Length: > 0 } s ? s
-            : throw new ToolException(400, $"{k} 必填");
-    internal static string? Opt(JsonElement a, string k) =>
-        a.TryGetProperty(k, out var v) && v.GetString() is { Length: > 0 } s ? s : null;
-    internal static double? Dbl(JsonElement a, string k) =>
-        a.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
 }
 
 public sealed class LibrarySearchTool : IGatherlightTool
@@ -77,9 +69,8 @@ public sealed class LibrarySearchTool : IGatherlightTool
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
         var items = await _repo.QueryAsync(
-            LibraryUpsertTool.Opt(args, "kind"), LibraryUpsertTool.Opt(args, "region"),
-            LibraryUpsertTool.Opt(args, "query"),
-            args.TryGetProperty("limit", out var l) && l.TryGetInt32(out var n) ? n : 20);
+            ToolArgs.Str(args, "kind"), ToolArgs.Str(args, "region"),
+            ToolArgs.Str(args, "query"), ToolArgs.Int(args, "limit", 20));
         var arr = new JsonArray();
         foreach (var it in items)
             arr.Add(new JsonObject
@@ -119,13 +110,13 @@ public sealed class LibraryImportTool : IGatherlightTool
 
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var rel = LibraryUpsertTool.Req(args, "path");
+        var rel = ToolArgs.Req(args, "path");
         var abs = _data.ResolveDataPath(rel) ?? throw new ToolException(400, $"路径越界:{rel}");
         if (!File.Exists(abs)) throw new ToolException(400, $"文件不存在:{rel}");
 
         var md = await File.ReadAllTextAsync(abs, ct);
         var items = MarkdownLibraryImporter.Parse(md,
-            LibraryUpsertTool.Opt(args, "kind") ?? "attraction", LibraryUpsertTool.Opt(args, "region"));
+            ToolArgs.Str(args, "kind") ?? "attraction", ToolArgs.Str(args, "region"));
 
         var byKind = new Dictionary<string, int>();
         foreach (var it in items)
@@ -159,7 +150,7 @@ public sealed class LibraryDeleteTool : IGatherlightTool
 
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var removed = await _repo.DeleteAsync(LibraryUpsertTool.Req(args, "kind"), LibraryUpsertTool.Req(args, "key"));
+        var removed = await _repo.DeleteAsync(ToolArgs.Req(args, "kind"), ToolArgs.Req(args, "key"));
         return new JsonObject { ["ok"] = removed, ["removed"] = removed }.ToJsonString();
     }
 }

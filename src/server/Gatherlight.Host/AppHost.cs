@@ -41,11 +41,7 @@ internal sealed class AppHost : Form
         _server = server;
         _url = $"{(options.TlsEnabled ? "https" : "http")}://127.0.0.1:{options.Port}/";
         _manageUrl = _url + "manage";
-        // With TLS on we talk to our own loopback endpoint, whose cert may be self-signed — trust it
-        // (loopback only, so there's no MITM surface to protect against here).
-        var handler = new HttpClientHandler();
-        if (options.TlsEnabled) handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
-        _http = new HttpClient(handler) { BaseAddress = new Uri(_url), Timeout = TimeSpan.FromSeconds(4) };
+        _http = LoopbackClient(_url, TimeSpan.FromSeconds(4)); // the shared health-poll client
 
         Text = "Gatherlight · 拾光 — 管理控制台";
         Icon = LoadAppIcon();
@@ -166,13 +162,14 @@ internal sealed class AppHost : Form
         }
     }
 
-    // A short-lived client with a generous timeout for the backup transfers (export streams the whole
-    // .zip; import does extract + reindex + commit) — the shared _http's 4 s timeout is for health.
-    private HttpClient BackupClient()
+    // An HttpClient bound to our own loopback endpoint — trusts the self-signed cert under TLS (loopback
+    // only, so there's no MITM surface). Used for the shared 4 s health client and the 5 min backup
+    // transfers (export streams the whole .zip; import does extract + reindex + commit).
+    private static HttpClient LoopbackClient(string url, TimeSpan timeout)
     {
         var handler = new HttpClientHandler();
-        if (_url.StartsWith("https", StringComparison.Ordinal)) handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
-        return new HttpClient(handler) { BaseAddress = new Uri(_url), Timeout = TimeSpan.FromMinutes(5) };
+        if (url.StartsWith("https", StringComparison.Ordinal)) handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+        return new HttpClient(handler) { BaseAddress = new Uri(url), Timeout = timeout };
     }
 
     private async Task ExportBackupAsync()
@@ -186,7 +183,7 @@ internal sealed class AppHost : Form
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         try
         {
-            using var http = BackupClient();
+            using var http = LoopbackClient(_url, TimeSpan.FromMinutes(5));
             var bytes = await http.GetByteArrayAsync("api/backup/export");
             await File.WriteAllBytesAsync(dlg.FileName, bytes);
             MessageBox.Show(this, $"已导出完整备份到:\n{dlg.FileName}\n\n(整个数据文件夹:计划 · 家庭 · 知识库 · git 历史 · 记忆)", "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -202,7 +199,7 @@ internal sealed class AppHost : Form
             MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
         try
         {
-            using var http = BackupClient();
+            using var http = LoopbackClient(_url, TimeSpan.FromMinutes(5));
             using var content = new ByteArrayContent(await File.ReadAllBytesAsync(dlg.FileName));
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/zip");
             using var res = await http.PostAsync("api/backup/import", content);
@@ -322,10 +319,8 @@ internal sealed class AppHost : Form
             {
                 _url = newUrl;
                 _manageUrl = _url + "manage";
-                var handler = new HttpClientHandler();
-                if (_url.StartsWith("https", StringComparison.Ordinal)) handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
                 _http.Dispose();
-                _http = new HttpClient(handler) { BaseAddress = new Uri(_url), Timeout = TimeSpan.FromSeconds(4) };
+                _http = LoopbackClient(_url, TimeSpan.FromSeconds(4));
             }
             for (var i = 0; i < 40; i++)
             {

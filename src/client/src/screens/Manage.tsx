@@ -108,50 +108,45 @@ export function Manage() {
     else window.open('/api/memory/export', '_blank');
     toast('正在导出记忆(知识库 + 事实 + 校准)…');
   };
-  const importMemory = () => {
-    if (inHost) { host('importMemory'); return; }
+  // Shared "pick a file → POST it → toast the result" flow (in-host defers to the native dialog).
+  const importFile = (opts: {
+    hostAction: string; accept: string; url: string; contentType: string;
+    body: (f: File) => BodyInit | Promise<BodyInit>; confirm?: string;
+    ok: (j: any) => string; errPrefix: string;
+  }) => {
+    if (inHost) { host(opts.hostAction); return; }
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.json';
+    input.accept = opts.accept;
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
+      if (opts.confirm && !window.confirm(opts.confirm)) return;
       try {
-        const res = await fetch('/api/memory/import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: await file.text() });
+        const res = await fetch(opts.url, { method: 'POST', headers: { 'content-type': opts.contentType }, body: await opts.body(file) });
         const j = await res.json();
-        if (res.ok) toast(`已导入记忆:${summarizeImported(j.imported)}`);
-        else toast(`导入失败:${j.error ?? res.status}`, 'err');
+        if (res.ok) toast(opts.ok(j));
+        else toast(`${opts.errPrefix}:${j.error ?? res.status}`, 'err');
       } catch (e) {
-        toast('导入失败:' + (e instanceof Error ? e.message : String(e)), 'err');
+        toast(`${opts.errPrefix}:` + (e instanceof Error ? e.message : String(e)), 'err');
       }
     };
     input.click();
   };
+  const importMemory = () => importFile({
+    hostAction: 'importMemory', accept: '.json', url: '/api/memory/import', contentType: 'application/json',
+    body: (f) => f.text(), ok: (j) => `已导入记忆:${summarizeImported(j.imported)}`, errPrefix: '导入失败',
+  });
   const exportBackup = () => {
     if (inHost) host('exportBackup');
     else window.open('/api/backup/export', '_blank');
     toast('正在导出完整备份(整个数据文件夹:计划 · 家庭 · 知识库 · 历史 · 记忆)…');
   };
-  const importBackup = () => {
-    if (inHost) { host('importBackup'); return; }
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.zip';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      if (!window.confirm('恢复将覆盖当前的计划 / 家庭 / 知识库,并合并记忆。确定继续?')) return;
-      try {
-        const res = await fetch('/api/backup/import', { method: 'POST', headers: { 'content-type': 'application/zip' }, body: file });
-        const j = await res.json();
-        if (res.ok) toast(`已从备份恢复:${j.restored?.files ?? 0} 个文件`);
-        else toast(`恢复失败:${j.error ?? res.status}`, 'err');
-      } catch (e) {
-        toast('恢复失败:' + (e instanceof Error ? e.message : String(e)), 'err');
-      }
-    };
-    input.click();
-  };
+  const importBackup = () => importFile({
+    hostAction: 'importBackup', accept: '.zip', url: '/api/backup/import', contentType: 'application/zip',
+    body: (f) => f, confirm: '恢复将覆盖当前的计划 / 家庭 / 知识库,并合并记忆。确定继续?',
+    ok: (j) => `已从备份恢复:${j.restored?.files ?? 0} 个文件`, errPrefix: '恢复失败',
+  });
   const restart = () => { host('serverRestart'); toast('已发送重启指令,服务将很快恢复…'); };
   const stopServer = () => { host('serverStop'); toast('已停止本地服务 —— 需要时点「启动」恢复。'); };
   const startServer = () => { host('serverStart'); toast('正在启动本地服务…'); };

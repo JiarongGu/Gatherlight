@@ -32,8 +32,8 @@ public sealed class RememberFactTool : IGatherlightTool
             args.GetProperty("kind").GetString()!,
             args.GetProperty("topic").GetString()!,
             args.GetProperty("content").GetString()!,
-            args.TryGetProperty("source", out var s) ? s.GetString() : null,
-            args.TryGetProperty("confidence", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0.7);
+            ToolArgs.Str(args, "source"),
+            ToolArgs.Dbl(args, "confidence") ?? 0.7);
         return new JsonObject { ["ok"] = true, ["id"] = id }.ToJsonString();
     }
 }
