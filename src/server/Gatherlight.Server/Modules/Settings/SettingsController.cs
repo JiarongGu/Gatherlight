@@ -23,6 +23,7 @@ public sealed class SettingsController : ControllerBase
     {
         ("GATHERLIGHT_PORT", "port"), ("GATHERLIGHT_BIND", "bindAddress"),
         ("GATHERLIGHT_ACCESS_TOKEN", "accessToken"), ("GATHERLIGHT_TRUST_LOOPBACK", "trustLoopback"),
+        ("GATHERLIGHT_ALLOW_LAN", "allowLanWithoutToken"),
         ("GATHERLIGHT_TLS", "tls.enabled"), ("GATHERLIGHT_TLS_CERT", "tls.certPath"),
         ("GATHERLIGHT_UPDATE_REPO", "selfUpdate.githubRepo"), ("GATHERLIGHT_UPDATE_API", "selfUpdate.apiUrl"),
     };
@@ -39,6 +40,7 @@ public sealed class SettingsController : ControllerBase
             port = c.Port,
             bindAddress = c.Security.BindAddress,
             trustLoopback = c.Security.TrustLoopback,
+            allowLanWithoutToken = c.Security.AllowLanWithoutToken,
             hasAccessToken = !string.IsNullOrEmpty(c.Security.AccessToken),
             tls = new
             {
@@ -54,7 +56,7 @@ public sealed class SettingsController : ControllerBase
     public sealed record TlsBody(bool? Enabled, string? CertPath, string? CertPassword, bool? ClearCertPassword);
     public sealed record UpdateBody(string? GithubRepo, string? ApiUrl);
     public sealed record SettingsBody(
-        string? ServerName, int? Port, string? BindAddress, bool? TrustLoopback,
+        string? ServerName, int? Port, string? BindAddress, bool? TrustLoopback, bool? AllowLanWithoutToken,
         string? AccessToken, bool? ClearAccessToken, TlsBody? Tls, UpdateBody? SelfUpdate);
 
     [HttpPut("api/manage/settings")]
@@ -71,11 +73,13 @@ public sealed class SettingsController : ControllerBase
 
         // Fail-closed: never persist a config that binds a non-loopback address without an access token
         // — the server would refuse to start (unauthenticated control of the data folder + claude CLI).
+        // Exception: the explicit LAN opt-in accepts an unauthenticated non-loopback bind.
         var loopback = newBind is "127.0.0.1" or "::1";
         var willHaveToken = body.ClearAccessToken == true ? false
             : !string.IsNullOrEmpty(body.AccessToken) || !string.IsNullOrEmpty(c.Security.AccessToken);
-        if (!loopback && !willHaveToken)
-            return BadRequest(new { error = "对外网开放(非 127.0.0.1)必须设置访问令牌,否则服务会拒绝启动。" });
+        var willAllowLan = body.AllowLanWithoutToken ?? c.Security.AllowLanWithoutToken;
+        if (!loopback && !willHaveToken && !willAllowLan)
+            return BadRequest(new { error = "对外网开放(非 127.0.0.1)必须设置访问令牌,或开启「局域网免令牌」,否则服务会拒绝启动。" });
 
         _config.Update(cfg =>
         {
@@ -83,6 +87,7 @@ public sealed class SettingsController : ControllerBase
             if (body.Port is { } port) cfg.Port = port;
             if (!string.IsNullOrWhiteSpace(body.BindAddress)) cfg.Security.BindAddress = body.BindAddress.Trim();
             if (body.TrustLoopback is { } tl) cfg.Security.TrustLoopback = tl;
+            if (body.AllowLanWithoutToken is { } lan) cfg.Security.AllowLanWithoutToken = lan;
             if (body.ClearAccessToken == true) cfg.Security.AccessToken = null;
             else if (!string.IsNullOrEmpty(body.AccessToken)) cfg.Security.AccessToken = body.AccessToken;
             if (body.Tls is { } tls)

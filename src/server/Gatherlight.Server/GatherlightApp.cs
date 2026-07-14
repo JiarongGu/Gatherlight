@@ -27,11 +27,16 @@ public static class GatherlightApp
 
         var builder = WebApplication.CreateBuilder(args ?? Array.Empty<string>());
         // Fail closed: exposing beyond loopback without a token = unauthenticated control of the
-        // claude CLI + the family's private data. Refuse rather than silently open the door.
-        if (!GatherlightServerOptions.IsLoopbackAddress(options.BindAddress) && string.IsNullOrEmpty(options.AccessToken))
+        // claude CLI + the family's private data. Refuse rather than silently open the door — UNLESS
+        // the user explicitly opts in (allowLanWithoutToken) for a trusted private LAN.
+        var openBind = !GatherlightServerOptions.IsLoopbackAddress(options.BindAddress)
+            && string.IsNullOrEmpty(options.AccessToken);
+        if (openBind && !options.AllowLanWithoutToken)
             throw new InvalidOperationException(
                 $"Refusing to bind {options.BindAddress} without an access token. Set security.accessToken " +
-                "in settings.json (or GATHERLIGHT_ACCESS_TOKEN) before exposing Gatherlight on the network.");
+                "in settings.json (or GATHERLIGHT_ACCESS_TOKEN) before exposing Gatherlight on the network — " +
+                "or set security.allowLanWithoutToken=true (GATHERLIGHT_ALLOW_LAN=1) to expose it unauthenticated " +
+                "on a trusted private LAN.");
 
         var cert = Modules.Security.Services.TlsCertificate.Resolve(options);
         if (cert is null)
@@ -155,6 +160,13 @@ public static class GatherlightApp
             .AddApplicationPart(typeof(GatherlightApp).Assembly);
 
         var app = builder.Build();
+
+        // Loud, once-at-startup warning when the LAN opt-in is exposing the app unauthenticated.
+        if (openBind && options.AllowLanWithoutToken)
+            app.Logger.LogWarning(
+                "Gatherlight is bound to {Bind}:{Port} WITHOUT an access token (allowLanWithoutToken). " +
+                "Anyone who can reach that address has full, unauthenticated access to your data and the " +
+                "claude CLI — only use this on a trusted private network.", options.BindAddress, options.Port);
 
         // Migrations before anything touches the DB.
         var data = app.Services.GetRequiredService<IDataContext>();

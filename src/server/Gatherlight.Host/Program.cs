@@ -41,6 +41,7 @@ internal static class Program
             BindAddress = GatherlightServerOptions.ResolveBindAddress(config.Current.Security.BindAddress),
             AccessToken = GatherlightServerOptions.ResolveAccessToken(config.Current.Security.AccessToken),
             TrustLoopback = GatherlightServerOptions.ResolveTrustLoopback(config.Current.Security.TrustLoopback),
+            AllowLanWithoutToken = GatherlightServerOptions.ResolveAllowLanWithoutToken(config.Current.Security.AllowLanWithoutToken),
             TlsEnabled = GatherlightServerOptions.ResolveTlsEnabled(config.Current.Security.Tls.Enabled),
             TlsCertPath = GatherlightServerOptions.ResolveTlsCertPath(config.Current.Security.Tls.CertPath),
             TlsCertPassword = GatherlightServerOptions.ResolveTlsCertPassword(config.Current.Security.Tls.CertPassword),

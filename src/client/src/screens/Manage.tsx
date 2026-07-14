@@ -828,6 +828,7 @@ interface SettingsData {
   port: number;
   bindAddress: string;
   trustLoopback: boolean;
+  allowLanWithoutToken: boolean;
   hasAccessToken: boolean;
   tls: { enabled: boolean; certPath: string | null; hasCertPassword: boolean };
   selfUpdate: { githubRepo: string | null; apiUrl: string | null };
@@ -841,7 +842,8 @@ function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t
   const [saved, setSaved] = useState(false);
   const [serverName, setServerName] = useState('');
   const [port, setPort] = useState('');
-  const [network, setNetwork] = useState(false);
+  // Access scope: local (loopback) · lan (0.0.0.0, no token) · wan (0.0.0.0, token required).
+  const [mode, setMode] = useState<'local' | 'lan' | 'wan'>('local');
   const [trustLoopback, setTrustLoopback] = useState(true);
   const [token, setToken] = useState('');
   const [clearToken, setClearToken] = useState(false);
@@ -856,7 +858,8 @@ function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t
       setData(d);
       setServerName(d.serverName);
       setPort(String(d.port));
-      setNetwork(d.bindAddress !== '127.0.0.1' && d.bindAddress !== '::1');
+      const loopback = d.bindAddress === '127.0.0.1' || d.bindAddress === '::1';
+      setMode(loopback ? 'local' : d.allowLanWithoutToken ? 'lan' : 'wan');
       setTrustLoopback(d.trustLoopback);
       setTlsEnabled(d.tls.enabled);
       setCertPath(d.tls.certPath ?? '');
@@ -877,7 +880,8 @@ function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t
     const body: Record<string, unknown> = {
       serverName,
       port: Number(port) || undefined,
-      bindAddress: network ? '0.0.0.0' : '127.0.0.1',
+      bindAddress: mode === 'local' ? '127.0.0.1' : '0.0.0.0',
+      allowLanWithoutToken: mode === 'lan',
       trustLoopback,
       tls: { enabled: tlsEnabled, certPath: certPath || null },
       selfUpdate: { githubRepo: repo || null },
@@ -932,22 +936,29 @@ function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t
         </div>
 
         <div className="set-group set-span">
-          <div className="set-group-h">远程访问 · Remote access</div>
-          <div className="set-field"><span>绑定 · Bind {envWarn('bindAddress') && <em>(env)</em>}</span>
-            <div className="cx-seg">
-              <button className={`cx-seg-b${!network ? ' on' : ''}`} onClick={() => setNetwork(false)}>仅本机 127.0.0.1</button>
-              <button className={`cx-seg-b${network ? ' on' : ''}`} onClick={() => setNetwork(true)}>局域网 0.0.0.0</button>
-            </div>
+          <div className="set-group-h">访问范围 · Access {envWarn('bindAddress') && <em>(env)</em>}</div>
+          <div className="cx-seg">
+            <button className={`cx-seg-b${mode === 'local' ? ' on' : ''}`} onClick={() => setMode('local')}>本机 · Local</button>
+            <button className={`cx-seg-b${mode === 'lan' ? ' on' : ''}`} onClick={() => setMode('lan')}>局域网 · LAN</button>
+            <button className={`cx-seg-b${mode === 'wan' ? ' on' : ''}`} onClick={() => setMode('wan')}>公网 · WAN</button>
           </div>
-          <label className="set-field"><span>访问令牌 · Token {envWarn('accessToken') && <em>(env)</em>}</span>
-            <input type="password" autoComplete="off" value={token}
-              placeholder={data.hasAccessToken ? '已设置(留空不改)' : '未设置'}
-              onChange={(e) => { setToken(e.target.value); setClearToken(false); }} />
-          </label>
-          {data.hasAccessToken && (
-            <label className="set-check"><input type="checkbox" checked={clearToken} onChange={(e) => { setClearToken(e.target.checked); if (e.target.checked) setToken(''); }} /> 清除令牌(改回仅本机)</label>
+          <div className={`set-hint${mode === 'wan' && !data.hasAccessToken && !token ? ' danger' : ''}`}>
+            {mode === 'local' && '仅本机可访问(127.0.0.1)—— 最安全,无需令牌。'}
+            {mode === 'lan' && '本机 + 局域网设备可访问(0.0.0.0 含 127.0.0.1),无需令牌 —— 仅在可信内网使用,任何能连上的设备都可进入。'}
+            {mode === 'wan' && '对公网开放(0.0.0.0 含本机与局域网)—— 必须设置访问令牌,否则服务拒绝启动。建议同时启用 HTTPS。'}
+          </div>
+          {mode !== 'local' && (
+            <>
+              <label className="set-field"><span>访问令牌 · Token {mode === 'wan' && <b style={{ color: 'var(--danger)' }}>*</b>} {envWarn('accessToken') && <em>(env)</em>}</span>
+                <input type="password" autoComplete="off" value={token}
+                  placeholder={data.hasAccessToken ? '已设置(留空不改)' : mode === 'wan' ? '必填' : '可选(留空 = 无令牌)'}
+                  onChange={(e) => { setToken(e.target.value); setClearToken(false); }} />
+              </label>
+              {data.hasAccessToken && (
+                <label className="set-check"><input type="checkbox" checked={clearToken} onChange={(e) => { setClearToken(e.target.checked); if (e.target.checked) setToken(''); }} /> 清除已设置的令牌</label>
+              )}
+            </>
           )}
-          {network && !data.hasAccessToken && !token && <div className="set-hint danger">对外网开放必须设置访问令牌。</div>}
           <label className="set-check"><input type="checkbox" checked={trustLoopback} onChange={(e) => setTrustLoopback(e.target.checked)} /> 信任本机请求(同机反代时关闭)</label>
         </div>
       </div>

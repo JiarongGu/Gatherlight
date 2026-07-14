@@ -25,6 +25,12 @@ public sealed class GatherlightServerOptions
     /// same-host reverse proxy. <c>GATHERLIGHT_TRUST_LOOPBACK=0</c> wins.</summary>
     public bool TrustLoopback { get; init; } = ResolveTrustLoopback(true);
 
+    /// <summary>Opt-in: allow binding beyond loopback WITHOUT an access token (the startup binding
+    /// check otherwise fails closed). Intended for a trusted private LAN behind NAT — with no token
+    /// the access gate is a no-op, so anyone who can reach the bind address has full unauthenticated
+    /// access. <c>GATHERLIGHT_ALLOW_LAN=1</c> wins.</summary>
+    public bool AllowLanWithoutToken { get; init; } = ResolveAllowLanWithoutToken(false);
+
     /// <summary>Serve HTTPS directly from Kestrel (self-signed cert by default). <c>GATHERLIGHT_TLS=1</c> wins.</summary>
     public bool TlsEnabled { get; init; } = ResolveTlsEnabled(false);
 
@@ -103,6 +109,13 @@ public sealed class GatherlightServerOptions
     public static bool ResolveTrustLoopback(bool settingValue) =>
         Environment.GetEnvironmentVariable("GATHERLIGHT_TRUST_LOOPBACK") is { Length: > 0 } e
             ? e is not ("0" or "false" or "False")
+            : settingValue;
+
+    /// <summary>Effective LAN-without-token opt-in: <c>GATHERLIGHT_ALLOW_LAN=1/true</c> wins, else
+    /// the persisted setting.</summary>
+    public static bool ResolveAllowLanWithoutToken(bool settingValue) =>
+        Environment.GetEnvironmentVariable("GATHERLIGHT_ALLOW_LAN") is { Length: > 0 } e
+            ? e is "1" or "true" or "True"
             : settingValue;
 
     /// <summary>Effective TLS toggle: <c>GATHERLIGHT_TLS=1/true</c> wins, else the persisted setting.</summary>

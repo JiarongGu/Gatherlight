@@ -45,6 +45,12 @@ public sealed class SecurityConfig
     /// entirely. <c>GATHERLIGHT_TRUST_LOOPBACK=0</c> overrides.</summary>
     public bool TrustLoopback { get; set; } = true;
 
+    /// <summary>Opt-in to expose the server beyond loopback WITHOUT a token (otherwise the binding
+    /// fails closed). With no token the access gate is a no-op, so this grants anyone who can reach
+    /// <see cref="BindAddress"/> full unauthenticated access — only for a trusted private LAN behind
+    /// NAT. <c>GATHERLIGHT_ALLOW_LAN=1</c> overrides.</summary>
+    public bool AllowLanWithoutToken { get; set; }
+
     /// <summary>HTTPS/TLS termination in Kestrel itself.</summary>
     public TlsConfig Tls { get; set; } = new();
 }

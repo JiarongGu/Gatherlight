@@ -46,7 +46,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   it unless `security.trustLoopback:false`, e.g. behind a same-host proxy). `SecurityHeadersMiddleware`
   puts CSP + nosniff/frame/referrer/permissions on every response — the CSP is calibrated to the
   built client, verify with a real render before tightening. `ILoginThrottle` = per-IP brute-force
-  lockout. Binding beyond loopback **without** a token **fails closed** (refuses to start).
+  lockout. Binding beyond loopback **without** a token **fails closed** (refuses to start) — unless
+  the explicit **`security.allowLanWithoutToken`** opt-in (`GATHERLIGHT_ALLOW_LAN=1`) is set, for a
+  trusted private LAN (logs a loud startup warning; the gate is then a no-op). The `/manage` Settings
+  tab surfaces this as a 3-way **Local / LAN / WAN** access mode (WAN = `0.0.0.0` + token required).
 - **TLS is Kestrel-native** (`TlsCertificate.Resolve`): a self-signed cert generated + reused from
   `state/gatherlight-tls.pfx`, or a configured PFX. Config lives in `security.*` (settings.json) +
   `GATHERLIGHT_BIND`·`_ACCESS_TOKEN`·`_TRUST_LOOPBACK`·`_TLS[_CERT]` env overrides.
