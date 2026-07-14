@@ -94,26 +94,31 @@ fs.mkdirSync(data, { recursive: true });
 
 const move = (from, to) => { if (fs.existsSync(from)) fs.renameSync(from, to); };
 move(path.join(stage, 'Gatherlight.Host.exe'), path.join(libs, 'Gatherlight.Host.exe'));
-move(path.join(stage, 'playwright.ps1'), path.join(libs, 'playwright.ps1'));
 move(path.join(stage, 'wwwroot'), path.join(res, 'wwwroot'));
 move(path.join(stage, 'Assets', 'DataTemplate'), path.join(res, 'template'));
 
-// Ship the Playwright driver next to the host so the browser-backed scrapers resolve it. The
-// single-file publish STRIPS the driver's native node.exe (into self-extract), leaving
-// .playwright/node incomplete → "Driver not found". Copy the COMPLETE driver from the non-single-file
-// Server Debug bin (build it if absent). node.exe (~80 MB) rides along.
+// Playwright DRIVER (~34 MB zip → ~88 MB): download-at-setup by default — the 资源 panel fetches it
+// (hosted as a GitHub release asset, since Playwright ships the .NET driver only via NuGet) into
+// {data}/state/resources/.playwright, resolved at runtime via PLAYWRIGHT_DRIVER_SEARCH_PATH, alongside
+// chromium. --offline bundles it next to the host instead. (The single-file publish STRIPS the driver's
+// native node.exe, so --offline copies the COMPLETE driver from the non-single-file Server Debug bin.)
 let playwrightBundled = false;
-const debugPw = path.join(repo, config.serverProject, 'bin', 'Debug', 'net10.0', '.playwright');
-if (!fs.existsSync(path.join(debugPw, 'node', 'win32_x64', 'node.exe'))) {
-  console.log('  (building Debug for the complete Playwright driver…)');
-  spawnSync('dotnet', ['build', config.serverProject, '-c', 'Debug', '--nologo', '-v', 'q'], { stdio: 'inherit', cwd: repo });
-}
-if (fs.existsSync(path.join(debugPw, 'node', 'win32_x64', 'node.exe'))) {
-  fs.cpSync(debugPw, path.join(libs, '.playwright'), { recursive: true });
-  playwrightBundled = true;
-  console.log('  \x1b[32m✔\x1b[0m libs/.playwright/  (driver + node.exe)');
+if (offline) {
+  move(path.join(stage, 'playwright.ps1'), path.join(libs, 'playwright.ps1'));
+  const debugPw = path.join(repo, config.serverProject, 'bin', 'Debug', 'net10.0', '.playwright');
+  if (!fs.existsSync(path.join(debugPw, 'node', 'win32_x64', 'node.exe'))) {
+    console.log('  (building Debug for the complete Playwright driver…)');
+    spawnSync('dotnet', ['build', config.serverProject, '-c', 'Debug', '--nologo', '-v', 'q'], { stdio: 'inherit', cwd: repo });
+  }
+  if (fs.existsSync(path.join(debugPw, 'node', 'win32_x64', 'node.exe'))) {
+    fs.cpSync(debugPw, path.join(libs, '.playwright'), { recursive: true });
+    playwrightBundled = true;
+    console.log('  \x1b[32m✔\x1b[0m libs/.playwright/  (driver + node.exe)');
+  } else {
+    console.log('  \x1b[33m⚠ Playwright driver not bundled — scrapers will need it installed on the host.\x1b[0m');
+  }
 } else {
-  console.log('  \x1b[33m⚠ Playwright driver not bundled — scrapers will need it installed on the host.\x1b[0m');
+  console.log('  Playwright driver → download-at-setup (provisioned with chromium via 资源 · Resources)');
 }
 
 fs.writeFileSync(path.join(data, '.gitkeep'), '');

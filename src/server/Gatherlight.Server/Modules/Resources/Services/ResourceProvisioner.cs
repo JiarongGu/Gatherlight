@@ -53,9 +53,9 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     {
         new ResourceSpec(
             Id: "chromium", Name: "Chromium(无头浏览器)",
-            NeededFor: "网页抓取工具 · scrape / flight / hotel / restaurant / policy",
+            NeededFor: "网页抓取工具 · scrape / flight / hotel / restaurant / policy(首次一并拉取 Playwright 驱动)",
             Kind: ResourceKind.PlaywrightChromium, InstallDir: "browsers", ReadyMarker: "",
-            ApproxBytes: 130_000_000),
+            ApproxBytes: 164_000_000),
         new ResourceSpec(
             Id: "git", Name: "Git(便携版 · MinGit)",
             NeededFor: "数据文件夹版本管理 · 计划改动的提交/审阅",
@@ -167,45 +167,64 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         }
     }
 
-    // ---- Chromium via the bundled Playwright driver ----
+    // The Playwright .NET driver (~34 MB zip → ~88 MB) — download-at-setup too, so it's out of the lean
+    // bundle. Playwright ships it only via NuGet (no public CDN download), so we host it as a fixed
+    // GitHub release asset. The version MUST track the Microsoft.Playwright package (1.49.0) — driver +
+    // DLL are paired. GATHERLIGHT_PW_DRIVER_URL overrides the source (mirror / local test).
+    private static readonly ResourceSpec DriverSpec = new(
+        "pw-driver", "Playwright 驱动", "", ResourceKind.Zip, ".playwright", "node/win32_x64/node.exe",
+        34_000_000,
+        Url: Environment.GetEnvironmentVariable("GATHERLIGHT_PW_DRIVER_URL")
+             ?? "https://github.com/JiarongGu/Gatherlight/releases/download/pw-driver-v1.49.0/pw-driver-win-x64.zip",
+        Sha256: "39c7c03e9ea3ac8351faf7a2d604efe7006a377f45e59f177ccd454a12d24abe");
+
+    /// <summary>The Playwright driver dir (node/win32_x64/node.exe + package/cli.js): prefer the
+    /// provisioned copy under the data folder, then one bundled next to the exe; null if neither.</summary>
+    private string? ResolveDriverDir()
+    {
+        foreach (var dir in new[] { Path.Combine(_data.ResourcesPath, ".playwright"), Path.Combine(AppContext.BaseDirectory, ".playwright") })
+            if (File.Exists(Path.Combine(dir, "node", "win32_x64", "node.exe"))) return dir;
+        return null;
+    }
+
+    // ---- Chromium via the Playwright driver (provisioned or bundled) ----
     private async Task ProvisionChromiumAsync(ResourceSpec spec, Prog p)
     {
-        var ps1 = ResolvePlaywrightScript()
-            ?? throw new InvalidOperationException("找不到 playwright.ps1(需要已构建的服务端)");
+        // The driver is chromium's bootstrap. Prefer provisioned/bundled; else download it first.
+        var driver = ResolveDriverDir();
+        if (driver is null)
+        {
+            Set(p, "running", 2, "下载 Playwright 驱动…");
+            await ProvisionZipAsync(DriverSpec, p);
+            driver = Path.Combine(_data.ResourcesPath, ".playwright");
+        }
+        var node = Path.Combine(driver, "node", "win32_x64", "node.exe");
+        var cli = Path.Combine(driver, "package", "cli.js");
+        if (!File.Exists(node) || !File.Exists(cli)) throw new InvalidOperationException("Playwright 驱动缺失");
+
         var browsers = InstallPath(spec);
         Directory.CreateDirectory(browsers);
-        Set(p, "running", 5, "下载 Chromium…(约 130MB,可能需要一两分钟)");
+        Set(p, "running", 8, "下载 Chromium…(约 130MB,可能需要一两分钟)");
 
-        var psi = new ProcessStartInfo("powershell.exe")
+        // Direct node form — equivalent to `playwright.ps1 install chromium` (the ps1 isn't in the zip).
+        var psi = new ProcessStartInfo(node)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        foreach (var a in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1, "install", "chromium" })
-            psi.ArgumentList.Add(a);
+        foreach (var a in new[] { cli, "install", "chromium" }) psi.ArgumentList.Add(a);
         psi.Environment["PLAYWRIGHT_BROWSERS_PATH"] = browsers;
 
-        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("powershell 启动失败");
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("驱动启动失败");
         proc.OutputDataReceived += (_, e) => { if (e.Data is { } d && d.Contains('%')) Set(p, "running", ScrapePercent(d, p.Percent), "下载 Chromium…"); };
         proc.ErrorDataReceived += (_, _) => { };
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
         await proc.WaitForExitAsync();
-        if (proc.ExitCode != 0) throw new InvalidOperationException($"playwright install 退出码 {proc.ExitCode}");
+        if (proc.ExitCode != 0) throw new InvalidOperationException($"chromium 安装退出码 {proc.ExitCode}");
         if (!IsInstalled(spec)) throw new InvalidOperationException("安装后未找到 Chromium");
-    }
-
-    /// <summary>The bundled driver's install script: libs/playwright.ps1 (prod) or the server bin (dev).</summary>
-    private static string? ResolvePlaywrightScript()
-    {
-        var candidates = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "playwright.ps1"),
-            Path.Combine(AppContext.BaseDirectory, "..", "libs", "playwright.ps1"),
-        };
-        return candidates.Select(Path.GetFullPath).FirstOrDefault(File.Exists);
     }
 
     private static int ScrapePercent(string line, int fallback)

@@ -41,6 +41,13 @@ public sealed class PlaywrightHost : IPlaywrightHost, IAsyncDisposable
             var browsers = Directory.Exists(provisioned) ? provisioned : Directory.Exists(bundled) ? bundled : null;
             if (browsers is not null && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH")))
                 Environment.SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", browsers);
+            // Driver: if provisioned into the data folder, point Playwright there via
+            // PLAYWRIGHT_DRIVER_SEARCH_PATH (it appends `.playwright`, so pass the PARENT). Only when the
+            // driver is actually present — this var has no fallback, so a wrong path would throw. Absent
+            // it, Playwright's default resolution finds a driver bundled next to the exe (dev / --offline).
+            var provDriver = Path.Combine(_data.ResourcesPath, ".playwright", "node", "win32_x64", "node.exe");
+            if (File.Exists(provDriver) && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PLAYWRIGHT_DRIVER_SEARCH_PATH")))
+                Environment.SetEnvironmentVariable("PLAYWRIGHT_DRIVER_SEARCH_PATH", _data.ResourcesPath);
             _playwright ??= await Playwright.CreateAsync();
             _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
             {

@@ -150,15 +150,15 @@ feature, and none blocks the app from starting:
    resolves the executable via `where`/`which` at runtime. Without it, browsing / plans / documents /
    library import all still work — only the AI chat gate errors. It's the one per-user step (an
    authenticated login can't be shipped in a bundle).
-2. **Playwright chromium** (web-scraper tools: `scrape`, `flight_*`, `hotel_*`, `restaurant_*`,
-   `policy_check`) — **provisioned at setup.** The production build ships the Playwright **driver** at
-   `libs/.playwright` (auto-resolved next to the host exe); download **chromium** from the 资源 ·
-   Resources panel (it runs the bundled `libs/playwright.ps1 install chromium` into
-   `{data}/state/resources/browsers`, which `PlaywrightHost` points `PLAYWRIGHT_BROWSERS_PATH` at).
-   `--offline` bundles it at `libs/browsers` instead. (WebView2 was rejected — it needs a UI thread/window in
-   a headless server and lacks Playwright's automation API.) Implementation note: single-file publish
-   strips the driver's native `node.exe`; the build restores a complete `.playwright` from a
-   non-single-file build so the driver resolves.
+2. **Web-scraper tools** (`scrape`, `flight_*`, `hotel_*`, `restaurant_*`, `policy_check`) — **fully
+   provisioned at setup.** Neither the Playwright **driver** nor **chromium** is bundled; click download
+   in the 资源 · Resources panel and both land in `{data}/state/resources/` (`.playwright` + `browsers`),
+   resolved at runtime via `PLAYWRIGHT_DRIVER_SEARCH_PATH` + `PLAYWRIGHT_BROWSERS_PATH`. Playwright ships
+   the .NET driver only via NuGet (no public CDN), so we host it as a fixed GitHub **release asset**
+   (`pw-driver-v<ver>/pw-driver-win-x64.zip`, sha256-pinned; `GATHERLIGHT_PW_DRIVER_URL` overrides for a
+   mirror); chromium installs via the downloaded driver (`node cli.js install chromium`). `--offline`
+   bundles both at `libs/.playwright` + `libs/browsers` for air-gapped installs. (WebView2 was rejected —
+   it needs a UI thread/window in a headless server and lacks Playwright's automation API.)
 3. **Node.js on PATH** — only for the PDF *form* tools (`pdf_fill` / `pdf_merge` / `fill_itinerary`),
    which shell out to the `tools/pdf-form` pdf-lib leaf via `npx`. (`pdf_extract_text` / `pdf_inspect`
    and the image tools are native — no Node needed.) Nothing else requires Node at runtime.
