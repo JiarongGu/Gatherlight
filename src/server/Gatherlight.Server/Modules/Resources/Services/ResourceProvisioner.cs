@@ -31,7 +31,11 @@ public sealed record ResourceSpec(
     string ReadyMarker,
     long ApproxBytes,
     string? Url = null,
-    string? Sha256 = null);
+    string? Sha256 = null,
+    // The subpath inside the extracted archive that IS the payload root — used for a package archive
+    // (our .nupkg is a zip that wraps the files under a content path). Null = the archive root itself,
+    // with single-wrapper-folder flattening (a plain release .zip).
+    string? ArchiveRoot = null);
 
 /// <summary>Live provisioning state for one resource (for the setup UI to poll).</summary>
 public sealed record ResourceStatus(
@@ -153,30 +157,51 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             Set(p, "running", 92, "解压中…");
             if (Directory.Exists(extract)) Directory.Delete(extract, true);
             ZipFile.ExtractToDirectory(zip, extract);
-            FlattenSingleRoot(extract, spec.ReadyMarker);
+
+            // The payload root: for a plain release .zip, the extract dir itself (hoisting a single
+            // wrapper folder); for a package archive (our .nupkg — a zip with metadata around the
+            // files), the ArchiveRoot subpath that holds the actual resource (e.g. content/playwright).
+            string payload;
+            if (!string.IsNullOrEmpty(spec.ArchiveRoot))
+            {
+                payload = Path.Combine(extract, spec.ArchiveRoot.Replace('/', Path.DirectorySeparatorChar));
+                if (!Directory.Exists(payload)) throw new InvalidOperationException($"包内未找到 {spec.ArchiveRoot}");
+            }
+            else
+            {
+                FlattenSingleRoot(extract, spec.ReadyMarker);
+                payload = extract;
+            }
 
             Set(p, "running", 97, "安装中…");
             var dest = InstallPath(spec);
             if (Directory.Exists(dest)) Directory.Delete(dest, true);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            Directory.Move(extract, dest);
+            Directory.Move(payload, dest);
         }
         finally
         {
             try { if (File.Exists(zip)) File.Delete(zip); } catch { /* best-effort */ }
+            try { if (Directory.Exists(extract)) Directory.Delete(extract, true); } catch { /* best-effort */ }
         }
     }
 
-    // The Playwright .NET driver (~34 MB zip → ~88 MB) — download-at-setup too, so it's out of the lean
-    // bundle. Playwright ships it only via NuGet (no public CDN download), so we host it as a fixed
-    // GitHub release asset. The version MUST track the Microsoft.Playwright package (1.49.0) — driver +
-    // DLL are paired. GATHERLIGHT_PW_DRIVER_URL overrides the source (mirror / local test).
+    // The Playwright .NET driver (win-x64 slice, ~34 MB zip -> ~88 MB): download-at-setup so it stays
+    // out of the lean bundle. Playwright ships the .NET driver only inside the ~181 MB all-platform
+    // Microsoft.Playwright NuGet, so we RE-PACK just the win-x64 slice into our own lean
+    // `Gatherlight.Resources` package (devtools: `dev.mjs resources-pack`) and pull it from nuget.org's
+    // public flat-container CDN — no self-hosted asset, versioned + immutable. The version MUST track
+    // the Microsoft.Playwright package (1.49.0 — driver + DLL are paired). GATHERLIGHT_PW_DRIVER_URL
+    // overrides the source (a mirror, or a local .nupkg during testing).
+    public const string ResourcesPackageId = "gatherlight.resources";     // lower-case (flat-container)
+    public const string ResourcesPackageVersion = "1.0.0";                // tracks the published package
     private static readonly ResourceSpec DriverSpec = new(
         "pw-driver", "Playwright 驱动", "", ResourceKind.Zip, ".playwright", "node/win32_x64/node.exe",
         34_000_000,
         Url: Environment.GetEnvironmentVariable("GATHERLIGHT_PW_DRIVER_URL")
-             ?? "https://github.com/JiarongGu/Gatherlight/releases/download/pw-driver-v1.49.0/pw-driver-win-x64.zip",
-        Sha256: "39c7c03e9ea3ac8351faf7a2d604efe7006a377f45e59f177ccd454a12d24abe");
+             ?? $"https://api.nuget.org/v3-flatcontainer/{ResourcesPackageId}/{ResourcesPackageVersion}/{ResourcesPackageId}.{ResourcesPackageVersion}.nupkg",
+        Sha256: null, // nuget.org is TLS + immutable-per-version; integrity is the registry's guarantee
+        ArchiveRoot: "content/playwright");
 
     /// <summary>The Playwright driver dir (node/win32_x64/node.exe + package/cli.js): prefer the
     /// provisioned copy under the data folder, then one bundled next to the exe; null if neither.</summary>

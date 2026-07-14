@@ -1,0 +1,53 @@
+name: Release resources (NuGet)
+
+# Manual-trigger only — publish the Gatherlight.Resources package (heavy download-at-setup binaries:
+# the Playwright win-x64 driver slice; git + model later) to nuget.org. Separate from the app Release:
+# you cut this when the Microsoft.Playwright version bumps (driver + package are paired) or when a new
+# payload is added. Requires the NUGET_API_KEY repository secret. The version MUST match
+# ResourceProvisioner.ResourcesPackageVersion in the app (the flat-container URL is version-pinned).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (must match ResourcesPackageVersion in ResourceProvisioner.cs)'
+        required: true
+        type: string
+        default: '1.0.0'
+      dry_run:
+        description: 'Pack only — do not push to nuget.org'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    name: Pack + push Gatherlight.Resources
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      # Builds the server Debug (to materialize the Playwright driver), assembles payload/, and packs
+      # dist/resources/*.nupkg.
+      - name: Pack
+        run: node devtools/dev.mjs resources-pack ${{ inputs.version }}
+
+      - name: Push to nuget.org
+        if: ${{ !inputs.dry_run }}
+        run: dotnet nuget push "dist/resources/*.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatherlight-resources-${{ inputs.version }}
+          path: dist/resources/*.nupkg

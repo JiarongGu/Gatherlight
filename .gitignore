@@ -4,6 +4,9 @@ obj/
 publish/
 *.user
 
+# Gatherlight.Resources — the assembled driver/binary payload (built from the driver; never committed)
+src/resources/*/payload/
+
 # Node / client
 node_modules/
 dist/

@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Gatherlight.Resources — a CONTENT-ONLY NuGet package that serves as heavy-resource STORAGE for the
+    self-hosted Gatherlight family planner. It ships the Playwright win-x64 driver slice (MinGit + a
+    small ONNX embedding model to follow) so the app downloads them at first-run setup from nuget.org's
+    public flat-container CDN, keeping the shipped bundle lean.
+
+    NOT a build-time dependency: nothing PackageReferences this. The app's ResourceProvisioner
+    downloads the .nupkg by URL and extracts the payload from the content/ path — so we deliberately
+    pack files under content/ and exclude the (empty) build output.
+
+    Pack:    node devtools/dev.mjs resources-pack [version]   (assembles payload/ + dotnet pack)
+    Publish: dotnet nuget push the .nupkg to nuget.org with an API key (see README.md).
+    The version MUST match ResourceProvisioner.ResourcesPackageVersion (the driver tracks Microsoft.Playwright).
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IncludeSymbols>false</IncludeSymbols>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+
+    <PackageId>Gatherlight.Resources</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Jiarong Gu</Authors>
+    <Description>Heavy download-at-setup resources for the self-hosted Gatherlight family planner: the Playwright win-x64 driver slice (MinGit + a small ONNX embedding model to follow). Consumed at RUNTIME by the app's ResourceProvisioner via the nuget.org flat-container API — not a build-time PackageReference. Redistributes Microsoft Playwright (Apache-2.0) + Node.js (MIT).</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageTags>gatherlight;resources;playwright;setup;download</PackageTags>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <!-- content-only: no lib/ assembly, payload sits under content/ by design; NU5110/NU5111 are
+         Playwright's own .ps1 helpers inside the driver (we deliberately never run them on install). -->
+    <NoWarn>$(NoWarn);NU5100;NU5110;NU5111;NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- payload/ is assembled by `dev.mjs resources-pack` (gitignored); packed under content/. -->
+    <None Include="payload\**" Pack="true" PackagePath="content" />
+  </ItemGroup>
+
+</Project>

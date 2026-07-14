@@ -16,6 +16,7 @@
 //   node devtools/dev.mjs install-hooks     - git core.hooksPath -> devtools/hooks (pre-commit guard)
 //   node devtools/dev.mjs check-sensitive   - scan staged changes (--tree for all tracked files)
 import { spawnSync, spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -347,7 +348,57 @@ switch (cmd) {
     break;
   }
 
+  case 'resources-pack': {
+    // Build the lean Gatherlight.Resources NuGet package: the Playwright win-x64 driver slice, packed
+    // for download-at-setup from nuget.org (the app's ResourceProvisioner pulls it, keeping the shipped
+    // bundle lean). Publish is separate: `dotnet nuget push` with a nuget.org API key.
+    const version = args[0]; // optional; defaults to the csproj <Version> (must match ResourcesPackageVersion)
+    const pkgDir = path.join(repo, 'src', 'resources', 'Gatherlight.Resources');
+    const proj = path.join(pkgDir, 'Gatherlight.Resources.csproj');
+    if (!fs.existsSync(proj)) { console.error(`package project not found: ${proj}`); process.exitCode = 1; break; }
+
+    // 1. Locate the built driver (.playwright win-x64 slice from a Debug build of the server).
+    const driver = path.join(repo, config.serverProject, 'bin', 'Debug', 'net10.0', '.playwright');
+    const driverReady = () => fs.existsSync(path.join(driver, 'node', 'win32_x64', 'node.exe'));
+    if (!driverReady()) {
+      console.log('  (building server Debug for the Playwright driver…)');
+      const b = spawnSync('dotnet', ['build', config.serverProject, '-c', 'Debug', '-v', 'minimal'], { stdio: 'inherit', cwd: repo, shell: false });
+      if (b.status !== 0) { process.exitCode = b.status ?? 1; break; }
+    }
+    if (!driverReady()) { console.error(`Playwright driver not found under ${driver} — is Microsoft.Playwright restored?`); process.exitCode = 1; break; }
+
+    // 2. Assemble payload/playwright/ = the driver slice (gitignored) → packs to content/playwright/.
+    const payloadRoot = path.join(pkgDir, 'payload');
+    const payload = path.join(payloadRoot, 'playwright');
+    fs.rmSync(payloadRoot, { recursive: true, force: true });
+    fs.mkdirSync(payload, { recursive: true });
+    fs.cpSync(driver, payload, { recursive: true });
+    let bytes = 0; (function walk(d) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); e.isDirectory() ? walk(p) : (bytes += fs.statSync(p).size); } })(payload);
+    console.log(`  payload: ${(bytes / 1e6).toFixed(0)} MB (Playwright win-x64 driver)`);
+
+    // 3. dotnet pack → dist/resources/*.nupkg
+    const out = path.join(repo, 'dist', 'resources');
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const packArgs = ['pack', proj, '-c', 'Release', '-o', out, '-v', 'minimal'];
+    if (version) packArgs.push(`-p:Version=${version}`);
+    const r = spawnSync('dotnet', packArgs, { stdio: 'inherit', cwd: repo, shell: false });
+    if (r.status !== 0) { process.exitCode = r.status ?? 1; break; }
+
+    // 4. Report the .nupkg + sha256 + a copy-paste publish hint.
+    const nupkg = fs.readdirSync(out).filter((f) => f.endsWith('.nupkg')).map((f) => path.join(out, f)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+    if (nupkg) {
+      const sha = crypto.createHash('sha256').update(fs.readFileSync(nupkg)).digest('hex');
+      const rel = path.relative(repo, nupkg).replaceAll('\\', '/');
+      console.log(`\n  \x1b[32m✔\x1b[0m ${rel}  (${(fs.statSync(nupkg).size / 1e6).toFixed(1)} MB)`);
+      console.log(`  sha256: ${sha}`);
+      console.log(`\n  publish (reserve the id once on nuget.org, then push each version):`);
+      console.log(`    dotnet nuget push "${rel}" --api-key <KEY> --source https://api.nuget.org/v3/index.json`);
+    }
+    break;
+  }
+
   default:
-    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|e2e|smoke|memory|eval|test-data|install-hooks|check-sensitive>');
+    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|smoke|memory|eval|test-data|install-hooks|check-sensitive>');
     process.exitCode = cmd ? 1 : 0;
 }
