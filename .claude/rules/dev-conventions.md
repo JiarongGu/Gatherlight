@@ -61,6 +61,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   back to `Gatherlight.cmd` where MSVC is absent) into `dist/Gatherlight/` (`libs/`·`res/`·`data/` +
   sha256 `manifest.json` + zip). The launcher carries the app icon (`src/assets/gatherlight.ico`,
   regen via `make-icon.ps1`).
+- **Large resources are download-at-setup, not bundled** (default lean bundle ~200 MB vs ~350 MB):
+  chromium + git are provisioned by `Modules/Resources` (`ResourceProvisioner` → `/api/manage/resources`,
+  the 资源 · Resources console panel) into `{data}/state/resources/…` (in the data folder → survives
+  updates, fetched once). Runtime resolvers prefer that copy (`PlaywrightHost` browsers path,
+  `GitCliService.GitExe` data-aware). `build-production.mjs --offline` bundles them for air-gapped
+  installs. The Playwright **driver** (`libs/.playwright`, the chromium-install bootstrap) is still bundled.
 - **Auto-update is two-phase**: the server (`Modules/Update`) checks the configured GitHub release +
   downloads/sha256-verifies into `{install}/.update/staged`; the C++ launcher overlays it on the next
   restart (a running exe can't replace itself) and is itself excluded from the overlay. That split is

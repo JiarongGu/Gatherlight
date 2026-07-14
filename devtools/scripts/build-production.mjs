@@ -10,9 +10,11 @@
 //     data/               the data folder — user data lands here (back this up)
 //   dist/Gatherlight-<version>-<rid>.zip   the whole bundle, zipped
 //
-//   node devtools/scripts/build-production.mjs [rid] [--skip-client]
-// The .NET runtime is embedded (target machine needs nothing). The authenticated `claude` CLI and
-// (for scrapers) a Playwright chromium remain host prerequisites — see docs/DEPLOYMENT.md.
+//   node devtools/scripts/build-production.mjs [rid] [--skip-client] [--offline] [--zip]
+// The .NET runtime is embedded (target machine needs nothing). By default the bundle is LEAN:
+// chromium + git are provisioned at first-run setup (资源 · Resources downloads them into the data
+// folder), not shipped — keeping the zip small. --offline bundles them for air-gapped installs. The
+// authenticated `claude` CLI is always a host prerequisite — see docs/DEPLOYMENT.md.
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -28,6 +30,10 @@ const skipClient = args.includes('--skip-client');
 // also packages it. `--skip-chromium` skips the ~150 MB browser bundle for fast local iteration.
 const doZip = args.includes('--zip');
 const skipChromium = args.includes('--skip-chromium');
+// LEAN by default: chromium (~120 MB) + git (~37 MB) are provisioned at SETUP (the 资源 · Resources
+// panel downloads them into the data folder), NOT shipped — keeps the zip small. --offline bundles
+// them for an air-gapped install where the target can't download.
+const offline = args.includes('--offline');
 // GATHERLIGHT_VERSION lets CI stamp the release tag without editing project.config.mjs.
 const version = process.env.GATHERLIGHT_VERSION || config.version || '0.0.0';
 
@@ -143,15 +149,16 @@ if (rid === 'win-x64') {
   console.log(`  (native launcher is win-x64 only; ${rid} uses Gatherlight.cmd)`);
 }
 
-// 3.6 bundle a portable git (MinGit) → libs/git/ so the host's data-repo engine (init/diff/commit/
-// restore — the two-gate audit trail) works on a machine with NO git installed. The server resolves
-// libs/git/cmd/git.exe (GitCliService.ResolveGit). Cached under devtools/_cache/; skipped with a
-// warning if the download is unavailable (the host then falls back to git on PATH).
-step(3.6, 'bundling portable git (MinGit)…');
+// 3.6 portable git (MinGit): download-at-setup by default (the server provisions it into
+// {data}/state/resources/git — GitCliService resolves that first). --offline bundles it into libs/git/
+// for air-gapped installs. Cached under devtools/_cache/.
+step(3.6, offline ? 'bundling portable git (MinGit)…' : 'git → download-at-setup (lean bundle)');
 const MINGIT_VER = '2.55.0.2';
 const MINGIT_URL = `https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.2/MinGit-${MINGIT_VER}-64-bit.zip`;
 let gitBundled = false;
-if (rid === 'win-x64') {
+if (!offline) {
+  console.log('  (skipped — provisioned at setup via 资源 · Resources; falls back to git on PATH)');
+} else if (rid === 'win-x64') {
   const cacheDir = path.join(repo, 'devtools', '_cache');
   fs.mkdirSync(cacheDir, { recursive: true });
   const zip = path.join(cacheDir, `MinGit-${MINGIT_VER}-64-bit.zip`);
@@ -176,14 +183,13 @@ if (rid === 'win-x64') {
   console.log(`  (portable git is win-x64 only; ${rid} needs git on PATH)`);
 }
 
-// 3.7 bundle Playwright's chromium → libs/browsers so the web-scraper tools run with NO separate
-// install on the host (PlaywrightHost points PLAYWRIGHT_BROWSERS_PATH here). Needs the bundled driver
-// (3 above). Default on; --skip-chromium keeps the bundle lean for local iteration. Uses the Debug
-// bin's playwright.ps1 (the bundled single-file exe can't self-install).
-step(3.7, 'bundling Playwright chromium…');
+// 3.7 Playwright chromium: download-at-setup by default (the 资源 panel runs the bundled driver's
+// playwright.ps1 install into {data}/state/resources/browsers — PlaywrightHost resolves that first).
+// --offline bundles it into libs/browsers for air-gapped installs. Needs the bundled driver (3 above).
+step(3.7, offline ? 'bundling Playwright chromium…' : 'chromium → download-at-setup (lean bundle)');
 let chromiumBundled = false;
-if (rid !== 'win-x64' || skipChromium || !playwrightBundled) {
-  console.log(`  (skipped — ${skipChromium ? '--skip-chromium' : !playwrightBundled ? 'no bundled driver' : rid}; host installs via playwright.ps1)`);
+if (!offline || rid !== 'win-x64' || skipChromium || !playwrightBundled) {
+  console.log(`  (skipped — ${!offline ? 'lean; provisioned at setup via 资源 · Resources' : skipChromium ? '--skip-chromium' : !playwrightBundled ? 'no bundled driver' : rid})`);
 } else {
   const browsersDir = path.join(libs, 'browsers');
   const ps1 = path.join(repo, config.serverProject, 'bin', 'Debug', 'net10.0', 'playwright.ps1');
@@ -241,11 +247,11 @@ fs.writeFileSync(path.join(bundle, 'README.txt'), [
   '前置 / Prerequisites:',
   '  · git —— ' + (gitBundled
     ? '已内置于 libs\\git(数据仓库引擎,无需另装) / bundled in libs\\git (the data-repo engine; no install needed)'
-    : '⚠ 本次未打包,需系统已装 git / not bundled this build — needs git on PATH'),
+    : '首次在控制台「资源 · Resources」一键下载(或系统已装 git) / download once from the 资源 · Resources panel (or git on PATH)'),
   '  · 已登录的 claude CLI —— 仅 AI 规划需要,浏览/导入无需 / an authenticated claude CLI — only for AI planning (browsing/import work without it)',
   '  · chromium(仅网页抓取工具)—— ' + (chromiumBundled
     ? '已内置于 libs\\browsers,无需安装 / bundled in libs\\browsers (no install needed)'
-    : '未打包,一次性安装: pwsh libs\\playwright.ps1 install chromium / not bundled — install once'),
+    : '首次在控制台「资源 · Resources」一键下载 / download once from the 资源 · Resources panel'),
   '',
   `v${version} · ${rid}`,
   '',

@@ -134,12 +134,16 @@ repo (versioned); the library is the one knowledge surface whose durability ride
 
 ## Host prerequisites
 
-**git is bundled.** A portable git (MinGit) ships in `libs/git/` and is the data repo's engine
-(init / diff / commit / restore — the two-gate audit trail, which the app runs at first boot). The
-server resolves it automatically (`GitCliService.ResolveGit`: `GATHERLIGHT_GIT` override → bundled
-`libs/git/cmd/git.exe` → `git` on PATH), so a fresh machine needs **no separate git install**. The
-three items below are the only remaining setup — each gates one optional feature, and none blocks the
-app from starting:
+**Large resources download at setup, not bundled** — the shipped zip is lean (~200 MB vs ~350 MB;
+chromium ~120 MB + git ~37 MB are omitted). First run, open the console's **资源 · Resources** panel
+and click download; each lands in the data folder (`{data}/state/resources/…`, downloaded once,
+preserved across app updates). `--offline` bundles them for an air-gapped install.
+
+**git** is the data repo's engine (init / diff / commit / restore — the two-gate audit trail). The
+server resolves it automatically (`GitCliService`: `GATHERLIGHT_GIT` override → provisioned
+`{data}/state/resources/git/cmd/git.exe` → bundled `libs/git` if `--offline` → `git` on PATH), so
+provision it from the 资源 panel (or have git on PATH). The items below each gate one optional
+feature, and none blocks the app from starting:
 
 1. **The authenticated `claude` CLI** — only for the AI chat/planning gate. The core spawns the local
    `claude` CLI (never an API key). Install Claude Code and sign in on the host once; the server
@@ -147,11 +151,11 @@ app from starting:
    library import all still work — only the AI chat gate errors. It's the one per-user step (an
    authenticated login can't be shipped in a bundle).
 2. **Playwright chromium** (web-scraper tools: `scrape`, `flight_*`, `hotel_*`, `restaurant_*`,
-   `policy_check`) — **bundled by default.** The production build ships the Playwright **driver** at
-   `libs/.playwright` (auto-resolved next to the host exe) and **chromium** at `libs/browsers`
-   (`PlaywrightHost` points `PLAYWRIGHT_BROWSERS_PATH` there), so scrapers run out of the box. Only if
-   the bundle was built `--skip-chromium` (leaner), install once on the host:
-   `pwsh libs/playwright.ps1 install chromium`. (WebView2 was rejected — it needs a UI thread/window in
+   `policy_check`) — **provisioned at setup.** The production build ships the Playwright **driver** at
+   `libs/.playwright` (auto-resolved next to the host exe); download **chromium** from the 资源 ·
+   Resources panel (it runs the bundled `libs/playwright.ps1 install chromium` into
+   `{data}/state/resources/browsers`, which `PlaywrightHost` points `PLAYWRIGHT_BROWSERS_PATH` at).
+   `--offline` bundles it at `libs/browsers` instead. (WebView2 was rejected — it needs a UI thread/window in
    a headless server and lacks Playwright's automation API.) Implementation note: single-file publish
    strips the driver's native `node.exe`; the build restores a complete `.playwright` from a
    non-single-file build so the driver resolves.
