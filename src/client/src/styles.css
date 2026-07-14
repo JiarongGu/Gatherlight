@@ -2070,7 +2070,7 @@ kbd, .topbar-kbd {
 .chat-rating-note:focus { outline: none; border-color: var(--accent); }
 
 /* ===================== /manage tabs + eval observability ===================== */
-.mng-tabs { display: flex; gap: 4px; margin: 4px 0 20px; border-bottom: 1px solid var(--border); }
+.mng-tabs { display: flex; align-items: center; gap: 4px; margin: 0 0 20px; border-bottom: 1px solid var(--border); }
 .mng-tab { background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 14px; cursor: pointer; color: var(--muted); font-family: var(--font-body); font-size: 13.5px; font-weight: 500; }
 .mng-tab:hover { color: var(--text-2); }
 .mng-tab.on { color: var(--accent); border-bottom-color: var(--accent); }
@@ -2160,22 +2160,44 @@ kbd, .topbar-kbd {
 .eval-dscore .v { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-2); }
 
 /* ===================== /manage — lantern control room ===================== */
-.mng { max-width: 1040px; margin: 0 auto; padding: 28px 26px 40px; }
+.mng { max-width: 1040px; margin: 0 auto; padding: 18px 26px 0; display: flex; flex-direction: column; }
 /* Desktop-shaped Overview: two columns (health+metrics · controls+updates) so a management window
    shows it without scrolling, instead of one long web-style column. Collapses to one on a narrow view. */
 .mng-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 22px; align-items: start; }
 .mng-col > :first-child { margin-top: 0; }
 @media (max-width: 840px) { .mng-grid { grid-template-columns: 1fr; } }
-.mng-top { display: flex; align-items: center; gap: 13px; margin-bottom: 22px; }
-.mng-top .seal {
-  width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center;
-  color: #fff8ee; font-family: var(--font-display); font-weight: 600; font-size: 21px;
+/* Desktop console: no big title bar — a small seal sits in the tab row, and the persistent info
+   footer (.mng-foot) carries port / site / access / health. */
+.mng-seal {
+  display: grid; place-items: center; flex: none; margin-right: 8px;
+  width: 26px; height: 26px; border-radius: 7px;
+  color: #fff8ee; font-family: var(--font-display); font-weight: 600; font-size: 15px;
   background: linear-gradient(150deg, var(--accent-strong), var(--accent));
-  box-shadow: 0 4px 13px var(--glow), inset 0 0 0 1px rgba(255,255,255,.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
-.mng-top h1 { font-family: var(--font-display); font-size: 23px; font-weight: 600; margin: 0; letter-spacing: -0.01em; line-height: 1.05; }
-.mng-top .sub { font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.3em; color: var(--muted); }
-.mng-top .ver { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.mng-seal.sm { width: 17px; height: 17px; border-radius: 5px; font-size: 10px; margin-right: 6px; }
+.mng-tabs-dot { margin-left: auto; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.mng-tabs-dot.ok { background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 18%, transparent); }
+.mng-tabs-dot.bad { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 22%, transparent); }
+
+/* Persistent info footer — replaces the big header title on the desktop console. */
+.mng-foot {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 2px 20px;
+  border-top: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.mng-foot-brand { display: inline-flex; align-items: center; font-family: var(--font-display); font-size: 12.5px; font-weight: 600; color: var(--text-2); letter-spacing: 0.02em; }
+.mng-foot-sep { width: 1px; height: 12px; background: var(--border); }
+.mng-foot-link { color: var(--muted); text-decoration: none; }
+.mng-foot-link:hover { color: var(--accent); }
+.mng-foot-h { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; }
 
 .mng-health {
   position: relative; background: var(--surface); border: 1px solid var(--border);
@@ -2390,6 +2412,35 @@ kbd, .topbar-kbd {
 }
 .set-saved { font-size: 12px; color: var(--accent-2); }
 
+/* 资源 · Resources — download-at-setup rows (each: name + why + size + download/progress). */
+.res-list { display: flex; flex-direction: column; gap: 10px; }
+.res-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.res-item.ok { border-color: color-mix(in srgb, var(--accent-2) 40%, var(--border)); }
+.res-item.err { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.res-main { flex: 1; min-width: 0; }
+.res-name { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
+.res-badge {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; color: var(--accent-2);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--border)); border-radius: 999px; padding: 1px 8px;
+}
+.res-need { font-size: 12.5px; color: var(--text-2); margin-top: 3px; }
+.res-prog { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin: 9px 0 4px; }
+.res-bar { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-strong)); transition: width 0.3s ease; }
+.res-msg { font-size: 11.5px; color: var(--muted); }
+.res-msg.danger { color: var(--danger); }
+.res-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: none; }
+.res-size { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.res-running { font-size: 12px; color: var(--accent); }
+
 /* ===== Management console — polish layer =====
    Motion + at-a-glance status + hover/focus refinements over the base .mng/.eval/.cx rules above.
    All additive: no base layout changes, so it degrades gracefully. */
@@ -2402,11 +2453,10 @@ kbd, .topbar-kbd {
 /* At-a-glance health dot in the header — visible on every tab, not just Overview. */
 .mng-top-dot {
   width: 9px; height: 9px; border-radius: 50%;
-  margin-left: auto; flex: 0 0 auto;
+  flex: 0 0 auto;
   background: var(--muted);
   transition: background 0.3s, box-shadow 0.3s;
 }
-.mng-top .ver { margin-left: 10px; }
 .mng-top-dot.ok { background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 18%, transparent); animation: mng-pulse 2.6s ease-in-out infinite; }
 .mng-top-dot.bad { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 22%, transparent); }
 

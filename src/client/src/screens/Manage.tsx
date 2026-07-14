@@ -37,7 +37,7 @@ export function Manage() {
   const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
   const [uptime, setUptime] = useState('0s');
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
-  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'settings'>('overview');
+  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'resources' | 'settings'>('overview');
   const started = useRef(Date.now());
 
   // Lightweight in-page toast — replaces alert()/confirm(), which in the WebView2 host block the
@@ -125,29 +125,23 @@ export function Manage() {
 
   return (
     <div className="mng" style={{ minHeight: '100vh' }}>
-      <div className="mng-top">
-        <span className="seal">拾</span>
-        <div>
-          <h1>管理控制台</h1>
-          <span className="sub">GATHERLIGHT · CONSOLE</span>
-        </div>
-        <span
-          className={`mng-top-dot${healthy ? ' ok' : healthy === false ? ' bad' : ''}`}
-          title={statusText}
-          aria-label={statusText}
-        />
-        <span className="ver">拾光</span>
-      </div>
-
       <div className="mng-tabs">
+        <span className="mng-seal" aria-hidden="true">拾</span>
         <button className={`mng-tab${view === 'overview' ? ' on' : ''}`} onClick={() => setView('overview')}>概览 · Overview</button>
         <button className={`mng-tab${view === 'eval' ? ' on' : ''}`} onClick={() => setView('eval')}>对话评估 · Eval</button>
         <button className={`mng-tab${view === 'cortex' ? ' on' : ''}`} onClick={() => setView('cortex')}>校准 · Cortex</button>
+        <button className={`mng-tab${view === 'resources' ? ' on' : ''}`} onClick={() => setView('resources')}>资源 · Resources</button>
         <button className={`mng-tab${view === 'settings' ? ' on' : ''}`} onClick={() => setView('settings')}>设置 · Settings</button>
+        <span
+          className={`mng-tabs-dot${healthy ? ' ok' : healthy === false ? ' bad' : ''}`}
+          title={statusText}
+          aria-label={statusText}
+        />
       </div>
 
       {view === 'eval' && <EvalView />}
       {view === 'cortex' && <CortexView />}
+      {view === 'resources' && <ResourcesView toast={toast} onRestart={restart} inHost={inHost} />}
       {view === 'settings' && <SettingsView inHost={inHost} toast={toast} onRestart={restart} />}
 
       {view === 'overview' && (
@@ -215,22 +209,24 @@ export function Manage() {
       </div>
       </div>
 
-      <div className="mng-meta">
-        端口 {location.port || '5317'} · 站点 {plannerUrl}
-        {authRequired !== null && (
-          <>
-            {' · '}
-            <span className={`mng-sec${authRequired ? ' on' : ''}`}>
-              {authRequired ? '🔒 远程访问已启用访问令牌' : '🏠 仅本机 · loopback'}
-            </span>
-          </>
-        )}
-        <br />
-        规划界面在浏览器中打开;此页监控本机服务的健康。数据(计划/家庭/知识库/SQLite)在数据文件夹,数据库不进 git,请随数据文件夹备份。
-      </div>
       {!inHost && <div className="mng-hint">提示:部分主机操作(重启 / 数据文件夹 / 退出)仅在桌面管理端可用。</div>}
       </div>
       )}
+
+      <div className="mng-foot">
+        <span className="mng-foot-brand"><span className="mng-seal sm" aria-hidden="true">拾</span>拾光 · 管理控制台</span>
+        <span className="mng-foot-sep" />
+        <span>端口 {location.port || '5317'}</span>
+        <a className="mng-foot-link" href={plannerUrl} target="_blank" rel="noreferrer">{plannerUrl}</a>
+        {authRequired !== null && (
+          <span className={`mng-sec${authRequired ? ' on' : ''}`}>{authRequired ? '🔒 令牌' : '🏠 仅本机'}</span>
+        )}
+        <span className="mng-foot-h" title={statusText}>
+          <span className={`mng-top-dot${healthy ? ' ok' : healthy === false ? ' bad' : ''}`} />
+          {statusText}
+          {healthy && latency != null ? ` · ${latency}ms` : ''}
+        </span>
+      </div>
 
       {notice && (
         <div className={`mng-toast${notice.kind === 'err' ? ' err' : ''}`} role="status" aria-live="polite">
@@ -818,6 +814,94 @@ function CortexView() {
             ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ---- Resources view (download-at-setup: chromium / git / … provisioned into the data folder) ----
+interface ResourceStatus {
+  id: string;
+  name: string;
+  neededFor: string;
+  approxBytes: number;
+  installed: boolean;
+  state: string;
+  percent: number;
+  message: string | null;
+}
+
+function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean }) {
+  const [items, setItems] = useState<ResourceStatus[] | null>(null);
+  const load = async () => {
+    try {
+      const d = await (await fetch('/api/manage/resources')).json();
+      setItems(d.resources);
+    } catch {
+      /* keep last */
+    }
+  };
+  useEffect(() => { load(); }, []);
+  // Poll while anything is downloading so the progress bar advances live.
+  useEffect(() => {
+    if (!items?.some((r) => r.state === 'running')) return;
+    const t = setInterval(load, 1200);
+    return () => clearInterval(t);
+  }, [items]);
+
+  const provision = async (id: string) => {
+    try {
+      const res = await fetch(`/api/manage/resources/${id}/provision`, { method: 'POST' });
+      if (res.ok) { toast('开始下载…'); load(); }
+      else toast('无法开始下载', 'err');
+    } catch {
+      toast('请求失败', 'err');
+    }
+  };
+
+  const mb = (n: number) => `${Math.round(n / 1_000_000)} MB`;
+  if (!items) return <div className="eval-empty">加载中…</div>;
+
+  return (
+    <div className="mng-view set">
+      <div className="set-lead">
+        大型资源(Chromium、Git 等)按需下载到数据文件夹,不打包进安装包 —— 保持安装包小巧。下载一次即长期保留(应用更新不会清除)。
+      </div>
+      <div className="res-list">
+        {items.map((r) => (
+          <div className={`res-item${r.installed ? ' ok' : ''}${r.state === 'error' ? ' err' : ''}`} key={r.id}>
+            <div className="res-main">
+              <div className="res-name">
+                {r.name}
+                {r.installed && <span className="res-badge">已安装</span>}
+              </div>
+              <div className="res-need">{r.neededFor}</div>
+              {r.state === 'running' && (
+                <>
+                  <div className="res-prog"><span className="res-bar" style={{ width: `${r.percent}%` }} /></div>
+                  <div className="res-msg">{r.message} · {r.percent}%</div>
+                </>
+              )}
+              {r.state === 'error' && <div className="res-msg danger">下载失败:{r.message}</div>}
+            </div>
+            <div className="res-side">
+              <div className="res-size">≈ {mb(r.approxBytes)}</div>
+              {r.state === 'running' ? (
+                <span className="res-running">下载中…</span>
+              ) : (
+                <button className={`cx-btn${r.installed ? '' : ' primary'}`} onClick={() => provision(r.id)}>
+                  {r.installed ? '重新下载' : '下载'}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {inHost && (
+        <div className="set-actions">
+          <button className="cx-btn" onClick={onRestart}>重启服务</button>
+          <span className="set-saved">部分资源(如 Git)需重启后生效</span>
+        </div>
+      )}
     </div>
   );
 }
