@@ -5,10 +5,14 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { repo, dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, onDisk } from './_e2e-common.mjs';
+import { repo, dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, onDisk, skipUnlessNodeModule } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p10');
 const { ok, fail, done } = makeReporter('p10');
+
+// The fixture PDF + the pdf_fill/fill_itinerary tools run via the tools/pdf-form Node leaf, so its
+// deps must be installed (`npm ci` there). Skip gracefully where they aren't (a fresh box / CI).
+skipUnlessNodeModule('tools/pdf-form', 'pdf-lib', 'p10');
 
 makeTestData(dataDir);
 const up = path.join(dataDir, 'uploads');

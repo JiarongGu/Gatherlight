@@ -3,7 +3,7 @@
 // server serving canned FlightAware/FlightStats HTML, so the full navigate + parse path is tested
 // deterministically (no live sites). Verifies the schedule is extracted and claims cross-checked.
 import http from 'node:http';
-import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient } from './_e2e-common.mjs';
+import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, skipUnlessChromium } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p11');
 const FIXTURE_PORT = 5388;
@@ -58,6 +58,7 @@ const { call } = makeClient(srv.base);
 
 try {
   await waitHealthy(srv.base);
+  await skipUnlessChromium(srv.base, 'p11'); // scrapers need the download-at-setup browser
 
   // native tool registered (not the leaf)
   const tools = (await (await fetch(`${srv.base}/api/tools`)).json()).tools;

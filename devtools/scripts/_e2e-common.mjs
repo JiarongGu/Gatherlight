@@ -26,6 +26,36 @@ export function makeReporter(suite) {
   return { ok, fail, done };
 }
 
+/** Skip a suite gracefully (exit 0, counts as PASS) when an env-only prerequisite is absent — the
+ *  same "no failures" convention e2e-p19 uses for the MSVC-less case. Keeps `e2e all` green on a
+ *  fresh box / CI that hasn't provisioned the heavy, download-at-setup pieces. */
+export function skipSuite(suite, reason) {
+  console.log(`  · ${reason} — skipping ${suite} (no failures).`);
+  console.log(`\ne2e-${suite} PASS (skipped)`);
+  process.exit(0);
+}
+
+/** Skip unless a Node module is installed under a repo subdir (e.g. the pdf-form leaf's deps). */
+export function skipUnlessNodeModule(subdir, moduleName, suite) {
+  if (!fs.existsSync(path.join(repo, subdir, 'node_modules', moduleName)))
+    skipSuite(suite, `${moduleName} not installed in ${subdir} (run \`npm ci\` there)`);
+}
+
+/** Skip unless a real browser (chromium) is available to the scraper tools — it's download-at-setup
+ *  (the 资源 panel / `dev.mjs fetch-tools`), not in the lean bundle, so CI / a fresh box won't have it.
+ *  Probes the `scrape` tool: a "Chromium 未安装" error means the browser isn't provisioned. */
+export async function skipUnlessChromium(base, suite) {
+  try {
+    const r = await fetch(base + '/api/tools/call', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'scrape', arguments: { url: 'http://127.0.0.1:1/', timeout: 3000 } }),
+    });
+    const text = JSON.stringify(await r.json().catch(() => ''));
+    if (text.includes('未安装') || text.includes('Executable doesn') || text.includes('Chromium 未'))
+      skipSuite(suite, 'Chromium not provisioned (download-at-setup; `dev.mjs fetch-tools`)');
+  } catch { /* if the probe itself fails weirdly, let the suite run and report normally */ }
+}
+
 export const makeTestData = (dataDir) =>
   spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'inherit' });
 
