@@ -126,17 +126,13 @@ export function Manage() {
   return (
     <div className="mng" style={{ minHeight: '100vh' }}>
       <div className="mng-tabs">
-        <span className="mng-seal" aria-hidden="true">拾</span>
-        <button className={`mng-tab${view === 'overview' ? ' on' : ''}`} onClick={() => setView('overview')}>概览 · Overview</button>
-        <button className={`mng-tab${view === 'eval' ? ' on' : ''}`} onClick={() => setView('eval')}>对话评估 · Eval</button>
-        <button className={`mng-tab${view === 'cortex' ? ' on' : ''}`} onClick={() => setView('cortex')}>校准 · Cortex</button>
-        <button className={`mng-tab${view === 'resources' ? ' on' : ''}`} onClick={() => setView('resources')}>资源 · Resources</button>
-        <button className={`mng-tab${view === 'settings' ? ' on' : ''}`} onClick={() => setView('settings')}>设置 · Settings</button>
-        <span
-          className={`mng-tabs-dot${healthy ? ' ok' : healthy === false ? ' bad' : ''}`}
-          title={statusText}
-          aria-label={statusText}
-        />
+        <div className="mng-tabs-inner">
+          <button className={`mng-tab${view === 'overview' ? ' on' : ''}`} onClick={() => setView('overview')}>概览 · Overview</button>
+          <button className={`mng-tab${view === 'eval' ? ' on' : ''}`} onClick={() => setView('eval')}>对话评估 · Eval</button>
+          <button className={`mng-tab${view === 'cortex' ? ' on' : ''}`} onClick={() => setView('cortex')}>校准 · Cortex</button>
+          <button className={`mng-tab${view === 'resources' ? ' on' : ''}`} onClick={() => setView('resources')}>资源 · Resources</button>
+          <button className={`mng-tab${view === 'settings' ? ' on' : ''}`} onClick={() => setView('settings')}>设置 · Settings</button>
+        </div>
       </div>
 
       {view === 'eval' && <EvalView />}
@@ -214,18 +210,20 @@ export function Manage() {
       )}
 
       <div className="mng-foot">
-        <span className="mng-foot-brand"><span className="mng-seal sm" aria-hidden="true">拾</span>拾光 · 管理控制台</span>
-        <span className="mng-foot-sep" />
-        <span>端口 {location.port || '5317'}</span>
-        <a className="mng-foot-link" href={plannerUrl} target="_blank" rel="noreferrer">{plannerUrl}</a>
-        {authRequired !== null && (
-          <span className={`mng-sec${authRequired ? ' on' : ''}`}>{authRequired ? '🔒 令牌' : '🏠 仅本机'}</span>
-        )}
-        <span className="mng-foot-h" title={statusText}>
-          <span className={`mng-top-dot${healthy ? ' ok' : healthy === false ? ' bad' : ''}`} />
-          {statusText}
-          {healthy && latency != null ? ` · ${latency}ms` : ''}
-        </span>
+        <div className="mng-foot-inner">
+          <span className="mng-foot-brand"><span className="mng-seal sm" aria-hidden="true">拾</span>拾光 · 管理控制台</span>
+          <span className="mng-foot-sep" />
+          <span>端口 {location.port || '5317'}</span>
+          <a className="mng-foot-link" href={plannerUrl} target="_blank" rel="noreferrer">{plannerUrl}</a>
+          {authRequired !== null && (
+            <span className={`mng-sec${authRequired ? ' on' : ''}`}>{authRequired ? '🔒 令牌' : '🏠 仅本机'}</span>
+          )}
+          <span className="mng-foot-h" title={statusText}>
+            <span className={`mng-top-dot${healthy ? ' ok' : healthy === false ? ' bad' : ''}`} />
+            {statusText}
+            {healthy && latency != null ? ` · ${latency}ms` : ''}
+          </span>
+        </div>
       </div>
 
       {notice && (

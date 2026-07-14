@@ -2070,7 +2070,15 @@ kbd, .topbar-kbd {
 .chat-rating-note:focus { outline: none; border-color: var(--accent); }
 
 /* ===================== /manage tabs + eval observability ===================== */
-.mng-tabs { display: flex; align-items: center; gap: 4px; margin: 0 0 20px; border-bottom: 1px solid var(--border); }
+/* Fixed top tab bar — mirrors the fixed footer; only the content between them scrolls. */
+.mng-tabs {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 30;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+  border-bottom: 1px solid var(--border);
+}
+.mng-tabs-inner { max-width: 1040px; margin: 0 auto; padding: 0 26px; display: flex; align-items: flex-end; gap: 4px; }
 .mng-tab { background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 14px; cursor: pointer; color: var(--muted); font-family: var(--font-body); font-size: 13.5px; font-weight: 500; }
 .mng-tab:hover { color: var(--text-2); }
 .mng-tab.on { color: var(--accent); border-bottom-color: var(--accent); }
@@ -2160,35 +2168,41 @@ kbd, .topbar-kbd {
 .eval-dscore .v { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-2); }
 
 /* ===================== /manage — lantern control room ===================== */
-.mng { max-width: 1040px; margin: 0 auto; padding: 18px 26px 0; display: flex; flex-direction: column; }
+.mng { max-width: 1040px; margin: 0 auto; padding: 56px 26px 58px; }
 /* Desktop-shaped Overview: two columns (health+metrics · controls+updates) so a management window
    shows it without scrolling, instead of one long web-style column. Collapses to one on a narrow view. */
 .mng-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 22px; align-items: start; }
 .mng-col > :first-child { margin-top: 0; }
 @media (max-width: 840px) { .mng-grid { grid-template-columns: 1fr; } }
-/* Desktop console: no big title bar — a small seal sits in the tab row, and the persistent info
-   footer (.mng-foot) carries port / site / access / health. */
+/* Desktop console: no big title bar — the tab row is bare, and the FIXED status footer (.mng-foot)
+   carries the identity + port / site / access / health, so nothing is duplicated up top. */
 .mng-seal {
-  display: grid; place-items: center; flex: none; margin-right: 8px;
-  width: 26px; height: 26px; border-radius: 7px;
-  color: #fff8ee; font-family: var(--font-display); font-weight: 600; font-size: 15px;
+  display: grid; place-items: center; flex: none; margin-right: 6px;
+  width: 17px; height: 17px; border-radius: 5px;
+  color: #fff8ee; font-family: var(--font-display); font-weight: 600; font-size: 10px;
   background: linear-gradient(150deg, var(--accent-strong), var(--accent));
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
-.mng-seal.sm { width: 17px; height: 17px; border-radius: 5px; font-size: 10px; margin-right: 6px; }
-.mng-tabs-dot { margin-left: auto; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
-.mng-tabs-dot.ok { background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 18%, transparent); }
-.mng-tabs-dot.bad { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 22%, transparent); }
 
-/* Persistent info footer — replaces the big header title on the desktop console. */
+/* Fixed status bar pinned to the viewport bottom — NOT part of any tab's scroll. Full-width bar,
+   content aligned to the console's centred column. */
 .mng-foot {
-  margin-top: auto;
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 30;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+  border-top: 1px solid var(--border);
+}
+.mng-foot-inner {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 9px 26px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  padding: 12px 2px 20px;
-  border-top: 1px solid var(--border-soft);
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--muted);
