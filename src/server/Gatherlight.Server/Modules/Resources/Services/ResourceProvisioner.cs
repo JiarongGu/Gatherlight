@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using Gatherlight.Server.Modules.Core.Services;
@@ -11,16 +10,16 @@ public enum ResourceKind
 {
     /// <summary>A public .zip downloaded + sha256-verified + extracted into the install dir.</summary>
     Zip,
-    /// <summary>Chromium, installed by the bundled Playwright driver (`playwright.ps1 install
-    /// chromium`) into the install dir — not a single file, so it has its own readiness check.</summary>
-    PlaywrightChromium,
+    /// <summary>The Gatherlight.Resources NuGet package (itself a zip) holding the FULL win-x64 runtime
+    /// — Playwright driver + git + chromium — downloaded once and unpacked into their install dirs.</summary>
+    Bundle,
 }
 
 /// <summary>
-/// A large resource that ships download-at-setup instead of being bundled. Kept out of the
-/// production zip to keep it small; the user provisions them once (desktop setup / the 资源 panel)
-/// and they live under <c>{data}/state/resources/{InstallDir}</c> (in the data folder, so they
-/// survive app updates and are fetched once).
+/// A large resource (or a bundle of them) that ships download-at-setup instead of inside the app
+/// bundle — kept out of the shipped zip so the app download stays lean; provisioned once (desktop
+/// setup / the 资源 panel) under <c>{data}/state/resources/</c> (in the data folder, so it survives app
+/// updates and is fetched once).
 /// </summary>
 public sealed record ResourceSpec(
     string Id,
@@ -32,9 +31,8 @@ public sealed record ResourceSpec(
     long ApproxBytes,
     string? Url = null,
     string? Sha256 = null,
-    // The subpath inside the extracted archive that IS the payload root — used for a package archive
-    // (our .nupkg is a zip that wraps the files under a content path). Null = the archive root itself,
-    // with single-wrapper-folder flattening (a plain release .zip).
+    // The subpath inside the extracted archive that IS the payload root — for a package archive whose
+    // files sit under a content path. Null = the archive root itself (with single-wrapper flattening).
     string? ArchiveRoot = null);
 
 /// <summary>Live provisioning state for one resource (for the setup UI to poll).</summary>
@@ -52,20 +50,35 @@ public interface IResourceProvisioner
 
 public sealed class ResourceProvisioner : IResourceProvisioner
 {
-    // The catalog. Sha256 left null = best-effort (no integrity check) until a pinned hash is added.
+    // The Gatherlight.Resources package: our own lean win-x64 runtime bundle (Playwright driver + git +
+    // chromium), pulled from nuget.org's public flat-container CDN — no self-hosted assets, versioned +
+    // immutable. The version tracks the Microsoft.Playwright package (1.49.0 — driver + browser + DLL
+    // are paired). GATHERLIGHT_RESOURCES_URL overrides the source (a mirror, or a local .nupkg to test).
+    public const string ResourcesPackageId = "gatherlight.resources";     // lower-case (flat-container)
+    public const string ResourcesPackageVersion = "1.0.0";                // must match the published package
+    private static string ResourcesUrl =>
+        Environment.GetEnvironmentVariable("GATHERLIGHT_RESOURCES_URL") is { Length: > 0 } u ? u
+        : $"https://api.nuget.org/v3-flatcontainer/{ResourcesPackageId}/{ResourcesPackageVersion}/{ResourcesPackageId}.{ResourcesPackageVersion}.nupkg";
+
+    // What the bundle contains (content/<Archive> inside the .nupkg) and where each part unpacks under
+    // the resources root — the exact dirs the runtime resolvers look in (PlaywrightHost → .playwright +
+    // browsers; GitCliService → git). "" marker = the browsers dir is ready when a chromium* dir exists.
+    private static readonly (string Archive, string Install, string Marker)[] BundleParts =
+    {
+        ("content/playwright", ".playwright", "node/win32_x64/node.exe"),
+        ("content/git", "git", "cmd/git.exe"),
+        ("content/browsers", "browsers", ""),
+    };
+
+    // One catalog entry: the whole runtime in a single download (the user's "bundle everything").
     public static readonly IReadOnlyList<ResourceSpec> Catalog = new[]
     {
         new ResourceSpec(
-            Id: "chromium", Name: "Chromium(无头浏览器)",
-            NeededFor: "网页抓取工具 · scrape / flight / hotel / restaurant / policy(首次一并拉取 Playwright 驱动)",
-            Kind: ResourceKind.PlaywrightChromium, InstallDir: "browsers", ReadyMarker: "",
-            ApproxBytes: 164_000_000),
-        new ResourceSpec(
-            Id: "git", Name: "Git(便携版 · MinGit)",
-            NeededFor: "数据文件夹版本管理 · 计划改动的提交/审阅",
-            Kind: ResourceKind.Zip, InstallDir: "git", ReadyMarker: "cmd/git.exe",
-            ApproxBytes: 46_000_000,
-            Url: "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.2/MinGit-2.55.0.2-64-bit.zip"),
+            Id: "runtime", Name: "运行环境(浏览器 · Git · 驱动)",
+            NeededFor: "网页抓取工具 + 数据仓库版本管理 —— 首次一次性下载全部运行组件",
+            Kind: ResourceKind.Bundle, InstallDir: "", ReadyMarker: "",
+            ApproxBytes: 235_000_000,
+            Url: ResourcesUrl),
     };
 
     private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
@@ -87,10 +100,15 @@ public sealed class ResourceProvisioner : IResourceProvisioner
 
     public bool IsInstalled(ResourceSpec s)
     {
-        var dir = InstallPath(s);
-        if (s.Kind == ResourceKind.PlaywrightChromium)
-            return Directory.Exists(dir) && Directory.EnumerateDirectories(dir, "chromium*").Any();
-        return File.Exists(Path.Combine(dir, s.ReadyMarker.Replace('/', Path.DirectorySeparatorChar)));
+        if (s.Kind == ResourceKind.Bundle)
+            return BundleParts.All(part =>
+            {
+                var dir = Path.Combine(_data.ResourcesPath, part.Install);
+                if (part.Marker.Length == 0) // browsers → a chromium* dir present
+                    return Directory.Exists(dir) && Directory.EnumerateDirectories(dir, "chromium*").Any();
+                return File.Exists(Path.Combine(dir, part.Marker.Replace('/', Path.DirectorySeparatorChar)));
+            });
+        return File.Exists(Path.Combine(InstallPath(s), s.ReadyMarker.Replace('/', Path.DirectorySeparatorChar)));
     }
 
     public IReadOnlyList<ResourceStatus> Status() => Catalog.Select(s =>
@@ -120,10 +138,10 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         try
         {
             Directory.CreateDirectory(_data.ResourcesPath);
-            if (spec.Kind == ResourceKind.Zip) await ProvisionZipAsync(spec, p);
-            else await ProvisionChromiumAsync(spec, p);
+            if (spec.Kind == ResourceKind.Bundle) await ProvisionBundleAsync(spec, p);
+            else await ProvisionZipAsync(spec, p);
             Set(p, "ready", 100, "已就绪");
-            _log.LogInformation("Resource provisioned: {Id} -> {Path}", spec.Id, InstallPath(spec));
+            _log.LogInformation("Resource provisioned: {Id}", spec.Id);
         }
         catch (Exception ex)
         {
@@ -133,7 +151,44 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         finally { lock (p) p.Running = false; }
     }
 
-    // ---- Zip resources (git, and future model files) ----
+    // ---- The runtime bundle: one .nupkg → driver + git + chromium into their install dirs ----
+    private async Task ProvisionBundleAsync(ResourceSpec spec, Prog p)
+    {
+        if (string.IsNullOrEmpty(spec.Url)) throw new InvalidOperationException("no download url");
+        var staging = Path.Combine(_data.ResourcesPath, ".staging");
+        Directory.CreateDirectory(staging);
+        var pkg = Path.Combine(staging, "runtime.nupkg");
+        var extract = Path.Combine(staging, "runtime");
+        try
+        {
+            Set(p, "running", 0, "下载运行环境…(约 220MB,首次可能需要几分钟)");
+            await DownloadAsync(spec.Url, pkg, pct => Set(p, "running", (int)(pct * 0.80), "下载运行环境…"));
+
+            Set(p, "running", 82, "解压中…");
+            if (Directory.Exists(extract)) Directory.Delete(extract, true);
+            ZipFile.ExtractToDirectory(pkg, extract);
+
+            // Move each part (content/playwright, content/git, content/browsers) into its install dir.
+            var step = 0;
+            foreach (var (archive, install, _) in BundleParts)
+            {
+                var src = Path.Combine(extract, archive.Replace('/', Path.DirectorySeparatorChar));
+                if (!Directory.Exists(src)) throw new InvalidOperationException($"包内未找到 {archive}");
+                var dest = Path.Combine(_data.ResourcesPath, install);
+                if (Directory.Exists(dest)) Directory.Delete(dest, true);
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                Directory.Move(src, dest);
+                Set(p, "running", 84 + (++step * 5), "安装中…");
+            }
+        }
+        finally
+        {
+            try { if (File.Exists(pkg)) File.Delete(pkg); } catch { /* best-effort */ }
+            try { if (Directory.Exists(extract)) Directory.Delete(extract, true); } catch { /* best-effort */ }
+        }
+    }
+
+    // ---- A single public .zip (retained for future standalone resources; not in the catalog today) ----
     private async Task ProvisionZipAsync(ResourceSpec spec, Prog p)
     {
         if (string.IsNullOrEmpty(spec.Url)) throw new InvalidOperationException("no download url");
@@ -158,9 +213,6 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             if (Directory.Exists(extract)) Directory.Delete(extract, true);
             ZipFile.ExtractToDirectory(zip, extract);
 
-            // The payload root: for a plain release .zip, the extract dir itself (hoisting a single
-            // wrapper folder); for a package archive (our .nupkg — a zip with metadata around the
-            // files), the ArchiveRoot subpath that holds the actual resource (e.g. content/playwright).
             string payload;
             if (!string.IsNullOrEmpty(spec.ArchiveRoot))
             {
@@ -184,82 +236,6 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             try { if (File.Exists(zip)) File.Delete(zip); } catch { /* best-effort */ }
             try { if (Directory.Exists(extract)) Directory.Delete(extract, true); } catch { /* best-effort */ }
         }
-    }
-
-    // The Playwright .NET driver (win-x64 slice, ~34 MB zip -> ~88 MB): download-at-setup so it stays
-    // out of the lean bundle. Playwright ships the .NET driver only inside the ~181 MB all-platform
-    // Microsoft.Playwright NuGet, so we RE-PACK just the win-x64 slice into our own lean
-    // `Gatherlight.Resources` package (devtools: `dev.mjs resources-pack`) and pull it from nuget.org's
-    // public flat-container CDN — no self-hosted asset, versioned + immutable. The version MUST track
-    // the Microsoft.Playwright package (1.49.0 — driver + DLL are paired). GATHERLIGHT_PW_DRIVER_URL
-    // overrides the source (a mirror, or a local .nupkg during testing).
-    public const string ResourcesPackageId = "gatherlight.resources";     // lower-case (flat-container)
-    public const string ResourcesPackageVersion = "1.0.0";                // tracks the published package
-    private static readonly ResourceSpec DriverSpec = new(
-        "pw-driver", "Playwright 驱动", "", ResourceKind.Zip, ".playwright", "node/win32_x64/node.exe",
-        34_000_000,
-        Url: Environment.GetEnvironmentVariable("GATHERLIGHT_PW_DRIVER_URL")
-             ?? $"https://api.nuget.org/v3-flatcontainer/{ResourcesPackageId}/{ResourcesPackageVersion}/{ResourcesPackageId}.{ResourcesPackageVersion}.nupkg",
-        Sha256: null, // nuget.org is TLS + immutable-per-version; integrity is the registry's guarantee
-        ArchiveRoot: "content/playwright");
-
-    /// <summary>The Playwright driver dir (node/win32_x64/node.exe + package/cli.js): prefer the
-    /// provisioned copy under the data folder, then one bundled next to the exe; null if neither.</summary>
-    private string? ResolveDriverDir()
-    {
-        foreach (var dir in new[] { Path.Combine(_data.ResourcesPath, ".playwright"), Path.Combine(AppContext.BaseDirectory, ".playwright") })
-            if (File.Exists(Path.Combine(dir, "node", "win32_x64", "node.exe"))) return dir;
-        return null;
-    }
-
-    // ---- Chromium via the Playwright driver (provisioned or bundled) ----
-    private async Task ProvisionChromiumAsync(ResourceSpec spec, Prog p)
-    {
-        // The driver is chromium's bootstrap. Prefer provisioned/bundled; else download it first.
-        var driver = ResolveDriverDir();
-        if (driver is null)
-        {
-            Set(p, "running", 2, "下载 Playwright 驱动…");
-            await ProvisionZipAsync(DriverSpec, p);
-            driver = Path.Combine(_data.ResourcesPath, ".playwright");
-        }
-        var node = Path.Combine(driver, "node", "win32_x64", "node.exe");
-        var cli = Path.Combine(driver, "package", "cli.js");
-        if (!File.Exists(node) || !File.Exists(cli)) throw new InvalidOperationException("Playwright 驱动缺失");
-
-        var browsers = InstallPath(spec);
-        Directory.CreateDirectory(browsers);
-        Set(p, "running", 8, "下载 Chromium…(约 130MB,可能需要一两分钟)");
-
-        // Direct node form — equivalent to `playwright.ps1 install chromium` (the ps1 isn't in the zip).
-        var psi = new ProcessStartInfo(node)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var a in new[] { cli, "install", "chromium" }) psi.ArgumentList.Add(a);
-        psi.Environment["PLAYWRIGHT_BROWSERS_PATH"] = browsers;
-
-        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("驱动启动失败");
-        proc.OutputDataReceived += (_, e) => { if (e.Data is { } d && d.Contains('%')) Set(p, "running", ScrapePercent(d, p.Percent), "下载 Chromium…"); };
-        proc.ErrorDataReceived += (_, _) => { };
-        proc.BeginOutputReadLine();
-        proc.BeginErrorReadLine();
-        await proc.WaitForExitAsync();
-        if (proc.ExitCode != 0) throw new InvalidOperationException($"chromium 安装退出码 {proc.ExitCode}");
-        if (!IsInstalled(spec)) throw new InvalidOperationException("安装后未找到 Chromium");
-    }
-
-    private static int ScrapePercent(string line, int fallback)
-    {
-        // Best-effort: pull the last "NN%" token from a playwright progress line.
-        var i = line.IndexOf('%');
-        if (i <= 0) return fallback;
-        var start = i - 1;
-        while (start >= 0 && (char.IsDigit(line[start]) || line[start] == '.')) start--;
-        return int.TryParse(line.AsSpan(start + 1, i - start - 1), out var n) && n is >= 0 and <= 100 ? Math.Max(5, n) : fallback;
     }
 
     private static void Set(Prog p, string state, int pct, string? msg)

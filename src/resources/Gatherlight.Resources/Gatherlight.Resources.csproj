@@ -25,10 +25,10 @@
     <PackageId>Gatherlight.Resources</PackageId>
     <Version>1.0.0</Version>
     <Authors>Jiarong Gu</Authors>
-    <Description>Heavy download-at-setup resources for the self-hosted Gatherlight family planner: the Playwright win-x64 driver slice (MinGit + a small ONNX embedding model to follow). Consumed at RUNTIME by the app's ResourceProvisioner via the nuget.org flat-container API — not a build-time PackageReference. Redistributes Microsoft Playwright (Apache-2.0) + Node.js (MIT).</Description>
+    <Description>The full win-x64 runtime for the self-hosted Gatherlight family planner, in one download-at-setup package: the Playwright driver + portable git (MinGit) + chromium headless-shell. The app pulls it once at first-run setup via the nuget.org flat-container API (not a build-time PackageReference), keeping the app download lean. Redistributes Microsoft Playwright (Apache-2.0), Node.js (MIT), Chromium headless-shell (BSD-3-Clause), and git-for-windows/MinGit (GPL-2.0).</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-    <PackageTags>gatherlight;resources;playwright;setup;download</PackageTags>
+    <PackageLicenseExpression>Apache-2.0 AND MIT AND BSD-3-Clause AND GPL-2.0-only</PackageLicenseExpression>
+    <PackageTags>gatherlight;resources;playwright;chromium;git;setup</PackageTags>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <!-- content-only: no lib/ assembly, payload sits under content/ by design; NU5110/NU5111 are
          Playwright's own .ps1 helpers inside the driver (we deliberately never run them on install). -->

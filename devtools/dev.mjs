@@ -349,15 +349,19 @@ switch (cmd) {
   }
 
   case 'resources-pack': {
-    // Build the lean Gatherlight.Resources NuGet package: the Playwright win-x64 driver slice, packed
-    // for download-at-setup from nuget.org (the app's ResourceProvisioner pulls it, keeping the shipped
-    // bundle lean). Publish is separate: `dotnet nuget push` with a nuget.org API key.
+    // Build the Gatherlight.Resources NuGet package = the FULL win-x64 runtime (Playwright driver +
+    // git + chromium), so the app pulls ONE ~220 MB package at first-run setup while the app download
+    // stays lean. Reuses a locally-provisioned git/chromium when present (dev), else downloads/installs
+    // them (CI). Publish is separate: `dotnet nuget push` with a nuget.org API key.
     const version = args[0]; // optional; defaults to the csproj <Version> (must match ResourcesPackageVersion)
     const pkgDir = path.join(repo, 'src', 'resources', 'Gatherlight.Resources');
     const proj = path.join(pkgDir, 'Gatherlight.Resources.csproj');
     if (!fs.existsSync(proj)) { console.error(`package project not found: ${proj}`); process.exitCode = 1; break; }
+    const MINGIT_URL = 'https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.2/MinGit-2.55.0.2-64-bit.zip';
+    const localRes = path.join(repo, 'local', 'state', 'resources');
+    const dirMB = (d) => { let n = 0; (function w(x) { for (const e of fs.readdirSync(x, { withFileTypes: true })) { const p = path.join(x, e.name); e.isDirectory() ? w(p) : (n += fs.statSync(p).size); } })(d); return (n / 1e6).toFixed(0); };
 
-    // 1. Locate the built driver (.playwright win-x64 slice from a Debug build of the server).
+    // 0. Locate the driver (.playwright win-x64 slice from a Debug build of the server).
     const driver = path.join(repo, config.serverProject, 'bin', 'Debug', 'net10.0', '.playwright');
     const driverReady = () => fs.existsSync(path.join(driver, 'node', 'win32_x64', 'node.exe'));
     if (!driverReady()) {
@@ -367,16 +371,53 @@ switch (cmd) {
     }
     if (!driverReady()) { console.error(`Playwright driver not found under ${driver} — is Microsoft.Playwright restored?`); process.exitCode = 1; break; }
 
-    // 2. Assemble payload/playwright/ = the driver slice (gitignored) → packs to content/playwright/.
     const payloadRoot = path.join(pkgDir, 'payload');
-    const payload = path.join(payloadRoot, 'playwright');
     fs.rmSync(payloadRoot, { recursive: true, force: true });
-    fs.mkdirSync(payload, { recursive: true });
-    fs.cpSync(driver, payload, { recursive: true });
-    let bytes = 0; (function walk(d) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); e.isDirectory() ? walk(p) : (bytes += fs.statSync(p).size); } })(payload);
-    console.log(`  payload: ${(bytes / 1e6).toFixed(0)} MB (Playwright win-x64 driver)`);
+    fs.mkdirSync(payloadRoot, { recursive: true });
 
-    // 3. dotnet pack → dist/resources/*.nupkg
+    // 1. driver -> payload/playwright
+    fs.cpSync(driver, path.join(payloadRoot, 'playwright'), { recursive: true });
+    console.log(`  driver:   ${dirMB(path.join(payloadRoot, 'playwright'))} MB`);
+
+    // 2. git -> payload/git  (reuse a local provisioned copy, else download + extract MinGit)
+    const gitOut = path.join(payloadRoot, 'git');
+    const localGit = path.join(localRes, 'git');
+    if (fs.existsSync(path.join(localGit, 'cmd', 'git.exe'))) {
+      console.log('  git:      reusing local provisioned copy');
+      fs.cpSync(localGit, gitOut, { recursive: true });
+    } else {
+      console.log('  git:      downloading MinGit…');
+      const zip = path.join(payloadRoot, '_mingit.zip');
+      const resp = await fetch(MINGIT_URL);
+      if (!resp.ok) { console.error(`MinGit download failed: ${resp.status}`); process.exitCode = 1; break; }
+      fs.writeFileSync(zip, Buffer.from(await resp.arrayBuffer()));
+      fs.mkdirSync(gitOut, { recursive: true });
+      const x = spawnSync('tar', ['-xf', zip, '-C', gitOut], { stdio: 'inherit', shell: false });
+      fs.rmSync(zip, { force: true });
+      if (x.status !== 0 || !fs.existsSync(path.join(gitOut, 'cmd', 'git.exe'))) { console.error('MinGit extract failed'); process.exitCode = 1; break; }
+    }
+    console.log(`  git:      ${dirMB(gitOut)} MB`);
+
+    // 3. chromium headless shell -> payload/browsers. The scrapers launch chromium HEADLESS, and
+    //    Playwright's headless mode uses the ~90 MB `chromium_headless_shell` build (headless_shell.exe),
+    //    NOT the ~280 MB full browser — so we ship only the shell (also keeps the .nupkg under 250 MB).
+    const browsersOut = path.join(payloadRoot, 'browsers');
+    const localBrowsers = path.join(localRes, 'browsers');
+    const hasLocalShell = fs.existsSync(localBrowsers) && fs.readdirSync(localBrowsers).some((d) => d.startsWith('chromium_headless_shell'));
+    fs.mkdirSync(browsersOut, { recursive: true });
+    if (hasLocalShell) {
+      console.log('  chromium: reusing local provisioned headless shell');
+      for (const d of fs.readdirSync(localBrowsers)) if (d.startsWith('chromium_headless_shell') || d.startsWith('ffmpeg')) fs.cpSync(path.join(localBrowsers, d), path.join(browsersOut, d), { recursive: true });
+    } else {
+      console.log('  chromium: installing headless shell via Playwright (~90 MB download)…');
+      const node = path.join(driver, 'node', 'win32_x64', 'node.exe');
+      const cli = path.join(driver, 'package', 'cli.js');
+      const ci = spawnSync(node, [cli, 'install', 'chromium-headless-shell'], { stdio: 'inherit', cwd: repo, shell: false, env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsersOut } });
+      if (ci.status !== 0 || !fs.readdirSync(browsersOut).some((d) => d.startsWith('chromium'))) { console.error('chromium headless shell install failed'); process.exitCode = 1; break; }
+    }
+    console.log(`  chromium: ${dirMB(browsersOut)} MB`);
+
+    // 4. dotnet pack → dist/resources/*.nupkg  (payload/{playwright,git,browsers} -> content/*)
     const out = path.join(repo, 'dist', 'resources');
     fs.rmSync(out, { recursive: true, force: true });
     fs.mkdirSync(out, { recursive: true });
@@ -385,12 +426,12 @@ switch (cmd) {
     const r = spawnSync('dotnet', packArgs, { stdio: 'inherit', cwd: repo, shell: false });
     if (r.status !== 0) { process.exitCode = r.status ?? 1; break; }
 
-    // 4. Report the .nupkg + sha256 + a copy-paste publish hint.
+    // 5. Report the .nupkg + sha256 + a copy-paste publish hint.
     const nupkg = fs.readdirSync(out).filter((f) => f.endsWith('.nupkg')).map((f) => path.join(out, f)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
     if (nupkg) {
       const sha = crypto.createHash('sha256').update(fs.readFileSync(nupkg)).digest('hex');
       const rel = path.relative(repo, nupkg).replaceAll('\\', '/');
-      console.log(`\n  \x1b[32m✔\x1b[0m ${rel}  (${(fs.statSync(nupkg).size / 1e6).toFixed(1)} MB)`);
+      console.log(`\n  \x1b[32m✔\x1b[0m ${rel}  (${(fs.statSync(nupkg).size / 1e6).toFixed(0)} MB)`);
       console.log(`  sha256: ${sha}`);
       console.log(`\n  publish (reserve the id once on nuget.org, then push each version):`);
       console.log(`    dotnet nuget push "${rel}" --api-key <KEY> --source https://api.nuget.org/v3/index.json`);
