@@ -21,7 +21,7 @@ public abstract class DocumentToolBase : IGatherlightTool
 
     protected string ResolveIn(JsonElement args, string key)
     {
-        var rel = args.GetProperty(key).GetString() ?? "";
+        var rel = ToolArgs.Req(args, key);
         var abs = Data.ResolveDataPath(rel) ?? throw new ToolException(400, $"{key} 路径越界:{rel}");
         if (!File.Exists(abs)) throw new ToolException(400, $"{key} 文件不存在:{rel}");
         return abs;
@@ -29,7 +29,7 @@ public abstract class DocumentToolBase : IGatherlightTool
 
     protected string ResolveOut(JsonElement args, string key)
     {
-        var rel = args.GetProperty(key).GetString() ?? "";
+        var rel = ToolArgs.Req(args, key);
         return Data.ResolveDataPath(rel) ?? throw new ToolException(400, $"{key} 路径越界:{rel}");
     }
 

@@ -44,7 +44,7 @@ public sealed class ExtractTool : IGatherlightTool
         string relPath;
         try
         {
-            relPath = _uploads.ResolveAttachment(args.GetProperty("relPath").GetString() ?? "");
+            relPath = _uploads.ResolveAttachment(ToolArgs.Req(args, "relPath"));
         }
         catch (ArgumentException ex)
         {

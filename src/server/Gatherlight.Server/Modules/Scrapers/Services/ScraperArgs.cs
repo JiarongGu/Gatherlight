@@ -9,9 +9,8 @@ namespace Gatherlight.Server.Modules.Scrapers.Services;
 /// </summary>
 public static class ScraperArgs
 {
-    /// <summary>Optional string property; null when absent or empty.</summary>
-    public static string? Str(JsonElement e, string key) =>
-        e.TryGetProperty(key, out var v) && v.GetString() is { Length: > 0 } s ? s : null;
+    /// <summary>Optional string property; null when absent, empty, or a present-but-non-string value.</summary>
+    public static string? Str(JsonElement e, string key) => ToolArgs.Str(e, key);
 
     /// <summary>Digits-only integer coercion ("A$1,148" → 1148); null when there are no digits.</summary>
     public static int? Digits(string raw)

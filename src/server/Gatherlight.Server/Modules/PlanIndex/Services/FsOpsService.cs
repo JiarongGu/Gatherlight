@@ -136,7 +136,10 @@ public sealed partial class FsOpsService : IFsOpsService
     private static void AssertInScope(string rel)
     {
         var norm = Norm(rel);
-        if (norm.StartsWith("..") || Path.IsPathRooted(norm))
+        // Reject any `..` SEGMENT, not just a leading one: Norm doesn't collapse `..`, so a tracked
+        // path like `plans/../.claude/x` would otherwise pass the prefix check below and reach
+        // `git rm -- plans/../.claude/x`, which git resolves out of scope into .claude/.
+        if (Path.IsPathRooted(norm) || norm.Split('/').Any(seg => seg == ".."))
             throw new ArgumentException($"路径越界:{rel}");
         var ok = AllowedDirs.Any(d => norm == d || norm.StartsWith(d + "/"));
         if (!ok) throw new ArgumentException($"不允许操作该路径(仅限 plans/ 和 household/):{rel}");

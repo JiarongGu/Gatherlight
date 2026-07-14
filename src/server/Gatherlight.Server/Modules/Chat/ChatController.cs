@@ -88,31 +88,43 @@ public sealed class ChatController : ControllerBase
 
         var (replay, live, unsubscribe) = _chat.Subscribe(id);
         using var _ = unsubscribe;
+
+        // Serialize ALL writes to Response.Body — the heartbeat task and the event loop run
+        // concurrently, and Response.Body forbids concurrent writes (would throw / corrupt SSE framing).
+        using var writeGate = new SemaphoreSlim(1, 1);
+        async Task Write(string payload)
+        {
+            await writeGate.WaitAsync(ct);
+            try { await Response.WriteAsync(payload, ct); await Response.Body.FlushAsync(ct); }
+            finally { writeGate.Release(); }
+        }
+        static string Frame(AgentEvent ev) => $"data: {JsonSerializer.Serialize(ev, AgentEvent.WireJson)}\n\n";
+
+        // Stop the heartbeat when the event loop ends, so it can't touch writeGate/Response after scope exit.
+        using var hbCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
-            foreach (var ev in replay) await WriteEventAsync(ev, ct);
+            foreach (var ev in replay) await Write(Frame(ev));
 
             // Heartbeat so proxies don't drop the idle connection.
             using var heartbeat = new PeriodicTimer(TimeSpan.FromSeconds(15));
             var heartbeatTask = Task.Run(async () =>
             {
-                while (await heartbeat.WaitForNextTickAsync(ct))
-                {
-                    await Response.WriteAsync(": keep-alive\n\n", ct);
-                    await Response.Body.FlushAsync(ct);
-                }
-            }, ct);
+                try { while (await heartbeat.WaitForNextTickAsync(hbCts.Token)) await Write(": keep-alive\n\n"); }
+                catch (OperationCanceledException) { /* stream ending */ }
+            }, hbCts.Token);
 
-            await foreach (var ev in live.ReadAllAsync(ct))
-                await WriteEventAsync(ev, ct);
+            try
+            {
+                await foreach (var ev in live.ReadAllAsync(ct)) await Write(Frame(ev));
+            }
+            finally
+            {
+                hbCts.Cancel();
+                try { await heartbeatTask; } catch { /* observed; ended with the stream */ }
+            }
         }
         catch (OperationCanceledException) { /* client disconnected */ }
-    }
-
-    private async Task WriteEventAsync(AgentEvent ev, CancellationToken ct)
-    {
-        await Response.WriteAsync($"data: {JsonSerializer.Serialize(ev, AgentEvent.WireJson)}\n\n", ct);
-        await Response.Body.FlushAsync(ct);
     }
 
     // --- gate 1 (plan) -------------------------------------------------------------------

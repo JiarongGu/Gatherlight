@@ -29,9 +29,9 @@ public sealed class RememberFactTool : IGatherlightTool
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
         var id = await _store.LearnAsync(
-            args.GetProperty("kind").GetString()!,
-            args.GetProperty("topic").GetString()!,
-            args.GetProperty("content").GetString()!,
+            ToolArgs.Req(args, "kind"),
+            ToolArgs.Req(args, "topic"),
+            ToolArgs.Req(args, "content"),
             ToolArgs.Str(args, "source"),
             ToolArgs.Dbl(args, "confidence") ?? 0.7);
         return new JsonObject { ["ok"] = true, ["id"] = id }.ToJsonString();
@@ -56,9 +56,9 @@ public sealed class RecallFactsTool : IGatherlightTool
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
         var rows = await _store.RecallAsync(
-            args.GetProperty("query").GetString()!,
-            args.TryGetProperty("kind", out var k) ? k.GetString() : null,
-            args.TryGetProperty("limit", out var l) && l.TryGetInt32(out var n) ? Math.Clamp(n, 1, 50) : 8);
+            ToolArgs.Req(args, "query"),
+            ToolArgs.Str(args, "kind"),
+            Math.Clamp(ToolArgs.Int(args, "limit", 8), 1, 50));
         var arr = new JsonArray();
         foreach (var r in rows)
         {

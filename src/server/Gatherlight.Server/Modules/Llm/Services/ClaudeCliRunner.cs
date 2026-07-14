@@ -135,11 +135,16 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
         string? sessionId = null;
         var finalText = "";
 
-        // Prompt over stdin → keeps argv free of dynamic content.
-        await proc.StandardInput.WriteAsync(opts.Prompt);
-        proc.StandardInput.Close();
-
+        // Prompt over stdin → keeps argv free of dynamic content. Write it on a BACKGROUND task,
+        // concurrently with draining stdout/stderr below: a large prompt (the router inlines KB docs)
+        // can exceed the OS stdin pipe buffer, and if we blocked here writing it while the child was
+        // blocked writing stdout that nobody is reading yet, both deadlock. Start the readers first.
         var stderrTask = PumpStderrAsync(proc, opts, ct);
+        var stdinTask = Task.Run(async () =>
+        {
+            try { await proc.StandardInput.WriteAsync(opts.Prompt.AsMemory(), ct); }
+            finally { try { proc.StandardInput.Close(); } catch { /* child already gone */ } }
+        }, ct);
         try
         {
             while (await proc.StandardOutput.ReadLineAsync(ct) is { } line)
@@ -168,6 +173,7 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
         }
         finally
         {
+            try { await stdinTask; } catch { /* broken pipe if the child exited before reading stdin */ }
             try { await stderrTask; } catch { /* pump ended with the process */ }
         }
 

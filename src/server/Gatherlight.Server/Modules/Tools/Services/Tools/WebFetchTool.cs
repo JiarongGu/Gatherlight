@@ -30,11 +30,11 @@ public sealed class WebFetchTool : IGatherlightTool
 
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var url = args.GetProperty("url").GetString()!;
+        var url = ToolArgs.Req(args, "url");
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
             throw new ToolException(400, $"无效 URL:{url}");
-        var selector = args.TryGetProperty("selector", out var s) && s.GetString() is { Length: > 0 } sv ? sv : "body";
-        var waitFor = args.TryGetProperty("waitFor", out var w) && w.GetString() is { Length: > 0 } wv ? wv : null;
+        var selector = ToolArgs.Str(args, "selector") ?? "body";
+        var waitFor = ToolArgs.Str(args, "waitFor");
         var timeout = args.TryGetProperty("timeout", out var t) && t.TryGetInt32(out var ms) && ms > 0
             ? Math.Min(ms, 60_000) : 30_000;
 

@@ -9,9 +9,11 @@ namespace Gatherlight.Server.Modules.Tools.Models;
 /// </summary>
 public static class ToolArgs
 {
-    /// <summary>An optional non-empty string, or null.</summary>
+    /// <summary>An optional non-empty string, or null. Returns null (not a throw) for a present-but-
+    /// non-string value (e.g. the model emits a number/array), so a malformed arg degrades gracefully.</summary>
     public static string? Str(JsonElement a, string key) =>
-        a.TryGetProperty(key, out var v) && v.GetString() is { Length: > 0 } s ? s : null;
+        a.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
+            && v.GetString() is { Length: > 0 } s ? s : null;
 
     /// <summary>A required non-empty string, or a 400 <see cref="ToolException"/>.</summary>
     public static string Req(JsonElement a, string key, string? message = null) =>
