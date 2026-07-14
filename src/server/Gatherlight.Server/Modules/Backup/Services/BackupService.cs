@@ -23,18 +23,23 @@ public interface IBackupService
 }
 
 /// <summary>
-/// The whole-install backup: the family's records (markdown + files) AND the DB memory in one .zip, so
-/// a data folder is disposable + portable — export here, import there (or after a wipe) restores
-/// everything. The DB memory travels as <c>memory.json</c> (the same bundle as /api/memory); the
-/// markdown records travel as files. Import serializes on the <see cref="DataWriteLock"/> (one writer),
-/// replaces the record subtrees, reindexes, and commits to the data repo for the audit trail.
+/// The whole-install backup: EVERYTHING in the data folder that matters, in one .zip, so a data folder
+/// is disposable + portable — export here, import there (or after a wipe) restores it. Contents: the
+/// records (plans / household / .claude / CLAUDE.md / uploads), the git history (<c>.git</c>, the audit
+/// trail), the server config (<c>state/settings.json</c>), and the DB memory (<c>memory.json</c> — the
+/// same bundle as /api/memory; the raw DB isn't copied because its durable half travels here and the
+/// rest — plan index, chat — is rebuildable). Only the regenerable/transient bits are left out:
+/// <c>state/resources</c> (from nuget), <c>state/logs</c>, <c>state/cache</c>, <c>cache/</c>,
+/// <c>archive/</c>. Import serializes on the <see cref="DataWriteLock"/>, replaces those subtrees,
+/// reindexes, and commits.
 /// </summary>
 public sealed class BackupService : IBackupService
 {
-    // The data-folder subtrees/files that ARE the records (tracked in the data repo). state/, cache/,
-    // archive/ are app state / regenerable (resources come from nuget) and stay out of the backup.
-    private static readonly string[] Folders = { "plans", "household", ".claude", "uploads" };
-    private static readonly string[] RootFiles = { "CLAUDE.md" };
+    // The data-folder subtrees that ARE local (records + git history). state/resources, state/logs,
+    // state/cache, cache/, archive/ are regenerable/transient and left out.
+    private static readonly string[] Folders = { "plans", "household", ".claude", "uploads", ".git" };
+    // Individual files (data-root-relative) that also travel — top-level + the server config.
+    private static readonly string[] RootFiles = { "CLAUDE.md", ".gitignore", "state/settings.json" };
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -135,9 +140,11 @@ public sealed class BackupService : IBackupService
             }
             foreach (var file in RootFiles)
             {
-                var src = Path.Combine(dataDir, file);
+                var src = Path.Combine(dataDir, file.Replace('/', Path.DirectorySeparatorChar));
                 if (!File.Exists(src)) continue;
-                File.Copy(src, Path.Combine(_data.RootPath, file), overwrite: true);
+                var dest = Path.Combine(_data.RootPath, file.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.Copy(src, dest, overwrite: true);
                 restored++;
             }
 

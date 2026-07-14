@@ -189,7 +189,7 @@ internal sealed class AppHost : Form
             using var http = BackupClient();
             var bytes = await http.GetByteArrayAsync("api/backup/export");
             await File.WriteAllBytesAsync(dlg.FileName, bytes);
-            MessageBox.Show(this, $"已导出完整备份到:\n{dlg.FileName}\n\n(计划 · 家庭 · 知识库 · 记忆)", "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, $"已导出完整备份到:\n{dlg.FileName}\n\n(整个数据文件夹:计划 · 家庭 · 知识库 · git 历史 · 记忆)", "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex) { MessageBox.Show(this, "导出失败:" + ex.Message, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }

@@ -130,7 +130,7 @@ export function Manage() {
   const exportBackup = () => {
     if (inHost) host('exportBackup');
     else window.open('/api/backup/export', '_blank');
-    toast('正在导出完整备份(计划 · 家庭 · 知识库 · 记忆)…');
+    toast('正在导出完整备份(整个数据文件夹:计划 · 家庭 · 知识库 · 历史 · 记忆)…');
   };
   const importBackup = () => {
     if (inHost) { host('importBackup'); return; }
@@ -246,7 +246,7 @@ export function Manage() {
           导入记忆<span className="sub">合并另一台机器的记忆</span>
         </button>
         <button className="mng-btn" onClick={exportBackup}>
-          完整备份<span className="sub">计划 · 家庭 · 知识库 · 记忆 → 一个 .zip</span>
+          完整备份<span className="sub">整个数据文件夹(含 git 历史)→ 一个 .zip</span>
         </button>
         <button className="mng-btn" onClick={importBackup}>
           恢复备份<span className="sub">从 .zip 还原(覆盖记录 · 合并记忆)</span>
