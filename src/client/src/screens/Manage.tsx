@@ -36,7 +36,7 @@ export function Manage() {
   const [strip, setStrip] = useState<boolean[]>([]);
   const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
   const [uptime, setUptime] = useState('0s');
-  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
+  const [accessMode, setAccessMode] = useState<'local' | 'lan' | 'wan' | null>(null);
   const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'resources' | 'logs' | 'settings'>('overview');
   const started = useRef(Date.now());
 
@@ -50,13 +50,6 @@ export function Manage() {
     noticeTimer.current = window.setTimeout(() => setNotice(null), kind === 'err' ? 5200 : 3400);
   }, []);
   useEffect(() => () => { if (noticeTimer.current) window.clearTimeout(noticeTimer.current); }, []);
-
-  useEffect(() => {
-    fetch('/api/auth/status')
-      .then((r) => r.json())
-      .then((s) => setAuthRequired(!!s.required))
-      .catch(() => setAuthRequired(null));
-  }, []);
 
   // Mirror the console's active theme to the desktop host so its native window + tray menu match
   // whichever theme (light ↔ dark) the user is running — posted on mount and on every change.
@@ -83,6 +76,15 @@ export function Manage() {
       ]);
       if (mounted) setCounts({ plans, library, tools });
     };
+    // Re-read the access mode each cycle so the footer reflects a settings change after a restart
+    // (it's fetched every poll, not once on mount — the old bug left the footer stale).
+    const refreshAuth = async () => {
+      try {
+        const s = await (await fetch('/api/auth/status')).json();
+        if (!mounted) return;
+        setAccessMode((s.mode as 'local' | 'lan' | 'wan') ?? null);
+      } catch { if (mounted) setAccessMode(null); }
+    };
     const poll = async () => {
       const t0 = performance.now();
       let ok = false;
@@ -92,7 +94,7 @@ export function Manage() {
       setLatency(Math.round(performance.now() - t0));
       setStrip((s) => [...s, ok].slice(-STRIP));
       setUptime(fmtUptime(Date.now() - started.current));
-      if (ok && tick % 3 === 0) refreshCounts();
+      if (ok && tick % 3 === 0) { refreshCounts(); refreshAuth(); }
       tick++;
     };
     poll();
@@ -267,8 +269,13 @@ export function Manage() {
           <span className="mng-foot-sep" />
           <span>端口 {location.port || '5317'}</span>
           <a className="mng-foot-link" href={plannerUrl} target="_blank" rel="noreferrer">{plannerUrl}</a>
-          {authRequired !== null && (
-            <span className={`mng-sec${authRequired ? ' on' : ''}`}>{authRequired ? '🔒 令牌' : '🏠 仅本机'}</span>
+          {accessMode !== null && (
+            <span className={`mng-sec${accessMode !== 'local' ? ' on' : ''}`} title={
+              accessMode === 'local' ? '仅本机可访问(127.0.0.1)' :
+              accessMode === 'lan' ? '局域网开放(0.0.0.0),无令牌' : '公网开放,需访问令牌'
+            }>
+              {accessMode === 'local' ? '🏠 仅本机' : accessMode === 'lan' ? '🌐 局域网' : '🔒 公网'}
+            </span>
           )}
           <span className="mng-foot-h" title={statusText}>
             <span className={`mng-top-dot${healthy ? ' ok' : healthy === false ? ' bad' : ''}`} />

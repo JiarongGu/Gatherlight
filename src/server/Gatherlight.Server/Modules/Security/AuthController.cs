@@ -13,15 +13,23 @@ public sealed class AuthController : ControllerBase
 {
     private readonly ISecurityGuard _guard;
     private readonly ILoginThrottle _throttle;
-    public AuthController(ISecurityGuard guard, ILoginThrottle throttle)
+    private readonly GatherlightServerOptions _options;
+    public AuthController(ISecurityGuard guard, ILoginThrottle throttle, GatherlightServerOptions options)
     {
         _guard = guard;
         _throttle = throttle;
+        _options = options;
     }
 
     [HttpGet("api/auth/status")]
-    public IActionResult Status() =>
-        Ok(new { required = _guard.Enabled, authed = _guard.IsAuthenticated(HttpContext) });
+    public IActionResult Status()
+    {
+        // The 3-way access mode the footer shows, from the ACTUAL runtime bind (env overrides included):
+        // local = loopback; lan = exposed (0.0.0.0) without a token; wan = exposed with a token.
+        var loopback = _options.BindAddress is "127.0.0.1" or "::1";
+        var mode = loopback ? "local" : string.IsNullOrEmpty(_options.AccessToken) ? "lan" : "wan";
+        return Ok(new { required = _guard.Enabled, authed = _guard.IsAuthenticated(HttpContext), mode });
+    }
 
     public sealed record LoginBody(string? Token);
 

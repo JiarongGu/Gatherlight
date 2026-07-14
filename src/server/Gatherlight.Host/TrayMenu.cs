@@ -97,7 +97,9 @@ internal sealed class TrayRenderer : ToolStripRenderer
     {
         e.TextColor = e.Item.Enabled ? (e.Item.Selected ? Theme.AccentHi : Theme.Text) : e.Item.ForeColor;
         var inset = TrayMenu.Inset;
-        e.TextRectangle = new Rectangle(e.TextRectangle.X + inset, e.TextRectangle.Y, e.TextRectangle.Width - inset - 4, e.TextRectangle.Height);
+        // Center within the FULL item height (Y=0..Height), not the padding-offset content rectangle —
+        // the item's asymmetric top/bottom Padding otherwise pushes VerticalCenter text downward.
+        e.TextRectangle = new Rectangle(e.TextRectangle.X + inset, 0, e.TextRectangle.Width - inset - 4, e.Item.Height);
         e.TextFormat |= TextFormatFlags.VerticalCenter | TextFormatFlags.Left;
         base.OnRenderItemText(e);
     }
