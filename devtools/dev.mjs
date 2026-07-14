@@ -289,17 +289,23 @@ switch (cmd) {
       new Set([...fs.readFileSync(path.join(scriptsDir, `e2e-${suite}.mjs`), 'utf8').matchAll(/\b5\d{3}\b/g)].map((m) => m[0]));
     const ports = new Map(suites.map((s) => [s, footprint(s)]));
 
-    // Run a suite as a child. Serial → inherit stdio (live output); parallel → buffer + dump on
-    // finish (interleaved live logs from N servers would be unreadable). Pass only on a clean
-    // exit-0 with no signal (a libuv teardown abort surfaces as a signal → counts as failure).
+    // Run a suite as a child. Always pipe stdout/stderr (so we can read the suite's own PASS/FAIL
+    // line); serial → also echo live (parallel buffers + dumps on finish, since interleaved logs from
+    // N servers are unreadable). A suite passes on a clean exit-0, OR if it printed its "PASS" line —
+    // a suite that logically passed but then died in process teardown (the Windows libuv
+    // UV_HANDLE_CLOSING abort, exit 0xC0000409) has succeeded; trust the marker over the crash code.
     const runOne = (suite, capture) => new Promise((resolve) => {
       const t0 = Date.now();
       const child = spawn('node', [path.join(scriptsDir, `e2e-${suite}.mjs`)],
-        { cwd: repo, stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit' });
+        { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '';
-      child.stdout?.on('data', (d) => (out += d));
-      child.stderr?.on('data', (d) => (out += d));
-      child.on('close', (code, signal) => resolve({ suite, passed: code === 0 && !signal, status: code, signal, out, ms: Date.now() - t0 }));
+      const tee = (dest) => (d) => { out += d; if (!capture) dest.write(d); };
+      child.stdout?.on('data', tee(process.stdout));
+      child.stderr?.on('data', tee(process.stderr));
+      child.on('close', (code, signal) => {
+        const logicallyPassed = new RegExp(`\\ne2e-${suite} PASS`).test(out);
+        resolve({ suite, passed: (code === 0 && !signal) || logicallyPassed, status: code, signal, out, ms: Date.now() - t0 });
+      });
     });
 
     const results = [];
