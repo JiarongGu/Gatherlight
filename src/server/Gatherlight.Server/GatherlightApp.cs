@@ -78,6 +78,7 @@ public static class GatherlightApp
             // Uploads (chat attachments)
             .AddSingleton<IUploadService, UploadService>()
             // Tools — one registry, two surfaces (HTTP + MCP for the spawned agent)
+            .AddSingleton<Modules.Resources.Services.IResourceProvisioner, Modules.Resources.Services.ResourceProvisioner>()
             .AddSingleton<IPlaywrightHost, PlaywrightHost>()
             .AddSingleton<Modules.Scrapers.Services.IPlaywrightScraper, Modules.Scrapers.Services.PlaywrightScraper>()
             .AddSingleton<IGatherlightTool, ExtractTool>()

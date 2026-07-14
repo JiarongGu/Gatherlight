@@ -52,15 +52,19 @@ public class GitCliService : IGitCliService
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);
 
-    // The git executable, resolved once. An explicit GATHERLIGHT_GIT override wins (tests/dev); else a
-    // portable git bundled next to the host (libs/git/cmd/git.exe — shipped by build-production.mjs so
-    // a fresh machine needs no separate git install); else "git" from PATH. Git is the data repo's
-    // engine (init + diff + commit + restore), so bundling it makes the app self-sufficient.
-    internal static readonly string GitExe = ResolveGit();
-    private static string ResolveGit()
+    // The git executable, resolved per instance. An explicit GATHERLIGHT_GIT override wins (tests/dev);
+    // else a portable git provisioned at setup into the data folder ({data}/state/resources/git); else a
+    // copy bundled next to the host (libs/git); else "git" from PATH. Git is the data repo's engine
+    // (init + diff + commit + restore), so provisioning it makes a fresh machine self-sufficient.
+    private static string ResolveGit(string? resourcesDir)
     {
         var env = Environment.GetEnvironmentVariable("GATHERLIGHT_GIT");
         if (!string.IsNullOrWhiteSpace(env) && File.Exists(env)) return env;
+        if (!string.IsNullOrEmpty(resourcesDir))
+        {
+            var provisioned = Path.Combine(resourcesDir, "git", "cmd", "git.exe");
+            if (File.Exists(provisioned)) return provisioned;
+        }
         var bundled = Path.Combine(AppContext.BaseDirectory, "git", "cmd", "git.exe");
         if (File.Exists(bundled)) return bundled;
         return "git";
@@ -68,13 +72,15 @@ public class GitCliService : IGitCliService
 
     private readonly string _root;
     private readonly ILogger _log;
+    private readonly string GitExe;
 
-    public GitCliService(IDataContext data, ILogger<GitCliService> log) : this(data.RootPath, log) { }
+    public GitCliService(IDataContext data, ILogger<GitCliService> log) : this(data.RootPath, log, data.ResourcesPath) { }
 
-    protected GitCliService(string root, ILogger log)
+    protected GitCliService(string root, ILogger log, string? resourcesDir = null)
     {
         _root = Path.GetFullPath(root);
         _log = log;
+        GitExe = ResolveGit(resourcesDir);
     }
 
     public async Task<GitResult> RunAsync(string[] args, CancellationToken ct = default)

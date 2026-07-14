@@ -1,3 +1,4 @@
+using Gatherlight.Server.Modules.Core.Services;
 using Microsoft.Playwright;
 
 namespace Gatherlight.Server.Modules.Tools.Services;
@@ -19,8 +20,11 @@ public interface IPlaywrightHost
 public sealed class PlaywrightHost : IPlaywrightHost, IAsyncDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly IDataContext _data;
     private IPlaywright? _playwright;
     private IBrowser? _browser;
+
+    public PlaywrightHost(IDataContext data) => _data = data;
 
     public async Task<IBrowser> GetBrowserAsync(CancellationToken ct = default)
     {
@@ -29,11 +33,14 @@ public sealed class PlaywrightHost : IPlaywrightHost, IAsyncDisposable
         try
         {
             if (_browser is { IsConnected: true }) return _browser;
-            // Prefer a Chromium bundled next to the host (libs/browsers) so scraping needs no separate
-            // install. Set before the driver spawns (CreateAsync); an explicit env var still wins.
-            var bundledBrowsers = Path.Combine(AppContext.BaseDirectory, "browsers");
-            if (Directory.Exists(bundledBrowsers) && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH")))
-                Environment.SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", bundledBrowsers);
+            // Chromium is provisioned at setup into the data folder ({data}/state/resources/browsers);
+            // prefer that, then a copy bundled next to the host (libs/browsers), else the per-user cache.
+            // Set before the driver spawns (CreateAsync); an explicit env var still wins.
+            var provisioned = Path.Combine(_data.ResourcesPath, "browsers");
+            var bundled = Path.Combine(AppContext.BaseDirectory, "browsers");
+            var browsers = Directory.Exists(provisioned) ? provisioned : Directory.Exists(bundled) ? bundled : null;
+            if (browsers is not null && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH")))
+                Environment.SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", browsers);
             _playwright ??= await Playwright.CreateAsync();
             _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
             {
@@ -44,7 +51,7 @@ public sealed class PlaywrightHost : IPlaywrightHost, IAsyncDisposable
         catch (PlaywrightException ex) when (ex.Message.Contains("Executable doesn't exist"))
         {
             throw new InvalidOperationException(
-                "Playwright chromium 未安装 — 运行一次 `node devtools/dev.mjs fetch-tools`。", ex);
+                "Chromium 未安装 — 在管理台「资源 · Resources」中下载(或 dev: `node devtools/dev.mjs fetch-tools`)。", ex);
         }
         finally
         {
