@@ -1,12 +1,14 @@
-// Shared e2e harness. Leading `_` → the runner (dev.mjs, `^e2e-p\d+\.mjs$`) never picks this up as a
-// suite. Each suite imports what it needs; the boilerplate (reporter, server spawn, http/chat/git
-// helpers) lives here once so a fix (or a new assertion helper) lands in one place.
+// Shared e2e harness (lives with the suites in devtools/scripts/e2e/). Leading `_` → the runner
+// (dev.mjs, `^p\d+\.mjs$`) never picks this up as a suite. Each suite imports what it needs; the
+// boilerplate (reporter, server spawn, http/chat/git helpers) lives here once so a fix (or a new
+// assertion helper) lands in one place.
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+// this file is devtools/scripts/e2e/_e2e-common.mjs → three levels up is the repo root.
+export const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 export const claudeStubCmd = `node ${path.join(repo, 'devtools', 'scripts', 'claude-stub.mjs')}`;
 export const dataDirFor = (suite) => path.join(repo, 'devtools', `_e2e-${suite}-data`);
 

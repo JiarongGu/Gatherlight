@@ -90,9 +90,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 ## Dev loop
 
 - `node devtools/dev.mjs <server|host|vite|build|publish|e2e|smoke|memory|eval|test-data|check-sensitive|install-hooks>`.
-- e2e suites self-host the server against isolated `devtools/_e2e-*` data folders with the
-  claude stub; every phase of work lands with its suite green. Shared harness in
-  `devtools/scripts/_e2e-common.mjs` (leading `_` → not discovered as a suite).
+- e2e suites live in `devtools/scripts/e2e/` as `pN.mjs` (discovered by `^p\d+\.mjs$`); they self-host
+  the server against isolated `devtools/_e2e-*` data folders with the claude stub; every phase of work
+  lands with its suite green. Shared harness: `devtools/scripts/e2e/_e2e-common.mjs` (leading `_` → not
+  discovered as a suite).
 - `dev.mjs eval [scenarios.json]` = the prompt/agent playground (dry-plan + auto-score, a quality
   benchmark); `dev.mjs memory <export|import>` transfers DB memory; `host`/`publish` run/build the
   desktop bundle.

@@ -241,10 +241,10 @@ switch (cmd) {
     break;
 
   case 'e2e': {
-    const scriptsDir = path.join(repo, 'devtools', 'scripts');
+    const scriptsDir = path.join(repo, 'devtools', 'scripts', 'e2e');
     const all = fs.readdirSync(scriptsDir)
-      .filter((f) => /^e2e-p\d+\.mjs$/.test(f))
-      .map((f) => f.slice(4, -4))
+      .filter((f) => /^p\d+\.mjs$/.test(f))   // suites live in scripts/e2e/ as p1.mjs … p23.mjs
+      .map((f) => f.slice(0, -4))
       // NUMERIC order (p2 before p10) — a plain .sort() is lexicographic, which puts p3–p9 LAST.
       .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
 
@@ -286,7 +286,7 @@ switch (cmd) {
     // never causes a collision. Suites that share a port (e.g. p7/p15 both 5397) just won't run
     // at the same time — so parallel scheduling stays correct without touching any suite.
     const footprint = (suite) =>
-      new Set([...fs.readFileSync(path.join(scriptsDir, `e2e-${suite}.mjs`), 'utf8').matchAll(/\b5\d{3}\b/g)].map((m) => m[0]));
+      new Set([...fs.readFileSync(path.join(scriptsDir, `${suite}.mjs`), 'utf8').matchAll(/\b5\d{3}\b/g)].map((m) => m[0]));
     const ports = new Map(suites.map((s) => [s, footprint(s)]));
 
     // Run a suite as a child. Always pipe stdout/stderr (so we can read the suite's own PASS/FAIL
@@ -296,7 +296,7 @@ switch (cmd) {
     // UV_HANDLE_CLOSING abort, exit 0xC0000409) has succeeded; trust the marker over the crash code.
     const runOne = (suite, capture) => new Promise((resolve) => {
       const t0 = Date.now();
-      const child = spawn('node', [path.join(scriptsDir, `e2e-${suite}.mjs`)],
+      const child = spawn('node', [path.join(scriptsDir, `${suite}.mjs`)],
         { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '';
       const tee = (dest) => (d) => { out += d; if (!capture) dest.write(d); };
