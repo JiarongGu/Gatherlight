@@ -65,9 +65,10 @@ jobs:
       - name: Setup MSBuild (native launcher)
         uses: microsoft/setup-msbuild@v2
 
-      # Version source of truth = devtools/project.config.mjs. An explicit `version` input wins;
-      # otherwise `bump` steps the current semver (patch/minor/major). A changed version is written
-      # back + committed so the repo, the bundle, and the tag all agree.
+      # Version source of truth = src/Directory.Build.props (<VersionPrefix>), which the .NET assemblies
+      # AND devtools/project.config.mjs both read. An explicit `version` input wins; otherwise `bump`
+      # steps the current semver. A changed version is written back + committed so the repo, the bundle,
+      # and the tag all agree.
       - name: Determine version
         id: version
         shell: pwsh
@@ -96,9 +97,9 @@ jobs:
           }
 
           if ($final -ne $current) {
-            $p = "devtools/project.config.mjs"
+            $p = "src/Directory.Build.props"
             $c = Get-Content $p -Raw
-            $c = $c -replace "(version:\s*')[^']*'", ('${1}' + $final + "'")
+            $c = $c -replace "(<VersionPrefix>)[^<]*(</VersionPrefix>)", ('${1}' + $final + '${2}')
             Set-Content $p $c -NoNewline -Encoding utf8
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"

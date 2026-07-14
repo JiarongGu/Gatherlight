@@ -203,5 +203,5 @@ public sealed class BackupService : IBackupService
         catch { /* best-effort */ }
     }
 
-    private static string Ver() => typeof(BackupService).Assembly.GetName().Version?.ToString() ?? "?";
+    private static string Ver() => AppVersion.Semver;
 }

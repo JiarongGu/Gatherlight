@@ -1,5 +1,4 @@
 using System.IO.Compression;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Gatherlight.Server.Modules.Core.Services;
@@ -296,12 +295,7 @@ public sealed class UpdateService : IUpdateService
         return Convert.ToHexString(await SHA256.HashDataAsync(stream)).ToLowerInvariant();
     }
 
-    private static string CurrentVersion()
-    {
-        var v = (Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly()).GetName().Version;
-        if (v is null) return "0.0.0";
-        return $"{v.Major}.{v.Minor}.{v.Build}";
-    }
+    private static string CurrentVersion() => Core.Services.AppVersion.Semver;
 
     private static string NormalizeVersion(string tag)
     {

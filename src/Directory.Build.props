@@ -1,0 +1,18 @@
+<Project>
+
+  <!--
+    Single source of truth for the Gatherlight application version (semver major.minor.patch).
+    Applies to every .csproj under src/ (server, host) so a plain `dotnet build`/`run` reports the
+    REAL version, not the SDK default 1.0.0 — which otherwise made the update check compare the
+    running app as newer than a v0.x release and never offer updates.
+
+    - devtools/project.config.mjs reads VersionPrefix from here (one source for the zip name + manifest).
+    - The release workflow bumps VersionPrefix here.
+    - `dotnet publish -p:Version=X` overrides it for a release build.
+    - Gatherlight.Resources.csproj sets its own <Version> (it tracks the Playwright package, not the app).
+  -->
+  <PropertyGroup>
+    <VersionPrefix>0.1.0</VersionPrefix>
+  </PropertyGroup>
+
+</Project>

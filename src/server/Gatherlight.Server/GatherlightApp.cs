@@ -180,7 +180,7 @@ public static class GatherlightApp
 
         // Startup banner — the first lines of every log file (version · level · data root · bind · logs).
         app.Logger.LogInformation("=== Gatherlight starting === v{Ver} · level={Lvl} · data={Data} · bind={Bind}:{Port} · logs={Logs}",
-            typeof(GatherlightApp).Assembly.GetName().Version?.ToString() ?? "?",
+            Modules.Core.Services.AppVersion.Semver,
             logLevel, options.DataPath, options.BindAddress, options.Port, logsDir);
 
         // Loud, once-at-startup warning when the LAN opt-in is exposing the app unauthenticated.
