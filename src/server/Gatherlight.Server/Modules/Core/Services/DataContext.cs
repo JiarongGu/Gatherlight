@@ -20,6 +20,8 @@ public interface IDataContext
     /// <summary>Large downloadable resources (chromium, git, embedding model) provisioned at setup
     /// rather than bundled. Lives in the data folder so it survives app updates and is downloaded once.</summary>
     string ResourcesPath { get; }
+    /// <summary>Daily-rolling plain-text app logs (<c>{yyyy-MM-dd}.log</c>) for error tracking.</summary>
+    string LogsPath { get; }
     /// <summary>The planner knowledge base ({data}/.claude) the spawned agent runs on.</summary>
     string ZhikuPath { get; }
 
@@ -54,6 +56,7 @@ public sealed class DataContext : IDataContext
     public string HouseholdPath => Path.Combine(RootPath, "household");
     public string ZhikuPath => Path.Combine(RootPath, ".claude");
     public string ResourcesPath => Path.Combine(StatePath, "resources");
+    public string LogsPath => Path.Combine(StatePath, "logs");
 
     public string? ResolveDataPath(string relativePath)
     {

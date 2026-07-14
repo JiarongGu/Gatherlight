@@ -45,6 +45,12 @@ public static class GatherlightApp
             builder.WebHost.ConfigureKestrel(k =>
                 k.Listen(ParseBindAddress(options.BindAddress), options.Port, lo => lo.UseHttps(cert)));
         builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
+        // Persist logs to {data}/state/logs/{yyyy-MM-dd}.log so errors are trackable after the fact.
+        // Keep the file readable: app logs at Information+, framework noise (Microsoft/System) at Warning+.
+        var logsDir = Path.Combine(Path.GetFullPath(options.DataPath), "state", "logs");
+        builder.Logging.AddProvider(new Modules.Core.Logging.FileLoggerProvider(logsDir, LogLevel.Information));
+        builder.Logging.AddFilter<Modules.Core.Logging.FileLoggerProvider>("Microsoft", LogLevel.Warning);
+        builder.Logging.AddFilter<Modules.Core.Logging.FileLoggerProvider>("System", LogLevel.Warning);
 
         builder.Services
             .AddSingleton(options)
@@ -161,6 +167,11 @@ public static class GatherlightApp
             .AddApplicationPart(typeof(GatherlightApp).Assembly);
 
         var app = builder.Build();
+
+        // Startup banner — the first lines of every log file (version · data root · bind · logs path).
+        app.Logger.LogInformation("=== Gatherlight starting === v{Ver} · data={Data} · bind={Bind}:{Port} · logs={Logs}",
+            typeof(GatherlightApp).Assembly.GetName().Version?.ToString() ?? "?",
+            options.DataPath, options.BindAddress, options.Port, logsDir);
 
         // Loud, once-at-startup warning when the LAN opt-in is exposing the app unauthenticated.
         if (openBind && options.AllowLanWithoutToken)

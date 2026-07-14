@@ -37,7 +37,7 @@ export function Manage() {
   const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
   const [uptime, setUptime] = useState('0s');
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
-  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'resources' | 'settings'>('overview');
+  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'resources' | 'logs' | 'settings'>('overview');
   const started = useRef(Date.now());
 
   // Lightweight in-page toast — replaces alert()/confirm(), which in the WebView2 host block the
@@ -131,6 +131,7 @@ export function Manage() {
           <button className={`mng-tab${view === 'eval' ? ' on' : ''}`} onClick={() => setView('eval')}>对话评估 · Eval</button>
           <button className={`mng-tab${view === 'cortex' ? ' on' : ''}`} onClick={() => setView('cortex')}>校准 · Cortex</button>
           <button className={`mng-tab${view === 'resources' ? ' on' : ''}`} onClick={() => setView('resources')}>资源 · Resources</button>
+          <button className={`mng-tab${view === 'logs' ? ' on' : ''}`} onClick={() => setView('logs')}>日志 · Logs</button>
           <button className={`mng-tab${view === 'settings' ? ' on' : ''}`} onClick={() => setView('settings')}>设置 · Settings</button>
         </div>
       </div>
@@ -138,6 +139,7 @@ export function Manage() {
       {view === 'eval' && <EvalView />}
       {view === 'cortex' && <CortexView />}
       {view === 'resources' && <ResourcesView toast={toast} onRestart={restart} inHost={inHost} />}
+      {view === 'logs' && <LogsView inHost={inHost} />}
       {view === 'settings' && <SettingsView inHost={inHost} toast={toast} onRestart={restart} />}
 
       {view === 'overview' && (
@@ -899,6 +901,66 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
           <button className="cx-btn" onClick={onRestart}>重启服务</button>
           <span className="set-saved">部分资源(如 Git)需重启后生效</span>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Logs view (tail the app's daily file logs under {data}/state/logs) ----
+interface LogsData {
+  dir: string;
+  files: string[];
+  file: string | null;
+  lines: string[];
+}
+function LogsView({ inHost }: { inHost: boolean }) {
+  const [data, setData] = useState<LogsData | null>(null);
+  const [file, setFile] = useState('');
+  const [auto, setAuto] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+
+  const load = async (f?: string) => {
+    try {
+      const q = (f ?? file) ? `?file=${encodeURIComponent(f ?? file)}` : '';
+      const d: LogsData = await (await fetch(`/api/manage/logs${q}`)).json();
+      setData(d);
+      if (!file && d.file) setFile(d.file);
+    } catch {
+      /* keep last */
+    }
+  };
+  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!auto) return;
+    const t = setInterval(() => load(), 3000);
+    return () => clearInterval(t);
+  }, [auto, file]);
+  // Stick to the bottom after each refresh (newest lines).
+  useEffect(() => { if (preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight; }, [data]);
+
+  const cls = (l: string) =>
+    /\[(ERROR|CRIT)/.test(l) ? ' err' : /\[WARN/.test(l) ? ' warn' : /^\s*(→|at )/.test(l) ? ' dim' : '';
+
+  if (!data) return <div className="eval-empty">加载中…</div>;
+
+  return (
+    <div className="mng-view logs">
+      <div className="logs-bar">
+        <select className="logs-file" value={file} onChange={(e) => { setFile(e.target.value); load(e.target.value); }}>
+          {data.files.length === 0 && <option value="">(暂无日志)</option>}
+          {data.files.map((f) => <option key={f} value={f}>{f}</option>)}
+        </select>
+        <button className="cx-btn" onClick={() => load()}>刷新</button>
+        <label className="set-check"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> 自动刷新(3s)</label>
+        {inHost && <button className="cx-btn" onClick={() => host('openLogs')}>打开日志文件夹</button>}
+        <span className="logs-path" title={data.dir}>{data.dir}</span>
+      </div>
+      {data.files.length === 0 ? (
+        <div className="eval-empty">暂无日志 —— 应用运行后会写入 state/logs/。</div>
+      ) : (
+        <pre className="logs-view" ref={preRef}>
+          {data.lines.map((l, i) => <div className={`logs-line${cls(l)}`} key={i}>{l || ' '}</div>)}
+        </pre>
       )}
     </div>
   );

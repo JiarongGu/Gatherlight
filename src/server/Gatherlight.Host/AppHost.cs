@@ -140,6 +140,13 @@ public sealed class AppHost : Form
         {
             case "openPlanner": OpenExternal(_url); break;
             case "openDataFolder": OpenExternal(_options.DataPath); break;
+            case "openLogs":
+            {
+                var logs = Path.Combine(_options.DataPath, "state", "logs");
+                try { Directory.CreateDirectory(logs); } catch { /* best effort */ }
+                OpenExternal(logs);
+                break;
+            }
             case "restart": await RestartServerInProcessAsync(); break;
             case "applyUpdate": RestartForUpdate(); break;
             case "exit": ExitApp(); break;

@@ -30,6 +30,12 @@ internal static class Program
         ApplicationConfiguration.Initialize();
 
         var dataPath = GatherlightServerOptions.ResolveDefaultDataPath();
+        var logsDir = Path.Combine(Path.GetFullPath(dataPath), "state", "logs");
+        // Catch-all crash logging for the WinForms host boot path (outside the server's ILogger).
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            Gatherlight.Server.Modules.Core.Logging.LogSink.Crash(logsDir, "Host", "Unhandled exception", e.ExceptionObject as Exception);
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+            Gatherlight.Server.Modules.Core.Logging.LogSink.Crash(logsDir, "Host", "Unobserved task exception", e.Exception);
         // Load config first so the persisted port applies before Kestrel binds (env still overrides).
         var config = new ServerConfigService(new GatherlightServerOptions { DataPath = dataPath });
         // Recompute options from the (possibly just-edited) settings on every build, so a Settings-tab
@@ -86,7 +92,8 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Gatherlight 启动失败:\n{ex.Message}", "Gatherlight",
+            Gatherlight.Server.Modules.Core.Logging.LogSink.Crash(logsDir, "Host", "启动失败 / startup failed", ex);
+            MessageBox.Show($"Gatherlight 启动失败:\n{ex.Message}\n\n详情见日志 / see logs:\n{logsDir}", "Gatherlight",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
