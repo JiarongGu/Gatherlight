@@ -5,7 +5,7 @@
 //     Gatherlight.cmd     launcher — double-click to run (sets data path + optional memory seed)
 //     README.txt          how to run / transfer memory / prerequisites
 //     manifest.json       sha256 of every shipped file (for update verification)
-//     libs/               the self-contained single-file host (runtime + assemblies) + playwright.ps1
+//     libs/               the framework-dependent host (apphost exe + assemblies) + playwright.ps1
 //     res/                wwwroot (web planner) + template (knowledge-base seed)
 //     data/               the data folder — user data lands here (back this up)
 //   publish/Gatherlight-<version>-<rid>.zip   the whole bundle, zipped
@@ -73,15 +73,14 @@ if (!fs.existsSync(path.join(repo, config.serverProject, 'wwwroot', 'index.html'
   die('client build missing (wwwroot/index.html) — run without --skip-client');
 }
 
-// 2. publish the host (self-contained single-file) into a staging dir
-step(2, 'publishing host (self-contained single-file)…');
+// 2. publish the host FRAMEWORK-DEPENDENT into a staging dir. The .NET 10 runtime is NOT bundled —
+// the native launcher installs it once at first run (small bundle ~20 MB + small ~20 MB auto-updates,
+// vs ~110 MB every update with a bundled runtime). A folder of DLLs (not single-file) is the standard
+// FD layout and avoids single-file's native-lib extraction quirks (e.g. the Playwright driver).
+step(2, 'publishing host (framework-dependent; runtime installed by the launcher)…');
 fs.rmSync(dist, { recursive: true, force: true });
 runOr('dotnet', ['publish', config.hostProject, '-c', 'Release', '-r', rid, '-o', stage,
-  '--self-contained',
-  '-p:PublishSingleFile=true',
-  '-p:IncludeNativeLibrariesForSelfExtract=true',
-  '-p:EnableCompressionInSingleFile=true',
-  '-p:PublishReadyToRun=true',
+  '--self-contained', 'false',
   '-p:DebugType=none',
   `-p:Version=${version}`,
 ], {}, 'dotnet publish failed');
@@ -93,15 +92,16 @@ fs.mkdirSync(res, { recursive: true });
 fs.mkdirSync(data, { recursive: true });
 
 const move = (from, to) => { if (fs.existsSync(from)) fs.renameSync(from, to); };
-move(path.join(stage, 'Gatherlight.Host.exe'), path.join(libs, 'Gatherlight.Host.exe'));
+// The web UI + knowledge-base template go under res/; everything ELSE in the publish (the
+// framework-dependent app: apphost exe + app/dependency DLLs + runtimeconfig/deps.json + native
+// libs) is moved into libs/ in bulk below — NOT just the exe (FD is a folder of DLLs, not one file).
 move(path.join(stage, 'wwwroot'), path.join(res, 'wwwroot'));
 move(path.join(stage, 'Assets', 'DataTemplate'), path.join(res, 'template'));
 
 // Playwright DRIVER (~34 MB zip → ~88 MB): download-at-setup by default — the 资源 panel fetches it
-// (hosted as a GitHub release asset, since Playwright ships the .NET driver only via NuGet) into
-// {data}/state/resources/.playwright, resolved at runtime via PLAYWRIGHT_DRIVER_SEARCH_PATH, alongside
-// chromium. --offline bundles it next to the host instead. (The single-file publish STRIPS the driver's
-// native node.exe, so --offline copies the COMPLETE driver from the non-single-file Server Debug bin.)
+// (from the Gatherlight.Resources nuget package) into {data}/state/resources/.playwright, resolved at
+// runtime via PLAYWRIGHT_DRIVER_SEARCH_PATH, alongside chromium. --offline bundles it next to the host
+// instead, copied from the Server Debug bin (a complete driver incl. node.exe).
 let playwrightBundled = false;
 if (offline) {
   move(path.join(stage, 'playwright.ps1'), path.join(libs, 'playwright.ps1'));
@@ -122,6 +122,16 @@ if (offline) {
 }
 
 fs.writeFileSync(path.join(data, '.gitkeep'), '');
+// Everything remaining in staging IS the framework-dependent app — move it all into libs/, then drop
+// the (now-empty) staging dir. Without this the app DLLs / runtimeconfig / deps.json would be lost.
+// EXCEPT the Playwright driver (.playwright / playwright.ps1): it's ~88 MB and download-at-setup in the
+// lean bundle (the --offline block above bundles it explicitly), so leave it in staging to be dropped.
+try { fs.rmSync(path.join(stage, 'Assets'), { recursive: true, force: true }); } catch { /* may not exist */ }
+const skipFromLibs = new Set(['.playwright', 'playwright.ps1']);
+for (const entry of fs.readdirSync(stage)) {
+  if (skipFromLibs.has(entry)) continue;
+  move(path.join(stage, entry), path.join(libs, entry));
+}
 fs.rmSync(stage, { recursive: true, force: true });
 
 for (const need of [path.join(libs, 'Gatherlight.Host.exe'), path.join(res, 'wwwroot', 'index.html'), path.join(res, 'template', 'CLAUDE.md')]) {
@@ -241,7 +251,7 @@ fs.writeFileSync(path.join(bundle, 'README.txt'), [
   '结构 / Layout:',
   '  Gatherlight.exe   启动器(原生,带图标) / native launcher (with icon)',
   '  Gatherlight.cmd   启动器(备用) / launcher (fallback)',
-  '  libs\\             程序(自包含,含 .NET 运行时' + (gitBundled ? ' + 内置 git' : '') + ') / the self-contained app' + (gitBundled ? ' + bundled git' : ''),
+  '  libs\\             程序(需 .NET 10 运行时,首次启动自动安装' + (gitBundled ? ' + 内置 git' : '') + ') / the app (.NET 10 runtime auto-installed on first run' + (gitBundled ? ' + bundled git' : '') + ')',
   '  res\\              资源:网页客户端 + 知识库模板 / web client + knowledge-base template',
   '  data\\             你的数据(计划/家庭/知识库/SQLite)—— 备份这个文件夹 / your data — back this up',
   '',
@@ -298,7 +308,7 @@ if (doZip) {
 
 // summary
 const exeMb = (fs.statSync(path.join(libs, 'Gatherlight.Host.exe')).size / 1048576).toFixed(0);
-console.log(`\n\x1b[32m✔ bundle\x1b[0m  publish/Gatherlight/  (exe ${exeMb} MB, ${files.length} manifest files + bundled runtime, sha256 manifest)`);
+console.log(`\n\x1b[32m✔ bundle\x1b[0m  publish/Gatherlight/  (host ${exeMb} MB, ${files.length} manifest files, framework-dependent — runtime auto-installed on first run, sha256 manifest)`);
 console.log(`  layout:   ${launcherBuilt ? 'Gatherlight.exe · ' : ''}Gatherlight.cmd · libs/${gitBundled ? ' +git' : ''}${chromiumBundled ? ' +chromium' : ''}${playwrightBundled ? ' +driver' : ''} · res/ · data/`);
 console.log(`  git:      ${gitBundled ? 'bundled (libs/git) — no host git install needed' : '⚠ NOT bundled — host needs git on PATH'}`);
 console.log(`  scrapers: ${playwrightBundled && chromiumBundled ? 'bundled driver + chromium — work out of the box' : playwrightBundled ? 'driver bundled; chromium via playwright.ps1 install' : 'dev-only (no driver bundled)'}`);

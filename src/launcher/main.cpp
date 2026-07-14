@@ -1,14 +1,14 @@
 // Gatherlight launcher — a tiny native C++ bootstrapper that IS the top-level Gatherlight.exe the
-// user runs. It carries the app icon, resolves the install root, points the app at the bundle's
-// data/ folder (auto-seeding memory if a bundle was dropped in), and launches the desktop host in
-// libs/. The host is published SELF-CONTAINED (bundles the .NET runtime), so — unlike a
-// framework-dependent app — there is no runtime check/install to do here. Modeled on the
-// D3dxSkinManager launcher, trimmed to what a self-contained bundle needs.
+// user runs. It carries the app icon, resolves the install root, applies any staged update, ensures
+// the .NET 10 runtime is present (the host is FRAMEWORK-DEPENDENT — small bundle + small updates),
+// points the app at the bundle's data/ folder (auto-seeding memory if a bundle was dropped in), and
+// launches the desktop host in libs/. Modeled on the D3dxSkinManager launcher.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shlwapi.h>
 #include <string>
 #include "updater.h"
+#include "dotnet_runtime.h"
 
 #pragma comment(lib, "shlwapi.lib")
 
@@ -59,6 +59,18 @@ int WINAPI wWinMain(
             L"\n\nThe install looks incomplete — re-extract the bundle.";
         MessageBoxW(nullptr, msg.c_str(), L"Gatherlight", MB_OK | MB_ICONERROR);
         return 1;
+    }
+
+    // Ensure the .NET 10 shared runtimes the framework-dependent host needs are installed (one-time,
+    // with a UAC prompt). Best-effort: if it reports failure we still try to launch — the host's own
+    // apphost shows a clearer "runtime not found" dialog + download link if it's genuinely missing.
+    if (!EnsureDotNetRuntime())
+    {
+        MessageBoxW(nullptr,
+            L"The .NET 10 runtime could not be installed automatically.\n\n"
+            L"If Gatherlight does not start, install the .NET 10 Desktop Runtime and ASP.NET Core "
+            L"Runtime (x64) from https://dotnet.microsoft.com/download/dotnet/10.0 and try again.",
+            L"Gatherlight", MB_OK | MB_ICONWARNING);
     }
 
     // Point the app at the bundle's data/ folder (mirrors the old Gatherlight.cmd) and auto-seed

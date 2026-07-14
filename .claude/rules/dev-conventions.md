@@ -56,9 +56,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 ## Packaging & auto-update
 
-- `dev.mjs publish` (→ `devtools/scripts/build-production.mjs`) builds the self-contained host **plus
+- `dev.mjs publish` (→ `devtools/scripts/build-production.mjs`) builds the **framework-dependent** host
+  (~20 MB; the .NET 10 runtime is NOT bundled — the launcher installs it once at first run via the
+  official MS installers, `src/launcher/dotnet_runtime.cpp`, so updates are ~20 MB not ~110 MB) **plus
   the native C++ launcher** (`src/launcher/`, MSVC — CI selects the v143 toolset via `CI=true`; falls
-  back to `Gatherlight.cmd` where MSVC is absent) into `dist/Gatherlight/` (`libs/`·`res/`·`data/` +
+  back to `Gatherlight.cmd` where MSVC is absent) into `publish/Gatherlight/` (`libs/`·`res/`·`data/` +
   sha256 `manifest.json` + zip). The launcher carries the app icon (`src/assets/gatherlight.ico`,
   regen via `make-icon.ps1`).
 - **Large resources are download-at-setup, not bundled** (default lean bundle ~200 MB vs ~350 MB):

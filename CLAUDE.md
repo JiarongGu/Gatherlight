@@ -62,7 +62,8 @@ Playground,Memory}`.
 - `node devtools/dev.mjs e2e [pN|all]` — API e2e suites with a stubbed claude CLI against
   isolated `devtools/_e2e-*` data folders. Keep them green; each phase of work lands with its suite.
 - `node devtools/dev.mjs host` — the desktop management console (hosts the server in-process +
-  monitors health); `publish` builds the shippable bundle (self-contained host + native launcher).
+  monitors health); `publish` builds the shippable bundle (framework-dependent host — the launcher
+  installs the .NET 10 runtime on first run — + native launcher).
 - `node devtools/dev.mjs eval [scenarios.json]` — the prompt/agent playground (dry-plan + auto-score,
   a quality benchmark to run before/after tuning); `memory <export|import>` transfers DB memory.
 

@@ -56,10 +56,12 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="updater.cpp" />
+    <ClCompile Include="dotnet_runtime.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
     <ClInclude Include="updater.h" />
+    <ClInclude Include="dotnet_runtime.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="launcher.rc" />

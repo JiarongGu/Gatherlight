@@ -176,8 +176,10 @@ drops, and relaunches. The two-phase split — app stages, launcher applies — 
 exists. The launcher never self-updates (it's excluded from the overlay); a launcher change is a
 manual re-download.
 
-> The self-contained host is one ~100 MB file, so each update re-downloads it in full (no deltas).
-> `release.yml` publishes the zip + `manifest.json` as release assets on a `v*` tag.
+> The host is framework-dependent (~20 MB app; the .NET 10 runtime is installed once by the launcher
+> on first run and survives updates), so each update re-downloads only ~20 MB — not the ~110 MB a
+> bundled-runtime build would. `release.yml` publishes the zip + `manifest.json` as release assets on
+> a `v*` tag.
 
 **Manual.** Re-run `.\build-production.ps1` (or `node devtools/dev.mjs publish`) and replace the folder. Data
 folders are upgraded in place on next boot regardless of update path: `ZhikuSeeder` re-seeds template
