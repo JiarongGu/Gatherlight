@@ -186,14 +186,58 @@ jobs:
         id: notes
         shell: pwsh
         run: |
-          $tag = "${{ steps.version.outputs.tag }}"
-          $prev = git describe --tags --abbrev=0 "$tag^" 2>$null
-          if ($prev) { $log = git log "$prev..HEAD" --pretty=format:"- %s" --no-merges }
-          else { $log = git log --pretty=format:"- %s" --no-merges }
-          $notes = @("## Gatherlight $tag", "", $log, "", "---",
-            "Download the zip, extract, and run **Gatherlight.exe**. Windows 10/11 (x64).") -join "`n"
-          $notes | Out-File release-notes.md -Encoding utf8
-          Write-Host $notes
+          $currentTag = "${{ steps.version.outputs.tag }}"
+
+          # Previous RELEASE tag = the highest tag STRICTLY LESS than the current version, compared by
+          # VERSION (not `git describe`, which is empty on a first release → dumped ALL history, and not
+          # a string sort). Robust when the current tag already exists (a re-run) and orders 1.10.0 >
+          # 1.6.0 numerically; handles 2- or 3-part tags (an old `v1.0` parses as 1.0.0).
+          function Parse-Ver($t) {
+            if ($t -match '^v?(\d+)\.(\d+)(\.(\d+))?') {
+              $patch = if ($matches[4]) { $matches[4] } else { '0' }
+              return [version]"$($matches[1]).$($matches[2]).$patch"
+            }
+            return $null
+          }
+          $curV = Parse-Ver $currentTag
+          $previousTag = $null; $prevV = $null
+          foreach ($t in (git tag)) {
+            $v = Parse-Ver $t
+            if ($null -eq $v) { continue }
+            if ($curV -and $v -ge $curV) { continue }   # skip the current tag + anything newer
+            if ($null -eq $prevV -or $v -gt $prevV) { $prevV = $v; $previousTag = $t }
+          }
+
+          if ($previousTag) {
+            Write-Host "notes: $previousTag..HEAD (current $currentTag)"
+            $commits = git log "$previousTag..HEAD" --pretty=format:"%s" --no-merges
+          } else {
+            Write-Host "no previous release tag — using all commits"
+            $commits = git log --pretty=format:"%s" --no-merges
+          }
+
+          # Categorize by conventional-commit prefix (scoped too, e.g. `fix(backup):`); drop the
+          # non-user-facing kinds so the notes read like a changelog, not a raw git log.
+          $features = @(); $fixes = @(); $other = @()
+          foreach ($msg in $commits) {
+            if ($msg -match '^feat(\([^)]+\))?:\s*(.+)')    { $features += $matches[2].Trim() }
+            elseif ($msg -match '^fix(\([^)]+\))?:\s*(.+)') { $fixes += $matches[2].Trim() }
+            elseif ($msg -match '^(chore|docs|refactor|style|perf|test|ci|build)(\([^)]+\))?:\s*') { }
+            else { $other += $msg }
+          }
+
+          $notes = @("## Gatherlight $currentTag", "")
+          if ($features.Count) { $notes += "### New features"; $notes += ""; $features | ForEach-Object { $notes += "- $_" }; $notes += "" }
+          if ($fixes.Count)    { $notes += "### Fixes";        $notes += ""; $fixes    | ForEach-Object { $notes += "- $_" }; $notes += "" }
+          if ($other.Count)    { $notes += "### Other changes"; $notes += ""; $other   | ForEach-Object { $notes += "- $_" }; $notes += "" }
+          if (($features.Count + $fixes.Count + $other.Count) -eq 0) { $notes += "No notable changes."; $notes += "" }
+
+          $notes += "---"; $notes += ""
+          $notes += "Download the zip, extract, and run **Gatherlight.exe**. On first run the launcher installs the .NET 10 runtime if it's missing (one-time). Windows 10/11 (x64)."
+
+          $md = $notes -join "`n"
+          $md | Out-File release-notes.md -Encoding utf8
+          Write-Host $md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
