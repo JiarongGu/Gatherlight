@@ -353,10 +353,17 @@ switch (cmd) {
     // git + chromium), so the app pulls ONE ~220 MB package at first-run setup while the app download
     // stays lean. Reuses a locally-provisioned git/chromium when present (dev), else downloads/installs
     // them (CI). Publish is separate: `dotnet nuget push` with a nuget.org API key.
-    const version = args[0]; // optional; defaults to the csproj <Version> (must match ResourcesPackageVersion)
     const pkgDir = path.join(repo, 'src', 'resources', 'Gatherlight.Resources');
     const proj = path.join(pkgDir, 'Gatherlight.Resources.csproj');
     if (!fs.existsSync(proj)) { console.error(`package project not found: ${proj}`); process.exitCode = 1; break; }
+    // Version single source of truth = ResourceProvisioner.ResourcesPackageVersion (the flat-container
+    // URL the app fetches). Derive it so the packed .nupkg version can't drift from what the app asks
+    // for; an explicit arg can still override for a one-off.
+    const provCs = path.join(repo, 'src/server/Gatherlight.Server/Modules/Resources/Services/ResourceProvisioner.cs');
+    const provVer = (fs.readFileSync(provCs, 'utf8').match(/ResourcesPackageVersion\s*=\s*"([^"]+)"/) || [])[1];
+    const version = args[0] || provVer;
+    if (!version) { console.error('could not resolve resources version (ResourcesPackageVersion not found)'); process.exitCode = 1; break; }
+    console.log(`  version:  ${version}${args[0] ? ' (override)' : ' (from ResourceProvisioner.ResourcesPackageVersion)'}`);
     const MINGIT_URL = 'https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.2/MinGit-2.55.0.2-64-bit.zip';
     const localRes = path.join(repo, 'local', 'state', 'resources');
     const dirMB = (d) => { let n = 0; (function w(x) { for (const e of fs.readdirSync(x, { withFileTypes: true })) { const p = path.join(x, e.name); e.isDirectory() ? w(p) : (n += fs.statSync(p).size); } })(d); return (n / 1e6).toFixed(0); };

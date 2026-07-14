@@ -52,10 +52,14 @@ public sealed class ResourceProvisioner : IResourceProvisioner
 {
     // The Gatherlight.Resources package: our own lean win-x64 runtime bundle (Playwright driver + git +
     // chromium), pulled from nuget.org's public flat-container CDN — no self-hosted assets, versioned +
-    // immutable. The version tracks the Microsoft.Playwright package (1.49.0 — driver + browser + DLL
-    // are paired). GATHERLIGHT_RESOURCES_URL overrides the source (a mirror, or a local .nupkg to test).
+    // immutable. GATHERLIGHT_RESOURCES_URL overrides the source (a mirror, or a local .nupkg to test).
+    //
+    // ResourcesPackageVersion is the SINGLE SOURCE OF TRUTH for the package version: `resources-pack`
+    // reads it to stamp the .nupkg, and this URL asks nuget for exactly it — so they can't drift. The
+    // package has its own semver, bumped whenever a payload changes (e.g. a Microsoft.Playwright
+    // upgrade); it is NOT equal to the Playwright version. Bump this + re-publish the package together.
     public const string ResourcesPackageId = "gatherlight.resources";     // lower-case (flat-container)
-    public const string ResourcesPackageVersion = "1.0.0";                // must match the published package
+    public const string ResourcesPackageVersion = "1.0.0";
     private static string ResourcesUrl =>
         Environment.GetEnvironmentVariable("GATHERLIGHT_RESOURCES_URL") is { Length: > 0 } u ? u
         : $"https://api.nuget.org/v3-flatcontainer/{ResourcesPackageId}/{ResourcesPackageVersion}/{ResourcesPackageId}.{ResourcesPackageVersion}.nupkg";

@@ -8,11 +8,6 @@ name: Release resources (NuGet)
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Package version (must match ResourcesPackageVersion in ResourceProvisioner.cs)'
-        required: true
-        type: string
-        default: '1.0.0'
       dry_run:
         description: 'Pack only — do not push to nuget.org'
         required: false
@@ -38,9 +33,10 @@ jobs:
           node-version: '22'
 
       # Builds the server Debug (to materialize the Playwright driver), assembles payload/, and packs
-      # publish/resources/*.nupkg.
+      # publish/resources/*.nupkg. The version is derived from ResourceProvisioner.ResourcesPackageVersion
+      # (the single source of truth — the version the app fetches), so it can't drift.
       - name: Pack
-        run: node devtools/dev.mjs resources-pack ${{ inputs.version }}
+        run: node devtools/dev.mjs resources-pack
 
       - name: Push to nuget.org
         if: ${{ !inputs.dry_run }}
@@ -49,5 +45,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gatherlight-resources-${{ inputs.version }}
+          name: gatherlight-resources
           path: publish/resources/*.nupkg

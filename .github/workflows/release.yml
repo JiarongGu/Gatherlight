@@ -67,8 +67,9 @@ jobs:
 
       # Version source of truth = src/Directory.Build.props (<VersionPrefix>), which the .NET assemblies
       # AND devtools/project.config.mjs both read. An explicit `version` input wins; otherwise `bump`
-      # steps the current semver. A changed version is written back + committed so the repo, the bundle,
-      # and the tag all agree.
+      # steps the current semver. The bump is WRITTEN to the working tree here (so the e2e + bundle use
+      # it) but the commit+push is deferred until AFTER the gate passes — a failed release must not leave
+      # a phantom bump commit on the branch.
       - name: Determine version
         id: version
         shell: pwsh
@@ -96,18 +97,17 @@ jobs:
             }
           }
 
+          $changed = "false"
           if ($final -ne $current) {
             $p = "src/Directory.Build.props"
             $c = Get-Content $p -Raw
             $c = $c -replace "(<VersionPrefix>)[^<]*(</VersionPrefix>)", ('${1}' + $final + '${2}')
             Set-Content $p $c -NoNewline -Encoding utf8
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add $p
-            git commit -m "chore: release v$final"
-            git push
+            $changed = "true"
+            Write-Host "wrote version $final to $p (commit deferred until the gate + bundle pass)"
           }
 
+          "changed=$changed" >> $env:GITHUB_OUTPUT
           "version=$final" >> $env:GITHUB_OUTPUT
           "tag=v$final" >> $env:GITHUB_OUTPUT
 
@@ -146,7 +146,20 @@ jobs:
             ${{ steps.artifact.outputs.path }}
             publish/Gatherlight/manifest.json
 
-      # Only tag AFTER a green e2e + a successful bundle, so tags always point at shippable commits.
+      # Commit + push the version bump ONLY now that e2e + the bundle succeeded — so a failed release
+      # leaves no phantom "chore: release vX" commit on the branch (and never burns a version number).
+      - name: Commit version bump
+        if: steps.version.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/Directory.Build.props
+          git commit -m "chore: release v${{ steps.version.outputs.version }}"
+          git push
+
+      # Only tag AFTER a green e2e + a successful bundle (+ the bump commit), so tags always point at
+      # shippable commits.
       - name: Create git tag
         if: inputs.create_tag
         shell: pwsh

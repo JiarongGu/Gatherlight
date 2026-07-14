@@ -10,9 +10,14 @@
     downloads the .nupkg by URL and extracts the payload from the content/ path — so we deliberately
     pack files under content/ and exclude the (empty) build output.
 
-    Pack:    node devtools/dev.mjs resources-pack [version]   (assembles payload/ + dotnet pack)
+    Pack:    node devtools/dev.mjs resources-pack   (assembles payload/ + dotnet pack)
     Publish: dotnet nuget push the .nupkg to nuget.org with an API key (see README.md).
-    The version MUST match ResourceProvisioner.ResourcesPackageVersion (the driver tracks Microsoft.Playwright).
+
+    VERSION: the single source of truth is ResourceProvisioner.ResourcesPackageVersion (the
+    flat-container URL the app fetches). `resources-pack` reads it and passes -p:Version, so the
+    <Version> below is only a fallback for a bare `dotnet pack` and is normally overridden. This
+    package has its OWN semver, bumped when a payload changes (e.g. a Playwright upgrade) — it is NOT
+    equal to the Microsoft.Playwright version.
   -->
 
   <PropertyGroup>
@@ -23,6 +28,7 @@
     <IsPackable>true</IsPackable>
 
     <PackageId>Gatherlight.Resources</PackageId>
+    <!-- Fallback only; `resources-pack` overrides with -p:Version from ResourcesPackageVersion. Keep in sync. -->
     <Version>1.0.0</Version>
     <Authors>Jiarong Gu</Authors>
     <Description>The full win-x64 runtime for the self-hosted Gatherlight family planner, in one download-at-setup package: the Playwright driver + portable git (MinGit) + chromium headless-shell. The app pulls it once at first-run setup via the nuget.org flat-container API (not a build-time PackageReference), keeping the app download lean. Redistributes Microsoft Playwright (Apache-2.0), Node.js (MIT), Chromium headless-shell (BSD-3-Clause), and git-for-windows/MinGit (GPL-2.0).</Description>
