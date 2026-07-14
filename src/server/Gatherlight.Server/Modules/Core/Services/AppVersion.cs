@@ -14,6 +14,7 @@ public static class AppVersion
     private static string Resolve()
     {
         var v = (Assembly.GetEntryAssembly() ?? typeof(AppVersion).Assembly).GetName().Version;
-        return v is null ? "0.0.0" : $"{v.Major}.{v.Minor}.{v.Build}";
+        // Build is -1 for a 2-part assembly version; clamp so it reads 1.0.0, not 1.0.-1.
+        return v is null ? "0.0.0" : $"{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}";
     }
 }

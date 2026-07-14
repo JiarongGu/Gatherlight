@@ -300,7 +300,14 @@ public sealed class UpdateService : IUpdateService
     private static string NormalizeVersion(string tag)
     {
         tag = tag.Trim();
-        return tag.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? tag[1..] : tag;
+        if (tag.StartsWith("v", StringComparison.OrdinalIgnoreCase)) tag = tag[1..];
+        // Canonicalize the numeric core to 3-part semver so a `v1.0` release renders + compares as
+        // `1.0.0` (matching the app's own AppVersion.Semver), preserving any -pre/+build suffix.
+        var core = NumericCore(tag);
+        var suffix = tag.Length > core.Length ? tag[core.Length..] : "";
+        var parts = core.Split('.', StringSplitOptions.RemoveEmptyEntries).ToList();
+        while (parts.Count < 3) parts.Add("0");
+        return string.Join('.', parts.Take(3)) + suffix;
     }
 
     private static bool IsNewer(string latest, string current)

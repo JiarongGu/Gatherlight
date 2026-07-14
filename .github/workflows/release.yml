@@ -97,6 +97,12 @@ jobs:
             }
           }
 
+          # Normalize to a full 3-part semver so `1.0` becomes `1.0.0` in the tag, zip name, and bump.
+          if ($final -match '^(\d+)(\.(\d+))?(\.(\d+))?([-+].*)?$') {
+            $final = "$([int]$matches[1]).$([int]($matches[3] ?? 0)).$([int]($matches[5] ?? 0))" + $matches[6]
+            Write-Host "normalized version: $final"
+          }
+
           $changed = "false"
           if ($final -ne $current) {
             $p = "src/Directory.Build.props"
