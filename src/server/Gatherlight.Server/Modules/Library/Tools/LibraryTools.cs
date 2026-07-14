@@ -36,14 +36,18 @@ public sealed class LibraryUpsertTool : IGatherlightTool
         .Num("confidence", "0-1 置信度(默认 0.7;实测核验过用 0.9+)")
         .Str("verifiedAt", "核验时间 ISO8601(默认当前时间)"));
 
+    private sealed record Args(
+        string? Kind, string? Key, string? Name, string? NameLocal, string? Region, string? Summary,
+        string? Url, string? ImageUrl, double? Lat, double? Lng, string? Tags, string? Source,
+        double? Confidence, string? VerifiedAt);
+
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
+        var a = ToolArgs.Parse<Args>(args);
         var item = await _repo.UpsertAsync(new LibraryUpsert(
-            ToolArgs.Req(args, "kind"), ToolArgs.Req(args, "key"), ToolArgs.Req(args, "name"),
-            ToolArgs.Str(args, "nameLocal"), ToolArgs.Str(args, "region"), ToolArgs.Str(args, "summary"),
-            ToolArgs.Str(args, "url"), ToolArgs.Str(args, "imageUrl"), ToolArgs.Dbl(args, "lat"), ToolArgs.Dbl(args, "lng"),
-            ToolArgs.Str(args, "tags"), ToolArgs.Str(args, "source"), ToolArgs.Dbl(args, "confidence"),
-            ToolArgs.Str(args, "verifiedAt") ?? DateTime.UtcNow.ToString("o")));
+            ToolArgs.Req(a.Kind, "kind"), ToolArgs.Req(a.Key, "key"), ToolArgs.Req(a.Name, "name"),
+            a.NameLocal, a.Region, a.Summary, a.Url, a.ImageUrl, a.Lat, a.Lng, a.Tags, a.Source,
+            a.Confidence, a.VerifiedAt ?? DateTime.UtcNow.ToString("o")));
         return new JsonObject
         {
             ["ok"] = true, ["id"] = item.Id, ["kind"] = item.Kind, ["key"] = item.Key,
@@ -66,11 +70,12 @@ public sealed class LibrarySearchTool : IGatherlightTool
         .Str("region", "限定地区(可选)")
         .Int("limit", "最多返回条数(默认 20)"));
 
+    private sealed record Args(string? Query, string? Kind, string? Region, int? Limit);
+
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var items = await _repo.QueryAsync(
-            ToolArgs.Str(args, "kind"), ToolArgs.Str(args, "region"),
-            ToolArgs.Str(args, "query"), ToolArgs.Int(args, "limit", 20));
+        var a = ToolArgs.Parse<Args>(args);
+        var items = await _repo.QueryAsync(a.Kind, a.Region, a.Query, a.Limit ?? 20);
         var arr = new JsonArray();
         foreach (var it in items)
             arr.Add(new JsonObject
@@ -108,15 +113,17 @@ public sealed class LibraryImportTool : IGatherlightTool
             options: new[] { "attraction", "restaurant", "hotel", "experience", "other" })
         .Str("region", "覆盖地区(可选;默认用 ## 标题作地区)"));
 
+    private sealed record Args(string? Path, string? Kind, string? Region);
+
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var rel = ToolArgs.Req(args, "path");
+        var a = ToolArgs.Parse<Args>(args);
+        var rel = ToolArgs.Req(a.Path, "path");
         var abs = _data.ResolveDataPath(rel) ?? throw new ToolException(400, $"路径越界:{rel}");
         if (!File.Exists(abs)) throw new ToolException(400, $"文件不存在:{rel}");
 
         var md = await File.ReadAllTextAsync(abs, ct);
-        var items = MarkdownLibraryImporter.Parse(md,
-            ToolArgs.Str(args, "kind") ?? "attraction", ToolArgs.Str(args, "region"));
+        var items = MarkdownLibraryImporter.Parse(md, a.Kind ?? "attraction", a.Region);
 
         var byKind = new Dictionary<string, int>();
         foreach (var it in items)
@@ -148,9 +155,12 @@ public sealed class LibraryDeleteTool : IGatherlightTool
         .Str("kind", "类型", required: true)
         .Str("key", "slug", required: true));
 
+    private sealed record Args(string? Kind, string? Key);
+
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var removed = await _repo.DeleteAsync(ToolArgs.Req(args, "kind"), ToolArgs.Req(args, "key"));
+        var a = ToolArgs.Parse<Args>(args);
+        var removed = await _repo.DeleteAsync(ToolArgs.Req(a.Kind, "kind"), ToolArgs.Req(a.Key, "key"));
         return new JsonObject { ["ok"] = removed, ["removed"] = removed }.ToJsonString();
     }
 }

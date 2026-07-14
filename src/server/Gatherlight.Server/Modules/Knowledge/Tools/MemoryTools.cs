@@ -26,14 +26,14 @@ public sealed class RememberFactTool : IGatherlightTool
         .Str("source", "来源 URL 或依据(强烈建议)")
         .Num("confidence", "0-1 置信度(默认 0.7;scrape 实测过的用 0.9+)"));
 
+    private sealed record Args(string? Kind, string? Topic, string? Content, string? Source, double? Confidence);
+
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
+        var a = ToolArgs.Parse<Args>(args);
         var id = await _store.LearnAsync(
-            ToolArgs.Req(args, "kind"),
-            ToolArgs.Req(args, "topic"),
-            ToolArgs.Req(args, "content"),
-            ToolArgs.Str(args, "source"),
-            ToolArgs.Dbl(args, "confidence") ?? 0.7);
+            ToolArgs.Req(a.Kind, "kind"), ToolArgs.Req(a.Topic, "topic"), ToolArgs.Req(a.Content, "content"),
+            a.Source, a.Confidence ?? 0.7);
         return new JsonObject { ["ok"] = true, ["id"] = id }.ToJsonString();
     }
 }
@@ -53,12 +53,13 @@ public sealed class RecallFactsTool : IGatherlightTool
         .Str("kind", "限定分类(可选)")
         .Int("limit", "最多返回条数(默认 8)"));
 
+    private sealed record Args(string? Query, string? Kind, int? Limit);
+
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
+        var a = ToolArgs.Parse<Args>(args);
         var rows = await _store.RecallAsync(
-            ToolArgs.Req(args, "query"),
-            ToolArgs.Str(args, "kind"),
-            Math.Clamp(ToolArgs.Int(args, "limit", 8), 1, 50));
+            ToolArgs.Req(a.Query, "query"), a.Kind, Math.Clamp(a.Limit ?? 8, 1, 50));
         var arr = new JsonArray();
         foreach (var r in rows)
         {

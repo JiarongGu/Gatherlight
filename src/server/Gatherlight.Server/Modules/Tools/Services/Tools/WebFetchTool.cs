@@ -28,15 +28,17 @@ public sealed class WebFetchTool : IGatherlightTool
         .Str("waitFor", "等待该 CSS 选择器出现后再提取(可选)")
         .Int("timeout", "导航超时毫秒数(默认 30000,上限 60000)"));
 
+    private sealed record Args(string? Url, string? Selector, string? WaitFor, int? Timeout);
+
     public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var url = ToolArgs.Req(args, "url");
+        var a = ToolArgs.Parse<Args>(args);
+        var url = ToolArgs.Req(a.Url, "url");
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
             throw new ToolException(400, $"无效 URL:{url}");
-        var selector = ToolArgs.Str(args, "selector") ?? "body";
-        var waitFor = ToolArgs.Str(args, "waitFor");
-        var timeout = args.TryGetProperty("timeout", out var t) && t.TryGetInt32(out var ms) && ms > 0
-            ? Math.Min(ms, 60_000) : 30_000;
+        var selector = a.Selector is { Length: > 0 } ? a.Selector : "body";
+        var waitFor = a.WaitFor is { Length: > 0 } ? a.WaitFor : null;
+        var timeout = a.Timeout is { } ms && ms > 0 ? Math.Min(ms, 60_000) : 30_000;
 
         var browser = await _host.GetBrowserAsync(ct);
         var context = await browser.NewContextAsync(new BrowserNewContextOptions

@@ -22,12 +22,14 @@ public sealed class IndexListTool : IGatherlightTool
         .Str("category", "限定类别(可选):Trips / Daily / Weekly / Budgets / Packing / Visa …")
         .Int("limit", "最多返回条数(默认 200)"));
 
+    private sealed record Args(string? Category, int? Limit);
+
     public Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var category = ToolArgs.Str(args, "category");
+        var a = ToolArgs.Parse<Args>(args);
         var items = _index.List()
-            .Where(e => category is null || string.Equals(e.Category, category, StringComparison.OrdinalIgnoreCase))
-            .Take(ToolArgs.Int(args, "limit", 200)).ToList();
+            .Where(e => a.Category is null || string.Equals(e.Category, a.Category, StringComparison.OrdinalIgnoreCase))
+            .Take(a.Limit ?? 200).ToList();
         return Task.FromResult(Render(items));
     }
 
@@ -57,10 +59,12 @@ public sealed class IndexSearchTool : IGatherlightTool
         .Str("query", "检索词", required: true)
         .Int("limit", "最多返回条数(默认 50)"));
 
+    private sealed record Args(string? Query, int? Limit);
+
     public Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        var q = ToolArgs.Req(args, "query");
-        return Task.FromResult(IndexListTool.Render(_index.Search(q, ToolArgs.Int(args, "limit", 50))));
+        var a = ToolArgs.Parse<Args>(args);
+        return Task.FromResult(IndexListTool.Render(_index.Search(ToolArgs.Req(a.Query, "query"), a.Limit ?? 50)));
     }
 }
 
