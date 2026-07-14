@@ -127,6 +127,31 @@ export function Manage() {
     };
     input.click();
   };
+  const exportBackup = () => {
+    if (inHost) host('exportBackup');
+    else window.open('/api/backup/export', '_blank');
+    toast('正在导出完整备份(计划 · 家庭 · 知识库 · 记忆)…');
+  };
+  const importBackup = () => {
+    if (inHost) { host('importBackup'); return; }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      if (!window.confirm('恢复将覆盖当前的计划 / 家庭 / 知识库,并合并记忆。确定继续?')) return;
+      try {
+        const res = await fetch('/api/backup/import', { method: 'POST', headers: { 'content-type': 'application/zip' }, body: file });
+        const j = await res.json();
+        if (res.ok) toast(`已从备份恢复:${j.restored?.files ?? 0} 个文件`);
+        else toast(`恢复失败:${j.error ?? res.status}`, 'err');
+      } catch (e) {
+        toast('恢复失败:' + (e instanceof Error ? e.message : String(e)), 'err');
+      }
+    };
+    input.click();
+  };
   const restart = () => { host('serverRestart'); toast('已发送重启指令,服务将很快恢复…'); };
   const stopServer = () => { host('serverStop'); toast('已停止本地服务 —— 需要时点「启动」恢复。'); };
   const startServer = () => { host('serverStart'); toast('正在启动本地服务…'); };
@@ -219,6 +244,12 @@ export function Manage() {
         </button>
         <button className="mng-btn" onClick={importMemory}>
           导入记忆<span className="sub">合并另一台机器的记忆</span>
+        </button>
+        <button className="mng-btn" onClick={exportBackup}>
+          完整备份<span className="sub">计划 · 家庭 · 知识库 · 记忆 → 一个 .zip</span>
+        </button>
+        <button className="mng-btn" onClick={importBackup}>
+          恢复备份<span className="sub">从 .zip 还原(覆盖记录 · 合并记忆)</span>
         </button>
         {inHost && (
           <button className="mng-btn danger" onClick={() => host('exit')}>

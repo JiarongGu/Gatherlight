@@ -105,9 +105,56 @@ public sealed partial class PlanIndexService : IPlanIndexService
             assets, transaction: tx);
         tx.Commit();
 
+        // Regenerate the markdown-native index of plans/ (kept in sync with the DB here).
+        try { WriteIndexMarkdown(entries); } catch (Exception ex) { _log.LogWarning("INDEX.md write skipped: {Msg}", ex.Message); }
+
         _log.LogInformation("Plan index rescanned: {Files} files, {Assets} assets", entries.Count, assets.Count);
         return Task.CompletedTask;
     }
+
+    // The markdown-native index of plans/ — a human-readable table of contents kept in sync with
+    // plan_index, so the user + agent see everything at a glance and the index_* MCP tools have a
+    // source file. Hash-guarded: only rewritten when the content changes, so it doesn't churn the
+    // FileSystemWatcher / git (the re-scan its own write triggers finds identical content and stops).
+    private void WriteIndexMarkdown(List<PlanIndexEntry> entries)
+    {
+        var plans = entries.Where(e => e.Path.StartsWith("plans/", StringComparison.Ordinal))
+            .OrderBy(e => e.Category, StringComparer.Ordinal)
+            .ThenByDescending(e => e.Name, StringComparer.Ordinal)
+            .ToList();
+
+        var sb = new StringBuilder();
+        sb.Append("# plans/INDEX.md — generated\n\n");
+        sb.Append("> Auto-generated table of contents for `plans/`, kept in sync with the plan index on every\n");
+        sb.Append("> change. **Do not hand-edit** — the server rebuilds it. Query it via the `index_*` MCP tools.\n\n");
+        if (plans.Count == 0)
+        {
+            sb.Append("_No plans yet._\n");
+        }
+        else
+        {
+            var cats = plans.Select(p => p.Category).Distinct().Count();
+            sb.Append($"{plans.Count} plan(s) across {cats} categor{(cats == 1 ? "y" : "ies")}.\n\n");
+            foreach (var group in plans.GroupBy(e => e.Category))
+            {
+                sb.Append($"## {group.Key}\n\n| Date | Title | File |\n|---|---|---|\n");
+                foreach (var e in group)
+                {
+                    var link = e.Path.Length > 6 ? e.Path[6..] : e.Path; // strip "plans/" — INDEX.md sits in plans/
+                    sb.Append($"| {e.PlanDate ?? "—"} | {MdCell(e.Title)} | [`{MdCell(e.Name)}`]({link}) |\n");
+                }
+                sb.Append('\n');
+            }
+        }
+
+        var content = sb.ToString();
+        var dest = Path.Combine(_data.PlansPath, "INDEX.md");
+        if (File.Exists(dest) && File.ReadAllText(dest) == content) return; // unchanged → no churn
+        Directory.CreateDirectory(_data.PlansPath);
+        File.WriteAllText(dest, content);
+    }
+
+    private static string MdCell(string s) => s.Replace("|", "\\|").Replace("\n", " ").Trim();
 
     public List<PlanIndexEntry> List()
     {
@@ -151,7 +198,9 @@ public sealed partial class PlanIndexService : IPlanIndexService
             foreach (var f in Directory.EnumerateFiles(abs, "*.md", SearchOption.AllDirectories))
             {
                 var rel = _data.ToRelativePath(f);
-                if (rel is not null) yield return rel;
+                // plans/INDEX.md is generated (below), not a plan — never index it (would loop).
+                if (rel is not null && !rel.Equals("plans/INDEX.md", StringComparison.OrdinalIgnoreCase))
+                    yield return rel;
             }
         }
         foreach (var single in new[] { ".claude/AI_GUIDE.md", ".claude/KEYWORDS_INDEX.md" })

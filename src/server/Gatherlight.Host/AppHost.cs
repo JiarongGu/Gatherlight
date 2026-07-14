@@ -161,7 +161,57 @@ internal sealed class AppHost : Form
             case "exit": ExitApp(); break;
             case "exportMemory": await ExportMemoryAsync(); break;
             case "importMemory": await ImportMemoryAsync(); break;
+            case "exportBackup": await ExportBackupAsync(); break;
+            case "importBackup": await ImportBackupAsync(); break;
         }
+    }
+
+    // A short-lived client with a generous timeout for the backup transfers (export streams the whole
+    // .zip; import does extract + reindex + commit) — the shared _http's 4 s timeout is for health.
+    private HttpClient BackupClient()
+    {
+        var handler = new HttpClientHandler();
+        if (_url.StartsWith("https", StringComparison.Ordinal)) handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+        return new HttpClient(handler) { BaseAddress = new Uri(_url), Timeout = TimeSpan.FromMinutes(5) };
+    }
+
+    private async Task ExportBackupAsync()
+    {
+        using var dlg = new SaveFileDialog
+        {
+            Filter = "Gatherlight 备份 (*.zip)|*.zip",
+            FileName = $"gatherlight-backup-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+            Title = "导出完整备份",
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            using var http = BackupClient();
+            var bytes = await http.GetByteArrayAsync("api/backup/export");
+            await File.WriteAllBytesAsync(dlg.FileName, bytes);
+            MessageBox.Show(this, $"已导出完整备份到:\n{dlg.FileName}\n\n(计划 · 家庭 · 知识库 · 记忆)", "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex) { MessageBox.Show(this, "导出失败:" + ex.Message, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
+
+    private async Task ImportBackupAsync()
+    {
+        using var dlg = new OpenFileDialog { Filter = "Gatherlight 备份 (*.zip)|*.zip", Title = "从备份恢复" };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        if (MessageBox.Show(this, "恢复将覆盖当前的计划 / 家庭 / 知识库,并合并记忆。确定继续?", "Gatherlight",
+            MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+        try
+        {
+            using var http = BackupClient();
+            using var content = new ByteArrayContent(await File.ReadAllBytesAsync(dlg.FileName));
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/zip");
+            using var res = await http.PostAsync("api/backup/import", content);
+            var text = await res.Content.ReadAsStringAsync();
+            if (!res.IsSuccessStatusCode) throw new Exception(text);
+            MessageBox.Show(this, "已从备份恢复。\n" + text, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            try { _web.CoreWebView2?.Reload(); } catch { }
+        }
+        catch (Exception ex) { MessageBox.Show(this, "恢复失败:" + ex.Message, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
 
     private async Task ExportMemoryAsync()

@@ -61,6 +61,9 @@ Available under `.claude/skills/`:
 - [`/scrape`](skills/scrape/SKILL.md) — render a JS/SPA page via the `scrape` MCP tool; the mandatory deeplink verifier
 - `extract` MCP tool (`mcp__planner-tools__extract`) — read user-uploaded PDFs/images (no wrapper skill; call directly)
 
+### 🚀 Setup
+- [`/onboard`](skills/onboard/SKILL.md) — first-run: fill the household profile + start the first plan (self-invoke on an empty `household/`)
+
 ### 💾 Memory + maintenance
 - [`/household-update`](skills/household-update/SKILL.md) — add/edit household profile facts
 - [`/remember`](skills/remember/SKILL.md) — capture session learnings + route to docs/rules/household
@@ -89,6 +92,8 @@ Critical rules every session should be aware of:
 ---
 
 ## What this workspace is
+
+The full layout contract is [`STRUCTURE.md`](STRUCTURE.md) — where every file lives and why (read it when unsure where something goes).
 
 A markdown-first family planner, hosted by the Gatherlight server. Plans live as files in `plans/` (trips, daily, weekly, budgets, packing). The household profile (`household/*`) is the load-bearing memory layer. Claude is the planning agent; deterministic capability comes from the server's MCP tools (`scrape`, `extract`) — **there is no code here and nothing to build**.
 
