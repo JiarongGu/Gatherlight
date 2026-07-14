@@ -349,7 +349,7 @@ export const Sidebar = memo(function Sidebar({
           </span>
         </button>
         <button
-          className={`side-lib kb${knowledgeActive ? ' active' : ''}`}
+          className={`side-lib pin-kb${knowledgeActive ? ' active' : ''}`}
           onClick={onOpenKnowledge}
           aria-current={knowledgeActive ? 'page' : undefined}
         >

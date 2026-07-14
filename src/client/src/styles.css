@@ -2544,16 +2544,18 @@ kbd, .topbar-kbd {
 .side-lib-en { font-family: var(--font-mono); font-size: 7.5px; letter-spacing: 0.26em; color: var(--muted); }
 .side-sep { height: 1px; background: var(--border-soft); margin: 12px 4px; }
 
-/* The two fixed standalone pins share the .side-lib structure; .kb is the celadon (calm secondary)
-   variant so 智库 reads as a sibling-but-distinct surface next to the amber 知识库 (not both amber). */
+/* The two fixed standalone pins share the .side-lib structure; .pin-kb is the celadon (calm
+   secondary) variant so 智库 reads as a sibling-but-distinct surface next to the amber 知识库 (not
+   both amber). NOTE: the modifier is `pin-kb`, NOT `kb` — a bare `kb` class would also match the
+   Knowledge Base *screen* container `.kb` and inherit its page padding, ballooning the pin. */
 .side-pins { display: flex; flex-direction: column; gap: 8px; }
-.side-lib.kb { background: linear-gradient(135deg, var(--accent-2-soft), transparent); }
-.side-lib.kb:hover { border-color: color-mix(in srgb, var(--accent-2) 45%, var(--border)); }
-.side-lib.kb.active {
+.side-lib.pin-kb { background: linear-gradient(135deg, var(--accent-2-soft), transparent); }
+.side-lib.pin-kb:hover { border-color: color-mix(in srgb, var(--accent-2) 45%, var(--border)); }
+.side-lib.pin-kb.active {
   border-color: color-mix(in srgb, var(--accent-2) 55%, var(--border));
   box-shadow: 0 4px 14px var(--accent-2-soft);
 }
-.side-lib.kb .side-lib-icon {
+.side-lib.pin-kb .side-lib-icon {
   background: linear-gradient(150deg, color-mix(in srgb, var(--accent-2) 78%, #000), var(--accent-2));
 }
 .side-lib-n {
