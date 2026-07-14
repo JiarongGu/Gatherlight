@@ -21,8 +21,9 @@
   opens the host window (LauncherDir not truncated), and (b) with the host running, a staged update
   (`{install}/.update/`) applies on relaunch — the running host is killed and the overlay lands
   (CloseRunningHost). Enable Windows `LongPathsEnabled=1` for such installs. Compile-verified only.
-- [ ] **Cut a release:** run `e2e all` as the final gate, then the manual `release.yml` (Actions →
-  Run workflow). First real run also exercises the new bump-after-gate + version single-source flow.
+- [ ] **Cut a release:** the manual `release.yml` (Actions → Run workflow). The `e2e all` gate is
+  green as of `89e91bd` (23/23); the first real run also exercises the new bump-after-gate + version
+  single-source flow.
 - [ ] **Push:** the review-fix + data-foundation + packaging commits are on local `master`, unpushed.
 
 ### Product (deferred, not urgent)
