@@ -34,9 +34,12 @@ const KB_BLURB: Record<string, string> = {
   Dev: 'UI / 开发相关'
 };
 
-// First meaningful line, flattened to plain text — a one-glance preview of the doc.
+// First meaningful BODY line, flattened to plain text — a one-glance preview. Skips headings (incl.
+// the H1, which equals the card title) and blockquotes so the preview never just repeats the title.
 function preview(content: string): string {
   for (const raw of content.split('\n')) {
+    const trimmed = raw.trim();
+    if (!trimmed || /^#{1,6}\s/.test(trimmed) || /^>/.test(trimmed)) continue;
     const line = toPlainText(raw);
     if (line) return line.length > 140 ? `${line.slice(0, 140)}…` : line;
   }
