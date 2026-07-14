@@ -135,7 +135,7 @@ public sealed class BackupService : IBackupService
                 var src = Path.Combine(dataDir, folder);
                 if (!Directory.Exists(src)) continue;
                 var dest = Path.Combine(_data.RootPath, folder);
-                if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+                ForceDeleteDir(dest); // git objects under .git are read-only — clear the bit before deleting
                 CopyTree(src, dest, ref restored);
             }
             foreach (var file in RootFiles)
@@ -167,7 +167,7 @@ public sealed class BackupService : IBackupService
         finally
         {
             try { File.Delete(tmpZip); } catch { /* best-effort */ }
-            try { Directory.Delete(staging, recursive: true); } catch { /* best-effort */ }
+            try { ForceDeleteDir(staging); } catch { /* best-effort */ }
         }
     }
 
@@ -178,9 +178,29 @@ public sealed class BackupService : IBackupService
         {
             var target = Path.Combine(dest, Path.GetRelativePath(src, f));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            if (File.Exists(target)) ClearReadOnly(target);
             File.Copy(f, target, overwrite: true);
             count++;
         }
+    }
+
+    // Delete a directory even if it holds read-only files (git keeps .git/objects/* read-only, which
+    // otherwise makes Directory.Delete / File.Copy(overwrite) throw UnauthorizedAccessException).
+    private static void ForceDeleteDir(string dir)
+    {
+        if (!Directory.Exists(dir)) return;
+        foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)) ClearReadOnly(f);
+        Directory.Delete(dir, recursive: true);
+    }
+
+    private static void ClearReadOnly(string file)
+    {
+        try
+        {
+            var attr = File.GetAttributes(file);
+            if ((attr & FileAttributes.ReadOnly) != 0) File.SetAttributes(file, attr & ~FileAttributes.ReadOnly);
+        }
+        catch { /* best-effort */ }
     }
 
     private static string Ver() => typeof(BackupService).Assembly.GetName().Version?.ToString() ?? "?";
