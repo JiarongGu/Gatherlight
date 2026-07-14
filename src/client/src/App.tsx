@@ -14,7 +14,7 @@ import {
   PlanActionsMenu,
   type ActionTarget
 } from '@/ui/organisms';
-import { Home, Library, Manage } from '@/screens';
+import { Home, Library, KnowledgeBase, Manage } from '@/screens';
 import { loadPlanData, type PlanData, type PlanFile, type TripAsset } from './lib/collectFiles';
 import { extractHeadings, stripFirstH1 } from './lib/markdown';
 import { buildTripExport, downloadAsFile, downloadTripPDF, isTripFile } from './lib/export';
@@ -37,17 +37,21 @@ const EMPTY_ASSETS: TripAsset[] = [];
 // Planner view ⇄ URL. Query params keep the desktop-hosted app on the same surface across reloads
 // and let the management console deep-link into it (e.g. `?view=library`, `?path=plans/…`). The
 // `/manage` console and `?gallery` surface are separate top-level routes, handled before this.
-type PlannerView = { path: string | null; library: boolean };
+type PlannerView = { path: string | null; library: boolean; knowledge: boolean };
 function readView(): PlannerView {
-  if (typeof location === 'undefined') return { path: null, library: false };
+  const none = { path: null, library: false, knowledge: false };
+  if (typeof location === 'undefined') return none;
   const p = new URLSearchParams(location.search);
-  if (p.get('view') === 'library') return { path: null, library: true };
+  const view = p.get('view');
+  if (view === 'library') return { ...none, library: true };
+  if (view === 'knowledge') return { ...none, knowledge: true };
   const path = p.get('path');
-  return { path: path && path.trim() ? path.trim() : null, library: false };
+  return { ...none, path: path && path.trim() ? path.trim() : null };
 }
 function viewToUrl(v: PlannerView): string {
   const p = new URLSearchParams();
   if (v.library) p.set('view', 'library');
+  else if (v.knowledge) p.set('view', 'knowledge');
   else if (v.path) p.set('path', v.path);
   const qs = p.toString();
   return qs ? `${location.pathname}?${qs}` : location.pathname;
@@ -75,8 +79,10 @@ export function App() {
   // Initial view comes from the URL (deep-link / reload); default is the Home dashboard.
   const initialView = useMemo(readView, []);
   const [activePath, setActivePath] = useState<string | null>(initialView.path);
-  // The 知识库 is a DB-backed top-level surface, distinct from the markdown plan reader.
+  // Two standalone top-level surfaces, distinct from the markdown plan reader: the DB-backed 知识库
+  // (Library) and the 智库 (Knowledge Base — the AI-infra corpus). Only one is active at a time.
   const [showLibrary, setShowLibrary] = useState(initialView.library);
+  const [showKnowledge, setShowKnowledge] = useState(initialView.knowledge);
 
   const screens = useBreakpoint();
   const isMobile = !screens.md; // md = 768px
@@ -211,15 +217,16 @@ export function App() {
   // land on the same surface and back/forward work. pushState keeps the pathname (`/`) unchanged, so
   // the `/manage`·`?gallery` route guards above stay stable.
   useEffect(() => {
-    const url = viewToUrl({ path: activePath, library: showLibrary });
+    const url = viewToUrl({ path: activePath, library: showLibrary, knowledge: showKnowledge });
     if (url !== location.pathname + location.search) window.history.pushState(null, '', url);
-  }, [activePath, showLibrary]);
+  }, [activePath, showLibrary, showKnowledge]);
   // Back/forward → restore the view the URL encodes.
   useEffect(() => {
     const onPop = () => {
       const v = readView();
       setActivePath(v.path);
       setShowLibrary(v.library);
+      setShowKnowledge(v.knowledge);
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -237,6 +244,7 @@ export function App() {
       pushRecent(path);
       setActivePath(path);
       setShowLibrary(false);
+      setShowKnowledge(false);
       if (isMobile) setSidebarOpen(false);
     },
     [isMobile]
@@ -245,11 +253,20 @@ export function App() {
   const handleHome = useCallback(() => {
     setActivePath(null);
     setShowLibrary(false);
+    setShowKnowledge(false);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
   const handleOpenLibrary = useCallback(() => {
     setShowLibrary(true);
+    setShowKnowledge(false);
+    setActivePath(null);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
+  const handleOpenKnowledge = useCallback(() => {
+    setShowKnowledge(true);
+    setShowLibrary(false);
     setActivePath(null);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
@@ -319,11 +336,15 @@ export function App() {
       onAskAI={askAI}
       onOpenLibrary={handleOpenLibrary}
       libraryActive={showLibrary}
+      onOpenKnowledge={handleOpenKnowledge}
+      knowledgeActive={showKnowledge}
     />
   );
 
   const contentNode = showLibrary ? (
     <Library />
+  ) : showKnowledge ? (
+    <KnowledgeBase files={files} onSelect={handleSelect} />
   ) : active ? (
     <>
       {canExport && <TripDayNav headings={headings} />}

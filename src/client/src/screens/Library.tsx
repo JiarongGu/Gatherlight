@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { SearchOutlined, EnvironmentOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons';
 import { loadLibrary, KIND_LABEL, type LibraryItem, type LibraryFacets } from '@/lib/libraryApi';
+import { toPlainText } from '@/lib/markdown';
 
 // Route cover images through the server proxy — fetch-once, disk-cached, offline-safe.
 const proxied = (url: string) => `/api/library/image?url=${encodeURIComponent(url)}`;
@@ -175,7 +176,12 @@ function Chip({
 }
 
 function LibraryCard({ item }: { item: LibraryItem }) {
-  const glyph = (item.nameLocal ?? item.name).trim().charAt(0) || '拾';
+  // Authored fields can carry inline markdown / stray list markers ("+ ", "**已访问**", "[x](url)")
+  // — flatten to clean text for the card preview so it never shows literal punctuation.
+  const name = toPlainText(item.name);
+  const nameLocal = item.nameLocal ? toPlainText(item.nameLocal) : '';
+  const summary = item.summary ? toPlainText(item.summary) : '';
+  const glyph = (nameLocal || name).trim().charAt(0) || '拾';
   const pct = Math.round(Math.max(0, Math.min(1, item.confidence)) * 100);
   const tags = (item.tags ?? '')
     .split(',')
@@ -197,7 +203,7 @@ function LibraryCard({ item }: { item: LibraryItem }) {
         {showImg && (
           <img
             src={proxied(item.imageUrl!)}
-            alt={item.name}
+            alt={name}
             loading="lazy"
             className={imgLoaded ? 'loaded' : ''}
             onLoad={() => setImgLoaded(true)}
@@ -207,11 +213,11 @@ function LibraryCard({ item }: { item: LibraryItem }) {
         <span className="lib-kind-tag">{KIND_LABEL[item.kind] ?? item.kind}</span>
       </div>
       <div className="lib-card-body">
-        <div className="lib-card-name">{item.name}</div>
-        {item.nameLocal && item.nameLocal !== item.name && (
-          <div className="lib-card-local">{item.nameLocal}</div>
+        <div className="lib-card-name">{name}</div>
+        {nameLocal && nameLocal !== name && (
+          <div className="lib-card-local">{nameLocal}</div>
         )}
-        {item.summary && <div className="lib-card-summary">{item.summary}</div>}
+        {summary && <div className="lib-card-summary">{summary}</div>}
         {tags.length > 0 && (
           <div className="lib-tags">
             {tags.map((t) => (

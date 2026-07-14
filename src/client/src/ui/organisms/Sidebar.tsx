@@ -37,6 +37,8 @@ interface Props {
   onAskAI: (message: string) => void;
   onOpenLibrary: () => void;
   libraryActive: boolean;
+  onOpenKnowledge: () => void;
+  knowledgeActive: boolean;
 }
 
 // Trip grouping (slug parsing, destination labels, variant numbering) lives in
@@ -88,40 +90,16 @@ const CATEGORY_ICON: Record<string, React.ReactNode> = {
   Other: <FolderOutlined />
 };
 
-// Latin eyebrows under each top-level section — the bilingual treatment borrowed from the 知识库 pin.
-const CATEGORY_EN: Record<string, string> = {
-  TripUnits: 'TRAVEL',
-  Daily: 'DAILY',
-  Weekly: 'WEEKLY',
-  Household: 'HOUSEHOLD',
-  Budgets: 'BUDGET',
-  Packing: 'PACKING',
-  Other: 'OTHER',
-  KB: 'KNOWLEDGE BASE'
-};
-
-// A top-level section header styled like the 知识库 pin (boxed icon + serif 中文 over a mono Latin
-// eyebrow), one notch quieter so the pinned Library stays the primary surface. Sub-levels stay plain.
-function sectionLabel(opts: {
-  icon: React.ReactNode;
-  zh: React.ReactNode;
-  en: string;
-  count?: number;
-  note?: string;
-  muted?: boolean;
-}) {
+// A growing plan-section header — a lighter, single-line treatment (small icon + serif 中文 + count).
+// These sections GROW with the user's plans, so they stay quiet; the crafted bilingual "pin" look is
+// reserved for the two fixed standalone surfaces (知识库 Library, 智库 Knowledge Base) above.
+function growLabel(icon: React.ReactNode, zh: React.ReactNode, count?: number) {
   return (
-    <div className={`side-cat${opts.muted ? ' muted' : ''}`}>
-      <span className="side-cat-icon">{opts.icon}</span>
-      <span className="side-cat-text">
-        <span className="side-cat-zh">
-          {opts.zh}
-          {opts.count !== undefined && <span className="side-cat-n">{opts.count}</span>}
-          {opts.note && <span className="side-cat-note">{opts.note}</span>}
-        </span>
-        <span className="side-cat-en">{opts.en}</span>
-      </span>
-    </div>
+    <span className="side-grow">
+      <span className="side-grow-icon">{icon}</span>
+      <span className="side-grow-zh">{zh}</span>
+      {count !== undefined && <span className="side-grow-n">{count}</span>}
+    </span>
   );
 }
 
@@ -136,7 +114,9 @@ export const Sidebar = memo(function Sidebar({
   onAfterAction,
   onAskAI,
   onOpenLibrary,
-  libraryActive
+  libraryActive,
+  onOpenKnowledge,
+  knowledgeActive
 }: Props) {
   const { mode } = useTheme();
   const trimmedSearch = ''; // sidebar tree-filter removed; global ⌘K palette is the search
@@ -264,12 +244,7 @@ export const Sidebar = memo(function Sidebar({
       ? [
           {
             key: 'cat-TripUnits',
-            label: sectionLabel({
-              icon: <CompassOutlined />,
-              zh: '旅游',
-              en: CATEGORY_EN.TripUnits,
-              count: totalVariants
-            }),
+            label: growLabel(<CompassOutlined />, '旅游', totalVariants),
             children: destinationGroups.map((grp) => ({
               key: `dest-${grp.destination}`,
               label: (
@@ -316,91 +291,76 @@ export const Sidebar = memo(function Sidebar({
 
   const userCategoryItems: MenuProps['items'] = groupedUser.map(({ category, files: catFiles }) => ({
     key: `cat-${category}`,
-    label: sectionLabel({
-      icon: CATEGORY_ICON[category],
-      zh: SIDEBAR_LABEL[category] ?? category,
-      en: CATEGORY_EN[category] ?? category.toUpperCase(),
-      count: catFiles.length
-    }),
+    label: growLabel(CATEGORY_ICON[category], SIDEBAR_LABEL[category] ?? category, catFiles.length),
     children: catFiles.map((f) =>
       fileMenuItem(f, category === 'Household' ? { label: HOUSEHOLD_LABEL[f.name] ?? f.name } : {})
     )
   }));
 
-  const kbItems: MenuProps['items'] =
-    groupedKB.length > 0
-      ? [
-          {
-            key: 'cat-KB',
-            label: sectionLabel({
-              icon: <DatabaseOutlined />,
-              zh: '智库',
-              en: CATEGORY_EN.KB,
-              count: kbTotal,
-              note: 'AI 基础设施',
-              muted: true
-            }),
-            children: groupedKB.map(({ category, files: catFiles }) => ({
-              key: `cat-${category}`,
-              icon: CATEGORY_ICON[category],
-              label: (
-                <span style={{ color: 'var(--text-2)' }}>
-                  {SIDEBAR_LABEL[category] ?? category}
-                  <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--muted)' }}>
-                    {catFiles.length}
-                  </span>
-                </span>
-              ),
-              children: catFiles.map((f) => fileMenuItem(f))
-            }))
-          }
-        ]
-      : [];
+  // 智库 (Knowledge Base) is no longer a growing tree section — it's a standalone pin (below), so the
+  // plan tree holds only the user's own growing content. kbTotal still feeds the pin's count.
+  const menuItems: MenuProps['items'] = [...tripUnitItems, ...userCategoryItems];
 
-  const menuItems: MenuProps['items'] = [...tripUnitItems, ...userCategoryItems, ...kbItems];
-
-  const hasContent = destinationGroups.length > 0 || groupedUser.length > 0 || groupedKB.length > 0;
+  const hasContent = destinationGroups.length > 0 || groupedUser.length > 0;
 
   return (
-    <div style={{ padding: '12px 10px 16px' }}>
-      {/* 知识库 — the DB-backed knowledge surface, pinned above the markdown plan tree. */}
-      <button
-        className={`side-lib${libraryActive ? ' active' : ''}`}
-        onClick={onOpenLibrary}
-        aria-current={libraryActive ? 'page' : undefined}
-      >
-        <ReadOutlined className="side-lib-icon" />
-        <span className="side-lib-text">
-          <span className="side-lib-zh">知识库</span>
-          <span className="side-lib-en">LIBRARY</span>
-        </span>
-      </button>
-      <div className="side-sep" />
-      {!hasContent ? (
-        <Empty description="无匹配" style={{ marginTop: 24 }} />
-      ) : (
-        <Menu
-          className="side-menu"
-          mode="inline"
-          theme={mode}
-          items={menuItems}
-          selectedKeys={activePath ? [activePath] : []}
-          openKeys={effectiveOpenKeys}
-          onOpenChange={handleOpenChange}
-          onClick={(e) => {
-            // Only leaf clicks (file paths) — not group headers
-            if (
-              !e.key.startsWith('cat-') &&
-              !e.key.startsWith('tu-') &&
-              !e.key.startsWith('dest-')
-            ) {
-              onSelect(e.key);
-            }
-          }}
-          inlineIndent={14}
-          style={{ background: 'transparent', border: 'none' }}
-        />
-      )}
+    <div className="side-inner">
+      {/* The growing plan tree fills the top and scrolls; the two standalone surfaces are pinned to
+          the bottom of the rail (below). */}
+      <div className="side-scroll">
+        {!hasContent ? (
+          <Empty description="无匹配" style={{ marginTop: 24 }} />
+        ) : (
+          <Menu
+            className="side-menu"
+            mode="inline"
+            theme={mode}
+            items={menuItems}
+            selectedKeys={activePath ? [activePath] : []}
+            openKeys={effectiveOpenKeys}
+            onOpenChange={handleOpenChange}
+            onClick={(e) => {
+              // Only leaf clicks (file paths) — not group headers
+              if (
+                !e.key.startsWith('cat-') &&
+                !e.key.startsWith('tu-') &&
+                !e.key.startsWith('dest-')
+              ) {
+                onSelect(e.key);
+              }
+            }}
+            inlineIndent={14}
+            style={{ background: 'transparent', border: 'none' }}
+          />
+        )}
+      </div>
+      {/* Two fixed, standalone surfaces pinned at the BOTTOM: the DB-backed 知识库 (Library, amber)
+          and the 智库 (Knowledge Base — the AI-infra corpus, celadon). Same pin styling for both. */}
+      <div className="side-pins side-foot">
+        <button
+          className={`side-lib${libraryActive ? ' active' : ''}`}
+          onClick={onOpenLibrary}
+          aria-current={libraryActive ? 'page' : undefined}
+        >
+          <ReadOutlined className="side-lib-icon" />
+          <span className="side-lib-text">
+            <span className="side-lib-zh">知识库</span>
+            <span className="side-lib-en">LIBRARY</span>
+          </span>
+        </button>
+        <button
+          className={`side-lib kb${knowledgeActive ? ' active' : ''}`}
+          onClick={onOpenKnowledge}
+          aria-current={knowledgeActive ? 'page' : undefined}
+        >
+          <DatabaseOutlined className="side-lib-icon" />
+          <span className="side-lib-text">
+            <span className="side-lib-zh">智库</span>
+            <span className="side-lib-en">KNOWLEDGE BASE</span>
+          </span>
+          {kbTotal > 0 && <span className="side-lib-n">{kbTotal}</span>}
+        </button>
+      </div>
     </div>
   );
 });

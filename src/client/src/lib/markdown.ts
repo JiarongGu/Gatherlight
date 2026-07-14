@@ -39,6 +39,27 @@ export function stripFirstH1(source: string): string {
   return source.replace(/^#\s+.+\r?\n(?:\r?\n)?/m, '');
 }
 
+/**
+ * Flatten inline markdown to clean plain text for PREVIEW contexts (library cards, list rows) —
+ * strips emphasis / code / link syntax and leading list·heading·quote markers, keeps the visible
+ * text + emoji, and collapses whitespace to one line. Deliberately cheap and forgiving, not a full
+ * parser: authored fields (e.g. a library summary) often carry `**bold**` / `[label](url)` that
+ * would otherwise render as literal punctuation in a one-line preview.
+ */
+export function toPlainText(md: string): string {
+  return md
+    .replace(/```[\s\S]*?```/g, ' ') // fenced code blocks
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // images → alt
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // links → label
+    .replace(/`([^`]+)`/g, '$1') // inline code
+    .replace(/(\*\*|__)(.*?)\1/g, '$2') // bold
+    .replace(/(\*|_)(.*?)\1/g, '$2') // italic
+    .replace(/~~(.*?)~~/g, '$2') // strikethrough
+    .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)/gm, '') // leading block markers
+    .replace(/\s+/g, ' ') // collapse whitespace + newlines
+    .trim();
+}
+
 export interface Snippet {
   text: string;
   matchStart: number;
