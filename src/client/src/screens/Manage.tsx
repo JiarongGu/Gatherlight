@@ -58,6 +58,17 @@ export function Manage() {
       .catch(() => setAuthRequired(null));
   }, []);
 
+  // Mirror the console's active theme to the desktop host so its native window + tray menu match
+  // whichever theme (light ↔ dark) the user is running — posted on mount and on every change.
+  useEffect(() => {
+    if (!inHost) return;
+    const send = () => host('theme:' + (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'));
+    send();
+    const obs = new MutationObserver(send);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => obs.disconnect();
+  }, []);
+
   useEffect(() => {
     let mounted = true;
     let tick = 0;
@@ -116,7 +127,9 @@ export function Manage() {
     };
     input.click();
   };
-  const restart = () => { host('restart'); toast('已发送重启指令,服务将很快恢复…'); };
+  const restart = () => { host('serverRestart'); toast('已发送重启指令,服务将很快恢复…'); };
+  const stopServer = () => { host('serverStop'); toast('已停止本地服务 —— 需要时点「启动」恢复。'); };
+  const startServer = () => { host('serverStart'); toast('正在启动本地服务…'); };
 
   const hColor = healthy === null ? 'var(--muted)' : healthy ? 'var(--success)' : 'var(--danger)';
   const statusText = healthy === null ? '检查中…' : healthy ? '运行正常 · Healthy' : '无响应 · Not responding';
@@ -181,13 +194,24 @@ export function Manage() {
       <div className="mng-actions">
         <button className="mng-btn primary" onClick={openPlanner}>在浏览器打开规划界面</button>
         {inHost && (
-          <button className="mng-btn" onClick={() => host('openDataFolder')}>
-            打开数据文件夹<span className="sub">plans · household · 知识库 · SQLite</span>
-          </button>
+          <div className="mng-srv">
+            <div className="mng-srv-h">本地服务 · Server</div>
+            <div className="mng-srv-row">
+              <button className="mng-srv-b restart" onClick={restart} title="回收并重启进程内服务">
+                重启<span>Restart</span>
+              </button>
+              <button className="mng-srv-b" onClick={stopServer} disabled={healthy === false} title="停止服务(管理端保持打开)">
+                停止<span>Stop</span>
+              </button>
+              <button className="mng-srv-b" onClick={startServer} disabled={healthy === true} title="重新启动服务">
+                启动<span>Start</span>
+              </button>
+            </div>
+          </div>
         )}
         {inHost && (
-          <button className="mng-btn" onClick={restart}>
-            重启服务<span className="sub">recycle the in-process server</span>
+          <button className="mng-btn" onClick={() => host('openDataFolder')}>
+            打开数据文件夹<span className="sub">plans · household · 知识库 · SQLite</span>
           </button>
         )}
         <button className="mng-btn" onClick={exportMemory}>
@@ -970,6 +994,8 @@ function LogsView({ inHost }: { inHost: boolean }) {
 interface SettingsData {
   serverName: string;
   port: number;
+  logLevel: string;
+  hostCloseAction: string;
   bindAddress: string;
   trustLoopback: boolean;
   allowLanWithoutToken: boolean;
@@ -986,6 +1012,8 @@ function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t
   const [saved, setSaved] = useState(false);
   const [serverName, setServerName] = useState('');
   const [port, setPort] = useState('');
+  const [logLevel, setLogLevel] = useState('Information');
+  const [closeAction, setCloseAction] = useState('ask');
   // Access scope: local (loopback) · lan (0.0.0.0, no token) · wan (0.0.0.0, token required).
   const [mode, setMode] = useState<'local' | 'lan' | 'wan'>('local');
   const [trustLoopback, setTrustLoopback] = useState(true);
@@ -1002,6 +1030,8 @@ function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t
       setData(d);
       setServerName(d.serverName);
       setPort(String(d.port));
+      setLogLevel(d.logLevel || 'Information');
+      setCloseAction(d.hostCloseAction || 'ask');
       const loopback = d.bindAddress === '127.0.0.1' || d.bindAddress === '::1';
       setMode(loopback ? 'local' : d.allowLanWithoutToken ? 'lan' : 'wan');
       setTrustLoopback(d.trustLoopback);
@@ -1024,6 +1054,8 @@ function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t
     const body: Record<string, unknown> = {
       serverName,
       port: Number(port) || undefined,
+      logLevel,
+      hostCloseAction: closeAction,
       bindAddress: mode === 'local' ? '127.0.0.1' : '0.0.0.0',
       allowLanWithoutToken: mode === 'lan',
       trustLoopback,
@@ -1065,6 +1097,20 @@ function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t
           <label className="set-field"><span>端口 · Port {envWarn('port') && <em>(env)</em>}</span>
             <input value={port} inputMode="numeric" onChange={(e) => setPort(e.target.value.replace(/[^0-9]/g, ''))} />
           </label>
+          <label className="set-field"><span>日志级别 · Log level {envWarn('logLevel') && <em>(env)</em>}</span>
+            <select value={logLevel} onChange={(e) => setLogLevel(e.target.value)}>
+              {['Trace', 'Debug', 'Information', 'Warning', 'Error', 'Critical'].map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </label>
+          {inHost && (
+            <label className="set-field"><span>关闭窗口时 · On window close</span>
+              <select value={closeAction} onChange={(e) => setCloseAction(e.target.value)}>
+                <option value="ask">每次询问 · Ask each time</option>
+                <option value="tray">最小化到托盘 · Minimize to tray</option>
+                <option value="exit">退出程序 · Exit</option>
+              </select>
+            </label>
+          )}
         </div>
 
         <div className="set-group">

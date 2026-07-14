@@ -15,6 +15,16 @@ public sealed class ServerConfig
     /// the <c>GATHERLIGHT_PORT</c> env var overrides it for dev/e2e.</summary>
     public int Port { get; set; } = GatherlightServerOptions.DefaultPort;
 
+    /// <summary>Minimum level for the file log ({data}/state/logs). One of Trace/Debug/Information/
+    /// Warning/Error/Critical. Applied at startup; <c>GATHERLIGHT_LOG_LEVEL</c> overrides. Framework
+    /// (Microsoft/System) noise stays capped at Warning regardless.</summary>
+    public string LogLevel { get; set; } = "Information";
+
+    /// <summary>Desktop-host behaviour when the window's close (✕) button is pressed: <c>ask</c>
+    /// (prompt each time — default), <c>tray</c> (minimize to the tray, keep serving), or <c>exit</c>
+    /// (quit). Set from the close prompt's "remember" option or in Settings. Ignored by `dotnet run`.</summary>
+    public string HostCloseAction { get; set; } = "ask";
+
     /// <summary>Remote-access hardening (binding + auth). All values applied at startup.</summary>
     public SecurityConfig Security { get; set; } = new();
 

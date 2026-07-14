@@ -58,10 +58,47 @@ internal static class Program
         WebApplication? server = null;
         var gate = new SemaphoreSlim(1, 1);
 
+        // Tear down the running Kestrel (the desktop app's "stop server") — the window + WebView stay
+        // alive (the already-loaded SPA keeps rendering; its health poll simply goes red until start).
+        async Task StopServerAsync()
+        {
+            await gate.WaitAsync();
+            try
+            {
+                var old = server;
+                server = null;
+                if (old is not null)
+                {
+                    try { await old.StopAsync(TimeSpan.FromSeconds(5)); } catch { /* force off */ }
+                    try { await old.DisposeAsync(); } catch { /* force off */ }
+                    await Task.Delay(300); // let Kestrel release the port
+                }
+            }
+            finally { gate.Release(); }
+        }
+
+        // Bring Kestrel back up with the current settings ("start server"). No-op (returns the current
+        // URL) if it's already running. Recomputes options so a Settings change applies on start.
+        async Task<string> StartServerAsync()
+        {
+            await gate.WaitAsync();
+            try
+            {
+                if (server is not null) return BaseUrl(options);
+                options = BuildOptions();
+                var fresh = GatherlightApp.Build(options, args: args, config: config);
+                await fresh.StartAsync();
+                server = fresh;
+                return BaseUrl(options);
+            }
+            finally { gate.Release(); }
+        }
+
         // Recycle the in-process Kestrel server on request — the desktop app's "restart server": stop +
         // dispose the running one, recompute options from the current settings, rebuild, and start. The
         // window stays open. Returns the (possibly new) base URL so the host re-points the WebView when
-        // the port/scheme changed. Also serves as "start" if the server isn't currently up.
+        // the port/scheme changed. Also serves as "start" if the server isn't currently up. (Single
+        // lock section — it does NOT call Stop/Start, whose gate is non-reentrant.)
         async Task<string> RestartServerAsync()
         {
             await gate.WaitAsync();
@@ -84,11 +121,13 @@ internal static class Program
             finally { gate.Release(); }
         }
 
+        var control = new ServerControl { Start = StartServerAsync, Stop = StopServerAsync, Restart = RestartServerAsync };
+
         try
         {
             server = GatherlightApp.Build(options, args: args, config: config);
             server.Start(); // Kestrel in-process, non-blocking; the form owns shutdown
-            Application.Run(new AppHost(options, RestartServerAsync));
+            Application.Run(new AppHost(options, config, control));
         }
         catch (Exception ex)
         {

@@ -2263,6 +2263,21 @@ kbd, .topbar-kbd {
 .mng-btn.primary:hover { background: var(--accent-strong); transform: translateY(-1px); }
 .mng-btn.danger:hover { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); color: var(--danger); }
 
+/* /manage — server lifecycle group (restart / stop / start); spans the 2-col actions grid */
+.mng-srv { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 12px 14px 13px; }
+.mng-srv-h { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-family: var(--font-body); margin-bottom: 9px; }
+.mng-srv-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.mng-srv-b {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 9px 6px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); font-size: 13.5px; font-weight: 600;
+  cursor: pointer; transition: all 0.16s; font-family: var(--font-body);
+}
+.mng-srv-b span { font-size: 10.5px; font-weight: 400; color: var(--muted); letter-spacing: 0.04em; }
+.mng-srv-b:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.mng-srv-b.restart:hover:not(:disabled) { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.mng-srv-b:disabled { opacity: 0.42; cursor: default; }
+
 .mng-meta { margin-top: 28px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); line-height: 1.75; word-break: break-all; }
 .mng-hint { margin-top: 6px; font-size: 11px; color: var(--muted); font-family: var(--font-body); }
 .mng-sec { color: var(--muted); }
@@ -2402,8 +2417,8 @@ kbd, .topbar-kbd {
 .set-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
 .set-field > span { font-size: 12.5px; color: var(--text-2); font-weight: 500; }
 .set-field > span em { color: var(--warn); font-style: normal; font-size: 10.5px; margin-left: 4px; }
-.set-field input { padding: 8px 11px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 13px; font-family: var(--font-body); }
-.set-field input:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 3px var(--accent-soft); }
+.set-field input, .set-field select { padding: 8px 11px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 13px; font-family: var(--font-body); }
+.set-field input:focus, .set-field select:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 3px var(--accent-soft); }
 .set-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); margin-bottom: 10px; cursor: pointer; }
 .set-check input { accent-color: var(--accent); width: 15px; height: 15px; }
 .set-hint { font-size: 11.5px; margin: -4px 0 10px; color: var(--muted); line-height: 1.6; }
@@ -2459,7 +2474,7 @@ kbd, .topbar-kbd {
 .logs { display: flex; flex-direction: column; gap: 12px; }
 .logs-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .logs-file {
-  padding: 6px 10px; border-radius: var(--radius); border: 1px solid var(--border);
+  min-width: 175px; padding: 6px 12px 6px 10px; border-radius: var(--radius); border: 1px solid var(--border);
   background: var(--surface-2); color: var(--text); font-family: var(--font-mono); font-size: 12px;
 }
 .logs-path { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42%; }
@@ -2471,6 +2486,17 @@ kbd, .topbar-kbd {
 .logs-line.err { color: var(--danger); }
 .logs-line.warn { color: var(--warn); }
 .logs-line.dim { color: var(--muted); }
+
+/* Custom dropdown chevron — the native WebView2 arrow sits flush against the border; draw our own
+   with a proper gap + room. Applies to the settings selects + the log-file picker. */
+.set-field select, .logs-file {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='11' height='7' viewBox='0 0 11 7'><path d='M1 1l4.5 4.5L10 1' fill='none' stroke='%23998f7d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  padding-right: 30px;
+}
 
 /* ===== Management console — polish layer =====
    Motion + at-a-glance status + hover/focus refinements over the base .mng/.eval/.cx rules above.

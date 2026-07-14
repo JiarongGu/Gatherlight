@@ -2,10 +2,15 @@ using System.Drawing.Drawing2D;
 
 namespace Gatherlight.Host;
 
-/// <summary>A crafted warm tray menu: no image gutter, inset rounded amber hover, roomy padding,
-/// a brand header + live health line + grouped actions — not the default gray Windows menu.</summary>
+/// <summary>A crafted lantern-paper tray menu — not the default gray Windows menu: no image gutter,
+/// an inset rounded hover tint, roomy aligned padding, a brand header + live health line + grouped
+/// actions. Colours come from <see cref="Theme"/> so it matches whichever theme the console is in;
+/// the host rebuilds it via <see cref="Build"/> when the mode changes.</summary>
 internal static class TrayMenu
 {
+    // One shared horizontal inset for header / status / items / separators so everything left-aligns.
+    private const int TextInset = 13;
+
     public static (ContextMenuStrip Menu, ToolStripMenuItem Status) Build(HostContext ctx)
     {
         var menu = new ContextMenuStrip
@@ -16,7 +21,8 @@ internal static class TrayMenu
             Font = Theme.UI(9.5f),
             ShowImageMargin = false,
             ShowCheckMargin = false,
-            Padding = new Padding(6, 6, 6, 6),
+            Padding = new Padding(7, 8, 7, 8),
+            MinimumSize = new Size(232, 0),
         };
 
         var header = new ToolStripMenuItem("Gatherlight · 拾光")
@@ -24,9 +30,15 @@ internal static class TrayMenu
             Enabled = false,
             Font = Theme.UI(10.5f, FontStyle.Bold),
             ForeColor = Theme.Text,
-            Padding = new Padding(2, 3, 2, 1),
+            Padding = new Padding(2, 4, 2, 2),
         };
-        var status = new ToolStripMenuItem("●  检查中…") { Enabled = false, ForeColor = Theme.Muted, Padding = new Padding(2, 0, 2, 4) };
+        var status = new ToolStripMenuItem("●  检查中…")
+        {
+            Enabled = false,
+            Font = Theme.UI(9f),
+            ForeColor = Theme.Muted,
+            Padding = new Padding(2, 0, 2, 5),
+        };
 
         menu.Items.Add(header);
         menu.Items.Add(status);
@@ -49,10 +61,12 @@ internal static class TrayMenu
 
     private static ToolStripMenuItem Item(string text, Action onClick)
     {
-        var it = new ToolStripMenuItem(text) { ForeColor = Theme.Text, Padding = new Padding(2, 4, 2, 4) };
+        var it = new ToolStripMenuItem(text) { ForeColor = Theme.Text, Padding = new Padding(2, 6, 2, 6) };
         it.Click += (_, _) => onClick();
         return it;
     }
+
+    internal static int Inset => TextInset;
 }
 
 internal sealed class TrayRenderer : ToolStripRenderer
@@ -73,16 +87,17 @@ internal sealed class TrayRenderer : ToolStripRenderer
     {
         if (!e.Item.Selected || !e.Item.Enabled) return;
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        var r = new Rectangle(3, 1, e.Item.Width - 6, e.Item.Height - 2);
+        var r = new Rectangle(4, 1, e.Item.Width - 8, e.Item.Height - 2);
         using var path = Theme.RoundRect(r, 7);
-        using var fill = new SolidBrush(ColorTranslator.FromHtml("#312619"));
+        using var fill = new SolidBrush(Theme.Hover);
         e.Graphics.FillPath(fill, path);
     }
 
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
     {
         e.TextColor = e.Item.Enabled ? (e.Item.Selected ? Theme.AccentHi : Theme.Text) : e.Item.ForeColor;
-        e.TextRectangle = new Rectangle(e.TextRectangle.X + 10, e.TextRectangle.Y, e.TextRectangle.Width - 12, e.TextRectangle.Height);
+        var inset = TrayMenu.Inset;
+        e.TextRectangle = new Rectangle(e.TextRectangle.X + inset, e.TextRectangle.Y, e.TextRectangle.Width - inset - 4, e.TextRectangle.Height);
         e.TextFormat |= TextFormatFlags.VerticalCenter | TextFormatFlags.Left;
         base.OnRenderItemText(e);
     }
@@ -91,6 +106,6 @@ internal sealed class TrayRenderer : ToolStripRenderer
     {
         using var pen = new Pen(Theme.Border);
         var y = e.Item.Height / 2;
-        e.Graphics.DrawLine(pen, 10, y, e.Item.Width - 10, y);
+        e.Graphics.DrawLine(pen, TrayMenu.Inset, y, e.Item.Width - TrayMenu.Inset, y);
     }
 }

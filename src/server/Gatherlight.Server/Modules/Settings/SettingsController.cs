@@ -23,7 +23,7 @@ public sealed class SettingsController : ControllerBase
     {
         ("GATHERLIGHT_PORT", "port"), ("GATHERLIGHT_BIND", "bindAddress"),
         ("GATHERLIGHT_ACCESS_TOKEN", "accessToken"), ("GATHERLIGHT_TRUST_LOOPBACK", "trustLoopback"),
-        ("GATHERLIGHT_ALLOW_LAN", "allowLanWithoutToken"),
+        ("GATHERLIGHT_ALLOW_LAN", "allowLanWithoutToken"), ("GATHERLIGHT_LOG_LEVEL", "logLevel"),
         ("GATHERLIGHT_TLS", "tls.enabled"), ("GATHERLIGHT_TLS_CERT", "tls.certPath"),
         ("GATHERLIGHT_UPDATE_REPO", "selfUpdate.githubRepo"), ("GATHERLIGHT_UPDATE_API", "selfUpdate.apiUrl"),
     };
@@ -38,6 +38,8 @@ public sealed class SettingsController : ControllerBase
         {
             serverName = c.ServerName,
             port = c.Port,
+            logLevel = c.LogLevel,
+            hostCloseAction = c.HostCloseAction,
             bindAddress = c.Security.BindAddress,
             trustLoopback = c.Security.TrustLoopback,
             allowLanWithoutToken = c.Security.AllowLanWithoutToken,
@@ -56,7 +58,8 @@ public sealed class SettingsController : ControllerBase
     public sealed record TlsBody(bool? Enabled, string? CertPath, string? CertPassword, bool? ClearCertPassword);
     public sealed record UpdateBody(string? GithubRepo, string? ApiUrl);
     public sealed record SettingsBody(
-        string? ServerName, int? Port, string? BindAddress, bool? TrustLoopback, bool? AllowLanWithoutToken,
+        string? ServerName, int? Port, string? LogLevel, string? HostCloseAction,
+        string? BindAddress, bool? TrustLoopback, bool? AllowLanWithoutToken,
         string? AccessToken, bool? ClearAccessToken, TlsBody? Tls, UpdateBody? SelfUpdate);
 
     [HttpPut("api/manage/settings")]
@@ -85,6 +88,10 @@ public sealed class SettingsController : ControllerBase
         {
             if (body.ServerName is { Length: > 0 }) cfg.ServerName = body.ServerName.Trim();
             if (body.Port is { } port) cfg.Port = port;
+            if (body.LogLevel is { Length: > 0 } lvl && Enum.TryParse<Microsoft.Extensions.Logging.LogLevel>(lvl, true, out _))
+                cfg.LogLevel = lvl;
+            if (body.HostCloseAction is { Length: > 0 } hca && hca is "ask" or "tray" or "exit")
+                cfg.HostCloseAction = hca;
             if (!string.IsNullOrWhiteSpace(body.BindAddress)) cfg.Security.BindAddress = body.BindAddress.Trim();
             if (body.TrustLoopback is { } tl) cfg.Security.TrustLoopback = tl;
             if (body.AllowLanWithoutToken is { } lan) cfg.Security.AllowLanWithoutToken = lan;

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Text.Json;
 using Gatherlight.Server;
+using Gatherlight.Server.Modules.Core.Services;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -14,27 +15,30 @@ namespace Gatherlight.Host;
 /// itself opens in a browser. A tiny host bridge handles native actions the web can't do
 /// (open the planner in the system browser, open the data folder, restart, exit, memory files).
 /// </summary>
-public sealed class AppHost : Form
+internal sealed class AppHost : Form
 {
     private const string ShowSignalName = "Gatherlight.Host.Show";
 
     private readonly GatherlightServerOptions _options;
+    private readonly ServerConfigService _config; // shared with the server: close-behaviour + live settings
     private string _url;         // mutable: a Settings restart can change the port/scheme
     private string _manageUrl;
     private HttpClient _http;
     private readonly HostContext _ctx;
     private readonly NotifyIcon _tray;
-    private readonly ToolStripMenuItem _trayStatus;
+    private ToolStripMenuItem _trayStatus; // reassigned when the tray is rebuilt on a theme switch
     private readonly WebView2 _web;
-    private readonly Func<Task<string>> _restartServer; // recycles the server, returns its (maybe new) base URL
+    private readonly ServerControl _server; // start / stop / recycle the in-process Kestrel
     private EventWaitHandle? _showSignal;
     private bool _exiting;
-    private bool _restarting;
+    private bool _themeApplied;
+    private Task _serverOp = Task.CompletedTask; // chain head: serializes start/stop/restart in order
 
-    public AppHost(GatherlightServerOptions options, Func<Task<string>> restartServer)
+    public AppHost(GatherlightServerOptions options, ServerConfigService config, ServerControl server)
     {
         _options = options;
-        _restartServer = restartServer;
+        _config = config;
+        _server = server;
         _url = $"{(options.TlsEnabled ? "https" : "http")}://127.0.0.1:{options.Port}/";
         _manageUrl = _url + "manage";
         // With TLS on we talk to our own loopback endpoint, whose cert may be self-signed — trust it
@@ -71,7 +75,7 @@ public sealed class AppHost : Form
             ShowWindow = ShowWindow,
             OpenBrowser = () => OpenExternal(_url),
             OpenDataFolder = () => OpenExternal(_options.DataPath),
-            Restart = () => _ = RestartServerInProcessAsync(),
+            Restart = () => _ = ServerActionAsync("restart"),
             Exit = ExitApp,
         };
         var (menu, status) = TrayMenu.Build(_ctx);
@@ -136,6 +140,8 @@ public sealed class AppHost : Form
     {
         string action;
         try { action = e.TryGetWebMessageAsString(); } catch { return; }
+        // The console mirrors its current theme so the native window + tray match (light ↔ dark).
+        if (action.StartsWith("theme:", StringComparison.Ordinal)) { ApplyThemeMode(action == "theme:light"); return; }
         switch (action)
         {
             case "openPlanner": OpenExternal(_url); break;
@@ -147,7 +153,10 @@ public sealed class AppHost : Form
                 OpenExternal(logs);
                 break;
             }
-            case "restart": await RestartServerInProcessAsync(); break;
+            case "restart":
+            case "serverRestart": await ServerActionAsync("restart"); break;
+            case "serverStart": await ServerActionAsync("start"); break;
+            case "serverStop": await ServerActionAsync("stop"); break;
             case "applyUpdate": RestartForUpdate(); break;
             case "exit": ExitApp(); break;
             case "exportMemory": await ExportMemoryAsync(); break;
@@ -229,16 +238,34 @@ public sealed class AppHost : Form
         return Theme.SealIcon();
     }
 
-    // Recycle the in-process server — the /manage "重启服务" action + the tray "重启". Rebuilds Kestrel
-    // off the UI thread (keeping the window), waits for the fresh server to answer, then reloads the
-    // management view so it reconnects. Any failure falls back to a clean full process relaunch.
-    private async Task RestartServerInProcessAsync()
+    // Drive the in-process server lifecycle — the /manage Controls + tray actions. Actions are CHAINED
+    // (never dropped), so a quick Stop→Start or a double-click runs in order rather than the second
+    // one being silently swallowed. The heavy work is serialized again in Program by the server gate.
+    private Task ServerActionAsync(string kind) // "start" | "stop" | "restart"
     {
-        if (_restarting || _exiting) return;
-        _restarting = true;
+        if (_exiting) return Task.CompletedTask;
+        var prev = _serverOp;
+        return _serverOp = ChainServerActionAsync(prev, kind);
+    }
+
+    // One link of the action chain: wait for the previous action, then (re)build / tear down Kestrel.
+    // "start"/"restart" build off the UI thread (keeping the window), wait for the fresh server to
+    // answer, then reload the view so it reconnects; "stop" tears it down (the SPA stays rendered, its
+    // health poll goes red). A start/restart failure falls back to a clean full process relaunch.
+    private async Task ChainServerActionAsync(Task prev, string kind)
+    {
+        try { await prev; } catch { /* a prior action's failure must not block the next */ }
+        if (_exiting) return;
         try
         {
-            var newUrl = await Task.Run(_restartServer);
+            if (kind == "stop")
+            {
+                await Task.Run(_server.Stop);
+                TrayMenu.SetStatus(_trayStatus, healthy: false, 0); // intentionally down — no need to poll a dead port
+                return;
+            }
+
+            var newUrl = kind == "start" ? await Task.Run(_server.Start) : await Task.Run(_server.Restart);
             // A Settings restart can change the port/scheme — re-point the host client + WebView.
             var urlChanged = !string.Equals(newUrl, _url, StringComparison.Ordinal);
             if (urlChanged)
@@ -259,9 +286,25 @@ public sealed class AppHost : Form
         }
         catch
         {
-            Restart(); // in-process recycle failed (rare) → clean full relaunch
+            if (kind != "stop") Restart(); // (re)start failed (rare) → clean full relaunch
         }
-        finally { _restarting = false; }
+    }
+
+    // Repaint the native window + rebuild the tray to match the theme the console posted (light ↔ dark),
+    // so the whole app reads as one piece regardless of which theme the user runs.
+    private void ApplyThemeMode(bool light)
+    {
+        if (_themeApplied && Theme.IsLight == light) return;
+        _themeApplied = true;
+        Theme.ApplyMode(light);
+        BackColor = Theme.Bg;
+        try { _web.DefaultBackgroundColor = Theme.Bg; } catch { /* not ready yet */ }
+        var previous = _tray.ContextMenuStrip;
+        var (menu, status) = TrayMenu.Build(_ctx);
+        _trayStatus = status;
+        _tray.ContextMenuStrip = menu;
+        previous?.Dispose();
+        _ = PollTrayHealthAsync(); // refresh the status line's colour + text under the new palette
     }
 
     // Full process relaunch — the fallback for RestartServerInProcessAsync, and the path
@@ -292,12 +335,58 @@ public sealed class AppHost : Form
     private void OnClosing(object? sender, FormClosingEventArgs e)
     {
         SaveWindowState();
-        if (!_exiting && e.CloseReason == CloseReason.UserClosing)
+        // Only intercept the user pressing the window ✕. Programmatic exits (tray「退出」, bridge "exit",
+        // Application.Exit) already set _exiting / aren't UserClosing and must close straight through.
+        if (_exiting || e.CloseReason != CloseReason.UserClosing) return;
+
+        var action = (_config.Current.HostCloseAction ?? "ask").Trim().ToLowerInvariant();
+        if (action == "ask")
         {
-            e.Cancel = true;
-            Hide();
-            ShowInTaskbar = false;
+            var (chosen, remember) = AskCloseAction();
+            if (chosen is null) { e.Cancel = true; return; } // cancelled → stay open
+            if (remember) { try { _config.Update(c => c.HostCloseAction = chosen); } catch { /* best effort */ } }
+            action = chosen;
         }
+
+        if (action == "exit")
+        {
+            // Let the close proceed → Application.Run returns → Program stops the server. Clean up the
+            // tray + listener here (Application.Exit isn't needed; the form is already on its way out).
+            _exiting = true;
+            _tray.Visible = false;
+            _showSignal?.Dispose();
+            return;
+        }
+
+        // Default ("tray"): minimize to the tray and keep serving in the background.
+        e.Cancel = true;
+        Hide();
+        ShowInTaskbar = false;
+    }
+
+    // Native "regular application" close prompt: minimize-to-tray vs exit, with a remember checkbox
+    // that persists the choice (also changeable in Settings). Returns (action, remember) where action
+    // is "tray"/"exit", or (null, _) when the user cancels (Esc / ✕ / Cancel) → the window stays open.
+    private (string? action, bool remember) AskCloseAction()
+    {
+        var tray = new TaskDialogButton("最小化到托盘  ·  Minimize to tray");
+        var exit = new TaskDialogButton("退出  ·  Exit");
+        var verify = new TaskDialogVerificationCheckBox("记住我的选择(可在「设置」中更改)");
+        var page = new TaskDialogPage
+        {
+            Caption = "Gatherlight · 拾光",
+            Heading = "关闭管理控制台?",
+            Text = "服务会在后台继续运行。要最小化到托盘,还是完全退出?",
+            Icon = TaskDialogIcon.Information,
+            AllowCancel = true,
+            Verification = verify,
+            Buttons = { tray, exit },
+            DefaultButton = tray,
+        };
+        var result = TaskDialog.ShowDialog(this, page);
+        if (result == tray) return ("tray", verify.Checked);
+        if (result == exit) return ("exit", verify.Checked);
+        return (null, false);
     }
 
     private void ExitApp()
