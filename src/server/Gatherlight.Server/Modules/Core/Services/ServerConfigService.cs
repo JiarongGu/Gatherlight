@@ -63,8 +63,10 @@ public sealed class SecurityConfig
 /// </summary>
 public sealed class UpdateConfig
 {
-    /// <summary><c>owner/name</c> of the GitHub repo to pull releases from. <c>GATHERLIGHT_UPDATE_REPO</c> overrides.</summary>
-    public string? GithubRepo { get; set; }
+    /// <summary><c>owner/name</c> of the GitHub repo to pull releases from. Defaults to the official
+    /// Gatherlight repo so auto-update works out of the box; set empty to disable, or point at a fork.
+    /// <c>GATHERLIGHT_UPDATE_REPO</c> overrides.</summary>
+    public string? GithubRepo { get; set; } = "JiarongGu/Gatherlight";
     /// <summary>Explicit release-API URL (wins over <see cref="GithubRepo"/>). <c>GATHERLIGHT_UPDATE_API</c> overrides.</summary>
     public string? ApiUrl { get; set; }
 }
