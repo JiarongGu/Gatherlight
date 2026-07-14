@@ -2370,9 +2370,24 @@ kbd, .topbar-kbd {
 .set-field input:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 3px var(--accent-soft); }
 .set-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); margin-bottom: 10px; cursor: pointer; }
 .set-check input { accent-color: var(--accent); width: 15px; height: 15px; }
-.set-hint { font-size: 11.5px; margin: -4px 0 10px; color: var(--muted); }
+.set-hint { font-size: 11.5px; margin: -4px 0 10px; color: var(--muted); line-height: 1.6; }
 .set-hint.danger { color: var(--danger); }
-.set-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+/* Access card: mode selector + explainer on the left, token + toggles on the right — so the
+   full-width card uses its space instead of stranding an empty right half. */
+.set-access { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 6px 32px; align-items: start; }
+.set-access-main, .set-access-side { display: flex; flex-direction: column; min-width: 0; }
+.set-access-side:empty { display: none; }
+.set-access-seg { display: flex; width: 100%; margin-bottom: 10px; }
+.set-access-seg .cx-seg-b { flex: 1; text-align: center; }
+@media (max-width: 760px) { .set-access { grid-template-columns: 1fr; gap: 4px; } }
+.set-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-soft);
+}
 .set-saved { font-size: 12px; color: var(--accent-2); }
 
 /* ===== Management console — polish layer =====

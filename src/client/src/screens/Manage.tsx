@@ -937,29 +937,35 @@ function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t
 
         <div className="set-group set-span">
           <div className="set-group-h">访问范围 · Access {envWarn('bindAddress') && <em>(env)</em>}</div>
-          <div className="cx-seg">
-            <button className={`cx-seg-b${mode === 'local' ? ' on' : ''}`} onClick={() => setMode('local')}>本机 · Local</button>
-            <button className={`cx-seg-b${mode === 'lan' ? ' on' : ''}`} onClick={() => setMode('lan')}>局域网 · LAN</button>
-            <button className={`cx-seg-b${mode === 'wan' ? ' on' : ''}`} onClick={() => setMode('wan')}>公网 · WAN</button>
-          </div>
-          <div className={`set-hint${mode === 'wan' && !data.hasAccessToken && !token ? ' danger' : ''}`}>
-            {mode === 'local' && '仅本机可访问(127.0.0.1)—— 最安全,无需令牌。'}
-            {mode === 'lan' && '本机 + 局域网设备可访问(0.0.0.0 含 127.0.0.1),无需令牌 —— 仅在可信内网使用,任何能连上的设备都可进入。'}
-            {mode === 'wan' && '对公网开放(0.0.0.0 含本机与局域网)—— 必须设置访问令牌,否则服务拒绝启动。建议同时启用 HTTPS。'}
-          </div>
-          {mode !== 'local' && (
-            <>
-              <label className="set-field"><span>访问令牌 · Token {mode === 'wan' && <b style={{ color: 'var(--danger)' }}>*</b>} {envWarn('accessToken') && <em>(env)</em>}</span>
-                <input type="password" autoComplete="off" value={token}
-                  placeholder={data.hasAccessToken ? '已设置(留空不改)' : mode === 'wan' ? '必填' : '可选(留空 = 无令牌)'}
-                  onChange={(e) => { setToken(e.target.value); setClearToken(false); }} />
-              </label>
-              {data.hasAccessToken && (
-                <label className="set-check"><input type="checkbox" checked={clearToken} onChange={(e) => { setClearToken(e.target.checked); if (e.target.checked) setToken(''); }} /> 清除已设置的令牌</label>
+          <div className="set-access">
+            <div className="set-access-main">
+              <div className="cx-seg set-access-seg">
+                <button className={`cx-seg-b${mode === 'local' ? ' on' : ''}`} onClick={() => setMode('local')}>本机 · Local</button>
+                <button className={`cx-seg-b${mode === 'lan' ? ' on' : ''}`} onClick={() => setMode('lan')}>局域网 · LAN</button>
+                <button className={`cx-seg-b${mode === 'wan' ? ' on' : ''}`} onClick={() => setMode('wan')}>公网 · WAN</button>
+              </div>
+              <div className={`set-hint${mode === 'wan' && !data.hasAccessToken && !token ? ' danger' : ''}`}>
+                {mode === 'local' && '仅本机可访问(127.0.0.1)—— 最安全,无需令牌。'}
+                {mode === 'lan' && '本机 + 局域网设备可访问(0.0.0.0 含 127.0.0.1),无需令牌 —— 仅在可信内网使用,任何能连上的设备都可进入。'}
+                {mode === 'wan' && '对公网开放(0.0.0.0 含本机与局域网)—— 必须设置访问令牌,否则服务拒绝启动。建议同时启用 HTTPS。'}
+              </div>
+            </div>
+            <div className="set-access-side">
+              {mode !== 'local' && (
+                <>
+                  <label className="set-field"><span>访问令牌 · Token {mode === 'wan' && <b style={{ color: 'var(--danger)' }}>*</b>} {envWarn('accessToken') && <em>(env)</em>}</span>
+                    <input type="password" autoComplete="off" value={token}
+                      placeholder={data.hasAccessToken ? '已设置(留空不改)' : mode === 'wan' ? '必填' : '可选(留空 = 无令牌)'}
+                      onChange={(e) => { setToken(e.target.value); setClearToken(false); }} />
+                  </label>
+                  {data.hasAccessToken && (
+                    <label className="set-check"><input type="checkbox" checked={clearToken} onChange={(e) => { setClearToken(e.target.checked); if (e.target.checked) setToken(''); }} /> 清除已设置的令牌</label>
+                  )}
+                </>
               )}
-            </>
-          )}
-          <label className="set-check"><input type="checkbox" checked={trustLoopback} onChange={(e) => setTrustLoopback(e.target.checked)} /> 信任本机请求(同机反代时关闭)</label>
+              <label className="set-check"><input type="checkbox" checked={trustLoopback} onChange={(e) => setTrustLoopback(e.target.checked)} /> 信任本机请求(同机反代时关闭)</label>
+            </div>
+          </div>
         </div>
       </div>
 
