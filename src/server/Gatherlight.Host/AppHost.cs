@@ -138,6 +138,8 @@ internal sealed class AppHost : Form
         try { action = e.TryGetWebMessageAsString(); } catch { return; }
         // The console mirrors its current theme so the native window + tray match (light ↔ dark).
         if (action.StartsWith("theme:", StringComparison.Ordinal)) { ApplyThemeMode(action == "theme:light"); return; }
+        // Reply from the styled close prompt (see WebClosePrompt): close:tray|exit|cancel[:remember].
+        if (action.StartsWith("close:", StringComparison.Ordinal)) { ApplyCloseChoice(action); return; }
         switch (action)
         {
             case "openPlanner": OpenExternal(_url); break;
@@ -408,6 +410,15 @@ internal sealed class AppHost : Form
         var action = (_config.Current.HostCloseAction ?? "ask").Trim().ToLowerInvariant();
         if (action == "ask")
         {
+            // Prefer the styled web prompt (consistent with the console's other dialogs). Cancel the
+            // close now and wait for the web to post back "close:tray|exit|cancel[:remember]", which
+            // ApplyCloseChoice applies. Fall back to the native TaskDialog only when the WebView isn't up.
+            if (_web.CoreWebView2 is not null)
+            {
+                e.Cancel = true;
+                WebClosePrompt();
+                return;
+            }
             var (chosen, remember) = AskCloseAction();
             if (chosen is null) { e.Cancel = true; return; } // cancelled → stay open
             if (remember) { try { _config.Update(c => c.HostCloseAction = chosen); } catch { /* best effort */ } }
@@ -426,6 +437,29 @@ internal sealed class AppHost : Form
 
         // Default ("tray"): minimize to the tray and keep serving in the background.
         e.Cancel = true;
+        Hide();
+        ShowInTaskbar = false;
+    }
+
+    // Ask the web console to show the styled close prompt (host → web). The user's choice comes back as
+    // "close:tray|exit|cancel[:remember]" via OnHostMessage → ApplyCloseChoice.
+    private void WebClosePrompt()
+    {
+        try { _web.CoreWebView2?.PostWebMessageAsJson("{\"type\":\"close-prompt\"}"); }
+        catch { /* view gone → the next ✕ falls back to the native dialog */ }
+    }
+
+    // Apply the choice the web close prompt posted back. The close was already cancelled, so the window
+    // is open: "cancel" leaves it, "tray" hides to the tray, "exit" quits; "remember" persists the pick.
+    private void ApplyCloseChoice(string msg)
+    {
+        var parts = msg.Split(':');           // close:tray[:remember] | close:exit[:remember] | close:cancel
+        var choice = parts.Length > 1 ? parts[1] : "cancel";
+        var remember = parts.Length > 2 && parts[2] == "remember";
+        if (choice == "cancel") return;
+        if (remember && (choice == "tray" || choice == "exit"))
+            try { _config.Update(c => c.HostCloseAction = choice); } catch { /* best effort */ }
+        if (choice == "exit") { ExitApp(); return; }
         Hide();
         ShowInTaskbar = false;
     }

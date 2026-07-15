@@ -2596,7 +2596,9 @@ kbd, .topbar-kbd {
 .mng-modal-body .t { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 9px; }
 .mng-modal-body .t::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); flex: 0 0 auto; }
 .mng-modal-body .m { margin-top: 10px; font-size: 13px; line-height: 1.5; color: var(--muted); }
-.mng-modal-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 16px 22px 18px; }
+.mng-modal-check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+.mng-modal-check input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+.mng-modal-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 16px 22px 18px; flex-wrap: wrap; }
 .mng-mbtn {
   font: inherit; font-size: 12.5px; padding: 7px 16px; border-radius: var(--radius);
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); cursor: pointer;

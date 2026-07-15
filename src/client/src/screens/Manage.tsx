@@ -90,6 +90,15 @@ export function Manage() {
     []);
   const answerAsk = useCallback((v: boolean) => setAsk((a) => { a?.resolve(v); return null; }), []);
 
+  // Styled window-close prompt (host mode): when the user presses ✕ and the close action is "ask", the
+  // host cancels the close + asks the console to show this, then applies whatever we post back.
+  const [closing, setClosing] = useState(false);
+  const [rememberClose, setRememberClose] = useState(false);
+  const answerClose = (choice: 'tray' | 'exit' | 'cancel') => {
+    setClosing(false);
+    host(`close:${choice}${rememberClose && choice !== 'cancel' ? ':remember' : ''}`);
+  };
+
   // Host → web bridge: the desktop host posts result notices (backup / restore / memory export+import)
   // back to the console so they render as styled in-page toasts, not native MessageBoxes.
   useEffect(() => {
@@ -103,7 +112,9 @@ export function Manage() {
     if (!cw?.addEventListener) return;
     const handler = (e: { data: unknown }) => {
       const d = e.data as { type?: string; kind?: string; text?: string } | null;
-      if (d && d.type === 'toast') toast(String(d.text ?? ''), d.kind === 'err' ? 'err' : 'ok');
+      if (!d) return;
+      if (d.type === 'toast') toast(String(d.text ?? ''), d.kind === 'err' ? 'err' : 'ok');
+      else if (d.type === 'close-prompt') { setRememberClose(false); setClosing(true); }
     };
     cw.addEventListener('message', handler);
     return () => cw.removeEventListener?.('message', handler);
@@ -383,6 +394,26 @@ export function Manage() {
               <button className={`mng-mbtn ${ask.danger ? 'danger' : 'primary'}`} autoFocus onClick={() => answerAsk(true)}>
                 {ask.okText ?? '确定'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {closing && (
+        <div className="mng-modal-overlay" role="dialog" aria-modal="true">
+          <div className="mng-modal">
+            <div className="mng-modal-body">
+              <div className="t">关闭管理控制台?</div>
+              <div className="m">服务会在后台继续运行。要最小化到托盘,还是完全退出?</div>
+              <label className="mng-modal-check">
+                <input type="checkbox" checked={rememberClose} onChange={(e) => setRememberClose(e.target.checked)} />
+                记住我的选择(可在「设置」中更改)
+              </label>
+            </div>
+            <div className="mng-modal-actions">
+              <button className="mng-mbtn" onClick={() => answerClose('cancel')}>取消</button>
+              <button className="mng-mbtn danger" onClick={() => answerClose('exit')}>退出</button>
+              <button className="mng-mbtn primary" autoFocus onClick={() => answerClose('tray')}>最小化到托盘</button>
             </div>
           </div>
         </div>
