@@ -82,8 +82,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   it has its own private git repo. The server never edits `state/`-external data outside the
   reviewed flows (chat gates, fs ops, seeder) — and those all serialize on `DataWriteLock`
   (one writer, or git index.lock collisions + corrupted review diffs).
-- The agent's write scope (`plans/ household/ .claude/`) is enforced by the PreToolUse
-  scope-guard hook generated into the data folder — not by trust.
+- The spawned agent is **jailed to the data folder** by the PreToolUse scope-guard hook
+  (`ChatEnvironmentService.ScopeGuardMjs` planner / `devtools/scripts/system-scope-guard.mjs`
+  系统模式 — identical logic, different write-scope; `e2e-p24` runs both): **reads**
+  (Read/Grep/Glob) confined to the folder, **writes** (Edit/Write/…) to `plans/ household/
+  .claude/` (系统模式: `src/client`), **Bash** denied git-history / network-egress / inline-eval
+  (`node -e`, `python -c`) / fs-crawl / path-escape. Anything genuinely **out-of-boundary must
+  route through a server MCP tool** — mediated + auditable — never raw Bash. Enforcement, not
+  trust. The guard carries a `GUARD_VERSION`; the server re-issues it into existing data folders
+  when it bumps (it's a security boundary, not editable KB content). Residuals the hook can't
+  close (code run *inside* an agent-authored script; exfil via a WebFetch URL) need an OS sandbox.
 - The shipped knowledge base lives in `Assets/DataTemplate/` and is seeded/upgraded by
   `ZhikuSeeder` (hash-guarded: user-modified files are never overwritten).
 

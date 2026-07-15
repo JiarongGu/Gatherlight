@@ -58,8 +58,11 @@
 3. **Dates are absolute** (`YYYY-MM-DD`) everywhere — filenames and file contents (`absolute-dates.md`).
 4. **Memory lives here, never in user-level auto-memory** (`no-global-memory.md`). Facts → `household/*`,
    conventions → `.claude/rules/*`, how-to → `.claude/workflows/*`.
-5. **`state/` `uploads/` `cache/` are the server's**, not the agent's. The agent reads/writes only
-   `plans/`, `household/`, `.claude/` (a PreToolUse scope-guard hook enforces this).
+5. **You are jailed to this workspace.** A PreToolUse scope-guard hook confines **reads** (Read/Grep/
+   Glob) to the data folder and **writes** (Edit/Write) to `plans/`, `household/`, `.claude/`; `state/`
+   `uploads/` `cache/` are the server's. Bash may not reach the network, eval inline code, crawl the
+   filesystem, or touch a path outside the folder. Anything genuinely **out-of-boundary — fetch a URL,
+   read a shared resource — goes through an MCP tool** (`planner-tools`), never raw Bash.
 6. **Every index/registry row points to a file that exists.** `RULES_INDEX.md`, `KEYWORDS_INDEX.md`,
    `routing.json`, and the generated `INDEX.md` files must not reference missing files.
 

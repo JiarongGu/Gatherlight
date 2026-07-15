@@ -6,8 +6,11 @@ namespace Gatherlight.Server.Modules.Chat.Services;
 /// Generates the runtime files the spawned claude needs inside the data folder:
 /// <c>state/settings.chat.json</c> (acceptEdits + the PreToolUse scope-guard hook, passed via
 /// --settings on the execute phase — regenerated every boot, it's app state) and
-/// <c>.claude/hooks/scope-guard.mjs</c> (written only when missing — it lives in knowledge-base
-/// territory where the user may customize; the seeder manages upgrades later).
+/// <c>.claude/hooks/scope-guard.mjs</c> — the agent's SECURITY jail (reads confined to the data
+/// folder, writes to plans/ household/ .claude/, Bash denied git-history/network/inline-eval/crawl/
+/// path-escape). Because it's a security boundary (not editable knowledge-base content), it's
+/// re-issued whenever its <c>GUARD_VERSION</c> is missing or older than the shipped one, so hardening
+/// reaches folders seeded by an earlier build. Out-of-boundary work must route through an MCP tool.
 /// </summary>
 public sealed class ChatEnvironmentService
 {
@@ -50,13 +53,32 @@ public sealed class ChatEnvironmentService
             """);
 
         string? created = null;
-        if (!File.Exists(ScopeGuardPath))
+        if (ShouldReissueGuard(ScopeGuardPath))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ScopeGuardPath)!);
             File.WriteAllText(ScopeGuardPath, ScopeGuardMjs);
             created = ".claude/hooks/scope-guard.mjs";
         }
         return created;
+    }
+
+    // The scope guard is a SECURITY boundary, not user content: (re)issue it when missing OR when an
+    // older GUARD_VERSION is on disk, so a hardened guard reaches data folders seeded by an earlier
+    // build (and a weakened/tampered copy is replaced). Same-version files are left as-is — no
+    // spurious data-repo commit. A newer on-disk version (dev ahead of server) is also left alone.
+    private static readonly int ShippedGuardVersion = ReadGuardVersion(ScopeGuardMjs);
+
+    private static bool ShouldReissueGuard(string guardPath)
+    {
+        if (!File.Exists(guardPath)) return true;
+        try { return ReadGuardVersion(File.ReadAllText(guardPath)) < ShippedGuardVersion; }
+        catch { return true; }
+    }
+
+    private static int ReadGuardVersion(string body)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(body, @"GUARD_VERSION:\s*(\d+)");
+        return m.Success && int.TryParse(m.Groups[1].Value, out var v) ? v : 0;
     }
 
     private const string SettingsChatJson = """
@@ -72,7 +94,7 @@ public sealed class ChatEnvironmentService
           "hooks": {
             "PreToolUse": [
               {
-                "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+                "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|Read|Grep|Glob",
                 "hooks": [
                   {
                     "type": "command",
@@ -88,69 +110,98 @@ public sealed class ChatEnvironmentService
     private const string ScopeGuardMjs = """
         #!/usr/bin/env node
         /**
-         * PreToolUse scope guard for Gatherlight's headless claude runs.
+         * PreToolUse scope guard (v2) for Gatherlight headless PLANNER runs — cwd = the data folder.
+         * Registered in state/settings.chat.json.
          *
-         * Registered in state/settings.chat.json. Reads the hook payload on stdin and DENIES:
-         *   - Edit/Write/MultiEdit/NotebookEdit whose target path is outside the
-         *     allow-list (plans/, household/, .claude/).
-         *   - Bash commands that would commit / mutate git history or destroy files
-         *     (the SERVER owns commits, only after human diff approval).
+         * The spawned agent is JAILED to the data folder. Enforced boundaries:
+         *   WRITE (Edit/Write/MultiEdit/NotebookEdit)  -> only under plans/ household/ .claude/
+         *   READ  (Read/Grep/Glob)                     -> only inside the data folder
+         *   BASH                                       -> not: git-history / delete, network egress,
+         *                                                inline code-eval, filesystem crawl, or any
+         *                                                path outside the folder (args or redirects)
          *
-         * Anything else: stay silent (exit 0) so the normal acceptEdits flow proceeds.
+         * Anything genuinely out-of-boundary (fetch a URL, run a scraper, read a shared resource) MUST
+         * go through a server MCP tool -- mediated + auditable -- never raw Bash. Else: silent exit 0.
+         *
+         * Kept identical to devtools/scripts/system-scope-guard.mjs except WRITE_DIRS; e2e suite p24
+         * runs both. GUARD_VERSION is the upgrade key: the server re-issues newer logic into an
+         * existing data folder (ChatEnvironmentService.EnsureFiles), so hardening reaches old installs.
          */
+        // GUARD_VERSION: 2
         import path from 'node:path';
 
-        const ALLOWED_DIRS = ['plans', 'household', '.claude'];
+        const WRITE_DIRS = ['plans', 'household', '.claude'];
 
-        const FORBIDDEN_BASH = [
-          /\bgit\s+commit\b/,
-          /\bgit\s+add\b/,
-          /\bgit\s+push\b/,
-          /\bgit\s+reset\b/,
-          /\bgit\s+restore\b/,
-          /\bgit\s+checkout\b/,
-          /\bgit\s+clean\b/,
-          /\bgit\s+rebase\b/,
-          /\bgit\s+stash\b/,
-          /\bgit\s+rm\b/,
-          /\brm\s+-[rf]/,
-          /\bRemove-Item\b/i
+        const HISTORY = [
+          /\bgit\s+(commit|add|push|reset|restore|checkout|clean|rebase|stash|rm)\b/,
+          /\brm\s+-[rf]/, /\bRemove-Item\b/i, /\bdel\s+\/[a-z]/i,
         ];
+        const NETWORK = [
+          /\bcurl\b/, /\bwget\b/, /\bInvoke-WebRequest\b/i, /(^|[\s;&|(])iwr(\s|$)/i,
+          /\bInvoke-RestMethod\b/i, /(^|[\s;&|(])nc(\s|$)/, /\bncat\b/, /\btelnet\b/, /\bssh\b/, /\bscp\b/,
+        ];
+        const EVALS = [
+          /\bnode\s+(-e|--eval)\b/, /\b(python3?|py)\s+-c\b/, /\bperl\s+-e\b/, /\bruby\s+-e\b/,
+          /\b(powershell|pwsh)\b[\s\S]*\s-(e|enc|encodedcommand|command)\b/i, /(^|[\s;&|(])eval(\s|$)/,
+        ];
+        const CRAWL = [
+          /(^|[\s;&|(])find\s/, /(^|[\s;&|(])ls\s+-[a-zA-Z]*[Rr]/, /(^|[\s;&|(])dir\b[\s\S]*\/s/i,
+        ];
+        const HOME = /(\$HOME|\$HOMEPATH|\$USERPROFILE|\$LOCALAPPDATA|\$APPDATA|\$env:|%USERPROFILE%|%LOCALAPPDATA%|%APPDATA%|%HOMEPATH%)/i;
 
         function deny(reason) {
           process.stdout.write(JSON.stringify({
-            hookSpecificOutput: {
-              hookEventName: 'PreToolUse',
-              permissionDecision: 'deny',
-              permissionDecisionReason: reason
-            }
+            hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason },
           }));
           process.exit(0);
         }
+        const allow = () => process.exit(0);
 
-        function allowSilently() {
-          process.exit(0);
+        // Normalize a path (relative -> resolved against `root`) to a lowercased, drive-aware slash form
+        // so containment is a string-prefix test. Git-bash `/c/x` and Windows `C:\x` both fold to `c:/x`.
+        function norm(p, root) {
+          let s = String(p).replace(/\\/g, '/').replace(/^\/([A-Za-z])(?=\/|$)/, (_, d) => `${d}:`);
+          const abs = /^[A-Za-z]:/.test(s) || s.startsWith('/');
+          if (!abs) s = `${String(root).replace(/\\/g, '/')}/${s}`;
+          const out = [];
+          for (const seg of s.split('/')) {
+            if (seg === '' || seg === '.') continue;
+            if (seg === '..') out.pop(); else out.push(seg);
+          }
+          return out.join('/').toLowerCase();
+        }
+        // Relative path of `p` inside `root`, or null when `p` escapes it.
+        function relTo(p, root) {
+          const r = norm('.', root);
+          const n = norm(p, root);
+          if (n === r) return '';
+          if (n.startsWith(r + '/')) return n.slice(r.length + 1);
+          return null;
+        }
+        const inside = (p, root) => relTo(p, root) !== null;
+
+        // Best-effort: does any path-like token in a Bash command point outside the jail? The robust
+        // controls are the network/eval denials above + the read/write jail at the tool layer; this
+        // catches the common cat/cp/mv/redirect-to-outside cases. An OS-level sandbox is the belt-and-
+        // suspenders upgrade, and also what would contain code executed inside an agent-authored script.
+        function bashEscapes(command, root) {
+          if (HOME.test(command)) return true;
+          for (let t of command.split(/[\s;|&()<>]+/)) {
+            t = t.replace(/^["']+|["']+$/g, '');
+            if (!t || t.startsWith('-')) continue;                    // a flag, not a path
+            if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) continue;         // URL -- network already denied
+            if (t.startsWith('~')) return true;                       // home dir
+            if (t === '..') return true;                              // bare `cd ..` climbing out
+            if (!/[\/\\]/.test(t) && !/^[A-Za-z]:$/.test(t)) continue; // not path-like
+            if (!inside(t, root)) return true;
+          }
+          return false;
         }
 
-        function isInsideAllowed(relPath) {
-          const norm = relPath.split(path.sep).join('/').replace(/^\.\//, '');
-          return ALLOWED_DIRS.some((dir) => norm === dir || norm.startsWith(dir + '/'));
-        }
-
-        async function readStdin() {
-          const chunks = [];
-          for await (const chunk of process.stdin) chunks.push(chunk);
-          return Buffer.concat(chunks).toString('utf8');
-        }
-
-        const raw = await readStdin();
+        const chunks = [];
+        for await (const c of process.stdin) chunks.push(c);
         let payload;
-        try {
-          payload = JSON.parse(raw || '{}');
-        } catch {
-          process.stderr.write('[scope-guard] could not parse hook payload\n');
-          allowSilently();
-        }
+        try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { allow(); }
 
         const toolName = payload.tool_name ?? '';
         const toolInput = payload.tool_input ?? {};
@@ -158,35 +209,36 @@ public sealed class ChatEnvironmentService
 
         if (toolName === 'Bash') {
           const command = String(toolInput.command ?? '');
-          const hit = FORBIDDEN_BASH.find((re) => re.test(command));
-          if (hit) {
-            deny(
-              `Blocked: the chat agent may not run git-history / destructive commands ` +
-                `(matched ${hit}). The server commits only after you approve the diff.`
-            );
-          }
-          allowSilently();
+          if (HISTORY.some((re) => re.test(command)))
+            deny('Blocked: no git-history / destructive commands — the server commits only after you approve the diff.');
+          if (NETWORK.some((re) => re.test(command)))
+            deny('Blocked: no direct network access from the shell. Use WebFetch / WebSearch, or a server MCP tool for out-of-boundary fetches.');
+          if (EVALS.some((re) => re.test(command)))
+            deny('Blocked: no inline code-eval (node -e / python -c / powershell -Command). Run a committed skill file or use an MCP tool.');
+          if (CRAWL.some((re) => re.test(command)))
+            deny('Blocked: use Read / Glob / Grep to explore — not Bash crawling (find / ls -R / dir /s).');
+          if (bashEscapes(command, projectDir))
+            deny('Blocked: this command references a path outside the data folder. The agent is jailed here; use an MCP tool for anything out-of-boundary.');
+          allow();
+        }
+
+        if (toolName === 'Read' || toolName === 'Grep' || toolName === 'Glob') {
+          const p = toolInput.file_path ?? toolInput.path ?? '';     // Grep/Glob path optional (absent = cwd, in jail)
+          if (p && !inside(String(p), projectDir))
+            deny(`Blocked: reads are limited to the data folder — "${p}" is outside it. Use an MCP tool for out-of-boundary data.`);
+          allow();
         }
 
         if (['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
           const filePath = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path ?? '';
-          if (!filePath) allowSilently();
-
-          const abs = path.isAbsolute(filePath) ? filePath : path.resolve(projectDir, filePath);
-          const rel = path.relative(projectDir, abs);
-
-          if (rel.startsWith('..') || path.isAbsolute(rel)) {
-            deny(`Blocked: ${filePath} is outside the workspace.`);
-          }
-          if (!isInsideAllowed(rel)) {
-            deny(
-              `Blocked: the chat agent may only edit ${ALLOWED_DIRS.join(', ')} — ` +
-                `not "${rel.split(path.sep).join('/')}".`
-            );
-          }
-          allowSilently();
+          if (!filePath) allow();
+          const rel = relTo(filePath, projectDir);
+          if (rel === null) deny(`Blocked: ${filePath} is outside the data folder.`);
+          if (!WRITE_DIRS.some((d) => rel === d || rel.startsWith(d + '/')))
+            deny(`Blocked: the agent may only edit ${WRITE_DIRS.join(', ')} — not "${rel}".`);
+          allow();
         }
 
-        allowSilently();
+        allow();
         """;
 }
