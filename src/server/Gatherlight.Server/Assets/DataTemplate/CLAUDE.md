@@ -89,6 +89,7 @@ The agent does **not** write or run code in this workspace. Deterministic work �
 | Tool | Call as | Use for |
 |---|---|---|
 | `scrape` | `mcp__planner-tools__scrape` with `{url, selector?, waitFor?, timeout?}` | Render a JS/SPA page in a real headless browser and return its text. **Mandatory** for verifying search deeplinks — `WebFetch` cannot execute JS. |
+| `xhs_search` | `mcp__planner-tools__xhs_search` with `{query, limit?}` | Search 小红书 (Xiaohongshu) for a keyword and return visible note results (title + link) — travel / dining / 亲子 / itinerary inspiration. Use this tool; **never** write your own scraper (you're sandboxed out of it). Best-effort: much of XHS needs login, so results may be partial. |
 | `extract` | `mcp__planner-tools__extract` with `{relPath, instruction?}` | Read an uploaded file (PDF / image) under `uploads/` and return extracted or summarised text. Read-only. |
 | `library_*` | `mcp__planner-tools__library_upsert` / `library_search` / `library_import` | The DB **knowledge library** (景点/餐厅/酒店/体验). `search` before researching (skip re-verified work); `upsert` verified entities instead of hand-writing an ATTRACTIONS.md; `import` migrates a legacy markdown library once. See [tool-first.md](.claude/rules/tool-first.md). |
 

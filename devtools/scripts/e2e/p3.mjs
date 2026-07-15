@@ -33,6 +33,9 @@ try {
   ok('extract + scrape listed', names.includes('extract') && names.includes('scrape'));
   const extractDef = list.body.tools.find((t) => t.name === 'extract');
   ok('inputSchema has required relPath', extractDef?.inputSchema?.required?.includes('relPath'));
+  const xhsDef = list.body.tools.find((t) => t.name === 'xhs_search');
+  ok('xhs_search registered with required query',
+    !!xhsDef && xhsDef.inputSchema?.required?.includes('query'), JSON.stringify(xhsDef?.inputSchema));
 
   const unknown = await j('/api/tools/call', {
     method: 'POST', headers: { 'content-type': 'application/json' },

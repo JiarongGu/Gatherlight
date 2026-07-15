@@ -101,6 +101,7 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.HotelPricesScraperTool>()
             .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.HotelInfoScraperTool>()
             .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.RestaurantInfoScraperTool>()
+            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.XhsSearchScraperTool>()
             .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.BudgetScanTool>()
             // Document / media processing (PdfPig extract + pdf-lib leaves for AcroForm + ImageSharp)
             .AddSingleton<Modules.Documents.Services.IPdfProcessor, Modules.Documents.Services.PdfProcessor>()
