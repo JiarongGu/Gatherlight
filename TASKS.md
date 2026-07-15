@@ -16,6 +16,20 @@
 
 ## Backlog
 
+### UI / desktop console
+- [ ] **Close-to-tray dialog** — the WM_CLOSE `TaskDialog` in `AppHost.cs` is still a native (though
+  modern) dialog; the other host popups now route to styled web toasts. Left native because a
+  window-close decision is synchronous and awkward to round-trip through the WebView. Revisit if the
+  native look bothers.
+
+### Security / agent harness (follow-ups to the v2 scope-guard jail)
+- [ ] **Port the xhs-search pattern (and similar) to server MCP tools** — so the planner never needs to
+  author + run its own executable scraper skills; aligns with "out-of-boundary → MCP". Closes the
+  agent-authored-script residual for that use case.
+- [ ] **OS-level sandbox for the spawned claude** (defense-in-depth) — AppContainer / job-object + FS
+  ACL scoped to the data folder + egress filter. The only layer that contains code executed *inside* an
+  agent-authored script, or exfil via a crafted WebFetch URL — residuals the PreToolUse hook can't reach.
+
 ### Verification (user-side — needs a real environment I can't reach)
 - [ ] **Runtime bootstrap on a clean machine:** on a Windows box WITHOUT .NET 10, run the bundle's
   `Gatherlight.exe` → confirm it installs the runtime (one UAC prompt) then the app starts. Verified
