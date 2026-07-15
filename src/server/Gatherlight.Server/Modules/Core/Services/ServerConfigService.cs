@@ -30,6 +30,12 @@ public sealed class ServerConfig
 
     /// <summary>Self-update source (GitHub releases).</summary>
     public UpdateConfig SelfUpdate { get; set; } = new();
+
+    /// <summary>Whether the first-run setup wizard has been completed. False on a truly fresh install
+    /// (no settings.json yet) so the console shows the wizard once; the wizard sets it true. A
+    /// pre-wizard settings.json (field absent) is migrated to true on load — existing users are already
+    /// set up and must never see the wizard. See <see cref="ServerConfigService.Load"/>.</summary>
+    public bool SetupCompleted { get; set; }
 }
 
 /// <summary>
@@ -141,7 +147,16 @@ public sealed class ServerConfigService
         try
         {
             if (File.Exists(_path))
-                return JsonSerializer.Deserialize<ServerConfig>(File.ReadAllText(_path), JsonOpts) ?? new ServerConfig();
+            {
+                var text = File.ReadAllText(_path);
+                var cfg = JsonSerializer.Deserialize<ServerConfig>(text, JsonOpts) ?? new ServerConfig();
+                // Pre-wizard installs (a settings.json written before the setup wizard existed) have no
+                // `setupCompleted` field → it deserializes to false. Those users are already configured,
+                // so migrate them to done — the wizard must only ever appear on a truly fresh install
+                // (where settings.json doesn't exist yet, handled by the `new ServerConfig()` below).
+                if (!text.Contains("\"setupCompleted\"", StringComparison.OrdinalIgnoreCase)) cfg.SetupCompleted = true;
+                return cfg;
+            }
         }
         catch (Exception ex)
         {

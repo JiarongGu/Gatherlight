@@ -51,6 +51,7 @@ public sealed class SettingsController : ControllerBase
                 hasCertPassword = !string.IsNullOrEmpty(c.Security.Tls.CertPassword),
             },
             selfUpdate = new { githubRepo = c.SelfUpdate.GithubRepo, apiUrl = c.SelfUpdate.ApiUrl },
+            setupCompleted = c.SetupCompleted,
             envOverrides = envSet,
         });
     }
@@ -60,7 +61,8 @@ public sealed class SettingsController : ControllerBase
     public sealed record SettingsBody(
         string? ServerName, int? Port, string? LogLevel, string? HostCloseAction,
         string? BindAddress, bool? TrustLoopback, bool? AllowLanWithoutToken,
-        string? AccessToken, bool? ClearAccessToken, TlsBody? Tls, UpdateBody? SelfUpdate);
+        string? AccessToken, bool? ClearAccessToken, TlsBody? Tls, UpdateBody? SelfUpdate,
+        bool? MarkSetupComplete);
 
     [HttpPut("api/manage/settings")]
     public IActionResult Put([FromBody] SettingsBody body)
@@ -109,6 +111,7 @@ public sealed class SettingsController : ControllerBase
                 if (su.GithubRepo is not null) cfg.SelfUpdate.GithubRepo = string.IsNullOrWhiteSpace(su.GithubRepo) ? null : su.GithubRepo.Trim();
                 if (su.ApiUrl is not null) cfg.SelfUpdate.ApiUrl = string.IsNullOrWhiteSpace(su.ApiUrl) ? null : su.ApiUrl.Trim();
             }
+            if (body.MarkSetupComplete == true) cfg.SetupCompleted = true;
         });
         return Ok(new { ok = true, restartRequired = true });
     }

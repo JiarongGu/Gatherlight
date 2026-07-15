@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import SetupWizard from './SetupWizard';
 
 // The desktop host injects window.__gatherlightHost + a WebView2 message bridge for native actions
 // (restart / open data folder / open planner in browser / exit / memory file dialogs). Opened in a
@@ -38,7 +39,36 @@ export function Manage() {
   const [uptime, setUptime] = useState('0s');
   const [accessMode, setAccessMode] = useState<'local' | 'lan' | 'wan' | null>(null);
   const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'resources' | 'logs' | 'settings'>('overview');
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [info, setInfo] = useState<{ serverName?: string; dataRoot?: string; version?: string }>({});
   const started = useRef(Date.now());
+
+  // Static instance details for the Overview (server name / version / data folder) — fetched once;
+  // these don't change during a session (a rename needs a restart), so no need to poll them.
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      const [h, u] = await Promise.all([
+        fetch('/api/health').then((r) => r.json()).catch(() => ({})),
+        fetch('/api/manage/update/check').then((r) => r.json()).catch(() => ({})),
+      ]);
+      if (on) setInfo({ serverName: h.serverName, dataRoot: h.dataRoot, version: u.currentVersion });
+    })();
+    return () => { on = false; };
+  }, []);
+
+  // First run: a truly fresh install (no settings.json yet) reports setupCompleted=false → show the
+  // one-time setup wizard. Existing installs are migrated to completed server-side, so they skip it.
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      try {
+        const s = await (await fetch('/api/manage/settings')).json();
+        if (on && s && s.setupCompleted === false) setNeedsSetup(true);
+      } catch { /* if settings can't be read, don't block the console with a wizard */ }
+    })();
+    return () => { on = false; };
+  }, []);
 
   // Lightweight in-page toast — replaces alert()/confirm(), which in the WebView2 host block the
   // native message bridge (and look nothing like the rest of the console).
@@ -50,6 +80,34 @@ export function Manage() {
     noticeTimer.current = window.setTimeout(() => setNotice(null), kind === 'err' ? 5200 : 3400);
   }, []);
   useEffect(() => () => { if (noticeTimer.current) window.clearTimeout(noticeTimer.current); }, []);
+
+  // On-brand confirm dialog (replaces window.confirm / the host's native MessageBox). Returns a
+  // promise that resolves true/false — so callers `await confirm(...)` inline.
+  const [ask, setAsk] = useState<{ text: string; danger?: boolean; okText?: string; resolve: (v: boolean) => void } | null>(null);
+  const confirm = useCallback(
+    (text: string, opts?: { danger?: boolean; okText?: string }) =>
+      new Promise<boolean>((resolve) => setAsk({ text, danger: opts?.danger, okText: opts?.okText, resolve })),
+    []);
+  const answerAsk = useCallback((v: boolean) => setAsk((a) => { a?.resolve(v); return null; }), []);
+
+  // Host → web bridge: the desktop host posts result notices (backup / restore / memory export+import)
+  // back to the console so they render as styled in-page toasts, not native MessageBoxes.
+  useEffect(() => {
+    if (!inHost) return;
+    const cw = (window as unknown as {
+      chrome?: { webview?: {
+        addEventListener?: (t: string, h: (e: { data: unknown }) => void) => void;
+        removeEventListener?: (t: string, h: (e: { data: unknown }) => void) => void;
+      } };
+    }).chrome?.webview;
+    if (!cw?.addEventListener) return;
+    const handler = (e: { data: unknown }) => {
+      const d = e.data as { type?: string; kind?: string; text?: string } | null;
+      if (d && d.type === 'toast') toast(String(d.text ?? ''), d.kind === 'err' ? 'err' : 'ok');
+    };
+    cw.addEventListener('message', handler);
+    return () => cw.removeEventListener?.('message', handler);
+  }, [toast]);
 
   // Mirror the console's active theme to the desktop host so its native window + tray menu match
   // whichever theme (light ↔ dark) the user is running — posted on mount and on every change.
@@ -110,20 +168,26 @@ export function Manage() {
     else window.open('/api/memory/export', '_blank');
     toast('正在导出记忆(知识库 + 事实 + 校准)…');
   };
-  // Shared "pick a file → POST it → toast the result" flow (in-host defers to the native dialog).
-  const importFile = (opts: {
+  // Shared "pick a file → POST it → toast the result" flow. In-host defers the file dialog + upload to
+  // the native host, but the destructive confirm is shown here (styled) first. In a plain browser the
+  // file is picked (keeping the click's user-gesture), then confirmed, then POSTed.
+  const importFile = async (opts: {
     hostAction: string; accept: string; url: string; contentType: string;
     body: (f: File) => BodyInit | Promise<BodyInit>; confirm?: string;
     ok: (j: any) => string; errPrefix: string;
   }) => {
-    if (inHost) { host(opts.hostAction); return; }
+    if (inHost) {
+      if (opts.confirm && !(await confirm(opts.confirm, { danger: true, okText: '继续恢复' }))) return;
+      host(opts.hostAction);
+      return;
+    }
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = opts.accept;
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
-      if (opts.confirm && !window.confirm(opts.confirm)) return;
+      if (opts.confirm && !(await confirm(opts.confirm, { danger: true, okText: '继续恢复' }))) return;
       try {
         const res = await fetch(opts.url, { method: 'POST', headers: { 'content-type': opts.contentType }, body: await opts.body(file) });
         const j = await res.json();
@@ -209,6 +273,18 @@ export function Manage() {
         <div className="mng-metric"><div className="n">{N(counts.library)}</div><div className="l">知识库 Library</div></div>
         <div className="mng-metric"><div className="n">{N(counts.tools)}</div><div className="l">工具 Tools</div></div>
       </div>
+
+      <div className="mng-title">详情 · Details</div>
+      <div className="mng-detail">
+        <div className="mng-detail-row"><span>服务器 · Server</span><b>{info.serverName ?? '—'}</b></div>
+        <div className="mng-detail-row"><span>版本 · Version</span><b>{info.version ? `v${info.version}` : '—'}</b></div>
+        <div className="mng-detail-row"><span>访问 · Access</span><b>
+          {accessMode === 'local' ? '仅本机' : accessMode === 'lan' ? '局域网' : accessMode === 'wan' ? '公网' : '—'}
+          {' · '}端口 {location.port || '5317'}
+        </b></div>
+        <div className="mng-detail-row"><span>运行时长 · Uptime</span><b>{uptime}</b></div>
+        <div className="mng-detail-row wide"><span>数据文件夹 · Data</span><b title={info.dataRoot}>{info.dataRoot ?? '—'}</b></div>
+      </div>
       </div>
 
       <div className="mng-col">
@@ -288,6 +364,27 @@ export function Manage() {
       {notice && (
         <div className={`mng-toast${notice.kind === 'err' ? ' err' : ''}`} role="status" aria-live="polite">
           {notice.text}
+        </div>
+      )}
+
+      {needsSetup && (
+        <SetupWizard inHost={inHost} toast={toast} onRestart={restart} onDone={() => setNeedsSetup(false)} />
+      )}
+
+      {ask && (
+        <div className="mng-modal-overlay" role="dialog" aria-modal="true" onClick={() => answerAsk(false)}>
+          <div className="mng-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="mng-modal-body">
+              <div className="t">确认操作 · Confirm</div>
+              <div className="m">{ask.text}</div>
+            </div>
+            <div className="mng-modal-actions">
+              <button className="mng-mbtn" onClick={() => answerAsk(false)}>取消</button>
+              <button className={`mng-mbtn ${ask.danger ? 'danger' : 'primary'}`} autoFocus onClick={() => answerAsk(true)}>
+                {ask.okText ?? '确定'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -710,7 +710,13 @@ h1, h2, h3, .u-display { font-family: var(--font-display); letter-spacing: -0.01
   line-height: 1.4;
   color: var(--muted);
   letter-spacing: 0.02em;
+  transition: color 0.3s;
 }
+/* While the in-flight run is still spending tokens, tint the strip with the accent and pulse it, so
+ * the climbing count reads as live activity rather than a stale total. */
+.chat-usage.live { color: var(--accent); animation: chat-usage-pulse 1.6s ease-in-out infinite; }
+@keyframes chat-usage-pulse { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .chat-usage.live { animation: none; } }
 .chat-step {
   display: flex;
   align-items: center;
@@ -2171,7 +2177,7 @@ kbd, .topbar-kbd {
 .mng { max-width: 1040px; margin: 0 auto; padding: 56px 26px 58px; }
 /* Desktop-shaped Overview: two columns (health+metrics · controls+updates) so a management window
    shows it without scrolling, instead of one long web-style column. Collapses to one on a narrow view. */
-.mng-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 22px; align-items: start; }
+.mng-grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 16px; align-items: start; }
 .mng-col > :first-child { margin-top: 0; }
 @media (max-width: 840px) { .mng-grid { grid-template-columns: 1fr; } }
 /* Desktop console: no big title bar — the tab row is bare, and the FIXED status footer (.mng-foot)
@@ -2215,13 +2221,13 @@ kbd, .topbar-kbd {
 
 .mng-health {
   position: relative; background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: 22px 24px; box-shadow: var(--shadow-sm); overflow: hidden;
+  border-radius: var(--radius-lg); padding: 15px 18px; box-shadow: var(--shadow-sm); overflow: hidden;
 }
 .mng-health::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: linear-gradient(var(--h), transparent); }
-.mng-health-row { display: flex; align-items: center; gap: 18px; }
+.mng-health-row { display: flex; align-items: center; gap: 13px; }
 .mng-lantern {
-  width: 44px; height: 44px; border-radius: 50%; background: var(--h); flex: 0 0 auto;
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--h) 16%, transparent), 0 0 22px 2px color-mix(in srgb, var(--h) 45%, transparent);
+  width: 30px; height: 30px; border-radius: 50%; background: var(--h); flex: 0 0 auto;
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--h) 16%, transparent), 0 0 16px 2px color-mix(in srgb, var(--h) 45%, transparent);
 }
 .mng-health.ok .mng-lantern { animation: mng-pulse 2.6s ease-in-out infinite; }
 @keyframes mng-pulse {
@@ -2229,20 +2235,28 @@ kbd, .topbar-kbd {
   50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--h) 9%, transparent), 0 0 32px 6px color-mix(in srgb, var(--h) 55%, transparent); }
 }
 .mng-status { flex: 1; }
-.mng-status .t { font-family: var(--font-display); font-size: 23px; font-weight: 600; color: var(--text); line-height: 1.1; }
-.mng-status .d { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+.mng-status .t { font-family: var(--font-display); font-size: 18px; font-weight: 600; color: var(--text); line-height: 1.1; }
+.mng-status .d { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .mng-uptime { text-align: right; }
-.mng-uptime .n { font-family: var(--font-display); font-size: 21px; font-weight: 600; color: var(--text); }
-.mng-uptime .l { font-size: 11px; color: var(--muted); }
-.mng-strip { display: flex; gap: 2px; align-items: stretch; height: 26px; margin-top: 18px; }
+.mng-uptime .n { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--text); }
+.mng-uptime .l { font-size: 10.5px; color: var(--muted); }
+.mng-strip { display: flex; gap: 2px; align-items: stretch; height: 18px; margin-top: 12px; }
 .mng-strip i { flex: 1; border-radius: 2px; background: var(--surface-2); min-width: 3px; }
 .mng-strip i.ok { background: linear-gradient(var(--success), color-mix(in srgb, var(--success) 70%, #000)); }
 .mng-strip i.bad { background: var(--danger); }
 
-.mng-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 14px; }
-.mng-metric { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; box-shadow: var(--shadow-sm); }
-.mng-metric .n { font-family: var(--font-display); font-size: 34px; font-weight: 600; line-height: 1; color: var(--text); }
-.mng-metric .l { font-size: 12px; color: var(--muted); margin-top: 9px; }
+.mng-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+/* Instance details — a compact key/value card that fills the Overview's left column with real info
+ * (server / version / access / data folder) instead of empty space. */
+.mng-detail { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); overflow: hidden; }
+.mng-detail-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 15px; font-size: 12.5px; }
+.mng-detail-row + .mng-detail-row { border-top: 1px solid var(--border); }
+.mng-detail-row > span { color: var(--muted); flex: 0 0 auto; }
+.mng-detail-row > b { color: var(--text); font-weight: 600; text-align: right; }
+.mng-detail-row.wide > b { font-family: var(--font-mono, monospace); font-size: 11.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mng-metric { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px 15px; box-shadow: var(--shadow-sm); }
+.mng-metric .n { font-family: var(--font-display); font-size: 25px; font-weight: 600; line-height: 1; color: var(--text); }
+.mng-metric .l { font-size: 11.5px; color: var(--muted); margin-top: 5px; }
 
 .mng-title { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); margin: 28px 0 12px; display: flex; align-items: center; gap: 9px; }
 .mng-title::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--border), transparent); }
@@ -2565,6 +2579,91 @@ kbd, .topbar-kbd {
 .mng-toast.err { border-color: color-mix(in srgb, var(--danger) 52%, var(--border)); }
 .mng-toast.err::before { background: var(--danger); box-shadow: 0 0 9px var(--danger); }
 @keyframes mng-toast-in { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* On-brand confirm dialog — replaces window.confirm / native MessageBox with a themed modal that
+ * matches the console (lantern-paper surface, amber accent), not a generic OS/AntD popup. */
+.mng-modal-overlay {
+  position: fixed; inset: 0; z-index: 80; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, #000 42%, transparent); backdrop-filter: blur(3px);
+  animation: mng-fade 0.18s ease both; padding: 24px;
+}
+.mng-modal {
+  width: min(440px, 92vw); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden;
+  animation: mng-modal-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.mng-modal-body { padding: 20px 22px 4px; }
+.mng-modal-body .t { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 9px; }
+.mng-modal-body .t::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); flex: 0 0 auto; }
+.mng-modal-body .m { margin-top: 10px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.mng-modal-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 16px 22px 18px; }
+.mng-mbtn {
+  font: inherit; font-size: 12.5px; padding: 7px 16px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.mng-mbtn:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.mng-mbtn.primary { background: var(--accent); border-color: var(--accent); color: #1b1206; font-weight: 600; }
+.mng-mbtn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, #fff); }
+.mng-mbtn.danger { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+.mng-mbtn.danger:hover { background: color-mix(in srgb, var(--danger) 86%, #000); }
+@keyframes mng-modal-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+/* First-run setup wizard — a larger on-brand card over a dimmed console. */
+.mng-modal-overlay.wiz { background: color-mix(in srgb, var(--bg) 78%, transparent); backdrop-filter: blur(6px); }
+.mng-wiz {
+  width: min(540px, 94vw); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden;
+  animation: mng-modal-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.mng-wiz-head {
+  display: flex; align-items: center; gap: 13px; padding: 20px 24px 18px;
+  border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+.mng-wiz-mark {
+  width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto; background: var(--accent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 16%, transparent), 0 0 18px 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.mng-wiz-head .ttl { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--text); }
+.mng-wiz-head .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.mng-wiz-dots { margin-left: auto; display: flex; gap: 6px; }
+.mng-wiz-dots .d { width: 7px; height: 7px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--border); transition: background 0.2s; }
+.mng-wiz-dots .d.on { background: var(--accent); border-color: var(--accent); }
+.mng-wiz-dots .d.done { background: color-mix(in srgb, var(--accent) 55%, var(--border)); border-color: transparent; }
+.mng-wiz-body { padding: 22px 24px 6px; min-height: 188px; }
+.mng-wiz-step { animation: mng-fade 0.22s ease both; }
+.mng-wiz-step h3 { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--text); margin: 0 0 6px; }
+.mng-wiz-step .hint { font-size: 12.5px; line-height: 1.55; color: var(--muted); margin: 0 0 14px; }
+.mng-wiz-input {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 13.5px; padding: 10px 13px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text);
+  transition: border-color 0.15s; margin-top: 4px;
+}
+.mng-wiz-input:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.mng-wiz-modes { display: flex; flex-direction: column; gap: 8px; }
+.mng-wiz-mode {
+  display: flex; align-items: flex-start; gap: 12px; text-align: left; cursor: pointer;
+  padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); transition: border-color 0.15s, background 0.15s;
+}
+.mng-wiz-mode:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.mng-wiz-mode.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--surface-2)); }
+.mng-wiz-mode .ic { font-size: 18px; line-height: 1.2; flex: 0 0 auto; }
+.mng-wiz-mode .tx { display: flex; flex-direction: column; gap: 3px; }
+.mng-wiz-mode .tx .t { font-size: 13px; font-weight: 600; }
+.mng-wiz-mode .tx .d { font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.mng-wiz-summary { list-style: none; margin: 4px 0 16px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.mng-wiz-summary li { display: flex; justify-content: space-between; padding: 9px 14px; font-size: 12.5px; }
+.mng-wiz-summary li + li { border-top: 1px solid var(--border); }
+.mng-wiz-summary li span { color: var(--muted); }
+.mng-wiz-summary li b { color: var(--text); font-weight: 600; }
+.mng-wiz-planner {
+  font: inherit; font-size: 12.5px; color: var(--accent); background: none; border: none; cursor: pointer;
+  padding: 0; text-decoration: underline; text-underline-offset: 3px;
+}
+.mng-wiz-planner:hover { color: color-mix(in srgb, var(--accent) 80%, var(--text)); }
+.mng-wiz-foot { display: flex; justify-content: space-between; gap: 9px; padding: 16px 24px 20px; }
+.mng-mbtn:disabled { opacity: 0.45; cursor: default; }
 
 /* Keyboard focus — a visible ring on every interactive console control (mouse users unaffected). */
 .mng-tab:focus-visible, .mng-btn:focus-visible, .mng-toast:focus-visible,

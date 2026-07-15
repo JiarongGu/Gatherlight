@@ -162,6 +162,23 @@ internal sealed class AppHost : Form
         }
     }
 
+    // Post a styled result toast back to the /manage web console (host→web), so backup / restore /
+    // memory outcomes render as in-page toasts that match the console — not native MessageBoxes. The
+    // console's counts/health poll refreshes derived data on its own, so no page reload is needed.
+    // No-op if the WebView isn't up (then the caller keeps whatever native fallback it has).
+    private void WebToast(string kind, string text)
+    {
+        try
+        {
+            var core = _web.CoreWebView2;
+            if (core is null) return;
+            var json = System.Text.Json.JsonSerializer.Serialize(new { type = "toast", kind, text });
+            void Post() { try { core.PostWebMessageAsJson(json); } catch { /* view gone */ } }
+            if (InvokeRequired) BeginInvoke((Action)Post); else Post();
+        }
+        catch { /* toast is best-effort */ }
+    }
+
     // An HttpClient bound to our own loopback endpoint — trusts the self-signed cert under TLS (loopback
     // only, so there's no MITM surface). Used for the shared 4 s health client and the 5 min backup
     // transfers (export streams the whole .zip; import does extract + reindex + commit).
@@ -190,17 +207,17 @@ internal sealed class AppHost : Form
             resp.EnsureSuccessStatusCode();
             await using (var fs = File.Create(dlg.FileName))
                 await resp.Content.CopyToAsync(fs);
-            MessageBox.Show(this, $"已导出完整备份到:\n{dlg.FileName}\n\n(整个数据文件夹:计划 · 家庭 · 知识库 · git 历史 · 记忆)", "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            WebToast("ok", $"已导出完整备份到 {dlg.FileName}");
         }
-        catch (Exception ex) { MessageBox.Show(this, "导出失败:" + ex.Message, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        catch (Exception ex) { WebToast("err", "导出失败:" + ex.Message); }
     }
 
+    // The destructive "will overwrite" confirm is shown by the web console (styled) BEFORE it posts
+    // `importBackup`, so by the time we're here the user has already agreed — we just pick the file + restore.
     private async Task ImportBackupAsync()
     {
         using var dlg = new OpenFileDialog { Filter = "Gatherlight 备份 (*.zip)|*.zip", Title = "从备份恢复" };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        if (MessageBox.Show(this, "恢复将覆盖当前的计划 / 家庭 / 知识库,并合并记忆。确定继续?", "Gatherlight",
-            MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
         try
         {
             // Stream the file up rather than reading it all into memory first.
@@ -211,10 +228,9 @@ internal sealed class AppHost : Form
             using var res = await http.PostAsync("api/backup/import", content);
             var text = await res.Content.ReadAsStringAsync();
             if (!res.IsSuccessStatusCode) throw new Exception(text);
-            MessageBox.Show(this, "已从备份恢复。\n" + text, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            try { _web.CoreWebView2?.Reload(); } catch { }
+            WebToast("ok", "已从备份恢复(计划 · 家庭 · 知识库 · 记忆已更新)");
         }
-        catch (Exception ex) { MessageBox.Show(this, "恢复失败:" + ex.Message, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        catch (Exception ex) { WebToast("err", "恢复失败:" + ex.Message); }
     }
 
     private async Task ExportMemoryAsync()
@@ -230,9 +246,9 @@ internal sealed class AppHost : Form
         {
             var bytes = await _http.GetByteArrayAsync("api/memory/export");
             await File.WriteAllBytesAsync(dlg.FileName, bytes);
-            MessageBox.Show(this, $"已导出记忆到:\n{dlg.FileName}", "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            WebToast("ok", $"已导出记忆到 {dlg.FileName}");
         }
-        catch (Exception ex) { MessageBox.Show(this, "导出失败:" + ex.Message, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        catch (Exception ex) { WebToast("err", "导出失败:" + ex.Message); }
     }
 
     private async Task ImportMemoryAsync()
@@ -245,10 +261,9 @@ internal sealed class AppHost : Form
             using var res = await _http.PostAsync("api/memory/import", body);
             var text = await res.Content.ReadAsStringAsync();
             if (!res.IsSuccessStatusCode) throw new Exception(text);
-            MessageBox.Show(this, "已导入记忆(合并 upsert)。\n" + text, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            try { _web.CoreWebView2?.Reload(); } catch { }
+            WebToast("ok", "已导入记忆(合并 upsert 完成)");
         }
-        catch (Exception ex) { MessageBox.Show(this, "导入失败:" + ex.Message, "Gatherlight", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        catch (Exception ex) { WebToast("err", "导入失败:" + ex.Message); }
     }
 
     // ---- light health poll — only to keep the tray status line live ----
