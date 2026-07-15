@@ -51,6 +51,7 @@ public sealed partial class ClaudeValidateService : IClaudeValidateService
                 ReadOnly = true,
                 // The verdict pass is simple — a cheaper model suffices.
                 Model = _appConfig.Get("llm.model.validate"),
+                Label = "validate",
                 OnEvent = _ => { }, // swallow the validator's chatter — only its verdict matters
             }, ct);
         }

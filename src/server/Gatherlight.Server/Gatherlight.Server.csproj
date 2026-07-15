@@ -14,6 +14,9 @@
 
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.72" />
+    <!-- Cron parsing + next-occurrence (timezone/DST aware) for the background-job scheduler.
+         Small, dependency-free, well-regarded. -->
+    <PackageReference Include="Cronos" Version="0.8.4" />
     <PackageReference Include="FluentMigrator.Runner.SQLite" Version="8.0.1" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
     <!-- Headless-browser tooling (web-fetch/scrape + future scraper ports). Browser binaries are

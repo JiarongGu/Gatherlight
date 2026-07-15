@@ -50,6 +50,10 @@ public sealed class ChatSession
     public ConcurrentDictionary<Channel<(int Seq, AgentEvent Ev)>, byte> Subscribers { get; } = new();
     public CancellationTokenSource? Abort { get; set; }
     public bool Cancelled { get; set; }
+    /// <summary>The app-wide single-agent lease, held for this session's whole lifetime (start →
+    /// terminal) so a background job can't mutate the data tree while a chat is live (incl. parked
+    /// at the diff gate with uncommitted edits). Released in <c>SetPhase</c> on a terminal phase.</summary>
+    public IDisposable? GateLease { get; set; }
     public required string ThreadContext { get; init; }
     /// <summary>Sequential persistence chain so DB writes keep event order without
     /// blocking the emit path.</summary>
@@ -88,6 +92,7 @@ public sealed class ChatSessionService
     private readonly BuildVerifyService _buildVerify;
     private readonly GatherlightServerOptions _options;
     private readonly Modules.Scoring.Services.IScoringService _scoring;
+    private readonly IAgentGate _gate;
     private readonly ILogger<ChatSessionService> _log;
 
     private const int MaxBuildRepair = 2;
@@ -98,8 +103,9 @@ public sealed class ChatSessionService
         IDataContext data, IAppConfigService appConfig, ChatEnvironmentService env,
         DataWriteLock writeLock, IToolRegistry tools, IZhikuRouter router,
         CodeRepoGit codeGit, BuildVerifyService buildVerify, GatherlightServerOptions options,
-        Modules.Scoring.Services.IScoringService scoring, ILogger<ChatSessionService> log)
+        Modules.Scoring.Services.IScoringService scoring, IAgentGate gate, ILogger<ChatSessionService> log)
     {
+        _gate = gate;
         _scoring = scoring;
         _router = router;
         _codeGit = codeGit;
@@ -153,6 +159,13 @@ public sealed class ChatSessionService
         s.Phase = phase;
         Emit(s, new AgentEvent { Kind = "phase", Phase = phase, Data = data });
         PersistSession(s);
+        // Release the app-wide agent slot the moment this session is done, so background jobs
+        // (and the next chat) can run. Idempotent — the lease disposes once.
+        if (ChatPhase.Terminal.Contains(phase))
+        {
+            s.GateLease?.Dispose();
+            s.GateLease = null;
+        }
     }
 
     private void PersistSession(ChatSession s)
@@ -165,8 +178,12 @@ public sealed class ChatSessionService
             TaskContinuationOptions.ExecuteSynchronously).Unwrap();
     }
 
-    private void Fail(ChatSession s, string message)
+    private void Fail(ChatSession s, string message, Exception? ex = null)
     {
+        // Every chat failure now lands in the file log — with the stack when there's an exception,
+        // so a live-instance failure is diagnosable without reproducing it here.
+        if (ex is not null) _log.LogError(ex, "Chat session {Session} ({Mode}) failed: {Msg}", s.Id, s.Mode, message);
+        else _log.LogWarning("Chat session {Session} ({Mode}) failed: {Msg}", s.Id, s.Mode, message);
         s.Error = message;
         Emit(s, new AgentEvent { Kind = "error", Text = message });
         // Record the FAILED turn to our durable thread memory (chat_turn) so the NEXT chat sees what was
@@ -177,6 +194,17 @@ public sealed class ChatSessionService
         RecordOutcome(s, "⚠️ 未完成(出错): " + reason);
         SetPhase(s, ChatPhase.Error);
         Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Error });
+    }
+
+    /// <summary>Turn an empty-output run into a DIAGNOSABLE failure. The SPECIFICS (exit code, error
+    /// subtype, stderr tail, is_error) go to the file log — that's where we debug from. The user-facing
+    /// message stays deliberately GENERAL (daily use): no guessing at causes on screen.</summary>
+    private string DiagnoseEmptyOutput(ChatSession s, ClaudeRunResult res, string zhPhase)
+    {
+        _log.LogWarning(
+            "Empty CLI output ({Phase}) session={Session} exit={Exit} isError={Err} subtype={Sub} stderrTail={Tail}",
+            zhPhase, s.Id, res.ExitCode, res.IsError, res.ResultSubtype ?? "(none)", res.StderrTail ?? "(none)");
+        return $"{zhPhase}未产出内容,请重试。若反复失败,请查看日志(state/logs)了解原因。";
     }
 
     /// <summary>SSE subscription: replay the buffered log (index = seq), then live (seq, event) pairs.
@@ -237,6 +265,10 @@ public sealed class ChatSessionService
     public async Task<ChatSession> StartChatAsync(string userMessage, IReadOnlyList<string> attachments, string mode = "plan")
     {
         if (IsBusy()) throw new InvalidOperationException("BUSY");
+        // Take the app-wide agent slot (shared with background jobs). Held until this session is
+        // terminal — a live chat owns the data tree, so no job can mutate it underneath.
+        var lease = _gate.TryBegin("chat");
+        if (lease is null) throw new InvalidOperationException("BUSY");
         var threadContext = await PrepareThreadContextAsync();
         var isSystem = mode == "system";
         var s = new ChatSession
@@ -247,10 +279,15 @@ public sealed class ChatSessionService
             Attachments = attachments.ToList(),
             Tracker = new EditTracker(isSystem ? _options.CodeRootPath : _data.RootPath),
             ThreadContext = threadContext,
+            GateLease = lease,
         };
         _sessions[s.Id] = s;
         _activeId = s.Id;
         PersistSession(s);
+        // Log the effective chat model at start — a bad `llm.model.chat` override (set via the Cortex
+        // console) is the classic cause of an instant empty plan, and this makes it visible up-front.
+        _log.LogInformation("Chat start: session={Session} mode={Mode} msgChars={Len} attachments={Att} model={Model}",
+            s.Id, s.Mode, userMessage.Length, s.Attachments.Count, _appConfig.Get("llm.model.chat") ?? "(cli-default)");
         _ = Task.Run(() => RunPlanningAsync(s));
         return s;
     }
@@ -268,6 +305,7 @@ public sealed class ChatSessionService
         McpConfigPath = File.Exists(_env.McpConfigPath) ? _env.McpConfigPath : null,
         // Pre-approve registry tools so the headless run never stalls on a permission prompt.
         AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : null,
+        Label = $"chat:{s.Mode}:{(readOnly ? "plan" : "exec")}",
         OnEvent = ev => Emit(s, ev),
     };
 
@@ -303,7 +341,7 @@ public sealed class ChatSessionService
             s.PlanText = res.FinalText.Trim();
             if (s.PlanText.Length == 0)
             {
-                Fail(s, "计划阶段没有产出内容,请重试或换个说法。");
+                Fail(s, DiagnoseEmptyOutput(s, res, "计划阶段"));
                 return;
             }
             SetPhase(s, ChatPhase.AwaitingPlanApproval, new { plan = s.PlanText });
@@ -312,7 +350,7 @@ public sealed class ChatSessionService
         catch (Exception ex)
         {
             if (s.Cancelled) return;
-            Fail(s, $"计划阶段失败:{ex.Message}");
+            Fail(s, $"计划阶段失败:{ex.Message}", ex);
         }
     }
 
@@ -358,7 +396,7 @@ public sealed class ChatSessionService
         catch (Exception ex)
         {
             if (s.Cancelled) return;
-            Fail(s, $"执行阶段失败:{ex.Message}");
+            Fail(s, $"执行阶段失败:{ex.Message}", ex);
         }
     }
 
@@ -419,7 +457,7 @@ public sealed class ChatSessionService
             var text = res.FinalText.Trim();
             if (text.Length == 0)
             {
-                Fail(s, "修订计划时没有产出内容,请重试或换个说法。");
+                Fail(s, DiagnoseEmptyOutput(s, res, "修订计划"));
                 return;
             }
             s.PlanText = text;
@@ -429,7 +467,7 @@ public sealed class ChatSessionService
         catch (Exception ex)
         {
             if (s.Cancelled) return;
-            Fail(s, $"修订计划失败:{ex.Message}");
+            Fail(s, $"修订计划失败:{ex.Message}", ex);
         }
     }
 
@@ -514,7 +552,7 @@ public sealed class ChatSessionService
         }
         catch (Exception ex)
         {
-            Fail(s, $"提交失败:{ex.Message}");
+            Fail(s, $"提交失败:{ex.Message}", ex);
         }
     }
 
@@ -534,7 +572,7 @@ public sealed class ChatSessionService
         }
         catch (Exception ex)
         {
-            Fail(s, $"还原失败:{ex.Message}");
+            Fail(s, $"还原失败:{ex.Message}", ex);
         }
     }
 
@@ -571,7 +609,7 @@ public sealed class ChatSessionService
         catch (Exception ex)
         {
             if (s.Cancelled) return;
-            Fail(s, $"调整阶段失败:{ex.Message}");
+            Fail(s, $"调整阶段失败:{ex.Message}", ex);
         }
     }
 

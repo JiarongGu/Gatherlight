@@ -22,10 +22,24 @@ public sealed record ClaudeRunOptions
     public string? McpConfigPath { get; init; }
     public string[]? AllowedTools { get; init; }
     public EditTracker? Tracker { get; init; }
+    /// <summary>Short attribution tag for logs (e.g. "chat:plan", "scorer:relevancy", "job:jab12").
+    /// Every spawn + outcome line is prefixed with it so the file log is greppable per consumer.</summary>
+    public string? Label { get; init; }
     public required Action<AgentEvent> OnEvent { get; init; }
 }
 
-public sealed record ClaudeRunResult(string? SessionId, string FinalText, int ExitCode);
+public sealed record ClaudeRunResult(string? SessionId, string FinalText, int ExitCode)
+{
+    /// <summary>The CLI's final `result` message reported an error (is_error=true) — e.g. it hit the
+    /// turn limit or the API errored. <see cref="FinalText"/> is typically empty in that case.</summary>
+    public bool IsError { get; init; }
+    /// <summary>The `result` message subtype: "success", "error_max_turns", "error_during_execution", …
+    /// The one signal that tells an empty output apart from a turn-limit / execution error.</summary>
+    public string? ResultSubtype { get; init; }
+    /// <summary>Tail of the CLI's stderr — surfaced when a run produced no usable output so an
+    /// empty-output failure is diagnosable instead of silent.</summary>
+    public string? StderrTail { get; init; }
+}
 
 /// <summary>
 /// Spawns the local (already-logged-in) claude CLI, streams its stream-json output and
@@ -127,19 +141,40 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
         {
             psi.FileName = ResolveClaudePath();
         }
-        foreach (var a in BuildArgs(opts)) psi.ArgumentList.Add(a);
+        var claudeArgs = BuildArgs(opts);
+        foreach (var a in claudeArgs) psi.ArgumentList.Add(a);
+
+        var label = opts.Label ?? "claude";
+        var sw = Stopwatch.StartNew();
+        // The one line that makes every LLM call traceable: which consumer, which exe/model/cwd, which
+        // flags, prompt size (NOT content — that may hold family data and rides in over stdin). If a run
+        // fails to spawn or returns empty, this is the context you need.
+        _log.LogInformation(
+            "[{Label}] claude spawn: exe={Exe} cwd={Cwd} readOnly={RO} model={Model} mcp={Mcp} settings={Set} resume={Res} allowedTools={Tools} promptChars={Len} args=[{Args}]",
+            label, psi.FileName, opts.Cwd, opts.ReadOnly, opts.Model ?? "(cli-default)",
+            opts.McpConfigPath is not null, opts.SettingsPath is not null, opts.ResumeSessionId is not null,
+            opts.AllowedTools?.Length ?? 0, opts.Prompt.Length, string.Join(' ', claudeArgs));
 
         using var proc = new Process { StartInfo = psi };
-        if (!proc.Start()) throw new InvalidOperationException("failed to spawn claude");
+        if (!proc.Start())
+        {
+            _log.LogError("[{Label}] failed to spawn claude (exe={Exe})", label, psi.FileName);
+            throw new InvalidOperationException("failed to spawn claude");
+        }
 
         string? sessionId = null;
         var finalText = "";
+        string? resultSubtype = null;
+        var isError = false;
+        // Bounded rolling tail of stderr — kept so an empty-output run can report WHY (auth, rate
+        // limit, CLI error) instead of a silent generic "no content".
+        var stderrTail = new List<string>();
 
         // Prompt over stdin → keeps argv free of dynamic content. Write it on a BACKGROUND task,
         // concurrently with draining stdout/stderr below: a large prompt (the router inlines KB docs)
         // can exceed the OS stdin pipe buffer, and if we blocked here writing it while the child was
         // blocked writing stdout that nobody is reading yet, both deadlock. Start the readers first.
-        var stderrTask = PumpStderrAsync(proc, opts, ct);
+        var stderrTask = PumpStderrAsync(proc, opts, stderrTail, ct);
         var stdinTask = Task.Run(async () =>
         {
             try { await proc.StandardInput.WriteAsync(opts.Prompt.AsMemory(), ct); }
@@ -154,9 +189,11 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
                 try
                 {
                     using var doc = JsonDocument.Parse(trimmed);
-                    var (sid, text) = HandleMessage(doc.RootElement, opts);
+                    var (sid, text, subtype, isErr) = HandleMessage(doc.RootElement, opts);
                     if (sid is not null) sessionId = sid;
                     if (text is not null) finalText = text;
+                    if (subtype is not null) resultSubtype = subtype;
+                    if (isErr is not null) isError = isErr.Value;
                 }
                 catch (JsonException)
                 {
@@ -167,6 +204,7 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
         }
         catch (OperationCanceledException)
         {
+            _log.LogInformation("[{Label}] claude aborted after {Ms}ms", label, sw.ElapsedMilliseconds);
             opts.OnEvent(new AgentEvent { Kind = "notice", Text = "⛔ 正在停止 claude…" });
             try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
             throw;
@@ -177,25 +215,51 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
             try { await stderrTask; } catch { /* pump ended with the process */ }
         }
 
-        return new ClaudeRunResult(sessionId, finalText, proc.ExitCode);
+        var tail = stderrTail.Count > 0 ? string.Join("\n", stderrTail.TakeLast(15)) : null;
+        if (tail is { Length: > 2000 }) tail = tail[^2000..];
+
+        // Outcome — the counterpart to the spawn line. A no-output / error run is a WARNING carrying
+        // exit code + subtype + stderr tail (the whole point: an empty plan is never silent again).
+        if (isError || finalText.Length == 0)
+            _log.LogWarning(
+                "[{Label}] claude produced no usable output: exit={Exit} isError={Err} subtype={Sub} in {Ms}ms · stderrTail={Tail}",
+                label, proc.ExitCode, isError, resultSubtype ?? "(none)", sw.ElapsedMilliseconds, tail ?? "(none)");
+        else
+            _log.LogInformation(
+                "[{Label}] claude done: exit={Exit} outChars={Out} session={Sid} subtype={Sub} in {Ms}ms",
+                label, proc.ExitCode, finalText.Length, sessionId ?? "(none)", resultSubtype ?? "(none)", sw.ElapsedMilliseconds);
+
+        return new ClaudeRunResult(sessionId, finalText, proc.ExitCode)
+        {
+            IsError = isError,
+            ResultSubtype = resultSubtype,
+            StderrTail = tail,
+        };
     }
 
-    private static async Task PumpStderrAsync(Process proc, ClaudeRunOptions opts, CancellationToken ct)
+    private static async Task PumpStderrAsync(Process proc, ClaudeRunOptions opts, List<string> tail, CancellationToken ct)
     {
         while (await proc.StandardError.ReadLineAsync(ct) is { } line)
         {
             var text = line.Trim();
+            if (text.Length == 0) continue;
+            // Keep a bounded tail for post-mortem diagnosis of an empty/failed run.
+            tail.Add(text);
+            if (tail.Count > 40) tail.RemoveAt(0);
             // CLI logs go to stderr; surface only as a low-key notice if it looks like an error.
-            if (text.Length > 0 && StderrErrorRegex().IsMatch(text))
+            if (StderrErrorRegex().IsMatch(text))
                 opts.OnEvent(new AgentEvent { Kind = "notice", Text = $"[claude] {Truncate(text, 400)}" });
         }
     }
 
-    /// <summary>Translate one stream-json object into events; returns sessionId/finalText if present.</summary>
-    private static (string? SessionId, string? FinalText) HandleMessage(JsonElement msg, ClaudeRunOptions opts)
+    /// <summary>Translate one stream-json object into events; returns sessionId/finalText and, for the
+    /// terminal `result` message, its subtype + is_error so an empty run can be diagnosed.</summary>
+    private static (string? SessionId, string? FinalText, string? ResultSubtype, bool? IsError) HandleMessage(JsonElement msg, ClaudeRunOptions opts)
     {
         string? sessionId = null;
         string? finalText = null;
+        string? resultSubtype = null;
+        bool? isError = null;
         var type = msg.TryGetProperty("type", out var t) ? t.GetString() : null;
 
         switch (type)
@@ -284,18 +348,22 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
                 break;
 
             case "result":
+                if (msg.TryGetProperty("subtype", out var rsub) && rsub.ValueKind == JsonValueKind.String)
+                    resultSubtype = rsub.GetString();
                 if (msg.TryGetProperty("result", out var res) && res.ValueKind == JsonValueKind.String
                     && res.GetString() is { } r && r.Trim().Length > 0)
                 {
                     finalText = r;
                 }
-                if (msg.TryGetProperty("is_error", out var isErr) && isErr.ValueKind == JsonValueKind.True)
+                if (msg.TryGetProperty("is_error", out var isErr))
                 {
-                    opts.OnEvent(new AgentEvent
-                    {
-                        Kind = "error",
-                        Text = finalText ?? "claude reported an error",
-                    });
+                    isError = isErr.ValueKind == JsonValueKind.True;
+                    if (isError.Value)
+                        opts.OnEvent(new AgentEvent
+                        {
+                            Kind = "error",
+                            Text = finalText ?? "claude reported an error",
+                        });
                 }
                 // Per-run usage/cost — the UI accumulates these per session (one event per CLI run).
                 if (msg.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
@@ -316,7 +384,7 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
                 }
                 break;
         }
-        return (sessionId, finalText);
+        return (sessionId, finalText, resultSubtype, isError);
     }
 
     private static IEnumerable<JsonElement> ContentBlocks(JsonElement msg)

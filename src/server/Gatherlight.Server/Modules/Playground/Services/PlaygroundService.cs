@@ -107,6 +107,7 @@ public sealed class PlaygroundService : IPlaygroundService
                 Model = model,
                 McpConfigPath = File.Exists(_env.McpConfigPath) ? _env.McpConfigPath : null,
                 AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : null,
+                Label = "playground",
                 OnEvent = ev =>
                 {
                     if (ev.Kind == "usage" && ev.Data is not null) AccumulateUsage(result, ev.Data);

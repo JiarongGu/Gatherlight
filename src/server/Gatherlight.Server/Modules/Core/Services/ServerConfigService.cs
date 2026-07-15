@@ -31,6 +31,9 @@ public sealed class ServerConfig
     /// <summary>Self-update source (GitHub releases).</summary>
     public UpdateConfig SelfUpdate { get; set; } = new();
 
+    /// <summary>Background-job scheduler (repeat/one-off agent tasks, tool calls, notifications).</summary>
+    public JobsConfig Jobs { get; set; } = new();
+
     /// <summary>Whether the first-run setup wizard has been completed. False on a truly fresh install
     /// (no settings.json yet) so the console shows the wizard once; the wizard sets it true. A
     /// pre-wizard settings.json (field absent) is migrated to true on load — existing users are already
@@ -85,6 +88,28 @@ public sealed class UpdateConfig
     public string? GithubRepo { get; set; } = "JiarongGu/Gatherlight";
     /// <summary>Explicit release-API URL (wins over <see cref="GithubRepo"/>). <c>GATHERLIGHT_UPDATE_API</c> overrides.</summary>
     public string? ApiUrl { get; set; }
+}
+
+/// <summary>
+/// Background-job scheduler settings. The scheduler reads these in-memory from
+/// <see cref="ServerConfigService.Current"/> every tick, so a console toggle takes effect without a
+/// restart. <see cref="Enabled"/> is the global kill-switch — off = jobs stay defined but nothing
+/// fires. Env overrides: <c>GATHERLIGHT_JOBS_ENABLED</c> (0/1).
+/// </summary>
+public sealed class JobsConfig
+{
+    /// <summary>Global kill-switch. When false the scheduler dispatches nothing (jobs stay defined).</summary>
+    public bool Enabled { get; set; } = true;
+    /// <summary>How often the scheduler wakes to look for due jobs (seconds).</summary>
+    public int PollSeconds { get; set; } = 30;
+    /// <summary>A job due while the app was closed fires once only if it came due within this many
+    /// hours; older misses are rolled forward (not fired late). See the catch-up design note.</summary>
+    public int CatchUpGraceHours { get; set; } = 24;
+    /// <summary>Wall-clock cap for an unattended run before its <c>claude</c> process tree is killed,
+    /// unless the job overrides it. Seconds.</summary>
+    public int DefaultTimeoutSeconds { get; set; } = 600;
+    /// <summary>A job that fails this many times in a row is auto-disabled (+ a notification).</summary>
+    public int MaxConsecutiveFailures { get; set; } = 3;
 }
 
 /// <summary>

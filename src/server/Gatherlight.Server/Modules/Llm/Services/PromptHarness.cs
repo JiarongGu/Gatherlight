@@ -37,6 +37,9 @@ public interface IPromptHarness
     string SystemExecutePrompt(string approvedPlan);
     string SystemReviseExecutePrompt(string feedback);
     string RepairPrompt(string buildOutput);
+    string JobExecutePrompt(string jobName, string instructions);
+    string JobReportPrompt(string jobName, string instructions);
+    string JobCommitMessage(string jobName, IReadOnlyList<string> files, bool autoApproved);
 }
 
 public sealed class PromptHarness : IPromptHarness
@@ -218,6 +221,32 @@ public sealed class PromptHarness : IPromptHarness
         {buildOutput}
         """;
 
+    // ------------------------------------------------------------------------------------
+    // Background jobs — unattended, scheduled runs (no human at the two gates). One CLI run does
+    // the whole task; a human reviews the diff LATER (or it auto-commits if the job is trusted).
+    // ------------------------------------------------------------------------------------
+
+    private const string JobExecuteTemplate = Common + """
+
+
+        CURRENT PHASE: SCHEDULED TASK (unattended execution).
+        This is a background job named "{jobName}" running on a schedule — there is NO human watching in real time and NO separate plan-approval step. Do the task end to end NOW: explore as needed (read files, search, run the CLAUDE.md gate, verify time-sensitive facts), then make the file edits. A human reviews your diff LATER, or it auto-commits if the job is trusted — so keep edits minimal and on-scope, cite facts (no fabrication; mark TBD when unknown), and edit files in place (never -v2 / -final siblings).
+        If the task can't be done safely (a fact you must verify turns out false, required info is missing), STOP — do NOT guess — and explain in your final message what blocked you, editing nothing. When done, your final message is a short Chinese summary of what you changed (one bullet per file), or why you couldn't.
+
+        THE SCHEDULED TASK:
+        {instructions}
+        """;
+
+    private const string JobReportTemplate = Common + """
+
+
+        CURRENT PHASE: SCHEDULED REPORT (read-only — do NOT edit, create, or delete any file).
+        This is a background job named "{jobName}" running on a schedule. Research/analyze exactly as instructed using READ-ONLY tools (Read / Glob / Grep, recall_facts, and the web/scrape MCP tools), then your FINAL message IS the report handed back to the user: well-structured Markdown in Simplified Chinese, concrete, with citations for any time-sensitive facts (no fabrication — mark unknowns TBD). No preamble like "here is the report"; output only the report itself.
+
+        THE SCHEDULED REPORT TASK:
+        {instructions}
+        """;
+
     private static readonly Regex PlaceholderRe = new(@"\{([a-zA-Z]+)\}", RegexOptions.Compiled);
 
     private static IReadOnlyList<string> Ph(string template) =>
@@ -253,6 +282,10 @@ public sealed class PromptHarness : IPromptHarness
             "系统模式:界面改动的修订。", "system", SystemReviseExecuteTemplate, Ph(SystemReviseExecuteTemplate)),
         new PromptDescriptor("repair", "系统模式 · 构建修复",
             "系统模式:构建失败后修复 src/client 代码。", "system", RepairTemplate, Ph(RepairTemplate)),
+        new PromptDescriptor("jobExecute", "定时任务 · 执行",
+            "后台定时任务:一次性完成并改动文件(供事后审阅或自动提交)。", "jobs", JobExecuteTemplate, Ph(JobExecuteTemplate)),
+        new PromptDescriptor("jobReport", "定时任务 · 报告",
+            "后台定时任务:只读分析并产出报告(不改动数据)。", "jobs", JobReportTemplate, Ph(JobReportTemplate)),
     };
 
     private readonly IAppConfigService _appConfig;
@@ -282,6 +315,25 @@ public sealed class PromptHarness : IPromptHarness
 
     public string RepairPrompt(string buildOutput) =>
         Render("repair", RepairTemplate, new() { ["buildOutput"] = buildOutput });
+
+    public string JobExecutePrompt(string jobName, string instructions) =>
+        Render("jobExecute", JobExecuteTemplate, new() { ["jobName"] = jobName, ["instructions"] = instructions });
+
+    public string JobReportPrompt(string jobName, string instructions) =>
+        Render("jobReport", JobReportTemplate, new() { ["jobName"] = jobName, ["instructions"] = instructions });
+
+    /// <summary>Commit message for a background job's edits: subject + provenance (auto vs
+    /// human-approved diff) + file list.</summary>
+    public string JobCommitMessage(string jobName, IReadOnlyList<string> files, bool autoApproved)
+    {
+        var name = string.Join(' ', jobName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var subject = $"job: {(name.Length <= 60 ? name : name[..59] + "…")}";
+        var provenance = autoApproved
+            ? "Scheduled background job (auto-commit — no human diff review)."
+            : "Scheduled background job (human-approved diff).";
+        var body = string.Join('\n', files.Select(f => $"- {f}"));
+        return $"{subject}\n\n{provenance}\n\nFiles:\n{body}\n\nCo-Authored-By: Claude <noreply@anthropic.com>";
+    }
 
     public string PlanPrompt(string userMessage, string? threadContext, IReadOnlyList<string> attachments, string? routedBlock = null)
     {

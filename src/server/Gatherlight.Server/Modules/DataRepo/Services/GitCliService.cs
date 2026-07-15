@@ -36,6 +36,13 @@ public interface IGitCliService
     Task<List<DataCommitInfo>> LogAsync(int count = 20, CancellationToken ct = default);
     /// <summary>Run an arbitrary git command in the data repo (plumbing for fs ops: rm/mv/add).</summary>
     Task<GitResult> RunAsync(string[] args, CancellationToken ct = default);
+    /// <summary>Capture the current changes to <paramref name="paths"/> as a unified patch that
+    /// <see cref="ApplyPatchAsync"/> can replay on a clean HEAD tree (new files via intent-to-add).
+    /// Used to stage a background-job diff for later human approval without leaving the tree dirty.</summary>
+    Task<string> CapturePatchAsync(IReadOnlyList<string> paths, CancellationToken ct = default);
+    /// <summary>Apply a patch from <see cref="CapturePatchAsync"/> to the working tree. Returns false
+    /// if it doesn't apply cleanly (the tree diverged since capture) — caller surfaces "re-run".</summary>
+    Task<bool> ApplyPatchAsync(string patch, CancellationToken ct = default);
 }
 
 public sealed record GitResult(int ExitCode, string Stdout, string Stderr)
@@ -216,6 +223,33 @@ public class GitCliService : IGitCliService
                 if (abs is not null && File.Exists(abs)) File.Delete(abs);
             }
         }
+    }
+
+    public async Task<string> CapturePatchAsync(IReadOnlyList<string> paths, CancellationToken ct = default)
+    {
+        var rels = paths.Select(Norm).ToArray();
+        if (rels.Length == 0) return "";
+        // Intent-to-add so brand-new files show in the diff; capture worktree-vs-index (== HEAD for
+        // tracked files); then undo the intent-add so the tree is back to its pre-capture state.
+        await RunAsync(new[] { "add", "-N", "--" }.Concat(rels).ToArray(), ct);
+        var diff = await RunAsync(new[] { "diff", "--no-color", "--binary", "--" }.Concat(rels).ToArray(), ct);
+        await RunAsync(new[] { "reset", "-q", "--" }.Concat(rels).ToArray(), ct);
+        return diff.Stdout;
+    }
+
+    public async Task<bool> ApplyPatchAsync(string patch, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(patch)) return true;
+        // Stage the patch inside .git/ (never in the tracked tree) and apply from there.
+        var tmp = Path.Combine(_root, ".git", $"gl-apply-{Guid.NewGuid():N}.patch");
+        await File.WriteAllTextAsync(tmp, patch, Utf8NoBom, ct);
+        try
+        {
+            var r = await RunAsync(new[] { "apply", "--whitespace=nowarn", tmp }, ct);
+            if (r.ExitCode != 0) _log.LogWarning("git apply of staged job patch failed: {Err}", r.Stderr.Trim());
+            return r.ExitCode == 0;
+        }
+        finally { try { File.Delete(tmp); } catch { /* best effort */ } }
     }
 
     public async Task<string> GetShortShaAsync(CancellationToken ct = default) =>

@@ -76,6 +76,8 @@ public static class GatherlightApp
             .AddHostedService<PlanIndexWatcher>()
             // LLM — spawn the authenticated claude CLI, never an API key
             .AddSingleton<IClaudeCliRunner, ClaudeCliRunner>()
+            // One live agent run at a time across chat AND background jobs (single-writer data tree)
+            .AddSingleton<IAgentGate, AgentGate>()
             .AddSingleton<IPromptHarness, PromptHarness>()
             .AddSingleton<IZhikuRouter, ZhikuRouter>()
             .AddSingleton<IClaudeValidateService, ClaudeValidateService>()
@@ -157,6 +159,11 @@ public static class GatherlightApp
             .AddSingleton<Modules.Security.Services.ILoginThrottle, Modules.Security.Services.LoginThrottle>()
             // Self-update: check GitHub releases + download/stage (launcher applies on restart)
             .AddSingleton<Modules.Update.Services.IUpdateService, Modules.Update.Services.UpdateService>()
+            // Background jobs: generic scheduled/one-off work (agent tasks, tool calls, notifications,
+            // reports) + a browser/in-app notification feed. See docs/background-jobs-design.md.
+            .AddSingleton<Modules.Jobs.Services.IJobRepository, Modules.Jobs.Services.JobRepository>()
+            .AddSingleton<Modules.Jobs.Services.INotificationService, Modules.Jobs.Services.NotificationService>()
+            .AddSingleton<Modules.Jobs.Services.IUnattendedRunService, Modules.Jobs.Services.UnattendedRunService>()
             // Hot-loadable script tools ({data}/tools/<name>/tool.json — no rebuild needed)
             .AddSingleton<ScriptToolProvider>()
             .AddSingleton<IScriptToolProvider>(sp => sp.GetRequiredService<ScriptToolProvider>())

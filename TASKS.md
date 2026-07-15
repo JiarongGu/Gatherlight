@@ -12,7 +12,30 @@
 
 ## In progress
 
-(none)
+### Background jobs (design: `docs/background-jobs-design.md`) — do top-down
+- [x] **T1 Data + config:** migration `202607160001_Jobs.cs` (`job`/`job_run`/`notification` tables +
+  indexes); `JobsConfig` in `ServerConfig`; add Cronos NuGet ref.
+- [ ] **T2 Models + repository:** `Modules/Jobs/Models/*`; `JobRepository` (Dapper CRUD, due-query,
+  run history, notifications); `JobSchedule` next-run calc via Cronos; DI.
+- [ ] **T3 Notifications:** `NotificationService` + `NotificationsController` (list, mark-read, SSE
+  stream mirroring ChatController).
+- [x] **T4 Agent gate + unattended runner:** extract `IAgentGate` (consulted by ChatSessionService);
+  `UnattendedRunService` (headless plan/execute → text + diff/patch); `CapturePatchAsync`/
+  `ApplyPatchAsync` on `IGitCliService`.
+- [ ] **T5 Job handlers:** `IJobHandler` + `Tool`/`Notify`/`Report`/`Agent` handlers (agent =
+  auto-commit or stage-for-review per `auto_commit`); DI collection.
+- [ ] **T6 Scheduler:** `JobSchedulerService : BackgroundService` (kill-switch, due dispatch,
+  Cronos next-run, catch-up-within-grace, timeout, failure/run-cap auto-disable, run logging).
+- [ ] **T7 Job service + controller + AI tools:** `JobService`; `JobsController` (REST incl.
+  run-now, kill-switch, approve/reject staged run); tools `job_schedule`/`job_list`/`job_cancel`/
+  `job_run_now`/`notify_user`.
+- [ ] **T8 Seeded skill + KB wiring:** `.claude/skills/schedule-job/SKILL.md` (DataTemplate) +
+  `automation.md` keyword + `KEYWORDS_INDEX` + `AI_GUIDE` (ships via ZhikuSeeder).
+- [ ] **T9 Client:** Automation panel in `Manage.tsx` (list/create-edit/history/kill-switch) +
+  notifications bell + browser Notification API + SSE hook; full `dev.mjs build`.
+- [ ] **T10 e2e `p26`:** create/list, cron next-run, catch-up, tool job, notify job, agent
+  stage+auto-commit, kill-switch pause, auto-disable, timeout — via the claude stub.
+- [ ] **T11 Verify + prune:** `e2e all` green; spec self-review; delete these lines (commit is the record).
 
 ## Backlog
 

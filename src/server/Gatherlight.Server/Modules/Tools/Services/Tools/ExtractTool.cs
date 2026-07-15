@@ -61,6 +61,7 @@ public sealed class ExtractTool : IGatherlightTool
             Cwd = Path.GetTempPath(), // neutral: no CLAUDE.md / knowledge-base load
             ReadOnly = true,
             Model = _appConfig.Get("llm.model.extract") ?? "sonnet",
+            Label = "extract",
             OnEvent = _ => { }, // sync caller: only the final text matters
         }, ct);
 

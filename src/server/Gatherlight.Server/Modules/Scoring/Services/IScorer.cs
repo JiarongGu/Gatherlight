@@ -63,6 +63,7 @@ public abstract class LlmScorerBase : IScorer
             Cwd = Path.GetTempPath(),   // neutral: no CLAUDE.md / knowledge-base load
             ReadOnly = true,
             Model = _config.Get("llm.model.scorer") ?? "haiku",
+            Label = $"scorer:{Id}",
             OnEvent = _ => { },
         }, ct);
 
