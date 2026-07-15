@@ -16,20 +16,6 @@
 
 ## Backlog
 
-### UI / desktop console
-- [ ] **Close-to-tray dialog** — the WM_CLOSE `TaskDialog` in `AppHost.cs` is still a native (though
-  modern) dialog; the other host popups now route to styled web toasts. Left native because a
-  window-close decision is synchronous and awkward to round-trip through the WebView. Revisit if the
-  native look bothers.
-
-### Security / agent harness (follow-ups to the v2 scope-guard jail)
-- [ ] **Port the xhs-search pattern (and similar) to server MCP tools** — so the planner never needs to
-  author + run its own executable scraper skills; aligns with "out-of-boundary → MCP". Closes the
-  agent-authored-script residual for that use case.
-- [ ] **OS-level sandbox for the spawned claude** (defense-in-depth) — AppContainer / job-object + FS
-  ACL scoped to the data folder + egress filter. The only layer that contains code executed *inside* an
-  agent-authored script, or exfil via a crafted WebFetch URL — residuals the PreToolUse hook can't reach.
-
 ### Verification (user-side — needs a real environment I can't reach)
 - [ ] **Runtime bootstrap on a clean machine:** on a Windows box WITHOUT .NET 10, run the bundle's
   `Gatherlight.exe` → confirm it installs the runtime (one UAC prompt) then the app starts. Verified
@@ -49,6 +35,12 @@
   or its own package) + EmbeddingService + vector tables + hybrid search over the FTS index.
 
 ## Parked (with reasons — don't pick up without a decision)
+- OS-level sandbox for the spawned claude (AppContainer/restricted-token + FS ACL + network-egress
+  filter) — the only layer that would contain code executed *inside* an agent-authored script or exfil
+  via a crafted WebFetch URL. NOT done in this pass: it's a dedicated Windows security project that
+  needs a real sandbox test rig to verify, and a half-built version gives a false sense of safety. The
+  shipped mitigation is the PreToolUse scope-guard v2 jail (reads/writes/Bash confined; out-of-boundary
+  → MCP), which closes the direct tool-based escapes; this is the defense-in-depth layer above it.
 - Resource-bundle sha256 pin (review #15) — NOT added: nuget.org TLS + per-version immutability is the
   integrity guarantee; a pinned sha would reintroduce the per-release drift that #7 removed. An
   overridden `GATHERLIGHT_RESOURCES_URL` is a deliberate operator choice. Reasoning in
