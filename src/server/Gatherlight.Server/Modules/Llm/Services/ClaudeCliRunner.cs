@@ -229,6 +229,26 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
                 break;
 
             case "assistant":
+                // Live token feedback: each assistant turn carries its own usage. Emit it as an
+                // ephemeral 'usage-live' tick so the chat UI shows tokens climbing DURING a long
+                // plan/research run — the authoritative per-run total still arrives via 'usage' at the
+                // 'result' message. A DISTINCT kind means Trace/Playground (which aggregate 'usage')
+                // ignore these, and the client resets the live counter when the 'usage' total commits,
+                // so run totals are never doubled (even on SSE replay).
+                if (msg.TryGetProperty("message", out var am) && am.TryGetProperty("usage", out var au)
+                    && au.ValueKind == JsonValueKind.Object)
+                {
+                    opts.OnEvent(new AgentEvent
+                    {
+                        Kind = "usage-live",
+                        Data = new
+                        {
+                            inputTokens = Int64OrZero(au, "input_tokens"),
+                            outputTokens = Int64OrZero(au, "output_tokens"),
+                            cacheReadTokens = Int64OrZero(au, "cache_read_input_tokens"),
+                        },
+                    });
+                }
                 foreach (var block in ContentBlocks(msg))
                 {
                     var bType = block.TryGetProperty("type", out var bt) ? bt.GetString() : null;

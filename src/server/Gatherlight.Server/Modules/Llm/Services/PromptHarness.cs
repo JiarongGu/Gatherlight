@@ -263,7 +263,7 @@ public sealed class PromptHarness : IPromptHarness
     {
         var context = string.IsNullOrWhiteSpace(threadContext)
             ? ""
-            : "RECENT REQUESTS IN THIS CONVERSATION (context only):\n" + threadContext.Trim() + "\n\n";
+            : "RECENT REQUESTS IN THIS CONVERSATION (context only; a turn marked \"⚠️ 未完成(出错)\" failed — if this request continues it, recover from there):\n" + threadContext.Trim() + "\n\n";
         return Render("systemPlan", SystemPlanTemplate, new()
         {
             ["context"] = context,
@@ -287,7 +287,7 @@ public sealed class PromptHarness : IPromptHarness
     {
         var context = string.IsNullOrWhiteSpace(threadContext)
             ? ""
-            : "RECENT REQUESTS IN THIS CONVERSATION (for understanding follow-ups only — the workspace files are the source of truth; do NOT assume these edits still exist on disk):\n"
+            : "RECENT REQUESTS IN THIS CONVERSATION (for understanding follow-ups only — the workspace files are the source of truth; do NOT assume these edits still exist on disk). A turn marked \"⚠️ 未完成(出错)\" did NOT finish: if the current request is a retry or continuation of it, pick up from there and address what went wrong rather than starting over blind:\n"
               + threadContext.Trim() + "\n\n";
         return Render("plan", PlanTemplate, new()
         {

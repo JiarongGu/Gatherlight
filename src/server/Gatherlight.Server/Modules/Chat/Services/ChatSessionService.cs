@@ -169,6 +169,12 @@ public sealed class ChatSessionService
     {
         s.Error = message;
         Emit(s, new AgentEvent { Kind = "error", Text = message });
+        // Record the FAILED turn to our durable thread memory (chat_turn) so the NEXT chat sees what was
+        // attempted and why it failed, and can recover — instead of starting blind. This is our own DB
+        // memory (injected into the next plan prompt's thread context), NOT the claude CLI's temp resume.
+        // The thread doesn't reset on a failed turn (only on commit / idle / length), so it carries over.
+        var reason = message.Length > 160 ? message[..160] + "…" : message;
+        RecordOutcome(s, "⚠️ 未完成(出错): " + reason);
         SetPhase(s, ChatPhase.Error);
         Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Error });
     }

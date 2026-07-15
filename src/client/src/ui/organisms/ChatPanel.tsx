@@ -49,11 +49,15 @@ interface ChatState {
   commitSha: string | null;
   error: string | null;
   busy: boolean; // an approve/reject request is in flight
-  // Cumulative session usage (one 'usage' event per CLI run: plan / execute / refine…).
+  // Cumulative session usage (committed via one 'usage' event per CLI run: plan / execute / refine…).
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; costUsd: number };
+  // Live usage of the IN-FLIGHT run — accumulates 'usage-live' ticks (per assistant turn) so tokens
+  // climb visibly during a long plan/research phase; reset to zero when the run's 'usage' total commits.
+  liveUsage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
 }
 
 const ZERO_USAGE = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0 };
+const ZERO_LIVE = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
 
 const initialState: ChatState = {
   sessionId: null,
@@ -65,7 +69,8 @@ const initialState: ChatState = {
   commitSha: null,
   error: null,
   busy: false,
-  usage: ZERO_USAGE
+  usage: ZERO_USAGE,
+  liveUsage: ZERO_LIVE
 };
 
 let seq = 0;
@@ -114,7 +119,8 @@ function reducer(state: ChatState, action: Action): ChatState {
         commitSha: null,
         error: null,
         busy: false,
-        usage: ZERO_USAGE
+        usage: ZERO_USAGE,
+        liveUsage: ZERO_LIVE
       };
 
     case 'rehydrate':
@@ -147,6 +153,8 @@ function reducer(state: ChatState, action: Action): ChatState {
           return { ...state, live: state.live + (ev.text ?? '') };
 
         case 'usage': {
+          // Authoritative per-run total — commit it to the session usage and clear the live counter
+          // (whose ticks approximated this same run and are now superseded).
           const u = (ev.data ?? {}) as Partial<ChatState['usage']>;
           return {
             ...state,
@@ -155,6 +163,21 @@ function reducer(state: ChatState, action: Action): ChatState {
               outputTokens: state.usage.outputTokens + (u.outputTokens ?? 0),
               cacheReadTokens: state.usage.cacheReadTokens + (u.cacheReadTokens ?? 0),
               costUsd: state.usage.costUsd + (u.costUsd ?? 0)
+            },
+            liveUsage: ZERO_LIVE
+          };
+        }
+
+        case 'usage-live': {
+          // Ephemeral per-turn tick — accumulate into the in-flight run's live counter so tokens climb
+          // visibly during a long plan/research phase. Reset when the run's 'usage' total commits.
+          const u = (ev.data ?? {}) as Partial<ChatState['liveUsage']>;
+          return {
+            ...state,
+            liveUsage: {
+              inputTokens: state.liveUsage.inputTokens + (u.inputTokens ?? 0),
+              outputTokens: state.liveUsage.outputTokens + (u.outputTokens ?? 0),
+              cacheReadTokens: state.liveUsage.cacheReadTokens + (u.cacheReadTokens ?? 0)
             }
           };
         }
@@ -262,16 +285,20 @@ function Stepper({ phase }: { phase: Phase }) {
 const fmtTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 /** Cumulative session token usage — one line under the stepper, updates live via SSE. */
-function UsageLine({ usage }: { usage: ChatState['usage'] }) {
-  const total = usage.inputTokens + usage.outputTokens;
-  if (total === 0) return null;
+function UsageLine({ usage, live }: { usage: ChatState['usage']; live: ChatState['liveUsage'] }) {
+  // Committed session totals + the in-flight run's live ticks, so tokens climb during a long
+  // plan/research phase instead of only appearing at the end.
+  const input = usage.inputTokens + live.inputTokens;
+  const output = usage.outputTokens + live.outputTokens;
+  const cacheRead = usage.cacheReadTokens + live.cacheReadTokens;
+  if (input + output === 0) return null;
+  const streaming = live.inputTokens + live.outputTokens > 0;
   return (
-    <Tooltip
-      title={`输入 ${usage.inputTokens.toLocaleString()} · 输出 ${usage.outputTokens.toLocaleString()} · 缓存读取 ${usage.cacheReadTokens.toLocaleString()}`}
-    >
-      <div className="chat-usage">
-        ⚡ {fmtTokens(usage.inputTokens)} in · {fmtTokens(usage.outputTokens)} out
+    <Tooltip title={`输入 ${input.toLocaleString()} · 输出 ${output.toLocaleString()} · 缓存读取 ${cacheRead.toLocaleString()}`}>
+      <div className={`chat-usage${streaming ? ' live' : ''}`}>
+        ⚡ {fmtTokens(input)} in · {fmtTokens(output)} out
         {usage.costUsd > 0 && <> · ~USD {usage.costUsd.toFixed(3)}</>}
+        {streaming && <> · 计算中…</>}
       </div>
     </Tooltip>
   );
@@ -481,7 +508,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       </div>
 
       <Stepper phase={state.phase} />
-      <UsageLine usage={state.usage} />
+      <UsageLine usage={state.usage} live={state.liveUsage} />
 
       {showJump && (
         <button className="chat-jump" onClick={jumpToLatest} aria-label="滚动到最新">

@@ -35,6 +35,15 @@ const usage = { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens:
 const done = (text) =>
   emit({ type: 'result', result: text, usage, total_cost_usd: 0.012 });
 
+// FORCE_ERROR: emit an empty result so the server's plan phase treats it as "no content produced" →
+// Fail() → records the failed turn to chat_turn. Used by e2e-p25 (error-continuity memory). Guarded by
+// "no prior failure yet" so the FOLLOW-UP chat (whose thread context echoes the original FORCE_ERROR
+// message but ALSO carries the 未完成 marker) proceeds normally instead of re-failing.
+if (prompt.includes('FORCE_ERROR') && !prompt.includes('未完成(出错)')) {
+  done('');
+  process.exit(0);
+}
+
 // LLM scorer judge (Modules/Scoring): return a canned {score, reason} verdict JSON so the automated
 // scorers produce a deterministic result under the stub.
 if (prompt.includes('SCORING TASK')) {
@@ -51,11 +60,13 @@ if (readOnly) {
   // a runtime override actually reached the spawned CLI (harmless when the token is absent).
   const echo = (prompt.match(/CORTEX_ECHO:(\S+)/) ?? [])[1];
   const echoTag = echo ? ` [echo:${echo}]` : '';
+  // Prove the prior failed turn reached this run's thread context (e2e-p25 error-continuity memory).
+  const priorFail = prompt.includes('未完成(出错)') ? ' [saw-prior-failure]' : '';
   const text = systemMode
     ? `## UI 改动计划(stub)\n\n- **Files to change** — src/client/src/stub-touch.txt`
     : prompt.includes("HUMAN'S FEEDBACK")
-      ? `## 修订后的计划(stub)${routed}${echoTag}\n\n1. **What the user asked** — 修订版\n2. **Files to change** — plans/daily/2026-07-14.md`
-      : `## 计划(stub)${routed}${echoTag}\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none`;
+      ? `## 修订后的计划(stub)${routed}${echoTag}${priorFail}\n\n1. **What the user asked** — 修订版\n2. **Files to change** — plans/daily/2026-07-14.md`
+      : `## 计划(stub)${routed}${echoTag}${priorFail}\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none`;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
   done(text);
 } else {
