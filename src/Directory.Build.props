@@ -12,7 +12,7 @@
     - Gatherlight.Resources.csproj sets its own <Version> (it tracks the Playwright package, not the app).
   -->
   <PropertyGroup>
-    <VersionPrefix>1.0.2</VersionPrefix>
+    <VersionPrefix>1.0.3</VersionPrefix>
   </PropertyGroup>
 
 </Project>
