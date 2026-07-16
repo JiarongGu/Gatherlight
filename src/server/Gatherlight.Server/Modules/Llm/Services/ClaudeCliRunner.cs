@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Gatherlight.Server.Modules.Core.Services;
 using Gatherlight.Server.Modules.Llm.Models;
 
 namespace Gatherlight.Server.Modules.Llm.Services;
@@ -75,7 +76,10 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
         var disallowed = new List<string> { "AskUserQuestion", "ExitPlanMode", "EnterPlanMode" };
         if (opts.ReadOnly)
         {
-            disallowed.AddRange(new[] { "Edit", "Write", "MultiEdit", "NotebookEdit" });
+            // MultiEdit was dropped from the CLI's tool set — passing it here made every read-only spawn
+            // emit "Permission deny rule \"MultiEdit\" matches no known tool". Edit/Write/NotebookEdit are
+            // the current write tools; denying them keeps the plan phase read-only.
+            disallowed.AddRange(new[] { "Edit", "Write", "NotebookEdit" });
         }
         else
         {
@@ -173,6 +177,10 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
         var finalText = "";
         string? resultSubtype = null;
         var isError = false;
+        // The model the CLI actually ran (from assistant messages, which precede the terminal 'result').
+        // Used to price the run from ModelPricing rather than trusting the CLI's total_cost_usd; falls
+        // back to the requested model when the stream doesn't name one.
+        string? runModel = null;
         // Bounded rolling tail of stderr — kept so an empty-output run can report WHY (auth, rate
         // limit, CLI error) instead of a silent generic "no content".
         var stderrTail = new List<string>();
@@ -196,7 +204,8 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
                 try
                 {
                     using var doc = JsonDocument.Parse(trimmed);
-                    var (sid, text, subtype, isErr) = HandleMessage(doc.RootElement, opts);
+                    runModel ??= ExtractModel(doc.RootElement);
+                    var (sid, text, subtype, isErr) = HandleMessage(doc.RootElement, opts, runModel ?? opts.Model);
                     if (sid is not null) sessionId = sid;
                     if (text is not null) finalText = text;
                     if (subtype is not null) resultSubtype = subtype;
@@ -269,7 +278,7 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
 
     /// <summary>Translate one stream-json object into events; returns sessionId/finalText and, for the
     /// terminal `result` message, its subtype + is_error so an empty run can be diagnosed.</summary>
-    private static (string? SessionId, string? FinalText, string? ResultSubtype, bool? IsError) HandleMessage(JsonElement msg, ClaudeRunOptions opts)
+    private static (string? SessionId, string? FinalText, string? ResultSubtype, bool? IsError) HandleMessage(JsonElement msg, ClaudeRunOptions opts, string? runModel)
     {
         string? sessionId = null;
         string? finalText = null;
@@ -381,19 +390,24 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
                         });
                 }
                 // Per-run usage/cost — the UI accumulates these per session (one event per CLI run).
+                // Cost is computed from ModelPricing on the ACTUAL model + token counts, NOT the CLI's
+                // total_cost_usd (which is opaque and not tied to our routing) — chat + Trace read this.
                 if (msg.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
                 {
+                    var inTok = Int64OrZero(usage, "input_tokens");
+                    var outTok = Int64OrZero(usage, "output_tokens");
+                    var cacheRead = Int64OrZero(usage, "cache_read_input_tokens");
+                    var cacheCreate = Int64OrZero(usage, "cache_creation_input_tokens");
                     opts.OnEvent(new AgentEvent
                     {
                         Kind = "usage",
                         Data = new
                         {
-                            inputTokens = Int64OrZero(usage, "input_tokens"),
-                            outputTokens = Int64OrZero(usage, "output_tokens"),
-                            cacheReadTokens = Int64OrZero(usage, "cache_read_input_tokens"),
-                            cacheCreationTokens = Int64OrZero(usage, "cache_creation_input_tokens"),
-                            costUsd = msg.TryGetProperty("total_cost_usd", out var cost)
-                                && cost.ValueKind == JsonValueKind.Number ? cost.GetDouble() : 0d,
+                            inputTokens = inTok,
+                            outputTokens = outTok,
+                            cacheReadTokens = cacheRead,
+                            cacheCreationTokens = cacheCreate,
+                            costUsd = ModelPricing.CostUsd(runModel, inTok, outTok, cacheRead, cacheCreate),
                         },
                     });
                 }
@@ -435,6 +449,16 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
 
     private static long Int64OrZero(JsonElement obj, string key) =>
         obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : 0;
+
+    /// <summary>The model id carried on an `assistant` message (<c>message.model</c>), or null. This is
+    /// the authoritative model the run used — captured for pricing (the CLI honors <c>--model</c>, but a
+    /// null request means the CLI default, which only the stream names).</summary>
+    private static string? ExtractModel(JsonElement msg) =>
+        msg.TryGetProperty("type", out var t) && t.GetString() == "assistant"
+        && msg.TryGetProperty("message", out var m)
+        && m.TryGetProperty("model", out var md) && md.ValueKind == JsonValueKind.String
+            ? md.GetString()
+            : null;
 
     /// <summary>Resolve the real `claude` executable once and cache it. On Windows `claude` is
     /// usually a `.cmd` shim on PATH; starting the resolved path directly means .NET (not a shell)

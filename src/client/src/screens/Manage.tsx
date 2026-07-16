@@ -822,33 +822,55 @@ interface KbStatus {
   hasStaged: boolean;
   staged?: { path: string; status: string; diff: string }[] | null;
   stagedAt?: string | null;
-  progress?: { current: number; total: number; file?: string | null; running: boolean } | null;
+  progress?: {
+    current: number; total: number; file?: string | null; running: boolean;
+    outChars?: number; tokens?: number; costUsd?: number; elapsedMs?: number; model?: string | null;
+  } | null;
 }
+
+const fmtElapsed = (ms?: number) => {
+  const s = Math.max(0, Math.round((ms ?? 0) / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
+};
+const fmtUsd = (n?: number) => {
+  const v = n ?? 0;
+  if (v <= 0) return null;
+  return v < 0.001 ? '<$0.001' : `$${v.toFixed(v < 1 ? 3 : 2)}`;
+};
 function KbUpgradesCard({ toast }: { toast: (t: string, k?: 'ok' | 'err') => void }) {
   const [status, setStatus] = useState<KbStatus | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false); // local (approve/reject/starting) — not the merge itself
   const load = async () => { try { setStatus(await (await fetch('/api/manage/kb-upgrades')).json()); } catch { /* ignore */ } };
   useEffect(() => { load(); }, []);
 
+  // The merge runs server-side; its progress is server truth. Poll while a run is in flight — `running`
+  // (server truth) so the live status survives leaving this tab and coming back or a full reload, plus
+  // `busy` so the initiating click polls during the blocking POST before `running` has flipped on. The
+  // old bug: busy + the poll lived only in local state and died on unmount, leaving a blank card.
+  const running = status?.progress?.running ?? false;
+  const active = running || busy;
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(load, 1000);
+    return () => clearInterval(id);
+  }, [active]);
+
   if (!status) return null;
   const nAvail = status.available?.length ?? 0;
-  if (!status.hasStaged && nAvail === 0) return null; // nothing to surface
+  if (!status.hasStaged && nAvail === 0 && !running) return null; // nothing to surface
+  const prog = status.progress;
 
   const run = async () => {
+    if (busy || running) return;
     setBusy(true);
-    // The merge is one blocking POST that spawns claude per file (can be minutes for a big KB). Poll
-    // the status endpoint meanwhile so the card shows live per-file progress instead of a frozen button.
-    const poll = setInterval(load, 1000);
+    await load(); // flip `running` on quickly so the poll effect above takes over the live updates
     try {
       const res = await fetch('/api/manage/kb-upgrades/run', { method: 'POST' });
       const r = await res.json();
       if (res.ok && r.staged) toast(`已合并 ${r.merged} 个文件${r.failed ? `(${r.failed} 个失败)` : ''},请审阅`);
       else toast(r.error ?? '合并无改动', res.ok ? 'ok' : 'err');
-    } finally {
-      clearInterval(poll);
-      setBusy(false);
-      await load();
-    }
+    } catch { toast('合并失败', 'err'); }
+    finally { setBusy(false); await load(); }
   };
   const approve = async () => {
     setBusy(true);
@@ -892,17 +914,26 @@ function KbUpgradesCard({ toast }: { toast: (t: string, k?: 'ok' | 'err') => voi
         <>
           <div className="kbup-desc">{nAvail} 个你自定义过的知识库文件有新模板改进。AI 合并会保留你的改动并采纳改进,结果需你审阅后才生效。</div>
           <ul className="kbup-list">{status.available.map((u) => <li key={u.path}>{u.path}</li>)}</ul>
-          {busy && status.progress?.running && (
+          {running && prog && (
             <div className="kbup-progress">
-              合并中 {status.progress.current}/{status.progress.total}
-              {status.progress.file ? <> · <code>{status.progress.file}</code></> : null}
+              <div className="kbup-progress-head">
+                合并中 {prog.current}/{prog.total}
+                {prog.file ? <> · <code>{prog.file}</code></> : null}
+                {prog.model ? <> · {prog.model}</> : null}
+              </div>
+              <div className="kbup-progress-live">
+                ⏱ {fmtElapsed(prog.elapsedMs)}
+                {prog.outChars ? <> · 生成中 ~{prog.outChars.toLocaleString()} 字</> : null}
+                {prog.tokens ? <> · {prog.tokens.toLocaleString()} tok</> : null}
+                {fmtUsd(prog.costUsd) ? <> · ~{fmtUsd(prog.costUsd)}</> : null}
+              </div>
             </div>
           )}
           <div className="kbup-btns">
-            <button className="cx-btn primary" onClick={run} disabled={busy}>
-              {busy
-                ? (status.progress?.running ? `合并中 ${status.progress.current}/${status.progress.total}…（AI）` : '合并中…（AI）')
-                : '运行合并(AI)'}
+            <button className="cx-btn primary" onClick={run} disabled={busy || running}>
+              {running
+                ? `合并中 ${prog?.current ?? 0}/${prog?.total ?? 0}…（AI）`
+                : busy ? '启动中…' : '运行合并(AI)'}
             </button>
           </div>
         </>
