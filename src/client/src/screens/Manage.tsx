@@ -248,7 +248,7 @@ export function Manage() {
       </div>
 
       {view === 'eval' && <EvalView />}
-      {view === 'cortex' && <CortexView />}
+      {view === 'cortex' && <CortexView toast={toast} />}
       {view === 'jobs' && <JobsView toast={toast} confirm={confirm} />}
       {view === 'resources' && <ResourcesView toast={toast} onRestart={restart} inHost={inHost} />}
       {view === 'logs' && <LogsView inHost={inHost} />}
@@ -816,7 +816,85 @@ const GROUP_LABELS: Record<string, string> = {
 const GROUP_ORDER = ['planner', 'validation', 'utility', 'system'];
 const modelLabel = (v: string | null) => (v && v.length ? v : 'CLI 默认');
 
-function CortexView() {
+// ---- Knowledge-base upgrade migration (customized .claude/ files vs. shipped template improvements) ----
+interface KbStatus {
+  available: { path: string }[];
+  hasStaged: boolean;
+  staged?: { path: string; status: string; diff: string }[] | null;
+  stagedAt?: string | null;
+}
+function KbUpgradesCard({ toast }: { toast: (t: string, k?: 'ok' | 'err') => void }) {
+  const [status, setStatus] = useState<KbStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = async () => { try { setStatus(await (await fetch('/api/manage/kb-upgrades')).json()); } catch { /* ignore */ } };
+  useEffect(() => { load(); }, []);
+
+  if (!status) return null;
+  const nAvail = status.available?.length ?? 0;
+  if (!status.hasStaged && nAvail === 0) return null; // nothing to surface
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/manage/kb-upgrades/run', { method: 'POST' });
+      const r = await res.json();
+      if (res.ok && r.staged) toast(`已合并 ${r.merged} 个文件,请审阅`);
+      else toast(r.error ?? '合并无改动', res.ok ? 'ok' : 'err');
+      await load();
+    } finally { setBusy(false); }
+  };
+  const approve = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/manage/kb-upgrades/approve', { method: 'POST' });
+      const r = await res.json();
+      toast(res.ok ? `已应用升级 ${r.sha ?? ''}` : (r.error ?? '应用失败'), res.ok ? 'ok' : 'err');
+      await load();
+    } finally { setBusy(false); }
+  };
+  const reject = async () => {
+    setBusy(true);
+    try { await fetch('/api/manage/kb-upgrades/reject', { method: 'POST' }); toast('已保留你的版本'); await load(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="kbup">
+      <div className="kbup-title">🔄 知识库升级 · Knowledge-base upgrades</div>
+      {status.hasStaged ? (
+        <>
+          <div className="kbup-desc">已把 {status.staged?.length ?? 0} 个文件与新模板合并(保留你的自定义 + 采纳改进),审阅后应用:</div>
+          <div className="kbup-diffs">
+            {status.staged?.map((f) => (
+              <details className="kbup-file" key={f.path}>
+                <summary>{f.path} <span className="jobs-kind">{f.status}</span></summary>
+                <pre className="kbup-diff">
+                  {(f.diff || '').split('\n').map((l, i) => (
+                    <div key={i} className={l.startsWith('+') && !l.startsWith('+++') ? 'add' : l.startsWith('-') && !l.startsWith('---') ? 'del' : ''}>{l || ' '}</div>
+                  ))}
+                </pre>
+              </details>
+            ))}
+          </div>
+          <div className="kbup-btns">
+            <button className="cx-btn primary" onClick={approve} disabled={busy}>应用升级</button>
+            <button className="cx-btn ghost" onClick={reject} disabled={busy}>保留我的版本</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="kbup-desc">{nAvail} 个你自定义过的知识库文件有新模板改进。AI 合并会保留你的改动并采纳改进,结果需你审阅后才生效。</div>
+          <ul className="kbup-list">{status.available.map((u) => <li key={u.path}>{u.path}</li>)}</ul>
+          <div className="kbup-btns">
+            <button className="cx-btn primary" onClick={run} disabled={busy}>{busy ? '合并中…（AI）' : '运行合并(AI)'}</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function CortexView({ toast }: { toast: (t: string, k?: 'ok' | 'err') => void }) {
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [models, setModels] = useState<ModelItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -912,6 +990,9 @@ function CortexView() {
         校准“cortex”——每次 LLM 调用所用的提示词与模型都在这里调,存入 <code>app_config</code>,下次调用即时生效,无需重启。
         与「对话评估」形成闭环:先评分收集数据,再回到这里调提示词/模型。
       </div>
+
+      <KbUpgradesCard toast={toast} />
+
 
       <div className="mng-title">模型路由 · Model routing</div>
       <div className="cx-models">

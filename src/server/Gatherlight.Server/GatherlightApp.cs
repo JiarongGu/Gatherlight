@@ -185,7 +185,9 @@ public static class GatherlightApp
             .AddHostedService(sp => sp.GetRequiredService<ScriptToolProvider>())
             .AddSingleton<IToolRegistry, ToolRegistry>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
-            .AddSingleton<IZhikuSeeder, ZhikuSeeder>();
+            .AddSingleton<IZhikuSeeder, ZhikuSeeder>()
+            // Knowledge-base upgrade migration (LLM-reconcile customized .claude/ files with new templates)
+            .AddSingleton<Modules.Seed.Services.IZhikuMigrator, Modules.Seed.Services.ZhikuMigrator>();
 
         builder.Services.AddHttpClient();
 
@@ -230,6 +232,9 @@ public static class GatherlightApp
         }
         // Seed/upgrade the knowledge base BEFORE indexing so a fresh data folder scaffolds fully.
         app.Services.GetRequiredService<IZhikuSeeder>().SeedAsync().GetAwaiter().GetResult();
+        // Detect customized .claude/ files that have shipped improvements (which the seeder skips) and
+        // notify — the LLM 3-way merge is opt-in from the console (no startup token spend).
+        app.Services.GetRequiredService<Modules.Seed.Services.IZhikuMigrator>().NotifyIfUpgradesAsync().GetAwaiter().GetResult();
 
         app.Services.GetRequiredService<IPlanIndexService>().RescanAsync().GetAwaiter().GetResult();
 

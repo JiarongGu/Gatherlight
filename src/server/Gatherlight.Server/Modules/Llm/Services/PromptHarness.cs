@@ -40,6 +40,7 @@ public interface IPromptHarness
     string JobExecutePrompt(string jobName, string instructions);
     string JobReportPrompt(string jobName, string instructions);
     string JobCommitMessage(string jobName, IReadOnlyList<string> files, bool autoApproved);
+    string KbMergePrompt(string path, string userVersion, string templateVersion);
 }
 
 public sealed class PromptHarness : IPromptHarness
@@ -247,6 +248,31 @@ public sealed class PromptHarness : IPromptHarness
         {instructions}
         """;
 
+    // Knowledge-base upgrade migration — reconcile a user's customized .claude/ file with the new
+    // shipped template (2-way: A = user's current, B = new template). Output = merged file only.
+    private const string KbMergeTemplate = """
+        You are reconciling two versions of a knowledge-base file in a family-planner workspace (its `.claude/` config: rules / skills / workflows / templates). Produce a MERGED version and output ONLY the merged file content — no preamble, no explanation, no code fences, no commentary.
+
+        FILE: {path}
+
+        VERSION A — the user's CURRENT customized file (their intentional edits — preserve them):
+        <<<<A
+        {userVersion}
+        A>>>>
+
+        VERSION B — the NEW official template with improvements (adopt them):
+        <<<<B
+        {templateVersion}
+        B>>>>
+
+        Merge rules:
+        - Keep every intentional customization from A (added rules/examples/wording, family- or workspace-specific content).
+        - Adopt B's improvements (new sections, clearer structure, fixed links, new guidance) wherever they don't conflict with A's customizations.
+        - When A and B genuinely conflict on the same point, prefer A (the user's choice), but still fold in B's non-conflicting additions around it.
+        - Preserve A's language and formatting conventions.
+        - Output the COMPLETE merged file, ready to save as-is.
+        """;
+
     private static readonly Regex PlaceholderRe = new(@"\{([a-zA-Z]+)\}", RegexOptions.Compiled);
 
     private static IReadOnlyList<string> Ph(string template) =>
@@ -286,6 +312,8 @@ public sealed class PromptHarness : IPromptHarness
             "后台定时任务:一次性完成并改动文件(供事后审阅或自动提交)。", "jobs", JobExecuteTemplate, Ph(JobExecuteTemplate)),
         new PromptDescriptor("jobReport", "定时任务 · 报告",
             "后台定时任务:只读分析并产出报告(不改动数据)。", "jobs", JobReportTemplate, Ph(JobReportTemplate)),
+        new PromptDescriptor("kbMerge", "知识库升级 · 合并",
+            "应用更新时,把用户自定义的 .claude 文件与新模板改进合并(2-way)。", "utility", KbMergeTemplate, Ph(KbMergeTemplate)),
     };
 
     private readonly IAppConfigService _appConfig;
@@ -321,6 +349,12 @@ public sealed class PromptHarness : IPromptHarness
 
     public string JobReportPrompt(string jobName, string instructions) =>
         Render("jobReport", JobReportTemplate, new() { ["jobName"] = jobName, ["instructions"] = instructions });
+
+    public string KbMergePrompt(string path, string userVersion, string templateVersion) =>
+        Render("kbMerge", KbMergeTemplate, new()
+        {
+            ["path"] = path, ["userVersion"] = userVersion, ["templateVersion"] = templateVersion,
+        });
 
     /// <summary>Commit message for a background job's edits: subject + provenance (auto vs
     /// human-approved diff) + file list.</summary>

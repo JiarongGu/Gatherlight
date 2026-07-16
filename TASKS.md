@@ -17,16 +17,11 @@
 ## Backlog
 
 ### Verification (user-side — needs a real environment I can't reach)
-- [ ] **Background-jobs console UI:** `/manage` → 自动化 · Jobs — build-verified (tsc + vite green) but
-  not visually checked. Confirm: create each kind, run-now, the enable toggle, run-history expand,
-  staged-agent approve/reject, the kill-switch, and the planner top-bar notification bell (SSE +
-  browser Notification permission prompt). Backend is fully e2e-covered (`p26`, 19/19).
-
-### Product (deferred, not urgent)
-- [ ] **Sub-project 2 — update migration (LLM-assisted):** on an app/reference-KB version bump,
-  reconcile a user's *customized* `.claude/` files with new template improvements (today `ZhikuSeeder`
-  skips user-modified files forever). Reuses the background-jobs **unattended-run** primitive as a
-  special one-off migration job that stages a reviewable diff. Its own spec → plan cycle.
+- [ ] **New UI on your live instance:** the 自动化 · Jobs panel, the planner notification bell, and the
+  知识库升级 (KB-upgrade) card were all browser-verified here (create/run/run-history/bell; KB-upgrade
+  available + staged-diff states) and a tz-display bug was fixed. A pass on YOUR real data + the
+  browser-Notification permission prompt is still worth a glance. Backends fully e2e-covered
+  (jobs `p26` 19/19, KB migration `p27` 8/8).
 - [ ] **Runtime bootstrap on a clean machine:** on a Windows box WITHOUT .NET 10, run the bundle's
   `Gatherlight.exe` → confirm it installs the runtime (one UAC prompt) then the app starts. Verified
   only on a machine that already has .NET 10 (app launches, 19 MB bundle). The missing→install path is
