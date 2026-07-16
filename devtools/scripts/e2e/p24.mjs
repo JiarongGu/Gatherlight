@@ -13,7 +13,7 @@ import { repo, makeReporter } from './_e2e-common.mjs';
 
 const { ok, fail, done } = makeReporter('p24');
 
-const systemGuard = path.join(repo, 'devtools', 'scripts', 'system-scope-guard.mjs');
+const systemGuard = path.join(repo, 'guard', 'system-scope-guard.mjs');
 
 // Extract the planner guard body from the C# const and materialize it to a temp .mjs, so the test
 // exercises the exact bytes the server injects into a data folder (WRITE_DIRS = plans/household/.claude).
@@ -57,9 +57,19 @@ battery('system', systemGuard, [
   ['read escapes ..', 'Read', { file_path: '../../secret.txt' }, true],
   ['grep no path (cwd)', 'Grep', { pattern: 'foo' }, false],
   ['glob escaping path', 'Glob', { pattern: '**', path: '../../..' }, true],
-  // writes
+  // writes — broad allow (whole repo) minus the PROTECTED deny-list
   ['write src/client', 'Write', { file_path: 'src/client/src/x.tsx' }, false],
+  ['write .claude rule', 'Write', { file_path: '.claude/rules/dev-conventions.md' }, false],
+  ['write .claude skill', 'Write', { file_path: '.claude/skills/foo/foo.mjs' }, false],
+  ['write devtools', 'Write', { file_path: 'devtools/dev.mjs' }, false],
+  ['write docs', 'Write', { file_path: 'docs/x.md' }, false],
+  ['write root file', 'Write', { file_path: 'README.md' }, false],
+  ['write guard denied', 'Write', { file_path: 'guard/system-scope-guard.mjs' }, true],
+  ['write guard default-site denied', 'Write', { file_path: 'guard/default-site/index.html' }, true],
   ['write src/server denied', 'Write', { file_path: 'src/server/x.cs' }, true],
+  ['write .claude settings denied', 'Write', { file_path: '.claude/settings.json' }, true],
+  ['write .claude settings.local denied', 'Write', { file_path: '.claude/settings.local.json' }, true],
+  ['write .git denied', 'Write', { file_path: '.git/config' }, true],
   ['write outside repo', 'Write', { file_path: '../evil.txt' }, true],
   // bash
   ['bash ls in-repo', 'Bash', { command: 'ls src/client' }, false],
