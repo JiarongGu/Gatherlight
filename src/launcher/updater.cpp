@@ -91,6 +91,16 @@ int RunHidden(const std::wstring& cmdLine)
     return (int)code;
 }
 
+// Absolute path to a System32 executable — never invoke robocopy by bare name (a planted robocopy.exe
+// in the cwd would be found first via CreateProcessW's search order).
+std::wstring System32Exe(const wchar_t* exe)
+{
+    wchar_t sys[MAX_PATH];
+    UINT n = GetSystemDirectoryW(sys, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return exe;   // fallback: bare name
+    return std::wstring(sys, n) + L"\\" + exe;
+}
+
 // Mirror `src` into `dst` (recursive, overwriting) with robocopy, plus any extra exclude args.
 // robocopy exit codes < 8 = success (0 = nothing to copy, 1–7 = copied/extra/mismatch, all fine).
 bool RobocopyTree(const std::wstring& src, const std::wstring& dst, const std::wstring& extra)
@@ -170,16 +180,6 @@ std::wstring OwnExeBasename()
     wchar_t path[32768]; // long-path safe (see CloseRunningHost) so the basename isn't truncated
     GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
     return std::wstring(PathFindFileNameW(path));
-}
-
-// Absolute path to a System32 executable — never invoke robocopy by bare name (a planted robocopy.exe
-// in the cwd would be found first via CreateProcessW's search order).
-std::wstring System32Exe(const wchar_t* exe)
-{
-    wchar_t sys[MAX_PATH];
-    UINT n = GetSystemDirectoryW(sys, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return exe;   // fallback: bare name
-    return std::wstring(sys, n) + L"\\" + exe;
 }
 
 // A manifest path is unsafe if it escapes the install root — a `..` path segment, or an absolute/drive
