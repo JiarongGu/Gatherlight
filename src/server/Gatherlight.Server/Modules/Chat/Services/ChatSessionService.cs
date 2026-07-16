@@ -58,7 +58,6 @@ public sealed class ChatSession
     /// <summary>Sequential persistence chain so DB writes keep event order without
     /// blocking the emit path.</summary>
     public Task PersistChain = Task.CompletedTask;
-    public int EventSeq;
 }
 
 /// <summary>
@@ -141,13 +140,16 @@ public sealed class ChatSessionService
         // Append + fan out to subscribers under the SAME lock Subscribe snapshots under, so an event
         // emitted between a reconnect's snapshot and its subscribe can't be lost, and every subscriber
         // sees the same stable seq (the log index).
+        int seq;
         lock (s.Log)
         {
             s.Log.Add(ev);
             var idx = s.Log.Count - 1;
+            // Persisted seq is DERIVED from the same log index under this lock (not a separate counter),
+            // so the SSE frame id (idx) and the DB seq can never drift apart.
+            seq = idx + 1;
             foreach (var ch in s.Subscribers.Keys) ch.Writer.TryWrite((idx, ev));
         }
-        var seq = Interlocked.Increment(ref s.EventSeq);
         var payload = JsonSerializer.Serialize(ev, AgentEvent.WireJson);
         s.PersistChain = s.PersistChain.ContinueWith(
             _ => _repo.AppendEventAsync(s.Id, seq, ev.Kind, payload),

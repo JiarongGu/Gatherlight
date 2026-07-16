@@ -39,10 +39,16 @@ public sealed class LoginThrottle : ILoginThrottle
     public bool IsLocked(string key, out TimeSpan retryAfter)
     {
         retryAfter = TimeSpan.Zero;
-        if (_map.TryGetValue(key, out var e) && e.LockedUntil is { } until)
+        if (!_map.TryGetValue(key, out var e)) return false;
+        // Read LockedUntil under the same per-entry lock RecordFailure writes it with — a lock-free read
+        // of the nullable DateTime can tear.
+        lock (e)
         {
-            var remaining = until - DateTime.UtcNow;
-            if (remaining > TimeSpan.Zero) { retryAfter = remaining; return true; }
+            if (e.LockedUntil is { } until)
+            {
+                var remaining = until - DateTime.UtcNow;
+                if (remaining > TimeSpan.Zero) { retryAfter = remaining; return true; }
+            }
         }
         return false;
     }
