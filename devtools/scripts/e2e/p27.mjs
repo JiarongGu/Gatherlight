@@ -33,6 +33,20 @@ try {
   db.close();
   ok('rewound shipped-hash', Number(changed.changes) === 1);
 
+  // 2b) no-baseline path (the 合并升级 fix): a diverged file with NO shipped record — the case on
+  //     workspaces that predate upgrade-tracking (imported / the original prototype KB) — must STILL
+  //     be offered, not silently skipped. Delete the record, assert still detected, restore for below.
+  {
+    const db2 = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'));
+    db2.prepare('DELETE FROM zhiku_state WHERE key = ?').run('shipped:' + REL);
+    const stNb = await getJson('/api/manage/kb-upgrades');
+    ok('no-baseline customized file still detected (the 合并升级 fix)',
+      (stNb.available ?? []).some((u) => u.path === REL), JSON.stringify(stNb.available));
+    db2.prepare('INSERT INTO zhiku_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+      .run('shipped:' + REL, 'stalehash0000');
+    db2.close();
+  }
+
   // 3) detect the upgrade
   const st1 = await getJson('/api/manage/kb-upgrades');
   ok('upgrade detected', (st1.available ?? []).some((u) => u.path === REL), JSON.stringify(st1.available));

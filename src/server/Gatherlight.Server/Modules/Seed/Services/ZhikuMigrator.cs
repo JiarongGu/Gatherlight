@@ -12,7 +12,8 @@ using Gatherlight.Server.Modules.Llm.Services;
 namespace Gatherlight.Server.Modules.Seed.Services;
 
 public sealed record KbUpgrade(string Path);
-public sealed record KbMigrationStatus(List<KbUpgrade> Available, bool HasStaged, List<DiffFile>? Staged, string? StagedAt);
+public sealed record KbMigrationProgress(int Current, int Total, string? File, bool Running);
+public sealed record KbMigrationStatus(List<KbUpgrade> Available, bool HasStaged, List<DiffFile>? Staged, string? StagedAt, KbMigrationProgress? Progress);
 public sealed record KbMigrationResult(int Merged, int Failed, bool Staged, string? Error);
 
 /// <summary>
@@ -47,6 +48,10 @@ public sealed class ZhikuMigrator : IZhikuMigrator
     private readonly IDataCommitRepository _commits;
     private readonly INotificationService _notifications;
     private readonly ILogger<ZhikuMigrator> _log;
+
+    // Live per-file progress of an in-flight RunMigrationAsync, read by GetStatusAsync so the console
+    // can poll a status indicator during a long multi-file merge (the migrator is a DI singleton).
+    private volatile KbMigrationProgress? _progress;
 
     public ZhikuMigrator(
         IDataContext data, IDbConnectionFactory db, IClaudeCliRunner runner, IPromptHarness harness,
@@ -83,15 +88,20 @@ public sealed class ZhikuMigrator : IZhikuMigrator
             var target = _data.ResolveDataPath(rel);
             if (target is null || !File.Exists(target)) continue;      // absent → seeder writes it fresh, not a merge
 
-            var shipped = await GetStateAsync($"shipped:{rel}");
-            if (shipped is null) continue;                              // no record (imported) → can't tell customization from base
-
             var current = Hash(await File.ReadAllBytesAsync(target));
             var template = Hash(await File.ReadAllBytesAsync(abs));
-            if (current == template) continue;                          // already current
-            if (current == shipped) continue;                           // unmodified → seeder auto-upgrades it
-            if (template == shipped) continue;                          // template unchanged → no upstream improvement
-            result.Add(new KbUpgrade(rel));                             // modified AND template changed → merge candidate
+            if (current == template) continue;                          // already current — nothing to merge
+
+            // The shipped:{rel} baseline lets us skip the two provably-no-op cases. It's ABSENT on
+            // workspaces that predate upgrade-tracking (imported / the original prototype KB), where a
+            // file diverges but we have no base. Those are STILL offered — as a 2-way merge (user's
+            // current + latest template), gated by the human review of the staged diff — instead of
+            // being silently skipped forever (which made 合并升级 a permanent no-op on exactly those
+            // installs: e.g. 44 of 53 files here had no baseline → 0 candidates).
+            var shipped = await GetStateAsync($"shipped:{rel}");
+            if (shipped is not null && current == shipped) continue;    // unmodified since we shipped → seeder auto-upgrades it
+            if (shipped is not null && template == shipped) continue;   // template unchanged since we shipped → no upstream improvement
+            result.Add(new KbUpgrade(rel));                             // diverged (with or without a baseline) → merge candidate
         }
         return result;
     }
@@ -115,12 +125,13 @@ public sealed class ZhikuMigrator : IZhikuMigrator
     {
         var available = await DetectUpgradesAsync();
         var staged = await ReadStagedAsync();
-        return new KbMigrationStatus(available, staged is not null, staged?.Files, staged?.CreatedAt);
+        return new KbMigrationStatus(available, staged is not null, staged?.Files, staged?.CreatedAt, _progress);
     }
 
     public async Task<KbMigrationResult> RunMigrationAsync(CancellationToken ct = default)
     {
         var candidates = await DetectUpgradesAsync();
+        _log.LogInformation("KB migration run requested: {N} merge candidate(s)", candidates.Count);
         if (candidates.Count == 0) return new KbMigrationResult(0, 0, false, "没有可用升级");
 
         var root = ZhikuSeeder.TemplateRoot;
@@ -128,43 +139,50 @@ public sealed class ZhikuMigrator : IZhikuMigrator
         var shippedUpdates = new Dictionary<string, string>();
         var failed = 0;
 
-        using (await _writeLock.AcquireAsync(ct))
+        _progress = new KbMigrationProgress(0, candidates.Count, null, true);
+        try
         {
-            foreach (var c in candidates)
+            using (await _writeLock.AcquireAsync(ct))
             {
-                var target = _data.ResolveDataPath(c.Path)!;
-                var abs = Path.Combine(root, c.Path.Replace('/', Path.DirectorySeparatorChar));
-                var userContent = await File.ReadAllTextAsync(target, ct);
-                var templateBytes = await File.ReadAllBytesAsync(abs, ct);
-                var templateContent = Encoding.UTF8.GetString(templateBytes);
+                var done = 0;
+                foreach (var c in candidates)
+                {
+                    _progress = new KbMigrationProgress(++done, candidates.Count, c.Path, true);
+                    var target = _data.ResolveDataPath(c.Path)!;
+                    var abs = Path.Combine(root, c.Path.Replace('/', Path.DirectorySeparatorChar));
+                    var userContent = await File.ReadAllTextAsync(target, ct);
+                    var templateBytes = await File.ReadAllBytesAsync(abs, ct);
+                    var templateContent = Encoding.UTF8.GetString(templateBytes);
 
-                var merged = await MergeOneAsync(c.Path, userContent, templateContent, ct);
-                if (string.IsNullOrWhiteSpace(merged)) { failed++; _log.LogWarning("KB merge produced nothing for {File}", c.Path); continue; }
-                merged = merged.TrimEnd() + "\n";
+                    var merged = await MergeOneAsync(c.Path, userContent, templateContent, ct);
+                    if (string.IsNullOrWhiteSpace(merged)) { failed++; _log.LogWarning("KB merge produced nothing for {File}", c.Path); continue; }
+                    merged = merged.TrimEnd() + "\n";
 
-                shippedUpdates[c.Path] = Hash(templateBytes);           // reconciled against this template version
-                if (merged == userContent) continue;                    // no-op merge → nothing to stage, just reconcile state
-                await File.WriteAllTextAsync(target, merged, new UTF8Encoding(false), ct);
-                changed.Add(c.Path);
+                    shippedUpdates[c.Path] = Hash(templateBytes);           // reconciled against this template version
+                    if (merged == userContent) continue;                    // no-op merge → nothing to stage, just reconcile state
+                    await File.WriteAllTextAsync(target, merged, new UTF8Encoding(false), ct);
+                    changed.Add(c.Path);
+                }
+
+                if (changed.Count == 0)
+                {
+                    // Some no-op reconciliations may still need the shipped-state bumped so we don't re-nag.
+                    foreach (var kv in shippedUpdates) await SetStateAsync($"shipped:{kv.Key}", kv.Value);
+                    return new KbMigrationResult(0, failed, false, failed > 0 ? "合并失败,未产出改动" : "合并后无实际改动");
+                }
+
+                var files = await _git.BuildDiffAsync(changed, ct);
+                var patch = await _git.CapturePatchAsync(changed, ct);
+                await _git.RestorePathsAsync(changed, ct);                  // tree clean; changes live in the staged patch
+                await WriteStagedAsync(new StagedMigration(patch, files, shippedUpdates, DateTime.UtcNow.ToString("o")), ct);
             }
 
-            if (changed.Count == 0)
-            {
-                // Some no-op reconciliations may still need the shipped-state bumped so we don't re-nag.
-                foreach (var kv in shippedUpdates) await SetStateAsync($"shipped:{kv.Key}", kv.Value);
-                return new KbMigrationResult(0, failed, false, failed > 0 ? "合并失败,未产出改动" : "合并后无实际改动");
-            }
-
-            var files = await _git.BuildDiffAsync(changed, ct);
-            var patch = await _git.CapturePatchAsync(changed, ct);
-            await _git.RestorePathsAsync(changed, ct);                  // tree clean; changes live in the staged patch
-            await WriteStagedAsync(new StagedMigration(patch, files, shippedUpdates, DateTime.UtcNow.ToString("o")), ct);
+            await _notifications.CreateAsync(
+                NotificationKind.Info, "知识库升级已就绪", $"{changed.Count} 个文件已合并,待你审阅。", link: "kb-upgrades");
+            _log.LogInformation("KB migration staged: {N} merged, {F} failed", changed.Count, failed);
+            return new KbMigrationResult(changed.Count, failed, true, null);
         }
-
-        await _notifications.CreateAsync(
-            NotificationKind.Info, "知识库升级已就绪", $"{changed.Count} 个文件已合并,待你审阅。", link: "kb-upgrades");
-        _log.LogInformation("KB migration staged: {N} merged, {F} failed", changed.Count, failed);
-        return new KbMigrationResult(changed.Count, failed, true, null);
+        finally { _progress = null; }
     }
 
     public async Task<(bool Ok, string? Error, string? Sha)> ApproveAsync(CancellationToken ct = default)

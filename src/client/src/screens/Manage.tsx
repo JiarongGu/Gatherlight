@@ -822,6 +822,7 @@ interface KbStatus {
   hasStaged: boolean;
   staged?: { path: string; status: string; diff: string }[] | null;
   stagedAt?: string | null;
+  progress?: { current: number; total: number; file?: string | null; running: boolean } | null;
 }
 function KbUpgradesCard({ toast }: { toast: (t: string, k?: 'ok' | 'err') => void }) {
   const [status, setStatus] = useState<KbStatus | null>(null);
@@ -835,13 +836,19 @@ function KbUpgradesCard({ toast }: { toast: (t: string, k?: 'ok' | 'err') => voi
 
   const run = async () => {
     setBusy(true);
+    // The merge is one blocking POST that spawns claude per file (can be minutes for a big KB). Poll
+    // the status endpoint meanwhile so the card shows live per-file progress instead of a frozen button.
+    const poll = setInterval(load, 1000);
     try {
       const res = await fetch('/api/manage/kb-upgrades/run', { method: 'POST' });
       const r = await res.json();
-      if (res.ok && r.staged) toast(`已合并 ${r.merged} 个文件,请审阅`);
+      if (res.ok && r.staged) toast(`已合并 ${r.merged} 个文件${r.failed ? `(${r.failed} 个失败)` : ''},请审阅`);
       else toast(r.error ?? '合并无改动', res.ok ? 'ok' : 'err');
+    } finally {
+      clearInterval(poll);
+      setBusy(false);
       await load();
-    } finally { setBusy(false); }
+    }
   };
   const approve = async () => {
     setBusy(true);
@@ -885,8 +892,18 @@ function KbUpgradesCard({ toast }: { toast: (t: string, k?: 'ok' | 'err') => voi
         <>
           <div className="kbup-desc">{nAvail} 个你自定义过的知识库文件有新模板改进。AI 合并会保留你的改动并采纳改进,结果需你审阅后才生效。</div>
           <ul className="kbup-list">{status.available.map((u) => <li key={u.path}>{u.path}</li>)}</ul>
+          {busy && status.progress?.running && (
+            <div className="kbup-progress">
+              合并中 {status.progress.current}/{status.progress.total}
+              {status.progress.file ? <> · <code>{status.progress.file}</code></> : null}
+            </div>
+          )}
           <div className="kbup-btns">
-            <button className="cx-btn primary" onClick={run} disabled={busy}>{busy ? '合并中…（AI）' : '运行合并(AI)'}</button>
+            <button className="cx-btn primary" onClick={run} disabled={busy}>
+              {busy
+                ? (status.progress?.running ? `合并中 ${status.progress.current}/${status.progress.total}…（AI）` : '合并中…（AI）')
+                : '运行合并(AI)'}
+            </button>
           </div>
         </>
       )}
