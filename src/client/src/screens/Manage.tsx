@@ -1364,6 +1364,17 @@ const STATUS_LABEL: Record<string, string> = {
   success: '成功', failed: '失败', timeout: '超时', staged: '待审阅', rejected: '已拒绝', skipped: '已跳过', running: '运行中',
 };
 const fmtWhen = (iso?: string | null) => (iso ? iso.slice(0, 16).replace('T', ' ') : '—');
+// Scheduled instants are stored UTC; show them in the job's own timezone so "每天9点" reads as 09:00,
+// not the UTC 01:00. Falls back to the raw slice if the tz/date is unusable.
+const fmtWhenTz = (iso?: string | null, tz?: string | null) => {
+  if (!iso) return '—';
+  try {
+    return new Intl.DateTimeFormat('zh-CN', {
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      hour12: false, timeZone: tz || undefined,
+    }).format(new Date(iso)).replace(/\//g, '-');
+  } catch { return fmtWhen(iso); }
+};
 
 function JobsView({ toast, confirm }: {
   toast: (t: string, k?: 'ok' | 'err') => void;
@@ -1558,8 +1569,8 @@ function JobsView({ toast, confirm }: {
                 <div className="jobs-row-main" onClick={() => toggleOpen(job.id)}>
                   <div className="jobs-row-name">{job.name} <span className={`jobs-kind k-${job.kind}`}>{KIND_LABEL[job.kind] ?? job.kind}</span>{!job.enabled && <span className="jobs-off">已停用</span>}</div>
                   <div className="jobs-row-meta">
-                    <span>{job.scheduleKind === 'cron' ? `cron ${job.cron}` : `一次 ${fmtWhen(job.runAt)}`}</span>
-                    <span>下次 {fmtWhen(job.nextRunAt)}</span>
+                    <span>{job.scheduleKind === 'cron' ? `cron ${job.cron}` : `一次 ${fmtWhenTz(job.runAt, job.timezone)}`}</span>
+                    <span>下次 {fmtWhenTz(job.nextRunAt, job.timezone)}{job.timezone ? ` (${job.timezone})` : ''}</span>
                     {job.lastStatus && <span className={`jobs-st s-${job.lastStatus}`}>{STATUS_LABEL[job.lastStatus] ?? job.lastStatus}</span>}
                     <span>运行 {job.runCount} 次</span>
                   </div>
