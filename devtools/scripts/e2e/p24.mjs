@@ -94,6 +94,8 @@ if (plannerGuard) {
     ['write plan md', 'Write', { file_path: 'plans/trips/2026-08-x.md' }, false],
     ['write household md', 'Edit', { file_path: 'household/people.md' }, false],
     ['write .claude skill', 'Write', { file_path: '.claude/skills/xhs-search/xhs-search.mjs' }, false],
+    ['write .claude hooks guard denied', 'Write', { file_path: '.claude/hooks/scope-guard.mjs' }, true],
+    ['write .claude settings denied', 'Write', { file_path: '.claude/settings.json' }, true],
     ['write src/client denied', 'Write', { file_path: 'src/client/x.tsx' }, true],
     ['write outside folder', 'Write', { file_path: '/c/Users/x/evil' }, true],
     ['read household', 'Read', { file_path: 'household/people.md' }, false],

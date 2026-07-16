@@ -34,9 +34,9 @@ public sealed class ChatEnvironmentService
     {
         File.WriteAllText(SettingsPath, SettingsChatJson);
         // 系统模式 settings: same acceptEdits shape, but the PreToolUse hook is the code repo's
-        // tracked system scope guard (allow-list src/client only), referenced absolutely since
-        // the run's $CLAUDE_PROJECT_DIR is the code repo.
-        var systemGuard = Path.Combine(_options.CodeRootPath, "devtools", "scripts", "system-scope-guard.mjs")
+        // tracked system scope guard (deny-list: whole repo except guard/, src/server, settings, .git),
+        // referenced absolutely since the run's $CLAUDE_PROJECT_DIR is the code repo.
+        var systemGuard = Path.Combine(_options.CodeRootPath, "guard", "system-scope-guard.mjs")
             .Replace('\\', '/');
         File.WriteAllText(SystemSettingsPath, SettingsChatJson.Replace(
             "node \\\"$CLAUDE_PROJECT_DIR/.claude/hooks/scope-guard.mjs\\\"",
@@ -114,7 +114,8 @@ public sealed class ChatEnvironmentService
          * Registered in state/settings.chat.json.
          *
          * The spawned agent is JAILED to the data folder. Enforced boundaries:
-         *   WRITE (Edit/Write/MultiEdit/NotebookEdit)  -> only under plans/ household/ .claude/
+         *   WRITE (Edit/Write/MultiEdit/NotebookEdit)  -> under plans/ household/ .claude/ EXCEPT
+         *                                                the PROTECTED set (.claude/hooks/, .claude/settings*.json)
          *   READ  (Read/Grep/Glob)                     -> only inside the data folder
          *   BASH                                       -> not: git-history / delete, network egress,
          *                                                inline code-eval, filesystem crawl, or any
@@ -123,14 +124,15 @@ public sealed class ChatEnvironmentService
          * Anything genuinely out-of-boundary (fetch a URL, run a scraper, read a shared resource) MUST
          * go through a server MCP tool -- mediated + auditable -- never raw Bash. Else: silent exit 0.
          *
-         * Kept identical to devtools/scripts/system-scope-guard.mjs except WRITE_DIRS; e2e suite p24
+         * Kept identical to guard/system-scope-guard.mjs except WRITE_DIRS + PROTECTED; e2e suite p24
          * runs both. GUARD_VERSION is the upgrade key: the server re-issues newer logic into an
          * existing data folder (ChatEnvironmentService.EnsureFiles), so hardening reaches old installs.
          */
-        // GUARD_VERSION: 2
+        // GUARD_VERSION: 3
         import path from 'node:path';
 
         const WRITE_DIRS = ['plans', 'household', '.claude'];
+        const PROTECTED = ['.claude/hooks', '.claude/settings.json', '.claude/settings.local.json'];
 
         const HISTORY = [
           /\bgit\s+(commit|add|push|reset|restore|checkout|clean|rebase|stash|rm)\b/,
@@ -179,6 +181,9 @@ public sealed class ChatEnvironmentService
           return null;
         }
         const inside = (p, root) => relTo(p, root) !== null;
+        // rel is under any entry of `dirs`. A '' entry means the whole jail; other entries match the
+        // dir/file itself or anything beneath it. Shared by the WRITE_DIRS allow-list + PROTECTED deny-list.
+        const underAny = (rel, dirs) => dirs.some((d) => d === '' || rel === d || rel.startsWith(d + '/'));
 
         // Best-effort: does any path-like token in a Bash command point outside the jail? The robust
         // controls are the network/eval denials above + the read/write jail at the tool layer; this
@@ -234,8 +239,10 @@ public sealed class ChatEnvironmentService
           if (!filePath) allow();
           const rel = relTo(filePath, projectDir);
           if (rel === null) deny(`Blocked: ${filePath} is outside the data folder.`);
-          if (!WRITE_DIRS.some((d) => rel === d || rel.startsWith(d + '/')))
+          if (!underAny(rel, WRITE_DIRS))
             deny(`Blocked: the agent may only edit ${WRITE_DIRS.join(', ')} — not "${rel}".`);
+          if (underAny(rel, PROTECTED))
+            deny(`Blocked: "${rel}" is a protected, app-managed path (the guard / settings) — not editable.`);
           allow();
         }
 
