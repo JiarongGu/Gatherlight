@@ -178,9 +178,14 @@ public sealed class BackupService : IBackupService
     private static void CopyTree(string src, string dest, ref int count)
     {
         Directory.CreateDirectory(dest);
+        var destFull = Path.GetFullPath(dest);
+        var destWithSep = destFull.EndsWith(Path.DirectorySeparatorChar) ? destFull : destFull + Path.DirectorySeparatorChar;
         foreach (var f in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
         {
             var target = Path.Combine(dest, Path.GetRelativePath(src, f));
+            // Defense-in-depth (import is a privileged whole-install replace): never write outside dest,
+            // even if a symlink/crafted entry in the uploaded archive resolves the target elsewhere.
+            if (!Path.GetFullPath(target).StartsWith(destWithSep, StringComparison.OrdinalIgnoreCase)) continue;
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             if (File.Exists(target)) ClearReadOnly(target);
             File.Copy(f, target, overwrite: true);

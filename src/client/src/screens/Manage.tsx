@@ -1157,12 +1157,14 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
     }
   };
   useEffect(() => { load(); }, []);
-  // Poll while anything is downloading so the progress bar advances live.
+  // Poll while anything is downloading so the progress bar advances live. Gate on a DERIVED boolean —
+  // keying on `items` would tear down + recreate the interval on every 1.2s load() (items changes each tick).
+  const anyRunning = items?.some((r) => r.state === 'running') ?? false;
   useEffect(() => {
-    if (!items?.some((r) => r.state === 'running')) return;
+    if (!anyRunning) return;
     const t = setInterval(load, 1200);
     return () => clearInterval(t);
-  }, [items]);
+  }, [anyRunning]);
 
   const provision = async (id: string) => {
     try {

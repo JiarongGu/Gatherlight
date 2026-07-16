@@ -41,29 +41,49 @@ export function NotificationBell() {
     }
   }, []);
 
-  // Live stream: new notifications prepend + fire a browser toast.
+  // Live stream: new notifications prepend + fire a browser toast. Self-reconnects with capped backoff
+  // (EventSource's built-in retry can stall on a hard/non-retryable close, silently killing the feed),
+  // and re-fetches on reconnect so a notification delivered during the gap isn't missed.
   useEffect(() => {
     let es: EventSource | null = null;
-    try {
-      es = new EventSource('/api/notifications/stream');
-      es.onmessage = (e) => {
-        try {
-          const n = JSON.parse(e.data) as AppNotification;
-          if (!n?.id) return;
-          setItems((prev) => [n, ...prev.filter((x) => x.id !== n.id)].slice(0, 50));
-          setUnread((u) => u + 1);
-          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            new Notification(n.title, { body: n.body ?? undefined });
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let retry = 0;
+    let closed = false;
+
+    const connect = () => {
+      if (closed) return;
+      try {
+        es = new EventSource('/api/notifications/stream');
+        es.onopen = () => { retry = 0; };   // a healthy connection resets the backoff
+        es.onmessage = (e) => {
+          try {
+            const n = JSON.parse(e.data) as AppNotification;
+            if (!n?.id) return;
+            setItems((prev) => [n, ...prev.filter((x) => x.id !== n.id)].slice(0, 50));
+            setUnread((u) => u + 1);
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+              new Notification(n.title, { body: n.body ?? undefined });
+            }
+          } catch {
+            /* keep-alive / non-JSON frame */
           }
-        } catch {
-          /* keep-alive / non-JSON frame */
-        }
-      };
-    } catch {
-      /* SSE unavailable */
-    }
-    return () => es?.close();
-  }, []);
+        };
+        es.onerror = () => {
+          es?.close();
+          es = null;
+          if (closed) return;
+          const delay = Math.min(1000 * 2 ** retry, 30_000);
+          retry++;
+          timer = setTimeout(() => { load(); connect(); }, delay);
+        };
+      } catch {
+        /* SSE unavailable */
+      }
+    };
+    connect();
+
+    return () => { closed = true; if (timer) clearTimeout(timer); es?.close(); };
+  }, [load]);
 
   const markAllRead = async () => {
     setUnread(0);

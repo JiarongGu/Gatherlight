@@ -58,9 +58,17 @@ function viewToUrl(v: PlannerView): string {
 }
 
 export function App() {
+  // Route BEFORE any hooks so PlannerApp's hooks run unconditionally (rules-of-hooks). These conditions
+  // are constant per mount, but a conditional return sitting above hook calls is a latent trap.
   if (SHOW_GALLERY) return <Gallery />;
   // The desktop management console renders this admin dashboard (WebView2 loads /manage).
   if (typeof location !== 'undefined' && location.pathname.replace(/\/+$/, '') === '/manage') return <Manage />;
+  return <PlannerApp />;
+}
+
+// The markdown-plan reader shell — rendered only when neither the gallery nor the /manage console is
+// active, so every hook below runs unconditionally.
+function PlannerApp() {
   // Plan data now arrives from the server (the data folder is server-side) — loaded once at
   // startup; edits land via chat/fs endpoints which re-index server-side.
   const [planData, setPlanData] = useState<PlanData | null>(null);

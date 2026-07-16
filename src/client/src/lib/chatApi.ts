@@ -51,13 +51,16 @@ export const refineDiff = (id: string, message: string) =>
  */
 export function openStream(
   id: string,
-  onEvent: (ev: AgentEvent) => void,
+  onEvent: (ev: AgentEvent, seq: number) => void,
   onError?: (e: Event) => void
 ): () => void {
   const es = new EventSource(`/api/chat/${id}/stream`);
   es.onmessage = (msg) => {
     try {
-      onEvent(JSON.parse(msg.data) as AgentEvent);
+      // The SSE `id:` field (surfaced as lastEventId) is the server-side seq — passed to the
+      // consumer so it can drop a re-delivered frame (client-side replay idempotency).
+      const seq = Number(msg.lastEventId);
+      onEvent(JSON.parse(msg.data) as AgentEvent, Number.isFinite(seq) ? seq : -1);
     } catch {
       /* ignore malformed frame */
     }

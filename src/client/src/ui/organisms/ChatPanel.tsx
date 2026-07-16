@@ -318,8 +318,14 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
   const [systemMode, setSystemMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Highest SSE frame seq applied — reset to -1 whenever a fresh stream opens (both open from the
+  // server's log at seq 0). Guards against a re-delivered frame doubling token/cost + transcript if a
+  // reconnect ever replays past what Last-Event-ID already covered.
+  const lastSeqRef = useRef(-1);
   // Dispatch an event + drop the persisted session id once it finishes.
-  const onEvent = useCallback((ev: AgentEvent) => {
+  const onEvent = useCallback((ev: AgentEvent, seq: number) => {
+    if (seq >= 0 && seq <= lastSeqRef.current) return;   // already applied — skip replay
+    if (seq >= 0) lastSeqRef.current = seq;
     if (ev.kind === 'done') localStorage.removeItem(SESSION_KEY);
     dispatch({ type: 'event', ev });
   }, []);
@@ -361,6 +367,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
     const id = localStorage.getItem(SESSION_KEY);
     if (!id) return;
     dispatch({ type: 'rehydrate', sessionId: id });
+    lastSeqRef.current = -1;   // fresh stream replays from seq 0
     closeRef.current = openStream(id, onEvent, () => localStorage.removeItem(SESSION_KEY));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -434,6 +441,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       dispatch({ type: 'reset', sessionId: id, message: outgoing });
       setDraft('');
       setAttachments([]);
+      lastSeqRef.current = -1;   // fresh session/stream starts at seq 0
       closeRef.current = openStream(id, onEvent);
     } catch (err: any) {
       dispatch({ type: 'event', ev: { kind: 'error', text: err?.message ?? '发送失败' } });
@@ -588,7 +596,9 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
           <Alert type="error" showIcon style={{ margin: '8px 0' }} message={state.error} />
         )}
 
-        <ChatRating sessionId={state.sessionId} phase={state.phase} />
+        {/* key on the session so a new conversation gets a fresh rating widget (local sent/rating
+            state would otherwise persist and lock out rating every turn after the first). */}
+        <ChatRating key={state.sessionId ?? 'none'} sessionId={state.sessionId} phase={state.phase} />
       </div>
 
       <div className="chat-composer">

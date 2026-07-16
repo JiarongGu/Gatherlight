@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -30,6 +31,12 @@ public sealed class SecurityGuard : ISecurityGuard
 
     private readonly byte[]? _token;
     private readonly bool _trustLoopback;
+
+    // Opaque browser sessions: the cookie carries a random session id (not the shared secret), validated
+    // against this server-side set. In-memory → cleared on restart (users re-log in), which is fine for a
+    // self-hosted app and strictly better than a never-expiring raw-token cookie.
+    private readonly ConcurrentDictionary<string, DateTime> _sessions = new();
+    private static readonly TimeSpan SessionTtl = TimeSpan.FromDays(30);
 
     public SecurityGuard(GatherlightServerOptions options)
     {
@@ -67,18 +74,40 @@ public sealed class SecurityGuard : ISecurityGuard
         }
         if (ValidateToken(header)) return true;
 
-        return ctx.Request.Cookies.TryGetValue(CookieName, out var cookie) && ValidateToken(cookie);
+        // The cookie holds an opaque session id (issued at login), never the token itself.
+        return ctx.Request.Cookies.TryGetValue(CookieName, out var cookie) && ValidSession(cookie);
     }
 
-    public void IssueCookie(HttpContext ctx) =>
-        ctx.Response.Cookies.Append(CookieName, Encoding.UTF8.GetString(_token!), new CookieOptions
+    public void IssueCookie(HttpContext ctx)
+    {
+        var sid = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        PruneSessions();
+        _sessions[sid] = DateTime.UtcNow;
+        ctx.Response.Cookies.Append(CookieName, sid, new CookieOptions
         {
             HttpOnly = true,
             SameSite = SameSiteMode.Lax,
             Secure = ctx.Request.IsHttps,
-            MaxAge = TimeSpan.FromDays(30),
+            MaxAge = SessionTtl,
             Path = "/",
         });
+    }
 
-    public void ClearCookie(HttpContext ctx) => ctx.Response.Cookies.Delete(CookieName);
+    public void ClearCookie(HttpContext ctx)
+    {
+        if (ctx.Request.Cookies.TryGetValue(CookieName, out var sid)) _sessions.TryRemove(sid, out _);
+        ctx.Response.Cookies.Delete(CookieName);
+    }
+
+    private bool ValidSession(string sid) =>
+        !string.IsNullOrEmpty(sid) && _sessions.TryGetValue(sid, out var created) && DateTime.UtcNow - created < SessionTtl;
+
+    // Opportunistic cleanup so expired sessions don't accumulate on a long-lived process.
+    private void PruneSessions()
+    {
+        if (_sessions.Count < 512) return;
+        var cutoff = DateTime.UtcNow - SessionTtl;
+        foreach (var kv in _sessions)
+            if (kv.Value < cutoff) _sessions.TryRemove(kv.Key, out _);
+    }
 }
