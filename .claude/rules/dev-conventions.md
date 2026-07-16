@@ -82,15 +82,19 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   it has its own private git repo. The server never edits `state/`-external data outside the
   reviewed flows (chat gates, fs ops, seeder) — and those all serialize on `DataWriteLock`
   (one writer, or git index.lock collisions + corrupted review diffs).
-- The spawned agent is **jailed to the data folder** by the PreToolUse scope-guard hook
-  (`ChatEnvironmentService.ScopeGuardMjs` planner / `devtools/scripts/system-scope-guard.mjs`
+- The spawned agent is **jailed** by the PreToolUse scope-guard hook
+  (`ChatEnvironmentService.ScopeGuardMjs` planner / `guard/system-scope-guard.mjs`
   系统模式 — identical logic, different write-scope; `e2e-p24` runs both): **reads**
-  (Read/Grep/Glob) confined to the folder, **writes** (Edit/Write/…) to `plans/ household/
-  .claude/` (系统模式: `src/client`), **Bash** denied git-history / network-egress / inline-eval
+  (Read/Grep/Glob) confined to the jail, **writes** (Edit/Write/…) to `plans/ household/ .claude/`
+  (planner) or the **whole code repo except the PROTECTED set** — `guard/`, `src/server`,
+  `.claude/settings*.json`, `.git` — (系统模式). Each guard combines an allow-list (`WRITE_DIRS`)
+  with a `PROTECTED` deny-list that overrides it (the planner protects `.claude/hooks` + settings so
+  the agent can't neuter its own guard). **Bash** denied git-history / network-egress / inline-eval
   (`node -e`, `python -c`) / fs-crawl / path-escape. Anything genuinely **out-of-boundary must
   route through a server MCP tool** — mediated + auditable — never raw Bash. Enforcement, not
   trust. The guard carries a `GUARD_VERSION`; the server re-issues it into existing data folders
-  when it bumps (it's a security boundary, not editable KB content). Residuals the hook can't
+  when it bumps (it's a security boundary, not editable KB content). The `guard/` folder is
+  app-managed (shipped + overlaid by updates), read-only to the agent. Residuals the hook can't
   close (code run *inside* an agent-authored script; exfil via a WebFetch URL) need an OS sandbox.
 - The shipped knowledge base lives in `Assets/DataTemplate/` and is seeded/upgraded by
   `ZhikuSeeder` (hash-guarded: user-modified files are never overwritten).
