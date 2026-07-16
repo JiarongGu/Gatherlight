@@ -1,6 +1,6 @@
 # Keywords — Automation
 
-Used by `/doc-loader` when the task involves browser scraping, link verification, or reading uploaded files.
+Used by `/doc-loader` when the task involves browser scraping, link verification, reading uploaded files, or **scheduling background work** (recurring reports / reminders / tasks).
 
 ## Routing table
 
@@ -11,11 +11,14 @@ Used by `/doc-loader` when the task involves browser scraping, link verification
 | Verify a policy fact (visa / flight number / hours / event dates) | [rules/verify-policy-info.md](../rules/verify-policy-info.md), [workflows/WEB_SEARCH.md](../workflows/WEB_SEARCH.md) |
 | Build a reference library / fact list (verified, not hand-curated) | [rules/tool-first.md](../rules/tool-first.md), [workflows/BROWSER_AUTOMATION.md](../workflows/BROWSER_AUTOMATION.md) |
 | User uploaded a PDF / image whose content should inform the plan | [workflows/BROWSER_AUTOMATION.md](../workflows/BROWSER_AUTOMATION.md) §extract |
+| **Schedule** recurring / one-off background work (periodic report, reminder, recurring task) | [/schedule-job skill](../skills/schedule-job/SKILL.md) |
 
 ## Tools (provided by the Gatherlight server over MCP)
 
 - `scrape` — `mcp__planner-tools__scrape` `{url, selector?, waitFor?, timeout?}` — render a JS page in a real browser, return text. Wrapped by [`/scrape`](../skills/scrape/SKILL.md).
 - `extract` — `mcp__planner-tools__extract` `{relPath, instruction?}` — read an uploaded file under `uploads/`, return extracted/summarised text.
+- `job_schedule` / `job_list` / `job_run_now` / `job_cancel` — schedule + manage background jobs (recurring/one-off: report / reminder / task / tool). Wrapped by [`/schedule-job`](../skills/schedule-job/SKILL.md).
+- `notify_user` — `mcp__planner-tools__notify_user` `{title, body?, kind?}` — send the user an immediate in-app/browser notification (for a scheduled reminder use `job_schedule` kind=notify).
 
 New tools arrive with Gatherlight releases — record gaps via [`/remember`](../skills/remember/SKILL.md).
 

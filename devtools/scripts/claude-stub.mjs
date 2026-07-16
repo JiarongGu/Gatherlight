@@ -74,8 +74,12 @@ if (readOnly) {
   const abs = path.resolve(process.cwd(), rel);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const marker = prompt.includes("HUMAN'S FEEDBACK") ? 'revised-by-stub' : 'written-by-stub';
+  // An optional JOBMARK:<tok> in the prompt varies the written content so two background-job runs
+  // (e2e-p26) produce DISTINCT diffs against the same file. Absent → original content (p2 unaffected).
+  const jobmark = (prompt.match(/JOBMARK:(\S+)/) ?? [])[1];
+  const tag = jobmark ? ` ${jobmark}` : '';
   // system-mode content varies per process so consecutive sessions produce a real diff.
-  fs.writeFileSync(abs, systemMode ? `stub UI edit ${marker} ${process.pid}\n` : `# 2026-07-14 计划(fixture)\n\n- ${marker}\n`, 'utf8');
+  fs.writeFileSync(abs, systemMode ? `stub UI edit ${marker} ${process.pid}\n` : `# 2026-07-14 计划(fixture)\n\n- ${marker}${tag}\n`, 'utf8');
   emit({
     type: 'assistant',
     message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: abs } }] },

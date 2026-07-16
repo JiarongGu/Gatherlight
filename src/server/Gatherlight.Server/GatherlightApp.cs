@@ -164,6 +164,21 @@ public static class GatherlightApp
             .AddSingleton<Modules.Jobs.Services.IJobRepository, Modules.Jobs.Services.JobRepository>()
             .AddSingleton<Modules.Jobs.Services.INotificationService, Modules.Jobs.Services.NotificationService>()
             .AddSingleton<Modules.Jobs.Services.IUnattendedRunService, Modules.Jobs.Services.UnattendedRunService>()
+            // Job kinds = IJobHandler DI collection (add a kind = add a handler, never an if/else)
+            .AddSingleton<Modules.Jobs.Services.IJobHandler, Modules.Jobs.Services.ToolJobHandler>()
+            .AddSingleton<Modules.Jobs.Services.IJobHandler, Modules.Jobs.Services.NotifyJobHandler>()
+            .AddSingleton<Modules.Jobs.Services.IJobHandler, Modules.Jobs.Services.ReportJobHandler>()
+            .AddSingleton<Modules.Jobs.Services.IJobHandler, Modules.Jobs.Services.AgentJobHandler>()
+            // Orchestration (CRUD + execution engine + staged approve/reject) shared by the scheduler + run-now
+            .AddSingleton<Modules.Jobs.Services.IJobService, Modules.Jobs.Services.JobService>()
+            // The scheduler loop (polls due jobs, dispatches, catch-up, guardrails)
+            .AddHostedService<Modules.Jobs.Services.JobSchedulerService>()
+            // AI-facing job management tools (both surfaces)
+            .AddSingleton<IGatherlightTool, Modules.Jobs.Tools.JobScheduleTool>()
+            .AddSingleton<IGatherlightTool, Modules.Jobs.Tools.JobListTool>()
+            .AddSingleton<IGatherlightTool, Modules.Jobs.Tools.JobCancelTool>()
+            .AddSingleton<IGatherlightTool, Modules.Jobs.Tools.JobRunNowTool>()
+            .AddSingleton<IGatherlightTool, Modules.Jobs.Tools.NotifyUserTool>()
             // Hot-loadable script tools ({data}/tools/<name>/tool.json — no rebuild needed)
             .AddSingleton<ScriptToolProvider>()
             .AddSingleton<IScriptToolProvider>(sp => sp.GetRequiredService<ScriptToolProvider>())
@@ -253,6 +268,10 @@ public static class GatherlightApp
 
         // Sessions left non-terminal by a previous server death → error (inspectable, not resumed).
         app.Services.GetRequiredService<IChatRepository>().FailInterruptedSessionsAsync().GetAwaiter().GetResult();
+        // Same for job runs left 'running' by a crash → reconcile to failed so history is honest.
+        var reconciled = app.Services.GetRequiredService<Modules.Jobs.Services.IJobRepository>()
+            .FailInterruptedRunsAsync().GetAwaiter().GetResult();
+        if (reconciled > 0) app.Logger.LogInformation("Reconciled {N} interrupted job run(s) → failed", reconciled);
 
         // Defense-in-depth response headers (CSP + framing/sniffing) on everything.
         app.UseMiddleware<Modules.Security.SecurityHeadersMiddleware>();

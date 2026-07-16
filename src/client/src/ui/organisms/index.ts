@@ -6,6 +6,7 @@ export { Sidebar } from './Sidebar';
 // Home is a screen (routed surface) — re-exported here so legacy barrel imports keep working.
 export { Home } from '@/screens';
 export { TopBar } from './TopBar';
+export { NotificationBell } from './NotificationBell';
 export { CommandPalette } from './CommandPalette';
 export { ChatPanel } from './ChatPanel';
 export { TripAssets } from './TripAssets';

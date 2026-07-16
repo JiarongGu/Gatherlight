@@ -24,9 +24,13 @@ public interface IJobRepository
 
     Task InsertRunAsync(JobRun run);
     Task UpdateRunAsync(JobRun run);
+    Task DeleteRunAsync(string id);
     Task<JobRun?> GetRunAsync(string id);
     Task<List<JobRun>> ListRunsAsync(string jobId, int limit);
     Task<List<JobRun>> RecentRunsAsync(int limit);
+    /// <summary>Runs left <c>running</c> by a previous process (server death mid-run) → mark failed,
+    /// so history is honest and nothing looks stuck. Returns how many were reconciled.</summary>
+    Task<int> FailInterruptedRunsAsync();
 }
 
 public sealed class JobRepository : IJobRepository
@@ -136,6 +140,12 @@ public sealed class JobRepository : IJobRepository
             run);
     }
 
+    public async Task DeleteRunAsync(string id)
+    {
+        using var conn = _db.Open();
+        await conn.ExecuteAsync("DELETE FROM job_run WHERE id = @id", new { id });
+    }
+
     public async Task<JobRun?> GetRunAsync(string id)
     {
         using var conn = _db.Open();
@@ -164,5 +174,16 @@ public sealed class JobRepository : IJobRepository
             FROM job_run ORDER BY started_at DESC LIMIT @limit
             """,
             new { limit = Math.Clamp(limit, 1, 200) })).ToList();
+    }
+
+    public async Task<int> FailInterruptedRunsAsync()
+    {
+        using var conn = _db.Open();
+        return await conn.ExecuteAsync(
+            """
+            UPDATE job_run SET status = 'failed', outcome = '服务器重启中断', finished_at = @now
+            WHERE status = 'running'
+            """,
+            new { now = DateTime.UtcNow.ToString("o") });
     }
 }

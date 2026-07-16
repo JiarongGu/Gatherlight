@@ -11,7 +11,7 @@
 | [keywords/planning.md](keywords/planning.md) | Any `plans/` file: trip, daily, weekly, budget, packing | ~3 KB |
 | [keywords/household.md](keywords/household.md) | `household/*` updates: people, preferences, constraints, recurring | ~2 KB |
 | [keywords/conventions.md](keywords/conventions.md) | Cross-cutting "how we write things" — filenames, dates, money, citations | ~2 KB |
-| [keywords/automation.md](keywords/automation.md) | Browser scraping, link verification, uploaded-file extraction | ~1 KB |
+| [keywords/automation.md](keywords/automation.md) | Browser scraping, link verification, uploaded-file extraction, scheduling background jobs | ~1 KB |
 
 **Pick exactly one sub-index per task.** Load multiple only if the task genuinely spans scopes (e.g. "plan a trip AND update household profile with the new dietary fact").
 
@@ -31,6 +31,7 @@
 | verify, cross-check, audit, fabrication, fact-check, broken link | `automation.md` (verification workflows) |
 | restaurant URL, directory page, hotel address verify, flight number verify | `automation.md` |
 | uploaded file, PDF, image, attachment, extract | `automation.md` |
+| schedule, recurring, repeat, every day/week/month, remind me, reminder, periodic report, 定期, 提醒 | `automation.md` (schedule-job) |
 
 ## Always-on (regardless of sub-index)
 

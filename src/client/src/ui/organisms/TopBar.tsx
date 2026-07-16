@@ -10,6 +10,7 @@ import {
 import type { ReactNode } from 'react';
 import type { ThemeMode } from '@/lib/theme';
 import { modKeyLabel } from '@/lib/platform';
+import { NotificationBell } from './NotificationBell';
 
 interface Props {
   isMobile: boolean;
@@ -65,6 +66,7 @@ export function TopBar({
             {mode === 'dark' ? <BulbOutlined /> : <BulbFilled />}
           </button>
         </Tooltip>
+        <NotificationBell />
         <Tooltip title="Claude 助手">
           <button className="topbar-icon-btn" onClick={onOpenChat} aria-label="Claude 助手">
             <RobotOutlined />

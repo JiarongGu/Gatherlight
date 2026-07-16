@@ -110,6 +110,12 @@ public sealed class JobsConfig
     public int DefaultTimeoutSeconds { get; set; } = 600;
     /// <summary>A job that fails this many times in a row is auto-disabled (+ a notification).</summary>
     public int MaxConsecutiveFailures { get; set; } = 3;
+    /// <summary>Transient failures (CLI/tool errors, not config errors or timeouts) are retried this
+    /// many times WITHIN a single fire before the run is recorded as failed — so a rate-limit blip
+    /// doesn't count toward auto-disable. 0 = no retry.</summary>
+    public int MaxRetries { get; set; } = 2;
+    /// <summary>Base backoff between retries (seconds); doubles each attempt (5s, 10s, …).</summary>
+    public int RetryBackoffSeconds { get; set; } = 5;
 }
 
 /// <summary>

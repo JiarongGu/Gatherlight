@@ -88,6 +88,24 @@ human to approve a plan). `agent` uses the same execute-mode scope guard + `Edit
 4. **Failure auto-disable** — `consecutive_failures >= jobs.maxConsecutiveFailures` (default 3) →
    `enabled=0` + notification. No mid-slot retry in v1 (a failed run waits for its next cron slot).
 
+## Robustness (Mastra-informed)
+
+Two patterns adopted from Mastra's workflow engine, proportionate to a single-process desktop app:
+
+- **Retry taxonomy + backoff.** A **transient** failure (CLI/tool 5xx, unexpected exception) is
+  retried up to `jobs.maxRetries` (2) with exponential backoff (`jobs.retryBackoffSeconds` × 2ⁿ)
+  *within a single fire*, so a rate-limit blip doesn't count toward auto-disable. **Config errors,
+  timeouts, and tool 4xx are non-retryable** → fail fast. `JobHandlerResult.Retryable` carries the
+  classification; `JobService.RunHandlerOnceAsync` maps exceptions (ToolException status ≥ 500 =
+  retryable).
+- **Durable-run reconciliation.** On startup, any `job_run` left `running` by a crashed process is
+  marked `failed` (`FailInterruptedRunsAsync`, mirrors the chat-session reconciliation) — history
+  stays honest, nothing looks stuck.
+
+Deliberately **not** adopted (they solve distributed/multi-instance problems Gatherlight doesn't have):
+a pubsub event bus, compare-and-swap multi-instance cron claiming, and a general
+snapshot/resume engine. The stage-for-review gate already *is* Mastra's suspend/resume — single-step.
+
 ## AI surface
 
 Tools (both surfaces, `Modules/Jobs/Tools/`): `job_schedule` (upsert), `job_list`, `job_cancel`,
