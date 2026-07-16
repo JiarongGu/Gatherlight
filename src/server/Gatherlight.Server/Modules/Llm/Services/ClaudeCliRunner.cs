@@ -156,10 +156,17 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
             opts.AllowedTools?.Length ?? 0, opts.Prompt.Length, string.Join(' ', claudeArgs));
 
         using var proc = new Process { StartInfo = psi };
-        if (!proc.Start())
+        try
         {
-            _log.LogError("[{Label}] failed to spawn claude (exe={Exe})", label, psi.FileName);
-            throw new InvalidOperationException("failed to spawn claude");
+            if (!proc.Start())
+                throw new InvalidOperationException("Process.Start returned false");
+        }
+        catch (Exception ex)
+        {
+            // A throw here (exe not found, permission denied) previously left ONLY the spawn line in the
+            // log — now the failure is explicit so a broken LLM task is never silent.
+            _log.LogError(ex, "[{Label}] claude spawn FAILED (exe={Exe}): {Msg}", label, psi.FileName, ex.Message);
+            throw;
         }
 
         string? sessionId = null;
@@ -206,6 +213,14 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
         {
             _log.LogInformation("[{Label}] claude aborted after {Ms}ms", label, sw.ElapsedMilliseconds);
             opts.OnEvent(new AgentEvent { Kind = "notice", Text = "⛔ 正在停止 claude…" });
+            try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Mid-stream failure (broken pipe, CLI crash, reader error): log the outcome as a FAILURE —
+            // the counterpart to the spawn line — so no failed LLM task is ever missing from the log.
+            _log.LogError(ex, "[{Label}] claude FAILED after {Ms}ms: {Msg}", label, sw.ElapsedMilliseconds, ex.Message);
             try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
             throw;
         }
