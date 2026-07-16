@@ -2,6 +2,7 @@ import { Children, isValidElement, memo, useMemo, type ComponentProps, type Reac
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
+import { rehypeStripDangerous } from '@/lib/sanitize';
 import { Image } from '@/ui/atoms';
 import { Collapsible } from '@/ui/molecules';
 import { TripMap } from './TripMap';
@@ -94,7 +95,9 @@ const FALLBACK_SVG =
 // actually change — not on every shell state toggle (chat / ⌘K / theme / resize).
 type MdComponents = ComponentProps<typeof ReactMarkdown>['components'];
 
-const REHYPE_PLUGINS = [rehypeRaw];
+// rehypeRaw parses raw HTML into nodes; rehypeStripDangerous then removes script-ish
+// elements + on* handlers + javascript:/data: URLs (untrusted plan/LLM content).
+const REHYPE_PLUGINS = [rehypeRaw, rehypeStripDangerous];
 
 export const MarkdownView = memo(function MarkdownView({ source, collapsible }: Props) {
   const remarkPlugins = useMemo(

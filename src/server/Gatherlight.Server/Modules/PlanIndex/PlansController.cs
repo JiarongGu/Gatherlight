@@ -103,14 +103,39 @@ public sealed class PlansController : ControllerBase
     {
         var rel = path.Replace('\\', '/');
         if (!rel.StartsWith("plans/")) return NotFound();
-        var abs = _data.ResolveDataPath(rel);
-        if (abs is null || !System.IO.File.Exists(abs)) return NotFound();
-        var mime = Path.GetExtension(abs).ToLowerInvariant() switch
+        // Only the asset kinds the index actually serves — never an arbitrary file under plans/.
+        var mime = Path.GetExtension(rel).ToLowerInvariant() switch
         {
             ".pdf" => "application/pdf",
             ".json" => "application/json",
-            _ => "application/octet-stream",
+            _ => (string?)null,
         };
+        if (mime is null) return NotFound();
+        var abs = _data.ResolveDataPath(rel);
+        if (abs is null || !System.IO.File.Exists(abs)) return NotFound();
+        // The jailed agent can write under plans/, including symlinks. ResolveDataPath blocks `..`
+        // textually, but a symlink (file or parent dir) whose target is outside the data root would still
+        // resolve inside the prefix — reject any reparse point in the chain so it can't serve state/ or .git/.
+        if (!NoSymlinkEscape(abs)) return NotFound();
         return PhysicalFile(abs, mime, enableRangeProcessing: true);
+    }
+
+    private bool NoSymlinkEscape(string abs)
+    {
+        try
+        {
+            var root = Path.GetFullPath(_data.RootPath).TrimEnd(Path.DirectorySeparatorChar);
+            var fi = new FileInfo(abs);
+            if (fi.Attributes.HasFlag(FileAttributes.ReparsePoint)) return false;   // symlinked file
+            for (var dir = fi.Directory; dir is not null; dir = dir.Parent)
+            {
+                if (string.Equals(Path.GetFullPath(dir.FullName).TrimEnd(Path.DirectorySeparatorChar),
+                        root, StringComparison.OrdinalIgnoreCase))
+                    break;                                                          // reached the data root — done
+                if (dir.Attributes.HasFlag(FileAttributes.ReparsePoint)) return false; // symlinked dir in the chain
+            }
+            return true;
+        }
+        catch { return false; }
     }
 }

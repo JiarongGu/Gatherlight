@@ -11,9 +11,11 @@ public sealed record ChatTurnRow(long Id, string Message, string Outcome, string
 /// </summary>
 public interface IChatRepository
 {
+    // thread context is derived on demand from chat_turn (PrepareThreadContextAsync) and never persisted
+    // on chat_session, so it's not a parameter here.
     Task UpsertSessionAsync(string id, string phase, string mode, string userMessage,
         string? attachmentsJson, string? planText, string? claudeSessionId, string? commitSha,
-        string? error, string? threadContext, string createdAt);
+        string? error, string createdAt);
     Task AppendEventAsync(string sessionId, int seq, string kind, string payloadJson);
     Task<List<string>> EventPayloadsAsync(string sessionId);
     /// <summary>Sessions left non-terminal by a dead server → error (an in-flight run cannot
@@ -35,7 +37,7 @@ public sealed class ChatRepository : IChatRepository
 
     public async Task UpsertSessionAsync(string id, string phase, string mode, string userMessage,
         string? attachmentsJson, string? planText, string? claudeSessionId, string? commitSha,
-        string? error, string? threadContext, string createdAt)
+        string? error, string createdAt)
     {
         using var conn = _db.Open();
         await conn.ExecuteAsync(

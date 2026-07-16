@@ -101,8 +101,11 @@ public sealed class ScoringService : IScoringService
         if (row is null) return null;
 
         var files = new List<string>();
+        // The committed phase event carries data:{ sha, files }. Require BOTH markers so an unrelated
+        // event that merely mentions "files" (a plan, a tool detail, an error) can't be picked instead
+        // and silently zero the scope-adherence scorer.
         var payload = await conn.QuerySingleOrDefaultAsync<string>(
-            "SELECT payload_json FROM chat_event WHERE session_id = @id AND payload_json LIKE '%\"files\"%' ORDER BY seq DESC LIMIT 1",
+            "SELECT payload_json FROM chat_event WHERE session_id = @id AND payload_json LIKE '%\"files\"%' AND payload_json LIKE '%\"sha\"%' ORDER BY seq DESC LIMIT 1",
             new { id = sessionId });
         if (payload is not null)
         {

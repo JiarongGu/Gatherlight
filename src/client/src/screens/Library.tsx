@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { SearchOutlined, EnvironmentOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons';
 import { loadLibrary, KIND_LABEL, type LibraryItem, type LibraryFacets } from '@/lib/libraryApi';
 import { toPlainText } from '@/lib/markdown';
+import { safeUrl } from '@/lib/sanitize';
 
 // Route cover images through the server proxy — fetch-once, disk-cached, offline-safe.
 const proxied = (url: string) => `/api/library/image?url=${encodeURIComponent(url)}`;
@@ -188,7 +189,9 @@ function LibraryCard({ item }: { item: LibraryItem }) {
     .map((t) => t.trim())
     .filter(Boolean)
     .slice(0, 3);
-  const href = item.url ?? undefined;
+  // item.url is agent-authored (library_upsert tool) — allow only http/https/mailto so a
+  // javascript: value can't execute on click.
+  const href = safeUrl(item.url);
   // The glyph is always the backdrop; the cover image fades in over it once loaded, so a slow proxy
   // fetch (cold disk cache) shows the warm seal — never an empty box or the browser's broken-image
   // icon. A genuinely dead URL trips onError and we drop the img, leaving the glyph in place.

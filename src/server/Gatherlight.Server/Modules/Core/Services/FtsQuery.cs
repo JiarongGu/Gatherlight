@@ -18,4 +18,10 @@ public static class FtsQuery
             .ToList();
         return tokens.Count == 0 ? null : string.Join(" OR ", tokens);
     }
+
+    /// <summary>Escape a raw query for use inside a LIKE pattern with <c>ESCAPE '\'</c> — so a user's
+    /// <c>%</c>/<c>_</c> is matched literally instead of becoming a wildcard (over-matching). Escape the
+    /// escape char first.</summary>
+    public static string EscapeLike(string q) =>
+        q.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }

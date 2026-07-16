@@ -120,9 +120,11 @@ public class GitCliService : IGitCliService
         if (fresh)
         {
             (await RunAsync(new[] { "init" }, ct)).ThrowOnError("init");
-            EnsureDataGitignore();
             _log.LogInformation("Initialized data repo at {Root}", _root);
         }
+        // Every boot (not just fresh): an imported/user-edited .gitignore that dropped a line must not
+        // silently let `git add -A` commit app state into the audit trail.
+        EnsureDataGitignore();
         // Commits must work on a fresh machine with no global identity, and CRLF churn must not
         // pollute diffs. Local (repo-level) settings only.
         if ((await RunAsync(new[] { "config", "user.name" }, ct)).ExitCode != 0)
@@ -133,15 +135,27 @@ public class GitCliService : IGitCliService
         return fresh;
     }
 
-    /// <summary>App state must never enter the data repo's audit trail.</summary>
+    // App state must NEVER enter the data repo's audit trail (state/settings.json holds the access token,
+    // uploads/cache/ hold user files). These lines are load-bearing for the `git add -A` seeder/import path.
+    private static readonly string[] RequiredIgnores =
+    {
+        "state/", "uploads/", "cache/", "archive/", "sensitive-patterns.txt",
+        ".claude/settings.local.json", ".claude/scheduled_tasks.lock", ".claude/plans/",
+    };
+
+    /// <summary>Ensure every required ignore is present — appends any missing (idempotent), so a
+    /// dropped line in an imported/edited .gitignore can't expose app state to the audit trail.</summary>
     private void EnsureDataGitignore()
     {
+        const string header = "# Gatherlight data folder — private repo. App state/caches stay out of the audit trail.";
         var path = Path.Combine(_root, ".gitignore");
-        if (File.Exists(path)) return;
-        File.WriteAllText(path,
-            "# Gatherlight data folder — private repo. App state/caches stay out of the audit trail.\n" +
-            "state/\nuploads/\ncache/\narchive/\nsensitive-patterns.txt\n" +
-            ".claude/settings.local.json\n.claude/scheduled_tasks.lock\n.claude/plans/\n");
+        var lines = File.Exists(path) ? File.ReadAllLines(path).ToList() : new List<string> { header };
+        var have = lines.Select(l => l.Trim()).ToHashSet();
+        var changed = false;
+        foreach (var ig in RequiredIgnores)
+            if (have.Add(ig)) { lines.Add(ig); changed = true; }
+        if (changed || !File.Exists(path))
+            File.WriteAllText(path, string.Join('\n', lines) + "\n");
     }
 
     public async Task<bool> ExistsInHeadAsync(string rel, CancellationToken ct = default) =>
@@ -266,7 +280,16 @@ public class GitCliService : IGitCliService
             .ToList();
     }
 
-    private static string Norm(string rel) => PathText.Norm(rel);
+    // The single choke point for every `git … -- <path>` invocation. Callers pass data-root-relative
+    // paths (plans/…, household/…, .claude/…); reject an absolute/drive/UNC path or a `..` segment so a
+    // caller assembling an agent-influenced path list can't drive git at a file outside the data root.
+    private static string Norm(string rel)
+    {
+        var s = PathText.Norm(rel);
+        if (Path.IsPathRooted(s) || s.Split('/').Any(seg => seg == ".."))
+            throw new InvalidOperationException($"Refusing git path outside the data root: '{rel}'");
+        return s;
+    }
 
     private static bool IsClaudeInfra(string rel) => rel == ".claude" || rel.StartsWith(".claude/");
 }

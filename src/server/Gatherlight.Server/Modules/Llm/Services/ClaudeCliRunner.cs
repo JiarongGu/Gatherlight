@@ -448,7 +448,7 @@ public sealed partial class ClaudeCliRunner : IClaudeCliRunner
     private static string? Truncate(string? s, int n) => s is null || s.Length <= n ? s : s[..n];
 
     private static long Int64OrZero(JsonElement obj, string key) =>
-        obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : 0;
+        obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;
 
     /// <summary>The model id carried on an `assistant` message (<c>message.model</c>), or null. This is
     /// the authoritative model the run used — captured for pricing (the CLI honors <c>--model</c>, but a

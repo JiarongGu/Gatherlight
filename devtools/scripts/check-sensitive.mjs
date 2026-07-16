@@ -42,28 +42,56 @@ if (existsSync(localFile)) {
 }
 
 const git = (args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+const gitBuf = (args) => execFileSync('git', args, { cwd: repo, maxBuffer: 64 * 1024 * 1024 });
 
-// Files to scan + a getter for their content (staged blob vs on-disk).
-let files, contentOf;
+// Decode a file's BYTES, honoring a UTF-16 BOM (or a no-BOM UTF-16LE heuristic) — a secret in a UTF-16
+// file must not slip past a naive utf8 read whose embedded NULs get skipped as "binary". Returns the
+// text, or null for genuine binary.
+function decodeText(buf) {
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return buf.toString('utf16le');
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    const s = Buffer.from(buf);                              // UTF-16BE → swap to LE
+    for (let i = 0; i + 1 < s.length; i += 2) { const t = s[i]; s[i] = s[i + 1]; s[i + 1] = t; }
+    return s.toString('utf16le');
+  }
+  let odd = 0;
+  const sample = Math.min(buf.length, 4096);
+  for (let i = 1; i < sample; i += 2) if (buf[i] === 0) odd++;
+  if (sample >= 8 && odd > sample / 8) return buf.toString('utf16le');
+  const text = buf.toString('utf8');
+  return text.includes('\0') ? null : text;                 // still NUL after utf8 → true binary
+}
+
+// Files to scan + a getter for their raw bytes (staged blob vs on-disk).
+let files, bytesOf;
 if (tree) {
   files = git(['ls-files']).split('\n').filter(Boolean);
-  contentOf = (f) => { try { return readFileSync(path.join(repo, f), 'utf8'); } catch { return ''; } };
+  bytesOf = (f) => readFileSync(path.join(repo, f));
 } else {
   files = git(['diff', '--cached', '--name-only', '--diff-filter=ACM']).split('\n').filter(Boolean);
-  contentOf = (f) => { try { return git(['show', `:${f}`]); } catch { return ''; } };
+  bytesOf = (f) => gitBuf(['show', `:${f}`]);
 }
 
 const hits = [];
+const unreadable = [];
 for (const f of files) {
-  const content = contentOf(f);
-  if (content.includes('\0')) continue; // binary
-  const lines = content.split('\n');
+  let text;
+  try { text = decodeText(bytesOf(f)); }
+  catch (e) { unreadable.push(`${f}: ${e.message}`); continue; }  // don't silently pass an unscannable file
+  if (text === null) continue; // genuine binary
+  const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     for (const { re, why } of patterns) {
       const m = lines[i].match(re);
       if (m) hits.push({ f, line: i + 1, why, snippet: m[0] });
     }
   }
+}
+
+// Fail closed: a file we couldn't read might hide a leak — block rather than pass silently.
+if (unreadable.length > 0) {
+  console.error('check-sensitive: could not scan these files (fail-closed):\n  ' + unreadable.join('\n  '));
+  process.exit(1);
 }
 
 if (hits.length === 0) {

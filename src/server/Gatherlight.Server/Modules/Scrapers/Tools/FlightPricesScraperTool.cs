@@ -87,12 +87,19 @@ public sealed partial class FlightPricesScraperTool : IGatherlightTool
         if (CaptchaRegex().IsMatch(title)) return (null, "CAPTCHA hit — verify manually on site");
 
         var prices = new List<int>();
-        foreach (var re in new[] { AUDollarRegex(), AUDCodeRegex(), PlainDollarRegex() })
+        void Collect(Regex re)
+        {
             foreach (Match m in re.Matches(text))
             {
                 var n = ScraperArgs.Digits(m.Groups[1].Value);
                 if (n is >= 200 and <= 20000) prices.Add(n.Value);
             }
+        }
+        // Prefer explicitly-AUD prices (A$ / AUD …). Only fall back to a bare `$` figure when no explicit
+        // AUD match exists — else a stray USD `$` in the plausibility band can undercut the real AUD fare.
+        Collect(AUDollarRegex());
+        Collect(AUDCodeRegex());
+        if (prices.Count == 0) Collect(PlainDollarRegex());
         if (prices.Count == 0) return (null, $"No prices parsed (title={ScraperArgs.Trunc(title, 60)})");
         return (prices.Min(), $"cheapest of {prices.Count} prices on page");
     }

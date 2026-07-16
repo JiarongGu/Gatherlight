@@ -13,6 +13,19 @@ namespace Gatherlight.Server.Modules.Tools.Services.Tools;
 public abstract class NodeLeafTool : IGatherlightTool
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);
+    private const int MaxOutputChars = 2_000_000;   // ~2 MB cap on buffered child output (OOM guard)
+
+    // Drain a child pipe to EOF (so the process never blocks on a full pipe) but stop ACCUMULATING past
+    // the cap — a runaway/hostile leaf can't OOM the server by dumping unbounded stdout/stderr.
+    private static async Task<string> ReadCappedAsync(StreamReader reader, int cap, CancellationToken ct)
+    {
+        var sb = new StringBuilder();
+        var buf = new char[8192];
+        int n;
+        while ((n = await reader.ReadAsync(buf.AsMemory(), ct)) > 0)
+            if (sb.Length < cap) sb.Append(buf, 0, Math.Min(n, cap - sb.Length));
+        return sb.ToString();
+    }
 
     public abstract string Name { get; }
     public abstract string Description { get; }
@@ -55,8 +68,8 @@ public abstract class NodeLeafTool : IGatherlightTool
         foreach (var a in BuildArgv(args)) psi.ArgumentList.Add(a);
 
         using var proc = Process.Start(psi) ?? throw new ToolException(500, "无法启动工具进程");
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = proc.StandardError.ReadToEndAsync(ct);
+        var stdoutTask = ReadCappedAsync(proc.StandardOutput, MaxOutputChars, ct);
+        var stderrTask = ReadCappedAsync(proc.StandardError, MaxOutputChars, ct);
         try
         {
             await proc.WaitForExitAsync(ct);

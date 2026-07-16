@@ -8,12 +8,41 @@
 #include <windows.h>
 #include <urlmon.h>
 #include <shlwapi.h>
+#include <wintrust.h>
+#include <softpub.h>
 #include <string>
 
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "wintrust.lib")
 
 namespace {
+
+// Verify a file carries a valid Authenticode signature. Microsoft signs its runtime installers, and we
+// launch this one ELEVATED — so an unsigned/tampered download (MITM of the aka.ms fetch, cache poisoning)
+// must be refused rather than run as admin.
+bool VerifyAuthenticode(const std::wstring& path)
+{
+    WINTRUST_FILE_INFO fileInfo = {};
+    fileInfo.cbStruct = sizeof(fileInfo);
+    fileInfo.pcwszFilePath = path.c_str();
+
+    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    WINTRUST_DATA wtd = {};
+    wtd.cbStruct = sizeof(wtd);
+    wtd.dwUIChoice = WTD_UI_NONE;
+    wtd.fdwRevocationChecks = WTD_REVOKE_NONE;
+    wtd.dwUnionChoice = WTD_CHOICE_FILE;
+    wtd.pFile = &fileInfo;
+    wtd.dwStateAction = WTD_STATEACTION_VERIFY;
+
+    LONG status = WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &wtd);
+
+    wtd.dwStateAction = WTD_STATEACTION_CLOSE;   // free the state allocated during VERIFY
+    WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &wtd);
+
+    return status == ERROR_SUCCESS;
+}
 
 // aka.ms redirectors to the latest .NET 10 runtime installers (x64). The Windows Desktop installer
 // carries Microsoft.NETCore.App + Microsoft.WindowsDesktop.App; the ASP.NET Core installer carries
@@ -81,6 +110,9 @@ bool DownloadAndInstall(const wchar_t* url, const wchar_t* filename)
     std::wstring path = std::wstring(tempPath) + filename;
 
     if (FAILED(URLDownloadToFileW(nullptr, url, path.c_str(), 0, nullptr))) return false;
+
+    // Refuse to run an unsigned/tampered installer with elevation.
+    if (!VerifyAuthenticode(path)) { DeleteFileW(path.c_str()); return false; }
 
     std::wstring cmd = L"\"" + path + L"\" /install /quiet /norestart";
     STARTUPINFOW si = { sizeof(STARTUPINFOW) };

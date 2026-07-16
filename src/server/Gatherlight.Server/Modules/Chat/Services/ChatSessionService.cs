@@ -174,7 +174,7 @@ public sealed class ChatSessionService
             _ => _repo.UpsertSessionAsync(
                 s.Id, s.Phase, s.Mode, s.UserMessage,
                 JsonSerializer.Serialize(s.Attachments), s.PlanText, s.ClaudeSessionId,
-                s.CommitSha, s.Error, s.ThreadContext, s.CreatedAt.ToString("o")),
+                s.CommitSha, s.Error, s.CreatedAt.ToString("o")),
             TaskContinuationOptions.ExecuteSynchronously).Unwrap();
     }
 
@@ -199,12 +199,21 @@ public sealed class ChatSessionService
     /// <summary>Turn an empty-output run into a DIAGNOSABLE failure. The SPECIFICS (exit code, error
     /// subtype, stderr tail, is_error) go to the file log — that's where we debug from. The user-facing
     /// message stays deliberately GENERAL (daily use): no guessing at causes on screen.</summary>
-    private string DiagnoseEmptyOutput(ChatSession s, ClaudeRunResult res, string zhPhase)
+    // A plan run failed to produce an APPROVABLE plan — either it emitted nothing, or it reported an
+    // error (turn limit / execution error) which can still leave partial text that must NOT be presented
+    // as a real plan for the human to approve.
+    private string DiagnoseFailedRun(ChatSession s, ClaudeRunResult res, string zhPhase)
     {
         _log.LogWarning(
-            "Empty CLI output ({Phase}) session={Session} exit={Exit} isError={Err} subtype={Sub} stderrTail={Tail}",
-            zhPhase, s.Id, res.ExitCode, res.IsError, res.ResultSubtype ?? "(none)", res.StderrTail ?? "(none)");
-        return $"{zhPhase}未产出内容,请重试。若反复失败,请查看日志(state/logs)了解原因。";
+            "No usable plan ({Phase}) session={Session} exit={Exit} isError={Err} subtype={Sub} chars={Chars} stderrTail={Tail}",
+            zhPhase, s.Id, res.ExitCode, res.IsError, res.ResultSubtype ?? "(none)", res.FinalText.Trim().Length, res.StderrTail ?? "(none)");
+        var why = res.ResultSubtype switch
+        {
+            "error_max_turns" => "(达到回合上限)",
+            "error_during_execution" => "(执行出错)",
+            _ => res.IsError ? "(CLI 报告错误)" : "(无内容)",
+        };
+        return $"{zhPhase}未能完成{why},请重试。若反复失败,请查看日志(state/logs)了解原因。";
     }
 
     /// <summary>SSE subscription: replay the buffered log (index = seq), then live (seq, event) pairs.
@@ -339,9 +348,11 @@ public sealed class ChatSessionService
             if (s.Cancelled) return; // cancel() owns the terminal state
             s.ClaudeSessionId = res.SessionId;
             s.PlanText = res.FinalText.Trim();
-            if (s.PlanText.Length == 0)
+            // Fail on an error result even when partial text exists — a turn-limited/errored run is not a
+            // plan to approve, only a fragment.
+            if (res.IsError || s.PlanText.Length == 0)
             {
-                Fail(s, DiagnoseEmptyOutput(s, res, "计划阶段"));
+                Fail(s, DiagnoseFailedRun(s, res, "计划阶段"));
                 return;
             }
             SetPhase(s, ChatPhase.AwaitingPlanApproval, new { plan = s.PlanText });
@@ -455,9 +466,9 @@ public sealed class ChatSessionService
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
             var text = res.FinalText.Trim();
-            if (text.Length == 0)
+            if (res.IsError || text.Length == 0)
             {
-                Fail(s, DiagnoseEmptyOutput(s, res, "修订计划"));
+                Fail(s, DiagnoseFailedRun(s, res, "修订计划"));
                 return;
             }
             s.PlanText = text;

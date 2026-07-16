@@ -41,6 +41,9 @@ public sealed class PlaywrightScraper : IPlaywrightScraper
 
     public async Task<PageResult> FetchAsync(string url, string? waitForSelector = null, int timeoutMs = 30_000, CancellationToken ct = default)
     {
+        // Note: scraper tools build URLs from operator-configured GATHERLIGHT_BASE_* bases (the agent
+        // supplies flight numbers / countries, not the host), so the SSRF guard lives on WebFetchTool
+        // (the agent-supplied-URL surface), not here — else it would block legitimate loopback bases.
         var nav = ForNavigation(url);
         var browser = await _host.GetBrowserAsync(ct);
         var context = await browser.NewContextAsync(new BrowserNewContextOptions

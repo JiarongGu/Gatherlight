@@ -1,5 +1,6 @@
 using Dapper;
 using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Modules.Cortex.Services;
 using Gatherlight.Server.Modules.Knowledge.Services;
 using Gatherlight.Server.Modules.Library.Services;
 
@@ -58,14 +59,16 @@ public sealed class MemoryService : IMemoryService
     private readonly IKnowledgeStore _knowledge;
     private readonly IEntityStore _entity;
     private readonly IAppConfigService _config;
+    private readonly ICortexConfigService _cortex;
 
-    public MemoryService(IDbConnectionFactory db, ILibraryRepository library, IKnowledgeStore knowledge, IEntityStore entity, IAppConfigService config)
+    public MemoryService(IDbConnectionFactory db, ILibraryRepository library, IKnowledgeStore knowledge, IEntityStore entity, IAppConfigService config, ICortexConfigService cortex)
     {
         _db = db;
         _library = library;
         _knowledge = knowledge;
         _entity = entity;
         _config = config;
+        _cortex = cortex;
     }
 
     public async Task<MemoryBundle> ExportAsync()
@@ -117,12 +120,23 @@ public sealed class MemoryService : IMemoryService
             ent++;
         }
         var cx = 0;
+        const string promptPrefix = "cortex.prompt.";
         foreach (var (key, value) in bundle.Cortex ?? new())
         {
             // Prefix-guard: never let a hand-edited bundle inject arbitrary app_config keys.
             if (string.IsNullOrEmpty(key) || value is null) continue;
             if (!CortexPrefixes.Any(key.StartsWith)) continue;
-            _config.Set(key, value);
+            // Prompt overrides must satisfy the placeholder contract, or the planner breaks quietly on the
+            // target install — route them through the validating cortex writer; model knobs go direct.
+            if (key.StartsWith(promptPrefix))
+            {
+                var r = _cortex.SetPrompt(key[promptPrefix.Length..], value);
+                if (!r.Found || r.MissingPlaceholders.Count > 0) continue;   // unknown/invalid prompt — skip
+            }
+            else
+            {
+                _config.Set(key, value);
+            }
             cx++;
         }
         return new MemoryImportResult(lib, kn, ent, cx);

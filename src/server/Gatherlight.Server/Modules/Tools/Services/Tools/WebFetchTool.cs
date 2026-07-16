@@ -36,6 +36,7 @@ public sealed class WebFetchTool : IGatherlightTool
         var url = ToolArgs.Req(a.Url, "url");
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
             throw new ToolException(400, $"无效 URL:{url}");
+        await SsrfGuard.AssertPublicAsync(url, ct);   // block loopback/metadata/private-LAN targets
         var selector = a.Selector is { Length: > 0 } ? a.Selector : "body";
         var waitFor = a.WaitFor is { Length: > 0 } ? a.WaitFor : null;
         var timeout = a.Timeout is { } ms && ms > 0 ? Math.Min(ms, 60_000) : 30_000;

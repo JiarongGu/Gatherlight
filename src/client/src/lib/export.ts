@@ -1,6 +1,7 @@
 import { marked } from 'marked';
 import type { PlanFile } from './collectFiles';
 import { stripFirstH1 } from './markdown';
+import { sanitizeHtml, escapeHtml } from './sanitize';
 
 /**
  * Build a single combined-markdown document for a trip:
@@ -134,7 +135,11 @@ export async function downloadTripPDF(active: PlanFile, allFiles: PlanFile[]): P
 
   // Configure marked for GFM tables + checklists
   marked.setOptions({ gfm: true, breaks: false });
-  const bodyHtml = await marked.parse(content);
+  // marked does not sanitize; the content is user/agent-authored markdown that can carry
+  // raw HTML. Strip script-ish elements + on* handlers + javascript: URLs before writing
+  // it into the same-origin export window, and escape the title interpolated into <title>.
+  const bodyHtml = sanitizeHtml(await marked.parse(content));
+  const safeTitle = escapeHtml(documentTitle);
 
   const printWindow = window.open('', '_blank');
   if (!printWindow) {
@@ -165,7 +170,7 @@ export async function downloadTripPDF(active: PlanFile, allFiles: PlanFile[]): P
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <title>${documentTitle}</title>
+    <title>${safeTitle}</title>
     <style>${printStyles}</style>
   </head>
   <body>

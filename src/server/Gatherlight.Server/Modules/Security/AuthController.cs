@@ -26,7 +26,7 @@ public sealed class AuthController : ControllerBase
     {
         // The 3-way access mode the footer shows, from the ACTUAL runtime bind (env overrides included):
         // local = loopback; lan = exposed (0.0.0.0) without a token; wan = exposed with a token.
-        var loopback = _options.BindAddress is "127.0.0.1" or "::1";
+        var loopback = GatherlightServerOptions.IsLoopbackAddress(_options.BindAddress);
         var mode = loopback ? "local" : string.IsNullOrEmpty(_options.AccessToken) ? "lan" : "wan";
         return Ok(new { required = _guard.Enabled, authed = _guard.IsAuthenticated(HttpContext), mode });
     }

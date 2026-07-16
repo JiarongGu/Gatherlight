@@ -19,7 +19,11 @@ public sealed record KbUpgrade(string Path);
 /// is the model doing the merge (so the card can show which tier the cost reflects).</summary>
 public sealed record KbMigrationProgress(
     int Current, int Total, string? File, bool Running,
-    long OutChars = 0, long Tokens = 0, double CostUsd = 0, long ElapsedMs = 0, string? Model = null);
+    long OutChars = 0, long Tokens = 0, double CostUsd = 0, long ElapsedMs = 0, string? Model = null,
+    // Internal: UTC ticks when this file's merge began, carried IN the record so it travels atomically
+    // with File/Current (a single volatile reference read — no torn pair with a separate field).
+    // GetStatusAsync derives ElapsedMs from it and zeroes it before returning, so the client never sees it.
+    long StartedUtcTicks = 0);
 public sealed record KbMigrationStatus(List<KbUpgrade> Available, bool HasStaged, List<DiffFile>? Staged, string? StagedAt, KbMigrationProgress? Progress);
 public sealed record KbMigrationResult(int Merged, int Failed, bool Staged, string? Error);
 
@@ -59,9 +63,6 @@ public sealed class ZhikuMigrator : IZhikuMigrator
     // Live per-file progress of an in-flight RunMigrationAsync, read by GetStatusAsync so the console
     // can poll a status indicator during a long multi-file merge (the migrator is a DI singleton).
     private volatile KbMigrationProgress? _progress;
-    // UTC ticks when the current file's merge began — so GetStatusAsync computes a fresh elapsed on
-    // every poll (survives a client tab switch: the merge runs server-side, progress is server truth).
-    private long _fileStartTicks;
 
     public ZhikuMigrator(
         IDataContext data, IDbConnectionFactory db, IClaudeCliRunner runner, IPromptHarness harness,
@@ -136,17 +137,15 @@ public sealed class ZhikuMigrator : IZhikuMigrator
         var available = await DetectUpgradesAsync();
         var staged = await ReadStagedAsync();
         var progress = _progress;
-        // Stamp a live elapsed on each poll from the file-start tick — so the timer moves every second
-        // (the token/cost counters only finalize when the file's usage lands) and survives a tab switch.
-        if (progress is { Running: true })
-        {
-            var startTicks = Volatile.Read(ref _fileStartTicks);
-            if (startTicks > 0)
-                progress = progress with
-                {
-                    ElapsedMs = (long)(DateTime.UtcNow - new DateTime(startTicks, DateTimeKind.Utc)).TotalMilliseconds,
-                };
-        }
+        // Stamp a live elapsed on each poll from the record's own start tick — so the timer moves every
+        // second (token/cost finalize when the file's usage lands) and survives a tab switch. Reading the
+        // single volatile reference gives a consistent File+tick pair; zero the tick out of the response.
+        if (progress is { Running: true, StartedUtcTicks: > 0 })
+            progress = progress with
+            {
+                ElapsedMs = (long)(DateTime.UtcNow - new DateTime(progress.StartedUtcTicks, DateTimeKind.Utc)).TotalMilliseconds,
+                StartedUtcTicks = 0,
+            };
         return new KbMigrationStatus(available, staged is not null, staged?.Files, staged?.CreatedAt, progress);
     }
 
@@ -171,15 +170,15 @@ public sealed class ZhikuMigrator : IZhikuMigrator
                 foreach (var c in candidates)
                 {
                     done++;
-                    Volatile.Write(ref _fileStartTicks, DateTime.UtcNow.Ticks);
-                    _progress = new KbMigrationProgress(done, candidates.Count, c.Path, true, Model: model);
+                    var startedTicks = DateTime.UtcNow.Ticks;
+                    _progress = new KbMigrationProgress(done, candidates.Count, c.Path, true, Model: model, StartedUtcTicks: startedTicks);
                     var target = _data.ResolveDataPath(c.Path)!;
                     var abs = Path.Combine(root, c.Path.Replace('/', Path.DirectorySeparatorChar));
                     var userContent = await File.ReadAllTextAsync(target, ct);
                     var templateBytes = await File.ReadAllBytesAsync(abs, ct);
                     var templateContent = Encoding.UTF8.GetString(templateBytes);
 
-                    var merged = await MergeOneAsync(c.Path, userContent, templateContent, done, candidates.Count, model, ct);
+                    var merged = await MergeOneAsync(c.Path, userContent, templateContent, done, candidates.Count, model, startedTicks, ct);
                     if (string.IsNullOrWhiteSpace(merged)) { failed++; _log.LogWarning("KB merge produced nothing for {File}", c.Path); continue; }
                     merged = merged.TrimEnd() + "\n";
 
@@ -241,7 +240,7 @@ public sealed class ZhikuMigrator : IZhikuMigrator
     }
 
     private async Task<string> MergeOneAsync(string path, string userContent, string templateContent,
-        int done, int total, string? model, CancellationToken ct)
+        int done, int total, string? model, long startedTicks, CancellationToken ct)
     {
         long outChars = 0, inTok = 0, outTok = 0, cacheRead = 0, cacheCreate = 0;
         var res = await _runner.RunAsync(new ClaudeRunOptions
@@ -272,7 +271,7 @@ public sealed class ZhikuMigrator : IZhikuMigrator
                         return;
                 }
                 var cost = ModelPricing.CostUsd(model, inTok, outTok, cacheRead, cacheCreate);
-                _progress = new KbMigrationProgress(done, total, path, true, outChars, outTok, cost, 0, model);
+                _progress = new KbMigrationProgress(done, total, path, true, outChars, outTok, cost, 0, model, startedTicks);
             },
         }, ct);
         return res.FinalText;

@@ -19,7 +19,7 @@
  * This body is kept identical to the planner guard (ChatEnvironmentService.ScopeGuardMjs) except for
  * WRITE_DIRS + PROTECTED; the e2e suite (p24) runs both. GUARD_VERSION lets the server re-issue newer logic.
  */
-// GUARD_VERSION: 3
+// GUARD_VERSION: 4
 import path from 'node:path';
 
 const WRITE_DIRS = [''];  // '' = the whole jail (repo); writes are gated by PROTECTED below
@@ -32,15 +32,22 @@ const HISTORY = [
 const NETWORK = [
   /\bcurl\b/, /\bwget\b/, /\bInvoke-WebRequest\b/i, /(^|[\s;&|(])iwr(\s|$)/i,
   /\bInvoke-RestMethod\b/i, /(^|[\s;&|(])nc(\s|$)/, /\bncat\b/, /\btelnet\b/, /\bssh\b/, /\bscp\b/,
+  /\bsftp\b/, /\brsync\b/, /\baria2c?\b/, /(^|[\s;&|(])ftp(\s|$)/,
+  /\bgit\s+(clone|fetch|pull|ls-remote|remote)\b/,
+  /\bpython3?\b[^;&|\n]*-m\s+(http\.server|SimpleHTTPServer|urllib|webbrowser)\b/i,
 ];
 const EVALS = [
-  /\bnode\s+(-e|--eval)\b/, /\b(python3?|py)\s+-c\b/, /\bperl\s+-e\b/, /\bruby\s+-e\b/,
+  /\bnode\b[^;&|\n]*?\s-(?:e|-eval)\b/, /\b(python3?|py)\s+-c\b/, /\bperl\s+-e\b/, /\bruby\s+-e\b/,
   /\b(powershell|pwsh)\b[\s\S]*\s-(e|enc|encodedcommand|command)\b/i, /(^|[\s;&|(])eval(\s|$)/,
+  /\b(?:ba|z|k|da)?sh\s+-c\b/, /[|]\s*(?:ba|z|k|da)?sh\b/,   // inline shell eval / pipe-to-shell
 ];
 const CRAWL = [
   /(^|[\s;&|(])find\s/, /(^|[\s;&|(])ls\s+-[a-zA-Z]*[Rr]/, /(^|[\s;&|(])dir\b[\s\S]*\/s/i,
+  /(^|[\s;&|(])grep\b[^;&|\n]*\s-[a-zA-Z]*[rR]/, /(^|[\s;&|(])(rg|tree)(\s|$)/,
+  /\bGet-ChildItem\b[^;&|\n]*-[Rr]ecurse/i, /(^|[\s;&|(])gci\b[^;&|\n]*-[a-zA-Z]*[Rr]\b/i,
 ];
-const HOME = /(\$HOME|\$HOMEPATH|\$USERPROFILE|\$LOCALAPPDATA|\$APPDATA|\$env:|%USERPROFILE%|%LOCALAPPDATA%|%APPDATA%|%HOMEPATH%)/i;
+// Sensitive home/profile vars, braced (${HOME}) or bare ($HOME). `~` is caught in bashEscapes.
+const HOME = /(\$\{?(HOME|USERPROFILE|LOCALAPPDATA|APPDATA|HOMEPATH)\b|\$env:|%(USERPROFILE|LOCALAPPDATA|APPDATA|HOMEPATH|HOME)%)/i;
 
 function deny(reason) {
   process.stdout.write(JSON.stringify({
@@ -110,7 +117,7 @@ if (toolName === 'Bash') {
   if (NETWORK.some((re) => re.test(command)))
     deny('Blocked: no direct network access from the shell. Use WebFetch / WebSearch, or a server MCP tool for out-of-boundary fetches.');
   if (EVALS.some((re) => re.test(command)))
-    deny('Blocked: no inline code-eval (node -e / python -c / powershell -Command). Run a committed script or use an MCP tool.');
+    deny('Blocked: no inline code-eval (node -e / python -c / sh -c / pipe-to-shell / powershell -Command). Run a committed script or use an MCP tool.');
   if (CRAWL.some((re) => re.test(command)))
     deny('Blocked: use Read / Glob / Grep to explore — not Bash crawling (find / ls -R / dir /s).');
   if (bashEscapes(command, projectDir))

@@ -20,7 +20,9 @@ public static class ModelPricing
         ("opus",    5.0, 25.0),
     };
 
-    // Cache-read input is ~0.1x base input; a 5-minute cache write is ~1.25x base input.
+    // Cache-read input is ~0.1x base input. Cache writes are billed by TTL: 1.25x (5-minute) or 2x
+    // (1-hour). The claude CLI manages its own cache TTL and doesn't report which it used, so we assume
+    // the 5-minute default; a 1-hour-cached call therefore under-reports its (usually tiny) write cost.
     private const double CacheReadFactor = 0.10;
     private const double CacheWriteFactor = 1.25;
 

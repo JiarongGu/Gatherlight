@@ -115,13 +115,13 @@ public sealed class LibraryRepository : ILibraryRepository
                 new { match, kind, region, limit })).ToList();
         }
 
-        var like = q is { Length: > 0 } ? $"%{q}%" : null;
+        var like = q is { Length: > 0 } ? $"%{FtsQuery.EscapeLike(q)}%" : null;
         return (await conn.QueryAsync<LibraryItem>(
             $"""
             SELECT {Cols} FROM library_item
             WHERE (@kind IS NULL OR kind = @kind)
               AND (@region IS NULL OR region = @region)
-              AND (@like IS NULL OR name LIKE @like OR name_local LIKE @like OR summary LIKE @like OR tags LIKE @like)
+              AND (@like IS NULL OR name LIKE @like ESCAPE '\' OR name_local LIKE @like ESCAPE '\' OR summary LIKE @like ESCAPE '\' OR tags LIKE @like ESCAPE '\')
             ORDER BY CAST(confidence AS REAL) DESC, name ASC
             LIMIT @limit
             """,

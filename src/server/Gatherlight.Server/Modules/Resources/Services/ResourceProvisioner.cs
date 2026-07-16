@@ -60,9 +60,24 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     // upgrade); it is NOT equal to the Playwright version. Bump this + re-publish the package together.
     public const string ResourcesPackageId = "gatherlight.resources";     // lower-case (flat-container)
     public const string ResourcesPackageVersion = "1.0.0";
-    private static string ResourcesUrl =>
-        Environment.GetEnvironmentVariable("GATHERLIGHT_RESOURCES_URL") is { Length: > 0 } u ? u
-        : $"https://api.nuget.org/v3-flatcontainer/{ResourcesPackageId}/{ResourcesPackageVersion}/{ResourcesPackageId}.{ResourcesPackageVersion}.nupkg";
+    private static string ResourcesUrl
+    {
+        get
+        {
+            var o = Environment.GetEnvironmentVariable("GATHERLIGHT_RESOURCES_URL");
+            if (o is { Length: > 0 })
+            {
+                // The bundle is unpacked into executables (chromium/git) the app runs — a REMOTE cleartext
+                // source is MITM-able. Allow https, or http only to loopback (a local test server/mirror).
+                if (o.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                    && !(Uri.TryCreate(o, UriKind.Absolute, out var u) && u.IsLoopback))
+                    throw new InvalidOperationException(
+                        "GATHERLIGHT_RESOURCES_URL over http must target loopback — refusing a remote cleartext resource source.");
+                return o;
+            }
+            return $"https://api.nuget.org/v3-flatcontainer/{ResourcesPackageId}/{ResourcesPackageVersion}/{ResourcesPackageId}.{ResourcesPackageVersion}.nupkg";
+        }
+    }
 
     // What the bundle contains (content/<Archive> inside the .nupkg) and where each part unpacks under
     // the resources root — the exact dirs the runtime resolvers look in (PlaywrightHost → .playwright +
@@ -254,19 +269,25 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         lock (p) { p.State = state; p.Percent = Math.Clamp(pct, 0, 100); p.Message = msg; }
     }
 
+    private const long MaxDownloadBytes = 600L * 1024 * 1024;   // hard ceiling — a wrong/hostile URL can't fill the disk
+
     private static async Task DownloadAsync(string url, string dest, Action<int> onPct)
     {
-        using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        // Per-download deadline (the shared HttpClient timeout is infinite for large provisioning fetches).
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
+        using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
         resp.EnsureSuccessStatusCode();
         var total = resp.Content.Headers.ContentLength ?? -1;
-        await using var src = await resp.Content.ReadAsStreamAsync();
+        if (total > MaxDownloadBytes) throw new InvalidOperationException($"download too large ({total} bytes)");
+        await using var src = await resp.Content.ReadAsStreamAsync(cts.Token);
         await using var dst = File.Create(dest);
         var buf = new byte[81920];
         long read = 0; int n; var lastPct = -1;
-        while ((n = await src.ReadAsync(buf)) > 0)
+        while ((n = await src.ReadAsync(buf, cts.Token)) > 0)
         {
-            await dst.WriteAsync(buf.AsMemory(0, n));
             read += n;
+            if (read > MaxDownloadBytes) throw new InvalidOperationException("download exceeded size cap");
+            await dst.WriteAsync(buf.AsMemory(0, n), cts.Token);
             if (total > 0) { var pct = (int)(read * 100 / total); if (pct != lastPct) { lastPct = pct; onPct(pct); } }
         }
     }

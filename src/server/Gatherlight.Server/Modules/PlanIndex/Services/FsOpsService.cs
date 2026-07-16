@@ -113,14 +113,19 @@ public sealed partial class FsOpsService : IFsOpsService
             var from = Norm(fromRaw);
             var to = Norm(toRaw);
             var toAbs = _data.ResolveDataPath(to)!;
+            // Never silently overwrite an existing in-scope file (data loss, and no git record of the
+            // clobbered file until the following add) — surface a conflict instead. Dropping `-f` /
+            // overwrite makes git mv / File.Move themselves refuse too.
+            if (File.Exists(toAbs) || Directory.Exists(toAbs))
+                throw new InvalidOperationException($"重命名目标已存在:{to}");
             Directory.CreateDirectory(Path.GetDirectoryName(toAbs)!);
             if (await _git.IsTrackedAsync(from, ct))
             {
-                (await _git.RunAsync(new[] { "mv", "-f", "--", from, to }, ct)).ThrowOnError("mv");
+                (await _git.RunAsync(new[] { "mv", "--", from, to }, ct)).ThrowOnError("mv");
             }
             else
             {
-                File.Move(_data.ResolveDataPath(from)!, toAbs, overwrite: true);
+                File.Move(_data.ResolveDataPath(from)!, toAbs);
                 (await _git.RunAsync(new[] { "add", "--", to }, ct)).ThrowOnError("add");
             }
         }

@@ -76,10 +76,21 @@ public sealed class SettingsController : ControllerBase
         if (!string.IsNullOrWhiteSpace(body.BindAddress) && !IPAddress.TryParse(newBind, out _))
             return BadRequest(new { error = "绑定地址需是 IP(如 127.0.0.1 或 0.0.0.0)/ bindAddress must be an IP" });
 
+        // A shared access token is a brute-forceable secret (throttled per-IP) — enforce a floor so a
+        // 2–3 char token can't be exposed on the LAN/WAN.
+        if (!string.IsNullOrEmpty(body.AccessToken) && body.AccessToken.Length < 12)
+            return BadRequest(new { error = "访问令牌至少需要 12 个字符 / access token must be at least 12 characters" });
+        // The self-update fetch must ride TLS (the payload is applied to the install) — reject a remote
+        // http:// API (http to loopback is fine for a local mirror).
+        if (body.SelfUpdate?.ApiUrl is { Length: > 0 } apiUrl
+            && !(Uri.TryCreate(apiUrl, UriKind.Absolute, out var au)
+                 && (au.Scheme == Uri.UriSchemeHttps || (au.Scheme == Uri.UriSchemeHttp && au.IsLoopback))))
+            return BadRequest(new { error = "更新 API 地址必须是 https://(本地回环可用 http)/ update ApiUrl must be https (http allowed to loopback)" });
+
         // Fail-closed: never persist a config that binds a non-loopback address without an access token
         // — the server would refuse to start (unauthenticated control of the data folder + claude CLI).
         // Exception: the explicit LAN opt-in accepts an unauthenticated non-loopback bind.
-        var loopback = newBind is "127.0.0.1" or "::1";
+        var loopback = GatherlightServerOptions.IsLoopbackAddress(newBind);
         var willHaveToken = body.ClearAccessToken == true ? false
             : !string.IsNullOrEmpty(body.AccessToken) || !string.IsNullOrEmpty(c.Security.AccessToken);
         var willAllowLan = body.AllowLanWithoutToken ?? c.Security.AllowLanWithoutToken;

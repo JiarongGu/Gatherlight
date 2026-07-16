@@ -112,9 +112,9 @@ public sealed class KnowledgeStore : IKnowledgeStore
                 new { match, kind, limit })
             : await conn.QueryAsync(
                 "SELECT id, kind, topic, content, source, confidence, hits, created_at, updated_at " +
-                "FROM knowledge WHERE (topic LIKE @like OR content LIKE @like) AND (@kind IS NULL OR kind = @kind) " +
+                "FROM knowledge WHERE (topic LIKE @like ESCAPE '\\' OR content LIKE @like ESCAPE '\\') AND (@kind IS NULL OR kind = @kind) " +
                 "ORDER BY CAST(confidence AS REAL) DESC, updated_at DESC LIMIT @limit",
-                new { like = $"%{query}%", kind, limit });
+                new { like = $"%{FtsQuery.EscapeLike(query)}%", kind, limit });
         // Manual mapping: SQLite's dynamic typing (NUMERIC/BLOB affinity surprises) breaks
         // Dapper's strict positional-record materialization — coerce each column explicitly.
         var rows = raw

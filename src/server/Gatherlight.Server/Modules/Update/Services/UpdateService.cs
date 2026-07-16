@@ -59,18 +59,31 @@ public sealed class UpdateService : IUpdateService
     private string ReadyMarker => Path.Combine(StagingRoot, "ready.json");
 
     // Effective release-API URL: env > explicit setting > derived from the repo slug; null = disabled.
+    // The update payload is applied to the install, so the fetch MUST be https — a http/other-scheme URL
+    // disables updates (fail safe) rather than fetching the trust anchor in cleartext.
     private string? ApiUrl()
     {
         var u = _config.Current.SelfUpdate;
         var api = Environment.GetEnvironmentVariable("GATHERLIGHT_UPDATE_API");
         if (string.IsNullOrWhiteSpace(api)) api = u.ApiUrl;
-        if (!string.IsNullOrWhiteSpace(api)) return api;
+        if (!string.IsNullOrWhiteSpace(api))
+        {
+            if (IsSecureUpdateUrl(api)) return api;
+            _log.LogWarning("Update API URL must be https (or http to loopback) — updates disabled: {Api}", api);
+            return null;
+        }
 
         var repo = Environment.GetEnvironmentVariable("GATHERLIGHT_UPDATE_REPO");
         if (string.IsNullOrWhiteSpace(repo)) repo = u.GithubRepo;
         if (!string.IsNullOrWhiteSpace(repo)) return $"https://api.github.com/repos/{repo.Trim()}/releases/latest";
         return null;
     }
+
+    // https, or http only to loopback (a local mirror / the update e2e's mock server). A REMOTE http
+    // source is MITM-able and the payload is applied to the install.
+    private static bool IsSecureUpdateUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u)
+        && (u.Scheme == Uri.UriSchemeHttps || (u.Scheme == Uri.UriSchemeHttp && u.IsLoopback));
 
     private HttpClient NewClient()
     {
@@ -158,6 +171,7 @@ public sealed class UpdateService : IUpdateService
             using var doc = JsonDocument.Parse(releaseJson);
             var (zipUrl, _) = FindAssets(doc.RootElement);
             if (zipUrl is null) throw new InvalidOperationException("release has no .zip asset");
+            if (!IsSecureUpdateUrl(zipUrl)) throw new InvalidOperationException("release zip URL must be https (or http to loopback)");
 
             if (Directory.Exists(StagingRoot)) Directory.Delete(StagingRoot, recursive: true);
             Directory.CreateDirectory(StagingRoot);
@@ -223,12 +237,35 @@ public sealed class UpdateService : IUpdateService
         {
             var full = Path.Combine(stagedDir, f.Path.Replace('/', Path.DirectorySeparatorChar));
             if (!File.Exists(full)) { problems.Add($"{f.Path} (missing)"); continue; }
-            if (string.IsNullOrEmpty(f.Sha256)) continue;
+            // A blank hash is a tampered/incomplete manifest — never skip verification for a listed file.
+            if (string.IsNullOrEmpty(f.Sha256)) { problems.Add($"{f.Path} (no sha256 in manifest)"); continue; }
             if (!string.Equals(await Sha256Async(full), f.Sha256, StringComparison.OrdinalIgnoreCase))
                 problems.Add($"{f.Path} (hash mismatch)");
         }
+
+        // Reject any staged file NOT covered by the manifest — the launcher overlays everything in
+        // staged/, so an unlisted (unverified) file would otherwise be applied (e.g. a side-loaded DLL).
+        // Mirror the builder's manifest exclusions (build-production.mjs): user data + the version-locked
+        // Playwright runtime are intentionally unhashed, so they're expected-but-unlisted, not intrusions.
+        var listed = manifest.Files.Select(f => f.Path.Replace('\\', '/')).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        listed.Add("manifest.json");
+        foreach (var full in Directory.EnumerateFiles(stagedDir, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(stagedDir, full).Replace('\\', '/');
+            if (IsUnhashedByDesign(rel) || listed.Contains(rel)) continue;
+            problems.Add($"{rel} (not in manifest)");
+        }
         return problems;
     }
+
+    // Paths the build deliberately omits from the manifest (build-production.mjs §5) — user data + the
+    // huge version-locked Playwright runtime. Not intrusions; skip them in the unlisted-file check.
+    private static bool IsUnhashedByDesign(string rel) =>
+        rel is "data" or ".update"
+        || rel.StartsWith("data/", StringComparison.OrdinalIgnoreCase)
+        || rel.StartsWith(".update/", StringComparison.OrdinalIgnoreCase)
+        || rel.StartsWith("libs/browsers/", StringComparison.OrdinalIgnoreCase)
+        || rel.StartsWith("libs/.playwright/", StringComparison.OrdinalIgnoreCase);
 
     // Compress-Archive wraps the bundle in a top-level "Gatherlight/" folder; unwrap it so staged/ has
     // manifest.json + libs/ + res/ directly (ExtractToDirectory keeps the archive's own root).

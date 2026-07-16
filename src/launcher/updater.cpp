@@ -95,7 +95,7 @@ int RunHidden(const std::wstring& cmdLine)
 // robocopy exit codes < 8 = success (0 = nothing to copy, 1–7 = copied/extra/mismatch, all fine).
 bool RobocopyTree(const std::wstring& src, const std::wstring& dst, const std::wstring& extra)
 {
-    std::wstring cmd = L"robocopy \"" + src + L"\" \"" + dst + L"\" /E " + extra +
+    std::wstring cmd = L"\"" + System32Exe(L"robocopy.exe") + L"\" \"" + src + L"\" \"" + dst + L"\" /E " + extra +
         L" /NJH /NJS /NP /NFL /NDL /R:2 /W:1";
     int rc = RunHidden(cmd);
     return rc >= 0 && rc < 8;
@@ -172,6 +172,33 @@ std::wstring OwnExeBasename()
     return std::wstring(PathFindFileNameW(path));
 }
 
+// Absolute path to a System32 executable — never invoke robocopy by bare name (a planted robocopy.exe
+// in the cwd would be found first via CreateProcessW's search order).
+std::wstring System32Exe(const wchar_t* exe)
+{
+    wchar_t sys[MAX_PATH];
+    UINT n = GetSystemDirectoryW(sys, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return exe;   // fallback: bare name
+    return std::wstring(sys, n) + L"\\" + exe;
+}
+
+// A manifest path is unsafe if it escapes the install root — a `..` path segment, or an absolute/drive
+// (`C:\`) / rooted (`\` or `/`) prefix. Deleting such a path would touch files outside the install.
+bool IsUnsafeRel(const std::string& p)
+{
+    if (p.empty()) return true;
+    if (p[0] == '/' || p[0] == '\\') return true;            // rooted
+    if (p.size() >= 2 && p[1] == ':') return true;           // drive-qualified
+    size_t start = 0;
+    for (size_t i = 0; i <= p.size(); ++i)
+        if (i == p.size() || p[i] == '/' || p[i] == '\\')
+        {
+            if (i - start == 2 && p[start] == '.' && p[start + 1] == '.') return true;
+            start = i + 1;
+        }
+    return false;
+}
+
 } // namespace
 
 bool ApplyPendingUpdate(const std::wstring& installDir)
@@ -213,7 +240,7 @@ bool ApplyPendingUpdate(const std::wstring& installDir)
     // 3. Overlay staged files onto the install, EXCLUDING the running launcher's own image (it can't
     //    be overwritten while running, and never self-updates). robocopy /E mirrors subdirs; /XF
     //    excludes; exit codes < 8 = success.
-    std::wstring copy = L"robocopy \"" + stagedDir + L"\" \"" + installDir +
+    std::wstring copy = L"\"" + System32Exe(L"robocopy.exe") + L"\" \"" + stagedDir + L"\" \"" + installDir +
         L"\" /E /XF \"" + launcherName + L"\" /NJH /NJS /NP /NFL /NDL /R:3 /W:1";
     int rc = RunHidden(copy);
     bool ok = (rc >= 0 && rc < 8);
@@ -227,6 +254,7 @@ bool ApplyPendingUpdate(const std::wstring& installDir)
         for (const auto& p : oldPaths)
         {
             if (newPaths.count(p)) continue;
+            if (IsUnsafeRel(p)) continue;   // zip-slip: a hostile manifest path must not delete outside the install
 
             std::string base = p;
             size_t slash = base.find_last_of("/\\");

@@ -36,6 +36,34 @@ public sealed class AccessGateMiddleware
             return;
         }
 
+        // CSRF: auth is a browser-attached cookie (and loopback is trusted), so a malicious page could
+        // drive a state-changing request the browser auto-authenticates. Require mutating requests to be
+        // same-origin. Non-browser clients (the claude CLI / MCP over the token) send no Origin/Sec-Fetch
+        // headers and are unaffected — CSRF is a browser-only attack.
+        if (sensitive && IsMutating(ctx.Request.Method) && !IsSameOriginOrNonBrowser(ctx))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            ctx.Response.ContentType = "application/json";
+            await ctx.Response.WriteAsync("{\"error\":\"cross-origin request rejected\"}");
+            return;
+        }
+
         await _next(ctx);
+    }
+
+    private static bool IsMutating(string method) =>
+        HttpMethods.IsPost(method) || HttpMethods.IsPut(method) || HttpMethods.IsPatch(method) || HttpMethods.IsDelete(method);
+
+    private static bool IsSameOriginOrNonBrowser(HttpContext ctx)
+    {
+        // Modern browsers stamp every request with Sec-Fetch-Site — trust only same-origin (or a
+        // user-initiated `none`, e.g. an address-bar navigation).
+        var secFetch = ctx.Request.Headers["Sec-Fetch-Site"].ToString();
+        if (!string.IsNullOrEmpty(secFetch)) return secFetch is "same-origin" or "none";
+        // Older/edge browsers: fall back to Origin vs Host. Absent Origin ⇒ a non-browser client (CLI/MCP).
+        var origin = ctx.Request.Headers.Origin.ToString();
+        if (string.IsNullOrEmpty(origin)) return true;
+        return Uri.TryCreate(origin, UriKind.Absolute, out var o)
+            && string.Equals(o.Authority, ctx.Request.Host.Value, StringComparison.OrdinalIgnoreCase);
     }
 }

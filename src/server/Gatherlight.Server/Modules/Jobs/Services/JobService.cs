@@ -195,6 +195,12 @@ public sealed class JobService : IJobService
         var maxRetries = Math.Max(0, cfg.MaxRetries);
         var sw = Stopwatch.StartNew();
 
+        // Whole-fire budget: all attempts + backoffs SHARE roughly one timeout, so a long-timeout job with
+        // retries can't hold the (sequential) scheduler + agent slot for timeout×(retries+1) — hours. A
+        // retry only runs if earlier attempts failed fast enough to leave budget.
+        using var fireCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        fireCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(timeout, 10, 3600) + 60));
+
         // Retry loop: a transient (retryable) failure is retried up to maxRetries with exponential
         // backoff WITHIN this fire, so a rate-limit blip doesn't count toward auto-disable. Config
         // errors + timeouts are non-retryable → fail fast. (Mastra step-retry pattern, single-attempt-row.)
@@ -202,10 +208,17 @@ public sealed class JobService : IJobService
         var attempt = 0;
         while (true)
         {
-            result = await RunHandlerOnceAsync(handler, job, run, timeout, ct);
+            result = await RunHandlerOnceAsync(handler, job, run, timeout, ct, fireCts.Token);
             if (result.Deferred)
             {
                 await _repo.DeleteRunAsync(run.Id);   // lost the gate race; keep history clean, retry next tick
+                return null;
+            }
+            // Server shutting down mid-run: not a job failure — drop the run row and stop, so it doesn't
+            // count toward auto-disable or advance the schedule off a half-run.
+            if (ct.IsCancellationRequested)
+            {
+                try { await _repo.DeleteRunAsync(run.Id); } catch { /* shutting down */ }
                 return null;
             }
             var ok = result.Status is JobRunStatus.Success or JobRunStatus.Staged;
@@ -215,8 +228,8 @@ public sealed class JobService : IJobService
             var backoff = TimeSpan.FromSeconds(Math.Clamp(cfg.RetryBackoffSeconds, 1, 300) * Math.Pow(2, attempt - 1));
             _log.LogInformation("Job {Id} run {Run} transient failure ({Outcome}); retry {Att}/{Max} after {Backoff}s",
                 job.Id, run.Id, result.Outcome, attempt, maxRetries, backoff.TotalSeconds);
-            try { await Task.Delay(backoff, ct); }
-            catch (OperationCanceledException) { break; }
+            try { await Task.Delay(backoff, fireCts.Token); }
+            catch (OperationCanceledException) { break; }   // fire-budget exhausted or shutting down → stop retrying
         }
         sw.Stop();
 
@@ -236,17 +249,25 @@ public sealed class JobService : IJobService
     /// <summary>One handler attempt, timeout-bounded, with exceptions classified into a retryable/
     /// non-retryable failure (ToolException 4xx = config/won't-fix = non-retryable; 5xx + unexpected =
     /// transient = retryable; a scheduler-timeout is non-retryable).</summary>
-    private async Task<JobHandlerResult> RunHandlerOnceAsync(IJobHandler handler, Job job, JobRun run, int timeout, CancellationToken ct)
+    private async Task<JobHandlerResult> RunHandlerOnceAsync(
+        IJobHandler handler, Job job, JobRun run, int timeout, CancellationToken shutdownCt, CancellationToken fireCt)
     {
         try
         {
-            using var runCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            using var runCts = CancellationTokenSource.CreateLinkedTokenSource(fireCt);
             runCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(timeout, 10, 3600) + 30));
             return await handler.RunAsync(new JobRunContext { Job = job, Run = run, TimeoutSeconds = timeout, Ct = runCts.Token });
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (shutdownCt.IsCancellationRequested)
         {
-            return JobHandlerResult.Failed(JobRunStatus.Timeout, "任务超时(调度器强制终止)", retryable: false);
+            // Server shutting down — non-retryable; ExecuteAsync sees shutdownCt cancelled and drops the
+            // run rather than recording a failure that would count toward auto-disable.
+            return JobHandlerResult.Failed(JobRunStatus.Timeout, "服务器停止,任务中断", retryable: false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Per-attempt timeout OR the whole-fire budget — non-retryable (a retry would re-hit the budget).
+            return JobHandlerResult.Failed(JobRunStatus.Timeout, "任务超时(调度器强制终止或超出总时限)", retryable: false);
         }
         catch (ToolException tex)
         {

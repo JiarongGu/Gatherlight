@@ -50,9 +50,12 @@ public sealed class TraceService : ITraceService
         };
         if (events.Count == 0) return trace;
 
-        // tool-result timestamps (by seq) so each tool call can measure its own duration.
+        // tool-result timestamps (seq-ascending) so each tool call can measure its own duration. Each
+        // result is consumed by exactly one tool (pointer walks forward in lockstep) — a tool with no
+        // result then gets 0 instead of borrowing a later tool's result and spanning multiple calls.
         var toolResults = events.Where(e => e.Kind == "tool-result")
             .Select(e => (e.Seq, At: Parse(e.CreatedAt))).ToList();
+        var resultIdx = 0;
 
         foreach (var e in events)
         {
@@ -68,8 +71,15 @@ public sealed class TraceService : ITraceService
                 {
                     var (name, detail) = ToolFields(e.PayloadJson);
                     var start = Parse(e.CreatedAt);
-                    var result = toolResults.FirstOrDefault(r => r.Seq > e.Seq);
-                    var dur = result.At != default && start != default ? (long)(result.At - start).TotalMilliseconds : 0;
+                    // Skip results that precede this tool (belong to earlier tools), then take + consume
+                    // the next one if any.
+                    while (resultIdx < toolResults.Count && toolResults[resultIdx].Seq <= e.Seq) resultIdx++;
+                    long dur = 0;
+                    if (resultIdx < toolResults.Count)
+                    {
+                        var result = toolResults[resultIdx++];
+                        dur = result.At != default && start != default ? (long)(result.At - start).TotalMilliseconds : 0;
+                    }
                     trace.Steps.Add(new TraceStep { Seq = e.Seq, Kind = "tool", Label = name, Detail = detail, At = e.CreatedAt, DurationMs = Math.Max(0, dur) });
                     trace.ToolCalls++;
                     break;
