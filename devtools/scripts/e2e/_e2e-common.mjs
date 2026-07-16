@@ -45,12 +45,20 @@ export function skipUnlessNodeModule(subdir, moduleName, suite) {
 
 /** Skip unless a real browser (chromium) is available to the scraper tools — it's download-at-setup
  *  (the 资源 panel / `dev.mjs fetch-tools`), not in the lean bundle, so CI / a fresh box won't have it.
- *  Probes the `scrape` tool: a "Chromium 未安装" error means the browser isn't provisioned. */
+ *  A "Chromium 未安装" error means the browser isn't provisioned → skip.
+ *
+ *  Probes a *scraper-port* tool (`flight_schedule`), NOT `scrape`: the `scrape` tool runs the SSRF
+ *  guard before it ever launches the browser, so a loopback probe URL comes back 403 and the
+ *  "未安装" signal never surfaces (that regression is exactly what made e2e-p11 stop skipping on a
+ *  chromium-less box). Scraper ports are SSRF-exempt — they build URLs from operator-configured
+ *  bases — and hit GetBrowserAsync directly, so a missing browser surfaces as "未安装". When the
+ *  browser IS present the probe returns normally (navigating to whatever base the suite configured,
+ *  a local fixture for the callers here) and the suite runs. */
 export async function skipUnlessChromium(base, suite) {
   try {
     const r = await fetch(base + '/api/tools/call', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'scrape', arguments: { url: 'http://127.0.0.1:1/', timeout: 3000 } }),
+      body: JSON.stringify({ name: 'flight_schedule', arguments: { carrierIATA: 'XX', flightNumber: '0' } }),
     });
     const text = JSON.stringify(await r.json().catch(() => ''));
     if (text.includes('未安装') || text.includes('Executable doesn') || text.includes('Chromium 未'))
