@@ -3,7 +3,6 @@ using Gatherlight.Server.Modules.Chat.Services;
 using Gatherlight.Server.Modules.Core.Services;
 using Gatherlight.Server.Modules.Llm.Models;
 using Gatherlight.Server.Modules.Llm.Services;
-using Gatherlight.Server.Modules.Scoring.Models;
 using Gatherlight.Server.Modules.Scoring.Services;
 using Gatherlight.Server.Modules.Tools.Services;
 
@@ -119,11 +118,8 @@ public sealed class PlaygroundService : IPlaygroundService
             var plan = res.FinalText.Trim();
             result.PlanPreview = plan.Length <= 280 ? plan : plan[..280] + "…";
 
-            var verdicts = await _scoring.EvaluateAsync(new ScoreContext
-            {
-                SessionId = "playground", UserMessage = s.Message, PlanText = plan,
-                Phase = "playground", Mode = "plan", ChangedFiles = Array.Empty<string>(),
-            }, ct);
+            var verdicts = await _scoring.EvaluateAsync(ScoringContext.Build(
+                "playground", s.Message, plan, "playground", "plan", null, Array.Empty<string>()), ct);
             foreach (var v in verdicts)
             {
                 result.Scores[v.ScorerId] = Math.Round(v.Score, 3);

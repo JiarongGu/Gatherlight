@@ -10,6 +10,7 @@ using Gatherlight.Server.Modules.Seed.Services;
 using Gatherlight.Server.Modules.Tools.Models;
 using Gatherlight.Server.Modules.Tools.Services;
 using Gatherlight.Server.Modules.Tools.Services.Tools;
+using Lyntai; // the shared LLM library (AddClaudeCliProvider / DefaultCandidates on the builder)
 
 namespace Gatherlight.Server;
 
@@ -24,6 +25,13 @@ public static class GatherlightApp
         GatherlightServerOptions? options = null, string[]? args = null, ServerConfigService? config = null)
     {
         options ??= new GatherlightServerOptions();
+
+        // Bridge the CLI stub override to Lyntai's ClaudeCli provider: the native runner reads
+        // GATHERLIGHT_CLAUDE_CMD, Lyntai's provider reads CLAUDE_CMD — point both at the same stubbed CLI
+        // (tests/e2e) so the migrated one-shot scorers hit the stub, not a real claude. No-op in production.
+        var stubCmd = Environment.GetEnvironmentVariable("GATHERLIGHT_CLAUDE_CMD");
+        if (!string.IsNullOrEmpty(stubCmd) && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CLAUDE_CMD")))
+            Environment.SetEnvironmentVariable("CLAUDE_CMD", stubCmd);
 
         var builder = WebApplication.CreateBuilder(args ?? Array.Empty<string>());
         // Fail closed: exposing beyond loopback without a token = unauthenticated control of the
@@ -50,6 +58,7 @@ public static class GatherlightApp
         // at Warning (or the app level if quieter). One ServerConfigService for both this + the DI below.
         config ??= new ServerConfigService(options);
         var logsDir = Path.Combine(Path.GetFullPath(options.DataPath), "state", "logs");
+        var dbPath = Path.Combine(Path.GetFullPath(options.DataPath), "state", "gatherlight.db"); // = IDataContext.DatabasePath (for Lyntai's store)
         var logLevel = ResolveLogLevel(config.Current.LogLevel);
         var fwLevel = logLevel > LogLevel.Warning ? logLevel : LogLevel.Warning;
         builder.Logging.AddProvider(new Modules.Core.Logging.FileLoggerProvider(logsDir, logLevel));
@@ -76,6 +85,25 @@ public static class GatherlightApp
             .AddHostedService<PlanIndexWatcher>()
             // LLM — spawn the authenticated claude CLI, never an API key
             .AddSingleton<IClaudeCliRunner, ClaudeCliRunner>()
+            // Lyntai (灵台) — the shared LLM library from NuGet. The one-shot utility calls (LLM-judge
+            // scorers) consume its ILlmClient front door + ClaudeCli provider (neutral cwd, verdict/router);
+            // the interactive two-gate above keeps the native runner. AddLyntai returns IServiceCollection,
+            // so it chains; no storage wired (a pure completion path).
+            .AddLyntai(b => b
+                .AddClaudeCliProvider()
+                .DefaultCandidates("claude-cli")
+                // Lyntai owns scoring persistence: its SQLite storage lands lyntai_score_result (+ the other
+                // lyntai_* tables) in the same gatherlight.db, migrated eagerly here.
+                .UseSqliteStorage(dbPath)
+                // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
+                // collection so its IScoringService iterates + persists them (LLM judges route through
+                // llm.model.scorer, skip via Applies()).
+                .AddScorer<Modules.Scoring.Services.ScopeAdherenceScorer>()
+                .AddScorer<Modules.Scoring.Services.PlanStructureScorer>()
+                .AddScorer<Modules.Scoring.Services.OutcomeScorer>()
+                .AddScorer<Modules.Scoring.Services.CitationScorer>()
+                .AddScorer<Modules.Scoring.Services.AnswerRelevancyScorer>()
+                .AddScorer<Modules.Scoring.Services.FaithfulnessScorer>())
             // One live agent run at a time across chat AND background jobs (single-writer data tree)
             .AddSingleton<IAgentGate, AgentGate>()
             .AddSingleton<IPromptHarness, PromptHarness>()
@@ -142,14 +170,7 @@ public static class GatherlightApp
             // Cortex tuning: runtime prompt-template + model-routing overrides (write side of LLM-ops)
             .AddSingleton<Modules.Cortex.Services.ICortexConfigService, Modules.Cortex.Services.CortexConfigService>()
             // Automated scorers (Mastra-style): grade each committed conversation on 智库-rule dimensions
-            .AddSingleton<Modules.Scoring.Services.IScoreRepository, Modules.Scoring.Services.ScoreRepository>()
             .AddSingleton<Modules.Scoring.Services.IScoringService, Modules.Scoring.Services.ScoringService>()
-            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.ScopeAdherenceScorer>()
-            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.PlanStructureScorer>()
-            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.OutcomeScorer>()
-            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.CitationScorer>()
-            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.AnswerRelevancyScorer>()
-            .AddSingleton<Modules.Scoring.Services.IScorer, Modules.Scoring.Services.FaithfulnessScorer>()
             // Run traces (Mastra observability): structure the chat_event stream into a run timeline
             .AddSingleton<Modules.Trace.Services.ITraceService, Modules.Trace.Services.TraceService>()
             // Prompt/agent playground (Mastra runEvals): score dry plans over a scenario set (CLI)

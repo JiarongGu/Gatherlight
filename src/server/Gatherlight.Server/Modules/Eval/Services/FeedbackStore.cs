@@ -107,8 +107,8 @@ public sealed class FeedbackStore : IFeedbackStore
             """
             SELECT s.id, s.phase, s.mode, s.user_message, s.commit_sha, s.error, s.created_at,
                    f.rating, f.note,
-                   (SELECT CAST(AVG(score) AS REAL) FROM chat_score c WHERE c.session_id = s.id) AS avg_score,
-                   (SELECT COUNT(*) FROM chat_score c WHERE c.session_id = s.id) AS score_count
+                   (SELECT CAST(AVG(score) AS REAL) FROM lyntai_score_result c WHERE c.session_id = s.id) AS avg_score,
+                   (SELECT COUNT(*) FROM lyntai_score_result c WHERE c.session_id = s.id) AS score_count
             FROM chat_session s LEFT JOIN chat_feedback f ON f.session_id = s.id
             ORDER BY s.created_at DESC LIMIT @limit
             """,
@@ -157,7 +157,7 @@ public sealed class FeedbackStore : IFeedbackStore
 
         // Attach the automated scorer verdicts so the tuning dataset carries both signals.
         var scores = await conn.QueryAsync<ScoreExportRow>(
-            "SELECT session_id, scorer_id, CAST(score AS REAL) AS score FROM chat_score");
+            "SELECT session_id, scorer_id, CAST(score AS REAL) AS score FROM lyntai_score_result");
         var bySession = scores.GroupBy(x => x.SessionId).ToDictionary(g => g.Key, g => g.ToList());
         foreach (var r in records)
             if (bySession.TryGetValue(r.Id, out var rows))

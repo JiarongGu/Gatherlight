@@ -1,72 +1,59 @@
 using System.Text.Json;
 using Dapper;
 using Gatherlight.Server.Modules.Core.Services;
-using Gatherlight.Server.Modules.Scoring.Models;
 
 namespace Gatherlight.Server.Modules.Scoring.Services;
 
 /// <summary>
-/// Runs the registered <see cref="IScorer"/>s over a conversation and persists their verdicts
-/// (Mastra's scorer-run + save-to-scores-store). Auto-invoked after a conversation commits (from
-/// ChatSessionService, fire-and-forget) and on demand from the console (score one / score all).
+/// Orchestrates Lyntai's scoring framework over Gatherlight conversations: builds a Lyntai
+/// <see cref="Lyntai.Cortex.ScoreContext"/> from the session, runs Lyntai's <c>IScoringService</c> (which
+/// upserts each verdict into Lyntai's <c>IScoreStore</c> = <c>lyntai_score_result</c>), and reads
+/// verdicts/aggregates back. Scorers, judge, and persistence are all Lyntai's; only the session-context
+/// rebuild + the backlog query (which need the app's own <c>chat_session</c> table) stay here.
 /// </summary>
 public interface IScoringService
 {
     /// <summary>Run every applicable scorer over the context and return the verdicts WITHOUT persisting
     /// (the playground eval harness scores dry runs this way).</summary>
-    Task<List<ScoredResult>> EvaluateAsync(ScoreContext ctx, CancellationToken ct = default);
+    Task<IReadOnlyList<Lyntai.Cortex.ScoredResult>> EvaluateAsync(Lyntai.Cortex.ScoreContext ctx, CancellationToken ct = default);
     /// <summary>Run every applicable scorer over the given context and store the results.</summary>
-    Task<int> ScoreAsync(ScoreContext ctx, CancellationToken ct = default);
+    Task<int> ScoreAsync(Lyntai.Cortex.ScoreContext ctx, CancellationToken ct = default);
     /// <summary>Rebuild the context from persisted data and score it (manual re-score).</summary>
     Task<int> ScoreSessionAsync(string sessionId, CancellationToken ct = default);
     /// <summary>Score every terminal conversation that has no scores yet. Returns how many were scored.</summary>
     Task<int> ScoreAllAsync(CancellationToken ct = default);
-    Task<List<StoredScore>> GetAsync(string sessionId);
-    Task<List<ScoreAggregate>> AggregateAsync();
-    IReadOnlyList<IScorer> Scorers { get; }
+    Task<IReadOnlyList<Lyntai.Cortex.ScoredResult>> GetAsync(string sessionId);
+    Task<IReadOnlyList<Lyntai.Cortex.ScorerAggregate>> AggregateAsync();
+    IReadOnlyList<Lyntai.Cortex.IScorer> Scorers { get; }
 }
 
 public sealed class ScoringService : IScoringService
 {
-    private readonly IReadOnlyList<IScorer> _scorers;
-    private readonly IScoreRepository _repo;
+    private static readonly string[] Terminal = { "committed", "rejected", "cancelled", "error" };
+
+    private readonly Lyntai.Cortex.IScoringService _scoring; // iterates the registered scorers, fail-open, persists
+    private readonly Lyntai.Storage.IScoreStore _store;      // upsert (session,scorer) + cross-session aggregate
+    private readonly IReadOnlyList<Lyntai.Cortex.IScorer> _scorers;
     private readonly IDbConnectionFactory _db;
-    private readonly ILogger<ScoringService> _log;
 
-    public ScoringService(IEnumerable<IScorer> scorers, IScoreRepository repo, IDbConnectionFactory db, ILogger<ScoringService> log)
+    public ScoringService(Lyntai.Cortex.IScoringService scoring, Lyntai.Storage.IScoreStore store,
+        IEnumerable<Lyntai.Cortex.IScorer> scorers, IDbConnectionFactory db)
     {
+        _scoring = scoring;
+        _store = store;
         _scorers = scorers.ToList();
-        _repo = repo;
         _db = db;
-        _log = log;
     }
 
-    public IReadOnlyList<IScorer> Scorers => _scorers;
+    public IReadOnlyList<Lyntai.Cortex.IScorer> Scorers => _scorers;
 
-    public async Task<List<ScoredResult>> EvaluateAsync(ScoreContext ctx, CancellationToken ct = default)
-    {
-        var results = new List<ScoredResult>();
-        foreach (var scorer in _scorers)
-        {
-            try
-            {
-                var r = await scorer.ScoreAsync(ctx, ct);
-                if (r is null) continue;   // not applicable
-                results.Add(new ScoredResult { ScorerId = scorer.Id, IsLlm = scorer.IsLlm, Score = Math.Clamp(r.Score, 0, 1), Reason = r.Reason });
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning("Scorer {Scorer} failed for {Session}: {Msg}", scorer.Id, ctx.SessionId, ex.Message);
-            }
-        }
-        return results;
-    }
+    public Task<IReadOnlyList<Lyntai.Cortex.ScoredResult>> EvaluateAsync(Lyntai.Cortex.ScoreContext ctx, CancellationToken ct = default) =>
+        _scoring.EvaluateAsync(ctx, persist: false, ct);
 
-    public async Task<int> ScoreAsync(ScoreContext ctx, CancellationToken ct = default)
+    public async Task<int> ScoreAsync(Lyntai.Cortex.ScoreContext ctx, CancellationToken ct = default)
     {
-        var results = await EvaluateAsync(ctx, ct);
-        foreach (var r in results)
-            await _repo.UpsertAsync(ctx.SessionId, r.ScorerId, r.Score, r.Reason, r.IsLlm);
+        // persist:true — Lyntai's IScoringService upserts each verdict into IScoreStore (re-scoring replaces)
+        var results = await _scoring.EvaluateAsync(ctx, persist: true, ct);
         return results.Count;
     }
 
@@ -78,7 +65,17 @@ public sealed class ScoringService : IScoringService
 
     public async Task<int> ScoreAllAsync(CancellationToken ct = default)
     {
-        var ids = await _repo.UnscoredTerminalSessionIdsAsync(500);
+        List<string> ids;
+        using (var conn = _db.Open())
+        {
+            // terminal conversations with no scores yet — join the app's session table to Lyntai's store
+            ids = (await conn.QueryAsync<string>("""
+                SELECT s.id FROM chat_session s
+                WHERE s.phase IN @terminal
+                  AND NOT EXISTS (SELECT 1 FROM lyntai_score_result r WHERE r.session_id = s.id)
+                ORDER BY s.created_at DESC LIMIT 500
+                """, new { terminal = Terminal })).ToList();
+        }
         var total = 0;
         foreach (var id in ids)
         {
@@ -88,11 +85,11 @@ public sealed class ScoringService : IScoringService
         return total;
     }
 
-    public Task<List<StoredScore>> GetAsync(string sessionId) => _repo.GetAsync(sessionId);
-    public Task<List<ScoreAggregate>> AggregateAsync() => _repo.AggregateAsync();
+    public Task<IReadOnlyList<Lyntai.Cortex.ScoredResult>> GetAsync(string sessionId) => _store.GetAsync(sessionId);
+    public Task<IReadOnlyList<Lyntai.Cortex.ScorerAggregate>> AggregateAsync() => _store.AggregateAsync();
 
     // Reconstruct the scoring context from the persisted session + the committed event's file list.
-    private async Task<ScoreContext?> BuildContextAsync(string sessionId)
+    private async Task<Lyntai.Cortex.ScoreContext?> BuildContextAsync(string sessionId)
     {
         using var conn = _db.Open();
         var row = await conn.QuerySingleOrDefaultAsync(
@@ -113,8 +110,6 @@ public sealed class ScoringService : IScoringService
             {
                 using var doc = JsonDocument.Parse(payload);
                 var root = doc.RootElement;
-                // The committed phase event is { kind, phase, data: { sha, files } } — files is nested
-                // under "data"; fall back to a root-level "files" for safety.
                 JsonElement arr = default;
                 var found = (root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
                                 && data.TryGetProperty("files", out arr) && arr.ValueKind == JsonValueKind.Array)
@@ -125,15 +120,29 @@ public sealed class ScoringService : IScoringService
             catch { /* leave files empty */ }
         }
 
-        return new ScoreContext
+        return ScoringContext.Build(sessionId, (string?)row.user_message ?? "", (string?)row.plan_text ?? "",
+            (string?)row.phase ?? "", (string?)row.mode ?? "plan", (string?)row.commit_sha, files);
+    }
+}
+
+/// <summary>Packs Gatherlight's domain dimensions into Lyntai's generic <see cref="Lyntai.Cortex.ScoreContext"/>:
+/// Input=user message, Output=plan, and phase/mode/commit/changed-files into <c>Extra</c> (the intended
+/// extension pattern — list values serialized to JSON; the scorers read them back via ScoreCtxExt).</summary>
+public static class ScoringContext
+{
+    public static Lyntai.Cortex.ScoreContext Build(string sessionId, string userMessage, string planText,
+        string phase, string mode, string? commitSha, IReadOnlyList<string> changedFiles) =>
+        new()
         {
             SessionId = sessionId,
-            Phase = (string?)row.phase ?? "",
-            Mode = (string?)row.mode ?? "plan",
-            UserMessage = (string?)row.user_message ?? "",
-            PlanText = (string?)row.plan_text ?? "",
-            CommitSha = (string?)row.commit_sha,
-            ChangedFiles = files,
+            Input = userMessage,
+            Output = planText,
+            Extra = new Dictionary<string, string>
+            {
+                ["phase"] = phase,
+                ["mode"] = mode,
+                ["commitSha"] = commitSha ?? "",
+                ["changedFiles"] = JsonSerializer.Serialize(changedFiles),
+            },
         };
-    }
 }

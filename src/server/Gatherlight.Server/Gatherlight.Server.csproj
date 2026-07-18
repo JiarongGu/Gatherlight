@@ -13,12 +13,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Dapper" Version="2.1.72" />
+    <PackageReference Include="Dapper" Version="2.1.79" />
     <!-- Cron parsing + next-occurrence (timezone/DST aware) for the background-job scheduler.
          Small, dependency-free, well-regarded. -->
     <PackageReference Include="Cronos" Version="0.8.4" />
     <PackageReference Include="FluentMigrator.Runner.SQLite" Version="8.0.1" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <!-- Headless-browser tooling (web-fetch/scrape + future scraper ports). Browser binaries are
          fetched once via `node devtools/dev.mjs fetch-tools`, never at server startup. -->
     <PackageReference Include="Microsoft.Playwright" Version="1.49.0" />
@@ -32,6 +32,15 @@
          e_sqlite3 has a known CVE (GHSA-2m69-gcr7-jv3q); 3.0.x ships the patched build
          (no stable 2.1.12 exists). Runtime-verified against Microsoft.Data.Sqlite 10. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <!-- Lyntai (灵台) — the shared LLM library extracted from this family, consumed from NuGet. The
+         one-shot utility LLM calls (LLM-judge scorers) route through its own-seam ILlmClient + ClaudeCli
+         provider (neutral cwd, verdict-classified, router/fallback). The interactive two-gate chat stays
+         on the native ClaudeCliRunner — that flow is CLI-agentic and outside ILlmClient's request/reply shape. -->
+    <PackageReference Include="Lyntai.Core" Version="0.28.3" />
+    <PackageReference Include="Lyntai.Providers.ClaudeCli" Version="0.28.3" />
+    <!-- Lyntai's SQLite storage backs the scoring store (lyntai_score_result: upsert + aggregate + export),
+         landed in the same gatherlight.db (lyntai_-prefixed, coexists with the app's own tables). -->
+    <PackageReference Include="Lyntai.Storage.Sqlite" Version="0.28.3" />
   </ItemGroup>
 
   <!-- Built client (src/client `npm run build` outputs here; gitignored). Copied next to the exe

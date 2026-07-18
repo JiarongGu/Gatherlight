@@ -556,11 +556,8 @@ public sealed class ChatSessionService
             Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Committed, Data = new { sha } });
             // Auto-score the committed conversation (Mastra-style) off the request path — the LLM
             // judges take a few seconds; per-scorer failures are swallowed inside the service.
-            var scoreCtx = new Modules.Scoring.Models.ScoreContext
-            {
-                SessionId = s.Id, UserMessage = s.UserMessage, PlanText = s.PlanText,
-                Phase = s.Phase, Mode = s.Mode, CommitSha = s.CommitSha, ChangedFiles = paths,
-            };
+            var scoreCtx = Modules.Scoring.Services.ScoringContext.Build(
+                s.Id, s.UserMessage, s.PlanText, s.Phase, s.Mode, s.CommitSha, paths);
             _ = Task.Run(() => _scoring.ScoreAsync(scoreCtx));
         }
         catch (Exception ex)
