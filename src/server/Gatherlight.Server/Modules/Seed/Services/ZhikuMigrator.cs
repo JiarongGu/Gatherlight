@@ -8,6 +8,8 @@ using Gatherlight.Server.Modules.Jobs.Models;
 using Gatherlight.Server.Modules.Jobs.Services;
 using Gatherlight.Server.Modules.Llm.Models;
 using Gatherlight.Server.Modules.Llm.Services;
+using Lyntai.Providers.ClaudeCli;
+using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
 
 namespace Gatherlight.Server.Modules.Seed.Services;
 
@@ -51,7 +53,7 @@ public sealed class ZhikuMigrator : IZhikuMigrator
 
     private readonly IDataContext _data;
     private readonly IDbConnectionFactory _db;
-    private readonly IClaudeCliRunner _runner;
+    private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
     private readonly IAppConfigService _appConfig;
     private readonly IGitCliService _git;
@@ -65,13 +67,13 @@ public sealed class ZhikuMigrator : IZhikuMigrator
     private volatile KbMigrationProgress? _progress;
 
     public ZhikuMigrator(
-        IDataContext data, IDbConnectionFactory db, IClaudeCliRunner runner, IPromptHarness harness,
+        IDataContext data, IDbConnectionFactory db, IAgentRunner agent, IPromptHarness harness,
         IAppConfigService appConfig, IGitCliService git, DataWriteLock writeLock, IDataCommitRepository commits,
         INotificationService notifications, ILogger<ZhikuMigrator> log)
     {
         _data = data;
         _db = db;
-        _runner = runner;
+        _agent = agent;
         _harness = harness;
         _appConfig = appConfig;
         _git = git;
@@ -243,17 +245,17 @@ public sealed class ZhikuMigrator : IZhikuMigrator
         int done, int total, string? model, long startedTicks, CancellationToken ct)
     {
         long outChars = 0, inTok = 0, outTok = 0, cacheRead = 0, cacheCreate = 0;
-        var res = await _runner.RunAsync(new ClaudeRunOptions
+        // Feed the stream into live progress: streamed chars climb during generation (the signal that moves
+        // while one file merges for minutes); token totals + cost land with the run's usage. GetStatusAsync
+        // overlays a fresh ElapsedMs on each poll.
+        var res = await _agent.RunAsync(new ClaudeAgentOptions
         {
             Prompt = _harness.KbMergePrompt(path, userContent, templateContent),
-            Cwd = Path.GetTempPath(),   // neutral: the merge is self-contained in the prompt
-            ReadOnly = true,
+            WorkingDirectory = Path.GetTempPath(),   // neutral: the merge is self-contained in the prompt
+            ToolPolicy = AgentToolPolicy.ReadOnly,
             Model = model,
-            Label = $"kb-merge:{path}",
-            // Feed the stream this call used to discard into live progress: streamed chars climb during
-            // generation (the signal that moves while one file merges for minutes); token totals + cost
-            // land with the run's usage. GetStatusAsync overlays a fresh ElapsedMs on each poll.
-            OnEvent = ev =>
+            TimeoutSeconds = 1800,
+        }, label: $"kb-merge:{path}", onEvent: ev =>
             {
                 switch (ev.Kind)
                 {
@@ -272,8 +274,7 @@ public sealed class ZhikuMigrator : IZhikuMigrator
                 }
                 var cost = ModelPricing.CostUsd(model, inTok, outTok, cacheRead, cacheCreate);
                 _progress = new KbMigrationProgress(done, total, path, true, outChars, outTok, cost, 0, model, startedTicks);
-            },
-        }, ct);
+            }, ct: ct);
         return res.FinalText;
     }
 

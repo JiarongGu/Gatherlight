@@ -4,7 +4,7 @@ namespace Gatherlight.Server.Modules.Core.Services;
 /// Per-model token pricing (USD per 1M tokens). The single source of truth for turning a run's token
 /// counts into a realistic dollar cost — computed from the ACTUAL model that ran, instead of trusting
 /// the claude CLI's opaque <c>total_cost_usd</c> (which reflects whatever the CLI decided and isn't
-/// tied to our model routing). Consumed by <c>ClaudeCliRunner</c> (the 'usage' event cost, which chat
+/// tied to our model routing). Consumed by <c>AgentRunner</c> (the 'usage' event cost, which chat
 /// and Trace both read) and by the KB merge card's live per-file cost. Rates are Anthropic public list
 /// prices (cached 2026-06); update the table here when they change.
 /// </summary>

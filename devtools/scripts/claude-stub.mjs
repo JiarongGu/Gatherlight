@@ -14,7 +14,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const args = process.argv.slice(2);
-const readOnly = args.includes('--disallowedTools') && args.includes('Edit');
+// Write (execute) runs add `--permission-mode acceptEdits` (Lyntai's ClaudeAgentArgs); read-only (plan)
+// runs never do. This is the robust signal — the disallowed-tools list is now a single comma-joined arg.
+const readOnly = !(args.includes('--permission-mode') && args.includes('acceptEdits'));
 
 const chunks = [];
 for await (const c of process.stdin) chunks.push(c);

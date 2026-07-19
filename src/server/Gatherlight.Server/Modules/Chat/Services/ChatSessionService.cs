@@ -6,6 +6,9 @@ using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Llm.Models;
 using Gatherlight.Server.Modules.Llm.Services;
 using Gatherlight.Server.Modules.Tools.Services;
+using Lyntai.Providers.ClaudeCli;
+using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
+using AgentSessionResult = Lyntai.Agents.AgentSessionResult;
 
 namespace Gatherlight.Server.Modules.Chat.Services;
 
@@ -75,7 +78,7 @@ public sealed class ChatSessionService
     private string? _activeId;
     private int _counter;
 
-    private readonly IClaudeCliRunner _runner;
+    private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
     private readonly IClaudeValidateService _validator;
     private readonly IGitCliService _git;
@@ -97,7 +100,7 @@ public sealed class ChatSessionService
     private const int MaxBuildRepair = 2;
 
     public ChatSessionService(
-        IClaudeCliRunner runner, IPromptHarness harness, IClaudeValidateService validator,
+        IAgentRunner agent, IPromptHarness harness, IClaudeValidateService validator,
         IGitCliService git, IDataCommitRepository commits, IChatRepository repo,
         IDataContext data, IAppConfigService appConfig, ChatEnvironmentService env,
         DataWriteLock writeLock, IToolRegistry tools, IZhikuRouter router,
@@ -110,7 +113,7 @@ public sealed class ChatSessionService
         _codeGit = codeGit;
         _buildVerify = buildVerify;
         _options = options;
-        _runner = runner;
+        _agent = agent;
         _harness = harness;
         _validator = validator;
         _git = git;
@@ -204,12 +207,12 @@ public sealed class ChatSessionService
     // A plan run failed to produce an APPROVABLE plan — either it emitted nothing, or it reported an
     // error (turn limit / execution error) which can still leave partial text that must NOT be presented
     // as a real plan for the human to approve.
-    private string DiagnoseFailedRun(ChatSession s, ClaudeRunResult res, string zhPhase)
+    private string DiagnoseFailedRun(ChatSession s, AgentSessionResult res, string zhPhase)
     {
         _log.LogWarning(
-            "No usable plan ({Phase}) session={Session} exit={Exit} isError={Err} subtype={Sub} chars={Chars} stderrTail={Tail}",
-            zhPhase, s.Id, res.ExitCode, res.IsError, res.ResultSubtype ?? "(none)", res.FinalText.Trim().Length, res.StderrTail ?? "(none)");
-        var why = res.ResultSubtype switch
+            "No usable plan ({Phase}) session={Session} isError={Err} subtype={Sub} chars={Chars} diag={Diag}",
+            zhPhase, s.Id, res.IsError, res.Subtype ?? "(none)", res.FinalText.Trim().Length, res.Diagnostic ?? "(none)");
+        var why = res.Subtype switch
         {
             "error_max_turns" => "(达到回合上限)",
             "error_during_execution" => "(执行出错)",
@@ -307,17 +310,22 @@ public sealed class ChatSessionService
     private IGitCliService GitFor(ChatSession s) => IsSystem(s) ? _codeGit : _git;
     private string WorkRootFor(ChatSession s) => IsSystem(s) ? _options.CodeRootPath : _data.RootPath;
 
-    private ClaudeRunOptions BaseRunOptions(ChatSession s, string prompt, bool readOnly) => new()
+    // Per-call chat budget: the old runner was unbounded (abort-only). Preserve "effectively unbounded"
+    // with a generous per-call timeout (clamped to LyntaiOptions.MaxProviderTimeout = 2h); overridable
+    // via llm.timeout.chat. The human can always abort.
+    private int ChatTimeoutSeconds =>
+        int.TryParse(_appConfig.Get("llm.timeout.chat"), out var s) && s > 0 ? s : 7200;
+
+    private ClaudeAgentOptions BaseRunOptions(ChatSession s, string prompt, bool readOnly) => new()
     {
         Prompt = prompt,
-        Cwd = WorkRootFor(s),
-        ReadOnly = readOnly,
+        WorkingDirectory = WorkRootFor(s),
+        ToolPolicy = readOnly ? AgentToolPolicy.ReadOnly : AgentToolPolicy.Write,
         Model = _appConfig.Get("llm.model.chat"),
+        TimeoutSeconds = ChatTimeoutSeconds,
         McpConfigPath = File.Exists(_env.McpConfigPath) ? _env.McpConfigPath : null,
         // Pre-approve registry tools so the headless run never stalls on a permission prompt.
-        AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : null,
-        Label = $"chat:{s.Mode}:{(readOnly ? "plan" : "exec")}",
-        OnEvent = ev => Emit(s, ev),
+        AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : Array.Empty<string>(),
     };
 
     private async Task RunPlanningAsync(ChatSession s)
@@ -346,7 +354,9 @@ public sealed class ChatSessionService
         s.Abort = new CancellationTokenSource();
         try
         {
-            var res = await _runner.RunAsync(BaseRunOptions(s, prompt, readOnly: true), s.Abort.Token);
+            var res = await _agent.RunAsync(
+                BaseRunOptions(s, prompt, readOnly: true),
+                label: $"chat:{s.Mode}:plan", onEvent: ev => Emit(s, ev), ct: s.Abort.Token);
             if (s.Cancelled) return; // cancel() owns the terminal state
             s.ClaudeSessionId = res.SessionId;
             s.PlanText = res.FinalText.Trim();
@@ -386,14 +396,15 @@ public sealed class ChatSessionService
         s.Abort = new CancellationTokenSource();
         try
         {
-            var res = await _runner.RunAsync(BaseRunOptions(s,
-                IsSystem(s) ? _harness.SystemExecutePrompt(s.PlanText) : _harness.ExecutePrompt(s.PlanText),
-                readOnly: false) with
-            {
-                ResumeSessionId = s.ClaudeSessionId,
-                SettingsPath = IsSystem(s) ? _env.SystemSettingsPath : _env.SettingsPath,
-                Tracker = s.Tracker,
-            }, s.Abort.Token);
+            var res = await _agent.RunAsync(
+                BaseRunOptions(s,
+                    IsSystem(s) ? _harness.SystemExecutePrompt(s.PlanText) : _harness.ExecutePrompt(s.PlanText),
+                    readOnly: false) with
+                {
+                    ResumeToken = s.ClaudeSessionId,
+                    SettingsPath = IsSystem(s) ? _env.SystemSettingsPath : _env.SettingsPath,
+                },
+                label: $"chat:{s.Mode}:exec", onEvent: ev => Emit(s, ev), tracker: s.Tracker, ct: s.Abort.Token);
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
 
@@ -439,12 +450,14 @@ public sealed class ChatSessionService
             }
             Emit(s, new AgentEvent { Kind = "notice", Text = $"❌ 构建失败,让 AI 修复(第 {attempt + 1} 次)…" });
             SetPhase(s, ChatPhase.Executing);
-            await _runner.RunAsync(BaseRunOptions(s, _harness.RepairPrompt(result.Output), readOnly: false) with
-            {
-                ResumeSessionId = s.ClaudeSessionId,
-                SettingsPath = _env.SystemSettingsPath,
-                Tracker = s.Tracker,
-            }, s.Abort?.Token ?? default);
+            await _agent.RunAsync(
+                BaseRunOptions(s, _harness.RepairPrompt(result.Output), readOnly: false) with
+                {
+                    ResumeToken = s.ClaudeSessionId,
+                    SettingsPath = _env.SystemSettingsPath,
+                },
+                label: $"chat:{s.Mode}:repair", onEvent: ev => Emit(s, ev), tracker: s.Tracker,
+                ct: s.Abort?.Token ?? default);
             if (s.Cancelled) return result;
         }
     }
@@ -460,11 +473,9 @@ public sealed class ChatSessionService
             var revisePrompt = IsSystem(s)
                 ? _harness.SystemRevisePlanPrompt(s.PlanText, feedback)
                 : _harness.RevisePlanPrompt(s.PlanText, feedback);
-            var res = await _runner.RunAsync(
-                BaseRunOptions(s, revisePrompt, readOnly: true) with
-                {
-                    ResumeSessionId = s.ClaudeSessionId,
-                }, s.Abort.Token);
+            var res = await _agent.RunAsync(
+                BaseRunOptions(s, revisePrompt, readOnly: true) with { ResumeToken = s.ClaudeSessionId },
+                label: $"chat:{s.Mode}:revise-plan", onEvent: ev => Emit(s, ev), ct: s.Abort.Token);
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
             var text = res.FinalText.Trim();
@@ -595,15 +606,15 @@ public sealed class ChatSessionService
         s.Abort = new CancellationTokenSource();
         try
         {
-            var res = await _runner.RunAsync(
+            var res = await _agent.RunAsync(
                 BaseRunOptions(s,
                     IsSystem(s) ? _harness.SystemReviseExecutePrompt(feedback) : _harness.ReviseExecutePrompt(feedback),
                     readOnly: false) with
                 {
-                    ResumeSessionId = s.ClaudeSessionId,
+                    ResumeToken = s.ClaudeSessionId,
                     SettingsPath = IsSystem(s) ? _env.SystemSettingsPath : _env.SettingsPath,
-                    Tracker = s.Tracker,
-                }, s.Abort.Token);
+                },
+                label: $"chat:{s.Mode}:revise-exec", onEvent: ev => Emit(s, ev), tracker: s.Tracker, ct: s.Abort.Token);
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
 

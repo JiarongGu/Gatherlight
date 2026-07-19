@@ -5,6 +5,8 @@ using Gatherlight.Server.Modules.Llm.Models;
 using Gatherlight.Server.Modules.Llm.Services;
 using Gatherlight.Server.Modules.Scoring.Services;
 using Gatherlight.Server.Modules.Tools.Services;
+using Lyntai.Providers.ClaudeCli;
+using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
 
 namespace Gatherlight.Server.Modules.Playground.Services;
 
@@ -50,7 +52,7 @@ public interface IPlaygroundService
 
 public sealed class PlaygroundService : IPlaygroundService
 {
-    private readonly IClaudeCliRunner _runner;
+    private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
     private readonly IScoringService _scoring;
     private readonly IDataContext _data;
@@ -59,10 +61,10 @@ public sealed class PlaygroundService : IPlaygroundService
     private readonly IToolRegistry _tools;
 
     public PlaygroundService(
-        IClaudeCliRunner runner, IPromptHarness harness, IScoringService scoring, IDataContext data,
+        IAgentRunner agent, IPromptHarness harness, IScoringService scoring, IDataContext data,
         IAppConfigService appConfig, ChatEnvironmentService env, IToolRegistry tools)
     {
-        _runner = runner;
+        _agent = agent;
         _harness = harness;
         _scoring = scoring;
         _data = data;
@@ -98,20 +100,19 @@ public sealed class PlaygroundService : IPlaygroundService
         {
             // Mirror the real plan phase's read-only run (cwd = data root → loads the knowledge base;
             // MCP tools available) so the eval reflects actual planner behaviour — just no gate/commit.
-            var res = await _runner.RunAsync(new ClaudeRunOptions
+            var res = await _agent.RunAsync(new ClaudeAgentOptions
             {
                 Prompt = _harness.PlanPrompt(s.Message, threadContext: null, attachments: Array.Empty<string>()),
-                Cwd = _data.RootPath,
-                ReadOnly = true,
+                WorkingDirectory = _data.RootPath,
+                ToolPolicy = AgentToolPolicy.ReadOnly,
                 Model = model,
+                TimeoutSeconds = 3600,
                 McpConfigPath = File.Exists(_env.McpConfigPath) ? _env.McpConfigPath : null,
-                AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : null,
-                Label = "playground",
-                OnEvent = ev =>
-                {
-                    if (ev.Kind == "usage" && ev.Data is not null) AccumulateUsage(result, ev.Data);
-                },
-            }, ct);
+                AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : Array.Empty<string>(),
+            }, label: "playground", onEvent: ev =>
+            {
+                if (ev.Kind == "usage" && ev.Data is not null) AccumulateUsage(result, ev.Data);
+            }, ct: ct);
 
             sw.Stop();
             result.DurationMs = sw.ElapsedMilliseconds;

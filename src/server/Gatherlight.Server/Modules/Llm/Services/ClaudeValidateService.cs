@@ -2,6 +2,8 @@ using System.Text.RegularExpressions;
 using Gatherlight.Server.Modules.Core.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Llm.Models;
+using Lyntai.Providers.ClaudeCli;
+using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
 
 namespace Gatherlight.Server.Modules.Llm.Services;
 
@@ -20,15 +22,15 @@ public interface IClaudeValidateService
 
 public sealed partial class ClaudeValidateService : IClaudeValidateService
 {
-    private readonly IClaudeCliRunner _runner;
+    private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
     private readonly IDataContext _data;
     private readonly IAppConfigService _appConfig;
 
     public ClaudeValidateService(
-        IClaudeCliRunner runner, IPromptHarness harness, IDataContext data, IAppConfigService appConfig)
+        IAgentRunner agent, IPromptHarness harness, IDataContext data, IAppConfigService appConfig)
     {
-        _runner = runner;
+        _agent = agent;
         _harness = harness;
         _data = data;
         _appConfig = appConfig;
@@ -41,19 +43,18 @@ public sealed partial class ClaudeValidateService : IClaudeValidateService
         var diff = string.Join("\n\n", claudeFiles.Select(f => $"### {f.Path}\n{f.Diff}"));
         onEvent(new AgentEvent { Kind = "notice", Text = $"🔎 智库变更校验中 ({paths.Count} 个 .claude/ 文件)…" });
 
-        ClaudeRunResult result;
+        Lyntai.Agents.AgentSessionResult result;
         try
         {
-            result = await _runner.RunAsync(new ClaudeRunOptions
+            result = await _agent.RunAsync(new ClaudeAgentOptions
             {
                 Prompt = _harness.ValidatePrompt(paths, diff),
-                Cwd = _data.RootPath,
-                ReadOnly = true,
+                WorkingDirectory = _data.RootPath,
+                ToolPolicy = AgentToolPolicy.ReadOnly,
                 // The verdict pass is simple — a cheaper model suffices.
                 Model = _appConfig.Get("llm.model.validate"),
-                Label = "validate",
-                OnEvent = _ => { }, // swallow the validator's chatter — only its verdict matters
-            }, ct);
+                TimeoutSeconds = 600,
+            }, label: "validate", onEvent: null, ct: ct); // swallow chatter — only its verdict matters
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)

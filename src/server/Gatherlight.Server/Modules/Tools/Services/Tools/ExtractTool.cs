@@ -3,6 +3,8 @@ using Gatherlight.Server.Modules.Core.Services;
 using Gatherlight.Server.Modules.Files.Services;
 using Gatherlight.Server.Modules.Llm.Services;
 using Gatherlight.Server.Modules.Tools.Models;
+using Lyntai.Providers.ClaudeCli;
+using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
 
 namespace Gatherlight.Server.Modules.Tools.Services.Tools;
 
@@ -13,17 +15,17 @@ namespace Gatherlight.Server.Modules.Tools.Services.Tools;
 /// </summary>
 public sealed class ExtractTool : IGatherlightTool
 {
-    private readonly IClaudeCliRunner _runner;
+    private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
     private readonly IUploadService _uploads;
     private readonly IDataContext _data;
     private readonly IAppConfigService _appConfig;
 
     public ExtractTool(
-        IClaudeCliRunner runner, IPromptHarness harness, IUploadService uploads,
+        IAgentRunner agent, IPromptHarness harness, IUploadService uploads,
         IDataContext data, IAppConfigService appConfig)
     {
-        _runner = runner;
+        _agent = agent;
         _harness = harness;
         _uploads = uploads;
         _data = data;
@@ -55,15 +57,14 @@ public sealed class ExtractTool : IGatherlightTool
             ? s
             : "读取该文件,提取其中的关键信息,整理成简洁清晰的结构化摘要(用简体中文)。";
 
-        var res = await _runner.RunAsync(new ClaudeRunOptions
+        var res = await _agent.RunAsync(new ClaudeAgentOptions
         {
             Prompt = _harness.ProcessFilePrompt(absPath, instruction),
-            Cwd = Path.GetTempPath(), // neutral: no CLAUDE.md / knowledge-base load
-            ReadOnly = true,
+            WorkingDirectory = Path.GetTempPath(), // neutral: no CLAUDE.md / knowledge-base load
+            ToolPolicy = AgentToolPolicy.ReadOnly, // Read allowed; Edit/Write denied
             Model = _appConfig.Get("llm.model.extract") ?? "sonnet",
-            Label = "extract",
-            OnEvent = _ => { }, // sync caller: only the final text matters
-        }, ct);
+            TimeoutSeconds = 600,
+        }, label: "extract", onEvent: null, ct: ct); // sync caller: only the final text matters
 
         var outText = res.FinalText.Trim();
         if (outText.Length == 0)

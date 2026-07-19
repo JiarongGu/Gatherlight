@@ -32,15 +32,16 @@
          e_sqlite3 has a known CVE (GHSA-2m69-gcr7-jv3q); 3.0.x ships the patched build
          (no stable 2.1.12 exists). Runtime-verified against Microsoft.Data.Sqlite 10. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
-    <!-- Lyntai (灵台) — the shared LLM library extracted from this family, consumed from NuGet. The
-         one-shot utility LLM calls (LLM-judge scorers) route through its own-seam ILlmClient + ClaudeCli
-         provider (neutral cwd, verdict-classified, router/fallback). The interactive two-gate chat stays
-         on the native ClaudeCliRunner — that flow is CLI-agentic and outside ILlmClient's request/reply shape. -->
-    <PackageReference Include="Lyntai.Core" Version="0.28.3" />
-    <PackageReference Include="Lyntai.Providers.ClaudeCli" Version="0.28.3" />
+    <!-- Lyntai (灵台) — the shared LLM library extracted from this family, consumed from NuGet. LLM-judge
+         scorers route through its own-seam ILlmClient + ClaudeCli provider (neutral cwd, verdict-classified,
+         router/fallback). The interactive two-gate chat, background jobs, and playground drive the CLI's own
+         agent loop through its IAgentSession (ClaudeAgentSession) — read-only/write gates, resume, the
+         scope-guard settings file, app-hosted MCP — adapted to the app's SSE wire by AgentRunner. -->
+    <PackageReference Include="Lyntai.Core" Version="0.28.5" />
+    <PackageReference Include="Lyntai.Providers.ClaudeCli" Version="0.28.5" />
     <!-- Lyntai's SQLite storage backs the scoring store (lyntai_score_result: upsert + aggregate + export),
          landed in the same gatherlight.db (lyntai_-prefixed, coexists with the app's own tables). -->
-    <PackageReference Include="Lyntai.Storage.Sqlite" Version="0.28.3" />
+    <PackageReference Include="Lyntai.Storage.Sqlite" Version="0.28.5" />
   </ItemGroup>
 
   <!-- Built client (src/client `npm run build` outputs here; gitignored). Copied next to the exe

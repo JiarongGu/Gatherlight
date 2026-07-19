@@ -5,6 +5,8 @@ using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Llm.Models;
 using Gatherlight.Server.Modules.Llm.Services;
 using Gatherlight.Server.Modules.Tools.Services;
+using Lyntai.Providers.ClaudeCli;
+using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
 
 namespace Gatherlight.Server.Modules.Jobs.Services;
 
@@ -56,7 +58,7 @@ public interface IUnattendedRunService
 public sealed class UnattendedRunService : IUnattendedRunService
 {
     private readonly IAgentGate _gate;
-    private readonly IClaudeCliRunner _runner;
+    private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
     private readonly IDataContext _data;
     private readonly IGitCliService _git;
@@ -67,12 +69,12 @@ public sealed class UnattendedRunService : IUnattendedRunService
     private readonly ILogger<UnattendedRunService> _log;
 
     public UnattendedRunService(
-        IAgentGate gate, IClaudeCliRunner runner, IPromptHarness harness, IDataContext data,
+        IAgentGate gate, IAgentRunner agent, IPromptHarness harness, IDataContext data,
         IGitCliService git, DataWriteLock writeLock, IToolRegistry tools, IAppConfigService appConfig,
         ChatEnvironmentService env, ILogger<UnattendedRunService> log)
     {
         _gate = gate;
-        _runner = runner;
+        _agent = agent;
         _harness = harness;
         _data = data;
         _git = git;
@@ -99,29 +101,28 @@ public sealed class UnattendedRunService : IUnattendedRunService
             ? _harness.JobReportPrompt(spec.JobName, spec.Instructions)
             : _harness.JobExecutePrompt(spec.JobName, spec.Instructions);
 
-        var opts = new ClaudeRunOptions
+        var opts = new ClaudeAgentOptions
         {
             Prompt = prompt,
-            Cwd = _data.RootPath,
-            ReadOnly = spec.ReadOnly,
+            WorkingDirectory = _data.RootPath,
+            ToolPolicy = spec.ReadOnly ? AgentToolPolicy.ReadOnly : AgentToolPolicy.Write,
             Model = _appConfig.Get("llm.model.chat"),
+            TimeoutSeconds = Math.Clamp(spec.TimeoutSeconds, 10, 3600),
             McpConfigPath = File.Exists(_env.McpConfigPath) ? _env.McpConfigPath : null,
-            AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : null,
+            AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : Array.Empty<string>(),
             SettingsPath = spec.ReadOnly ? null : (File.Exists(_env.SettingsPath) ? _env.SettingsPath : null),
-            Tracker = tracker,
-            Label = $"job:{spec.RunId}",
-            OnEvent = spec.OnEvent ?? (_ => { }),
         };
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(spec.TimeoutSeconds, 10, 3600)));
 
-        ClaudeRunResult? res = null;
+        Lyntai.Agents.AgentSessionResult? res = null;
         string? error = null;
         var timedOut = false;
         try
         {
-            res = await _runner.RunAsync(opts, timeoutCts.Token);
+            res = await _agent.RunAsync(opts, label: $"job:{spec.RunId}", onEvent: spec.OnEvent,
+                tracker: tracker, ct: timeoutCts.Token);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
         {

@@ -83,14 +83,18 @@ public static class GatherlightApp
             .AddSingleton<IIcsExportService, IcsExportService>()
             .AddSingleton<IBudgetService, BudgetService>()
             .AddHostedService<PlanIndexWatcher>()
-            // LLM — spawn the authenticated claude CLI, never an API key
-            .AddSingleton<IClaudeCliRunner, ClaudeCliRunner>()
-            // Lyntai (灵台) — the shared LLM library from NuGet. The one-shot utility calls (LLM-judge
-            // scorers) consume its ILlmClient front door + ClaudeCli provider (neutral cwd, verdict/router);
-            // the interactive two-gate above keeps the native runner. AddLyntai returns IServiceCollection,
-            // so it chains; no storage wired (a pure completion path).
+            // Lyntai (灵台) — the shared LLM library from NuGet. LLM-judge scorers consume its ILlmClient
+            // front door + ClaudeCli provider (neutral cwd, verdict/router); the interactive two-gate, jobs,
+            // and playground drive the CLI's own agent loop through its IAgentSession (via AgentRunner below).
+            // AddLyntai returns IServiceCollection, so it chains; SQLite storage backs scoring persistence.
             .AddLyntai(b => b
                 .AddClaudeCliProvider()
+                // The interactive two-gate + jobs + playground drive the CLI's own agent loop through
+                // Lyntai's IAgentSession (registered here). Long agentic runs need a budget bigger than the
+                // 2-min provider default: lift the ceiling so a per-call TimeoutSeconds up to 2h is honored
+                // (short one-shot/scorer calls keep the 2-min ProviderTimeout default).
+                .AddClaudeCliAgentSession()
+                .Configure(o => o.MaxProviderTimeout = TimeSpan.FromHours(2))
                 .DefaultCandidates("claude-cli")
                 // Lyntai owns scoring persistence: its SQLite storage lands lyntai_score_result (+ the other
                 // lyntai_* tables) in the same gatherlight.db, migrated eagerly here.
@@ -104,6 +108,8 @@ public static class GatherlightApp
                 .AddScorer<Modules.Scoring.Services.CitationScorer>()
                 .AddScorer<Modules.Scoring.Services.AnswerRelevancyScorer>()
                 .AddScorer<Modules.Scoring.Services.FaithfulnessScorer>())
+            // App-side adapter over Lyntai's IAgentSession — the two-gate / jobs / playground run through this.
+            .AddSingleton<IAgentRunner, AgentRunner>()
             // One live agent run at a time across chat AND background jobs (single-writer data tree)
             .AddSingleton<IAgentGate, AgentGate>()
             .AddSingleton<IPromptHarness, PromptHarness>()
