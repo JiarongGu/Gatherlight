@@ -1,9 +1,35 @@
 using Dapper;
 using Gatherlight.Server.Modules.Core.Services;
+using IConversationStore = Lyntai.Storage.IConversationStore;
 
 namespace Gatherlight.Server.Modules.Chat.Services;
 
 public sealed record ChatTurnRow(long Id, string Message, string Outcome, string CreatedAt);
+
+/// <summary>The two-gate session state Gatherlight stores in the Lyntai thread's opaque JSON metadata
+/// (Lyntai owns the lyntai_thread/lyntai_message schema; this is the app's own additional info inside the
+/// metadata slot it's given). Written by <see cref="ChatRepository.UpsertSessionAsync"/>; read back by the
+/// eval console + scoring via <see cref="Parse"/> — always through the IConversationStore API, never raw SQL.</summary>
+public sealed record SessionMetadata(
+    string? Phase = null, string? Mode = null, string? UserMessage = null, string? PlanText = null,
+    string? ClaudeSessionId = null, string? CommitSha = null, string? Error = null, string? Attachments = null)
+{
+    public static readonly SessionMetadata Empty = new();
+
+    // camelCase keys (phase/mode/userMessage/…) so the JSON matches the data-migration's json_object keys.
+    private static readonly System.Text.Json.JsonSerializerOptions Json =
+        new() { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
+
+    public string Serialize() => System.Text.Json.JsonSerializer.Serialize(this, Json);
+
+    /// <summary>Parse a thread's metadata blob; missing/malformed → <see cref="Empty"/> (never throws).</summary>
+    public static SessionMetadata Parse(string? metadata)
+    {
+        if (string.IsNullOrWhiteSpace(metadata)) return Empty;
+        try { return System.Text.Json.JsonSerializer.Deserialize<SessionMetadata>(metadata, Json) ?? Empty; }
+        catch { return Empty; }
+    }
+}
 
 /// <summary>
 /// Persistence for chat state: session snapshots (restart inspection), the per-session event
@@ -16,7 +42,7 @@ public interface IChatRepository
     Task UpsertSessionAsync(string id, string phase, string mode, string userMessage,
         string? attachmentsJson, string? planText, string? claudeSessionId, string? commitSha,
         string? error, string createdAt);
-    Task AppendEventAsync(string sessionId, int seq, string kind, string payloadJson);
+    Task AppendEventAsync(string sessionId, string kind, string payloadJson);
     Task<List<string>> EventPayloadsAsync(string sessionId);
     /// <summary>Sessions left non-terminal by a dead server → error (an in-flight run cannot
     /// survive a restart; the working tree may hold partial edits the user can inspect).</summary>
@@ -32,60 +58,51 @@ public sealed class ChatRepository : IChatRepository
     private static readonly string[] TerminalPhases = { "committed", "rejected", "cancelled", "error" };
 
     private readonly IDbConnectionFactory _db;
+    private readonly IConversationStore _convo;
 
-    public ChatRepository(IDbConnectionFactory db) => _db = db;
+    public ChatRepository(IDbConnectionFactory db, IConversationStore convo)
+    {
+        _db = db;
+        _convo = convo;
+    }
 
+    // Session state lives in the Lyntai thread's opaque JSON metadata (Gatherlight owns the shape); the
+    // eval console reads it back via json_extract. Writes go through the IConversationStore API so Lyntai
+    // owns the lyntai_thread/lyntai_message schema (single source of truth — no app conversation tables).
     public async Task UpsertSessionAsync(string id, string phase, string mode, string userMessage,
         string? attachmentsJson, string? planText, string? claudeSessionId, string? commitSha,
         string? error, string createdAt)
     {
-        using var conn = _db.Open();
-        await conn.ExecuteAsync(
-            """
-            INSERT INTO chat_session(id, phase, mode, user_message, attachments_json, plan_text,
-                claude_session_id, commit_sha, error, created_at, updated_at)
-            VALUES (@id, @phase, @mode, @userMessage, @attachmentsJson, @planText,
-                @claudeSessionId, @commitSha, @error, @createdAt, @now)
-            ON CONFLICT(id) DO UPDATE SET
-                phase = excluded.phase,
-                plan_text = excluded.plan_text,
-                claude_session_id = excluded.claude_session_id,
-                commit_sha = excluded.commit_sha,
-                error = excluded.error,
-                updated_at = excluded.updated_at
-            """,
-            new
-            {
-                id, phase, mode, userMessage, attachmentsJson, planText,
-                claudeSessionId, commitSha, error, createdAt,
-                now = DateTime.UtcNow.ToString("o"),
-            });
+        var metadata = new SessionMetadata(phase, mode, userMessage, planText, claudeSessionId, commitSha,
+            error, attachmentsJson).Serialize();
+        var existing = await _convo.GetThreadAsync(id);
+        if (existing is null) await _convo.CreateThreadAsync(id, title: null, metadata: metadata);
+        else await _convo.SetThreadMetadataAsync(id, metadata);
     }
 
-    public async Task AppendEventAsync(string sessionId, int seq, string kind, string payloadJson)
-    {
-        using var conn = _db.Open();
-        await conn.ExecuteAsync(
-            "INSERT INTO chat_event(session_id, seq, kind, payload_json, created_at) " +
-            "VALUES (@sessionId, @seq, @kind, @payloadJson, @now)",
-            new { sessionId, seq, kind, payloadJson, now = DateTime.UtcNow.ToString("o") });
-    }
+    // One agent event = one typed message on the thread; Lyntai assigns the GUID id + the 1-based per-thread
+    // seq (append order). The live SSE frame id stays the in-memory log index (ChatSessionService.Emit).
+    public async Task AppendEventAsync(string sessionId, string kind, string payloadJson) =>
+        await _convo.AppendMessageAsync(sessionId, kind, payloadJson);
 
-    public async Task<List<string>> EventPayloadsAsync(string sessionId)
-    {
-        using var conn = _db.Open();
-        return (await conn.QueryAsync<string>(
-            "SELECT payload_json FROM chat_event WHERE session_id = @sessionId ORDER BY seq",
-            new { sessionId })).ToList();
-    }
+    public async Task<List<string>> EventPayloadsAsync(string sessionId) =>
+        (await _convo.GetMessagesAsync(sessionId)).Select(m => m.Payload).ToList();
 
     public async Task<int> FailInterruptedSessionsAsync()
     {
-        using var conn = _db.Open();
-        return await conn.ExecuteAsync(
-            "UPDATE chat_session SET phase = 'error', error = 'server restarted mid-run', " +
-            "updated_at = @now WHERE phase NOT IN @terminal",
-            new { now = DateTime.UtcNow.ToString("o"), terminal = TerminalPhases });
+        // Non-terminal threads left by a dead server → error. Through the IConversationStore API (list +
+        // parse the metadata we own + rewrite) — no raw SQL against Lyntai's table. Startup-only + bounded.
+        var threads = await _convo.ListThreadsAsync(limit: 1000);
+        var n = 0;
+        foreach (var t in threads)
+        {
+            var m = SessionMetadata.Parse(t.Metadata);
+            if (m.Phase is null || Array.IndexOf(TerminalPhases, m.Phase) >= 0) continue;
+            await _convo.SetThreadMetadataAsync(
+                t.Id, (m with { Phase = "error", Error = "server restarted mid-run" }).Serialize());
+            n++;
+        }
+        return n;
     }
 
     public async Task<List<ChatTurnRow>> TurnsAsync()

@@ -142,20 +142,18 @@ public sealed class ChatSessionService
     {
         // Append + fan out to subscribers under the SAME lock Subscribe snapshots under, so an event
         // emitted between a reconnect's snapshot and its subscribe can't be lost, and every subscriber
-        // sees the same stable seq (the log index).
-        int seq;
+        // sees the same stable frame id (the log index).
         lock (s.Log)
         {
             s.Log.Add(ev);
-            var idx = s.Log.Count - 1;
-            // Persisted seq is DERIVED from the same log index under this lock (not a separate counter),
-            // so the SSE frame id (idx) and the DB seq can never drift apart.
-            seq = idx + 1;
+            var idx = s.Log.Count - 1; // live SSE frame id (Last-Event-ID); persisted seq is Lyntai-assigned
             foreach (var ch in s.Subscribers.Keys) ch.Writer.TryWrite((idx, ev));
         }
         var payload = JsonSerializer.Serialize(ev, AgentEvent.WireJson);
+        // Persist in order via the chain; Lyntai's conversation store assigns the durable per-thread seq
+        // (append order) — used only for the DB transcript/scoring, not the live SSE resume.
         s.PersistChain = s.PersistChain.ContinueWith(
-            _ => _repo.AppendEventAsync(s.Id, seq, ev.Kind, payload),
+            _ => _repo.AppendEventAsync(s.Id, ev.Kind, payload),
             TaskContinuationOptions.ExecuteSynchronously).Unwrap();
     }
 

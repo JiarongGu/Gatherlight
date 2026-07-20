@@ -1,13 +1,14 @@
 using System.Globalization;
 using System.Text.Json;
-using Dapper;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Modules.Chat.Services;
 using Gatherlight.Server.Modules.Trace.Models;
+using IConversationStore = Lyntai.Storage.IConversationStore;
 
 namespace Gatherlight.Server.Modules.Trace.Services;
 
 /// <summary>
-/// Builds a structured run trace from the persisted chat_event stream (Mastra's observability, mapped
+/// Builds a structured run trace from the persisted conversation event stream (Lyntai's conversation store,
+/// read through IConversationStore; Mastra's observability, mapped
 /// to the two-gate flow): the phase timeline, each tool call with its duration, LLM runs with
 /// tokens/cost, and errors — plus rolled-up totals. The raw prose lives in the transcript; this is
 /// the operational skeleton for inspecting + tuning what the agent actually did.
@@ -19,8 +20,8 @@ public interface ITraceService
 
 public sealed class TraceService : ITraceService
 {
-    private readonly IDbConnectionFactory _db;
-    public TraceService(IDbConnectionFactory db) => _db = db;
+    private readonly IConversationStore _convo;
+    public TraceService(IConversationStore convo) => _convo = convo;
 
     private sealed class EventRow
     {
@@ -32,21 +33,23 @@ public sealed class TraceService : ITraceService
 
     public async Task<RunTrace?> BuildAsync(string sessionId)
     {
-        using var conn = _db.Open();
-        var session = await conn.QuerySingleOrDefaultAsync(
-            "SELECT mode, phase, commit_sha FROM chat_session WHERE id = @id", new { id = sessionId });
-        if (session is null) return null;
+        var thread = await _convo.GetThreadAsync(sessionId);
+        if (thread is null) return null;
+        var m = SessionMetadata.Parse(thread.Metadata);
 
-        var events = (await conn.QueryAsync<EventRow>(
-            "SELECT seq, kind, payload_json, created_at FROM chat_event WHERE session_id = @id ORDER BY seq",
-            new { id = sessionId })).ToList();
+        var events = (await _convo.GetMessagesAsync(sessionId))
+            .Select(x => new EventRow
+            {
+                Seq = (int)x.Seq, Kind = x.Kind, PayloadJson = x.Payload, CreatedAt = x.CreatedAt.ToString("o"),
+            })
+            .ToList();
 
         var trace = new RunTrace
         {
             SessionId = sessionId,
-            Mode = (string?)session.mode ?? "plan",
-            Phase = (string?)session.phase ?? "",
-            CommitSha = (string?)session.commit_sha,
+            Mode = m.Mode ?? "plan",
+            Phase = m.Phase ?? "",
+            CommitSha = m.CommitSha,
         };
         if (events.Count == 0) return trace;
 

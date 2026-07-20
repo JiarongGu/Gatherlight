@@ -1,5 +1,8 @@
 using Dapper;
+using Gatherlight.Server.Modules.Chat.Services;
 using Gatherlight.Server.Modules.Core.Services;
+using IConversationStore = Lyntai.Storage.IConversationStore;
+using IScoreStore = Lyntai.Storage.IScoreStore;
 
 namespace Gatherlight.Server.Modules.Eval.Services;
 
@@ -64,14 +67,6 @@ public sealed class TranscriptEvent
 
 public sealed record Transcript(TranscriptSession Session, List<TranscriptEvent> Events);
 
-// Class (not a tuple/positional record) — SQLite dynamic typing breaks positional materialization.
-public sealed class ScoreExportRow
-{
-    public string SessionId { get; set; } = "";
-    public string ScorerId { get; set; } = "";
-    public double Score { get; set; }
-}
-
 public interface IFeedbackStore
 {
     Task RateAsync(string sessionId, int rating, string? note);
@@ -81,10 +76,25 @@ public interface IFeedbackStore
     Task<List<EvalRecord>> EvalExportAsync();
 }
 
+/// <summary>
+/// Read/write side of the eval console. Conversations + their event transcripts live in Lyntai's
+/// conversation store and the automated scores in Lyntai's score store — read through their APIs
+/// (<c>IConversationStore</c> / <c>IScoreStore</c>), never raw SQL against the <c>lyntai_*</c> tables.
+/// Only the app's OWN human-rating table (<c>chat_feedback</c>) is SQL. Session state is parsed from the
+/// thread's JSON metadata (<see cref="SessionMetadata"/>) the app wrote.
+/// </summary>
 public sealed class FeedbackStore : IFeedbackStore
 {
     private readonly IDbConnectionFactory _db;
-    public FeedbackStore(IDbConnectionFactory db) => _db = db;
+    private readonly IConversationStore _convo;
+    private readonly IScoreStore _scores;
+
+    public FeedbackStore(IDbConnectionFactory db, IConversationStore convo, IScoreStore scores)
+    {
+        _db = db;
+        _convo = convo;
+        _scores = scores;
+    }
 
     public async Task RateAsync(string sessionId, int rating, string? note)
     {
@@ -102,23 +112,30 @@ public sealed class FeedbackStore : IFeedbackStore
 
     public async Task<List<ConversationRow>> ConversationsAsync(int limit)
     {
-        using var conn = _db.Open();
-        return (await conn.QueryAsync<ConversationRow>(
-            """
-            SELECT s.id, s.phase, s.mode, s.user_message, s.commit_sha, s.error, s.created_at,
-                   f.rating, f.note,
-                   (SELECT CAST(AVG(score) AS REAL) FROM lyntai_score_result c WHERE c.session_id = s.id) AS avg_score,
-                   (SELECT COUNT(*) FROM lyntai_score_result c WHERE c.session_id = s.id) AS score_count
-            FROM chat_session s LEFT JOIN chat_feedback f ON f.session_id = s.id
-            ORDER BY s.created_at DESC LIMIT @limit
-            """,
-            new { limit = Math.Clamp(limit, 1, 500) })).ToList();
+        var threads = await _convo.ListThreadsAsync(Math.Clamp(limit, 1, 500));
+        var scores = await ScoreIndexAsync();
+        var feedback = await FeedbackIndexAsync();
+        return threads.Select(t =>
+        {
+            var m = SessionMetadata.Parse(t.Metadata);
+            var (avg, count) = scores.GetValueOrDefault(t.Id);
+            var (rating, note) = feedback.GetValueOrDefault(t.Id);
+            return new ConversationRow
+            {
+                Id = t.Id, Phase = m.Phase ?? "", Mode = m.Mode ?? "", UserMessage = m.UserMessage,
+                CommitSha = m.CommitSha, Error = m.Error, CreatedAt = t.CreatedAt.ToString("o"),
+                Rating = rating, Note = note,
+                AvgScore = count > 0 ? avg : null, ScoreCount = count,
+            };
+        }).ToList();
     }
 
     public async Task<EvalStats> StatsAsync()
     {
+        // No count on IConversationStore — list + count (bounded; a self-hosted family planner's conversation
+        // set is small). Ratings are the app's own chat_feedback table.
+        var total = (await _convo.ListThreadsAsync(limit: 100_000)).Count;
         using var conn = _db.Open();
-        var total = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM chat_session");
         var rated = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM chat_feedback");
         var avg = await conn.ExecuteScalarAsync<double?>("SELECT AVG(CAST(rating AS REAL)) FROM chat_feedback") ?? 0;
         var dist = (await conn.QueryAsync<RatingBucket>(
@@ -128,40 +145,63 @@ public sealed class FeedbackStore : IFeedbackStore
 
     public async Task<Transcript?> TranscriptAsync(string id)
     {
-        using var conn = _db.Open();
-        var session = await conn.QuerySingleOrDefaultAsync<TranscriptSession>(
-            """
-            SELECT s.id, s.phase, s.mode, s.user_message, s.plan_text, s.commit_sha, s.error, s.created_at,
-                   f.rating, f.note
-            FROM chat_session s LEFT JOIN chat_feedback f ON f.session_id = s.id
-            WHERE s.id = @id
-            """,
-            new { id });
-        if (session is null) return null;
-        var events = (await conn.QueryAsync<TranscriptEvent>(
-            "SELECT seq, kind, payload_json, created_at FROM chat_event WHERE session_id = @id ORDER BY seq",
-            new { id })).ToList();
+        var thread = await _convo.GetThreadAsync(id);
+        if (thread is null) return null;
+        var m = SessionMetadata.Parse(thread.Metadata);
+        var (rating, note) = (await FeedbackIndexAsync()).GetValueOrDefault(id);
+        var session = new TranscriptSession
+        {
+            Id = id, Phase = m.Phase ?? "", Mode = m.Mode ?? "", UserMessage = m.UserMessage,
+            PlanText = m.PlanText, CommitSha = m.CommitSha, Error = m.Error,
+            CreatedAt = thread.CreatedAt.ToString("o"), Rating = rating, Note = note,
+        };
+        var events = (await _convo.GetMessagesAsync(id)).Select(x => new TranscriptEvent
+        {
+            Seq = (int)x.Seq, Kind = x.Kind, PayloadJson = x.Payload, CreatedAt = x.CreatedAt.ToString("o"),
+        }).ToList();
         return new Transcript(session, events);
     }
 
     public async Task<List<EvalRecord>> EvalExportAsync()
     {
-        using var conn = _db.Open();
-        var records = (await conn.QueryAsync<EvalRecord>(
-            """
-            SELECT s.id, s.mode, s.user_message AS input, s.plan_text AS plan, s.commit_sha,
-                   f.rating, f.note, s.created_at
-            FROM chat_session s JOIN chat_feedback f ON f.session_id = s.id
-            ORDER BY s.created_at
-            """)).ToList();
-
-        // Attach the automated scorer verdicts so the tuning dataset carries both signals.
-        var scores = await conn.QueryAsync<ScoreExportRow>(
-            "SELECT session_id, scorer_id, CAST(score AS REAL) AS score FROM lyntai_score_result");
-        var bySession = scores.GroupBy(x => x.SessionId).ToDictionary(g => g.Key, g => g.ToList());
-        foreach (var r in records)
-            if (bySession.TryGetValue(r.Id, out var rows))
-                r.Scores = rows.ToDictionary(x => x.ScorerId, x => Math.Round(x.Score, 3));
+        // The tuning dataset = rated conversations + both signals (human rating + automated scores).
+        var feedback = await FeedbackIndexAsync();
+        var scoresBySession = (await _scores.ExportAsync())
+            .GroupBy(x => x.SessionId)
+            .ToDictionary(g => g.Key, g => g.ToDictionary(x => x.ScorerId, x => Math.Round(x.Score, 3)));
+        var threads = await _convo.ListThreadsAsync(limit: 100_000);
+        var records = new List<EvalRecord>();
+        foreach (var t in threads.OrderBy(t => t.CreatedAt))
+        {
+            if (!feedback.TryGetValue(t.Id, out var f) || f.Rating is null) continue; // rated conversations only
+            var m = SessionMetadata.Parse(t.Metadata);
+            records.Add(new EvalRecord
+            {
+                Id = t.Id, Mode = m.Mode ?? "", Input = m.UserMessage, Plan = m.PlanText, CommitSha = m.CommitSha,
+                Rating = f.Rating.Value, Note = f.Note, CreatedAt = t.CreatedAt.ToString("o"),
+                Scores = scoresBySession.GetValueOrDefault(t.Id) ?? new(),
+            });
+        }
         return records;
+    }
+
+    // session -> (avg score, count) from Lyntai's score store (API, not SQL).
+    private async Task<Dictionary<string, (double Avg, int Count)>> ScoreIndexAsync() =>
+        (await _scores.ExportAsync()).GroupBy(r => r.SessionId)
+            .ToDictionary(g => g.Key, g => (g.Average(x => x.Score), g.Count()));
+
+    // session -> (rating, note) from the app's OWN chat_feedback table.
+    private async Task<Dictionary<string, (int? Rating, string? Note)>> FeedbackIndexAsync()
+    {
+        using var conn = _db.Open();
+        var rows = await conn.QueryAsync<FeedbackRow>("SELECT session_id AS SessionId, rating, note FROM chat_feedback");
+        return rows.ToDictionary(r => r.SessionId, r => ((int?)r.Rating, r.Note));
+    }
+
+    private sealed class FeedbackRow
+    {
+        public string SessionId { get; set; } = "";
+        public int Rating { get; set; }
+        public string? Note { get; set; }
     }
 }

@@ -37,11 +37,11 @@
          router/fallback). The interactive two-gate chat, background jobs, and playground drive the CLI's own
          agent loop through its IAgentSession (ClaudeAgentSession) — read-only/write gates, resume, the
          scope-guard settings file, app-hosted MCP — adapted to the app's SSE wire by AgentRunner. -->
-    <PackageReference Include="Lyntai.Core" Version="0.28.5" />
-    <PackageReference Include="Lyntai.Providers.ClaudeCli" Version="0.28.5" />
+    <PackageReference Include="Lyntai.Core" Version="0.29.0" />
+    <PackageReference Include="Lyntai.Providers.ClaudeCli" Version="0.29.0" />
     <!-- Lyntai's SQLite storage backs the scoring store (lyntai_score_result: upsert + aggregate + export),
          landed in the same gatherlight.db (lyntai_-prefixed, coexists with the app's own tables). -->
-    <PackageReference Include="Lyntai.Storage.Sqlite" Version="0.28.5" />
+    <PackageReference Include="Lyntai.Storage.Sqlite" Version="0.29.0" />
   </ItemGroup>
 
   <!-- Built client (src/client `npm run build` outputs here; gitignored). Copied next to the exe

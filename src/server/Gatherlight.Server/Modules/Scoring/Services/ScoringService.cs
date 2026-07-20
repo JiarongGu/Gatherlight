@@ -1,6 +1,6 @@
 using System.Text.Json;
-using Dapper;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Modules.Chat.Services;
+using IConversationStore = Lyntai.Storage.IConversationStore;
 
 namespace Gatherlight.Server.Modules.Scoring.Services;
 
@@ -34,15 +34,15 @@ public sealed class ScoringService : IScoringService
     private readonly Lyntai.Cortex.IScoringService _scoring; // iterates the registered scorers, fail-open, persists
     private readonly Lyntai.Storage.IScoreStore _store;      // upsert (session,scorer) + cross-session aggregate
     private readonly IReadOnlyList<Lyntai.Cortex.IScorer> _scorers;
-    private readonly IDbConnectionFactory _db;
+    private readonly IConversationStore _convo;
 
     public ScoringService(Lyntai.Cortex.IScoringService scoring, Lyntai.Storage.IScoreStore store,
-        IEnumerable<Lyntai.Cortex.IScorer> scorers, IDbConnectionFactory db)
+        IEnumerable<Lyntai.Cortex.IScorer> scorers, IConversationStore convo)
     {
         _scoring = scoring;
         _store = store;
         _scorers = scorers.ToList();
-        _db = db;
+        _convo = convo;
     }
 
     public IReadOnlyList<Lyntai.Cortex.IScorer> Scorers => _scorers;
@@ -65,17 +65,17 @@ public sealed class ScoringService : IScoringService
 
     public async Task<int> ScoreAllAsync(CancellationToken ct = default)
     {
-        List<string> ids;
-        using (var conn = _db.Open())
-        {
-            // terminal conversations with no scores yet — join the app's session table to Lyntai's store
-            ids = (await conn.QueryAsync<string>("""
-                SELECT s.id FROM chat_session s
-                WHERE s.phase IN @terminal
-                  AND NOT EXISTS (SELECT 1 FROM lyntai_score_result r WHERE r.session_id = s.id)
-                ORDER BY s.created_at DESC LIMIT 500
-                """, new { terminal = Terminal })).ToList();
-        }
+        // Terminal conversations with no scores yet — both stores read through their APIs (no raw SQL).
+        var scored = (await _store.ExportAsync(ct)).Select(r => r.SessionId).ToHashSet();
+        var threads = await _convo.ListThreadsAsync(500, ct);
+        var ids = threads
+            .Where(t =>
+            {
+                var phase = SessionMetadata.Parse(t.Metadata).Phase;
+                return phase is not null && Terminal.Contains(phase) && !scored.Contains(t.Id);
+            })
+            .Select(t => t.Id)
+            .ToList();
         var total = 0;
         foreach (var id in ids)
         {
@@ -91,19 +91,17 @@ public sealed class ScoringService : IScoringService
     // Reconstruct the scoring context from the persisted session + the committed event's file list.
     private async Task<Lyntai.Cortex.ScoreContext?> BuildContextAsync(string sessionId)
     {
-        using var conn = _db.Open();
-        var row = await conn.QuerySingleOrDefaultAsync(
-            "SELECT phase, mode, user_message, plan_text, commit_sha FROM chat_session WHERE id = @id",
-            new { id = sessionId });
-        if (row is null) return null;
+        var thread = await _convo.GetThreadAsync(sessionId);
+        if (thread is null) return null;
+        var m = SessionMetadata.Parse(thread.Metadata);
 
         var files = new List<string>();
-        // The committed phase event carries data:{ sha, files }. Require BOTH markers so an unrelated
-        // event that merely mentions "files" (a plan, a tool detail, an error) can't be picked instead
-        // and silently zero the scope-adherence scorer.
-        var payload = await conn.QuerySingleOrDefaultAsync<string>(
-            "SELECT payload_json FROM chat_event WHERE session_id = @id AND payload_json LIKE '%\"files\"%' AND payload_json LIKE '%\"sha\"%' ORDER BY seq DESC LIMIT 1",
-            new { id = sessionId });
+        // The committed phase event carries data:{ sha, files }. Require BOTH markers so an unrelated event
+        // that merely mentions "files" (a plan, a tool detail, an error) can't be picked instead and silently
+        // zero the scope-adherence scorer. Read the event stream through the store API (latest match).
+        var payload = (await _convo.GetMessagesAsync(sessionId))
+            .LastOrDefault(x => x.Payload.Contains("\"files\"", StringComparison.Ordinal)
+                             && x.Payload.Contains("\"sha\"", StringComparison.Ordinal))?.Payload;
         if (payload is not null)
         {
             try
@@ -120,8 +118,8 @@ public sealed class ScoringService : IScoringService
             catch { /* leave files empty */ }
         }
 
-        return ScoringContext.Build(sessionId, (string?)row.user_message ?? "", (string?)row.plan_text ?? "",
-            (string?)row.phase ?? "", (string?)row.mode ?? "plan", (string?)row.commit_sha, files);
+        return ScoringContext.Build(sessionId, m.UserMessage ?? "", m.PlanText ?? "",
+            m.Phase ?? "", m.Mode ?? "plan", m.CommitSha, files);
     }
 }
 

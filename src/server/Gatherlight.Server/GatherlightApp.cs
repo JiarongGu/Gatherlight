@@ -177,7 +177,7 @@ public static class GatherlightApp
             .AddSingleton<Modules.Cortex.Services.ICortexConfigService, Modules.Cortex.Services.CortexConfigService>()
             // Automated scorers (Mastra-style): grade each committed conversation on 智库-rule dimensions
             .AddSingleton<Modules.Scoring.Services.IScoringService, Modules.Scoring.Services.ScoringService>()
-            // Run traces (Mastra observability): structure the chat_event stream into a run timeline
+            // Run traces (Mastra observability): structure the conversation event stream into a run timeline
             .AddSingleton<Modules.Trace.Services.ITraceService, Modules.Trace.Services.TraceService>()
             // Prompt/agent playground (Mastra runEvals): score dry plans over a scenario set (CLI)
             .AddSingleton<Modules.Playground.Services.IPlaygroundService, Modules.Playground.Services.PlaygroundService>()
