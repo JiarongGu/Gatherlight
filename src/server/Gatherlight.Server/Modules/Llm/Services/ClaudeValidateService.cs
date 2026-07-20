@@ -48,7 +48,7 @@ public sealed partial class ClaudeValidateService : IClaudeValidateService
         {
             result = await _agent.RunAsync(new ClaudeAgentOptions
             {
-                Prompt = _harness.ValidatePrompt(paths, diff),
+                Prompt = await _harness.ValidatePrompt(paths, diff),
                 WorkingDirectory = _data.RootPath,
                 ToolPolicy = AgentToolPolicy.ReadOnly,
                 // The verdict pass is simple — a cheaper model suffices.

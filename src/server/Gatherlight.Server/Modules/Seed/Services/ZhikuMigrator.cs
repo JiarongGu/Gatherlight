@@ -250,7 +250,7 @@ public sealed class ZhikuMigrator : IZhikuMigrator
         // overlays a fresh ElapsedMs on each poll.
         var res = await _agent.RunAsync(new ClaudeAgentOptions
         {
-            Prompt = _harness.KbMergePrompt(path, userContent, templateContent),
+            Prompt = await _harness.KbMergePrompt(path, userContent, templateContent),
             WorkingDirectory = Path.GetTempPath(),   // neutral: the merge is self-contained in the prompt
             ToolPolicy = AgentToolPolicy.ReadOnly,
             Model = model,

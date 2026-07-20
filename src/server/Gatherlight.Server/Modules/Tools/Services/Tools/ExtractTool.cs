@@ -59,7 +59,7 @@ public sealed class ExtractTool : IGatherlightTool
 
         var res = await _agent.RunAsync(new ClaudeAgentOptions
         {
-            Prompt = _harness.ProcessFilePrompt(absPath, instruction),
+            Prompt = await _harness.ProcessFilePrompt(absPath, instruction),
             WorkingDirectory = Path.GetTempPath(), // neutral: no CLAUDE.md / knowledge-base load
             ToolPolicy = AgentToolPolicy.ReadOnly, // Read allowed; Edit/Write denied
             Model = _appConfig.Get("llm.model.extract") ?? "sonnet",

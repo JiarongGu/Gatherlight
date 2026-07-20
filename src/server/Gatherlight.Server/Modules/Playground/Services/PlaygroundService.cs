@@ -102,7 +102,7 @@ public sealed class PlaygroundService : IPlaygroundService
             // MCP tools available) so the eval reflects actual planner behaviour — just no gate/commit.
             var res = await _agent.RunAsync(new ClaudeAgentOptions
             {
-                Prompt = _harness.PlanPrompt(s.Message, threadContext: null, attachments: Array.Empty<string>()),
+                Prompt = await _harness.PlanPrompt(s.Message, threadContext: null, attachments: Array.Empty<string>()),
                 WorkingDirectory = _data.RootPath,
                 ToolPolicy = AgentToolPolicy.ReadOnly,
                 Model = model,

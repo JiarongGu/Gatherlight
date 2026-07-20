@@ -97,9 +97,9 @@ public sealed class UnattendedRunService : IUnattendedRunService
 
         var sw = Stopwatch.StartNew();
         var tracker = spec.ReadOnly ? null : new EditTracker(_data.RootPath);
-        var prompt = spec.ReadOnly
+        var prompt = await (spec.ReadOnly
             ? _harness.JobReportPrompt(spec.JobName, spec.Instructions)
-            : _harness.JobExecutePrompt(spec.JobName, spec.Instructions);
+            : _harness.JobExecutePrompt(spec.JobName, spec.Instructions));
 
         var opts = new ClaudeAgentOptions
         {

@@ -333,7 +333,7 @@ public sealed class ChatSessionService
         if (IsSystem(s))
         {
             Emit(s, new AgentEvent { Kind = "notice", Text = "🔧 系统模式:正在分析界面代码 + 拟定改动计划…" });
-            prompt = _harness.SystemPlanPrompt(s.UserMessage, s.ThreadContext);
+            prompt = await _harness.SystemPlanPrompt(s.UserMessage, s.ThreadContext);
         }
         else
         {
@@ -347,7 +347,7 @@ public sealed class ChatSessionService
                     ? "🧭 正在按 CLAUDE.md gate 调研 + 拟定计划…"
                     : $"⚡ 已按「{routed.CategoryKey}」预路由知识库(免调研)— 正在拟定计划…",
             });
-            prompt = _harness.PlanPrompt(s.UserMessage, s.ThreadContext, s.Attachments, routed?.PromptBlock);
+            prompt = await _harness.PlanPrompt(s.UserMessage, s.ThreadContext, s.Attachments, routed?.PromptBlock);
         }
         s.Abort = new CancellationTokenSource();
         try
@@ -396,7 +396,7 @@ public sealed class ChatSessionService
         {
             var res = await _agent.RunAsync(
                 BaseRunOptions(s,
-                    IsSystem(s) ? _harness.SystemExecutePrompt(s.PlanText) : _harness.ExecutePrompt(s.PlanText),
+                    await (IsSystem(s) ? _harness.SystemExecutePrompt(s.PlanText) : _harness.ExecutePrompt(s.PlanText)),
                     readOnly: false) with
                 {
                     ResumeToken = s.ClaudeSessionId,
@@ -449,7 +449,7 @@ public sealed class ChatSessionService
             Emit(s, new AgentEvent { Kind = "notice", Text = $"❌ 构建失败,让 AI 修复(第 {attempt + 1} 次)…" });
             SetPhase(s, ChatPhase.Executing);
             await _agent.RunAsync(
-                BaseRunOptions(s, _harness.RepairPrompt(result.Output), readOnly: false) with
+                BaseRunOptions(s, await _harness.RepairPrompt(result.Output), readOnly: false) with
                 {
                     ResumeToken = s.ClaudeSessionId,
                     SettingsPath = _env.SystemSettingsPath,
@@ -468,9 +468,9 @@ public sealed class ChatSessionService
         s.Abort = new CancellationTokenSource();
         try
         {
-            var revisePrompt = IsSystem(s)
+            var revisePrompt = await (IsSystem(s)
                 ? _harness.SystemRevisePlanPrompt(s.PlanText, feedback)
-                : _harness.RevisePlanPrompt(s.PlanText, feedback);
+                : _harness.RevisePlanPrompt(s.PlanText, feedback));
             var res = await _agent.RunAsync(
                 BaseRunOptions(s, revisePrompt, readOnly: true) with { ResumeToken = s.ClaudeSessionId },
                 label: $"chat:{s.Mode}:revise-plan", onEvent: ev => Emit(s, ev), ct: s.Abort.Token);
@@ -606,7 +606,7 @@ public sealed class ChatSessionService
         {
             var res = await _agent.RunAsync(
                 BaseRunOptions(s,
-                    IsSystem(s) ? _harness.SystemReviseExecutePrompt(feedback) : _harness.ReviseExecutePrompt(feedback),
+                    await (IsSystem(s) ? _harness.SystemReviseExecutePrompt(feedback) : _harness.ReviseExecutePrompt(feedback)),
                     readOnly: false) with
                 {
                     ResumeToken = s.ClaudeSessionId,

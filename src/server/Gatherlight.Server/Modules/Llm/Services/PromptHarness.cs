@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using Gatherlight.Server.Modules.Core.Services;
+using Lyntai.Prompts;
 
 namespace Gatherlight.Server.Modules.Llm.Services;
 
@@ -25,22 +25,24 @@ public sealed record PromptDescriptor(
 /// </summary>
 public interface IPromptHarness
 {
-    string PlanPrompt(string userMessage, string? threadContext, IReadOnlyList<string> attachments, string? routedBlock = null);
-    string RevisePlanPrompt(string prevPlan, string feedback);
-    string ExecutePrompt(string approvedPlan);
-    string ReviseExecutePrompt(string feedback);
-    string ValidatePrompt(IReadOnlyList<string> claudePaths, string diff);
+    // Render methods are async: the override lookup goes through Lyntai's IPromptRegistry (over the app's
+    // app_config KV). CommitMessage/JobCommitMessage build strings directly (no template) → stay sync.
+    Task<string> PlanPrompt(string userMessage, string? threadContext, IReadOnlyList<string> attachments, string? routedBlock = null);
+    Task<string> RevisePlanPrompt(string prevPlan, string feedback);
+    Task<string> ExecutePrompt(string approvedPlan);
+    Task<string> ReviseExecutePrompt(string feedback);
+    Task<string> ValidatePrompt(IReadOnlyList<string> claudePaths, string diff);
     string CommitMessage(string userMessage, IReadOnlyList<string> files);
-    string ProcessFilePrompt(string absPath, string instruction);
-    string SystemPlanPrompt(string userMessage, string? threadContext);
-    string SystemRevisePlanPrompt(string prevPlan, string feedback);
-    string SystemExecutePrompt(string approvedPlan);
-    string SystemReviseExecutePrompt(string feedback);
-    string RepairPrompt(string buildOutput);
-    string JobExecutePrompt(string jobName, string instructions);
-    string JobReportPrompt(string jobName, string instructions);
+    Task<string> ProcessFilePrompt(string absPath, string instruction);
+    Task<string> SystemPlanPrompt(string userMessage, string? threadContext);
+    Task<string> SystemRevisePlanPrompt(string prevPlan, string feedback);
+    Task<string> SystemExecutePrompt(string approvedPlan);
+    Task<string> SystemReviseExecutePrompt(string feedback);
+    Task<string> RepairPrompt(string buildOutput);
+    Task<string> JobExecutePrompt(string jobName, string instructions);
+    Task<string> JobReportPrompt(string jobName, string instructions);
     string JobCommitMessage(string jobName, IReadOnlyList<string> files, bool autoApproved);
-    string KbMergePrompt(string path, string userVersion, string templateVersion);
+    Task<string> KbMergePrompt(string path, string userVersion, string templateVersion);
 }
 
 public sealed class PromptHarness : IPromptHarness
@@ -316,42 +318,42 @@ public sealed class PromptHarness : IPromptHarness
             "应用更新时,把用户自定义的 .claude 文件与新模板改进合并(2-way)。", "utility", KbMergeTemplate, Ph(KbMergeTemplate)),
     };
 
-    private readonly IAppConfigService _appConfig;
+    private readonly IPromptRegistry _registry;
 
-    public PromptHarness(IAppConfigService appConfig) => _appConfig = appConfig;
+    public PromptHarness(IPromptRegistry registry) => _registry = registry;
 
-    public string SystemPlanPrompt(string userMessage, string? threadContext)
+    public Task<string> SystemPlanPrompt(string userMessage, string? threadContext)
     {
         var context = string.IsNullOrWhiteSpace(threadContext)
             ? ""
             : "RECENT REQUESTS IN THIS CONVERSATION (context only; a turn marked \"⚠️ 未完成(出错)\" failed — if this request continues it, recover from there):\n" + threadContext.Trim() + "\n\n";
-        return Render("systemPlan", SystemPlanTemplate, new()
+        return RenderAsync("systemPlan", SystemPlanTemplate, new()
         {
             ["context"] = context,
             ["userMessage"] = userMessage,
         });
     }
 
-    public string SystemRevisePlanPrompt(string prevPlan, string feedback) =>
-        Render("systemRevisePlan", SystemRevisePlanTemplate, new() { ["prevPlan"] = prevPlan, ["feedback"] = feedback });
+    public Task<string> SystemRevisePlanPrompt(string prevPlan, string feedback) =>
+        RenderAsync("systemRevisePlan", SystemRevisePlanTemplate, new() { ["prevPlan"] = prevPlan, ["feedback"] = feedback });
 
-    public string SystemExecutePrompt(string approvedPlan) =>
-        Render("systemExecute", SystemExecuteTemplate, new() { ["approvedPlan"] = approvedPlan });
+    public Task<string> SystemExecutePrompt(string approvedPlan) =>
+        RenderAsync("systemExecute", SystemExecuteTemplate, new() { ["approvedPlan"] = approvedPlan });
 
-    public string SystemReviseExecutePrompt(string feedback) =>
-        Render("systemReviseExecute", SystemReviseExecuteTemplate, new() { ["feedback"] = feedback });
+    public Task<string> SystemReviseExecutePrompt(string feedback) =>
+        RenderAsync("systemReviseExecute", SystemReviseExecuteTemplate, new() { ["feedback"] = feedback });
 
-    public string RepairPrompt(string buildOutput) =>
-        Render("repair", RepairTemplate, new() { ["buildOutput"] = buildOutput });
+    public Task<string> RepairPrompt(string buildOutput) =>
+        RenderAsync("repair", RepairTemplate, new() { ["buildOutput"] = buildOutput });
 
-    public string JobExecutePrompt(string jobName, string instructions) =>
-        Render("jobExecute", JobExecuteTemplate, new() { ["jobName"] = jobName, ["instructions"] = instructions });
+    public Task<string> JobExecutePrompt(string jobName, string instructions) =>
+        RenderAsync("jobExecute", JobExecuteTemplate, new() { ["jobName"] = jobName, ["instructions"] = instructions });
 
-    public string JobReportPrompt(string jobName, string instructions) =>
-        Render("jobReport", JobReportTemplate, new() { ["jobName"] = jobName, ["instructions"] = instructions });
+    public Task<string> JobReportPrompt(string jobName, string instructions) =>
+        RenderAsync("jobReport", JobReportTemplate, new() { ["jobName"] = jobName, ["instructions"] = instructions });
 
-    public string KbMergePrompt(string path, string userVersion, string templateVersion) =>
-        Render("kbMerge", KbMergeTemplate, new()
+    public Task<string> KbMergePrompt(string path, string userVersion, string templateVersion) =>
+        RenderAsync("kbMerge", KbMergeTemplate, new()
         {
             ["path"] = path, ["userVersion"] = userVersion, ["templateVersion"] = templateVersion,
         });
@@ -369,13 +371,13 @@ public sealed class PromptHarness : IPromptHarness
         return $"{subject}\n\n{provenance}\n\nFiles:\n{body}\n\nCo-Authored-By: Claude <noreply@anthropic.com>";
     }
 
-    public string PlanPrompt(string userMessage, string? threadContext, IReadOnlyList<string> attachments, string? routedBlock = null)
+    public Task<string> PlanPrompt(string userMessage, string? threadContext, IReadOnlyList<string> attachments, string? routedBlock = null)
     {
         var context = string.IsNullOrWhiteSpace(threadContext)
             ? ""
             : "RECENT REQUESTS IN THIS CONVERSATION (for understanding follow-ups only — the workspace files are the source of truth; do NOT assume these edits still exist on disk). A turn marked \"⚠️ 未完成(出错)\" did NOT finish: if the current request is a retry or continuation of it, pick up from there and address what went wrong rather than starting over blind:\n"
               + threadContext.Trim() + "\n\n";
-        return Render("plan", PlanTemplate, new()
+        return RenderAsync("plan", PlanTemplate, new()
         {
             ["context"] = context,
             ["routing"] = routedBlock ?? "",
@@ -384,17 +386,17 @@ public sealed class PromptHarness : IPromptHarness
         });
     }
 
-    public string RevisePlanPrompt(string prevPlan, string feedback) =>
-        Render("revisePlan", RevisePlanTemplate, new() { ["prevPlan"] = prevPlan, ["feedback"] = feedback });
+    public Task<string> RevisePlanPrompt(string prevPlan, string feedback) =>
+        RenderAsync("revisePlan", RevisePlanTemplate, new() { ["prevPlan"] = prevPlan, ["feedback"] = feedback });
 
-    public string ExecutePrompt(string approvedPlan) =>
-        Render("execute", ExecuteTemplate, new() { ["approvedPlan"] = approvedPlan });
+    public Task<string> ExecutePrompt(string approvedPlan) =>
+        RenderAsync("execute", ExecuteTemplate, new() { ["approvedPlan"] = approvedPlan });
 
-    public string ReviseExecutePrompt(string feedback) =>
-        Render("reviseExecute", ReviseExecuteTemplate, new() { ["feedback"] = feedback });
+    public Task<string> ReviseExecutePrompt(string feedback) =>
+        RenderAsync("reviseExecute", ReviseExecuteTemplate, new() { ["feedback"] = feedback });
 
-    public string ValidatePrompt(IReadOnlyList<string> claudePaths, string diff) =>
-        Render("validate", ValidateTemplate, new()
+    public Task<string> ValidatePrompt(IReadOnlyList<string> claudePaths, string diff) =>
+        RenderAsync("validate", ValidateTemplate, new()
         {
             ["paths"] = string.Join('\n', claudePaths.Select(p => $"  - {p}")),
             ["diff"] = diff,
@@ -424,8 +426,8 @@ public sealed class PromptHarness : IPromptHarness
     /// <summary>One-shot file-processor prompt (the `extract` tool) — deliberately lean: no
     /// knowledge-base gate, no exploration, absolute path so it runs from a neutral cwd
     /// (no CLAUDE.md token load).</summary>
-    public string ProcessFilePrompt(string absPath, string instruction) =>
-        Render("processFile", ProcessFileTemplate, new() { ["absPath"] = absPath, ["instruction"] = instruction });
+    public Task<string> ProcessFilePrompt(string absPath, string instruction) =>
+        RenderAsync("processFile", ProcessFileTemplate, new() { ["absPath"] = absPath, ["instruction"] = instruction });
 
     /// <summary>Attachments block — data-root-relative paths of files the user uploaded for this
     /// turn. The claude CLI's Read tool ingests PDFs and images natively.</summary>
@@ -437,13 +439,9 @@ public sealed class PromptHarness : IPromptHarness
                + list + "\n\n";
     }
 
-    /// <summary>App-config override (<c>cortex.prompt.{name}</c>) wins over the built-in template;
-    /// {placeholder} tokens are filled from vars either way.</summary>
-    private string Render(string name, string defaultTemplate, Dictionary<string, string> vars)
-    {
-        var template = _appConfig.Get($"cortex.prompt.{name}") ?? defaultTemplate;
-        foreach (var (key, value) in vars)
-            template = template.Replace("{" + key + "}", value);
-        return template;
-    }
+    /// <summary>Rendering is Lyntai's <see cref="IPromptRegistry"/>: it reads the override
+    /// (<c>cortex.prompt.{name}</c>, via the configured key prefix, from the app's app_config KV) and fills
+    /// the <c>{placeholder}</c> tokens from vars — the cortex render/override logic belongs to Lyntai.</summary>
+    private Task<string> RenderAsync(string name, string defaultTemplate, Dictionary<string, string> vars) =>
+        _registry.RenderAsync(name, defaultTemplate, vars);
 }

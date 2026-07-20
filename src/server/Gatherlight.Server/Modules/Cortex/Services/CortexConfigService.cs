@@ -1,5 +1,6 @@
 using Gatherlight.Server.Modules.Core.Services;
 using Gatherlight.Server.Modules.Llm.Services;
+using Lyntai.Prompts;
 
 namespace Gatherlight.Server.Modules.Cortex.Services;
 
@@ -53,8 +54,13 @@ public sealed class CortexConfigService : ICortexConfigService
     private static readonly string[] ModelSuggestions = { "", "haiku", "sonnet", "opus" };
 
     private readonly IAppConfigService _config;
+    private readonly IPromptRegistry _registry;
 
-    public CortexConfigService(IAppConfigService config) => _config = config;
+    public CortexConfigService(IAppConfigService config, IPromptRegistry registry)
+    {
+        _config = config;
+        _registry = registry;
+    }
 
     public IReadOnlyList<PromptView> Prompts() => PromptHarness.Catalog.Select(d =>
     {
@@ -77,10 +83,11 @@ public sealed class CortexConfigService : ICortexConfigService
         var desc = PromptHarness.Catalog.FirstOrDefault(d => d.Name == name);
         if (desc is null) return new PromptSetResult(false, Array.Empty<string>());
 
-        // Guard the placeholder contract: an override that drops {userMessage}/{diff}/… would
-        // silently strip the dynamic content that Render splices in, breaking the agent quietly.
-        var missing = desc.Placeholders.Where(p => !value.Contains("{" + p + "}")).ToArray();
-        if (missing.Length > 0) return new PromptSetResult(true, missing);
+        // Guard the placeholder contract via Lyntai's registry: an override that drops {userMessage}/{diff}/…
+        // would silently strip the dynamic content the render splices in. Rejecting up front (with the exact
+        // missing tokens) is IPromptRegistry.ValidateOverride's job — the cortex logic belongs to Lyntai.
+        var missing = _registry.ValidateOverride(desc.Default, value);
+        if (missing.Count > 0) return new PromptSetResult(true, missing);
 
         // No-op if the value equals the built-in default — clear the override instead of storing a copy.
         if (value == desc.Default) _config.Delete($"cortex.prompt.{name}");

@@ -156,15 +156,16 @@ public sealed partial class CitationScorer : IScorer
 // judge model routes through llm.model.scorer (haiku); Applies() gates the token spend (A8).
 
 /// <summary>Quality: does the plan address exactly what the user asked (on-scope)?</summary>
-public sealed class AnswerRelevancyScorer(Lyntai.Llm.ILlmClient llm, IAppConfigService config)
+public sealed class AnswerRelevancyScorer(Lyntai.Llm.ILlmClient llm)
     : LlmScorerBase(llm), IScorer
 {
     public override string Id => "answer-relevancy";
     public override string Name => "切题 · Answer relevancy";
     public string Description => "计划是否精准回应了用户的请求,没有偏题或遗漏核心诉求(LLM 评判)。";
     public override string Group => "quality";
-    protected override string? Model => config.Get("llm.model.scorer") ?? "haiku";
-    protected override string Consumer => "scorer:answer-relevancy";
+    // Judge model resolves LIVE via Lyntai's IModelRoutingStore: the llm.model.scorer override → else the
+    // "haiku" default (DefaultModelByConsumer["scorer"], set in AddLyntai). No explicit Model = Lyntai routes.
+    protected override string Consumer => "scorer";
 
     protected override bool Applies(ScoreContext ctx) => !string.IsNullOrWhiteSpace(ctx.Plan());
 
@@ -177,15 +178,15 @@ public sealed class AnswerRelevancyScorer(Lyntai.Llm.ILlmClient llm, IAppConfigS
 }
 
 /// <summary>Guardrail: are time-sensitive facts cited or marked TBD, not fabricated (no-fabrication)?</summary>
-public sealed class FaithfulnessScorer(Lyntai.Llm.ILlmClient llm, IAppConfigService config)
+public sealed class FaithfulnessScorer(Lyntai.Llm.ILlmClient llm)
     : LlmScorerBase(llm), IScorer
 {
     public override string Id => "faithfulness";
     public override string Name => "事实可靠 · Faithfulness";
     public string Description => "计划中的时效性事实(营业时间/价格/签证/航班)是否都有来源或标注 TBD,而非凭空断言(LLM 评判)。";
     public override string Group => "guardrails";
-    protected override string? Model => config.Get("llm.model.scorer") ?? "haiku";
-    protected override string Consumer => "scorer:faithfulness";
+    // Judge model resolves LIVE via Lyntai's IModelRoutingStore (llm.model.scorer → else "haiku"); see above.
+    protected override string Consumer => "scorer";
 
     protected override bool Applies(ScoreContext ctx) => ctx.Mode() == "plan" && !string.IsNullOrWhiteSpace(ctx.Plan());
 

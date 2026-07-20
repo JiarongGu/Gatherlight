@@ -94,7 +94,17 @@ public static class GatherlightApp
                 // 2-min provider default: lift the ceiling so a per-call TimeoutSeconds up to 2h is honored
                 // (short one-shot/scorer calls keep the 2-min ProviderTimeout default).
                 .AddClaudeCliAgentSession()
-                .Configure(o => o.MaxProviderTimeout = TimeSpan.FromHours(2))
+                .Configure(o =>
+                {
+                    o.MaxProviderTimeout = TimeSpan.FromHours(2);
+                    // Cortex lives in the app's OWN keys — point Lyntai's IPromptRegistry / IModelRoutingStore
+                    // straight at cortex.prompt.* / llm.model.* (no shim, no lyntai_kv duplicate).
+                    o.PromptKeyPrefix = "cortex.prompt.";
+                    o.ModelKeyPrefix = "llm.model.";
+                    o.DefaultModelByConsumer["scorer"] = "haiku"; // cheap-judge default; llm.model.scorer overrides live
+                })
+                // Live per-consumer model routing (the scorers' judge model) read from app_config each call.
+                .AddLiveModelRouting()
                 .DefaultCandidates("claude-cli")
                 // Lyntai owns scoring + conversation persistence: its SQLite storage lands lyntai_score_result,
                 // lyntai_thread/lyntai_message (+ other lyntai_* tables) in the same gatherlight.db.
@@ -111,6 +121,10 @@ public static class GatherlightApp
                 .AddScorer<Modules.Scoring.Services.CitationScorer>()
                 .AddScorer<Modules.Scoring.Services.AnswerRelevancyScorer>()
                 .AddScorer<Modules.Scoring.Services.FaithfulnessScorer>())
+            // Lyntai's cortex (IPromptRegistry / IModelRoutingStore) reads/writes the app's OWN app_config
+            // table — single source of truth for cortex.prompt.* / llm.model.*, no lyntai_kv duplicate. Plain
+            // AddSingleton after AddLyntai wins over its TryAdd SqliteKeyValueStore.
+            .AddSingleton<Lyntai.Storage.IKeyValueStore, Modules.Cortex.Services.AppConfigKeyValueStore>()
             // App-side adapter over Lyntai's IAgentSession — the two-gate / jobs / playground run through this.
             .AddSingleton<IAgentRunner, AgentRunner>()
             // One live agent run at a time across chat AND background jobs (single-writer data tree)
