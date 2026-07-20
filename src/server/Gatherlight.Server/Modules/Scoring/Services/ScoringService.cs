@@ -66,14 +66,18 @@ public sealed class ScoringService : IScoringService
     public async Task<int> ScoreAllAsync(CancellationToken ct = default)
     {
         // Terminal conversations with no scores yet — both stores read through their APIs (no raw SQL).
+        // List a generous window (IConversationStore has no server-side filter) and take up to 500 UNSCORED
+        // ones, so older unscored conversations aren't shut out once the total exceeds 500 (the filter must
+        // apply BEFORE the cap, not after).
         var scored = (await _store.ExportAsync(ct)).Select(r => r.SessionId).ToHashSet();
-        var threads = await _convo.ListThreadsAsync(500, ct);
+        var threads = await _convo.ListThreadsAsync(100_000, ct);
         var ids = threads
             .Where(t =>
             {
                 var phase = SessionMetadata.Parse(t.Metadata).Phase;
                 return phase is not null && Terminal.Contains(phase) && !scored.Contains(t.Id);
             })
+            .Take(500)
             .Select(t => t.Id)
             .ToList();
         var total = 0;

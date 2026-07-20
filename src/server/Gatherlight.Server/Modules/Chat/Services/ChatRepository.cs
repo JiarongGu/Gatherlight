@@ -43,7 +43,6 @@ public interface IChatRepository
         string? attachmentsJson, string? planText, string? claudeSessionId, string? commitSha,
         string? error, string createdAt);
     Task AppendEventAsync(string sessionId, string kind, string payloadJson);
-    Task<List<string>> EventPayloadsAsync(string sessionId);
     /// <summary>Sessions left non-terminal by a dead server → error (an in-flight run cannot
     /// survive a restart; the working tree may hold partial edits the user can inspect).</summary>
     Task<int> FailInterruptedSessionsAsync();
@@ -84,9 +83,6 @@ public sealed class ChatRepository : IChatRepository
     // seq (append order). The live SSE frame id stays the in-memory log index (ChatSessionService.Emit).
     public async Task AppendEventAsync(string sessionId, string kind, string payloadJson) =>
         await _convo.AppendMessageAsync(sessionId, kind, payloadJson);
-
-    public async Task<List<string>> EventPayloadsAsync(string sessionId) =>
-        (await _convo.GetMessagesAsync(sessionId)).Select(m => m.Payload).ToList();
 
     public async Task<int> FailInterruptedSessionsAsync()
     {

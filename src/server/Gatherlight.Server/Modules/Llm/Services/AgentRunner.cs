@@ -91,9 +91,15 @@ public sealed class AgentRunner : IAgentRunner
                 emit(new AgentEvent { Kind = "thinking", Text = th.Text });
                 break;
             case ToolCall tc:
-                tracker?.Record(tc.Name, ClaudeToolCalls.FilePathOf(tc));
-                emit(new AgentEvent { Kind = "tool", Tool = new ToolInfo(tc.Name, ToolDetail(tc)) });
+            {
+                var args = ParseArgs(tc.ArgumentsJson);
+                // EditTracker filters by tool name; feed the write path (file_path OR notebook_path OR path)
+                // so NotebookEdit (notebook_path) writes are tracked into the commit set too — Lyntai's
+                // ClaudeToolCalls.FilePathOf only reads file_path (filed as a Lyntai gap).
+                tracker?.Record(tc.Name, First(args, "file_path", "notebook_path", "path"));
+                emit(new AgentEvent { Kind = "tool", Tool = new ToolInfo(tc.Name, ToolDetail(tc.Name, args)) });
                 break;
+            }
             case ToolResult:
                 emit(new AgentEvent { Kind = "tool-result" });
                 break;
@@ -124,29 +130,32 @@ public sealed class AgentRunner : IAgentRunner
         }
     }
 
-    // UI detail string for the 'tool' event (app presentation — not a Lyntai concern). File-path tools use
-    // Lyntai's ClaudeToolCalls.FilePathOf; the rest read their own arg from the tool-call JSON.
-    private static string? ToolDetail(ToolCall call)
+    // Parse the tool-call arguments JSON once (object, or default when absent/malformed). Never throws.
+    private static JsonElement ParseArgs(string? json)
     {
-        if (call.Name is "Read" or "Edit" or "Write" or "MultiEdit" or "NotebookEdit")
-            return ClaudeToolCalls.FilePathOf(call);
-        try
-        {
-            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
-            var input = doc.RootElement;
-            if (input.ValueKind != JsonValueKind.Object) return null;
-            string? Get(string k) => input.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-            return call.Name switch
-            {
-                "Grep" or "Glob" => Get("pattern"),
-                "Bash" => Trunc(Get("command"), 80),
-                "Skill" => Get("skill") ?? Get("command"),
-                "WebSearch" => Get("query"),
-                "WebFetch" => Get("url"),
-                _ => null,
-            };
-        }
-        catch { return null; }
+        if (string.IsNullOrWhiteSpace(json)) return default;
+        try { using var doc = JsonDocument.Parse(json); return doc.RootElement.Clone(); }
+        catch { return default; }
+    }
+
+    // UI detail string for the 'tool' event (app presentation) — the relevant arg per tool, from the parsed args.
+    private static string? ToolDetail(string name, JsonElement input) => name switch
+    {
+        "Read" or "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => First(input, "file_path", "notebook_path", "path"),
+        "Grep" or "Glob" => First(input, "pattern"),
+        "Bash" => Trunc(First(input, "command"), 80),
+        "Skill" => First(input, "skill", "command"),
+        "WebSearch" => First(input, "query"),
+        "WebFetch" => First(input, "url"),
+        _ => null,
+    };
+
+    private static string? First(JsonElement obj, params string[] keys)
+    {
+        if (obj.ValueKind != JsonValueKind.Object) return null;
+        foreach (var k in keys)
+            if (obj.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String) return v.GetString();
+        return null;
     }
 
     private static string? Trunc(string? s, int n) => s is null || s.Length <= n ? s : s[..n];

@@ -23,9 +23,12 @@ public sealed class MigrateChatToLyntaiConversation : Migration
 {
     public override void Up()
     {
+        // Normalize created_at from the old ISO "o" form (2026-07-20T12:34:56.789Z) to Lyntai's TEXT form
+        // (space separator, no Z — Microsoft.Data.Sqlite writes DateTimeOffset.UtcDateTime that way), so
+        // migrated rows string-sort consistently with live rows in ListThreadsAsync's ORDER BY created_at.
         Execute.Sql("""
             INSERT OR IGNORE INTO lyntai_thread (id, title, created_at, metadata)
-            SELECT id, NULL, created_at,
+            SELECT id, NULL, replace(replace(created_at, 'T', ' '), 'Z', ''),
                    json_object('phase', phase, 'mode', mode, 'userMessage', user_message, 'planText', plan_text,
                                'claudeSessionId', claude_session_id, 'commitSha', commit_sha, 'error', error,
                                'attachments', attachments_json)
@@ -33,7 +36,8 @@ public sealed class MigrateChatToLyntaiConversation : Migration
             """);
         Execute.Sql("""
             INSERT OR IGNORE INTO lyntai_message (id, thread_id, seq, kind, payload, metadata, created_at)
-            SELECT lower(hex(randomblob(16))), session_id, seq, kind, payload_json, NULL, created_at
+            SELECT lower(hex(randomblob(16))), session_id, seq, kind, payload_json, NULL,
+                   replace(replace(created_at, 'T', ' '), 'Z', '')
             FROM chat_event;
             """);
         Delete.Table("chat_event");

@@ -96,8 +96,11 @@ public static class GatherlightApp
                 .AddClaudeCliAgentSession()
                 .Configure(o => o.MaxProviderTimeout = TimeSpan.FromHours(2))
                 .DefaultCandidates("claude-cli")
-                // Lyntai owns scoring persistence: its SQLite storage lands lyntai_score_result (+ the other
-                // lyntai_* tables) in the same gatherlight.db, migrated eagerly here.
+                // Lyntai owns scoring + conversation persistence: its SQLite storage lands lyntai_score_result,
+                // lyntai_thread/lyntai_message (+ other lyntai_* tables) in the same gatherlight.db.
+                // MUST stay EAGER (default migrateOnFirstUse:false → migrates synchronously here, during DI):
+                // the app's chat→lyntai + score→lyntai data migrations (Fluent, run at MigrateToLatest below)
+                // depend on the lyntai_* tables already existing. Do NOT switch to migrateOnFirstUse:true.
                 .UseSqliteStorage(dbPath)
                 // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
                 // collection so its IScoringService iterates + persists them (LLM judges route through
