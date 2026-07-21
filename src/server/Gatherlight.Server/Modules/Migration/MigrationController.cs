@@ -23,7 +23,11 @@ public sealed class MigrationController : ControllerBase
         if (_state.Snapshot().Phase != MigrationPhase.Failed)
             return Conflict(new { error = "没有失败的迁移可重试。" });
         _state.Reset();
-        _ = Task.Run(() => _runner.RunAsync(_life.ApplicationStopping));
+        _ = Task.Run(async () =>
+        {
+            try { await _runner.RunAsync(_life.ApplicationStopping); }
+            catch (Exception ex) { _state.Fail(ex.Message); }
+        });
         return Ok(new { ok = true });
     }
 }
