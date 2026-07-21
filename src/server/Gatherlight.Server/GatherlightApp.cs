@@ -231,7 +231,18 @@ public static class GatherlightApp
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>()
             // Knowledge-base upgrade migration (LLM-reconcile customized .claude/ files with new templates)
-            .AddSingleton<Modules.Seed.Services.IZhikuMigrator, Modules.Seed.Services.ZhikuMigrator>();
+            .AddSingleton<Modules.Seed.Services.IZhikuMigrator, Modules.Seed.Services.ZhikuMigrator>()
+            // Startup migration runner: the versioned, ordered, idempotent upgrade phase (was inline,
+            // pre-listen). IMigrationStep is a DI collection — registration order = run order.
+            .AddSingleton<Modules.Migration.Services.MigrationState>()
+            .AddSingleton<Modules.Migration.Services.StartupMigrationRunner>()
+            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.DbMigrateStep>()
+            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.SelfHealLocksStep>()
+            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.DataRepoInitStep>()
+            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.KnowledgeBaseStep>()
+            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.PlanIndexStep>()
+            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.SelfHealStateStep>()
+            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.MemorySeedStep>();
 
         builder.Services.AddHttpClient();
 
@@ -259,69 +270,25 @@ public static class GatherlightApp
                 "Anyone who can reach that address has full, unauthenticated access to your data and the " +
                 "claude CLI — only use this on a trusted private network.", options.BindAddress, options.Port);
 
-        // Migrations before anything touches the DB.
-        var data = app.Services.GetRequiredService<IDataContext>();
-        MigrationRunnerService.MigrateToLatest(data.DatabasePath);
-
-        // Data repo must exist before any fs op / chat commit; index fills before first request.
-        var git = app.Services.GetRequiredService<IGitCliService>();
-        if (git.EnsureRepoAsync().GetAwaiter().GetResult())
+        // Run the versioned startup migration in the background once we're listening, so /manage can
+        // render the progress overlay instead of the app appearing to hang. The gate keeps /api closed
+        // until it lifts. MigrationState defaults to migrating=true, so requests before this fires are
+        // already gated. (DB migrate, data-repo init, KB seed/notify, plan-index rescan, memory seed,
+        // chat scope-guard, and interrupted-work reconcile now all live as ordered IMigrationSteps.)
+        var life = app.Services.GetRequiredService<IHostApplicationLifetime>();
+        life.ApplicationStarted.Register(() =>
         {
-            // Freshly initialized over existing content (import case): baseline commit so
-            // diffs/restores have a HEAD to work against. Never auto-commits on later boots —
-            // interrupted chat edits must stay reviewable, not get swallowed.
-            var sha = git.CommitAllAsync("data: initial import").GetAwaiter().GetResult();
-            if (sha is not null)
-                app.Services.GetRequiredService<IDataCommitRepository>().Record(sha, "data: initial import", "import");
-        }
-        // Seed/upgrade the knowledge base BEFORE indexing so a fresh data folder scaffolds fully.
-        app.Services.GetRequiredService<IZhikuSeeder>().SeedAsync().GetAwaiter().GetResult();
-        // Detect customized .claude/ files that have shipped improvements (which the seeder skips) and
-        // notify — the LLM 3-way merge is opt-in from the console (no startup token spend).
-        app.Services.GetRequiredService<Modules.Seed.Services.IZhikuMigrator>().NotifyIfUpgradesAsync().GetAwaiter().GetResult();
-
-        app.Services.GetRequiredService<IPlanIndexService>().RescanAsync().GetAwaiter().GetResult();
-
-        // Optional startup memory seed (testing / new installs): point GATHERLIGHT_SEED_MEMORY at a
-        // bundle exported from another install and it's merged in on boot (idempotent upsert).
-        if (Environment.GetEnvironmentVariable("GATHERLIGHT_SEED_MEMORY") is { Length: > 0 } seedPath
-            && File.Exists(seedPath))
-        {
-            try
+            var runner = app.Services.GetRequiredService<Modules.Migration.Services.StartupMigrationRunner>();
+            var state = app.Services.GetRequiredService<Modules.Migration.Services.MigrationState>();
+            _ = Task.Run(async () =>
             {
-                var bundle = JsonSerializer.Deserialize<Modules.Memory.Services.MemoryBundle>(
-                    File.ReadAllText(seedPath), new JsonSerializerOptions(JsonSerializerDefaults.Web));
-                if (bundle is { GatherlightMemory: >= 1 })
-                {
-                    var r = app.Services.GetRequiredService<Modules.Memory.Services.IMemoryService>()
-                        .ImportAsync(bundle).GetAwaiter().GetResult();
-                    app.Logger.LogInformation("Seeded memory from {Path}: {Lib} library, {Kn} knowledge, {Ent} entities, {Cx} cortex",
-                        seedPath, r.Library, r.Knowledge, r.Entities, r.Cortex);
-                }
-            }
-            catch (Exception ex)
-            {
-                app.Logger.LogWarning("Memory seed from {Path} failed: {Msg}", seedPath, ex.Message);
-            }
-        }
+                try { await runner.RunAsync(life.ApplicationStopping); }
+                catch (Exception ex) { app.Logger.LogError(ex, "Startup migration crashed"); state.Fail(ex.Message); }
+            });
+        });
 
-        // Chat runtime files (settings.chat.json + scope-guard hook); a newly-seeded scope guard
-        // is committed so the agent's own diffs stay clean.
-        var chatEnv = app.Services.GetRequiredService<ChatEnvironmentService>();
-        if (chatEnv.EnsureFiles() is { } seededHook)
-        {
-            var hookSha = git.CommitPathsAsync(new[] { seededHook }, "seed: chat scope-guard hook")
-                .GetAwaiter().GetResult();
-            app.Services.GetRequiredService<IDataCommitRepository>().Record(hookSha, "seed: chat scope-guard hook", "seed");
-        }
-
-        // Sessions left non-terminal by a previous server death → error (inspectable, not resumed).
-        app.Services.GetRequiredService<IChatRepository>().FailInterruptedSessionsAsync().GetAwaiter().GetResult();
-        // Same for job runs left 'running' by a crash → reconcile to failed so history is honest.
-        var reconciled = app.Services.GetRequiredService<Modules.Jobs.Services.IJobRepository>()
-            .FailInterruptedRunsAsync().GetAwaiter().GetResult();
-        if (reconciled > 0) app.Logger.LogInformation("Reconciled {N} interrupted job run(s) → failed", reconciled);
-
+        // Block /api + /mcp (except health + /api/migration) while the startup migration runs.
+        app.UseMiddleware<Modules.Migration.MigrationGateMiddleware>();
         // Defense-in-depth response headers (CSP + framing/sniffing) on everything.
         app.UseMiddleware<Modules.Security.SecurityHeadersMiddleware>();
         // Gate /api + /mcp before the endpoints run (no-op unless an access token is configured).
