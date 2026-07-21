@@ -31,6 +31,9 @@ public sealed class UpdateService : IUpdateService
     private readonly object _gate = new();
     private readonly UpdateState _state = new();
 
+    // Above this fraction of total bytes changed, a whole-zip download is simpler than many ranges.
+    private const double DeltaThreshold = 0.5;
+
     public UpdateService(IHttpClientFactory http, ServerConfigService config, ILogger<UpdateService> log)
     {
         _http = http;
@@ -169,29 +172,18 @@ public sealed class UpdateService : IUpdateService
             using var client = NewClient();
             var releaseJson = await client.GetStringAsync(api);
             using var doc = JsonDocument.Parse(releaseJson);
-            var (zipUrl, _) = FindAssets(doc.RootElement);
+            var (zipUrl, manifestUrl) = FindAssets(doc.RootElement);
             if (zipUrl is null) throw new InvalidOperationException("release has no .zip asset");
             if (!IsSecureUpdateUrl(zipUrl)) throw new InvalidOperationException("release zip URL must be https (or http to loopback)");
 
-            if (Directory.Exists(StagingRoot)) Directory.Delete(StagingRoot, recursive: true);
-            Directory.CreateDirectory(StagingRoot);
-            var zipPath = Path.Combine(StagingRoot, "update.zip");
+            // Differential: fetch only changed files. Any problem returns false → full download below.
+            var delta = manifestUrl is not null && IsSecureUpdateUrl(manifestUrl)
+                && await TryDeltaAsync(client, zipUrl, manifestUrl, info.LatestVersion!);
 
-            await DownloadFileAsync(client, zipUrl, zipPath);
+            if (!delta)
+                await FullDownloadAsync(client, zipUrl, info.LatestVersion!);
 
-            Report(93);
-            if (Directory.Exists(StagedDir)) Directory.Delete(StagedDir, recursive: true);
-            ZipFile.ExtractToDirectory(zipPath, StagedDir, overwriteFiles: true);
-            File.Delete(zipPath);
-            FlattenSingleRoot(StagedDir);
-
-            Report(97);
-            var problems = await VerifyStagedAsync(StagedDir);
-            if (problems.Count > 0)
-                throw new InvalidOperationException($"verification failed ({problems.Count}): {string.Join(", ", problems.Take(3))}");
-
-            await File.WriteAllTextAsync(ReadyMarker, JsonSerializer.Serialize(new { version = info.LatestVersion }));
-            _log.LogInformation("Update {V} staged; applies on next restart.", info.LatestVersion);
+            _log.LogInformation("Update {V} staged ({Mode}); applies on next restart.", info.LatestVersion, delta ? "delta" : "full");
             SetDone(pending: true, version: info.LatestVersion);
         }
         catch (Exception ex)
@@ -200,6 +192,136 @@ public sealed class UpdateService : IUpdateService
             try { if (Directory.Exists(StagingRoot)) Directory.Delete(StagingRoot, recursive: true); } catch { }
             lock (_gate) { _state.Downloading = false; _state.Error = ex.Message; _state.Pending = false; }
         }
+    }
+
+    // The original whole-zip path: download → extract → verify every manifest file → ready.json.
+    private async Task FullDownloadAsync(HttpClient client, string zipUrl, string version)
+    {
+        if (Directory.Exists(StagingRoot)) Directory.Delete(StagingRoot, recursive: true);
+        Directory.CreateDirectory(StagingRoot);
+        var zipPath = Path.Combine(StagingRoot, "update.zip");
+
+        await DownloadFileAsync(client, zipUrl, zipPath);
+
+        Report(93);
+        if (Directory.Exists(StagedDir)) Directory.Delete(StagedDir, recursive: true);
+        ZipFile.ExtractToDirectory(zipPath, StagedDir, overwriteFiles: true);
+        File.Delete(zipPath);
+        FlattenSingleRoot(StagedDir);
+
+        Report(97);
+        var problems = await VerifyStagedAsync(StagedDir);
+        if (problems.Count > 0)
+            throw new InvalidOperationException($"verification failed ({problems.Count}): {string.Join(", ", problems.Take(3))}");
+
+        await File.WriteAllTextAsync(ReadyMarker, JsonSerializer.Serialize(new { version }));
+    }
+
+    // Try a differential update: diff the installed manifest vs the release manifest, range-fetch only
+    // the changed files out of the zip, stage them + the new manifest, and verify. Returns true when a
+    // full delta was staged + ready.json written; false (or on any exception) means "fall back to full".
+    private async Task<bool> TryDeltaAsync(HttpClient client, string zipUrl, string manifestUrl, string version)
+    {
+        try
+        {
+            var installedPath = Path.Combine(InstallDir, "manifest.json");
+            if (!File.Exists(installedPath)) { _log.LogInformation("delta: no installed manifest → full"); return false; }
+            var installed = JsonSerializer.Deserialize<UpdateManifest>(await File.ReadAllTextAsync(installedPath), Web);
+            var newManifestJson = await client.GetStringAsync(manifestUrl);
+            var newManifest = JsonSerializer.Deserialize<UpdateManifest>(newManifestJson, Web);
+            if (installed is null || newManifest is null || newManifest.Files.Count == 0) return false;
+
+            var old = installed.Files.ToDictionary(f => f.Path, f => f.Sha256, StringComparer.OrdinalIgnoreCase);
+            var changed = newManifest.Files
+                .Where(f => !(old.TryGetValue(f.Path, out var s) && string.Equals(s, f.Sha256, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            if (changed.Count == 0) { _log.LogInformation("delta: nothing changed → full"); return false; }
+
+            long changedBytes = changed.Sum(f => f.Size), totalBytes = newManifest.Files.Sum(f => f.Size);
+            if (totalBytes > 0 && changedBytes > totalBytes * DeltaThreshold)
+            {
+                _log.LogInformation("delta: {P}% changed exceeds threshold → full", (int)(100 * changedBytes / totalBytes));
+                return false;
+            }
+
+            var (length, rangeOk) = await ProbeRangeAsync(client, zipUrl);
+            if (!rangeOk || length <= 0) { _log.LogInformation("delta: no range support → full"); return false; }
+
+            var zip = new RemoteZip(client, zipUrl, length);
+            await zip.LoadAsync();
+
+            if (Directory.Exists(StagingRoot)) Directory.Delete(StagingRoot, recursive: true);
+            Directory.CreateDirectory(StagedDir);
+            Report(5);
+
+            var n = 0;
+            foreach (var f in changed)
+            {
+                if (!zip.TryGet(f.Path, out var entry)) { _log.LogWarning("delta: {P} not in zip → full", f.Path); return false; }
+                var bytes = await zip.FetchAsync(entry);
+                var dest = Path.Combine(StagedDir, f.Path.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                await File.WriteAllBytesAsync(dest, bytes);
+                n++;
+                Report(5 + (int)(85L * n / changed.Count));
+            }
+
+            await File.WriteAllTextAsync(Path.Combine(StagedDir, "manifest.json"), newManifestJson);
+            Report(96);
+
+            var problems = await VerifyDeltaAsync(StagedDir, changed);
+            if (problems.Count > 0) { _log.LogWarning("delta: verify failed ({N}): {P} → full", problems.Count, string.Join(", ", problems.Take(3))); return false; }
+
+            await File.WriteAllTextAsync(ReadyMarker, JsonSerializer.Serialize(new { version }));
+            _log.LogInformation("delta: staged {N}/{M} files, {A}/{B} bytes ({P}% of full).",
+                changed.Count, newManifest.Files.Count, changedBytes, totalBytes, totalBytes > 0 ? (int)(100 * changedBytes / totalBytes) : 0);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("delta failed ({Msg}) → full", ex.Message);
+            try { if (Directory.Exists(StagingRoot)) Directory.Delete(StagingRoot, recursive: true); } catch { }
+            return false;
+        }
+    }
+
+    // One-byte range probe: does the asset (following redirects) honor Range? Returns the total length.
+    private async Task<(long length, bool rangeOk)> ProbeRangeAsync(HttpClient client, string url)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            if (resp.StatusCode == System.Net.HttpStatusCode.PartialContent && resp.Content.Headers.ContentRange?.Length is long len && len > 0)
+                return (len, true);
+            return (-1, false);
+        }
+        catch { return (-1, false); }
+    }
+
+    // Delta verify: the fetched files exist + match the new manifest's sha256, and staged/ holds ONLY
+    // those files + manifest.json (an intrusion check). Unlike VerifyStagedAsync it does NOT require
+    // every manifest file to be present — a delta stages only what changed.
+    public async Task<List<string>> VerifyDeltaAsync(string stagedDir, IReadOnlyList<ManifestFile> changed)
+    {
+        var problems = new List<string>();
+        foreach (var f in changed)
+        {
+            var full = Path.Combine(stagedDir, f.Path.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(full)) { problems.Add($"{f.Path} (missing)"); continue; }
+            if (string.IsNullOrEmpty(f.Sha256)) { problems.Add($"{f.Path} (no sha256)"); continue; }
+            if (!string.Equals(await Sha256Async(full), f.Sha256, StringComparison.OrdinalIgnoreCase))
+                problems.Add($"{f.Path} (hash mismatch)");
+        }
+        var changedSet = changed.Select(f => f.Path.Replace('\\', '/')).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var full in Directory.EnumerateFiles(stagedDir, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(stagedDir, full).Replace('\\', '/');
+            if (rel == "manifest.json" || changedSet.Contains(rel)) continue;
+            problems.Add($"{rel} (unexpected in delta staged)");
+        }
+        return problems;
     }
 
     private async Task DownloadFileAsync(HttpClient client, string url, string dest)
