@@ -76,7 +76,9 @@ public sealed class RemoteZip
             ushort exLen = BitConverter.ToUInt16(cd, p + 30);
             ushort cmLen = BitConverter.ToUInt16(cd, p + 32);
             uint lho = BitConverter.ToUInt32(cd, p + 42);
-            string name = Encoding.UTF8.GetString(cd, p + 46, fnLen);
+            // Compress-Archive (Windows) writes entry names with backslashes, violating the zip spec's
+            // forward-slash rule — normalize so StripSingleRoot + manifest-path lookups match.
+            string name = Encoding.UTF8.GetString(cd, p + 46, fnLen).Replace('\\', '/');
             if (!name.EndsWith('/')) entries[name] = new Entry(name, lho, compSize, method);
             p += 46 + fnLen + exLen + cmLen;
         }
