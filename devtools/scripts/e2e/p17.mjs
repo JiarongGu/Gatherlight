@@ -8,7 +8,7 @@
 // The auth gate is the product here, so the gated requests stay bespoke `fetch` calls — we need to
 // control (or omit) the token header and assert on raw status codes. Only the harness boilerplate
 // (reporter / server spawn / poll) is shared.
-import { dataDirFor, makeReporter, makeTestData, startServer, until } from './_e2e-common.mjs';
+import { dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p17');
 const PA = 5401, PB = 5402, PC = 5403;
@@ -24,7 +24,7 @@ try {
   // ---------- A) no token: auth disabled, API open ----------
   a = startServer({ dataDir, port: PA });
   const baseA = a.base;
-  await until(() => fetch(`${baseA}/api/health`).then((r) => r.ok));
+  await waitHealthy(baseA);
   const stA = await (await fetch(`${baseA}/api/auth/status`)).json();
   ok('A: no token → auth not required', stA.required === false && stA.authed === true, JSON.stringify(stA));
   ok('A: API open without a token', status(await fetch(`${baseA}/api/plans`)) === 200);

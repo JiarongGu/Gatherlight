@@ -5,7 +5,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { dataDirFor, makeReporter, makeTestData, startServer, until, makeClient } from './_e2e-common.mjs';
+import { dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy, makeClient } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p13');
 const { ok, fail, done } = makeReporter('p13');
@@ -41,7 +41,7 @@ const srv = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_IMAGE_ALLOW_PR
 const { call, getJson } = makeClient(srv.base);
 
 try {
-  await until(() => fetch(`${srv.base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
 
   const tools = (await getJson('/api/tools')).tools;
   for (const n of ['library_upsert', 'library_search', 'library_delete'])

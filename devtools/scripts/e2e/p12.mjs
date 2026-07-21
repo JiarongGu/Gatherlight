@@ -5,7 +5,7 @@
 // rewrites every real-domain navigation (tabelog.com, booking.com, …) to `{origin}/{host}{path}`
 // while the tools still classify/report the original URL. Exercises the full navigate + parse path.
 import http from 'node:http';
-import { dataDirFor, makeReporter, makeTestData, startServer, until, makeClient, skipUnlessChromium } from './_e2e-common.mjs';
+import { dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy, makeClient, skipUnlessChromium } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p12');
 const { ok, fail, done } = makeReporter('p12');
@@ -91,7 +91,7 @@ const srv = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_FIXTURE_ORIGIN
 const { call } = makeClient(srv.base);
 
 try {
-  await until(() => fetch(`${srv.base}/api/health`).then((r) => r.ok));
+  await waitHealthy(srv.base);
   await skipUnlessChromium(srv.base, 'p12'); // scrapers need the download-at-setup browser
 
   const tools = (await (await fetch(`${srv.base}/api/tools`)).json()).tools;

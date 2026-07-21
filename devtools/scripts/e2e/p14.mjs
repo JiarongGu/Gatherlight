@@ -4,7 +4,7 @@
 // startup via GATHERLIGHT_SEED_MEMORY. Two server instances, no claude/browser.
 import fs from 'node:fs';
 import path from 'node:path';
-import { repo, dataDirFor, makeReporter, makeTestData, startServer, until, makeClient } from './_e2e-common.mjs';
+import { repo, dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy, makeClient } from './_e2e-common.mjs';
 
 const dataA = dataDirFor('p14a');
 const dataB = dataDirFor('p14b');
@@ -22,7 +22,7 @@ try {
   srv = startServer({ dataDir: dataA, port: PA });
   const baseA = srv.base;
   const { call: callA, getJson: getJsonA } = makeClient(baseA);
-  await until(() => fetch(`${baseA}/api/health`).then((r) => r.ok));
+  await waitHealthy(baseA);
 
   await callA('library_upsert', { kind: 'attraction', key: 'export-temple', name: 'Export Temple', nameLocal: '导出寺', region: 'Testville', summary: 'A temple that travels well.', lat: 35.01, lng: 135.7, confidence: 0.9 });
   await callA('library_upsert', { kind: 'restaurant', key: 'export-diner', name: 'Export Diner', region: 'Testville', confidence: 0.8 });
@@ -57,7 +57,7 @@ try {
   srv2 = startServer({ dataDir: dataB, port: PB, env: { GATHERLIGHT_SEED_MEMORY: bundlePath } });
   const baseB = srv2.base;
   const { call: callB, getJson: getJsonB } = makeClient(baseB);
-  await until(() => fetch(`${baseB}/api/health`).then((r) => r.ok));
+  await waitHealthy(baseB);
 
   const bLib = await getJsonB('/api/library');
   ok('fresh install seeded: library present', bLib.items.length >= 2, String(bLib.items.length));

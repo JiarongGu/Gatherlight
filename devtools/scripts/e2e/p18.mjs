@@ -11,7 +11,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'; // accept the self-signed cert i
 import fs from 'node:fs';
 import path from 'node:path';
 import tls from 'node:tls';
-import { dataDirFor, makeReporter, makeTestData, startServer, until } from './_e2e-common.mjs';
+import { dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p18');
 const pfxPath = path.join(dataDir, 'state', 'gatherlight-tls.pfx');
@@ -75,7 +75,7 @@ try {
   // ---------- Boot 3: a configured PFX (certPath) is honored ----------
   c = bootTls(P3, { GATHERLIGHT_TLS_CERT: pfxPath });   // no token → loopback trusted (default)
   const baseC = `https://127.0.0.1:${P3}`;
-  await until(() => fetch(`${baseC}/api/health`).then((r) => r.ok));
+  await waitHealthy(baseC);
   ok('3: configured PFX serves HTTPS + health open on loopback', status(await fetch(`${baseC}/api/health`)) === 200);
   const cert3 = await peerCert('127.0.0.1', P3);
   ok('3: configured cert is the one we pointed at', cert3?.subject?.CN === 'Gatherlight' && cert3.fingerprint256 === fp1);
