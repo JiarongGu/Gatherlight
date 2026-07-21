@@ -10,7 +10,7 @@ namespace Gatherlight.Server.Modules.Fluent.Migrations;
 /// <c>notification</c>. See <c>docs/background-jobs-design.md</c>.
 /// </summary>
 [Migration(202607160001)]
-public sealed class Jobs : Migration
+public sealed class Jobs : global::FluentMigrator.Migration
 {
     public override void Up()
     {

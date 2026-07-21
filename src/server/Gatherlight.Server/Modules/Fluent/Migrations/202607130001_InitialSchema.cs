@@ -8,7 +8,7 @@ namespace Gatherlight.Server.Modules.Fluent.Migrations;
 /// source of truth (plan_index carries a content hash + extracted metadata for zero-LLM browse).
 /// </summary>
 [Migration(202607130001)]
-public sealed class InitialSchema : Migration
+public sealed class InitialSchema : global::FluentMigrator.Migration
 {
     public override void Up()
     {

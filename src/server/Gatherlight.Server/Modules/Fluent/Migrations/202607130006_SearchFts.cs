@@ -11,7 +11,7 @@ namespace Gatherlight.Server.Modules.Fluent.Migrations;
 /// existing rows are backfilled here. The repositories fall back to LIKE for &lt;3-char queries.
 /// </summary>
 [Migration(202607130006)]
-public sealed class SearchFts : Migration
+public sealed class SearchFts : global::FluentMigrator.Migration
 {
     public override void Up()
     {

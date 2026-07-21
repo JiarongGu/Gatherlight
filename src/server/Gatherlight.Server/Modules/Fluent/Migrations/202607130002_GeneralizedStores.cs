@@ -9,7 +9,7 @@ namespace Gatherlight.Server.Modules.Fluent.Migrations;
 /// tables hold app data and granular learned facts.
 /// </summary>
 [Migration(202607130002)]
-public sealed class GeneralizedStores : Migration
+public sealed class GeneralizedStores : global::FluentMigrator.Migration
 {
     public override void Up()
     {

@@ -19,7 +19,7 @@ namespace Gatherlight.Server.Modules.Fluent.Migrations;
 /// re-run (or a thread already created by the live app) is not clobbered.
 /// </summary>
 [Migration(202607200001)]
-public sealed class MigrateChatToLyntaiConversation : Migration
+public sealed class MigrateChatToLyntaiConversation : global::FluentMigrator.Migration
 {
     public override void Up()
     {

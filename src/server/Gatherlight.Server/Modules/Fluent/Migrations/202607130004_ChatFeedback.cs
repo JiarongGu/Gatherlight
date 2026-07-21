@@ -8,7 +8,7 @@ namespace Gatherlight.Server.Modules.Fluent.Migrations;
 /// exportable from the management console's observability view. One row per session (upsert).
 /// </summary>
 [Migration(202607130004)]
-public sealed class ChatFeedback : Migration
+public sealed class ChatFeedback : global::FluentMigrator.Migration
 {
     public override void Up()
     {

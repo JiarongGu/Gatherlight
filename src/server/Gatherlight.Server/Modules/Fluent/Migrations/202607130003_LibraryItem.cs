@@ -10,7 +10,7 @@ namespace Gatherlight.Server.Modules.Fluent.Migrations;
 /// (replacing the old hand-written JAPAN_ATTRACTIONS.md pattern).
 /// </summary>
 [Migration(202607130003)]
-public sealed class LibraryItem : Migration
+public sealed class LibraryItem : global::FluentMigrator.Migration
 {
     public override void Up()
     {

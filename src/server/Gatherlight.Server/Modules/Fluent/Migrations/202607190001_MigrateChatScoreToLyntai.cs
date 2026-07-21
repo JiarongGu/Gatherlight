@@ -19,7 +19,7 @@ namespace Gatherlight.Server.Modules.Fluent.Migrations;
 /// so backfill name = scorer_id, group = '' purely to satisfy the constraint.
 /// </summary>
 [Migration(202607190001)]
-public sealed class MigrateChatScoreToLyntai : Migration
+public sealed class MigrateChatScoreToLyntai : global::FluentMigrator.Migration
 {
     public override void Up()
     {

@@ -9,7 +9,7 @@ namespace Gatherlight.Server.Modules.Fluent.Migrations;
 /// human signal + machine signal. Upsert per (session, scorer) so re-scoring replaces.
 /// </summary>
 [Migration(202607130005)]
-public sealed class ChatScore : Migration
+public sealed class ChatScore : global::FluentMigrator.Migration
 {
     public override void Up()
     {
