@@ -260,6 +260,10 @@ public sealed class UpdateService : IUpdateService
                 if (!zip.TryGet(f.Path, out var entry)) { _log.LogWarning("delta: {P} not in zip → full", f.Path); return false; }
                 var bytes = await zip.FetchAsync(entry);
                 var dest = Path.Combine(StagedDir, f.Path.Replace('/', Path.DirectorySeparatorChar));
+                // Zip-slip guard: a hostile manifest path (../, absolute) must not write outside staged/.
+                // The full-download fallback (ZipFile.ExtractToDirectory) rejects the same, so bail to it.
+                if (!Path.GetFullPath(dest).StartsWith(Path.GetFullPath(StagedDir) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                { _log.LogWarning("delta: entry path escapes staged/ ({P}) → full", f.Path); return false; }
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                 await File.WriteAllBytesAsync(dest, bytes);
                 n++;
