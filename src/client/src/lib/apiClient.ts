@@ -14,3 +14,12 @@ export async function post<T = unknown>(url: string, body?: unknown): Promise<T>
   }
   return data as T;
 }
+
+export async function get<T = unknown>(url: string): Promise<T> {
+  const res = await fetch(url);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as { error?: string }).error ?? `请求失败 (${res.status})`);
+  }
+  return data as T;
+}

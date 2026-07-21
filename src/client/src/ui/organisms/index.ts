@@ -13,3 +13,4 @@ export { TripAssets } from './TripAssets';
 export { PlanActionsMenu, type ActionTarget } from './PlanActionsMenu';
 export { TripMap } from './TripMap';
 export { CityMap } from './CityMap';
+export { MigrationOverlay } from './MigrationOverlay';

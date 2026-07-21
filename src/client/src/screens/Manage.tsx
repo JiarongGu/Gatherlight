@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import SetupWizard from './SetupWizard';
+import { MigrationOverlay } from '@/ui/organisms/MigrationOverlay';
 
 // The desktop host injects window.__gatherlightHost + a WebView2 message bridge for native actions
 // (restart / open data folder / open planner in browser / exit / memory file dialogs). Opened in a
@@ -235,6 +236,7 @@ export function Manage() {
 
   return (
     <div className="mng" style={{ minHeight: '100vh' }}>
+      <MigrationOverlay />
       <div className="mng-tabs">
         <div className="mng-tabs-inner">
           <button className={`mng-tab${view === 'overview' ? ' on' : ''}`} onClick={() => setView('overview')}>概览 · Overview</button>
