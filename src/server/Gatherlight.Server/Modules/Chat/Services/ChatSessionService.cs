@@ -140,6 +140,16 @@ public sealed class ChatSessionService
         return s is not null && !ChatPhase.Terminal.Contains(s.Phase);
     }
 
+    /// <summary>The current non-terminal session (the one holding the agent lease), or null. Lets a
+    /// client that lost its local session id (blip, reload, other browser) re-attach to a live session —
+    /// e.g. one parked at awaiting-input — instead of hitting BUSY with no way to reply or cancel.</summary>
+    public ChatSession? ActiveSession()
+    {
+        if (_activeId is null) return null;
+        var s = _sessions.GetValueOrDefault(_activeId);
+        return s is not null && !ChatPhase.Terminal.Contains(s.Phase) ? s : null;
+    }
+
     // --- events -----------------------------------------------------------------------
 
     private void Emit(ChatSession s, AgentEvent ev)
@@ -509,11 +519,14 @@ public sealed class ChatSessionService
         // `files` is the REAL-change set (BuildDiff drops denied / no-op / phantom edits).
         if (files.Count == 0)
         {
-            // No committable change — the agent was blocked or is asking for a decision. Don't dead-end
-            // (old behavior: Rejected); PAUSE for the human so they can answer / redirect and the agent
-            // resumes. Its last message (any question it asked) is already in the transcript.
-            Emit(s, new AgentEvent { Kind = "notice", Text = "没有文件被实际修改 — 可能需要你补充信息或说明要怎么改。" });
-            EnterAwaitingInput(s, "AI 这一步没有改动任何文件。请补充你的要求或回答上面的问题,我会继续。");
+            // No committable change → end cleanly (releases the agent lease). A pure no-op must NOT park
+            // at awaiting-input holding the lease — only an explicit NEEDS_INPUT question does that
+            // (handled in FinishExecuteAsync before we reach here). Parking on every no-op would wedge
+            // the whole app with no reply/redirect to give.
+            RecordOutcome(s, "无实际改动");
+            Emit(s, new AgentEvent { Kind = "notice", Text = "没有文件被实际修改(可能被范围限制拦截,或无需改动)。" });
+            SetPhase(s, ChatPhase.Rejected);
+            Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Rejected });
             return;
         }
 
@@ -668,7 +681,10 @@ public sealed class ChatSessionService
     {
         var q = string.IsNullOrWhiteSpace(question) ? "AI 需要你的补充信息才能继续。" : question.Trim();
         var opts = options ?? Array.Empty<string>();
-        Emit(s, new AgentEvent { Kind = "notice", Text = "⏸️ AI 需要你的回复才能继续 — 请选择一个选项或在下方输入框回复(或点「放弃任务」)。" });
+        // Only mention "选择一个选项" when the agent actually offered choices — otherwise it's a free-text
+        // question and telling the user to pick an option (with none shown) is confusing.
+        var how = opts.Count > 0 ? "请选择一个选项或在下方输入框回复" : "请在下方输入框回复";
+        Emit(s, new AgentEvent { Kind = "notice", Text = $"⏸️ AI 需要你的回复才能继续 — {how}(或点「放弃任务」)。" });
         SetPhase(s, ChatPhase.AwaitingInput, new { question = q, options = opts });
     }
 

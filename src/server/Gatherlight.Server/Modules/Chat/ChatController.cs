@@ -52,6 +52,17 @@ public sealed class ChatController : ControllerBase
         }
     }
 
+    /// <summary>The current live session (holding the agent lease), or none. The client hits this on
+    /// mount / on a BUSY reply to re-attach to a session it lost track of (blip, reload, other browser) —
+    /// e.g. one parked at awaiting-input — so it can reply or cancel instead of being wedged.</summary>
+    [HttpGet("api/chat/active")]
+    public IActionResult Active()
+    {
+        var s = _chat.ActiveSession();
+        return Ok(s is null ? new { active = false, id = (string?)null, phase = (string?)null }
+                            : new { active = true, id = (string?)s.Id, phase = (string?)s.Phase });
+    }
+
     /// <summary>Snapshot of current state (used on (re)load to rehydrate the UI).</summary>
     [HttpGet("api/chat/{id}")]
     public IActionResult Snapshot(string id)

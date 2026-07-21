@@ -21,6 +21,7 @@ import {
   refinePlan,
   refineDiff,
   respondInput,
+  getActiveSession,
   cancelChat,
   uploadFiles
 } from '@/lib/chatApi';
@@ -378,14 +379,32 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
     try { if (draft) localStorage.setItem(DRAFT_KEY, draft); else localStorage.removeItem(DRAFT_KEY); } catch { /* storage disabled */ }
   }, [draft]);
 
-  // Reconnect to an in-flight session after a reload (e.g. a system-mode HMR
-  // reload of this very page). The backend replays its event log to rebuild state.
-  useEffect(() => {
-    const id = localStorage.getItem(SESSION_KEY);
-    if (!id) return;
+  // Attach this panel to an existing server session: rehydrate from its replayed event log + open its
+  // stream. Used on mount AND to recover from a BUSY reply (a live session we lost track of). We do NOT
+  // pass an onError that clears SESSION_KEY — EventSource fires onerror on every transient drop and
+  // auto-reconnects, so clearing here would strand a live (e.g. awaiting-input) session; only a real
+  // 'done' clears it (in onEvent).
+  const attachTo = useCallback((id: string) => {
+    try { localStorage.setItem(SESSION_KEY, id); } catch { /* storage disabled */ }
     dispatch({ type: 'rehydrate', sessionId: id });
     lastSeqRef.current = -1;   // fresh stream replays from seq 0
-    closeRef.current = openStream(id, onEvent, () => localStorage.removeItem(SESSION_KEY));
+    closeRef.current?.();
+    closeRef.current = openStream(id, onEvent);
+  }, [onEvent]);
+
+  // Reconnect to an in-flight session after a reload/reopen. Prefer our saved id; if it's gone (a blip
+  // cleared it, a different browser), ask the server for its active session so a parked session is never
+  // unreachable from the UI.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let id = localStorage.getItem(SESSION_KEY);
+      if (!id) {
+        try { const a = await getActiveSession(); if (a.active && a.id) id = a.id; } catch { /* offline */ }
+      }
+      if (!cancelled && id) attachTo(id);
+    })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -486,9 +505,18 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       lastSeqRef.current = -1;   // fresh session/stream starts at seq 0
       closeRef.current = openStream(id, onEvent);
     } catch (err: any) {
-      dispatch({ type: 'event', ev: { kind: 'error', text: err?.message ?? '发送失败' } });
+      const text = err?.message ?? '发送失败';
+      // BUSY: a session is already live (commonly one paused at awaiting-input). Re-attach to it so the
+      // user lands on it and can reply or 放弃任务 — instead of a dead-end "task in progress" error.
+      if (/已有一个任务|BUSY/.test(text)) {
+        try {
+          const a = await getActiveSession();
+          if (a.active && a.id) { attachTo(a.id); return; }
+        } catch { /* fall through to surfacing the error */ }
+      }
+      dispatch({ type: 'event', ev: { kind: 'error', text } });
     }
-  }, [draft, onEvent, state, attachments, systemMode, replyInput]);
+  }, [draft, onEvent, state, attachments, systemMode, replyInput, attachTo]);
 
   const act = useCallback(
     async (fn: (id: string) => Promise<unknown>) => {
@@ -615,7 +643,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
             type="info"
             showIcon
             style={{ margin: '8px 0' }}
-            message="AI 需要你的选择 / 回复才能继续"
+            message={state.inputOptions.length > 0 ? 'AI 需要你的选择 / 回复才能继续' : 'AI 需要你的回复才能继续'}
             description={
               <div>
                 {state.inputQuestion && (

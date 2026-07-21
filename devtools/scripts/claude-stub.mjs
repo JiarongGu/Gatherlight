@@ -71,8 +71,13 @@ if (readOnly) {
       : `## 计划(stub)${routed}${echoTag}${priorFail}\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none`;
   // Carry an e2e trigger token from the user's request into the PLAN text, so it survives into the
   // execute-phase prompt ({approvedPlan}) — that's how p28 drives the phantom-path / needs-input paths.
-  const trig = prompt.includes('PHANTOMTEST') ? ' [TRIG:PHANTOM]'
-    : prompt.includes('NEEDINPUTTEST') ? ' [TRIG:NEEDINPUT]' : '';
+  // Read the token from the CURRENT request only (after "THE USER'S REQUEST:"), not the whole prompt —
+  // the thread-context block echoes PRIOR turns' messages, which would otherwise mis-trigger a follow-up.
+  const userReq = prompt.includes("THE USER'S REQUEST:") ? prompt.split("THE USER'S REQUEST:").pop() : prompt;
+  const trig = userReq.includes('PHANTOMTEST') ? ' [TRIG:PHANTOM]'
+    : userReq.includes('NEEDINPUTPLAINTEST') ? ' [TRIG:NEEDINPUTPLAIN]'
+    : userReq.includes('NEEDINPUTTEST') ? ' [TRIG:NEEDINPUT]'
+    : userReq.includes('NOOPTEST') ? ' [TRIG:NOOP]' : '';
   const planText = systemMode ? text : text + trig;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
   done(planText);
@@ -82,6 +87,18 @@ if (readOnly) {
   // no trigger tag) → fall through to the normal write. That models "agent paused → human replied".
   if (prompt.includes('[TRIG:NEEDINPUT]') && !prompt.includes("HUMAN'S FEEDBACK")) {
     done('先完成前面几项。\n\nNEEDS_INPUT: 是否也要修改 .claude/mcp.json?\nOPTION: 是,一起改\nOPTION: 否,保持不变');
+    process.exit(0);
+  }
+  // NOOP (e2e-p28): make NO change and ask nothing → empty diff → the flow ends 'rejected'. A pure
+  // no-op must NOT park at awaiting-input holding the lease.
+  if (prompt.includes('[TRIG:NOOP]')) {
+    done('这一步不需要改动任何文件(stub)。');
+    process.exit(0);
+  }
+  // NEEDS_INPUT with NO options (e2e-p28): a free-text question → awaiting-input with options=[], so the
+  // prompt must say "在下方输入框回复", NOT "选择一个选项".
+  if (prompt.includes('[TRIG:NEEDINPUTPLAIN]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('需要你确认一下。\n\nNEEDS_INPUT: 请问接下来想怎么处理?');
     process.exit(0);
   }
   // Phantom-path (e2e-p28): emit a Write tool_use for a file we DON'T create (announced-but-unwritten),

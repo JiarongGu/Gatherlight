@@ -1,5 +1,5 @@
 import type { AgentEvent, UploadedFile } from './chatTypes';
-import { post } from './apiClient';
+import { get, post } from './apiClient';
 
 export async function startChat(
   message: string,
@@ -29,6 +29,11 @@ export async function uploadFiles(files: File[]): Promise<UploadedFile[]> {
   }
   return (data as { files?: UploadedFile[] }).files ?? [];
 }
+
+// The server's current live session (holding the agent lease), if any — used to re-attach to a
+// session the client lost track of (blip / reload / other browser), e.g. one paused at awaiting-input.
+export const getActiveSession = () =>
+  get<{ active: boolean; id: string | null; phase: string | null }>('/api/chat/active');
 
 export const approvePlan = (id: string) => post(`/api/chat/${id}/plan/approve`);
 export const rejectPlan = (id: string) => post(`/api/chat/${id}/plan/reject`);
