@@ -43,6 +43,11 @@ export const refinePlan = (id: string, message: string) =>
 export const refineDiff = (id: string, message: string) =>
   post(`/api/chat/${id}/diff/refine`, { message });
 
+// Reply to an agent that paused for a decision (awaiting-input). The agent resumes the same
+// session with your answer and continues; partial edits so far are kept.
+export const respondInput = (id: string, message: string) =>
+  post(`/api/chat/${id}/input`, { message });
+
 /**
  * Subscribe to a session's event stream. Returns a close() fn.
  * Reconnects are handled by the browser's EventSource automatically: each frame carries an `id:`,

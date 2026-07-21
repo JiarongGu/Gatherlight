@@ -69,9 +69,35 @@ if (readOnly) {
     : prompt.includes("HUMAN'S FEEDBACK")
       ? `## 修订后的计划(stub)${routed}${echoTag}${priorFail}\n\n1. **What the user asked** — 修订版\n2. **Files to change** — plans/daily/2026-07-14.md`
       : `## 计划(stub)${routed}${echoTag}${priorFail}\n\n1. **What the user asked** — 新建明日计划\n2. **Files to change** — plans/daily/2026-07-14.md\n4. **Open questions** — none`;
-  emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
-  done(text);
+  // Carry an e2e trigger token from the user's request into the PLAN text, so it survives into the
+  // execute-phase prompt ({approvedPlan}) — that's how p28 drives the phantom-path / needs-input paths.
+  const trig = prompt.includes('PHANTOMTEST') ? ' [TRIG:PHANTOM]'
+    : prompt.includes('NEEDINPUTTEST') ? ' [TRIG:NEEDINPUT]' : '';
+  const planText = systemMode ? text : text + trig;
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
+  done(planText);
 } else {
+  // NEEDS_INPUT pause (e2e-p28): on the FIRST execute the plan carries [TRIG:NEEDINPUT] → ask for a
+  // decision and write NOTHING. On the resume the prompt is the revise template ("HUMAN'S FEEDBACK",
+  // no trigger tag) → fall through to the normal write. That models "agent paused → human replied".
+  if (prompt.includes('[TRIG:NEEDINPUT]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('先完成前面几项。\n\nNEEDS_INPUT: 是否也要修改 .claude/mcp.json?\nOPTION: 是,一起改\nOPTION: 否,保持不变');
+    process.exit(0);
+  }
+  // Phantom-path (e2e-p28): emit a Write tool_use for a file we DON'T create (announced-but-unwritten),
+  // alongside a real file — the server must drop the phantom from the diff + commit (no `git add` 128).
+  if (prompt.includes('[TRIG:PHANTOM]')) {
+    const realAbs = path.resolve(process.cwd(), 'plans/daily/2026-07-15.md');
+    fs.mkdirSync(path.dirname(realAbs), { recursive: true });
+    fs.writeFileSync(realAbs, `# 2026-07-15 计划(fixture)\n\n- written-by-stub ${process.pid}\n`, 'utf8');
+    const ghostAbs = path.resolve(process.cwd(), '.claude/skills/ghost/SKILL.md'); // never written to disk
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: realAbs } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: ghostAbs } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    done('已创建 plans/daily/2026-07-15.md;另有一个文件未落地(stub 幻影路径)');
+    process.exit(0);
+  }
   const rel = systemMode ? 'src/client/src/stub-touch.txt' : 'plans/daily/2026-07-14.md';
   const abs = path.resolve(process.cwd(), rel);
   fs.mkdirSync(path.dirname(abs), { recursive: true });

@@ -191,6 +191,11 @@ public class GitCliService : IGitCliService
             }
             else
             {
+                // Neither in HEAD nor on disk → a PHANTOM path: the agent announced a write (recorded by
+                // EditTracker off the tool_use) that never actually landed (deferred / blocked / no-op).
+                // Skip it — otherwise it becomes a bogus "added" entry and `git add` on a non-existent
+                // pathspec fatals (128), aborting the commit of the REAL changes beside it.
+                if (!onDisk) continue;
                 status = "added";
                 // Untracked: diff against NUL so the UI shows the full new content.
                 // --no-index exits 1 when files differ — that IS the success path.
@@ -205,7 +210,20 @@ public class GitCliService : IGitCliService
 
     public async Task<string> CommitPathsAsync(IReadOnlyList<string> paths, string message, CancellationToken ct = default)
     {
-        var rels = paths.Select(Norm).ToArray();
+        // Stage only paths git can actually act on: present on disk (add/modify) or tracked in HEAD
+        // (a deletion). A path that's neither — a phantom from an announced-but-unwritten edit — would
+        // make `git add` fatal (128) and abort the whole commit; drop it defensively (belt-and-suspenders
+        // to BuildDiffAsync, which already filters phantoms out of the review shown to the human).
+        var rels = new List<string>();
+        foreach (var raw in paths)
+        {
+            var rel = Norm(raw);
+            var abs = Path.Combine(_root, rel.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(abs) || await IsTrackedAsync(rel, ct)) rels.Add(rel);
+            else _log.LogWarning("CommitPaths: dropping non-existent, untracked path '{Rel}'", rel);
+        }
+        if (rels.Count == 0)
+            throw new InvalidOperationException("nothing to commit (all given paths missing or untracked)");
         (await RunAsync(new[] { "add", "--" }.Concat(rels).ToArray(), ct)).ThrowOnError("add");
         (await RunAsync(new[] { "commit", "-m", message, "--" }.Concat(rels).ToArray(), ct)).ThrowOnError("commit");
         return await GetShortShaAsync(ct);

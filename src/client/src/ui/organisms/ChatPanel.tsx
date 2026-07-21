@@ -20,6 +20,7 @@ import {
   rejectDiff,
   refinePlan,
   refineDiff,
+  respondInput,
   cancelChat,
   uploadFiles
 } from '@/lib/chatApi';
@@ -46,6 +47,10 @@ interface ChatState {
   live: string; // streaming assistant text
   thinking: string;
   review: ReviewPayload | null;
+  // The agent's question when it paused (phase 'awaiting-input'); shown as a prompt to reply to.
+  inputQuestion: string | null;
+  // Discrete choices the agent offered (OPTION: lines) — rendered as click-to-select buttons.
+  inputOptions: string[];
   commitSha: string | null;
   error: string | null;
   busy: boolean; // an approve/reject request is in flight
@@ -66,6 +71,8 @@ const initialState: ChatState = {
   live: '',
   thinking: '',
   review: null,
+  inputQuestion: null,
+  inputOptions: [],
   commitSha: null,
   error: null,
   busy: false,
@@ -116,6 +123,8 @@ function reducer(state: ChatState, action: Action): ChatState {
         live: '',
         thinking: '',
         review: null,
+        inputQuestion: null,
+        inputOptions: [],
         commitSha: null,
         error: null,
         busy: false,
@@ -139,6 +148,8 @@ function reducer(state: ChatState, action: Action): ChatState {
         live: '',
         thinking: '',
         review: null,
+        inputQuestion: null,
+        inputOptions: [],
         error: null,
         busy: false
       };
@@ -230,6 +241,11 @@ function reducer(state: ChatState, action: Action): ChatState {
           if (phase === 'awaiting-diff-approval' && ev.data) {
             next.review = ev.data as ReviewPayload;
           }
+          if (phase === 'awaiting-input') {
+            const d = ev.data as { question?: string; options?: string[] } | undefined;
+            next.inputQuestion = d?.question ?? null;
+            next.inputOptions = d?.options ?? [];
+          }
           if (phase === 'committed' && ev.data) {
             next.commitSha = (ev.data as { sha?: string }).sha ?? null;
           }
@@ -272,6 +288,7 @@ const STEP_ORDER: Record<string, number> = {
   building: 2,
   validating: 2,
   'awaiting-diff-approval': 3,
+  'awaiting-input': 2,
   committing: 4,
   committed: 4
 };
@@ -382,9 +399,13 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
   useEffect(() => () => closeRef.current?.(), []);
 
   // `inFlow` = a session is ongoing (locks the mode switch). `active` = the AI is
-  // actively working (input disabled; use 停止). At the two approval gates the
-  // input is ENABLED so the user can answer questions / request adjustments.
-  const inFlow = IN_PROGRESS.includes(state.phase) || state.phase === 'awaiting-plan-approval' || state.phase === 'awaiting-diff-approval';
+  // actively working (input disabled; use 停止). At the two approval gates AND when the
+  // agent paused for input, the input is ENABLED so the user can answer / request adjustments.
+  const inFlow =
+    IN_PROGRESS.includes(state.phase) ||
+    state.phase === 'awaiting-plan-approval' ||
+    state.phase === 'awaiting-diff-approval' ||
+    state.phase === 'awaiting-input';
   const active = IN_PROGRESS.includes(state.phase);
   // A fresh turn can be sent with text OR attachments alone (attachments-only
   // falls back to a default instruction in send()).
@@ -409,6 +430,21 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
     setAttachments((prev) => prev.filter((a) => a.relPath !== relPath));
   }, []);
 
+  // Reply to a paused agent — free text OR a clicked OPTION. Optimistically re-enter executing (the
+  // SSE phase event confirms it); same session, so the stream stays open and the agent resumes.
+  const replyInput = useCallback(async (message: string) => {
+    const { sessionId } = state;
+    const text = message.trim();
+    if (!sessionId || !text) return;
+    dispatch({ type: 'refine', phase: 'executing', message: text });
+    setDraft('');
+    try {
+      await respondInput(sessionId, text);
+    } catch (err: any) {
+      dispatch({ type: 'event', ev: { kind: 'error', text: err?.message ?? '发送失败' } });
+    }
+  }, [state]);
+
   const send = useCallback(async () => {
     const message = draft.trim();
     const { phase, sessionId } = state;
@@ -430,6 +466,12 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
         await refineDiff(sessionId, message);
         return;
       }
+      // Agent paused for a decision: reply resumes the SAME session and continues executing.
+      if (phase === 'awaiting-input' && sessionId) {
+        if (!message) return;
+        await replyInput(message);
+        return;
+      }
       // Otherwise (idle / terminal): a fresh turn on a new session. Allow an
       // attachments-only send with a default instruction so the backend (which
       // requires a message) still gets one.
@@ -446,7 +488,7 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
     } catch (err: any) {
       dispatch({ type: 'event', ev: { kind: 'error', text: err?.message ?? '发送失败' } });
     }
-  }, [draft, onEvent, state, attachments, systemMode]);
+  }, [draft, onEvent, state, attachments, systemMode, replyInput]);
 
   const act = useCallback(
     async (fn: (id: string) => Promise<unknown>) => {
@@ -568,6 +610,45 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
           />
         )}
 
+        {state.phase === 'awaiting-input' && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ margin: '8px 0' }}
+            message="AI 需要你的选择 / 回复才能继续"
+            description={
+              <div>
+                {state.inputQuestion && (
+                  <div style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>{state.inputQuestion}</div>
+                )}
+                {state.inputOptions.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                    {state.inputOptions.map((opt, i) => (
+                      <Button key={i} size="small" type="primary" ghost onClick={() => void replyInput(opt)}>
+                        {opt}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+                <span style={{ opacity: 0.75 }}>
+                  {state.inputOptions.length > 0
+                    ? '点一个选项,或在下方输入框回复。'
+                    : '在下方输入框回复,我会带着你的答复继续这次任务。'}
+                </span>
+                <Button
+                  size="small"
+                  danger
+                  loading={cancelling}
+                  onClick={() => void cancel()}
+                  style={{ marginLeft: 8 }}
+                >
+                  放弃任务
+                </Button>
+              </div>
+            }
+          />
+        )}
+
         {state.phase === 'committed' && (
           <Alert
             type="success"
@@ -664,7 +745,9 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
                   ? '可批准,或在此回答问题 / 补充信息 → 我据此改计划'
                   : state.phase === 'awaiting-diff-approval'
                     ? '可批准,或在此说明要怎么调整 → 我据此改文件'
-                    : '要改什么?(Enter 发送,Shift+Enter 换行)'
+                    : state.phase === 'awaiting-input'
+                      ? '回答 AI 的问题 / 补充信息 → 我带着你的答复继续'
+                      : '要改什么?(Enter 发送,Shift+Enter 换行)'
             }
             autoSize={{ minRows: 2, maxRows: 8 }}
             disabled={active}

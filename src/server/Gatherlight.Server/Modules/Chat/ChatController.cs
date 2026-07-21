@@ -180,6 +180,18 @@ public sealed class ChatController : ControllerBase
         return FireAndAck(() => _ = _chat.RefineDiffAsync(id, feedback), id, ChatPhase.AwaitingDiffApproval);
     }
 
+    // --- pause: agent asked for input ---------------------------------------------------
+
+    /// <summary>Reply to an agent that paused for a decision (awaiting-input). The agent resumes
+    /// the same session with your answer and keeps going — partial edits so far are kept.</summary>
+    [HttpPost("api/chat/{id}/input")]
+    public IActionResult RespondInput(string id, [FromBody] RefineRequest req)
+    {
+        var message = req.Message?.Trim() ?? "";
+        if (message.Length == 0) return BadRequest(new { error = "message is required" });
+        return FireAndAck(() => _ = _chat.RespondInputAsync(id, message), id, ChatPhase.AwaitingInput);
+    }
+
     /// <summary>Force-stop — valid from any non-terminal phase.</summary>
     [HttpPost("api/chat/{id}/cancel")]
     public async Task<IActionResult> Cancel(string id)

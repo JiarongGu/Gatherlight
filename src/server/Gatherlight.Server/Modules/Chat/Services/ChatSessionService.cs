@@ -20,6 +20,10 @@ public static class ChatPhase
     public const string Executing = "executing";
     public const string Validating = "validating";
     public const string AwaitingDiffApproval = "awaiting-diff-approval";
+    // The agent paused mid-execute needing a human decision (a NEEDS_INPUT question, or it made no
+    // committable change). NON-terminal: the session stays live, holding the agent slot, with any
+    // partial edits kept on disk — the human's reply resumes execute from here.
+    public const string AwaitingInput = "awaiting-input";
     public const string Committing = "committing";
     public const string Building = "building";
     public const string Committed = "committed";
@@ -405,14 +409,7 @@ public sealed class ChatSessionService
                 label: $"chat:{s.Mode}:exec", onEvent: ev => Emit(s, ev), tracker: s.Tracker, ct: s.Abort.Token);
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
-
-            BuildResult? build = null;
-            if (IsSystem(s))
-            {
-                build = await BuildWithRepairAsync(s);
-                if (s.Cancelled) return;
-            }
-            await PresentDiffAsync(s, build);
+            await FinishExecuteAsync(s, res);
         }
         catch (OperationCanceledException) when (s.Cancelled) { }
         catch (Exception ex)
@@ -509,13 +506,14 @@ public sealed class ChatSessionService
             using var _ = await _writeLock.AcquireAsync();
             files = await git.BuildDiffAsync(tracked);
         }
-        // `files` is the REAL-change set (BuildDiff drops denied / no-op edits).
+        // `files` is the REAL-change set (BuildDiff drops denied / no-op / phantom edits).
         if (files.Count == 0)
         {
-            RecordOutcome(s, "无实际改动");
-            Emit(s, new AgentEvent { Kind = "notice", Text = "没有文件被实际修改(可能被范围限制拦截,或无需改动)。" });
-            SetPhase(s, ChatPhase.Rejected);
-            Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Rejected });
+            // No committable change — the agent was blocked or is asking for a decision. Don't dead-end
+            // (old behavior: Rejected); PAUSE for the human so they can answer / redirect and the agent
+            // resumes. Its last message (any question it asked) is already in the transcript.
+            Emit(s, new AgentEvent { Kind = "notice", Text = "没有文件被实际修改 — 可能需要你补充信息或说明要怎么改。" });
+            EnterAwaitingInput(s, "AI 这一步没有改动任何文件。请补充你的要求或回答上面的问题,我会继续。");
             return;
         }
 
@@ -595,12 +593,29 @@ public sealed class ChatSessionService
         }
     }
 
-    public async Task RefineDiffAsync(string id, string feedback)
+    public Task RefineDiffAsync(string id, string feedback)
     {
         var s = RequirePhase(id, ChatPhase.AwaitingDiffApproval);
-        SetPhase(s, ChatPhase.Executing);
-        Emit(s, new AgentEvent { Kind = "notice", Text = "✍️ 收到调整意见,正在修改文件…" });
         s.Review = null; // the prior diff is now stale
+        return ContinueExecuteAsync(s, feedback, "✍️ 收到调整意见,正在修改文件…");
+    }
+
+    // --- gate: reply to a paused agent (awaiting-input) -------------------------------------
+
+    /// <summary>The human replies to an agent that paused for input. Resumes the SAME claude session
+    /// with the reply and continues executing — any partial edits already on disk are kept + built on.</summary>
+    public Task RespondInputAsync(string id, string message)
+    {
+        var s = RequirePhase(id, ChatPhase.AwaitingInput);
+        return ContinueExecuteAsync(s, message, "✍️ 收到你的回复,正在继续…");
+    }
+
+    // Resume execute with the human's text (a diff-refine OR an input-reply), then run the shared finish
+    // tail. Identical to the initial execute except it carries the human's feedback as the prompt.
+    private async Task ContinueExecuteAsync(ChatSession s, string feedback, string notice)
+    {
+        SetPhase(s, ChatPhase.Executing);
+        Emit(s, new AgentEvent { Kind = "notice", Text = notice });
         s.Abort = new CancellationTokenSource();
         try
         {
@@ -615,14 +630,7 @@ public sealed class ChatSessionService
                 label: $"chat:{s.Mode}:revise-exec", onEvent: ev => Emit(s, ev), tracker: s.Tracker, ct: s.Abort.Token);
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
-
-            BuildResult? build = null;
-            if (IsSystem(s))
-            {
-                build = await BuildWithRepairAsync(s);
-                if (s.Cancelled) return;
-            }
-            await PresentDiffAsync(s, build);
+            await FinishExecuteAsync(s, res);
         }
         catch (OperationCanceledException) when (s.Cancelled) { }
         catch (Exception ex)
@@ -630,6 +638,76 @@ public sealed class ChatSessionService
             if (s.Cancelled) return;
             Fail(s, $"调整阶段失败:{ex.Message}", ex);
         }
+    }
+
+    // Shared tail of every EXECUTE run (initial approve, diff-refine, input-reply). If the agent
+    // signalled it needs a human decision (a NEEDS_INPUT marker), PAUSE for a reply instead of
+    // presenting a (partial) diff — the tracked edits stay on disk and are built on when the human
+    // replies. Otherwise: (system-mode build then) present the diff.
+    private async Task FinishExecuteAsync(ChatSession s, AgentSessionResult res)
+    {
+        if (TryExtractNeedsInput(res.FinalText, out var question, out var options))
+        {
+            EnterAwaitingInput(s, question, options);
+            return;
+        }
+        BuildResult? build = null;
+        if (IsSystem(s))
+        {
+            build = await BuildWithRepairAsync(s);
+            if (s.Cancelled) return;
+        }
+        await PresentDiffAsync(s, build);
+    }
+
+    // Park the session waiting for the human's reply. NOT a terminal phase: the agent-slot lease stays
+    // held and any edits made so far stay on disk, so the reply resumes the same claude session. When
+    // the agent offered discrete choices (OPTION: lines), they ride in the phase data so the UI can
+    // render click-to-select buttons; the chosen label comes back as the reply message either way.
+    private void EnterAwaitingInput(ChatSession s, string question, IReadOnlyList<string>? options = null)
+    {
+        var q = string.IsNullOrWhiteSpace(question) ? "AI 需要你的补充信息才能继续。" : question.Trim();
+        var opts = options ?? Array.Empty<string>();
+        Emit(s, new AgentEvent { Kind = "notice", Text = "⏸️ AI 需要你的回复才能继续 — 请选择一个选项或在下方输入框回复(或点「放弃任务」)。" });
+        SetPhase(s, ChatPhase.AwaitingInput, new { question = q, options = opts });
+    }
+
+    // The execute prompt tells the agent to end its final message with a `NEEDS_INPUT: <question>` line
+    // (plus optional `OPTION: <label>` lines) when it genuinely needs a human decision — instead of
+    // guessing, or (as seen in the field) inventing a non-existent "confirm in the UI" step. Detecting
+    // it lets us pause the flow for a reply, offering the agent's own choices as clickable options.
+    private static readonly System.Text.RegularExpressions.Regex NeedsInputRe = new(
+        @"^[ \t>*_-]*NEEDS_INPUT:[ \t]*(?<q>.*)$",
+        System.Text.RegularExpressions.RegexOptions.Multiline
+        | System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex OptionRe = new(
+        @"^[ \t>*_-]*OPTION:[ \t]*(?<o>.+?)[ \t]*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool TryExtractNeedsInput(string? finalText, out string question, out List<string> options)
+    {
+        question = "";
+        options = new List<string>();
+        if (string.IsNullOrWhiteSpace(finalText)) return false;
+        var m = NeedsInputRe.Match(finalText);
+        if (!m.Success) return false;
+        // The marker line's own text is the question head; after it, `OPTION:` lines are the choices and
+        // any other non-empty line extends the question text shown in the UI.
+        var questionLines = new List<string>();
+        var head = m.Groups["q"].Value.Trim();
+        if (head.Length > 0) questionLines.Add(head);
+        foreach (var raw in finalText[(m.Index + m.Value.Length)..].Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0) continue;
+            var om = OptionRe.Match(line);
+            if (om.Success) options.Add(om.Groups["o"].Value.Trim());
+            else questionLines.Add(line);
+        }
+        question = string.Join("\n", questionLines);
+        return true;
     }
 
     // --- force stop ---------------------------------------------------------------------

@@ -9,6 +9,7 @@ export type Phase =
   | 'building'
   | 'validating'
   | 'awaiting-diff-approval'
+  | 'awaiting-input'
   | 'committing'
   | 'committed'
   | 'rejected'
@@ -81,6 +82,7 @@ export const PHASE_LABELS: Record<Phase, string> = {
   building: '构建验证中',
   validating: '校验智库变更',
   'awaiting-diff-approval': '待审阅改动',
+  'awaiting-input': '待你回复',
   committing: '提交中',
   committed: '已提交',
   rejected: '已撤销',

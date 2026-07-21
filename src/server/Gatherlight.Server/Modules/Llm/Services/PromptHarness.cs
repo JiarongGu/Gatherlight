@@ -110,7 +110,13 @@ public sealed class PromptHarness : IPromptHarness
         CURRENT PHASE: EXECUTING.
         - The human APPROVED the plan below. Implement it exactly. Make the file edits now.
         - Use templates from .claude/templates/ for any new plan file. Edit existing files in place (never create -v2 / -final siblings).
-        - If you discover the plan can't be followed safely (e.g. a fact you must verify turns out false), STOP, do not guess, and explain in your final message what blocked you instead of editing.
+        - EVERY file under plans/ household/ .claude/ (including .claude/mcp.json and other .claude config) is yours to edit DIRECTLY. There is NO per-file "confirm in the UI" step and no file that needs its own user approval — the human reviews your WHOLE diff at the end. Never call a file "sensitive" / "needs UI confirmation" and skip it, and never leave a planned file unwritten claiming you'll finish it after an approval that does not exist: either edit it, or raise NEEDS_INPUT (below).
+        - If you genuinely CANNOT proceed without a human decision (a real fork with no safe default, a fact you must verify turns out false, required info missing), do NOT guess and do NOT half-finish. End your final message with a NEEDS_INPUT block and stop:
+              NEEDS_INPUT: <the question, in one line>
+          If the decision is a choice between specific alternatives, add one `OPTION:` line per choice — short, self-contained labels — so the human can just CLICK one instead of typing:
+              OPTION: <first choice>
+              OPTION: <second choice>
+          The human replies (clicks an option, or types) and you resume with their answer; any edits you already made are kept.
         - When done, your final message should briefly summarize what you changed (one bullet per file). Do NOT commit — the human will review your diff.
 
         APPROVED PLAN:
@@ -121,7 +127,7 @@ public sealed class PromptHarness : IPromptHarness
 
 
         CURRENT PHASE: EXECUTING — REVISION.
-        The human reviewed the files you changed and asked for adjustments BEFORE anything is committed (feedback below). Adjust the edits now — edit files directly. Keep it minimal and on-scope; don't redo work that's already correct, and don't commit. When done, briefly summarize what changed (one bullet per file).
+        The human reviewed your work (or answered a question you raised) BEFORE anything is committed — their reply is below. Continue the task: edit files directly, folding in what they said. Keep it minimal and on-scope; don't redo work that's already correct, and don't commit. Every file under plans/ household/ .claude/ is yours to edit directly — no file needs its own UI confirmation. If you STILL need a human decision, end your final message with `NEEDS_INPUT: <question>` (plus one `OPTION: <label>` line per choice, if it's a pick-one) and stop — your edits so far are kept. When done, briefly summarize what changed (one bullet per file).
 
         THE HUMAN'S FEEDBACK:
         {feedback}
@@ -200,6 +206,7 @@ public sealed class PromptHarness : IPromptHarness
 
         CURRENT PHASE: EXECUTING. Implement the approved plan now by editing src/client files.
         Make minimal, type-safe edits that build cleanly. When done, briefly summarize what you changed (one bullet per file).
+        If you genuinely need a human decision before proceeding (a real fork, missing info), do NOT guess or half-finish — end your final message with `NEEDS_INPUT: <question>` (plus one `OPTION: <label>` line per choice, if it's a pick-one) and stop; the human replies and you resume (edits so far are kept).
 
         APPROVED PLAN:
         {approvedPlan}
@@ -209,7 +216,7 @@ public sealed class PromptHarness : IPromptHarness
 
 
         CURRENT PHASE: EXECUTING — REVISION.
-        The human reviewed your frontend changes and asked for adjustments BEFORE committing (feedback below). Adjust the edits now by editing src/client files. Keep it minimal, type-safe, and building cleanly; don't redo what's already correct. When done, briefly summarize what changed.
+        The human reviewed your frontend changes (or answered a question you raised) BEFORE committing — their reply is below. Continue: edit src/client files, folding in what they said. Keep it minimal, type-safe, and building cleanly; don't redo what's already correct. If you STILL need a human decision, end with `NEEDS_INPUT: <question>` (plus one `OPTION: <label>` line per choice, if it's a pick-one) and stop. When done, briefly summarize what changed.
 
         THE HUMAN'S FEEDBACK:
         {feedback}
