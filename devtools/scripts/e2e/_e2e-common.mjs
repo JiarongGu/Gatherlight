@@ -97,7 +97,15 @@ export async function until(fn, ms = 30000, poll = 250) {
   }
 }
 
-export const waitHealthy = (base, ms = 30000) => until(() => fetch(`${base}/api/health`).then((r) => r.ok), ms);
+// Wait until the server is up AND the startup migration has lifted the gate (health.migrating === false).
+// Older behavior (just r.ok) implicitly waited because the port wasn't open until migration finished; the
+// migration now runs while listening, so readiness must be checked explicitly.
+export const waitHealthy = (base, ms = 30000) => until(async () => {
+  const r = await fetch(`${base}/api/health`);
+  if (!r.ok) return false;
+  const j = await r.json().catch(() => ({}));
+  return j.migrating === true ? false : true;
+}, ms);
 
 /** HTTP + chat helpers bound to a base URL. */
 export function makeClient(base) {

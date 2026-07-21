@@ -30,7 +30,10 @@ public sealed class StartupMigrationRunner
     public async Task RunAsync(CancellationToken ct = default)
     {
         var current = AppVersion.Semver;
-        var last = _config.Get(LastRanVersionKey);
+        // Defer the config read until after db-migrate has ensured the table exists; on a first-run
+        // (or a fresh e2e data folder) the app_config table doesn't exist yet and the read would throw.
+        string? last = null;
+        try { last = _config.Get(LastRanVersionKey); } catch { /* pre-migration DB — treat as first run */ }
         _state.FromVersion = last ?? "";
         _state.ToVersion = current;
         _state.IsUpgrade = last is not null && last != current;
