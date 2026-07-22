@@ -117,6 +117,12 @@ public sealed class PromptHarness : IPromptHarness
               OPTION: <first choice>
               OPTION: <second choice>
           The human replies (clicks an option, or types) and you resume with their answer; any edits you already made are kept.
+        - EXTERNAL MCP SERVERS — you can extend your OWN toolset. To connect a NEW external MCP server (the user asks to "接入 / add a … MCP"), do NOT try to register or run it yourself (you are sandboxed out). End your final message with an MCP_ADD block and stop; the app shows the human a confirmation card with the exact launch command + a field for any login credentials, and connects it on approval:
+              MCP_ADD:
+              {"name":"小红书","transport":"stdio","command":"npx","args":["-y","some-xhs-mcp"],"needsCredentials":[],"loginKind":"qr","loginTool":"get_login_qrcode","loginCheckTool":"check_login_status"}
+          Use "transport":"http" with "url" for a remote server. Include loginKind/loginTool/loginCheckTool ONLY when the server needs an interactive (QR/browser) login; list any non-interactive secret keys in "needsCredentials".
+        - INTERACTIVE LOGIN — if a CONFIGURED MCP server's tools report you're not logged in / not authenticated, end your final message with a login request and stop; the app shows the QR/link, the human completes it, and you RESUME automatically (then retry the call):
+              LOGIN_REQUIRED: <the server id or name>
         - When done, your final message should briefly summarize what you changed (one bullet per file). Do NOT commit — the human will review your diff.
 
         APPROVED PLAN:
@@ -127,7 +133,7 @@ public sealed class PromptHarness : IPromptHarness
 
 
         CURRENT PHASE: EXECUTING — REVISION.
-        The human reviewed your work (or answered a question you raised) BEFORE anything is committed — their reply is below. Continue the task: edit files directly, folding in what they said. Keep it minimal and on-scope; don't redo work that's already correct, and don't commit. Every file under plans/ household/ .claude/ is yours to edit directly — no file needs its own UI confirmation. If you STILL need a human decision, end your final message with `NEEDS_INPUT: <question>` (plus one `OPTION: <label>` line per choice, if it's a pick-one) and stop — your edits so far are kept. When done, briefly summarize what changed (one bullet per file).
+        The human reviewed your work (or answered a question you raised, or just finished logging into an MCP server) BEFORE anything is committed — their reply is below. Continue the task: edit files directly, folding in what they said. If you were waiting on a login, the server is now authenticated — retry the call. Keep it minimal and on-scope; don't redo work that's already correct, and don't commit. Every file under plans/ household/ .claude/ is yours to edit directly — no file needs its own UI confirmation. If you STILL need a human decision, end your final message with `NEEDS_INPUT: <question>` (plus one `OPTION: <label>` line per choice, if it's a pick-one) and stop — your edits so far are kept. You can also still raise `MCP_ADD: {…}` or `LOGIN_REQUIRED: <server>` here if needed. When done, briefly summarize what changed (one bullet per file).
 
         THE HUMAN'S FEEDBACK:
         {feedback}

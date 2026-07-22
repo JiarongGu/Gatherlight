@@ -128,6 +128,30 @@ snake_case, DI-collection variation points (the new provider is just another sou
 per phase against isolated `devtools/_e2e-*` folders with the stub CLI. No secrets/paths/family
 data in tracked files (`.claude/rules/sensitive-info.md`).
 
+## Wiring a real Xiaohongshu MCP (P4)
+
+The generic pieces above make Xiaohongshu just a configured instance — no XHS-specific code.
+
+1. **Run a Xiaohongshu MCP server.** Community options: `xpzouying/xiaohongshu-mcp` (Go binary /
+   Docker, HTTP on `:18060`, tools incl. `get_login_qrcode` (returns a Base64 QR), `check_login_status`,
+   `search_feeds`, `get_feed_detail`), or a stdio `npx`/`uvx` server. stdio servers are launched by us
+   directly (Windows `npx`/`.cmd` shims handled by `ResolveLaunch`); an HTTP server the user runs, and
+   we connect to its URL.
+2. **Add it** — in chat ("接入小红书 MCP …") the agent emits `MCP_ADD` → the confirmation card; or via
+   the access-gated API:
+   - stdio: `{"name":"小红书","transport":"stdio","command":"npx","args":["-y","<pkg>"],`
+     `"loginKind":"qr","loginTool":"get_login_qrcode","loginCheckTool":"check_login_status"}`
+   - http: `{"name":"小红书","transport":"http","url":"http://127.0.0.1:18060/mcp",`
+     `"loginKind":"qr","loginTool":"get_login_qrcode","loginCheckTool":"check_login_status"}`
+3. **Log in** — the `/manage` 登录 button, or the agent hits a login-walled `search_feeds` and raises
+   `LOGIN_REQUIRED` → the QR renders in chat. The human scans with the XHS app; the session persists in
+   the server's own storage (its cwd under `{data}/state/mcp/<id>/` for stdio).
+4. **Use it** — `search_feeds` / `get_feed_detail` are now proxied tools (`<id>__search_feeds`) the
+   planner agent calls for real Xiaohongshu content.
+
+The live scan is inherently a human step (the user's own account) — verifiable only with a running
+server + phone, so it's the one part not covered by the stub e2e.
+
 ## Risks / open items
 
 - **Preview MCP SDK vs hand-roll** — resolved empirically in P1 by what restores/builds.

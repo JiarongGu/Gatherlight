@@ -155,7 +155,6 @@ public sealed class StdioMcpConnection : McpConnectionBase
     {
         var psi = new ProcessStartInfo
         {
-            FileName = command,
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -168,7 +167,13 @@ public sealed class StdioMcpConnection : McpConnectionBase
         // A persistent cwd (under the data folder) is where a server keeps its session/cookies, so an
         // interactive login survives restarts + updates.
         if (!string.IsNullOrEmpty(workingDir)) psi.WorkingDirectory = workingDir;
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        // Windows: `npx`/`npm`/`uvx`/… are .cmd shims that CreateProcess can't launch directly (it only
+        // appends .exe). Resolve to the real shim and run it through cmd.exe — so an MCP server started
+        // via a package runner (the common case) just works. Native exes / full paths are unchanged.
+        var spec = ResolveLaunch(command, args);
+        psi.FileName = spec.Exe;
+        if (spec.RawArguments is not null) psi.Arguments = spec.RawArguments;
+        else foreach (var a in spec.Argv!) psi.ArgumentList.Add(a);
         foreach (var kv in env) psi.Environment[kv.Key] = kv.Value;
 
         Process proc;
@@ -228,6 +233,75 @@ public sealed class StdioMcpConnection : McpConnectionBase
         try { if (!_proc.HasExited) _proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
         try { _proc.Dispose(); } catch { /* ignore */ }
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>How to actually launch a stdio server. <see cref="RawArguments"/> (when set) is used
+    /// verbatim as the command line — needed for the <c>cmd.exe /c "…"</c> wrapper, whose quoting rules
+    /// differ from the C-runtime escaping <c>ArgumentList</c> applies.</summary>
+    internal readonly record struct LaunchSpec(string Exe, List<string>? Argv, string? RawArguments);
+
+    /// <summary>Pick the real executable to launch. On Windows, a bare <c>npx</c>/<c>npm</c>/<c>uvx</c>
+    /// (or an explicit <c>.cmd</c>/<c>.bat</c>) is a shell shim CreateProcess can't run directly — resolve
+    /// it via <c>where.exe</c> and run it through <c>cmd.exe /c</c>. Native exes / full paths pass through.</summary>
+    internal static LaunchSpec ResolveLaunch(string command, IReadOnlyList<string> args)
+    {
+        var argv = new List<string>(args);
+        if (!OperatingSystem.IsWindows()) return new LaunchSpec(command, argv, null);
+
+        var ext = Path.GetExtension(command).ToLowerInvariant();
+        if (ext is ".exe" or ".com") return new LaunchSpec(command, argv, null);
+        if (ext is ".cmd" or ".bat") return CmdWrap(command, argv);
+
+        var hasPath = command.Contains('/') || command.Contains('\\');
+        if (!hasPath)
+        {
+            var resolved = WhereExe(command);
+            if (resolved is not null)
+            {
+                var rext = Path.GetExtension(resolved).ToLowerInvariant();
+                return rext is ".cmd" or ".bat" ? CmdWrap(resolved, argv) : new LaunchSpec(resolved, argv, null);
+            }
+        }
+        return new LaunchSpec(command, argv, null); // let CreateProcess try (it appends .exe for a bare name)
+    }
+
+    // cmd.exe /c ""script" "arg1" …" — the OUTER quote pair is cmd's own required wrapper so a script
+    // path with spaces (e.g. C:\Program Files\nodejs\npx.cmd) parses as a single token.
+    private static LaunchSpec CmdWrap(string script, List<string> argv)
+    {
+        var inner = string.Join(" ", new[] { script }.Concat(argv).Select(QuoteArg));
+        return new LaunchSpec("cmd.exe", null, $"/c \"{inner}\"");
+    }
+
+    private static string QuoteArg(string a) =>
+        a.Length == 0 || a.Any(c => char.IsWhiteSpace(c) || c == '"')
+            ? "\"" + a.Replace("\"", "\\\"") + "\""
+            : a;
+
+    private static string? WhereExe(string name)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "where.exe",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                CreateNoWindow = true,
+            };
+            psi.ArgumentList.Add(name);
+            using var p = Process.Start(psi);
+            if (p is null) return null;
+            var outp = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(3000);
+            var hits = outp.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+            // Prefer a runnable extension over an extensionless bash shim (Windows can't run the latter).
+            return hits.FirstOrDefault(l => l.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+                                         || l.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                                         || l.EndsWith(".bat", StringComparison.OrdinalIgnoreCase))
+                   ?? hits.FirstOrDefault();
+        }
+        catch { return null; }
     }
 }
 
