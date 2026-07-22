@@ -227,6 +227,16 @@ public static class GatherlightApp
             .AddSingleton<ScriptToolProvider>()
             .AddSingleton<IScriptToolProvider>(sp => sp.GetRequiredService<ScriptToolProvider>())
             .AddHostedService(sp => sp.GetRequiredService<ScriptToolProvider>())
+            // External MCP servers (Gatherlight-as-MCP-client): connect out to stdio/http MCP servers,
+            // proxy their tools into the registry (namespaced {serverId}__{tool}). Config +secrets in
+            // the mcp_server table; add is access-gated / chat-gated, never agent-reachable.
+            // See docs/mcp-client-design.md.
+            .AddSingleton<Modules.McpClient.Services.IMcpServerStore, Modules.McpClient.Services.McpServerStore>()
+            .AddSingleton<Modules.McpClient.Services.McpConnectionManager>()
+            .AddSingleton<Modules.McpClient.Services.IMcpConnectionManager>(sp => sp.GetRequiredService<Modules.McpClient.Services.McpConnectionManager>())
+            .AddHostedService(sp => sp.GetRequiredService<Modules.McpClient.Services.McpConnectionManager>())
+            .AddSingleton<Modules.McpClient.Services.IExternalToolProvider, Modules.McpClient.Services.McpProxyToolProvider>()
+            .AddSingleton<Modules.McpClient.Services.IMcpProvisionService, Modules.McpClient.Services.McpProvisionService>()
             .AddSingleton<IToolRegistry, ToolRegistry>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>()
@@ -242,7 +252,9 @@ public static class GatherlightApp
             .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.KnowledgeBaseStep>()
             .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.PlanIndexStep>()
             .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.SelfHealStateStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.MemorySeedStep>();
+            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.MemorySeedStep>()
+            // After the DB is migrated: connect the enabled external MCP servers (best-effort).
+            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.McpConnectStep>();
 
         builder.Services.AddHttpClient();
 

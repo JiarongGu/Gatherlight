@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Gatherlight.Server.Modules.McpClient.Services;
 using Gatherlight.Server.Modules.Tools.Models;
 
 namespace Gatherlight.Server.Modules.Tools.Services;
@@ -27,11 +28,14 @@ public sealed class ToolRegistry : IToolRegistry
 
     private readonly Dictionary<string, IGatherlightTool> _builtins;
     private readonly IScriptToolProvider _scripts;
+    private readonly IExternalToolProvider _external;
 
-    public ToolRegistry(IEnumerable<IGatherlightTool> tools, IScriptToolProvider scripts)
+    public ToolRegistry(IEnumerable<IGatherlightTool> tools, IScriptToolProvider scripts,
+        IExternalToolProvider external)
     {
         _builtins = tools.ToDictionary(t => t.Name);
         _scripts = scripts;
+        _external = external;
     }
 
     public string McpServerName => "planner-tools";
@@ -39,12 +43,15 @@ public sealed class ToolRegistry : IToolRegistry
     private static IReadOnlyList<string> SurfacesOf(IGatherlightTool t) =>
         t.Surfaces is { Count: > 0 } s ? s : AllSurfaces;
 
-    /// <summary>Effective tool set, resolved at call time so hot-loaded script tools appear
-    /// immediately. Built-ins win on a name collision.</summary>
+    /// <summary>Effective tool set, resolved at call time so hot-loaded script tools and
+    /// newly-connected external MCP tools appear immediately. Built-ins win on a name collision,
+    /// then script tools, then external MCP tools.</summary>
     private Dictionary<string, IGatherlightTool> Resolve()
     {
         var all = new Dictionary<string, IGatherlightTool>(_builtins);
         foreach (var t in _scripts.Current)
+            all.TryAdd(t.Name, t);
+        foreach (var t in _external.Current)
             all.TryAdd(t.Name, t);
         return all;
     }
