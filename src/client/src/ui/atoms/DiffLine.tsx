@@ -11,22 +11,19 @@ function classify(line: string): LineKind {
   return 'ctx';
 }
 
-const COLORS: Record<LineKind, { bg: string; fg: string }> = {
-  add: { bg: 'rgba(63,185,80,0.14)', fg: '#7ee787' },
-  del: { bg: 'rgba(248,81,73,0.14)', fg: '#ff9492' },
-  hunk: { bg: 'transparent', fg: '#6aa0ff' },
-  meta: { bg: 'transparent', fg: '#8d94a5' },
-  ctx: { bg: 'transparent', fg: '#c9d1d9' }
+// Colors live in styles.css as theme tokens (--diff-*) so the diff stays legible in BOTH light and
+// dark themes; the old hardcoded dark-theme colors washed out on the light rice-paper surface.
+const KIND_CLASS: Record<LineKind, string> = {
+  add: 'diff-add',
+  del: 'diff-del',
+  hunk: 'diff-hunk',
+  meta: 'diff-meta',
+  ctx: 'diff-ctx'
 };
 
 /** L1 — one colorized unified-diff line. */
 export function DiffLine({ line }: { line: string }) {
-  const c = COLORS[classify(line)];
-  return (
-    <div style={{ background: c.bg, color: c.fg, padding: '0 8px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-      {line || ' '}
-    </div>
-  );
+  return <div className={`diff-line ${KIND_CLASS[classify(line)]}`}>{line || ' '}</div>;
 }
 
 /** L1 — a full colorized unified diff (splits into DiffLine rows). */

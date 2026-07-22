@@ -64,6 +64,14 @@
   --mark-fg: #f3c98a;
   --mark-bg: rgba(234, 168, 96, 0.16);
   --glow: rgba(234, 168, 96, 0.14);
+  /* Unified-diff colors — legible on the dark surface. */
+  --diff-add-bg: rgba(63, 185, 80, 0.22);
+  --diff-add-fg: #56d364;
+  --diff-del-bg: rgba(248, 81, 73, 0.22);
+  --diff-del-fg: #ff9492;
+  --diff-hunk-fg: #79b8ff;
+  --diff-meta-fg: #9d9da5;
+  --diff-ctx-fg: #c9d1d9;
   --paper: transparent;
   /* legacy aliases (kept so existing var(--panel) etc. still resolve) */
   --panel: var(--surface);
@@ -97,6 +105,15 @@
   --mark-fg: #7a4a12;
   --mark-bg: rgba(224, 168, 74, 0.35);
   --glow: rgba(184, 92, 28, 0.10);
+  /* Unified-diff colors — dark ink on saturated tints, legible on the rice-paper surface (the
+     dark-theme light-on-dark values washed out here). */
+  --diff-add-bg: #c6ebcf;
+  --diff-add-fg: #0f6b2e;
+  --diff-del-bg: #f7cdc7;
+  --diff-del-fg: #a3132a;
+  --diff-hunk-fg: #0a5ba3;
+  --diff-meta-fg: #8a7d64;
+  --diff-ctx-fg: #2b2119;
   --paper: transparent;
   --panel: var(--surface);
   --panel-2: var(--surface-2);
@@ -921,6 +938,15 @@ h1, h2, h3, .u-display { font-family: var(--font-display); letter-spacing: -0.01
   overflow-x: auto;
   max-height: 360px;
 }
+
+/* One unified-diff line — colors are theme tokens so add/del/context stay legible in BOTH themes
+   (the old hardcoded dark-theme colors washed out on the light rice-paper surface). */
+.diff-line { padding: 0 8px; white-space: pre-wrap; word-break: break-word; }
+.diff-line.diff-add { background: var(--diff-add-bg); color: var(--diff-add-fg); }
+.diff-line.diff-del { background: var(--diff-del-bg); color: var(--diff-del-fg); }
+.diff-line.diff-hunk { color: var(--diff-hunk-fg); font-weight: 600; }
+.diff-line.diff-meta { color: var(--diff-meta-fg); }
+.diff-line.diff-ctx { color: var(--diff-ctx-fg); }
 
 .validation-report {
   font-size: 11.5px;
