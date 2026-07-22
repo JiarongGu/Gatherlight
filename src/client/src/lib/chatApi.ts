@@ -53,6 +53,12 @@ export const refineDiff = (id: string, message: string) =>
 export const respondInput = (id: string, message: string) =>
   post(`/api/chat/${id}/input`, { message });
 
+// Confirm (with any credential values) or decline the agent's proposal to add an external MCP
+// server (awaiting-mcp-approval). Secrets go straight to the server and are never echoed back.
+export const approveMcp = (id: string, secrets: Record<string, string>) =>
+  post(`/api/chat/${id}/mcp/approve`, { secrets });
+export const rejectMcp = (id: string) => post(`/api/chat/${id}/mcp/reject`);
+
 /**
  * Subscribe to a session's event stream. Returns a close() fn.
  * Reconnects are handled by the browser's EventSource automatically: each frame carries an `id:`,

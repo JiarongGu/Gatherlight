@@ -5,6 +5,9 @@ using Gatherlight.Server.Modules.Core.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Llm.Models;
 using Gatherlight.Server.Modules.Llm.Services;
+using Gatherlight.Server.Modules.McpClient.Models;
+using Gatherlight.Server.Modules.McpClient.Services;
+using Gatherlight.Server.Modules.McpClient.Services.Transport;
 using Gatherlight.Server.Modules.Tools.Services;
 using Lyntai.Providers.ClaudeCli;
 using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
@@ -24,6 +27,9 @@ public static class ChatPhase
     // committable change). NON-terminal: the session stays live, holding the agent slot, with any
     // partial edits kept on disk — the human's reply resumes execute from here.
     public const string AwaitingInput = "awaiting-input";
+    // The agent proposed adding an external MCP server; parked for the human to confirm the CONCRETE
+    // spec (+ enter any credentials) before anything connects. NON-terminal, holds the agent slot.
+    public const string AwaitingMcpApproval = "awaiting-mcp-approval";
     public const string Committing = "committing";
     public const string Building = "building";
     public const string Committed = "committed";
@@ -62,10 +68,19 @@ public sealed class ChatSession
     /// at the diff gate with uncommitted edits). Released in <c>SetPhase</c> on a terminal phase.</summary>
     public IDisposable? GateLease { get; set; }
     public required string ThreadContext { get; init; }
+    /// <summary>Set when the agent proposed adding an external MCP server (phase awaiting-mcp-approval);
+    /// the concrete draft the human confirms. Cleared on approve/reject. Never carries secrets — those
+    /// are supplied by the human at the gate and go straight to the provision service.</summary>
+    public McpProposal? McpProposal { get; set; }
     /// <summary>Sequential persistence chain so DB writes keep event order without
     /// blocking the emit path.</summary>
     public Task PersistChain = Task.CompletedTask;
 }
+
+/// <summary>A parsed, secret-free proposal to add an external MCP server (from an agent-emitted
+/// <c>MCP_ADD:</c> marker). <see cref="NeededCredentials"/> are the credential KEYS the human must
+/// fill in at the confirmation gate (e.g. <c>XHS_COOKIE</c>); their values never appear here.</summary>
+public sealed record McpProposal(McpAddRequest Draft, IReadOnlyList<string> NeededCredentials);
 
 /// <summary>
 /// Holds chat sessions and drives the two-gate flow (plan → human approve → execute →
@@ -99,6 +114,7 @@ public sealed class ChatSessionService
     private readonly GatherlightServerOptions _options;
     private readonly Modules.Scoring.Services.IScoringService _scoring;
     private readonly IAgentGate _gate;
+    private readonly IMcpProvisionService _mcpProvision;
     private readonly ILogger<ChatSessionService> _log;
 
     private const int MaxBuildRepair = 2;
@@ -109,9 +125,11 @@ public sealed class ChatSessionService
         IDataContext data, IAppConfigService appConfig, ChatEnvironmentService env,
         DataWriteLock writeLock, IToolRegistry tools, IZhikuRouter router,
         CodeRepoGit codeGit, BuildVerifyService buildVerify, GatherlightServerOptions options,
-        Modules.Scoring.Services.IScoringService scoring, IAgentGate gate, ILogger<ChatSessionService> log)
+        Modules.Scoring.Services.IScoringService scoring, IAgentGate gate,
+        IMcpProvisionService mcpProvision, ILogger<ChatSessionService> log)
     {
         _gate = gate;
+        _mcpProvision = mcpProvision;
         _scoring = scoring;
         _router = router;
         _codeGit = codeGit;
@@ -659,6 +677,14 @@ public sealed class ChatSessionService
     // replies. Otherwise: (system-mode build then) present the diff.
     private async Task FinishExecuteAsync(ChatSession s, AgentSessionResult res)
     {
+        // An MCP_ADD proposal is a privileged, out-of-band action (register a server that runs with
+        // server privileges) — park for explicit human confirmation of the concrete spec, never edit
+        // files for it. Checked before NEEDS_INPUT so a proposal isn't mistaken for a free-text pause.
+        if (TryExtractMcpAdd(res.FinalText, out var proposal))
+        {
+            EnterAwaitingMcpApproval(s, proposal);
+            return;
+        }
         if (TryExtractNeedsInput(res.FinalText, out var question, out var options))
         {
             EnterAwaitingInput(s, question, options);
@@ -724,6 +750,163 @@ public sealed class ChatSessionService
         }
         question = string.Join("\n", questionLines);
         return true;
+    }
+
+    // --- gate: approve/reject adding an external MCP server (awaiting-mcp-approval) ----------
+
+    /// <summary>Human confirmed the proposed MCP server. Merge in any credentials they entered, then
+    /// register + connect via the provision service and report the outcome. Uses the SERVER-held draft
+    /// (not client input) for command/url — the client only supplies secret values.</summary>
+    public async Task ApproveMcpAsync(string id, IReadOnlyDictionary<string, string>? secrets)
+    {
+        var s = RequirePhase(id, ChatPhase.AwaitingMcpApproval);
+        var proposal = s.McpProposal ?? throw new InvalidOperationException("NO_PROPOSAL");
+        SetPhase(s, ChatPhase.Executing);
+        Emit(s, new AgentEvent { Kind = "notice", Text = $"🔌 正在连接 MCP 服务「{proposal.Draft.Name}」…" });
+        try
+        {
+            var draft = proposal.Draft with
+            {
+                Secrets = secrets is { Count: > 0 } ? new Dictionary<string, string>(secrets) : null,
+            };
+            var cfg = await _mcpProvision.AddAsync(draft, s.Abort?.Token ?? default);
+            s.McpProposal = null;
+            if (cfg.Status == McpServerStatus.Connected)
+            {
+                var tools = cfg.DiscoveredTools();
+                Emit(s, new AgentEvent
+                {
+                    Kind = "notice",
+                    Text = $"✅ 已连接「{cfg.Name}」,发现 {tools.Count} 个工具:{string.Join("、", tools.Select(t => t.Name))}",
+                });
+                RecordOutcome(s, $"已添加 MCP 服务 {cfg.Id}");
+                SetPhase(s, ChatPhase.Committed, new { mcpServerId = cfg.Id, tools = tools.Select(t => t.Name).ToArray() });
+                Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Committed });
+            }
+            else
+            {
+                s.Error = cfg.LastError;
+                Emit(s, new AgentEvent { Kind = "error", Text = $"⚠️ 已保存「{cfg.Name}」,但连接失败:{cfg.LastError}" });
+                RecordOutcome(s, $"MCP 服务连接失败 {cfg.Id}");
+                SetPhase(s, ChatPhase.Error, new { mcpServerId = cfg.Id });
+                Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Error });
+            }
+        }
+        catch (Exception ex)
+        {
+            Fail(s, $"添加 MCP 服务失败:{ex.Message}", ex);
+        }
+    }
+
+    /// <summary>Human declined the proposed MCP server — discard the draft, nothing connects.</summary>
+    public Task RejectMcpAsync(string id)
+    {
+        var s = RequirePhase(id, ChatPhase.AwaitingMcpApproval);
+        s.McpProposal = null;
+        RecordOutcome(s, "已拒绝添加 MCP 服务");
+        Emit(s, new AgentEvent { Kind = "notice", Text = "已取消,未添加任何 MCP 服务。" });
+        SetPhase(s, ChatPhase.Rejected);
+        Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Rejected });
+        return Task.CompletedTask;
+    }
+
+    // Park waiting for the human to confirm the CONCRETE spec. Non-terminal (holds the agent slot).
+    private void EnterAwaitingMcpApproval(ChatSession s, McpProposal proposal)
+    {
+        s.McpProposal = proposal;
+        Emit(s, new AgentEvent
+        {
+            Kind = "notice",
+            Text = "⏸️ AI 想添加一个外部 MCP 服务 — 请核对下面的启动方式后确认(或点「放弃任务」)。",
+        });
+        SetPhase(s, ChatPhase.AwaitingMcpApproval, McpProposalView(proposal));
+    }
+
+    /// <summary>The concrete, secret-free spec shown at the gate — rendered from the PARSED draft, so a
+    /// prompt-injection can propose but the human sees the exact command/url before approving.</summary>
+    internal static object McpProposalView(McpProposal p) => new
+    {
+        name = p.Draft.Name,
+        transport = p.Draft.Transport,
+        command = p.Draft.Command,
+        args = p.Draft.Args ?? Array.Empty<string>(),
+        url = p.Draft.Url,
+        neededCredentials = p.NeededCredentials,
+    };
+
+    // The (system-mode) execute prompt tells the agent: to add an external MCP server, end its final
+    // message with `MCP_ADD:` followed by a JSON object (name, transport, command/args | url,
+    // needsCredentials[]) — never try to register it itself (it's sandboxed out). We parse the block,
+    // strip any secrets (the human enters those at the gate), and park for confirmation.
+    private static readonly System.Text.RegularExpressions.Regex McpAddRe = new(
+        @"^[ \t>*_-]*MCP_ADD:",
+        System.Text.RegularExpressions.RegexOptions.Multiline
+        | System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool TryExtractMcpAdd(string? finalText, out McpProposal proposal)
+    {
+        proposal = null!;
+        if (string.IsNullOrWhiteSpace(finalText)) return false;
+        var m = McpAddRe.Match(finalText);
+        if (!m.Success) return false;
+        var json = ExtractFirstJsonObject(finalText, m.Index + m.Length);
+        if (json is null) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            string? Str(string k) => r.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+            string[] Arr(string k) => r.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Array
+                ? v.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToArray()
+                : Array.Empty<string>();
+            Dictionary<string, string> Obj(string k)
+            {
+                var map = new Dictionary<string, string>(StringComparer.Ordinal);
+                if (r.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Object)
+                    foreach (var p in v.EnumerateObject())
+                        if (p.Value.ValueKind == JsonValueKind.String) map[p.Name] = p.Value.GetString()!;
+                return map;
+            }
+
+            var transport = Str("transport") == McpTransportKind.Http ? McpTransportKind.Http : McpTransportKind.Stdio;
+            var draft = new McpAddRequest(
+                Name: Str("name"),
+                Transport: transport,
+                Command: Str("command"),
+                Args: Arr("args"),
+                Env: Obj("env"),
+                Url: Str("url"),
+                Headers: Obj("headers"),
+                Secrets: null,               // secrets NEVER come from the agent — human enters at the gate
+                Enabled: true);
+            proposal = new McpProposal(draft, Arr("needsCredentials"));
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>First balanced <c>{...}</c> block at/after <paramref name="from"/>, string-aware.</summary>
+    private static string? ExtractFirstJsonObject(string text, int from)
+    {
+        var start = text.IndexOf('{', Math.Clamp(from, 0, text.Length));
+        if (start < 0) return null;
+        int depth = 0;
+        bool inStr = false, esc = false;
+        for (var i = start; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (inStr)
+            {
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') inStr = false;
+            }
+            else if (c == '"') inStr = true;
+            else if (c == '{') depth++;
+            else if (c == '}' && --depth == 0) return text.Substring(start, i - start + 1);
+        }
+        return null;
     }
 
     // --- force stop ---------------------------------------------------------------------

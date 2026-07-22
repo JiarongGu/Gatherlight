@@ -21,6 +21,8 @@ import {
   refinePlan,
   refineDiff,
   respondInput,
+  approveMcp,
+  rejectMcp,
   getActiveSession,
   cancelChat,
   uploadFiles
@@ -29,6 +31,7 @@ import {
   type AgentEvent,
   type Phase,
   type ReviewPayload,
+  type McpProposalView,
   type UploadedFile,
   PHASE_LABELS
 } from '@/lib/chatTypes';
@@ -52,6 +55,8 @@ interface ChatState {
   inputQuestion: string | null;
   // Discrete choices the agent offered (OPTION: lines) — rendered as click-to-select buttons.
   inputOptions: string[];
+  // The agent's proposal to add an external MCP server (phase 'awaiting-mcp-approval').
+  mcpProposal: McpProposalView | null;
   commitSha: string | null;
   error: string | null;
   busy: boolean; // an approve/reject request is in flight
@@ -74,6 +79,7 @@ const initialState: ChatState = {
   review: null,
   inputQuestion: null,
   inputOptions: [],
+  mcpProposal: null,
   commitSha: null,
   error: null,
   busy: false,
@@ -126,6 +132,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         review: null,
         inputQuestion: null,
         inputOptions: [],
+        mcpProposal: null,
         commitSha: null,
         error: null,
         busy: false,
@@ -151,6 +158,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         review: null,
         inputQuestion: null,
         inputOptions: [],
+        mcpProposal: null,
         error: null,
         busy: false
       };
@@ -247,6 +255,9 @@ function reducer(state: ChatState, action: Action): ChatState {
             next.inputQuestion = d?.question ?? null;
             next.inputOptions = d?.options ?? [];
           }
+          if (phase === 'awaiting-mcp-approval') {
+            next.mcpProposal = (ev.data as McpProposalView) ?? null;
+          }
           if (phase === 'committed' && ev.data) {
             next.commitSha = (ev.data as { sha?: string }).sha ?? null;
           }
@@ -290,6 +301,7 @@ const STEP_ORDER: Record<string, number> = {
   validating: 2,
   'awaiting-diff-approval': 3,
   'awaiting-input': 2,
+  'awaiting-mcp-approval': 2,
   committing: 4,
   committed: 4
 };
@@ -321,6 +333,89 @@ function UsageLine({ usage, live }: { usage: ChatState['usage']; live: ChatState
     </Tooltip>
   );
 }
+
+/** The awaiting-mcp-approval gate: show the CONCRETE launch spec (server-rendered, no secrets) +
+ *  one masked field per needed credential, and confirm/decline. The command/url is display-only —
+ *  approval sends only the credential values; the server uses its own stored draft for what runs. */
+const McpApprovalCard = memo(function McpApprovalCard({
+  proposal,
+  busy,
+  cancelling,
+  onApprove,
+  onReject,
+  onCancel
+}: {
+  proposal: McpProposalView;
+  busy: boolean;
+  cancelling: boolean;
+  onApprove: (secrets: Record<string, string>) => void;
+  onReject: () => void;
+  onCancel: () => void;
+}) {
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const needed = proposal.neededCredentials ?? [];
+  const launch =
+    proposal.transport === 'http'
+      ? proposal.url ?? ''
+      : [proposal.command, ...(proposal.args ?? [])].filter(Boolean).join(' ');
+  const missing = needed.some((k) => !(secrets[k]?.trim()));
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      style={{ margin: '8px 0' }}
+      message={`AI 想添加外部 MCP 服务:${proposal.name}`}
+      description={
+        <div>
+          <div style={{ marginBottom: 6, opacity: 0.85 }}>
+            连接方式(<code>{proposal.transport}</code>)—— 请核对下面将要运行的命令后再确认:
+          </div>
+          <pre
+            style={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              background: 'rgba(0,0,0,0.05)',
+              padding: 8,
+              borderRadius: 4,
+              margin: '0 0 8px',
+              fontSize: 12
+            }}
+          >
+            {launch}
+          </pre>
+          {needed.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ marginBottom: 4, opacity: 0.85 }}>需要你提供登录凭据(仅存本机,不写入对话记录):</div>
+              {needed.map((k) => (
+                <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ minWidth: 120, fontFamily: 'monospace', fontSize: 12 }}>{k}</span>
+                  <Input.Password
+                    size="small"
+                    placeholder={`输入 ${k}`}
+                    value={secrets[k] ?? ''}
+                    onChange={(e) => setSecrets((s) => ({ ...s, [k]: e.target.value }))}
+                    style={{ flex: 1 }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+            <Button type="primary" loading={busy} disabled={missing} onClick={() => onApprove(secrets)}>
+              批准并连接
+            </Button>
+            <Button danger loading={busy} onClick={onReject}>
+              拒绝
+            </Button>
+            <Button size="small" danger loading={cancelling} onClick={onCancel} style={{ marginLeft: 'auto' }}>
+              放弃任务
+            </Button>
+          </div>
+        </div>
+      }
+    />
+  );
+});
 
 export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefillNonce?: number }) {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -674,6 +769,17 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
                 </Button>
               </div>
             }
+          />
+        )}
+
+        {state.phase === 'awaiting-mcp-approval' && state.mcpProposal && (
+          <McpApprovalCard
+            proposal={state.mcpProposal}
+            busy={state.busy}
+            cancelling={cancelling}
+            onApprove={(secrets) => act((id) => approveMcp(id, secrets))}
+            onReject={() => act(rejectMcp)}
+            onCancel={() => void cancel()}
           />
         )}
 

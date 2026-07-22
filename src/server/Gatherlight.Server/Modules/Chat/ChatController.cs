@@ -8,6 +8,7 @@ namespace Gatherlight.Server.Modules.Chat;
 
 public sealed record StartChatRequest(string? Message, List<string>? Attachments, string? Mode);
 public sealed record RefineRequest(string? Message);
+public sealed record McpApproveRequest(Dictionary<string, string>? Secrets);
 
 [ApiController]
 public sealed class ChatController : ControllerBase
@@ -77,6 +78,7 @@ public sealed class ChatController : ControllerBase
             userMessage = s.UserMessage,
             plan = s.PlanText.Length > 0 ? s.PlanText : null,
             review = s.Review,
+            mcpProposal = s.McpProposal is null ? null : ChatSessionService.McpProposalView(s.McpProposal),
             commitSha = s.CommitSha,
             error = s.Error,
         });
@@ -202,6 +204,19 @@ public sealed class ChatController : ControllerBase
         if (message.Length == 0) return BadRequest(new { error = "message is required" });
         return FireAndAck(() => _ = _chat.RespondInputAsync(id, message), id, ChatPhase.AwaitingInput);
     }
+
+    // --- gate: approve/reject adding an external MCP server (awaiting-mcp-approval) ------
+
+    /// <summary>Approve the agent's MCP-server proposal. Optional <c>secrets</c> are the credential
+    /// values the human entered at the gate (keyed by the proposal's <c>neededCredentials</c>); they
+    /// go straight to the provision service and are never echoed back.</summary>
+    [HttpPost("api/chat/{id}/mcp/approve")]
+    public IActionResult ApproveMcp(string id, [FromBody] McpApproveRequest? req) =>
+        FireAndAck(() => _ = _chat.ApproveMcpAsync(id, req?.Secrets), id, ChatPhase.AwaitingMcpApproval);
+
+    [HttpPost("api/chat/{id}/mcp/reject")]
+    public IActionResult RejectMcp(string id) =>
+        FireAndAck(() => _ = _chat.RejectMcpAsync(id), id, ChatPhase.AwaitingMcpApproval);
 
     /// <summary>Force-stop — valid from any non-terminal phase.</summary>
     [HttpPost("api/chat/{id}/cancel")]

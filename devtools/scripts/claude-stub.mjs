@@ -77,6 +77,7 @@ if (readOnly) {
   const trig = userReq.includes('PHANTOMTEST') ? ' [TRIG:PHANTOM]'
     : userReq.includes('NEEDINPUTPLAINTEST') ? ' [TRIG:NEEDINPUTPLAIN]'
     : userReq.includes('NEEDINPUTTEST') ? ' [TRIG:NEEDINPUT]'
+    : userReq.includes('MCPADDTEST') ? ' [TRIG:MCPADD]'
     : userReq.includes('NOOPTEST') ? ' [TRIG:NOOP]' : '';
   const planText = systemMode ? text : text + trig;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
@@ -87,6 +88,18 @@ if (readOnly) {
   // no trigger tag) → fall through to the normal write. That models "agent paused → human replied".
   if (prompt.includes('[TRIG:NEEDINPUT]') && !prompt.includes("HUMAN'S FEEDBACK")) {
     done('先完成前面几项。\n\nNEEDS_INPUT: 是否也要修改 .claude/mcp.json?\nOPTION: 是,一起改\nOPTION: 否,保持不变');
+    process.exit(0);
+  }
+  // MCP_ADD proposal (e2e-p32): on the FIRST execute the plan carries [TRIG:MCPADD] → propose adding an
+  // external MCP server (the local stub server, so approval actually connects) needing a STUB_TOKEN
+  // credential, and write NOTHING → the flow parks at awaiting-mcp-approval. The resume path (approve)
+  // doesn't re-run the agent (the server calls the provision service directly).
+  if (prompt.includes('[TRIG:MCPADD]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    const stubServer = path.join(path.dirname(process.argv[1]), 'mcp-stub-server.mjs');
+    const proposal = JSON.stringify({
+      name: 'Stub MCP', transport: 'stdio', command: 'node', args: [stubServer], needsCredentials: ['STUB_TOKEN'],
+    });
+    done(`我建议接入一个外部 MCP 服务来获取信息。\n\nMCP_ADD:\n${proposal}`);
     process.exit(0);
   }
   // NOOP (e2e-p28): make NO change and ask nothing → empty diff → the flow ends 'rejected'. A pure

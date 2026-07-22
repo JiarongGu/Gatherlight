@@ -10,6 +10,7 @@ export type Phase =
   | 'validating'
   | 'awaiting-diff-approval'
   | 'awaiting-input'
+  | 'awaiting-mcp-approval'
   | 'committing'
   | 'committed'
   | 'rejected'
@@ -74,6 +75,20 @@ export interface ReviewPayload {
   build?: BuildResult;
 }
 
+/**
+ * The concrete, secret-free spec shown at the awaiting-mcp-approval gate. Rendered by the server
+ * from the agent's parsed proposal — the human confirms the exact command/url before anything
+ * connects, and fills a value for each `neededCredentials` key (which never crosses the wire back).
+ */
+export interface McpProposalView {
+  name: string;
+  transport: string;
+  command?: string | null;
+  args: string[];
+  url?: string | null;
+  neededCredentials: string[];
+}
+
 export const PHASE_LABELS: Record<Phase, string> = {
   idle: '待命',
   planning: '调研拟定计划',
@@ -83,6 +98,7 @@ export const PHASE_LABELS: Record<Phase, string> = {
   validating: '校验智库变更',
   'awaiting-diff-approval': '待审阅改动',
   'awaiting-input': '待你回复',
+  'awaiting-mcp-approval': '待确认 MCP 服务',
   committing: '提交中',
   committed: '已提交',
   rejected: '已撤销',

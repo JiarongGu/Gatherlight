@@ -39,7 +39,7 @@ export function Manage() {
   const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
   const [uptime, setUptime] = useState('0s');
   const [accessMode, setAccessMode] = useState<'local' | 'lan' | 'wan' | null>(null);
-  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'jobs' | 'resources' | 'logs' | 'settings'>('overview');
+  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'jobs' | 'mcp' | 'resources' | 'logs' | 'settings'>('overview');
   const [needsSetup, setNeedsSetup] = useState(false);
   const [info, setInfo] = useState<{ serverName?: string; dataRoot?: string; version?: string }>({});
   const started = useRef(Date.now());
@@ -243,6 +243,7 @@ export function Manage() {
           <button className={`mng-tab${view === 'eval' ? ' on' : ''}`} onClick={() => setView('eval')}>对话评估 · Eval</button>
           <button className={`mng-tab${view === 'cortex' ? ' on' : ''}`} onClick={() => setView('cortex')}>校准 · Cortex</button>
           <button className={`mng-tab${view === 'jobs' ? ' on' : ''}`} onClick={() => setView('jobs')}>自动化 · Jobs</button>
+          <button className={`mng-tab${view === 'mcp' ? ' on' : ''}`} onClick={() => setView('mcp')}>MCP 服务 · MCP</button>
           <button className={`mng-tab${view === 'resources' ? ' on' : ''}`} onClick={() => setView('resources')}>资源 · Resources</button>
           <button className={`mng-tab${view === 'logs' ? ' on' : ''}`} onClick={() => setView('logs')}>日志 · Logs</button>
           <button className={`mng-tab${view === 'settings' ? ' on' : ''}`} onClick={() => setView('settings')}>设置 · Settings</button>
@@ -252,6 +253,7 @@ export function Manage() {
       {view === 'eval' && <EvalView />}
       {view === 'cortex' && <CortexView toast={toast} />}
       {view === 'jobs' && <JobsView toast={toast} confirm={confirm} />}
+      {view === 'mcp' && <McpView toast={toast} confirm={confirm} />}
       {view === 'resources' && <ResourcesView toast={toast} onRestart={restart} inHost={inHost} />}
       {view === 'logs' && <LogsView inHost={inHost} />}
       {view === 'settings' && <SettingsView inHost={inHost} toast={toast} onRestart={restart} />}
@@ -1735,6 +1737,113 @@ function JobsView({ toast, confirm }: {
               )}
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface McpServer {
+  id: string;
+  name: string;
+  transport: string;
+  command?: string | null;
+  args: string[];
+  url?: string | null;
+  enabled: boolean;
+  status: string;
+  lastError?: string | null;
+  hasSecrets: boolean;
+  tools: { name: string; description: string }[];
+}
+
+const MCP_STATUS: Record<string, { label: string; color: string }> = {
+  connected: { label: '已连接', color: '#2e7d32' },
+  error: { label: '连接失败', color: '#c62828' },
+  disabled: { label: '已停用', color: '#888' },
+  pending: { label: '待连接', color: '#b26a00' }
+};
+
+// Minimal, read-mostly management of external MCP servers. Adding is deliberately NOT here — it
+// runs through the chat confirmation gate (human confirms the concrete spec + enters credentials).
+// This panel lists what's configured, its live status + proxied tools, and lets you disable/remove.
+function McpView({ toast, confirm }: {
+  toast: (t: string, k?: 'ok' | 'err') => void;
+  confirm: (t: string, o?: { danger?: boolean; okText?: string }) => Promise<boolean>;
+}) {
+  const [servers, setServers] = useState<McpServer[] | null>(null);
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch('/api/manage/mcp-servers');
+      setServers(await r.json());
+    } catch {
+      setServers([]);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const setEnabled = async (s: McpServer, enabled: boolean) => {
+    setServers((prev) => prev?.map((x) => (x.id === s.id ? { ...x, enabled } : x)) ?? prev);
+    try {
+      const r = await fetch(`/api/manage/mcp-servers/${s.id}/enabled`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled })
+      });
+      if (!r.ok) throw new Error(String(r.status));
+      toast(enabled ? '已启用' : '已停用');
+    } catch (e) {
+      toast('操作失败:' + (e instanceof Error ? e.message : String(e)), 'err');
+    }
+    load();
+  };
+  const del = async (s: McpServer) => {
+    if (!(await confirm(`移除 MCP 服务「${s.name}」?它的工具将不再可用。`, { danger: true, okText: '移除' }))) return;
+    try {
+      await fetch(`/api/manage/mcp-servers/${s.id}`, { method: 'DELETE' });
+      toast('已移除');
+    } catch (e) {
+      toast('移除失败:' + (e instanceof Error ? e.message : String(e)), 'err');
+    }
+    load();
+  };
+
+  if (servers === null) return <div className="eval-empty">加载中…</div>;
+
+  return (
+    <div className="mng-view mcp">
+      <div className="set-lead">
+        外部 MCP 服务:Gatherlight 连接到这些服务,并把它们的工具提供给 AI 使用。
+        <b>要新增,请在规划界面对 AI 说「帮我接入 …… MCP」</b> —— 会弹出确认卡片,核对启动命令、填入登录凭据后生效(凭据仅存本机,不写入对话记录)。
+      </div>
+      {servers.length === 0 ? (
+        <div className="eval-empty">还没有外部 MCP 服务。去规划界面让 AI 帮你接入一个。</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
+          {servers.map((s) => {
+            const st = MCP_STATUS[s.status] ?? { label: s.status, color: '#888' };
+            const launch = s.transport === 'http' ? (s.url ?? '') : [s.command, ...(s.args ?? [])].filter(Boolean).join(' ');
+            return (
+              <div key={s.id} style={{ border: '1px solid rgba(0,0,0,0.12)', borderRadius: 6, padding: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <b>{s.name}</b>
+                  <span style={{ color: st.color, fontSize: 12, fontWeight: 600 }}>● {st.label}</span>
+                  <span style={{ fontSize: 12, opacity: 0.7, fontFamily: 'monospace' }}>{s.transport}</span>
+                  {s.hasSecrets && <span style={{ fontSize: 12, opacity: 0.7 }}>🔑 已存凭据</span>}
+                  <span style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <label className="set-check" style={{ margin: 0 }}>
+                      <input type="checkbox" checked={s.enabled} onChange={(e) => setEnabled(s, e.target.checked)} />
+                      {s.enabled ? '启用' : '停用'}
+                    </label>
+                    <button className="cx-btn" onClick={() => del(s)}>移除</button>
+                  </span>
+                </div>
+                <code style={{ display: 'block', marginTop: 6, fontSize: 12, wordBreak: 'break-all', opacity: 0.85 }}>{launch}</code>
+                {s.lastError && <div style={{ marginTop: 6, fontSize: 12, color: '#c62828' }}>⚠️ {s.lastError}</div>}
+                {s.tools.length > 0 && (
+                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>工具:{s.tools.map((t) => t.name).join('、')}</div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
