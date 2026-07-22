@@ -30,6 +30,9 @@ public static class ChatPhase
     // The agent proposed adding an external MCP server; parked for the human to confirm the CONCRETE
     // spec (+ enter any credentials) before anything connects. NON-terminal, holds the agent slot.
     public const string AwaitingMcpApproval = "awaiting-mcp-approval";
+    // The agent hit a login-walled MCP server and asked for interactive login; a QR/URL is shown in
+    // chat, and the agent resumes automatically once the human completes the scan. NON-terminal.
+    public const string AwaitingLogin = "awaiting-login";
     public const string Committing = "committing";
     public const string Building = "building";
     public const string Committed = "committed";
@@ -72,6 +75,9 @@ public sealed class ChatSession
     /// the concrete draft the human confirms. Cleared on approve/reject. Never carries secrets — those
     /// are supplied by the human at the gate and go straight to the provision service.</summary>
     public McpProposal? McpProposal { get; set; }
+    /// <summary>Set when the agent asked to log into an MCP server (phase awaiting-login): which
+    /// server + the QR/URL challenge to show. Cleared when login completes and the agent resumes.</summary>
+    public McpLoginPrompt? McpLogin { get; set; }
     /// <summary>Sequential persistence chain so DB writes keep event order without
     /// blocking the emit path.</summary>
     public Task PersistChain = Task.CompletedTask;
@@ -81,6 +87,10 @@ public sealed class ChatSession
 /// <c>MCP_ADD:</c> marker). <see cref="NeededCredentials"/> are the credential KEYS the human must
 /// fill in at the confirmation gate (e.g. <c>XHS_COOKIE</c>); their values never appear here.</summary>
 public sealed record McpProposal(McpAddRequest Draft, IReadOnlyList<string> NeededCredentials);
+
+/// <summary>The interactive-login prompt shown in chat when the agent hit a login-walled server:
+/// which server, and the QR/URL challenge from its login tool.</summary>
+public sealed record McpLoginPrompt(string ServerId, string ServerName, McpLoginChallenge Challenge);
 
 /// <summary>
 /// Holds chat sessions and drives the two-gate flow (plan → human approve → execute →
@@ -115,6 +125,8 @@ public sealed class ChatSessionService
     private readonly Modules.Scoring.Services.IScoringService _scoring;
     private readonly IAgentGate _gate;
     private readonly IMcpProvisionService _mcpProvision;
+    private readonly IMcpLoginService _mcpLogin;
+    private readonly IMcpServerStore _mcpStore;
     private readonly ILogger<ChatSessionService> _log;
 
     private const int MaxBuildRepair = 2;
@@ -126,10 +138,13 @@ public sealed class ChatSessionService
         DataWriteLock writeLock, IToolRegistry tools, IZhikuRouter router,
         CodeRepoGit codeGit, BuildVerifyService buildVerify, GatherlightServerOptions options,
         Modules.Scoring.Services.IScoringService scoring, IAgentGate gate,
-        IMcpProvisionService mcpProvision, ILogger<ChatSessionService> log)
+        IMcpProvisionService mcpProvision, IMcpLoginService mcpLogin, IMcpServerStore mcpStore,
+        ILogger<ChatSessionService> log)
     {
         _gate = gate;
         _mcpProvision = mcpProvision;
+        _mcpLogin = mcpLogin;
+        _mcpStore = mcpStore;
         _scoring = scoring;
         _router = router;
         _codeGit = codeGit;
@@ -685,6 +700,13 @@ public sealed class ChatSessionService
             EnterAwaitingMcpApproval(s, proposal);
             return;
         }
+        // The agent hit a login-walled server and asked for interactive login — show the QR/URL in
+        // chat and pause; the agent resumes once the human completes the scan (login is LLM-decided).
+        if (TryExtractLoginRequired(res.FinalText, out var serverRef))
+        {
+            await EnterAwaitingLoginAsync(s, serverRef);
+            return;
+        }
         if (TryExtractNeedsInput(res.FinalText, out var question, out var options))
         {
             EnterAwaitingInput(s, question, options);
@@ -879,6 +901,9 @@ public sealed class ChatSessionService
                 Url: Str("url"),
                 Headers: Obj("headers"),
                 Secrets: null,               // secrets NEVER come from the agent — human enters at the gate
+                LoginKind: Str("loginKind"),
+                LoginTool: Str("loginTool"),
+                LoginCheckTool: Str("loginCheckTool"),
                 Enabled: true);
             proposal = new McpProposal(draft, Arr("needsCredentials"));
             return true;
@@ -907,6 +932,92 @@ public sealed class ChatSessionService
             else if (c == '}' && --depth == 0) return text.Substring(start, i - start + 1);
         }
         return null;
+    }
+
+    // --- gate: interactive login for an MCP server (awaiting-login) -------------------------
+
+    /// <summary>The human finished the scan → verify the server reports logged-in, then resume the
+    /// agent from where it paused (it retries the login-walled call, now authenticated).</summary>
+    public async Task ContinueLoginAsync(string id)
+    {
+        var s = RequirePhase(id, ChatPhase.AwaitingLogin);
+        var prompt = s.McpLogin ?? throw new InvalidOperationException("NO_LOGIN");
+        var status = await _mcpLogin.StatusAsync(prompt.ServerId, s.Abort?.Token ?? default);
+        if (!status.LoggedIn)
+        {
+            Emit(s, new AgentEvent { Kind = "notice", Text = "还没检测到登录成功,请完成扫码后再继续。" });
+            return;
+        }
+        s.McpLogin = null;
+        await ContinueExecuteAsync(s, $"我已登录「{prompt.ServerName}」,请继续之前的操作。", "✅ 登录成功,正在继续…");
+    }
+
+    // Park showing the login QR/URL. Non-terminal (holds the agent slot); the client polls the
+    // server's login status and calls ContinueLogin once logged in.
+    private async Task EnterAwaitingLoginAsync(ChatSession s, string serverRef)
+    {
+        var cfg = await ResolveServerAsync(serverRef);
+        if (cfg is null)
+        {
+            Emit(s, new AgentEvent { Kind = "notice", Text = $"⚠️ 找不到要登录的 MCP 服务「{serverRef}」。" });
+            await PresentDiffAsync(s);
+            return;
+        }
+        try
+        {
+            var challenge = await _mcpLogin.StartAsync(cfg.Id, s.Abort?.Token ?? default);
+            s.McpLogin = new McpLoginPrompt(cfg.Id, cfg.Name, challenge);
+            Emit(s, new AgentEvent
+            {
+                Kind = "notice",
+                Text = $"🔐 「{cfg.Name}」需要登录 — {challenge.Message}。登录完成后我会自动继续。",
+            });
+            SetPhase(s, ChatPhase.AwaitingLogin, McpLoginView(s.McpLogin));
+        }
+        catch (Exception ex)
+        {
+            Emit(s, new AgentEvent { Kind = "error", Text = $"启动登录失败:{ex.Message}" });
+            await PresentDiffAsync(s);
+        }
+    }
+
+    private async Task<McpServerConfig?> ResolveServerAsync(string serverRef)
+    {
+        var byId = await _mcpStore.GetAsync(serverRef.Trim());
+        if (byId is not null) return byId;
+        var all = await _mcpStore.ListAsync();
+        return all.FirstOrDefault(c => string.Equals(c.Name, serverRef.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>The QR/URL challenge shown in chat (secret-free — it's just a login prompt).</summary>
+    internal static object McpLoginView(McpLoginPrompt p) => new
+    {
+        serverId = p.ServerId,
+        serverName = p.ServerName,
+        kind = p.Challenge.Kind,
+        imageDataUri = p.Challenge.ImageDataUri,
+        url = p.Challenge.Url,
+        text = p.Challenge.Text,
+        message = p.Challenge.Message,
+    };
+
+    // The execute prompt tells the agent: when a server needs an interactive login before you can use
+    // it, end your message with `LOGIN_REQUIRED: <server id or name>` — the app shows the QR/URL and
+    // resumes you once the human has logged in.
+    private static readonly System.Text.RegularExpressions.Regex LoginRequiredRe = new(
+        @"^[ \t>*_-]*LOGIN_REQUIRED:[ \t]*(?<s>.+?)[ \t]*$",
+        System.Text.RegularExpressions.RegexOptions.Multiline
+        | System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool TryExtractLoginRequired(string? finalText, out string serverRef)
+    {
+        serverRef = "";
+        if (string.IsNullOrWhiteSpace(finalText)) return false;
+        var m = LoginRequiredRe.Match(finalText);
+        if (!m.Success) return false;
+        serverRef = m.Groups["s"].Value.Trim();
+        return serverRef.Length > 0;
     }
 
     // --- force stop ---------------------------------------------------------------------

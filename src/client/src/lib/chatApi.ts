@@ -59,6 +59,11 @@ export const approveMcp = (id: string, secrets: Record<string, string>) =>
   post(`/api/chat/${id}/mcp/approve`, { secrets });
 export const rejectMcp = (id: string) => post(`/api/chat/${id}/mcp/reject`);
 
+// Agent-driven login (awaiting-login): poll the server's login status, then resume the agent.
+export const getMcpLoginStatus = (serverId: string) =>
+  get<{ loggedIn: boolean; detail: string }>(`/api/manage/mcp-servers/${serverId}/login/status`);
+export const continueLogin = (id: string) => post(`/api/chat/${id}/login/continue`);
+
 /**
  * Subscribe to a session's event stream. Returns a close() fn.
  * Reconnects are handled by the browser's EventSource automatically: each frame carries an `id:`,

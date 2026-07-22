@@ -237,6 +237,7 @@ public static class GatherlightApp
             .AddHostedService(sp => sp.GetRequiredService<Modules.McpClient.Services.McpConnectionManager>())
             .AddSingleton<Modules.McpClient.Services.IExternalToolProvider, Modules.McpClient.Services.McpProxyToolProvider>()
             .AddSingleton<Modules.McpClient.Services.IMcpProvisionService, Modules.McpClient.Services.McpProvisionService>()
+            .AddSingleton<Modules.McpClient.Services.IMcpLoginService, Modules.McpClient.Services.McpLoginService>()
             .AddSingleton<IToolRegistry, ToolRegistry>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>()

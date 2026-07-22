@@ -16,7 +16,18 @@ const TOOLS = [
   { name: 'greet', description: 'Greet a name', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
   { name: 'env_echo', description: 'Return an env var value', inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } },
   { name: 'header_echo', description: 'Return a request header value', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+  // Interactive-login simulation (generic QR-login flow, e2e-p33): get_login_qrcode returns an image
+  // (QR), check_login_status flips to logged-in once the QR has been "shown + scanned".
+  { name: 'get_login_qrcode', description: 'Return a QR image to scan for login', inputSchema: { type: 'object', properties: {} } },
+  { name: 'check_login_status', description: 'Whether login has completed', inputSchema: { type: 'object', properties: {} } },
 ];
+
+// A small PNG QR-ish image content (a black square) — stands in for the login QR.
+const FAKE_QR_PNG = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAHElEQVR4nGNgYPjPQAz+P0oNA0PDqNRQ1AwAAObABQVOW7WYAAAAAElFTkSuQmCC';
+// Simulate the phone scan with a short delay: check_login_status reports logged-in only a few
+// seconds after the QR was requested — long enough for the UI to render the QR first.
+let qrShownAt = 0;
+const LOGIN_DELAY_MS = 3000;
 
 const text = (s) => ({ content: [{ type: 'text', text: String(s ?? '') }], isError: false });
 
@@ -35,6 +46,17 @@ function handle(method, params, headers) {
       if (name === 'greet') return text(`hi ${a.name}`);
       if (name === 'env_echo') return text(process.env[a.key] ?? '');
       if (name === 'header_echo') return text(headers[String(a.name || '').toLowerCase()] ?? '');
+      if (name === 'get_login_qrcode') {
+        qrShownAt = Date.now(); // start the simulated scan window
+        return { content: [
+          { type: 'image', data: FAKE_QR_PNG, mimeType: 'image/png' },
+          { type: 'text', text: '请用手机扫码登录' },
+        ], isError: false };
+      }
+      if (name === 'check_login_status') {
+        const loggedIn = qrShownAt > 0 && Date.now() - qrShownAt > LOGIN_DELAY_MS;
+        return text(loggedIn ? '已登录 logged_in' : '未登录（请扫码）');
+      }
       return { content: [{ type: 'text', text: `unknown tool: ${name}` }], isError: true };
     }
     default:

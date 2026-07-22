@@ -79,6 +79,7 @@ public sealed class ChatController : ControllerBase
             plan = s.PlanText.Length > 0 ? s.PlanText : null,
             review = s.Review,
             mcpProposal = s.McpProposal is null ? null : ChatSessionService.McpProposalView(s.McpProposal),
+            mcpLogin = s.McpLogin is null ? null : ChatSessionService.McpLoginView(s.McpLogin),
             commitSha = s.CommitSha,
             error = s.Error,
         });
@@ -217,6 +218,12 @@ public sealed class ChatController : ControllerBase
     [HttpPost("api/chat/{id}/mcp/reject")]
     public IActionResult RejectMcp(string id) =>
         FireAndAck(() => _ = _chat.RejectMcpAsync(id), id, ChatPhase.AwaitingMcpApproval);
+
+    /// <summary>The human finished the interactive login the agent asked for (awaiting-login) — resume
+    /// the agent. Idempotent-ish: if the server doesn't yet report logged-in, it just nudges.</summary>
+    [HttpPost("api/chat/{id}/login/continue")]
+    public IActionResult ContinueLogin(string id) =>
+        FireAndAck(() => _ = _chat.ContinueLoginAsync(id), id, ChatPhase.AwaitingLogin);
 
     /// <summary>Force-stop — valid from any non-terminal phase.</summary>
     [HttpPost("api/chat/{id}/cancel")]

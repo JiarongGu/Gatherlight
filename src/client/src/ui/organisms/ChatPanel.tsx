@@ -23,6 +23,8 @@ import {
   respondInput,
   approveMcp,
   rejectMcp,
+  getMcpLoginStatus,
+  continueLogin,
   getActiveSession,
   cancelChat,
   uploadFiles
@@ -32,6 +34,7 @@ import {
   type Phase,
   type ReviewPayload,
   type McpProposalView,
+  type McpLoginView,
   type UploadedFile,
   PHASE_LABELS
 } from '@/lib/chatTypes';
@@ -57,6 +60,8 @@ interface ChatState {
   inputOptions: string[];
   // The agent's proposal to add an external MCP server (phase 'awaiting-mcp-approval').
   mcpProposal: McpProposalView | null;
+  // The agent's request to log into an MCP server (phase 'awaiting-login').
+  mcpLogin: McpLoginView | null;
   commitSha: string | null;
   error: string | null;
   busy: boolean; // an approve/reject request is in flight
@@ -80,6 +85,7 @@ const initialState: ChatState = {
   inputQuestion: null,
   inputOptions: [],
   mcpProposal: null,
+  mcpLogin: null,
   commitSha: null,
   error: null,
   busy: false,
@@ -133,6 +139,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         inputQuestion: null,
         inputOptions: [],
         mcpProposal: null,
+        mcpLogin: null,
         commitSha: null,
         error: null,
         busy: false,
@@ -159,6 +166,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         inputQuestion: null,
         inputOptions: [],
         mcpProposal: null,
+        mcpLogin: null,
         error: null,
         busy: false
       };
@@ -258,6 +266,9 @@ function reducer(state: ChatState, action: Action): ChatState {
           if (phase === 'awaiting-mcp-approval') {
             next.mcpProposal = (ev.data as McpProposalView) ?? null;
           }
+          if (phase === 'awaiting-login') {
+            next.mcpLogin = (ev.data as McpLoginView) ?? null;
+          }
           if (phase === 'committed' && ev.data) {
             next.commitSha = (ev.data as { sha?: string }).sha ?? null;
           }
@@ -302,6 +313,7 @@ const STEP_ORDER: Record<string, number> = {
   'awaiting-diff-approval': 3,
   'awaiting-input': 2,
   'awaiting-mcp-approval': 2,
+  'awaiting-login': 2,
   committing: 4,
   committed: 4
 };
@@ -411,6 +423,76 @@ const McpApprovalCard = memo(function McpApprovalCard({
               放弃任务
             </Button>
           </div>
+        </div>
+      }
+    />
+  );
+});
+
+/** The awaiting-login gate: the agent decided it needs to log into an MCP server. Render the QR/URL
+ *  the server handed back, poll its login status, and resume the agent automatically once logged in.
+ *  Reuses the same generic login mechanism as the /manage 登录 button — login is LLM-decided here. */
+const McpLoginCard = memo(function McpLoginCard({
+  login,
+  sessionId,
+  cancelling,
+  onCancel
+}: {
+  login: McpLoginView;
+  sessionId: string | null;
+  cancelling: boolean;
+  onCancel: () => void;
+}) {
+  const [done, setDone] = useState(false);
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (done) return;
+    let stop = false;
+    const iv = setInterval(async () => {
+      try {
+        const st = await getMcpLoginStatus(login.serverId);
+        if (!stop && st.loggedIn && !resumed.current) {
+          resumed.current = true;
+          setDone(true);
+          if (sessionId) await continueLogin(sessionId); // resume the paused agent
+        }
+      } catch { /* keep polling */ }
+    }, 2000);
+    return () => { stop = true; clearInterval(iv); };
+  }, [login.serverId, sessionId, done]);
+
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      style={{ margin: '8px 0' }}
+      message={`需要登录:${login.serverName}`}
+      description={
+        <div>
+          {done ? (
+            <div style={{ color: '#2e7d32', padding: '8px 0' }}>✅ 已登录,正在继续…</div>
+          ) : (
+            <>
+              {login.imageDataUri && (
+                <img
+                  src={login.imageDataUri}
+                  alt="登录二维码"
+                  style={{ width: 200, height: 200, imageRendering: 'pixelated', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 6, display: 'block', marginBottom: 8 }}
+                />
+              )}
+              {login.url && (
+                <div style={{ marginBottom: 8, wordBreak: 'break-all' }}>
+                  <a href={login.url} target="_blank" rel="noreferrer">{login.url}</a>
+                </div>
+              )}
+              <div style={{ opacity: 0.85 }}>{login.message}</div>
+              {login.text && <div style={{ marginTop: 4, fontSize: 12, opacity: 0.7, whiteSpace: 'pre-wrap' }}>{login.text}</div>}
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>登录完成后我会自动继续(每 2 秒检测)。</div>
+              <Button size="small" danger loading={cancelling} onClick={onCancel} style={{ marginTop: 8 }}>
+                放弃任务
+              </Button>
+            </>
+          )}
         </div>
       }
     />
@@ -779,6 +861,15 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
             cancelling={cancelling}
             onApprove={(secrets) => act((id) => approveMcp(id, secrets))}
             onReject={() => act(rejectMcp)}
+            onCancel={() => void cancel()}
+          />
+        )}
+
+        {state.phase === 'awaiting-login' && state.mcpLogin && (
+          <McpLoginCard
+            login={state.mcpLogin}
+            sessionId={state.sessionId}
+            cancelling={cancelling}
             onCancel={() => void cancel()}
           />
         )}

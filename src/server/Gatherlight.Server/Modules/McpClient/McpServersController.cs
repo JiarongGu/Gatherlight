@@ -19,8 +19,13 @@ public sealed record SetEnabledRequest(bool Enabled);
 public sealed class McpServersController : ControllerBase
 {
     private readonly IMcpProvisionService _provision;
+    private readonly IMcpLoginService _login;
 
-    public McpServersController(IMcpProvisionService provision) => _provision = provision;
+    public McpServersController(IMcpProvisionService provision, IMcpLoginService login)
+    {
+        _provision = provision;
+        _login = login;
+    }
 
     [HttpGet]
     public async Task<IActionResult> List()
@@ -57,5 +62,24 @@ public sealed class McpServersController : ControllerBase
     {
         var ok = await _provision.RemoveAsync(id, ct);
         return ok ? Ok(new { ok = true }) : NotFound(new { error = "server not found" });
+    }
+
+    // --- generic interactive login (QR / browser) ---------------------------------------
+
+    /// <summary>Start login on a server that declares a login tool — returns the QR image / URL / text
+    /// to show the human. Generic: works for any server following the login-tool + check-tool shape.</summary>
+    [HttpPost("{id}/login/start")]
+    public async Task<IActionResult> LoginStart(string id, CancellationToken ct)
+    {
+        try { return Ok(await _login.StartAsync(id, ct)); }
+        catch (McpException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    /// <summary>Poll whether the server is logged in yet (the client calls this on a timer after Start).</summary>
+    [HttpGet("{id}/login/status")]
+    public async Task<IActionResult> LoginStatus(string id, CancellationToken ct)
+    {
+        try { return Ok(await _login.StatusAsync(id, ct)); }
+        catch (McpException ex) { return BadRequest(new { error = ex.Message }); }
     }
 }

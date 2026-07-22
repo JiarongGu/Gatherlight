@@ -28,7 +28,8 @@ public sealed class McpServerStore : IMcpServerStore
 
     private const string Cols =
         "id, name, transport, command, args_json, env_json, url, headers_json, secrets_json, " +
-        "enabled, status, last_error, discovered_tools_json, created_at, updated_at";
+        "enabled, status, last_error, discovered_tools_json, login_kind, login_tool, login_check_tool, " +
+        "created_at, updated_at";
 
     public async Task<List<McpServerConfig>> ListAsync()
     {
@@ -58,11 +59,14 @@ public sealed class McpServerStore : IMcpServerStore
             $"""
             INSERT INTO mcp_server({Cols})
             VALUES (@Id, @Name, @Transport, @Command, @ArgsJson, @EnvJson, @Url, @HeadersJson,
-                    @SecretsJson, @Enabled, @Status, @LastError, @DiscoveredToolsJson, @CreatedAt, @UpdatedAt)
+                    @SecretsJson, @Enabled, @Status, @LastError, @DiscoveredToolsJson,
+                    @LoginKind, @LoginTool, @LoginCheckTool, @CreatedAt, @UpdatedAt)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, transport = excluded.transport, command = excluded.command,
                 args_json = excluded.args_json, env_json = excluded.env_json, url = excluded.url,
                 headers_json = excluded.headers_json, secrets_json = excluded.secrets_json,
+                login_kind = excluded.login_kind, login_tool = excluded.login_tool,
+                login_check_tool = excluded.login_check_tool,
                 enabled = excluded.enabled, updated_at = excluded.updated_at
             """,
             cfg);

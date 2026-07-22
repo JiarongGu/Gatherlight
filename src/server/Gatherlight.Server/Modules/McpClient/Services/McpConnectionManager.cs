@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Gatherlight.Server.Modules.Core.Services;
 using Gatherlight.Server.Modules.McpClient.Models;
 using Gatherlight.Server.Modules.McpClient.Services.Transport;
 
@@ -20,6 +21,9 @@ public interface IMcpConnectionManager
     /// <summary>Every currently-connected server's tools, tagged with the owning server id.</summary>
     IReadOnlyList<(string ServerId, McpToolInfo Tool)> Tools { get; }
     Task<string> CallAsync(string serverId, string tool, JsonElement args, CancellationToken ct);
+    /// <summary>Call a tool on a connected server and return the RAW MCP result (keeps image/structured
+    /// content) — the interactive-login flow uses this to pull out a QR image.</summary>
+    Task<JsonElement> CallRawAsync(string serverId, string tool, JsonElement args, CancellationToken ct);
     Task ReloadAsync(CancellationToken ct = default);
 }
 
@@ -28,14 +32,16 @@ public sealed class McpConnectionManager : IMcpConnectionManager, IHostedService
     private sealed record Live(string Signature, IMcpConnection Conn, IReadOnlyList<McpToolInfo> Tools);
 
     private readonly IMcpServerStore _store;
+    private readonly IDataContext _data;
     private readonly ILogger<McpConnectionManager> _log;
     private readonly ConcurrentDictionary<string, Live> _live = new();
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private volatile IReadOnlyList<(string, McpToolInfo)> _tools = Array.Empty<(string, McpToolInfo)>();
 
-    public McpConnectionManager(IMcpServerStore store, ILogger<McpConnectionManager> log)
+    public McpConnectionManager(IMcpServerStore store, IDataContext data, ILogger<McpConnectionManager> log)
     {
         _store = store;
+        _data = data;
         _log = log;
     }
 
@@ -49,6 +55,25 @@ public sealed class McpConnectionManager : IMcpConnectionManager, IHostedService
         catch (McpException) { throw; }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { throw new McpException($"MCP call failed: {ex.Message}"); }
+    }
+
+    public async Task<JsonElement> CallRawAsync(string serverId, string tool, JsonElement args, CancellationToken ct)
+    {
+        if (!_live.TryGetValue(serverId, out var live))
+            throw new McpException($"MCP server '{serverId}' is not connected");
+        try { return await live.Conn.CallToolRawAsync(tool, args, ct); }
+        catch (McpException) { throw; }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { throw new McpException($"MCP call failed: {ex.Message}"); }
+    }
+
+    /// <summary>Per-server persistent storage dir (cwd for stdio servers) — where a server keeps its
+    /// cookies/session, under the data folder so it survives restarts + updates.</summary>
+    private string SessionDir(string serverId)
+    {
+        var dir = Path.Combine(_data.RootPath, "state", "mcp", serverId);
+        Directory.CreateDirectory(dir);
+        return dir;
     }
 
     public async Task ReloadAsync(CancellationToken ct = default)
@@ -82,7 +107,7 @@ public sealed class McpConnectionManager : IMcpConnectionManager, IHostedService
     {
         try
         {
-            var conn = McpConnectionFactory.Create(cfg, _log);
+            var conn = McpConnectionFactory.Create(cfg, _log, SessionDir(cfg.Id));
             using var initCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             initCts.CancelAfter(TimeSpan.FromSeconds(30));
             await conn.InitializeAsync(initCts.Token);

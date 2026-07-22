@@ -1754,7 +1754,16 @@ interface McpServer {
   status: string;
   lastError?: string | null;
   hasSecrets: boolean;
+  loginKind: string;
+  needsLogin: boolean;
   tools: { name: string; description: string }[];
+}
+
+interface McpLoginState {
+  serverId: string;
+  name: string;
+  challenge: { imageDataUri?: string | null; url?: string | null; text?: string | null; message: string };
+  loggedIn: boolean;
 }
 
 const MCP_STATUS: Record<string, { label: string; color: string }> = {
@@ -1772,6 +1781,7 @@ function McpView({ toast, confirm }: {
   confirm: (t: string, o?: { danger?: boolean; okText?: string }) => Promise<boolean>;
 }) {
   const [servers, setServers] = useState<McpServer[] | null>(null);
+  const [login, setLogin] = useState<McpLoginState | null>(null);
   const load = useCallback(async () => {
     try {
       const r = await fetch('/api/manage/mcp-servers');
@@ -1781,6 +1791,36 @@ function McpView({ toast, confirm }: {
     }
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // While a login modal is open and not yet complete, poll the server's login status. When it flips
+  // to logged-in, refresh the list (the server can now do authenticated calls).
+  useEffect(() => {
+    if (!login || login.loggedIn) return;
+    let stop = false;
+    const iv = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/manage/mcp-servers/${login.serverId}/login/status`);
+        const st = await r.json();
+        if (!stop && st?.loggedIn) {
+          setLogin((l) => (l ? { ...l, loggedIn: true } : l));
+          toast('登录成功');
+          load();
+        }
+      } catch { /* keep polling */ }
+    }, 2000);
+    return () => { stop = true; clearInterval(iv); };
+  }, [login, load, toast]);
+
+  const startLogin = async (s: McpServer) => {
+    try {
+      const r = await fetch(`/api/manage/mcp-servers/${s.id}/login/start`, { method: 'POST' });
+      const challenge = await r.json();
+      if (!r.ok) { toast(challenge?.error ?? '登录启动失败', 'err'); return; }
+      setLogin({ serverId: s.id, name: s.name, challenge, loggedIn: false });
+    } catch (e) {
+      toast('登录启动失败:' + (e instanceof Error ? e.message : String(e)), 'err');
+    }
+  };
 
   const setEnabled = async (s: McpServer, enabled: boolean) => {
     setServers((prev) => prev?.map((x) => (x.id === s.id ? { ...x, enabled } : x)) ?? prev);
@@ -1829,6 +1869,9 @@ function McpView({ toast, confirm }: {
                   <span style={{ fontSize: 12, opacity: 0.7, fontFamily: 'monospace' }}>{s.transport}</span>
                   {s.hasSecrets && <span style={{ fontSize: 12, opacity: 0.7 }}>🔑 已存凭据</span>}
                   <span style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+                    {s.needsLogin && (
+                      <button className="cx-btn primary" onClick={() => startLogin(s)}>登录</button>
+                    )}
                     <label className="set-check" style={{ margin: 0 }}>
                       <input type="checkbox" checked={s.enabled} onChange={(e) => setEnabled(s, e.target.checked)} />
                       {s.enabled ? '启用' : '停用'}
@@ -1844,6 +1887,49 @@ function McpView({ toast, confirm }: {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {login && (
+        <div
+          onClick={() => setLogin(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center'
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: 'var(--bg, #fff)', borderRadius: 10, padding: 24, width: 340, textAlign: 'center', boxShadow: '0 8px 40px rgba(0,0,0,0.25)' }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 12 }}>登录 {login.name}</div>
+            {login.loggedIn ? (
+              <div style={{ padding: '24px 0', color: '#2e7d32', fontSize: 16 }}>✅ 已登录</div>
+            ) : (
+              <>
+                {login.challenge.imageDataUri && (
+                  <img
+                    src={login.challenge.imageDataUri}
+                    alt="登录二维码"
+                    style={{ width: 220, height: 220, imageRendering: 'pixelated', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 6 }}
+                  />
+                )}
+                {login.challenge.url && (
+                  <div style={{ margin: '12px 0', wordBreak: 'break-all' }}>
+                    <a href={login.challenge.url} target="_blank" rel="noreferrer">{login.challenge.url}</a>
+                  </div>
+                )}
+                <div style={{ marginTop: 12, opacity: 0.85 }}>{login.challenge.message}</div>
+                {login.challenge.text && (
+                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7, whiteSpace: 'pre-wrap' }}>{login.challenge.text}</div>
+                )}
+                <div style={{ marginTop: 12, fontSize: 12, opacity: 0.6 }}>等待登录完成…（每 2 秒自动检测）</div>
+              </>
+            )}
+            <div style={{ marginTop: 16 }}>
+              <button className="cx-btn" onClick={() => setLogin(null)}>{login.loggedIn ? '完成' : '关闭'}</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

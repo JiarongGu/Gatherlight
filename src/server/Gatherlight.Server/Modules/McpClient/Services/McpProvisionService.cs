@@ -16,6 +16,9 @@ public sealed record McpAddRequest(
     string? Url,
     Dictionary<string, string>? Headers,
     Dictionary<string, string>? Secrets,
+    string? LoginKind = null,
+    string? LoginTool = null,
+    string? LoginCheckTool = null,
     bool Enabled = true);
 
 /// <summary>
@@ -70,6 +73,9 @@ public sealed class McpProvisionService : IMcpProvisionService
             Url = req.Url,
             HeadersJson = ToJsonObject(req.Headers),
             SecretsJson = ToJsonObject(req.Secrets),
+            LoginKind = req.LoginKind is McpLoginKind.Qr or McpLoginKind.Browser ? req.LoginKind : McpLoginKind.None,
+            LoginTool = req.LoginTool,
+            LoginCheckTool = req.LoginCheckTool,
             Enabled = req.Enabled,
             Status = req.Enabled ? McpServerStatus.Pending : McpServerStatus.Disabled,
             CreatedAt = now,

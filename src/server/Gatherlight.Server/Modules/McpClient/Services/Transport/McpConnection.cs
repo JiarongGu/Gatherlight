@@ -21,6 +21,9 @@ public interface IMcpConnection : IAsyncDisposable
     Task<IReadOnlyList<McpToolInfo>> ListToolsAsync(CancellationToken ct);
     /// <summary>Call a tool; returns its text content (or raw result JSON when non-textual).</summary>
     Task<string> CallToolAsync(string tool, JsonElement args, CancellationToken ct);
+    /// <summary>Call a tool; return the raw MCP <c>result</c> (keeps image/structured content — used
+    /// by the interactive-login flow to pull a QR image out).</summary>
+    Task<JsonElement> CallToolRawAsync(string tool, JsonElement args, CancellationToken ct);
 }
 
 /// <summary>
@@ -57,7 +60,10 @@ public abstract class McpConnectionBase : IMcpConnection
             : Array.Empty<McpToolInfo>();
     }
 
-    public async Task<string> CallToolAsync(string tool, JsonElement args, CancellationToken ct)
+    public async Task<string> CallToolAsync(string tool, JsonElement args, CancellationToken ct) =>
+        ExtractContent(await CallToolRawAsync(tool, args, ct));
+
+    public Task<JsonElement> CallToolRawAsync(string tool, JsonElement args, CancellationToken ct)
     {
         var p = new JsonObject
         {
@@ -66,8 +72,7 @@ public abstract class McpConnectionBase : IMcpConnection
                 ? JsonNode.Parse(args.GetRawText())
                 : new JsonObject(),
         };
-        var result = await RequestAsync("tools/call", p, ct);
-        return ExtractContent(result);
+        return RequestAsync("tools/call", p, ct);
     }
 
     /// <summary>Flatten an MCP <c>tools/call</c> result to a string; throw on <c>isError</c>.</summary>
@@ -146,7 +151,7 @@ public sealed class StdioMcpConnection : McpConnectionBase
     }
 
     public static StdioMcpConnection Start(string command, IReadOnlyList<string> args,
-        IReadOnlyDictionary<string, string> env, ILogger log, string serverName)
+        IReadOnlyDictionary<string, string> env, ILogger log, string serverName, string? workingDir = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -160,6 +165,9 @@ public sealed class StdioMcpConnection : McpConnectionBase
             StandardOutputEncoding = Utf8NoBom,
             StandardErrorEncoding = Utf8NoBom,
         };
+        // A persistent cwd (under the data folder) is where a server keeps its session/cookies, so an
+        // interactive login survives restarts + updates.
+        if (!string.IsNullOrEmpty(workingDir)) psi.WorkingDirectory = workingDir;
         foreach (var a in args) psi.ArgumentList.Add(a);
         foreach (var kv in env) psi.Environment[kv.Key] = kv.Value;
 
@@ -325,7 +333,7 @@ public sealed class HttpMcpConnection : McpConnectionBase
 /// <summary>Builds the right connection for a config, merging secrets into env (stdio) / headers (http).</summary>
 public static class McpConnectionFactory
 {
-    public static IMcpConnection Create(McpServerConfig cfg, ILogger log)
+    public static IMcpConnection Create(McpServerConfig cfg, ILogger log, string? workingDir = null)
     {
         if (cfg.Transport == McpTransportKind.Http)
         {
@@ -338,6 +346,6 @@ public static class McpConnectionFactory
         if (string.IsNullOrWhiteSpace(cfg.Command)) throw new McpException("stdio transport requires a command");
         var env = new Dictionary<string, string>(cfg.Env(), StringComparer.Ordinal);
         foreach (var kv in cfg.Secrets()) env[kv.Key] = kv.Value;           // secrets → env
-        return StdioMcpConnection.Start(cfg.Command!, cfg.Args(), env, log, cfg.Name);
+        return StdioMcpConnection.Start(cfg.Command!, cfg.Args(), env, log, cfg.Name, workingDir);
     }
 }

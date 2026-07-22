@@ -17,6 +17,13 @@ public static class McpServerStatus
     public const string Disabled = "disabled";
 }
 
+public static class McpLoginKind
+{
+    public const string None = "none";
+    public const string Qr = "qr";        // login tool returns a QR image to scan
+    public const string Browser = "browser"; // login tool returns a URL to open
+}
+
 /// <summary>
 /// One external MCP server's persisted config (the <c>mcp_server</c> row). snake_case columns map
 /// onto these props via the global <c>MatchNamesWithUnderscores</c>. <see cref="SecretsJson"/> is
@@ -37,8 +44,14 @@ public sealed class McpServerConfig
     public string Status { get; set; } = McpServerStatus.Pending;
     public string? LastError { get; set; }
     public string? DiscoveredToolsJson { get; set; }
+    // Generic interactive login (see McpLoginService). LoginKind 'none' = no login step.
+    public string LoginKind { get; set; } = McpLoginKind.None;
+    public string? LoginTool { get; set; }
+    public string? LoginCheckTool { get; set; }
     public string CreatedAt { get; set; } = "";
     public string UpdatedAt { get; set; } = "";
+
+    public bool NeedsLogin => LoginKind != McpLoginKind.None && !string.IsNullOrWhiteSpace(LoginTool);
 
     public string[] Args() => ParseStringArray(ArgsJson);
     public Dictionary<string, string> Env() => ParseStringMap(EnvJson);
@@ -120,11 +133,13 @@ public sealed record McpServerDto(
     string Status,
     string? LastError,
     bool HasSecrets,
+    string LoginKind,
+    bool NeedsLogin,
     IReadOnlyList<McpToolSummary> Tools)
 {
     public static McpServerDto From(McpServerConfig c) => new(
         c.Id, c.Name, c.Transport, c.Command, c.Args(), c.Url, c.Enabled, c.Status, c.LastError,
-        c.HasSecrets,
+        c.HasSecrets, c.LoginKind, c.NeedsLogin,
         c.DiscoveredTools().Select(t => new McpToolSummary(t.Name, t.Description)).ToArray());
 }
 

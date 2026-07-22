@@ -11,6 +11,7 @@ export type Phase =
   | 'awaiting-diff-approval'
   | 'awaiting-input'
   | 'awaiting-mcp-approval'
+  | 'awaiting-login'
   | 'committing'
   | 'committed'
   | 'rejected'
@@ -89,6 +90,20 @@ export interface McpProposalView {
   neededCredentials: string[];
 }
 
+/**
+ * Shown in chat when the agent decided it needs to log into an MCP server (awaiting-login). The
+ * client renders the QR / URL, polls the server's login status, and resumes the agent once done.
+ */
+export interface McpLoginView {
+  serverId: string;
+  serverName: string;
+  kind: string;
+  imageDataUri?: string | null;
+  url?: string | null;
+  text?: string | null;
+  message: string;
+}
+
 export const PHASE_LABELS: Record<Phase, string> = {
   idle: '待命',
   planning: '调研拟定计划',
@@ -99,6 +114,7 @@ export const PHASE_LABELS: Record<Phase, string> = {
   'awaiting-diff-approval': '待审阅改动',
   'awaiting-input': '待你回复',
   'awaiting-mcp-approval': '待确认 MCP 服务',
+  'awaiting-login': '待登录',
   committing: '提交中',
   committed: '已提交',
   rejected: '已撤销',

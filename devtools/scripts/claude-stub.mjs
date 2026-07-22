@@ -78,6 +78,7 @@ if (readOnly) {
     : userReq.includes('NEEDINPUTPLAINTEST') ? ' [TRIG:NEEDINPUTPLAIN]'
     : userReq.includes('NEEDINPUTTEST') ? ' [TRIG:NEEDINPUT]'
     : userReq.includes('MCPADDTEST') ? ' [TRIG:MCPADD]'
+    : userReq.includes('LOGINTEST') ? ' [TRIG:LOGIN]'
     : userReq.includes('NOOPTEST') ? ' [TRIG:NOOP]' : '';
   const planText = systemMode ? text : text + trig;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
@@ -100,6 +101,14 @@ if (readOnly) {
       name: 'Stub MCP', transport: 'stdio', command: 'node', args: [stubServer], needsCredentials: ['STUB_TOKEN'],
     });
     done(`我建议接入一个外部 MCP 服务来获取信息。\n\nMCP_ADD:\n${proposal}`);
+    process.exit(0);
+  }
+  // LOGIN_REQUIRED (e2e-p34): on the FIRST execute the plan carries [TRIG:LOGIN] → the agent decides
+  // it must log into a server before it can proceed and writes NOTHING → parks at awaiting-login. On
+  // the resume (HUMAN'S FEEDBACK, "已登录") it falls through to the normal write. Models "LLM decided to
+  // log in → user scanned → agent continues".
+  if (prompt.includes('[TRIG:LOGIN]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('要搜索小红书需要先登录。\n\nLOGIN_REQUIRED: login-demo');
     process.exit(0);
   }
   // NOOP (e2e-p28): make NO change and ask nothing → empty diff → the flow ends 'rejected'. A pure
