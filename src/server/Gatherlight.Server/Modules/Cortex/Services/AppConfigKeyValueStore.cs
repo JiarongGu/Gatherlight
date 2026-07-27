@@ -26,4 +26,7 @@ public sealed class AppConfigKeyValueStore(IAppConfigService config) : IKeyValue
         config.Delete(key);
         return Task.CompletedTask;
     }
+
+    public Task<IReadOnlyList<string>> ListKeysAsync(string? prefix = null, CancellationToken ct = default) =>
+        Task.FromResult(config.ListKeys(prefix));
 }

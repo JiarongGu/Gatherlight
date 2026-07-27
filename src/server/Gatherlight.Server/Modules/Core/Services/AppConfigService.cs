@@ -13,6 +13,11 @@ public interface IAppConfigService
     T Get<T>(string key, T fallback) where T : IParsable<T>;
     void Set(string key, string value);
     void Delete(string key);
+
+    /// <summary>Every key, or only those starting with <paramref name="prefix"/> (case-sensitive
+    /// starts-with; null = all), in ordinal order — backs Lyntai's <c>IKeyValueStore.ListKeysAsync</c>
+    /// so a namespaced consumer can enumerate its own <c>ns.*</c> slice.</summary>
+    IReadOnlyList<string> ListKeys(string? prefix = null);
 }
 
 public sealed class AppConfigService : IAppConfigService
@@ -46,5 +51,19 @@ public sealed class AppConfigService : IAppConfigService
     {
         using var conn = _db.Open();
         conn.Execute("DELETE FROM app_config WHERE key = @key", new { key });
+    }
+
+    public IReadOnlyList<string> ListKeys(string? prefix = null)
+    {
+        using var conn = _db.Open();
+        // NOT LIKE — SQLite's LIKE is ASCII case-INSENSITIVE, breaking the case-sensitive contract.
+        // substr under the default BINARY collation is an exact (ordinal) starts-with; ORDER BY key
+        // is BINARY (ordinal) too. Mirrors Lyntai's own SqliteKeyValueStore.ListKeysAsync.
+        var keys = conn.Query<string>(
+            "SELECT key FROM app_config " +
+            "WHERE (@prefix IS NULL OR substr(key, 1, length(@prefix)) = @prefix) " +
+            "ORDER BY key",
+            new { prefix });
+        return [.. keys];
     }
 }

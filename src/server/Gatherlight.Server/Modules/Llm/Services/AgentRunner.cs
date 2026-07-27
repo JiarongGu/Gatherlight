@@ -107,7 +107,7 @@ public sealed class AgentRunner : IAgentRunner
                 emit(new AgentEvent
                 {
                     Kind = "usage-live",
-                    Data = new { inputTokens = u.Input, outputTokens = u.Output, cacheReadTokens = u.CacheRead },
+                    Data = new { inputTokens = u.InputTokens, outputTokens = u.OutputTokens, cacheReadTokens = u.CacheReadTokens },
                 });
                 break;
             case UsageFinal u:
@@ -116,11 +116,11 @@ public sealed class AgentRunner : IAgentRunner
                     Kind = "usage",
                     Data = new
                     {
-                        inputTokens = u.Input,
-                        outputTokens = u.Output,
-                        cacheReadTokens = u.CacheRead,
-                        cacheCreationTokens = u.CacheCreate,
-                        costUsd = ModelPricing.CostUsd(u.Model ?? options.Model, u.Input, u.Output, u.CacheRead, u.CacheCreate),
+                        inputTokens = u.InputTokens,
+                        outputTokens = u.OutputTokens,
+                        cacheReadTokens = u.CacheReadTokens,
+                        cacheCreationTokens = u.CacheCreateTokens,
+                        costUsd = ModelPricing.CostUsd(u.Model ?? options.Model, u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheCreateTokens),
                     },
                 });
                 break;

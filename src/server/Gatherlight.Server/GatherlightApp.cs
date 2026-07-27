@@ -10,7 +10,7 @@ using Gatherlight.Server.Modules.Seed.Services;
 using Gatherlight.Server.Modules.Tools.Models;
 using Gatherlight.Server.Modules.Tools.Services;
 using Gatherlight.Server.Modules.Tools.Services.Tools;
-using Lyntai; // the shared LLM library (AddClaudeCliProvider / DefaultCandidates on the builder)
+using Lyntai; // the shared LLM library (AddClaudeCliProvider / UseDefaultCandidates on the builder)
 
 namespace Gatherlight.Server;
 
@@ -105,12 +105,12 @@ public static class GatherlightApp
                 })
                 // Live per-consumer model routing (the scorers' judge model) read from app_config each call.
                 .AddLiveModelRouting()
-                .DefaultCandidates("claude-cli")
+                .UseDefaultCandidates("claude-cli")
                 // Lyntai owns scoring + conversation persistence: its SQLite storage lands lyntai_score_result,
                 // lyntai_thread/lyntai_message (+ other lyntai_* tables) in the same gatherlight.db.
-                // MUST stay EAGER (default migrateOnFirstUse:false → migrates synchronously here, during DI):
+                // MUST stay EAGER (default SchemaMigration.OnStartup → migrates synchronously here, during DI):
                 // the app's chat→lyntai + score→lyntai data migrations (Fluent, run at MigrateToLatest below)
-                // depend on the lyntai_* tables already existing. Do NOT switch to migrateOnFirstUse:true.
+                // depend on the lyntai_* tables already existing. Do NOT switch to SchemaMigration.OnFirstUse.
                 .UseSqliteStorage(dbPath)
                 // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
                 // collection so its IScoringService iterates + persists them (LLM judges route through
