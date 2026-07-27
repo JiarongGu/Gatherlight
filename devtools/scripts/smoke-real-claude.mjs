@@ -72,8 +72,16 @@ async function waitPhase(id, targets, timeoutMs) {
 const post = (p) => getJson(`${base}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' } });
 
 try {
-  await until(() => fetch(`${base}/api/health`).then((r) => r.ok), 40000);
-  log('server up (real claude, no stub)');
+  // Ready = listening AND the startup migration has lifted its 503 gate (health.migrating === false).
+  // The migration runs WHILE listening (post-ApplicationStarted), so a bare r.ok fires too early on a
+  // fresh data folder — /api/chat then 503s with {migrating:true}. Mirrors e2e-common's waitHealthy.
+  await until(async () => {
+    const r = await fetch(`${base}/api/health`);
+    if (!r.ok) return false;
+    const j = await r.json().catch(() => ({}));
+    return j.migrating !== true;
+  }, 90000);
+  log('server up + migration gate lifted (real claude, no stub)');
 
   // MCP surface probe (informational) — the agent reaches native tools over this.
   try {
