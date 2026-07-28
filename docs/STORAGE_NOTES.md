@@ -32,7 +32,8 @@ already share the storage tech.
    BLOB + explicit `dims` + `model_id`, loads the optional **`sqlite-vec`** native extension for ANN,
    and **falls back to brute-force C# cosine** when it's absent
    (`Modules/Embedding/Services/SqliteVecLoader.cs`). Gatherlight's `recall_facts` / `library_search`
-   are now **FTS5 trigram** (BM25-ranked, CJK substring — migration `202607130006` + `FtsQuery`;
+   are now **FTS5 trigram** (BM25-ranked, CJK substring — the FTS tables/triggers in the
+   `202607280001_Baseline` + `FtsQuery`;
    LIKE only as the `<3`-char fallback), so the *lexical* gap is closed — but that's still keyword
    matching and misses paraphrases. Adding a small `*_embedding` table + the same
    optional-native (`sqlite-vec`)-with-cosine-fallback pattern would make recall *semantic*. Embeddings

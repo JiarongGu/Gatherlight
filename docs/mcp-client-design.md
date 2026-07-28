@@ -86,7 +86,7 @@ privileged action that a human must confirm.** The design keeps the jail intact:
 still win on name collision; external tools are namespaced `{serverId}__{tool}` to avoid clashes.
 This is the whole reason `Resolve()` is computed at call time — new tools appear without restart.
 
-### Data model — migration `202607220001_McpServers`
+### Data model — `mcp_server` (squashed into `202607280001_Baseline.cs`)
 
 `mcp_server`: `id` (text pk), `name`, `transport` (`stdio`|`http`), `command`, `args_json`,
 `env_json`, `url`, `headers_json`, `secrets_json` (server-only), `enabled` (int), `status`

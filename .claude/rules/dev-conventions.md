@@ -13,13 +13,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Trap: SQLite integer affinity — wrap double columns in `CAST(x AS REAL)` in SELECTs.
 - **Migrations**: FluentMigrator in `Modules/Fluent/Migrations/`, numbered `YYYYMMDDNNNN` —
   never reuse a number (unapplied duplicates are skipped silently). Composite PKs must be
-  inline at CreateTable (SQLite has no ALTER ADD CONSTRAINT).
+  inline at CreateTable (SQLite has no ALTER ADD CONSTRAINT). The 0.x ledger was squashed into a
+  single `202607280001_Baseline` (one-time, at the Lyntai-1.0 fresh-start reset — durable data
+  travels via the whole-install backup); the ledger is append-only again from there. Lyntai owns its
+  own `lyntai_*` tables + `lyntai_version_info` (migrated eagerly by `UseSqliteStorage`).
 - **Full-text search = FTS5 `trigram`**: search indexes are external-content FTS5 virtual tables
   with the **`trigram`** tokenizer (indexed CJK *substring* recall — `unicode61` treats a whole
   Chinese phrase as one token), kept in sync by AFTER INSERT/DELETE/UPDATE triggers and backfilled
   in the same migration. Build the MATCH string via `Core/Services/FtsQuery` (drops `<3`-char tokens,
-  quotes the rest), fall back to LIKE when it returns null, rank with `bm25()`. Reference: migration
-  `202607130006` + `LibraryStore`/`Knowledge/Stores`.
+  quotes the rest), fall back to LIKE when it returns null, rank with `bm25()`. Reference: the FTS
+  virtual tables + sync triggers in `202607280001_Baseline` + `LibraryStore`/`Knowledge/Stores`.
 - **Sources are BOM-less UTF-8 + `<CodePage>65001</CodePage>`** — without it, csc on a
   CJK-locale machine reads Chinese string literals as ANSI mojibake (bit us once).
 - **Scorers / evals** are the DI-collection pattern in practice: each eval dimension is an `IScorer`

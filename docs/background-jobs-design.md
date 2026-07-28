@@ -39,7 +39,7 @@ default:
 Patch-capture (vs. a `jobs/<runId>` git branch) chosen for v1: simpler, reuses the existing
 `DiffFile` rendering and reject/restore flow, keeps the working tree clean immediately.
 
-## Data model — migration `202607160001_Jobs.cs`
+## Data model — `job`/`job_run`/`notification` (squashed into `202607280001_Baseline.cs`)
 
 - **`job`** — `id` (`j{ticks:x}`), `name`, `kind` (`agent`/`tool`/`notify`/`report`), `config_json`
   (opaque per-handler payload), `schedule_kind` (`once`/`cron`), `cron`, `run_at`, `timezone` (IANA),

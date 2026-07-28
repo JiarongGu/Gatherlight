@@ -107,10 +107,12 @@ public static class GatherlightApp
                 .AddLiveModelRouting()
                 .UseDefaultCandidates("claude-cli")
                 // Lyntai owns scoring + conversation persistence: its SQLite storage lands lyntai_score_result,
-                // lyntai_thread/lyntai_message (+ other lyntai_* tables) in the same gatherlight.db.
-                // MUST stay EAGER (default SchemaMigration.OnStartup → migrates synchronously here, during DI):
-                // the app's chat→lyntai + score→lyntai data migrations (Fluent, run at MigrateToLatest below)
-                // depend on the lyntai_* tables already existing. Do NOT switch to SchemaMigration.OnFirstUse.
+                // lyntai_thread/lyntai_message (+ other lyntai_* tables) in the same gatherlight.db. Kept EAGER
+                // (default SchemaMigration.OnStartup → migrates synchronously here, during DI) so the lyntai_*
+                // tables exist before first use. The old 0.x→Lyntai data bridges that once REQUIRED this
+                // ordering are gone (squashed out at the 202607280001 baseline — a fresh DB has nothing to
+                // migrate), but there's no reason to defer, so leave it eager. Lyntai 1.0's own migrations are
+                // a fresh baseline reset (202607280001..) — a pre-1.0 DB must be reset, not upgraded in place.
                 .UseSqliteStorage(dbPath)
                 // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
                 // collection so its IScoringService iterates + persists them (LLM judges route through
