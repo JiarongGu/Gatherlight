@@ -8,6 +8,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - **Modules pattern**: `Modules/{Name}/` with `{Name}Controller.cs` (thin) → `Services/`
   (business logic + repository). Variation points are interfaces resolved via DI collections
   (e.g. `IGatherlightTool`), never if/else chains. Composition root: `GatherlightApp.Build()`.
+- **Type naming — never `Dto`/`DTO` in a name.** "DTO" is a pattern label, not a domain word; it
+  says nothing about what the type carries. Name the *role*, using the suffixes already in the
+  codebase: `…View` for a client-safe projection of an entity (`McpServerView`, `PromptView`,
+  `MigrationStepView`), `…Request`/`…Response` for a controller's wire shape, `…Summary` for a
+  reduced/aggregate shape (`BudgetSummary`), `…Info` for a descriptor (`McpToolInfo`), `…Config`
+  /`…Options` for settings, `…Snapshot` for a point-in-time state. Same for members, locals and
+  prose — say "the view projection", not "the DTO". (Also avoid the other empty suffixes: `Data`,
+  `Object`, `Manager` where a verb-noun service name fits.)
 - **SQLite via Dapper**: hand-written SQL, `snake_case` columns ↔ PascalCase properties
   (`MatchNamesWithUnderscores`). **Repository methods are async** (`QueryAsync`/`ExecuteAsync`).
   Trap: SQLite integer affinity — wrap double columns in `CAST(x AS REAL)` in SELECTs.

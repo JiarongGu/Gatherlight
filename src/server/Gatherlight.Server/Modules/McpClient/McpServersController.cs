@@ -9,7 +9,8 @@ public sealed record SetEnabledRequest(bool Enabled);
 
 /// <summary>
 /// Access-gated management of external MCP servers (<c>/api/manage/mcp-servers</c>). List/add/toggle/
-/// remove. Secrets are accepted on add but NEVER returned — the DTO projection drops them. This
+/// remove. Secrets are accepted on add but NEVER returned — the client-safe view projection drops
+/// them. This
 /// surface requires the access token (or loopback trust) — it is NOT on the agent's MCP surface, so
 /// the scope-guarded agent can't self-register a server. In P2 the chat confirmation gate becomes a
 /// second, human-confirmed entry that funnels into the same <see cref="IMcpProvisionService"/>.
@@ -31,7 +32,7 @@ public sealed class McpServersController : ControllerBase
     public async Task<IActionResult> List()
     {
         var servers = await _provision.ListAsync();
-        return Ok(servers.Select(McpServerDto.From));
+        return Ok(servers.Select(McpServerView.From));
     }
 
     [HttpPost]
@@ -40,7 +41,7 @@ public sealed class McpServersController : ControllerBase
         try
         {
             var cfg = await _provision.AddAsync(req, ct);
-            return Ok(McpServerDto.From(cfg));
+            return Ok(McpServerView.From(cfg));
         }
         catch (McpException ex)
         {
@@ -54,7 +55,7 @@ public sealed class McpServersController : ControllerBase
         var ok = await _provision.SetEnabledAsync(id, req.Enabled, ct);
         if (!ok) return NotFound(new { error = "server not found" });
         var cfg = await _provision.GetAsync(id);
-        return Ok(cfg is null ? null : McpServerDto.From(cfg));
+        return Ok(cfg is null ? null : McpServerView.From(cfg));
     }
 
     [HttpDelete("{id}")]

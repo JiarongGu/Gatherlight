@@ -8,7 +8,7 @@ namespace Gatherlight.Server.Modules.McpClient.Services;
 /// Persistence for external MCP server config (the <c>mcp_server</c> table). Dapper + hand-written
 /// SQL; snake_case columns map onto the model via the global <c>MatchNamesWithUnderscores</c>.
 /// Secrets live in <c>secrets_json</c> and never leave this layer except into a live connection's
-/// env/headers — the DTO projection drops them.
+/// env/headers — the <c>McpServerView</c> projection drops them.
 /// </summary>
 public interface IMcpServerStore
 {

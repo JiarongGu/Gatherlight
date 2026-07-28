@@ -3,7 +3,7 @@
 //   register a stub MCP server (stdio AND http) via /api/manage/mcp-servers, assert its tools are
 //   proxied into the registry (namespaced {id}__tool) on BOTH surfaces (/api/tools + /mcp) and
 //   round-trip a call; prove secret injection (stdio→env, http→header) and that secrets never leak
-//   into list DTOs; then toggle-disable and remove and assert the tools disappear.
+//   into list views; then toggle-disable and remove and assert the tools disappear.
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until, repo } from './_e2e-common.mjs';
@@ -72,12 +72,12 @@ try {
   const mcpCall = await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: `${stdioId}__greet`, arguments: { name: 'Ada' } } });
   ok('proxied tool via /mcp tools/call', mcpCall.body?.result?.content?.[0]?.text === 'hi Ada', JSON.stringify(mcpCall.body));
 
-  // --- secrets never leak in the list DTO --------------------------------------------
+  // --- secrets never leak in the list view -------------------------------------------
   const listAfterStdio = await j('/api/manage/mcp-servers');
-  const dto = (listAfterStdio.body ?? []).find((s) => s.id === stdioId);
-  ok('list shows hasSecrets=true', dto?.hasSecrets === true, JSON.stringify(dto));
-  ok('secret value NOT in list DTO', !JSON.stringify(listAfterStdio.body).includes('s3cr3t'));
-  ok('secretsJson NOT in list DTO', !JSON.stringify(listAfterStdio.body).toLowerCase().includes('secretsjson'));
+  const view = (listAfterStdio.body ?? []).find((s) => s.id === stdioId);
+  ok('list shows hasSecrets=true', view?.hasSecrets === true, JSON.stringify(view));
+  ok('secret value NOT in list view', !JSON.stringify(listAfterStdio.body).includes('s3cr3t'));
+  ok('secretsJson NOT in list view', !JSON.stringify(listAfterStdio.body).toLowerCase().includes('secretsjson'));
 
   // --- add an http MCP server (with a secret → header) -------------------------------
   await until(async () => (await fetch(`http://127.0.0.1:${HTTP_STUB_PORT}/`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"jsonrpc":"2.0","id":1,"method":"initialize"}' }).then((r) => r.ok).catch(() => false)), 10000);

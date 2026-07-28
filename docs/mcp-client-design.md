@@ -31,7 +31,7 @@ privileged action that a human must confirm.** The design keeps the jail intact:
    `exe + args + env` or `url` — *not* the agent's free text, so a prompt-injection can propose a
    malicious server but the human sees exactly what will run before approving.
 2. **Credentials are server-side only.** Login secrets (e.g. an XHS cookie) are stored in the app
-   DB (`state/gatherlight.db`, untracked), never returned to the client in list DTOs, never in the
+   DB (`state/gatherlight.db`, untracked), never returned to the client in list views, never in the
    agent's read-scope, never echoed into the chat transcript / plan / git.
 3. **The agent gets to *call* proxied tools, not manage servers.** No MCP-server CRUD is exposed on
    the agent's MCP surface — only through the access-gated `/api/manage/*` API + the chat gate.
@@ -63,7 +63,8 @@ privileged action that a human must confirm.** The design keeps the jail intact:
 ### Module layout — `Modules/McpClient/`
 
 - `Models/` — `McpServerConfig` (id, name, transport, command/args/env | url/headers, enabled,
-  status, lastError, discoveredTools), `McpServerSecret` (server-side only), DTOs (secret-free).
+  status, lastError, discoveredTools), `McpServerSecret` (server-side only), `McpServerView`
+  (client-safe, secret-free).
 - `Services/McpServerStore.cs` — Dapper repository over the `mcp_server` table (+ secrets).
 - `Services/Transport/` — `IMcpClientTransport` with `StdioMcpTransport` and `HttpMcpTransport`
   (Streamable-HTTP/SSE). A minimal JSON-RPC 2.0 client: `initialize`, `tools/list`, `tools/call`.
@@ -113,7 +114,7 @@ chat. Reject → discard the draft, nothing runs.
   credentials handling; `McpProvisionService`; `/api/manage/mcp-servers` list/toggle/remove +
   minimal `/manage` console panel; client gate UI (reuse the awaiting-input affordances). e2e
   (`p32`): stubbed chat proposes an add → gate → approve → server connected + tool callable; reject
-  → no-op; secrets never surface in list DTOs / transcript.
+  → no-op; secrets never surface in list views / transcript.
 - **P3 — Xiaohongshu real case.** Register a real Xiaohongshu MCP through the gate, supply login via
   the credentials field, run a **real query against real xiaohongshu.com**, and report the true
   result (including if login-walled). Docs in `docs/TOOLS.md` + the DataTemplate CLAUDE.md tool

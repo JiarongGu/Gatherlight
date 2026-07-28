@@ -27,7 +27,7 @@ public static class McpLoginKind
 /// <summary>
 /// One external MCP server's persisted config (the <c>mcp_server</c> row). snake_case columns map
 /// onto these props via the global <c>MatchNamesWithUnderscores</c>. <see cref="SecretsJson"/> is
-/// server-side only — it is NEVER placed in a <see cref="McpServerDto"/> or shown to the agent.
+/// server-side only — it is NEVER placed in a <see cref="McpServerView"/> or shown to the agent.
 /// </summary>
 public sealed class McpServerConfig
 {
@@ -122,7 +122,7 @@ public sealed record McpToolInfo(string Name, string Description, JsonElement In
 }
 
 /// <summary>Client-safe view of a server — NO secrets. What the management API + client ever see.</summary>
-public sealed record McpServerDto(
+public sealed record McpServerView(
     string Id,
     string Name,
     string Transport,
@@ -137,7 +137,7 @@ public sealed record McpServerDto(
     bool NeedsLogin,
     IReadOnlyList<McpToolSummary> Tools)
 {
-    public static McpServerDto From(McpServerConfig c) => new(
+    public static McpServerView From(McpServerConfig c) => new(
         c.Id, c.Name, c.Transport, c.Command, c.Args(), c.Url, c.Enabled, c.Status, c.LastError,
         c.HasSecrets, c.LoginKind, c.NeedsLogin,
         c.DiscoveredTools().Select(t => new McpToolSummary(t.Name, t.Description)).ToArray());

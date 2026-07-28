@@ -30,8 +30,8 @@ try {
   ok('add login server 200', add.status === 200, JSON.stringify(add.body));
   const id = add.body?.id;
   ok('connected', add.body?.status === 'connected');
-  ok('DTO reports loginKind=qr', add.body?.loginKind === 'qr', JSON.stringify(add.body));
-  ok('DTO reports needsLogin', add.body?.needsLogin === true);
+  ok('view reports loginKind=qr', add.body?.loginKind === 'qr', JSON.stringify(add.body));
+  ok('view reports needsLogin', add.body?.needsLogin === true);
 
   // start login → the QR image comes back as a data URI, ready to render + scan
   const start = await j(`/api/manage/mcp-servers/${id}/login/start`, { method: 'POST', headers: { 'content-type': 'application/json' } });
