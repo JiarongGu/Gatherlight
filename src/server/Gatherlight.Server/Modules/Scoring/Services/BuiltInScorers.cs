@@ -155,9 +155,46 @@ public sealed partial class CitationScorer : IScorer
 // LlmScorerBase subclass member wouldn't otherwise override the interface's default Description. The
 // judge model routes through llm.model.scorer (haiku); Applies() gates the token spend (A8).
 
+/// <summary>
+/// Base for the judges that can open the REAL artifact instead of grading only the excerpt packed into
+/// the score context. The read-only tools (<see cref="JudgeReadFileTool"/>/<see cref="JudgeListFilesTool"/>)
+/// reach these calls because <c>AddMcpToolHost</c> hosts them for the one-shot ILlmClient path — see
+/// GatherlightApp. Two things have to change for that to be usable: the base rubric's "reply with JSON
+/// and nothing else", which read literally forbids calling a tool first, and a prompt hint naming the
+/// tools and this session's artifacts (a judge won't go looking for a path nobody gave it).
+/// </summary>
+public abstract class ArtifactAwareJudge(Lyntai.Llm.ILlmClient llm) : LlmScorerBase(llm)
+{
+    // Keeps the "SCORING TASK" marker — Lyntai routes on Consumer, but the e2e claude stub keys on it.
+    protected override string JudgeSystemPrompt =>
+        "You are a strict evaluator performing a SCORING TASK. Before deciding you MAY call the read-only " +
+        "tools judge_list_files and judge_read_file to inspect the artifact being graded — prefer the real " +
+        "file over a truncated excerpt when the two could differ. When you have finished, reply with " +
+        """exactly one JSON object {"score": <number 0..1>, "reason": "<short reason>"} and nothing else.""";
+
+    /// <summary>The tool-affordance footer: what to read and where it is. Emitted only when it would help
+    /// — an excerpt that was NOT truncated and a session with no committed files gives the judge nothing
+    /// to look up, and an unconditional footer would just spend tokens teasing a pointless tool call.</summary>
+    protected static string ToolHint(ScoreContext ctx, bool truncated)
+    {
+        var files = ctx.ChangedFiles();
+        if (!truncated && files.Count == 0) return "";
+
+        var sb = new System.Text.StringBuilder("\n\n---\n");
+        if (truncated)
+            sb.Append("NOTE: the excerpt above is TRUNCATED. ");
+        sb.Append("You can read the full artifact with judge_read_file(path), or find one with " +
+                  "judge_list_files(dir) over plans/ household/ .claude/.");
+        if (files.Count > 0)
+            sb.Append("\nFiles written in this session:\n")
+              .Append(string.Join("\n", files.Take(20).Select(f => $"- {f}")));
+        return sb.ToString();
+    }
+}
+
 /// <summary>Quality: does the plan address exactly what the user asked (on-scope)?</summary>
 public sealed class AnswerRelevancyScorer(Lyntai.Llm.ILlmClient llm)
-    : LlmScorerBase(llm), IScorer
+    : ArtifactAwareJudge(llm), IScorer
 {
     public override string Id => "answer-relevancy";
     public override string Name => "切题 · Answer relevancy";
@@ -172,14 +209,15 @@ public sealed class AnswerRelevancyScorer(Lyntai.Llm.ILlmClient llm)
     protected override string BuildJudgePrompt(ScoreContext ctx) =>
         "Criterion: does the PLAN address exactly what the USER asked — covering the core request, " +
         "without unrelated scope creep or missing the point?\n\n" +
-        $"USER REQUEST:\n{Trim(ctx.User(), 1500)}\n\nPLAN:\n{Trim(ctx.Plan(), 4000)}";
+        $"USER REQUEST:\n{Trim(ctx.User(), 1500)}\n\nPLAN:\n{Trim(ctx.Plan(), 4000)}" +
+        ToolHint(ctx, truncated: ctx.Plan().Length > 4000);
 
     private static string Trim(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 }
 
 /// <summary>Guardrail: are time-sensitive facts cited or marked TBD, not fabricated (no-fabrication)?</summary>
 public sealed class FaithfulnessScorer(Lyntai.Llm.ILlmClient llm)
-    : LlmScorerBase(llm), IScorer
+    : ArtifactAwareJudge(llm), IScorer
 {
     public override string Id => "faithfulness";
     public override string Name => "事实可靠 · Faithfulness";
@@ -193,7 +231,10 @@ public sealed class FaithfulnessScorer(Lyntai.Llm.ILlmClient llm)
     protected override string BuildJudgePrompt(ScoreContext ctx) =>
         "Criterion: is every time-sensitive fact in the PLAN (opening hours, prices, visa rules, " +
         "flight numbers/times, event dates) either backed by a cited source URL or explicitly marked " +
-        $"TBD — i.e. NOT asserted as a confident fact without support?\n\nPLAN:\n{Trim(ctx.Plan(), 5000)}";
+        $"TBD — i.e. NOT asserted as a confident fact without support?\n\nPLAN:\n{Trim(ctx.Plan(), 5000)}" +
+        // The one dimension where opening the cited file actually settles the question: a claim counts as
+        // "supported" only if the source it points at really says so.
+        ToolHint(ctx, truncated: ctx.Plan().Length > 5000);
 
     private static string Trim(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 }

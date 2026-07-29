@@ -122,7 +122,20 @@ public static class GatherlightApp
                 .AddScorer<Modules.Scoring.Services.OutcomeScorer>()
                 .AddScorer<Modules.Scoring.Services.CitationScorer>()
                 .AddScorer<Modules.Scoring.Services.AnswerRelevancyScorer>()
-                .AddScorer<Modules.Scoring.Services.FaithfulnessScorer>())
+                .AddScorer<Modules.Scoring.Services.FaithfulnessScorer>()
+                // Tool-calling for the LLM judges. AddMcpToolHost registers an ICliToolProvisioner, which
+                // ONLY ClaudeCliProvider reads — i.e. the one-shot ILlmClient path, whose only consumers
+                // here are the two judges above. (The agent path, ClaudeAgentSession, takes no provisioner;
+                // its MCP stays --mcp-config → this server's own /mcp.) Per call it starts a loopback
+                // Kestrel on an OS-assigned port, bearer-gated, and tears it down after — so the judges get
+                // mediated, read-only access to the artifacts they're grading without the data folder's
+                // CLAUDE.md/knowledge base being loaded, which is exactly why they run neutral-cwd.
+                // Registering ZERO ITools would make the host a no-op (the provisioner short-circuits).
+                .AddMcpToolHost(new Lyntai.Providers.ClaudeCli.ClaudeCliMcpDialect())
+                .AddTool(sp => new Modules.Scoring.Services.JudgeReadFileTool(
+                    sp.GetRequiredService<Modules.Core.Services.IDataContext>()))
+                .AddTool(sp => new Modules.Scoring.Services.JudgeListFilesTool(
+                    sp.GetRequiredService<Modules.Core.Services.IDataContext>())))
             // Lyntai's cortex (IPromptRegistry / IModelRoutingStore) reads/writes the app's OWN app_config
             // table — single source of truth for cortex.prompt.* / llm.model.*, no lyntai_kv duplicate. Plain
             // AddSingleton after AddLyntai wins over its TryAdd SqliteKeyValueStore.

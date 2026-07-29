@@ -11,6 +11,7 @@
 //   execute (--permission-mode acceptEdits):
 //     physically writes plans/daily/2026-07-14.md + emits the Edit tool_use for it
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 
 const args = process.argv.slice(2);
@@ -46,10 +47,106 @@ if (prompt.includes('FORCE_ERROR') && !prompt.includes('未完成(出错)')) {
   process.exit(0);
 }
 
+// ---- judge tool host (Lyntai AddMcpToolHost) -------------------------------------------------
+// On a one-shot ILlmClient call — i.e. an LLM-judge scorer — Lyntai stands up an ephemeral loopback
+// MCP server exposing the app's ITools (Modules/Scoring/JudgeTools) and passes us --mcp-config
+// pointing at it, bearer token inside. The real claude would drive it with its built-in MCP client;
+// the stub speaks the streamable-HTTP JSON-RPC directly, which is what lets e2e-p36 assert the host
+// really starts, the token really gates it, and the read jail really holds.
+const mcpServerFromArgs = () => {
+  const i = args.indexOf('--mcp-config');
+  if (i < 0 || !args[i + 1]) return null;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(args[i + 1], 'utf8'));
+    const [name, s] = Object.entries(cfg.mcpServers ?? {})[0] ?? [];
+    return s?.url ? { name, url: s.url, auth: s.headers?.Authorization } : null;
+  } catch { return null; }
+};
+
+// node:http, NOT fetch: undici's connection pool leaves async handles alive, and the process.exit(0)
+// below then trips libuv's "handle already closing" assertion on Windows — which the server sees as a
+// CRASHED cli call (exit -1073740791) and the judge silently returns null. `agent: false` = no pool.
+const httpPost = (url, headers, body) => new Promise((resolve, reject) => {
+  const u = new URL(url);
+  const req = http.request({
+    hostname: u.hostname, port: u.port, path: u.pathname + u.search, method: 'POST', agent: false,
+    headers: { ...headers, 'content-length': Buffer.byteLength(body) },
+  }, (res) => {
+    let data = '';
+    res.setEncoding('utf8');
+    res.on('data', (c) => (data += c));
+    res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text: data }));
+  });
+  req.on('error', reject);
+  req.end(body);
+});
+
+// A streamable-HTTP MCP response is either plain JSON or an SSE frame; take the first `data:` payload.
+const parseRpc = (res) => {
+  if ((res.headers['content-type'] ?? '').includes('text/event-stream')) {
+    for (const line of res.text.split(/\r?\n/))
+      if (line.startsWith('data:')) { try { return JSON.parse(line.slice(5).trim()); } catch {} }
+    return null;
+  }
+  try { return JSON.parse(res.text); } catch { return null; }
+};
+
+const probeJudgeTools = async (server) => {
+  const out = {};
+  let session = null;
+  const rpc = async (body, { auth = true } = {}) => {
+    const res = await httpPost(server.url, {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      ...(auth && server.auth ? { authorization: server.auth } : {}),
+      ...(session ? { 'mcp-session-id': session } : {}),
+    }, JSON.stringify(body));
+    const sid = res.headers['mcp-session-id'];
+    if (sid) session = sid;
+    return { status: res.status, msg: parseRpc(res) };
+  };
+  const text = (r) => r.msg?.result?.content?.[0]?.text ?? `NO_CONTENT(${r.status}) ${JSON.stringify(r.msg?.error ?? {})}`;
+  const call = (name, argsObj) => rpc({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: argsObj } });
+
+  const init = await rpc({
+    jsonrpc: '2.0', id: 1, method: 'initialize',
+    params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'e2e-stub', version: '1' } },
+  });
+  out.init = init.status;
+  out.initErr = init.msg?.error?.message ?? null;
+  if (init.status !== 200) return out;
+  await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' });
+
+  const list = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+  out.tools = (list.msg?.result?.tools ?? []).map((t) => t.name).sort();
+
+  // discovery → read the real artifact
+  out.listed = text(await call('judge_list_files', { dir: 'plans' })).split('\n').filter(Boolean).slice(0, 3);
+  const first = out.listed.find((p) => p.endsWith('.md'));
+  out.read = first ? text(await call('judge_read_file', { path: first })).slice(0, 60) : 'NO_MD';
+
+  // the jail: state/ holds the access token + TLS pfx + the DB, and .. must not climb out
+  out.denyState = text(await call('judge_read_file', { path: 'state/settings.json' })).slice(0, 60);
+  out.denyEscape = text(await call('judge_read_file', { path: '../../../Windows/win.ini' })).slice(0, 60);
+  out.denyBinary = text(await call('judge_read_file', { path: 'plans/../state/gatherlight.db' })).slice(0, 60);
+
+  // the bearer gate: the endpoint EXECUTES tools, so an unauthenticated local caller must bounce
+  out.unauth = (await rpc({ jsonrpc: '2.0', id: 8, method: 'tools/list' }, { auth: false })).status;
+  return out;
+};
+
 // LLM scorer judge (Modules/Scoring): return a canned {score, reason} verdict JSON so the automated
-// scorers produce a deterministic result under the stub.
+// scorers produce a deterministic result under the stub. When the e2e plants JUDGE_TOOLS_PROBE in the
+// user message (which reaches the answer-relevancy prompt), first drive the hosted judge tools for
+// real and report the observations in `reason` — other suites skip that and stay fast.
 if (prompt.includes('SCORING TASK')) {
-  const verdict = JSON.stringify({ score: 0.8, reason: 'stub judge verdict' });
+  let reason = 'stub judge verdict';
+  const server = prompt.includes('JUDGE_TOOLS_PROBE') ? mcpServerFromArgs() : null;
+  if (server) {
+    try { reason = 'PROBE ' + JSON.stringify(await probeJudgeTools(server)); }
+    catch (err) { reason = 'PROBE ' + JSON.stringify({ error: String(err?.message ?? err) }); }
+  }
+  const verdict = JSON.stringify({ score: 0.8, reason });
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
   done(verdict);
   process.exit(0);

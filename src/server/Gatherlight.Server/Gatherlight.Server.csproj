@@ -42,6 +42,12 @@
     <!-- Lyntai's SQLite storage backs the scoring store (lyntai_score_result: upsert + aggregate + export),
          landed in the same gatherlight.db (lyntai_-prefixed, coexists with the app's own tables). -->
     <PackageReference Include="Lyntai.Storage.Sqlite" Version="1.1.0" />
+    <!-- The ephemeral loopback MCP host Lyntai stands up per one-shot ILlmClient call. It reaches ONLY
+         the ClaudeCliProvider path — i.e. the two LLM-judge scorers — giving them the read-only judge
+         tools (Modules/Scoring/JudgeTools). The interactive agent path is untouched: that one gets MCP
+         via the CLI's mcp-config flag pointed at this server's own persistent /mcp
+         (ChatEnvironmentService). -->
+    <PackageReference Include="Lyntai.Tools.Mcp.Hosting" Version="1.1.0" />
   </ItemGroup>
 
   <!-- Built client (src/client `npm run build` outputs here; gitignored). Copied next to the exe

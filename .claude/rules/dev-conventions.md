@@ -38,6 +38,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   LLM-judge ones extend `LlmScorerBase` (one-shot claude from a neutral cwd, `{score,reason}`
   verdict). Add a dimension = add a class + one registration, never a switch. The eval playground
   (`Modules/Playground`, `dev.mjs eval`) reuses them against dry plans (no persistence).
+- **Judge tools** (`Modules/Scoring/JudgeTools.cs`): the LLM judges can open the REAL artifact instead
+  of grading the truncated excerpt in the `ScoreContext`. They reach it through Lyntai's
+  `AddMcpToolHost(new ClaudeCliMcpDialect())`, which registers an `ICliToolProvisioner` — read ONLY by
+  `ClaudeCliProvider`, i.e. the one-shot `ILlmClient` path, so this affects the judges and nothing else
+  (the agent path, `ClaudeAgentSession`, takes no provisioner: its MCP stays the CLI's mcp-config flag
+  pointed at this server's own persistent `/mcp`). Per call Lyntai starts a bearer-gated loopback
+  Kestrel and tears it down after. **It executes app code, so the jail is the load-bearing part**:
+  read-only, text extensions only, size-capped, and a POSITIVE allow-list of `plans/ household/
+  .claude/` — never `state/` (access token, TLS pfx, DB), with symlink targets re-checked and every
+  listing hit re-resolved. That's the same set the planner agent may already read, so the judges gain
+  no reach the scope guard doesn't already grant. Registering zero `ITool`s makes the host a no-op.
+  Proof lives in `e2e-p36` (the claude stub drives the MCP server for real and asserts the denials).
 
 ## LLM / process spawning
 
