@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Gatherlight.Server.Modules.Chat.Services;
+using Gatherlight.Server.Platform.Agent.Chat.Services;
 using IConversationStore = Lyntai.Storage.IConversationStore;
 
 namespace Gatherlight.Server.Modules.Scoring.Services;

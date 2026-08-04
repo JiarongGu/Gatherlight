@@ -1,4 +1,4 @@
-using Gatherlight.Server.Modules.Chat.Services;
+using Gatherlight.Server.Platform.Agent.Chat.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Jobs.Services;
 using Gatherlight.Server.Platform.Hosting.Migration.Services;

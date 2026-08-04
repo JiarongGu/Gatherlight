@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
-using Gatherlight.Server.Modules.Chat.Services;
+using Gatherlight.Server.Platform.Agent.Chat.Services;
 using Gatherlight.Server.Modules.Trace.Models;
 using IConversationStore = Lyntai.Storage.IConversationStore;
 

@@ -1,10 +1,10 @@
 using System.Diagnostics;
-using Gatherlight.Server.Modules.Chat.Services;
+using Gatherlight.Server.Platform.Agent.Chat.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
-using Gatherlight.Server.Modules.Llm.Models;
-using Gatherlight.Server.Modules.Llm.Services;
-using Gatherlight.Server.Modules.Tools.Services;
+using Gatherlight.Server.Platform.Agent.Llm.Models;
+using Gatherlight.Server.Platform.Agent.Llm.Services;
+using Gatherlight.Server.Platform.Capabilities.Tools.Services;
 using Lyntai.Providers.ClaudeCli;
 using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
 

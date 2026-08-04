@@ -6,8 +6,8 @@ using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Jobs.Models;
 using Gatherlight.Server.Modules.Jobs.Services;
-using Gatherlight.Server.Modules.Llm.Models;
-using Gatherlight.Server.Modules.Llm.Services;
+using Gatherlight.Server.Platform.Agent.Llm.Models;
+using Gatherlight.Server.Platform.Agent.Llm.Services;
 using Lyntai.Providers.ClaudeCli;
 using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
 

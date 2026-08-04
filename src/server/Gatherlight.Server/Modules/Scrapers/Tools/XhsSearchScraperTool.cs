@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Gatherlight.Server.Modules.Scrapers.Services;
-using Gatherlight.Server.Modules.Tools.Models;
+using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 
 namespace Gatherlight.Server.Modules.Scrapers.Tools;
 

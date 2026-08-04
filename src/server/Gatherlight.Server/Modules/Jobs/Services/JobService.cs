@@ -3,8 +3,8 @@ using System.Text.Json;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Jobs.Models;
-using Gatherlight.Server.Modules.Llm.Services;
-using Gatherlight.Server.Modules.Tools.Models;
+using Gatherlight.Server.Platform.Agent.Llm.Services;
+using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 
 namespace Gatherlight.Server.Modules.Jobs.Services;
 

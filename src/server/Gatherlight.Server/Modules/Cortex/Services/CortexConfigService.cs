@@ -1,5 +1,5 @@
 using Gatherlight.Server.Platform.Kernel.Services;
-using Gatherlight.Server.Modules.Llm.Services;
+using Gatherlight.Server.Platform.Agent.Llm.Services;
 using Lyntai.Prompts;
 
 namespace Gatherlight.Server.Modules.Cortex.Services;

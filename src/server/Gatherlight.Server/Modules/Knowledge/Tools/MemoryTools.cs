@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Gatherlight.Server.Modules.Knowledge.Services;
-using Gatherlight.Server.Modules.Tools.Models;
+using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 
 namespace Gatherlight.Server.Modules.Knowledge.Tools;
 

@@ -1,4 +1,4 @@
-using Gatherlight.Server.Modules.McpClient.Services;
+using Gatherlight.Server.Platform.Capabilities.McpClient.Services;
 using Gatherlight.Server.Platform.Hosting.Migration.Services;
 
 namespace Gatherlight.Server.Platform.Hosting.Migration.Steps;

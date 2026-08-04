@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Gatherlight.Server.Modules.Tools.Services;
+using Gatherlight.Server.Platform.Capabilities.Tools.Services;
 using Microsoft.Playwright;
 
 namespace Gatherlight.Server.Modules.Scrapers.Services;

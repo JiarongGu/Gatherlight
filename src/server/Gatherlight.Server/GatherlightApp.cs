@@ -1,15 +1,15 @@
 using System.Text.Json;
-using Gatherlight.Server.Modules.Chat.Services;
+using Gatherlight.Server.Platform.Agent.Chat.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Files.Services;
 using Gatherlight.Server.Platform.Hosting.Fluent.Services;
-using Gatherlight.Server.Modules.Llm.Services;
+using Gatherlight.Server.Platform.Agent.Llm.Services;
 using Gatherlight.Server.Modules.PlanIndex.Services;
 using Gatherlight.Server.Modules.Seed.Services;
-using Gatherlight.Server.Modules.Tools.Models;
-using Gatherlight.Server.Modules.Tools.Services;
-using Gatherlight.Server.Modules.Tools.Services.Tools;
+using Gatherlight.Server.Platform.Capabilities.Tools.Models;
+using Gatherlight.Server.Platform.Capabilities.Tools.Services;
+using Gatherlight.Server.Platform.Capabilities.Tools.Services.Tools;
 using Lyntai; // the shared LLM library (AddClaudeCliProvider / UseDefaultCandidates on the builder)
 
 namespace Gatherlight.Server;
@@ -172,16 +172,16 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.XhsSearchScraperTool>()
             .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.BudgetScanTool>()
             // Document / media processing (PdfPig extract + pdf-lib leaves for AcroForm + ImageSharp)
-            .AddSingleton<Modules.Documents.Services.IPdfProcessor, Modules.Documents.Services.PdfProcessor>()
-            .AddSingleton<Modules.Documents.Services.IImageProcessor, Modules.Documents.Services.ImageProcessor>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.PdfInspectTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.PdfExtractTextTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.PdfFillTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.PdfMergeTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.FillItineraryTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.ImageInfoTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.ImageResizeTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.ImageConvertTool>()
+            .AddSingleton<Platform.Capabilities.Documents.Services.IPdfProcessor, Platform.Capabilities.Documents.Services.PdfProcessor>()
+            .AddSingleton<Platform.Capabilities.Documents.Services.IImageProcessor, Platform.Capabilities.Documents.Services.ImageProcessor>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.PdfInspectTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.PdfExtractTextTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.PdfFillTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.PdfMergeTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.FillItineraryTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageInfoTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageResizeTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageConvertTool>()
             // Generalized stores + agent-writable cross-session memory
             .AddSingleton<Modules.Knowledge.Services.IEntityStore, Modules.Knowledge.Services.EntityStore>()
             .AddSingleton<Modules.Knowledge.Services.IKnowledgeStore, Modules.Knowledge.Services.KnowledgeStore>()
@@ -246,13 +246,13 @@ public static class GatherlightApp
             // proxy their tools into the registry (namespaced {serverId}__{tool}). Config +secrets in
             // the mcp_server table; add is access-gated / chat-gated, never agent-reachable.
             // See docs/mcp-client-design.md.
-            .AddSingleton<Modules.McpClient.Services.IMcpServerStore, Modules.McpClient.Services.McpServerStore>()
-            .AddSingleton<Modules.McpClient.Services.McpConnectionManager>()
-            .AddSingleton<Modules.McpClient.Services.IMcpConnectionManager>(sp => sp.GetRequiredService<Modules.McpClient.Services.McpConnectionManager>())
-            .AddHostedService(sp => sp.GetRequiredService<Modules.McpClient.Services.McpConnectionManager>())
-            .AddSingleton<Modules.McpClient.Services.IExternalToolProvider, Modules.McpClient.Services.McpProxyToolProvider>()
-            .AddSingleton<Modules.McpClient.Services.IMcpProvisionService, Modules.McpClient.Services.McpProvisionService>()
-            .AddSingleton<Modules.McpClient.Services.IMcpLoginService, Modules.McpClient.Services.McpLoginService>()
+            .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpServerStore, Platform.Capabilities.McpClient.Services.McpServerStore>()
+            .AddSingleton<Platform.Capabilities.McpClient.Services.McpConnectionManager>()
+            .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpConnectionManager>(sp => sp.GetRequiredService<Platform.Capabilities.McpClient.Services.McpConnectionManager>())
+            .AddHostedService(sp => sp.GetRequiredService<Platform.Capabilities.McpClient.Services.McpConnectionManager>())
+            .AddSingleton<Platform.Capabilities.McpClient.Services.IExternalToolProvider, Platform.Capabilities.McpClient.Services.McpProxyToolProvider>()
+            .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpProvisionService, Platform.Capabilities.McpClient.Services.McpProvisionService>()
+            .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpLoginService, Platform.Capabilities.McpClient.Services.McpLoginService>()
             .AddSingleton<IToolRegistry, ToolRegistry>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>()

@@ -1,4 +1,4 @@
-using Gatherlight.Server.Modules.Chat.Services;
+using Gatherlight.Server.Platform.Agent.Chat.Services;
 using Gatherlight.Server.Modules.PlanIndex.Services;
 using Microsoft.AspNetCore.Mvc;
 

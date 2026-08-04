@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Gatherlight.Server.Modules.Jobs.Models;
 using Gatherlight.Server.Modules.Jobs.Services;
-using Gatherlight.Server.Modules.Tools.Models;
+using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Gatherlight.Server.Modules.Jobs.Tools;
