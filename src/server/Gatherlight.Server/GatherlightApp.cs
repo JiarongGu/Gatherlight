@@ -265,6 +265,10 @@ public static class GatherlightApp
             .AddSingleton<Platform.Capabilities.McpClient.Services.IExternalToolProvider, Platform.Capabilities.McpClient.Services.McpProxyToolProvider>()
             .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpProvisionService, Platform.Capabilities.McpClient.Services.McpProvisionService>()
             .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpLoginService, Platform.Capabilities.McpClient.Services.McpLoginService>()
+            // One registry carrying provenance + state over every origin (platform/script/mcp/draft);
+            // ToolRegistry projects through it so /api/tools and /mcp can never show something the
+            // agent isn't actually allowed to call.
+            .AddSingleton<Platform.Capabilities.Services.ICapabilityRegistry, Platform.Capabilities.Services.CapabilityRegistry>()
             .AddSingleton<IToolRegistry, ToolRegistry>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>()
