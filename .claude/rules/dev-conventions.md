@@ -5,9 +5,21 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 ## Backend (src/server/Gatherlight.Server)
 
-- **Modules pattern**: `Modules/{Name}/` with `{Name}Controller.cs` (thin) → `Services/`
-  (business logic + repository). Variation points are interfaces resolved via DI collections
-  (e.g. `IGatherlightTool`), never if/else chains. Composition root: `GatherlightApp.Build()`.
+- **Two-tier modules**: `Platform/<Group>/<Name>/` or `Product/Planner/<Name>/`, each with
+  `{Name}Controller.cs` (thin) → `Services/` (business logic + repository). **A module is Platform
+  if it survives the planner being replaced by a different site** — i.e. it knows nothing about
+  plans, trips, budgets, household or travel. Groups: `Kernel` (contexts, paths, config), `Site`
+  (template seeding, and the site manifest), `Hosting` (security, update, resources, migration,
+  settings, migrations runner), `Agent` (LLM + chat sessions/gates/SSE), `Capabilities` (tool
+  registry, MCP endpoint + client, document/media tooling), `Storage` (library, knowledge, memory,
+  uploads, data repo, backup), `Ops` (jobs, traces, scoring, eval, playground, cortex).
+  **Platform must never reference Product** — enforced by `node devtools/dev.mjs check-layering`,
+  which also fails on a module left unclassified. The composition root (`GatherlightApp.Build()`)
+  is exempt: it wires both layers by definition. Where Platform needs something the Product owns,
+  invert it behind a Platform-owned port resolved as a DI collection — see
+  `Platform/Kernel/Services/IRecordIndex.cs`, which lets startup migration and backup restore
+  trigger a rebuild without knowing the planner keeps an index. Variation points are interfaces
+  resolved via DI collections (e.g. `IGatherlightTool`), never if/else chains.
 - **Type naming — never `Dto`/`DTO` in a name.** "DTO" is a pattern label, not a domain word; it
   says nothing about what the type carries. Name the *role*, using the suffixes already in the
   codebase: `…View` for a client-safe projection of an entity (`McpServerView`, `PromptView`,
@@ -19,7 +31,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - **SQLite via Dapper**: hand-written SQL, `snake_case` columns ↔ PascalCase properties
   (`MatchNamesWithUnderscores`). **Repository methods are async** (`QueryAsync`/`ExecuteAsync`).
   Trap: SQLite integer affinity — wrap double columns in `CAST(x AS REAL)` in SELECTs.
-- **Migrations**: FluentMigrator in `Modules/Fluent/Migrations/`, numbered `YYYYMMDDNNNN` —
+  **Table ownership** (one database, deliberately not split): product tables are `plan_index`
+  `plan_asset` `library_item` `knowledge` `entity` `job` `job_run` `data_commit` `chat_*` `upload`
+  `tool_cache` `zhiku_state` `lyntai_*`; platform tables are `app_config` (security/update/resources
+  keys), `notification`, `process_log`. A note for a future split, not an enforced boundary — at one
+  site there is nothing for enforcement to catch.
+- **Migrations**: FluentMigrator in `Platform/Hosting/Fluent/Migrations/`, numbered `YYYYMMDDNNNN` —
   never reuse a number (unapplied duplicates are skipped silently). Composite PKs must be
   inline at CreateTable (SQLite has no ALTER ADD CONSTRAINT). The 0.x ledger was squashed into a
   single `202607280001_Baseline` (one-time, at the Lyntai-1.0 fresh-start reset — durable data
@@ -28,22 +45,24 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - **Full-text search = FTS5 `trigram`**: search indexes are external-content FTS5 virtual tables
   with the **`trigram`** tokenizer (indexed CJK *substring* recall — `unicode61` treats a whole
   Chinese phrase as one token), kept in sync by AFTER INSERT/DELETE/UPDATE triggers and backfilled
-  in the same migration. Build the MATCH string via `Core/Services/FtsQuery` (drops `<3`-char tokens,
-  quotes the rest), fall back to LIKE when it returns null, rank with `bm25()`. Reference: the FTS
-  virtual tables + sync triggers in `202607280001_Baseline` + `LibraryStore`/`Knowledge/Stores`.
+  in the same migration. Build the MATCH string via `Platform/Kernel/Services/FtsQuery` (drops
+  `<3`-char tokens, quotes the rest), fall back to LIKE when it returns null, rank with `bm25()`.
+  Reference: the FTS virtual tables + sync triggers in `202607280001_Baseline` +
+  `LibraryStore`/`Knowledge/Stores`.
 - **Sources are BOM-less UTF-8 + `<CodePage>65001</CodePage>`** — without it, csc on a
   CJK-locale machine reads Chinese string literals as ANSI mojibake (bit us once).
 - **Scorers / evals** are the DI-collection pattern in practice: each eval dimension is an `IScorer`
-  registered `AddSingleton<IScorer, …>` (`Modules/Scoring`) — deterministic ones compute in code,
-  LLM-judge ones extend `LlmScorerBase` (one-shot claude from a neutral cwd, `{score,reason}`
+  registered `AddSingleton<IScorer, …>` (`Platform/Ops/Scoring`) — deterministic ones compute in
+  code, LLM-judge ones extend `LlmScorerBase` (one-shot claude from a neutral cwd, `{score,reason}`
   verdict). Add a dimension = add a class + one registration, never a switch. The eval playground
-  (`Modules/Playground`, `dev.mjs eval`) reuses them against dry plans (no persistence).
-- **Judge tools** (`Modules/Scoring/JudgeTools.cs`): the LLM judges can open the REAL artifact instead
-  of grading the truncated excerpt in the `ScoreContext`. They reach it through Lyntai's
-  `AddMcpToolHost(new ClaudeCliMcpDialect())`, which registers an `ICliToolProvisioner` — read ONLY by
-  `ClaudeCliProvider`, i.e. the one-shot `ILlmClient` path, so this affects the judges and nothing else
-  (the agent path, `ClaudeAgentSession`, takes no provisioner: its MCP stays the CLI's mcp-config flag
-  pointed at this server's own persistent `/mcp`). Per call Lyntai starts a bearer-gated loopback
+  (`Platform/Ops/Playground`, `dev.mjs eval`) reuses them against dry plans (no persistence).
+- **Judge tools** (`Platform/Ops/Scoring/Services/JudgeTools.cs`): the LLM judges can open the
+  REAL artifact instead of grading the truncated excerpt in the `ScoreContext`. They reach it
+  through Lyntai's `AddMcpToolHost(new ClaudeCliMcpDialect())`, which registers an
+  `ICliToolProvisioner` — read ONLY by `ClaudeCliProvider`, i.e. the one-shot `ILlmClient` path,
+  so this affects the judges and nothing else (the agent path, `ClaudeAgentSession`, takes no
+  provisioner: its MCP stays the CLI's mcp-config flag pointed at this server's own persistent
+  `/mcp`). Per call Lyntai starts a bearer-gated loopback
   Kestrel and tears it down after. **It executes app code, so the jail is the load-bearing part**:
   read-only, text extensions only, size-capped, and a POSITIVE allow-list of `plans/ household/
   .claude/` — never `state/` (access token, TLS pfx, DB), with symlink targets re-checked and every
@@ -62,7 +81,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   **by design** (the planner gate is the product).
 - Tests stub the CLI via `GATHERLIGHT_CLAUDE_CMD` (see devtools/scripts/claude-stub.mjs).
 
-## Security / remote access (`Modules/Security`)
+## Security / remote access (`Platform/Hosting/Security`)
 
 - **Loopback is trusted; remote needs a token.** `AccessGateMiddleware` gates `/api` + `/mcp` (token
   via `Authorization: Bearer` / `X-Gatherlight-Token` / httpOnly `gl_auth` cookie; loopback bypasses
@@ -96,17 +115,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   so `pdf_inspect`/`pdf_fill`/`pdf_merge`/`fill_itinerary` threw `工具目录不存在:` in every installed copy
   and only worked from the source repo. Coverage: `e2e-p10` runs the tools in BOTH shapes.
 - **Large resources are download-at-setup, not bundled** (default lean bundle ~200 MB vs ~350 MB):
-  chromium + git are provisioned by `Modules/Resources` (`ResourceProvisioner` → `/api/manage/resources`,
-  the 资源 · Resources console panel) into `{data}/state/resources/…` (in the data folder → survives
-  updates, fetched once). Runtime resolvers prefer that copy (`PlaywrightHost` browsers path,
-  `GitCliService.GitExe` data-aware). `build-production.mjs --offline` bundles them for air-gapped
-  installs. The Playwright **driver** (`libs/.playwright`, the chromium-install bootstrap) is still bundled.
-- **Auto-update is two-phase**: the server (`Modules/Update`) checks the configured GitHub release +
-  downloads/sha256-verifies into `{install}/.update/staged`; the C++ launcher overlays it on the next
-  restart (a running exe can't replace itself) and is itself excluded from the overlay. That split is
-  the whole reason the launcher exists. Release: a single **manual-trigger**
-  `.github/workflows/release.yml` (`workflow_dispatch`; version bump → e2e gate → bundle → optional
-  tag → GitHub Release) — no auto CI on push/PR (D3dx-style).
+  chromium + git are provisioned by `Platform/Hosting/Resources` (`ResourceProvisioner` →
+  `/api/manage/resources`, the 资源 · Resources console panel) into `{data}/state/resources/…`
+  (in the data folder → survives updates, fetched once). Runtime resolvers prefer that copy
+  (`PlaywrightHost` browsers path, `GitCliService.GitExe` data-aware). `build-production.mjs
+  --offline` bundles them for air-gapped installs. The Playwright **driver** (`libs/.playwright`,
+  the chromium-install bootstrap) is still bundled.
+- **Auto-update is two-phase**: the server (`Platform/Hosting/Update`) checks the configured
+  GitHub release + downloads/sha256-verifies into `{install}/.update/staged`; the C++ launcher
+  overlays it on the next restart (a running exe can't replace itself) and is itself excluded
+  from the overlay. That split is the whole reason the launcher exists. Release: a single
+  **manual-trigger** `.github/workflows/release.yml` (`workflow_dispatch`; version bump → e2e
+  gate → bundle → optional tag → GitHub Release) — no auto CI on push/PR (D3dx-style).
 
 ## Data folder discipline
 

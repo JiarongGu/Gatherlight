@@ -27,8 +27,8 @@ legacy `viewer/` is deleted. On top of that: an **LLM-ops loop** (per-conversati
 automated scorers + run traces + cortex prompt/model tuning + an eval playground), **FTS5 trigram
 search**, portable **memory transfer**, **remote-access hardening** (access-token gate + TLS +
 security headers + brute-force lockout), a **native C++ launcher** with two-phase **auto-update**,
-and **CI/release** packaging. New server modules: `Modules/{Scoring,Trace,Cortex,Update,Security,
-Playground,Memory}`.
+and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,Cortex,Playground}`,
+`Platform/Hosting/{Update,Security}`, `Platform/Storage/Memory`.
 
 - `tools/pdf-form/` — a Node utility (pdf-lib + fontkit) for PDF AcroForm inspect/fill/merge,
   invoked by the C# document tools via `NodeLeafTool` (reliable on real + CJK PDFs where PDFsharp
@@ -46,9 +46,11 @@ Playground,Memory}`.
   `local/sensitive-patterns.txt`). History was reset on 2026-07-13 to remove exactly such leaks.
 - **User data lives ONLY in `local/`** (own private git repo). Never move it back into this repo.
 - **LLM via the authenticated `claude` CLI only — never an API key.**
-- **Backend = modules** (`Modules/{Name}` controller → service → repository; Dapper + hand-written
-  SQL, snake_case columns, FluentMigrator `YYYYMMDDNNNN` migrations; variation points are
-  interfaces resolved via DI, never if/else chains).
+- **Backend = two-tier modules** (`Platform/<Group>/<Name>` or `Product/Planner/<Name>`,
+  controller → service → repository; Dapper + hand-written SQL, snake_case columns,
+  FluentMigrator `YYYYMMDDNNNN` migrations; variation points are interfaces resolved via DI, never
+  if/else chains). **Platform must never reference Product** — `dev.mjs check-layering` enforces
+  it; details in `.claude/rules/dev-conventions.md`.
 - **Working files** (probes, drafts, captures) go under `devtools/` with a `_` prefix (gitignored),
   never OS temp.
 - **Never commit without explicit user approval.**
