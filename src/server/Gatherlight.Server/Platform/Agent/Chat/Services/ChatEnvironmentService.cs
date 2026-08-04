@@ -1,4 +1,5 @@
 using Gatherlight.Server.Platform.Kernel.Services;
+using Gatherlight.Server.Platform.Site.Services;
 
 namespace Gatherlight.Server.Platform.Agent.Chat.Services;
 
@@ -17,12 +18,15 @@ public sealed class ChatEnvironmentService
     private readonly ISiteContext _site;
     private readonly IPlatformContext _platform;
     private readonly GatherlightServerOptions _options;
+    private readonly ISiteManifestStore _manifest;
 
-    public ChatEnvironmentService(ISiteContext site, IPlatformContext platform, GatherlightServerOptions options)
+    public ChatEnvironmentService(
+        ISiteContext site, IPlatformContext platform, GatherlightServerOptions options, ISiteManifestStore manifest)
     {
         _site = site;
         _platform = platform;
         _options = options;
+        _manifest = manifest;
     }
 
     public string SettingsPath => Path.Combine(_platform.StatePath, "settings.chat.json");
@@ -58,10 +62,21 @@ public sealed class ChatEnvironmentService
         if (ShouldReissueGuard(ScopeGuardPath))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ScopeGuardPath)!);
-            File.WriteAllText(ScopeGuardPath, ScopeGuardMjs);
+            File.WriteAllText(ScopeGuardPath, RenderScopeGuard());
             created = ".claude/hooks/scope-guard.mjs";
         }
         return created;
+    }
+
+    /// <summary>The guard is generated, not shipped verbatim: its WRITE_DIRS come from the site
+    /// manifest's declared record directories (plus .claude), so a site that keeps its artifacts
+    /// somewhere else is jailed correctly without editing the guard. PROTECTED stays hardcoded —
+    /// a site must not be able to widen its own jail by editing its own manifest.</summary>
+    private string RenderScopeGuard()
+    {
+        var dirs = _manifest.Current.Records.Concat([".claude"]).Distinct();
+        var literal = "[" + string.Join(", ", dirs.Select(d => $"'{d.Replace("'", "\\'")}'")) + "]";
+        return ScopeGuardMjs.Replace("__WRITE_DIRS__", literal);
     }
 
     // The scope guard is a SECURITY boundary, not user content: (re)issue it when missing OR when an
@@ -135,10 +150,10 @@ public sealed class ChatEnvironmentService
          * runs both. GUARD_VERSION is the upgrade key: the server re-issues newer logic into an
          * existing data folder (ChatEnvironmentService.EnsureFiles), so hardening reaches old installs.
          */
-        // GUARD_VERSION: 4
+        // GUARD_VERSION: 5
         import path from 'node:path';
 
-        const WRITE_DIRS = ['plans', 'household', '.claude'];
+        const WRITE_DIRS = __WRITE_DIRS__;
         const PROTECTED = ['.claude/hooks', '.claude/settings.json', '.claude/settings.local.json'];
 
         const HISTORY = [
