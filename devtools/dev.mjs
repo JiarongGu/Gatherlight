@@ -15,6 +15,7 @@
 //   node devtools/dev.mjs test-data         - regenerate the synthetic fixture data folder
 //   node devtools/dev.mjs install-hooks     - git core.hooksPath -> devtools/hooks (pre-commit guard)
 //   node devtools/dev.mjs check-sensitive   - scan staged changes (--tree for all tracked files)
+//   node devtools/dev.mjs check-layering    - assert Platform/ never references Product/
 import { spawnSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -121,6 +122,10 @@ switch (cmd) {
 
   case 'check-sensitive':
     run('node', [path.join(repo, 'devtools', 'scripts', 'check-sensitive.mjs'), ...args]);
+    break;
+
+  case 'check-layering':
+    run('node', [path.join(repo, 'devtools', 'scripts', 'check-layering.mjs'), ...args]);
     break;
 
   case 'smoke':
