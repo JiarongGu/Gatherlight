@@ -92,11 +92,11 @@ fs.mkdirSync(res, { recursive: true });
 fs.mkdirSync(data, { recursive: true });
 
 const move = (from, to) => { if (fs.existsSync(from)) fs.renameSync(from, to); };
-// The web UI + knowledge-base template go under res/; everything ELSE in the publish (the
+// The web UI + site template go under res/; everything ELSE in the publish (the
 // framework-dependent app: apphost exe + app/dependency DLLs + runtimeconfig/deps.json + native
 // libs) is moved into libs/ in bulk below — NOT just the exe (FD is a folder of DLLs, not one file).
 move(path.join(stage, 'wwwroot'), path.join(res, 'wwwroot'));
-move(path.join(stage, 'Assets', 'DataTemplate'), path.join(res, 'template'));
+move(path.join(stage, 'Assets', 'SiteTemplate'), path.join(res, 'template'));
 
 // Playwright DRIVER (~34 MB zip → ~88 MB): download-at-setup by default — the 资源 panel fetches it
 // (from the Gatherlight.Resources nuget package) into {data}/state/resources/.playwright, resolved at

@@ -1,0 +1,8 @@
+{
+  "name": "Gatherlight",
+  "template": { "id": "planner", "version": "1.0.0" },
+  "agent": { "model": null, "promptPack": "planner" },
+  "records": ["plans", "household"],
+  "capabilities": { "deny": [], "enabled": [] },
+  "ui": { "spec": "ui/", "specVersion": 1 }
+}

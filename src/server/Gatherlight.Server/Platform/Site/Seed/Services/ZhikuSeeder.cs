@@ -11,8 +11,8 @@ public sealed record ZhikuStatus(
     List<string> Seeded, List<string> Upgraded, List<string> Skipped);
 
 /// <summary>
-/// Seeds/updates the planner knowledge base (智库) in the data folder from the shipped template
-/// (Assets/DataTemplate, copied next to the exe). Per file: absent → write; present and still
+/// Seeds/updates the planner knowledge base (智库) in the data folder from the shipped site template
+/// (Assets/SiteTemplate, copied next to the exe). Per file: absent → write; present and still
 /// byte-identical to what WE last shipped → safe to upgrade; present but user-modified (or
 /// pre-existing with no shipping record, e.g. an imported legacy workspace) → never touched,
 /// reported instead. Writes commit to the data repo as one `zhiku: seed` commit.

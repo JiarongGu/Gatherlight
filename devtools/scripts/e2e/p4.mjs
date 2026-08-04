@@ -8,7 +8,7 @@ import { repo, dataDirFor, makeReporter, startServer, waitHealthy, makeClient, c
 const dataDir = dataDirFor('p4');
 const PORT = 5394;
 const base = `http://127.0.0.1:${PORT}`;
-const binTemplate = path.join(repo, 'src', 'server', 'Gatherlight.Server', 'bin', 'Debug', 'net10.0', 'Assets', 'DataTemplate');
+const binTemplate = path.join(repo, 'src', 'server', 'Gatherlight.Server', 'bin', 'Debug', 'net10.0', 'Assets', 'SiteTemplate');
 
 const { ok, fail, done } = makeReporter('p4');
 const { j } = makeClient(base);

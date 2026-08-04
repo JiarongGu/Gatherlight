@@ -1,8 +1,8 @@
 namespace Gatherlight.Server.Platform.Kernel.Services;
 
 /// <summary>
-/// Resolves the shipped resource dirs (web client + knowledge-base template) across both layouts:
-/// the flat dev/output layout (<c>{base}/wwwroot</c>, <c>{base}/Assets/DataTemplate</c>) and the
+/// Resolves the shipped resource dirs (web client + site template) across both layouts:
+/// the flat dev/output layout (<c>{base}/wwwroot</c>, <c>{base}/Assets/SiteTemplate</c>) and the
 /// structured production bundle (<c>{base}/../res/wwwroot</c>, <c>{base}/../res/template</c> — the
 /// exe lives in <c>libs/</c>). First existing candidate wins; falls back to the flat path.
 /// </summary>
@@ -16,9 +16,9 @@ public static class ResourcePaths
         Path.Combine(Base, "res", "wwwroot"),
         Path.Combine(Base, "..", "res", "wwwroot"));
 
-    /// <summary>The shipped knowledge-base template (contains CLAUDE.md).</summary>
+    /// <summary>The shipped site template (contains CLAUDE.md + site.json).</summary>
     public static string DataTemplate => First("CLAUDE.md",
-        Path.Combine(Base, "Assets", "DataTemplate"),
+        Path.Combine(Base, "Assets", "SiteTemplate"),
         Path.Combine(Base, "res", "template"),
         Path.Combine(Base, "..", "res", "template"));
 

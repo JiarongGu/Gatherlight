@@ -269,11 +269,17 @@ public static class GatherlightApp
             // pre-listen). IMigrationStep is a DI collection — registration order = run order.
             .AddSingleton<Platform.Hosting.Migration.Services.MigrationState>()
             .AddSingleton<Platform.Hosting.Migration.Services.StartupMigrationRunner>()
-            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SiteManifestStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DbMigrateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealLocksStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DataRepoInitStep>()
+            // KnowledgeBaseStep (the seeder) BEFORE SiteManifestStep: the shipped template's site.json
+            // is authoritative for a fresh install; the manifest step's on-disk inference is only the
+            // fallback for a folder the seeder didn't cover (e.g. a broken install missing the template).
+            // It must also precede guard issuance (inside KnowledgeBaseStep, via ChatEnvironmentService
+            // .EnsureFiles -> RenderScopeGuard, which reads ISiteManifestStore.Current) so the guard's
+            // WRITE_DIRS reflect the real manifest, not model defaults.
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.KnowledgeBaseStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SiteManifestStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.RecordIndexStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealStateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.MemorySeedStep>()

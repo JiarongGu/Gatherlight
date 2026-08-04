@@ -32,16 +32,16 @@
     <ProjectReference Include="..\Gatherlight.Server\Gatherlight.Server.csproj" />
   </ItemGroup>
 
-  <!-- Stage the built client + knowledge-base template next to the Host exe: ZhikuSeeder reads
-       {BaseDirectory}/Assets/DataTemplate and the static file server reads {BaseDirectory}/wwwroot.
+  <!-- Stage the built client + site template next to the Host exe: ZhikuSeeder reads
+       {BaseDirectory}/Assets/SiteTemplate and the static file server reads {BaseDirectory}/wwwroot.
        (Content copy is not transitive across a ProjectReference, so link them explicitly.) -->
   <ItemGroup>
     <Content Include="..\Gatherlight.Server\wwwroot\**"
              Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest"
              Condition="Exists('..\Gatherlight.Server\wwwroot')" />
-    <Content Include="..\Gatherlight.Server\Assets\DataTemplate\**"
-             Link="Assets\DataTemplate\%(RecursiveDir)%(Filename)%(Extension)"
+    <Content Include="..\Gatherlight.Server\Assets\SiteTemplate\**"
+             Link="Assets\SiteTemplate\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
