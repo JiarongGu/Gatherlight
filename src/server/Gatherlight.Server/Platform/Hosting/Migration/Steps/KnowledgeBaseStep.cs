@@ -1,7 +1,7 @@
 using Gatherlight.Server.Platform.Agent.Chat.Services;
-using Gatherlight.Server.Modules.DataRepo.Services;
+using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 using Gatherlight.Server.Platform.Hosting.Migration.Services;
-using Gatherlight.Server.Modules.Seed.Services;
+using Gatherlight.Server.Platform.Site.Seed.Services;
 
 namespace Gatherlight.Server.Platform.Hosting.Migration.Steps;
 

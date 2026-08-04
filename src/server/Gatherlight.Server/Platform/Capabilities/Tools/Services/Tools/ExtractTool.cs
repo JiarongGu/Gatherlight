@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Gatherlight.Server.Platform.Kernel.Services;
-using Gatherlight.Server.Modules.Files.Services;
+using Gatherlight.Server.Platform.Storage.Files.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 using Lyntai.Providers.ClaudeCli;

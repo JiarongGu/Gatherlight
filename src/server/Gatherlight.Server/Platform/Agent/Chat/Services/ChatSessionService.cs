@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
 using Gatherlight.Server.Platform.Kernel.Services;
-using Gatherlight.Server.Modules.DataRepo.Services;
+using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Models;
 using Gatherlight.Server.Platform.Agent.Llm.Services;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Models;
@@ -122,7 +122,7 @@ public sealed class ChatSessionService
     private readonly CodeRepoGit _codeGit;
     private readonly BuildVerifyService _buildVerify;
     private readonly GatherlightServerOptions _options;
-    private readonly Modules.Scoring.Services.IScoringService _scoring;
+    private readonly Platform.Ops.Scoring.Services.IScoringService _scoring;
     private readonly IAgentGate _gate;
     private readonly IMcpProvisionService _mcpProvision;
     private readonly IMcpLoginService _mcpLogin;
@@ -137,7 +137,7 @@ public sealed class ChatSessionService
         IDataContext data, IAppConfigService appConfig, ChatEnvironmentService env,
         DataWriteLock writeLock, IToolRegistry tools, IZhikuRouter router,
         CodeRepoGit codeGit, BuildVerifyService buildVerify, GatherlightServerOptions options,
-        Modules.Scoring.Services.IScoringService scoring, IAgentGate gate,
+        Platform.Ops.Scoring.Services.IScoringService scoring, IAgentGate gate,
         IMcpProvisionService mcpProvision, IMcpLoginService mcpLogin, IMcpServerStore mcpStore,
         ILogger<ChatSessionService> log)
     {
@@ -609,7 +609,7 @@ public sealed class ChatSessionService
             Emit(s, new AgentEvent { Kind = "done", Phase = ChatPhase.Committed, Data = new { sha } });
             // Auto-score the committed conversation (Mastra-style) off the request path — the LLM
             // judges take a few seconds; per-scorer failures are swallowed inside the service.
-            var scoreCtx = Modules.Scoring.Services.ScoringContext.Build(
+            var scoreCtx = Platform.Ops.Scoring.Services.ScoringContext.Build(
                 s.Id, s.UserMessage, s.PlanText, s.Phase, s.Mode, s.CommitSha, paths);
             _ = Task.Run(() => _scoring.ScoreAsync(scoreCtx));
         }

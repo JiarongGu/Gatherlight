@@ -1,4 +1,4 @@
-using Gatherlight.Server.Modules.DataRepo.Services;
+using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 using Gatherlight.Server.Platform.Hosting.Migration.Services;
 
 namespace Gatherlight.Server.Platform.Hosting.Migration.Steps;

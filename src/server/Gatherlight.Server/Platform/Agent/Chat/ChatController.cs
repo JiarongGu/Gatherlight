@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Gatherlight.Server.Platform.Agent.Chat.Services;
-using Gatherlight.Server.Modules.Files.Services;
+using Gatherlight.Server.Platform.Storage.Files.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Models;
 using Microsoft.AspNetCore.Mvc;
 

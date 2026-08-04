@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Gatherlight.Server.Modules.Memory.Services;
+using Gatherlight.Server.Platform.Storage.Memory.Services;
 using Gatherlight.Server.Platform.Hosting.Migration.Services;
 
 namespace Gatherlight.Server.Platform.Hosting.Migration.Steps;

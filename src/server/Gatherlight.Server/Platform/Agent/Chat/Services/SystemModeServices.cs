@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Text;
-using Gatherlight.Server.Modules.DataRepo.Services;
+using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 
 namespace Gatherlight.Server.Platform.Agent.Chat.Services;
 
