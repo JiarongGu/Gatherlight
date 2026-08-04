@@ -81,7 +81,8 @@ public class GitCliService : IGitCliService
     private readonly ILogger _log;
     private readonly string GitExe;
 
-    public GitCliService(IDataContext data, ILogger<GitCliService> log) : this(data.RootPath, log, data.ResourcesPath) { }
+    public GitCliService(ISiteContext site, IPlatformContext platform, ILogger<GitCliService> log)
+        : this(site.RootPath, log, platform.ResourcesPath) { }
 
     protected GitCliService(string root, ILogger log, string? resourcesDir = null)
     {

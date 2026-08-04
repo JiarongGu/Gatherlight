@@ -58,7 +58,7 @@ public static class GatherlightApp
         // at Warning (or the app level if quieter). One ServerConfigService for both this + the DI below.
         config ??= new ServerConfigService(options);
         var logsDir = Path.Combine(Path.GetFullPath(options.DataPath), "state", "logs");
-        var dbPath = Path.Combine(Path.GetFullPath(options.DataPath), "state", "gatherlight.db"); // = IDataContext.DatabasePath (for Lyntai's store)
+        var dbPath = Path.Combine(Path.GetFullPath(options.DataPath), "state", "gatherlight.db"); // = IPlatformContext.DatabasePath (for Lyntai's store)
         var logLevel = ResolveLogLevel(config.Current.LogLevel);
         var fwLevel = logLevel > LogLevel.Warning ? logLevel : LogLevel.Warning;
         builder.Logging.AddProvider(new Platform.Kernel.Logging.FileLoggerProvider(logsDir, logLevel));
@@ -70,7 +70,9 @@ public static class GatherlightApp
             .AddSingleton(options)
             // The config resolved above (one instance, one settings.json reader).
             .AddSingleton(config)
-            .AddSingleton<IDataContext, DataContext>()
+            .AddSingleton<Platform.Site.Services.ISiteManifestStore, Platform.Site.Services.SiteManifestStore>()
+            .AddSingleton<Platform.Kernel.Services.ISiteContext, Platform.Kernel.Services.SiteContext>()
+            .AddSingleton<Platform.Kernel.Services.IPlatformContext, Platform.Kernel.Services.PlatformContext>()
             .AddSingleton<IDbConnectionFactory, SqliteConnectionFactory>()
             .AddSingleton<IAppConfigService, AppConfigService>()
             // Data repo (the private git repo inside the data folder)
@@ -138,9 +140,9 @@ public static class GatherlightApp
                 // Registering ZERO ITools would make the host a no-op (the provisioner short-circuits).
                 .AddMcpToolHost(new Lyntai.Providers.ClaudeCli.ClaudeCliMcpDialect())
                 .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeReadFileTool(
-                    sp.GetRequiredService<Platform.Kernel.Services.IDataContext>()))
+                    sp.GetRequiredService<Platform.Kernel.Services.ISiteContext>()))
                 .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeListFilesTool(
-                    sp.GetRequiredService<Platform.Kernel.Services.IDataContext>())))
+                    sp.GetRequiredService<Platform.Kernel.Services.ISiteContext>())))
             // Lyntai's cortex (IPromptRegistry / IModelRoutingStore) reads/writes the app's OWN app_config
             // table — single source of truth for cortex.prompt.* / llm.model.*, no lyntai_kv duplicate. Plain
             // AddSingleton after AddLyntai wins over its TryAdd SqliteKeyValueStore.

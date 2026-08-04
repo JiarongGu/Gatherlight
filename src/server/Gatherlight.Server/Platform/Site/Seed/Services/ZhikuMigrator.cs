@@ -51,7 +51,8 @@ public sealed class ZhikuMigrator : IZhikuMigrator
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
+    private readonly IPlatformContext _platform;
     private readonly IDbConnectionFactory _db;
     private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
@@ -67,11 +68,12 @@ public sealed class ZhikuMigrator : IZhikuMigrator
     private volatile KbMigrationProgress? _progress;
 
     public ZhikuMigrator(
-        IDataContext data, IDbConnectionFactory db, IAgentRunner agent, IPromptHarness harness,
+        ISiteContext data, IPlatformContext platform, IDbConnectionFactory db, IAgentRunner agent, IPromptHarness harness,
         IAppConfigService appConfig, IGitCliService git, DataWriteLock writeLock, IDataCommitRepository commits,
         INotificationService notifications, ILogger<ZhikuMigrator> log)
     {
         _data = data;
+        _platform = platform;
         _db = db;
         _agent = agent;
         _harness = harness;
@@ -83,7 +85,7 @@ public sealed class ZhikuMigrator : IZhikuMigrator
         _log = log;
     }
 
-    private string StagedPath => Path.Combine(_data.StatePath, "kb-migration-staged.json");
+    private string StagedPath => Path.Combine(_platform.StatePath, "kb-migration-staged.json");
 
     // Scope (per decision): the .claude/ knowledge base + CLAUDE.md only.
     private static bool InScope(string rel) => rel == "CLAUDE.md" || rel.StartsWith(".claude/");
@@ -98,7 +100,7 @@ public sealed class ZhikuMigrator : IZhikuMigrator
         {
             var rel = Path.GetRelativePath(root, abs).Replace('\\', '/');
             if (!InScope(rel)) continue;
-            var target = _data.ResolveDataPath(rel);
+            var target = _data.ResolveSitePath(rel);
             if (target is null || !File.Exists(target)) continue;      // absent → seeder writes it fresh, not a merge
 
             var current = Hash(await File.ReadAllBytesAsync(target));
@@ -174,7 +176,7 @@ public sealed class ZhikuMigrator : IZhikuMigrator
                     done++;
                     var startedTicks = DateTime.UtcNow.Ticks;
                     _progress = new KbMigrationProgress(done, candidates.Count, c.Path, true, Model: model, StartedUtcTicks: startedTicks);
-                    var target = _data.ResolveDataPath(c.Path)!;
+                    var target = _data.ResolveSitePath(c.Path)!;
                     var abs = Path.Combine(root, c.Path.Replace('/', Path.DirectorySeparatorChar));
                     var userContent = await File.ReadAllTextAsync(target, ct);
                     var templateBytes = await File.ReadAllBytesAsync(abs, ct);

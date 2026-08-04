@@ -23,13 +23,13 @@ public sealed class ScriptToolProvider : IScriptToolProvider, IHostedService, ID
 {
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(1);
 
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly ILogger<ScriptToolProvider> _log;
     private FileSystemWatcher? _watcher;
     private Timer? _timer;
     private volatile IReadOnlyList<IGatherlightTool> _current = Array.Empty<IGatherlightTool>();
 
-    public ScriptToolProvider(IDataContext data, ILogger<ScriptToolProvider> log)
+    public ScriptToolProvider(ISiteContext data, ILogger<ScriptToolProvider> log)
     {
         _data = data;
         _log = log;

@@ -8,11 +8,11 @@ namespace Gatherlight.Server.Platform.Kernel;
 [Route("api/health")]
 public sealed class HealthController : ControllerBase
 {
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly ServerConfigService _config;
     private readonly MigrationState _migration;
 
-    public HealthController(IDataContext data, ServerConfigService config, MigrationState migration)
+    public HealthController(ISiteContext data, ServerConfigService config, MigrationState migration)
     {
         _data = data;
         _config = config;

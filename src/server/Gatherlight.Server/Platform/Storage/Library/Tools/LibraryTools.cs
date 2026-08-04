@@ -97,8 +97,8 @@ public sealed class LibrarySearchTool : IGatherlightTool
 public sealed class LibraryImportTool : IGatherlightTool
 {
     private readonly ILibraryRepository _repo;
-    private readonly IDataContext _data;
-    public LibraryImportTool(ILibraryRepository repo, IDataContext data)
+    private readonly ISiteContext _data;
+    public LibraryImportTool(ILibraryRepository repo, ISiteContext data)
     {
         _repo = repo;
         _data = data;
@@ -119,7 +119,7 @@ public sealed class LibraryImportTool : IGatherlightTool
     {
         var a = ToolArgs.Parse<Args>(args);
         var rel = ToolArgs.Req(a.Path, "path");
-        var abs = _data.ResolveDataPath(rel) ?? throw new ToolException(400, $"路径越界:{rel}");
+        var abs = _data.ResolveSitePath(rel) ?? throw new ToolException(400, $"路径越界:{rel}");
         if (!File.Exists(abs)) throw new ToolException(400, $"文件不存在:{rel}");
 
         var md = await File.ReadAllTextAsync(abs, ct);

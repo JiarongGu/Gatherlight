@@ -72,12 +72,12 @@ public sealed class ReportJobHandler : IJobHandler
 {
     private readonly IUnattendedRunService _runner;
     private readonly INotificationService _notifications;
-    private readonly IDataContext _data;
-    public ReportJobHandler(IUnattendedRunService runner, INotificationService notifications, IDataContext data)
+    private readonly IPlatformContext _platform;
+    public ReportJobHandler(IUnattendedRunService runner, INotificationService notifications, IPlatformContext platform)
     {
         _runner = runner;
         _notifications = notifications;
-        _data = data;
+        _platform = platform;
     }
 
     public string Kind => JobKind.Report;
@@ -103,7 +103,7 @@ public sealed class ReportJobHandler : IJobHandler
         // Persist the report as a markdown artifact under state/ (survives, backed up), and keep a
         // pointer + preview in the run's detail for the UI.
         var rel = $"state/jobs/reports/{ctx.Run.Id}.md";
-        var abs = Path.Combine(_data.RootPath, rel.Replace('/', Path.DirectorySeparatorChar));
+        var abs = Path.Combine(_platform.StatePath, "jobs", "reports", $"{ctx.Run.Id}.md");
         Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
         await File.WriteAllTextAsync(abs, r.FinalText, ctx.Ct);
 

@@ -14,7 +14,7 @@ namespace Gatherlight.Server.Platform.Capabilities.Documents.Tools;
 public sealed class FillItineraryTool : DocumentToolBase
 {
     private readonly string _leafDir;
-    public FillItineraryTool(IDataContext data) : base(data) => _leafDir = ResolveLeafDir("pdf-form");
+    public FillItineraryTool(ISiteContext site, IPlatformContext platform) : base(site, platform) => _leafDir = ResolveLeafDir("pdf-form");
 
     public override string Name => "fill_itinerary";
 
@@ -34,6 +34,6 @@ public sealed class FillItineraryTool : DocumentToolBase
         Directory.CreateDirectory(Path.GetDirectoryName(outAbs)!);
 
         return await new FixedNodeLeaf(_leafDir, "fill-itinerary",
-            ["--in", tmpl, "--data", data, "--out", outAbs], Data.ResourcesPath).RunAsync(args, ct);
+            ["--in", tmpl, "--data", data, "--out", outAbs], Platform.ResourcesPath).RunAsync(args, ct);
     }
 }

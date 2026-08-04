@@ -24,15 +24,15 @@ public sealed class JobsController : ControllerBase
     private readonly IJobRepository _repo;
     private readonly ServerConfigService _config;
     private readonly IToolRegistry _tools;
-    private readonly IDataContext _data;
+    private readonly IPlatformContext _platform;
 
-    public JobsController(IJobService jobs, IJobRepository repo, ServerConfigService config, IToolRegistry tools, IDataContext data)
+    public JobsController(IJobService jobs, IJobRepository repo, ServerConfigService config, IToolRegistry tools, IPlatformContext platform)
     {
         _jobs = jobs;
         _repo = repo;
         _config = config;
         _tools = tools;
-        _data = data;
+        _platform = platform;
     }
 
     /// <summary>Metadata the create/edit form needs: the job kinds + tool names for tool-jobs.</summary>
@@ -110,9 +110,8 @@ public sealed class JobsController : ControllerBase
     {
         var run = await _repo.GetRunAsync(runId);
         if (run?.Detail is null) return NotFound(new { error = "无报告" });
-        var rel = $"state/jobs/reports/{runId}.md";
-        var abs = _data.ResolveDataPath(rel);
-        if (abs is null || !System.IO.File.Exists(abs)) return NotFound(new { error = "报告文件不存在" });
+        var abs = Path.Combine(_platform.StatePath, "jobs", "reports", $"{runId}.md");
+        if (!System.IO.File.Exists(abs)) return NotFound(new { error = "报告文件不存在" });
         return Ok(new { markdown = await System.IO.File.ReadAllTextAsync(abs) });
     }
 

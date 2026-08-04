@@ -18,12 +18,12 @@ public sealed class ExtractTool : IGatherlightTool
     private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
     private readonly IUploadService _uploads;
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IAppConfigService _appConfig;
 
     public ExtractTool(
         IAgentRunner agent, IPromptHarness harness, IUploadService uploads,
-        IDataContext data, IAppConfigService appConfig)
+        ISiteContext data, IAppConfigService appConfig)
     {
         _agent = agent;
         _harness = harness;
@@ -52,7 +52,7 @@ public sealed class ExtractTool : IGatherlightTool
         {
             throw new ToolException(400, ex.Message);
         }
-        var absPath = _data.ResolveDataPath(relPath)!;
+        var absPath = _data.ResolveSitePath(relPath)!;
         var instruction = args.TryGetProperty("instruction", out var i) && i.GetString() is { Length: > 0 } s
             ? s
             : "读取该文件,提取其中的关键信息,整理成简洁清晰的结构化摘要(用简体中文)。";

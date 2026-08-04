@@ -38,7 +38,7 @@ internal static class JudgeJail
     /// <summary>Resolve a data-root-relative path for reading. Returns null and sets
     /// <paramref name="error"/> when the path escapes the root, lands outside the readable subtrees,
     /// or resolves (via a symlink/junction) to somewhere it shouldn't.</summary>
-    internal static string? Resolve(IDataContext data, string relative, out string error)
+    internal static string? Resolve(ISiteContext data, string relative, out string error)
     {
         error = "";
         if (string.IsNullOrWhiteSpace(relative))
@@ -47,9 +47,9 @@ internal static class JudgeJail
             return null;
         }
 
-        // ResolveDataPath already normalizes and rejects traversal out of the data root; the subtree
-        // check below is the second, narrower gate.
-        var full = data.ResolveDataPath(relative);
+        // ResolveSitePath already normalizes and rejects traversal out of the data root (incl. state/);
+        // the subtree check below is the second, narrower gate.
+        var full = data.ResolveSitePath(relative);
         if (full is null)
         {
             error = $"path escapes the data folder: {relative}";
@@ -80,7 +80,7 @@ internal static class JudgeJail
 
     /// <summary>Whether an absolute path sits inside one of the readable subtrees. Compares on a
     /// directory boundary — a plain prefix match would let <c>plans-archive/</c> pass for <c>plans/</c>.</summary>
-    internal static bool InSubtree(IDataContext data, string fullPath)
+    internal static bool InSubtree(ISiteContext data, string fullPath)
     {
         foreach (var name in Subtrees)
         {
@@ -121,7 +121,7 @@ internal static class JudgeJail
 /// whether a time-sensitive claim is actually backed, the judge has to be able to open the plan and the
 /// household/knowledge file it cites.
 /// </summary>
-internal sealed class JudgeReadFileTool(IDataContext data) : ITool
+internal sealed class JudgeReadFileTool(ISiteContext data) : ITool
 {
     public string Name => "judge_read_file";
 
@@ -160,7 +160,7 @@ internal sealed class JudgeReadFileTool(IDataContext data) : ITool
 /// path (the score context carries changed files only once a session has committed), so let it list the
 /// readable subtrees rather than guess a filename and read an ERROR.
 /// </summary>
-internal sealed class JudgeListFilesTool(IDataContext data) : ITool
+internal sealed class JudgeListFilesTool(ISiteContext data) : ITool
 {
     public string Name => "judge_list_files";
 

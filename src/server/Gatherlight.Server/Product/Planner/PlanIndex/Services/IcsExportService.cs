@@ -21,13 +21,13 @@ public interface IIcsExportService
 
 public sealed partial class IcsExportService : IIcsExportService
 {
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
 
-    public IcsExportService(IDataContext data) => _data = data;
+    public IcsExportService(ISiteContext data) => _data = data;
 
     public string? BuildIcs(string relPath)
     {
-        var abs = _data.ResolveDataPath(relPath);
+        var abs = _data.ResolveSitePath(relPath);
         if (abs is null || !File.Exists(abs)) return null;
         var content = File.ReadAllText(abs);
         var slug = Path.GetFileNameWithoutExtension(relPath);

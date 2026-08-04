@@ -26,10 +26,10 @@ public sealed class ZhikuRouter : IZhikuRouter
     private const int InlineMaxBytes = 4096;   // docs at most this size are embedded verbatim
     private const int InlineBudgetBytes = 16384; // total embedded content cap per prompt
 
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly ILogger<ZhikuRouter> _log;
 
-    public ZhikuRouter(IDataContext data, ILogger<ZhikuRouter> log)
+    public ZhikuRouter(ISiteContext data, ILogger<ZhikuRouter> log)
     {
         _data = data;
         _log = log;
@@ -50,7 +50,7 @@ public sealed class ZhikuRouter : IZhikuRouter
         var budget = InlineBudgetBytes;
         foreach (var rel in category.Docs)
         {
-            var abs = _data.ResolveDataPath(rel);
+            var abs = _data.ResolveSitePath(rel);
             if (abs is null || !File.Exists(abs)) continue; // user may have pruned a doc — skip silently
             var fi = new FileInfo(abs);
             if (fi.Length <= InlineMaxBytes && fi.Length <= budget)

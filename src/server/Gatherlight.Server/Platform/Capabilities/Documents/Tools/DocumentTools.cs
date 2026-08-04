@@ -11,8 +11,13 @@ namespace Gatherlight.Server.Platform.Capabilities.Documents.Tools;
 /// resolved to absolute and traversal-guarded.</summary>
 public abstract class DocumentToolBase : IGatherlightTool
 {
-    protected readonly IDataContext Data;
-    protected DocumentToolBase(IDataContext data) => Data = data;
+    protected readonly ISiteContext Site;
+    protected readonly IPlatformContext Platform;
+    protected DocumentToolBase(ISiteContext site, IPlatformContext platform)
+    {
+        Site = site;
+        Platform = platform;
+    }
 
     public abstract string Name { get; }
     public abstract string Description { get; }
@@ -22,7 +27,7 @@ public abstract class DocumentToolBase : IGatherlightTool
     protected string ResolveIn(JsonElement args, string key)
     {
         var rel = ToolArgs.Req(args, key);
-        var abs = Data.ResolveDataPath(rel) ?? throw new ToolException(400, $"{key} 路径越界:{rel}");
+        var abs = Site.ResolveSitePath(rel) ?? throw new ToolException(400, $"{key} 路径越界:{rel}");
         if (!File.Exists(abs)) throw new ToolException(400, $"{key} 文件不存在:{rel}");
         return abs;
     }
@@ -30,7 +35,7 @@ public abstract class DocumentToolBase : IGatherlightTool
     protected string ResolveOut(JsonElement args, string key)
     {
         var rel = ToolArgs.Req(args, key);
-        return Data.ResolveDataPath(rel) ?? throw new ToolException(400, $"{key} 路径越界:{rel}");
+        return Site.ResolveSitePath(rel) ?? throw new ToolException(400, $"{key} 路径越界:{rel}");
     }
 
     protected static string Json(JsonNode node) =>
@@ -46,17 +51,17 @@ public abstract class DocumentToolBase : IGatherlightTool
 public sealed class PdfInspectTool : DocumentToolBase
 {
     private readonly string _leafDir;
-    public PdfInspectTool(IDataContext data) : base(data) => _leafDir = ResolveLeafDir("pdf-form");
+    public PdfInspectTool(ISiteContext site, IPlatformContext platform) : base(site, platform) => _leafDir = ResolveLeafDir("pdf-form");
 
     public override string Name => "pdf_inspect";
     public override string Description =>
         "检查 PDF:页数、尺寸、AcroForm 可填字段(名称/类型/当前值)、文档元数据。填表前先用它拿到字段名。";
     public override string InputSchema => ToolSchema.Of(b => b.Str("path", "PDF 的数据目录相对路径", required: true));
     public override Task<string> RunAsync(JsonElement args, CancellationToken ct) =>
-        new FixedNodeLeaf(_leafDir, "inspect", [ResolveIn(args, "path")], Data.ResourcesPath).RunAsync(args, ct);
+        new FixedNodeLeaf(_leafDir, "inspect", [ResolveIn(args, "path")], Platform.ResourcesPath).RunAsync(args, ct);
 }
 
-public sealed class PdfExtractTextTool(IDataContext data, IPdfProcessor pdf) : DocumentToolBase(data)
+public sealed class PdfExtractTextTool(ISiteContext site, IPlatformContext platform, IPdfProcessor pdf) : DocumentToolBase(site, platform)
 {
     public override string Name => "pdf_extract_text";
     public override string Description =>
@@ -75,7 +80,7 @@ public sealed class PdfExtractTextTool(IDataContext data, IPdfProcessor pdf) : D
 public sealed class PdfFillTool : DocumentToolBase
 {
     private readonly string _leafDir;
-    public PdfFillTool(IDataContext data) : base(data) => _leafDir = ResolveLeafDir("pdf-form");
+    public PdfFillTool(ISiteContext site, IPlatformContext platform) : base(site, platform) => _leafDir = ResolveLeafDir("pdf-form");
 
     public override string Name => "pdf_fill";
     public override string Description =>
@@ -94,8 +99,8 @@ public sealed class PdfFillTool : DocumentToolBase
         var flatten = args.TryGetProperty("flatten", out var f) && f.ValueKind == JsonValueKind.True;
 
         // Persist the field map to a scratch file for the leaf's --data.
-        Directory.CreateDirectory(Data.CachePath);
-        var valuesAbs = Path.Combine(Data.CachePath, $"pdf-fill-{Guid.NewGuid():N}.json");
+        Directory.CreateDirectory(Site.CachePath);
+        var valuesAbs = Path.Combine(Site.CachePath, $"pdf-fill-{Guid.NewGuid():N}.json");
         await File.WriteAllTextAsync(valuesAbs, args.GetProperty("values").GetRawText(), ct);
 
         var argv = new List<string> { "--in", tmpl, "--data", valuesAbs, "--out", outAbs };
@@ -107,7 +112,7 @@ public sealed class PdfFillTool : DocumentToolBase
         }
         try
         {
-            return await new FixedNodeLeaf(_leafDir, "fill", argv.ToArray(), Data.ResourcesPath).RunAsync(args, ct);
+            return await new FixedNodeLeaf(_leafDir, "fill", argv.ToArray(), Platform.ResourcesPath).RunAsync(args, ct);
         }
         finally
         {
@@ -119,7 +124,7 @@ public sealed class PdfFillTool : DocumentToolBase
 public sealed class PdfMergeTool : DocumentToolBase
 {
     private readonly string _leafDir;
-    public PdfMergeTool(IDataContext data) : base(data) => _leafDir = ResolveLeafDir("pdf-form");
+    public PdfMergeTool(ISiteContext site, IPlatformContext platform) : base(site, platform) => _leafDir = ResolveLeafDir("pdf-form");
 
     public override string Name => "pdf_merge";
     public override string Description => "把多个 PDF 按顺序合并成一个。";
@@ -133,19 +138,19 @@ public sealed class PdfMergeTool : DocumentToolBase
         foreach (var p in args.GetProperty("paths").EnumerateArray())
         {
             var rel = p.GetString() ?? "";
-            var abs = Data.ResolveDataPath(rel) ?? throw new ToolException(400, $"路径越界:{rel}");
+            var abs = Site.ResolveSitePath(rel) ?? throw new ToolException(400, $"路径越界:{rel}");
             if (!File.Exists(abs)) throw new ToolException(400, $"文件不存在:{rel}");
             argv.Add(abs);
             count++;
         }
         if (count < 2) throw new ToolException(400, "至少需要 2 个 PDF");
-        return new FixedNodeLeaf(_leafDir, "merge", argv.ToArray(), Data.ResourcesPath).RunAsync(args, ct);
+        return new FixedNodeLeaf(_leafDir, "merge", argv.ToArray(), Platform.ResourcesPath).RunAsync(args, ct);
     }
 }
 
 // ---- Image -----------------------------------------------------------------------------------
 
-public sealed class ImageInfoTool(IDataContext data, IImageProcessor img) : DocumentToolBase(data)
+public sealed class ImageInfoTool(ISiteContext site, IPlatformContext platform, IImageProcessor img) : DocumentToolBase(site, platform)
 {
     public override string Name => "image_info";
     public override string Description => "读取图片的格式、宽、高、位深(零 token)。";
@@ -160,7 +165,7 @@ public sealed class ImageInfoTool(IDataContext data, IImageProcessor img) : Docu
     }
 }
 
-public sealed class ImageResizeTool(IDataContext data, IImageProcessor img) : DocumentToolBase(data)
+public sealed class ImageResizeTool(ISiteContext site, IPlatformContext platform, IImageProcessor img) : DocumentToolBase(site, platform)
 {
     public override string Name => "image_resize";
     public override string Description => "把图片缩放到不超过 maxWidth×maxHeight(保持比例,不放大,自动按 EXIF 摆正)。";
@@ -177,7 +182,7 @@ public sealed class ImageResizeTool(IDataContext data, IImageProcessor img) : Do
     }
 }
 
-public sealed class ImageConvertTool(IDataContext data, IImageProcessor img) : DocumentToolBase(data)
+public sealed class ImageConvertTool(ISiteContext site, IPlatformContext platform, IImageProcessor img) : DocumentToolBase(site, platform)
 {
     public override string Name => "image_convert";
     public override string Description => "把图片转成 png / jpeg / webp(自动按 EXIF 摆正)。";

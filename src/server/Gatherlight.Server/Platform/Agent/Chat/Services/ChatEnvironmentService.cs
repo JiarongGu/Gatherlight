@@ -14,19 +14,21 @@ namespace Gatherlight.Server.Platform.Agent.Chat.Services;
 /// </summary>
 public sealed class ChatEnvironmentService
 {
-    private readonly IDataContext _data;
+    private readonly ISiteContext _site;
+    private readonly IPlatformContext _platform;
     private readonly GatherlightServerOptions _options;
 
-    public ChatEnvironmentService(IDataContext data, GatherlightServerOptions options)
+    public ChatEnvironmentService(ISiteContext site, IPlatformContext platform, GatherlightServerOptions options)
     {
-        _data = data;
+        _site = site;
+        _platform = platform;
         _options = options;
     }
 
-    public string SettingsPath => Path.Combine(_data.StatePath, "settings.chat.json");
-    public string SystemSettingsPath => Path.Combine(_data.StatePath, "settings.system.json");
-    public string McpConfigPath => Path.Combine(_data.StatePath, "mcp.chat.json");
-    public string ScopeGuardPath => Path.Combine(_data.ZhikuPath, "hooks", "scope-guard.mjs");
+    public string SettingsPath => Path.Combine(_platform.StatePath, "settings.chat.json");
+    public string SystemSettingsPath => Path.Combine(_platform.StatePath, "settings.system.json");
+    public string McpConfigPath => Path.Combine(_platform.StatePath, "mcp.chat.json");
+    public string ScopeGuardPath => Path.Combine(_site.ZhikuPath, "hooks", "scope-guard.mjs");
 
     /// <summary>Returns the data-root-relative path of the scope guard when it was newly
     /// written (caller commits it to the data repo), else null.</summary>

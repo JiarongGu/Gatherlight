@@ -8,11 +8,11 @@ namespace Gatherlight.Server.Product.Planner.PlanIndex;
 public sealed class PlansController : ControllerBase
 {
     private readonly IPlanIndexService _index;
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IIcsExportService _ics;
     private readonly IBudgetService _budget;
 
-    public PlansController(IPlanIndexService index, IDataContext data, IIcsExportService ics, IBudgetService budget)
+    public PlansController(IPlanIndexService index, ISiteContext data, IIcsExportService ics, IBudgetService budget)
     {
         _index = index;
         _data = data;
@@ -51,7 +51,7 @@ public sealed class PlansController : ControllerBase
 
     private string? ReadContent(string rel)
     {
-        var abs = _data.ResolveDataPath(rel);
+        var abs = _data.ResolveSitePath(rel);
         if (abs is null || !System.IO.File.Exists(abs)) return null;
         try { return System.IO.File.ReadAllText(abs); }
         catch (IOException) { return null; } // mid-write; watcher rescan follows
@@ -63,7 +63,7 @@ public sealed class PlansController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(path) || !path.EndsWith(".md"))
             return BadRequest(new { error = "path must be a .md file" });
-        var abs = _data.ResolveDataPath(path);
+        var abs = _data.ResolveSitePath(path);
         if (abs is null || !System.IO.File.Exists(abs)) return NotFound();
         return Ok(new { path, content = System.IO.File.ReadAllText(abs) });
     }
@@ -111,9 +111,9 @@ public sealed class PlansController : ControllerBase
             _ => (string?)null,
         };
         if (mime is null) return NotFound();
-        var abs = _data.ResolveDataPath(rel);
+        var abs = _data.ResolveSitePath(rel);
         if (abs is null || !System.IO.File.Exists(abs)) return NotFound();
-        // The jailed agent can write under plans/, including symlinks. ResolveDataPath blocks `..`
+        // The jailed agent can write under plans/, including symlinks. ResolveSitePath blocks `..`
         // textually, but a symlink (file or parent dir) whose target is outside the data root would still
         // resolve inside the prefix — reject any reparse point in the chain so it can't serve state/ or .git/.
         if (!NoSymlinkEscape(abs)) return NotFound();

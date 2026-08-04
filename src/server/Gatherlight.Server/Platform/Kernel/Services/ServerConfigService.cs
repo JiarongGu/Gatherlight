@@ -137,7 +137,7 @@ public sealed class TlsConfig
 }
 
 /// <summary>
-/// Loads/saves <see cref="ServerConfig"/>. Constructed before <see cref="DataContext"/> is usable,
+/// Loads/saves <see cref="ServerConfig"/>. Constructed before <see cref="PlatformContext"/> is usable,
 /// so it derives the settings path from the options directly.
 /// </summary>
 public sealed class ServerConfigService

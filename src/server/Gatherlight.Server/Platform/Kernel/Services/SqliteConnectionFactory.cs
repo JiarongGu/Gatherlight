@@ -25,7 +25,7 @@ public sealed class SqliteConnectionFactory : IDbConnectionFactory
         DefaultTypeMap.MatchNamesWithUnderscores = true;
     }
 
-    public SqliteConnectionFactory(IDataContext data)
+    public SqliteConnectionFactory(IPlatformContext data)
     {
         _connectionString = new SqliteConnectionStringBuilder
         {

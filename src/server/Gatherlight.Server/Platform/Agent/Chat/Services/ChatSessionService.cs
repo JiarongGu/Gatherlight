@@ -113,7 +113,7 @@ public sealed class ChatSessionService
     private readonly IGitCliService _git;
     private readonly IDataCommitRepository _commits;
     private readonly IChatRepository _repo;
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IAppConfigService _appConfig;
     private readonly ChatEnvironmentService _env;
     private readonly DataWriteLock _writeLock;
@@ -134,7 +134,7 @@ public sealed class ChatSessionService
     public ChatSessionService(
         IAgentRunner agent, IPromptHarness harness, IClaudeValidateService validator,
         IGitCliService git, IDataCommitRepository commits, IChatRepository repo,
-        IDataContext data, IAppConfigService appConfig, ChatEnvironmentService env,
+        ISiteContext data, IAppConfigService appConfig, ChatEnvironmentService env,
         DataWriteLock writeLock, IToolRegistry tools, IZhikuRouter router,
         CodeRepoGit codeGit, BuildVerifyService buildVerify, GatherlightServerOptions options,
         Platform.Ops.Scoring.Services.IScoringService scoring, IAgentGate gate,

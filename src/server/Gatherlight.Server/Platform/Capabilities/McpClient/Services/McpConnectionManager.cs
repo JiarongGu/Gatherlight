@@ -32,16 +32,16 @@ public sealed class McpConnectionManager : IMcpConnectionManager, IHostedService
     private sealed record Live(string Signature, IMcpConnection Conn, IReadOnlyList<McpToolInfo> Tools);
 
     private readonly IMcpServerStore _store;
-    private readonly IDataContext _data;
+    private readonly IPlatformContext _platform;
     private readonly ILogger<McpConnectionManager> _log;
     private readonly ConcurrentDictionary<string, Live> _live = new();
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private volatile IReadOnlyList<(string, McpToolInfo)> _tools = Array.Empty<(string, McpToolInfo)>();
 
-    public McpConnectionManager(IMcpServerStore store, IDataContext data, ILogger<McpConnectionManager> log)
+    public McpConnectionManager(IMcpServerStore store, IPlatformContext platform, ILogger<McpConnectionManager> log)
     {
         _store = store;
-        _data = data;
+        _platform = platform;
         _log = log;
     }
 
@@ -71,7 +71,7 @@ public sealed class McpConnectionManager : IMcpConnectionManager, IHostedService
     /// cookies/session, under the data folder so it survives restarts + updates.</summary>
     private string SessionDir(string serverId)
     {
-        var dir = Path.Combine(_data.RootPath, "state", "mcp", serverId);
+        var dir = Path.Combine(_platform.StatePath, "mcp", serverId);
         Directory.CreateDirectory(dir);
         return dir;
     }

@@ -11,8 +11,8 @@ namespace Gatherlight.Server.Platform.Kernel.Logging;
 [ApiController]
 public sealed class LogsController : ControllerBase
 {
-    private readonly IDataContext _data;
-    public LogsController(IDataContext data) => _data = data;
+    private readonly IPlatformContext _data;
+    public LogsController(IPlatformContext data) => _data = data;
 
     [HttpGet("api/manage/logs")]
     public IActionResult Get([FromQuery] int lines = 400, [FromQuery] string? file = null)

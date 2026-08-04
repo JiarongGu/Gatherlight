@@ -5,10 +5,10 @@ namespace Gatherlight.Server.Platform.Hosting.Migration.Steps;
 
 public sealed class SelfHealLocksStep : IMigrationStep
 {
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly MigrationState _state;
     private readonly ILogger<SelfHealLocksStep> _log;
-    public SelfHealLocksStep(IDataContext data, MigrationState state, ILogger<SelfHealLocksStep> log)
+    public SelfHealLocksStep(ISiteContext data, MigrationState state, ILogger<SelfHealLocksStep> log)
     { _data = data; _state = state; _log = log; }
 
     public string Id => "self-heal-locks";

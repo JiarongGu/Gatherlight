@@ -29,16 +29,19 @@ public interface IPlanIndexService
 
 public sealed partial class PlanIndexService : IPlanIndexService, IRecordIndex
 {
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IDbConnectionFactory _db;
     private readonly ILogger<PlanIndexService> _log;
 
-    public PlanIndexService(IDataContext data, IDbConnectionFactory db, ILogger<PlanIndexService> log)
+    public PlanIndexService(ISiteContext data, IDbConnectionFactory db, ILogger<PlanIndexService> log)
     {
         _data = data;
         _db = db;
         _log = log;
     }
+
+    /// <summary>Absolute plans/ dir — hoisted since RescanAsync + WriteIndexMarkdown each resolve it.</summary>
+    private string PlansPath => _data.ResolveSitePath("plans")!;
 
     public Task RebuildAsync(CancellationToken ct) => RescanAsync(ct);
 
@@ -72,7 +75,7 @@ public sealed partial class PlanIndexService : IPlanIndexService, IRecordIndex
         }
 
         // Trip-paired non-markdown assets: plans/visa/<slug>/<file>.{pdf,json}
-        var visaRoot = Path.Combine(_data.PlansPath, "visa");
+        var visaRoot = Path.Combine(PlansPath, "visa");
         if (Directory.Exists(visaRoot))
         {
             foreach (var abs in Directory.EnumerateFiles(visaRoot, "*", SearchOption.AllDirectories))
@@ -150,9 +153,9 @@ public sealed partial class PlanIndexService : IPlanIndexService, IRecordIndex
         }
 
         var content = sb.ToString();
-        var dest = Path.Combine(_data.PlansPath, "INDEX.md");
+        var dest = Path.Combine(PlansPath, "INDEX.md");
         if (File.Exists(dest) && File.ReadAllText(dest) == content) return; // unchanged → no churn
-        Directory.CreateDirectory(_data.PlansPath);
+        Directory.CreateDirectory(PlansPath);
         File.WriteAllText(dest, content);
     }
 

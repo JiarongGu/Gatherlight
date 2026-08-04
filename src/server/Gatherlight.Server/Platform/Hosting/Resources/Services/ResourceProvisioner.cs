@@ -102,11 +102,11 @@ public sealed class ResourceProvisioner : IResourceProvisioner
 
     private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
-    private readonly IDataContext _data;
+    private readonly IPlatformContext _data;
     private readonly ILogger<ResourceProvisioner> _log;
     private readonly ConcurrentDictionary<string, Prog> _prog = new();
 
-    public ResourceProvisioner(IDataContext data, ILogger<ResourceProvisioner> log)
+    public ResourceProvisioner(IPlatformContext data, ILogger<ResourceProvisioner> log)
     {
         _data = data;
         _log = log;

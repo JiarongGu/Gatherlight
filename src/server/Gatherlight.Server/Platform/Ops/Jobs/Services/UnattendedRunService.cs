@@ -60,7 +60,7 @@ public sealed class UnattendedRunService : IUnattendedRunService
     private readonly IAgentGate _gate;
     private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IGitCliService _git;
     private readonly DataWriteLock _writeLock;
     private readonly IToolRegistry _tools;
@@ -69,7 +69,7 @@ public sealed class UnattendedRunService : IUnattendedRunService
     private readonly ILogger<UnattendedRunService> _log;
 
     public UnattendedRunService(
-        IAgentGate gate, IAgentRunner agent, IPromptHarness harness, IDataContext data,
+        IAgentGate gate, IAgentRunner agent, IPromptHarness harness, ISiteContext data,
         IGitCliService git, DataWriteLock writeLock, IToolRegistry tools, IAppConfigService appConfig,
         ChatEnvironmentService env, ILogger<UnattendedRunService> log)
     {

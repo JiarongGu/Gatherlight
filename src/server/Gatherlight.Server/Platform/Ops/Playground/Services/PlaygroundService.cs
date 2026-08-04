@@ -55,13 +55,13 @@ public sealed class PlaygroundService : IPlaygroundService
     private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
     private readonly IScoringService _scoring;
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IAppConfigService _appConfig;
     private readonly ChatEnvironmentService _env;
     private readonly IToolRegistry _tools;
 
     public PlaygroundService(
-        IAgentRunner agent, IPromptHarness harness, IScoringService scoring, IDataContext data,
+        IAgentRunner agent, IPromptHarness harness, IScoringService scoring, ISiteContext data,
         IAppConfigService appConfig, ChatEnvironmentService env, IToolRegistry tools)
     {
         _agent = agent;

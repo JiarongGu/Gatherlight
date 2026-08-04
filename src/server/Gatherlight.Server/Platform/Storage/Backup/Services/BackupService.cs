@@ -37,22 +37,25 @@ public sealed class BackupService : IBackupService
     // The data-folder subtrees that ARE local (records + git history). state/resources, state/logs,
     // state/cache, cache/, archive/ are regenerable/transient and left out.
     private static readonly string[] Folders = { "plans", "household", ".claude", "uploads", ".git" };
-    // Individual files (data-root-relative) that also travel — top-level + the server config.
-    private static readonly string[] RootFiles = { "CLAUDE.md", ".gitignore", "state/settings.json" };
+    // Individual site-root files (data-root-relative) that also travel.
+    private static readonly string[] RootFiles = { "CLAUDE.md", ".gitignore" };
+    // The server config lives under platform state/, not the site — travels too, resolved separately.
+    private const string SettingsFile = "settings.json";
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
+    private readonly IPlatformContext _platform;
     private readonly IMemoryService _memory;
     private readonly IEnumerable<IRecordIndex> _indexes;
     private readonly IGitCliService _git;
     private readonly DataWriteLock _writeLock;
     private readonly ILogger<BackupService> _log;
 
-    public BackupService(IDataContext data, IMemoryService memory, IEnumerable<IRecordIndex> indexes,
+    public BackupService(ISiteContext data, IPlatformContext platform, IMemoryService memory, IEnumerable<IRecordIndex> indexes,
         IGitCliService git, DataWriteLock writeLock, ILogger<BackupService> log)
     {
-        _data = data; _memory = memory; _indexes = indexes; _git = git; _writeLock = writeLock; _log = log;
+        _data = data; _platform = platform; _memory = memory; _indexes = indexes; _git = git; _writeLock = writeLock; _log = log;
     }
 
     public async Task ExportAsync(Stream output, CancellationToken ct = default)
@@ -93,6 +96,8 @@ public sealed class BackupService : IBackupService
                     var p = Path.Combine(_data.RootPath, file);
                     if (File.Exists(p)) AddFile(p, $"data/{file}");
                 }
+                var settingsAbs = Path.Combine(_platform.StatePath, SettingsFile);
+                if (File.Exists(settingsAbs)) AddFile(settingsAbs, $"data/state/{SettingsFile}");
 
                 // The DB half — the same portable memory bundle as /api/memory/export.
                 using (var ms = zip.CreateEntry("memory.json", CompressionLevel.Optimal).Open())
@@ -149,6 +154,16 @@ public sealed class BackupService : IBackupService
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                 File.Copy(src, dest, overwrite: true);
                 restored++;
+            }
+            {
+                var src = Path.Combine(dataDir, "state", SettingsFile);
+                if (File.Exists(src))
+                {
+                    var dest = Path.Combine(_platform.StatePath, SettingsFile);
+                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                    File.Copy(src, dest, overwrite: true);
+                    restored++;
+                }
             }
 
             // Restore the DB memory half (idempotent upsert).

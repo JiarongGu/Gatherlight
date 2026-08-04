@@ -28,10 +28,10 @@ public interface IUploadService
 
 public sealed partial class UploadService : IUploadService
 {
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IDbConnectionFactory _db;
 
-    public UploadService(IDataContext data, IDbConnectionFactory db)
+    public UploadService(ISiteContext data, IDbConnectionFactory db)
     {
         _data = data;
         _db = db;
@@ -69,7 +69,7 @@ public sealed partial class UploadService : IUploadService
 
     public string ResolveAttachment(string rawRelPath)
     {
-        var abs = _data.ResolveDataPath(rawRelPath)
+        var abs = _data.ResolveSitePath(rawRelPath)
             ?? throw new ArgumentException($"附件路径非法:{rawRelPath}");
         var uploadsWithSep = _data.UploadsPath.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (!Path.GetFullPath(abs).StartsWith(uploadsWithSep, StringComparison.OrdinalIgnoreCase))

@@ -24,11 +24,11 @@ public sealed partial class ClaudeValidateService : IClaudeValidateService
 {
     private readonly IAgentRunner _agent;
     private readonly IPromptHarness _harness;
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IAppConfigService _appConfig;
 
     public ClaudeValidateService(
-        IAgentRunner agent, IPromptHarness harness, IDataContext data, IAppConfigService appConfig)
+        IAgentRunner agent, IPromptHarness harness, ISiteContext data, IAppConfigService appConfig)
     {
         _agent = agent;
         _harness = harness;

@@ -33,13 +33,13 @@ public sealed partial class BudgetService : IBudgetService
         "AUD", "USD", "JPY", "EUR", "GBP", "CNY", "RMB", "HKD", "SGD", "KRW", "TWD", "NZD", "CAD", "CHF", "THB",
     };
 
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
 
-    public BudgetService(IDataContext data) => _data = data;
+    public BudgetService(ISiteContext data) => _data = data;
 
     public BudgetSummary? Scan(string relPath)
     {
-        var abs = _data.ResolveDataPath(relPath);
+        var abs = _data.ResolveSitePath(relPath);
         if (abs is null || !File.Exists(abs)) return null;
 
         var all = new List<BudgetFigure>();

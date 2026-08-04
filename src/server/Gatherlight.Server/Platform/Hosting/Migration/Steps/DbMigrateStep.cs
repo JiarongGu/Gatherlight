@@ -6,8 +6,8 @@ namespace Gatherlight.Server.Platform.Hosting.Migration.Steps;
 
 public sealed class DbMigrateStep : IMigrationStep
 {
-    private readonly IDataContext _data;
-    public DbMigrateStep(IDataContext data) => _data = data;
+    private readonly IPlatformContext _data;
+    public DbMigrateStep(IPlatformContext data) => _data = data;
     public string Id => "db-migrate";
     public string Title => "数据库结构迁移";
     public bool Essential => true;

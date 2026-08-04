@@ -23,9 +23,9 @@ public sealed class ImageCache : IImageCache
     private const long MaxBytes = 8 * 1024 * 1024;
 
     private readonly IHttpClientFactory _http;
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
 
-    public ImageCache(IHttpClientFactory http, IDataContext data)
+    public ImageCache(IHttpClientFactory http, ISiteContext data)
     {
         _http = http;
         _data = data;

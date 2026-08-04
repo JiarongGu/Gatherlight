@@ -23,14 +23,14 @@ public sealed partial class FsOpsService : IFsOpsService
 {
     private static readonly string[] AllowedDirs = { "plans", "household" };
 
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IGitCliService _git;
     private readonly IDataCommitRepository _commits;
     private readonly IPlanIndexService _index;
     private readonly DataWriteLock _writeLock;
 
     public FsOpsService(
-        IDataContext data, IGitCliService git, IDataCommitRepository commits,
+        ISiteContext data, IGitCliService git, IDataCommitRepository commits,
         IPlanIndexService index, DataWriteLock writeLock)
     {
         _data = data;
@@ -51,7 +51,7 @@ public sealed partial class FsOpsService : IFsOpsService
         {
             if (await _git.IsTrackedAsync(rel, ct))
                 (await _git.RunAsync(new[] { "rm", "-f", "--", rel }, ct)).ThrowOnError("rm");
-            else if (_data.ResolveDataPath(rel) is { } abs && File.Exists(abs))
+            else if (_data.ResolveSitePath(rel) is { } abs && File.Exists(abs))
                 File.Delete(abs);
             removed.Add(rel);
         }
@@ -59,7 +59,7 @@ public sealed partial class FsOpsService : IFsOpsService
         {
             // git rm -r only works if something under the dir is tracked.
             var r = await _git.RunAsync(new[] { "rm", "-r", "-f", "--", dir }, ct);
-            if (r.ExitCode != 0 && _data.ResolveDataPath(dir) is { } abs && Directory.Exists(abs))
+            if (r.ExitCode != 0 && _data.ResolveSitePath(dir) is { } abs && Directory.Exists(abs))
                 Directory.Delete(abs, recursive: true);
             removed.Add(dir + "/");
         }
@@ -85,7 +85,7 @@ public sealed partial class FsOpsService : IFsOpsService
         using var _ = await _writeLock.AcquireAsync(ct);
 
         var rel = Norm(path);
-        var abs = _data.ResolveDataPath(rel) ?? throw new ArgumentException($"路径越界:{path}");
+        var abs = _data.ResolveSitePath(rel) ?? throw new ArgumentException($"路径越界:{path}");
         var content = await File.ReadAllTextAsync(abs, ct);
         var next = H1Regex().IsMatch(content)
             ? H1Regex().Replace(content, $"# {title}", 1)
@@ -112,7 +112,7 @@ public sealed partial class FsOpsService : IFsOpsService
         {
             var from = Norm(fromRaw);
             var to = Norm(toRaw);
-            var toAbs = _data.ResolveDataPath(to)!;
+            var toAbs = _data.ResolveSitePath(to)!;
             // Never silently overwrite an existing in-scope file (data loss, and no git record of the
             // clobbered file until the following add) — surface a conflict instead. Dropping `-f` /
             // overwrite makes git mv / File.Move themselves refuse too.
@@ -125,7 +125,7 @@ public sealed partial class FsOpsService : IFsOpsService
             }
             else
             {
-                File.Move(_data.ResolveDataPath(from)!, toAbs);
+                File.Move(_data.ResolveSitePath(from)!, toAbs);
                 (await _git.RunAsync(new[] { "add", "--", to }, ct)).ThrowOnError("add");
             }
         }

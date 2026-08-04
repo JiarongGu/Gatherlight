@@ -25,7 +25,7 @@ public interface IZhikuSeeder
 
 public sealed class ZhikuSeeder : IZhikuSeeder
 {
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IDbConnectionFactory _db;
     private readonly IGitCliService _git;
     private readonly IDataCommitRepository _commits;
@@ -34,7 +34,7 @@ public sealed class ZhikuSeeder : IZhikuSeeder
     private readonly ILogger<ZhikuSeeder> _log;
 
     public ZhikuSeeder(
-        IDataContext data, IDbConnectionFactory db, IGitCliService git,
+        ISiteContext data, IDbConnectionFactory db, IGitCliService git,
         IDataCommitRepository commits, DataWriteLock writeLock,
         Platform.Storage.Knowledge.Services.IProcessLog processLog, ILogger<ZhikuSeeder> log)
     {
@@ -74,7 +74,7 @@ public sealed class ZhikuSeeder : IZhikuSeeder
         {
             var templateBytes = await File.ReadAllBytesAsync(abs, ct);
             var templateHash = Hash(templateBytes);
-            var targetAbs = _data.ResolveDataPath(rel)!;
+            var targetAbs = _data.ResolveSitePath(rel)!;
             var recorded = await GetStateAsync($"shipped:{rel}");
 
             if (!File.Exists(targetAbs))

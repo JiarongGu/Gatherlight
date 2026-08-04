@@ -20,11 +20,11 @@ public interface IPlaywrightHost
 public sealed class PlaywrightHost : IPlaywrightHost, IAsyncDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly IDataContext _data;
+    private readonly IPlatformContext _data;
     private IPlaywright? _playwright;
     private IBrowser? _browser;
 
-    public PlaywrightHost(IDataContext data) => _data = data;
+    public PlaywrightHost(IPlatformContext data) => _data = data;
 
     public async Task<IBrowser> GetBrowserAsync(CancellationToken ct = default)
     {

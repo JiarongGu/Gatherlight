@@ -13,13 +13,13 @@ public sealed class PlanIndexWatcher : IHostedService, IDisposable
     private static readonly string[] WatchedPrefixes = { "plans", "household", ".claude" };
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(1.5);
 
-    private readonly IDataContext _data;
+    private readonly ISiteContext _data;
     private readonly IPlanIndexService _index;
     private readonly ILogger<PlanIndexWatcher> _log;
     private FileSystemWatcher? _watcher;
     private Timer? _timer;
 
-    public PlanIndexWatcher(IDataContext data, IPlanIndexService index, ILogger<PlanIndexWatcher> log)
+    public PlanIndexWatcher(ISiteContext data, IPlanIndexService index, ILogger<PlanIndexWatcher> log)
     {
         _data = data;
         _index = index;
