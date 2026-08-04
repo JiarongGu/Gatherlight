@@ -160,9 +160,15 @@ feature, and none blocks the app from starting:
    mirror); chromium installs via the downloaded driver (`node cli.js install chromium`). `--offline`
    bundles both at `libs/.playwright` + `libs/browsers` for air-gapped installs. (WebView2 was rejected —
    it needs a UI thread/window in a headless server and lacks Playwright's automation API.)
-3. **Node.js on PATH** — only for the PDF *form* tools (`pdf_fill` / `pdf_merge` / `fill_itinerary`),
-   which shell out to the `tools/pdf-form` pdf-lib leaf via `npx`. (`pdf_extract_text` / `pdf_inspect`
-   and the image tools are native — no Node needed.) Nothing else requires Node at runtime.
+3. **A `node` runtime** — only for the PDF tools that run on pdf-lib (`pdf_inspect` / `pdf_fill` /
+   `pdf_merge` / `fill_itinerary`). The bundle ships them **pre-built** as `res/tools/pdf-form/<entry>.cjs`
+   — self-contained single files, so the target needs no `npm install`, no `npx` and no `node_modules`;
+   it runs them as `node <entry>.cjs`. `node` is taken from PATH, and failing that from the `node.exe`
+   inside the **provisioned Playwright driver** (`{data}/state/resources/.playwright`), so an install
+   that used the 资源 panel usually needs nothing extra. (`pdf_extract_text` and the image tools are
+   native C# — no Node at all.) Nothing else requires Node at runtime.
+   *(Earlier releases packed nothing under `tools/` into the bundle at all, so these four tools failed
+   on every install with `工具目录不存在:` — they only ever worked when run from the source repo.)*
 
 ## Updating
 

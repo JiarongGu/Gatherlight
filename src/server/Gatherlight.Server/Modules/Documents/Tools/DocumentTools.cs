@@ -36,14 +36,9 @@ public abstract class DocumentToolBase : IGatherlightTool
     protected static string Json(JsonNode node) =>
         node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
 
-    /// <summary>Locate a Node leaf sub-project (tools/&lt;name&gt;) by walking up from the content root.</summary>
-    protected static string ResolveLeafDir(IHostEnvironment env, string leaf)
-    {
-        var dir = new DirectoryInfo(env.ContentRootPath);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "tools", leaf)))
-            dir = dir.Parent!;
-        return dir is not null ? Path.Combine(dir.FullName, "tools", leaf) : "";
-    }
+    /// <summary>Locate a Node leaf tool — the bundle's pre-built <c>res/tools/&lt;name&gt;</c> in an
+    /// install, the source sub-project in the repo. See <see cref="ResourcePaths.NodeLeaf"/>.</summary>
+    protected static string ResolveLeafDir(string leaf) => ResourcePaths.NodeLeaf(leaf);
 }
 
 // ---- PDF -------------------------------------------------------------------------------------
@@ -51,18 +46,14 @@ public abstract class DocumentToolBase : IGatherlightTool
 public sealed class PdfInspectTool : DocumentToolBase
 {
     private readonly string _leafDir;
-    public PdfInspectTool(IDataContext data, IHostEnvironment env) : base(data)
-        => _leafDir = ResolveLeafDir(env, "pdf-form");
+    public PdfInspectTool(IDataContext data) : base(data) => _leafDir = ResolveLeafDir("pdf-form");
 
     public override string Name => "pdf_inspect";
     public override string Description =>
         "检查 PDF:页数、尺寸、AcroForm 可填字段(名称/类型/当前值)、文档元数据。填表前先用它拿到字段名。";
     public override string InputSchema => ToolSchema.Of(b => b.Str("path", "PDF 的数据目录相对路径", required: true));
-    public override Task<string> RunAsync(JsonElement args, CancellationToken ct)
-    {
-        if (!Directory.Exists(_leafDir)) throw new ToolException(500, $"工具目录不存在:{_leafDir}");
-        return new FixedNodeLeaf(_leafDir, new[] { "tsx", "src/inspect.ts", ResolveIn(args, "path") }).RunAsync(args, ct);
-    }
+    public override Task<string> RunAsync(JsonElement args, CancellationToken ct) =>
+        new FixedNodeLeaf(_leafDir, "inspect", [ResolveIn(args, "path")], Data.ResourcesPath).RunAsync(args, ct);
 }
 
 public sealed class PdfExtractTextTool(IDataContext data, IPdfProcessor pdf) : DocumentToolBase(data)
@@ -84,8 +75,7 @@ public sealed class PdfExtractTextTool(IDataContext data, IPdfProcessor pdf) : D
 public sealed class PdfFillTool : DocumentToolBase
 {
     private readonly string _leafDir;
-    public PdfFillTool(IDataContext data, IHostEnvironment env) : base(data)
-        => _leafDir = ResolveLeafDir(env, "pdf-form");
+    public PdfFillTool(IDataContext data) : base(data) => _leafDir = ResolveLeafDir("pdf-form");
 
     public override string Name => "pdf_fill";
     public override string Description =>
@@ -99,7 +89,6 @@ public sealed class PdfFillTool : DocumentToolBase
 
     public override async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        if (!Directory.Exists(_leafDir)) throw new ToolException(500, $"工具目录不存在:{_leafDir}");
         var tmpl = ResolveIn(args, "templatePath");
         var outAbs = ResolveOut(args, "outPath");
         var flatten = args.TryGetProperty("flatten", out var f) && f.ValueKind == JsonValueKind.True;
@@ -109,7 +98,7 @@ public sealed class PdfFillTool : DocumentToolBase
         var valuesAbs = Path.Combine(Data.CachePath, $"pdf-fill-{Guid.NewGuid():N}.json");
         await File.WriteAllTextAsync(valuesAbs, args.GetProperty("values").GetRawText(), ct);
 
-        var argv = new List<string> { "tsx", "src/fill.ts", "--in", tmpl, "--data", valuesAbs, "--out", outAbs };
+        var argv = new List<string> { "--in", tmpl, "--data", valuesAbs, "--out", outAbs };
         if (flatten) argv.Add("--flatten");
         if (args.TryGetProperty("fontPath", out var fp) && fp.GetString() is { Length: > 0 })
         {
@@ -118,7 +107,7 @@ public sealed class PdfFillTool : DocumentToolBase
         }
         try
         {
-            return await new FixedNodeLeaf(_leafDir, argv.ToArray()).RunAsync(args, ct);
+            return await new FixedNodeLeaf(_leafDir, "fill", argv.ToArray(), Data.ResourcesPath).RunAsync(args, ct);
         }
         finally
         {
@@ -130,8 +119,7 @@ public sealed class PdfFillTool : DocumentToolBase
 public sealed class PdfMergeTool : DocumentToolBase
 {
     private readonly string _leafDir;
-    public PdfMergeTool(IDataContext data, IHostEnvironment env) : base(data)
-        => _leafDir = ResolveLeafDir(env, "pdf-form");
+    public PdfMergeTool(IDataContext data) : base(data) => _leafDir = ResolveLeafDir("pdf-form");
 
     public override string Name => "pdf_merge";
     public override string Description => "把多个 PDF 按顺序合并成一个。";
@@ -140,8 +128,7 @@ public sealed class PdfMergeTool : DocumentToolBase
         .Str("outPath", "输出 PDF 的数据目录相对路径", required: true));
     public override Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        if (!Directory.Exists(_leafDir)) throw new ToolException(500, $"工具目录不存在:{_leafDir}");
-        var argv = new List<string> { "tsx", "src/merge.ts", "--out", ResolveOut(args, "outPath") };
+        var argv = new List<string> { "--out", ResolveOut(args, "outPath") };
         var count = 0;
         foreach (var p in args.GetProperty("paths").EnumerateArray())
         {
@@ -152,7 +139,7 @@ public sealed class PdfMergeTool : DocumentToolBase
             count++;
         }
         if (count < 2) throw new ToolException(400, "至少需要 2 个 PDF");
-        return new FixedNodeLeaf(_leafDir, argv.ToArray()).RunAsync(args, ct);
+        return new FixedNodeLeaf(_leafDir, "merge", argv.ToArray(), Data.ResourcesPath).RunAsync(args, ct);
     }
 }
 

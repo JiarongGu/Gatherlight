@@ -122,9 +122,10 @@ jobs:
         run: npm ci
 
       # The pdf-form Node leaf backs the pdf_fill / fill_itinerary tools (and e2e-p10's fixtures), so
-      # install its deps for the gate. (The scraper suites p11/p12 need chromium — download-at-setup,
+      # install its deps — needed BOTH for the gate and for the bundle step, which esbuilds the leaf
+      # into res/tools/pdf-form. (The scraper suites p11/p12 need chromium — download-at-setup,
       # not in the bundle — so they skip gracefully in CI; run them locally after `dev.mjs fetch-tools`.)
-      - name: Install pdf-form deps (for e2e-p10)
+      - name: Install pdf-form deps (e2e-p10 + the shipped leaf bundle)
         working-directory: tools/pdf-form
         run: npm ci
 

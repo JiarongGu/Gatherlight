@@ -118,4 +118,43 @@ try {
 } finally {
   srv.stop();
 }
+
+// --- SHIPPED shape: the leaf as a release ships it -------------------------------------------
+// Everything above ran the leaf from source (npx tsx src/*.ts), which only exists in this repo. A
+// release instead ships res/tools/pdf-form/<entry>.cjs — esbuild-bundled single files run by plain
+// `node`, no npm install/npx/node_modules on the target. That path shipped BROKEN (nothing under
+// tools/ was ever packed, so all four leaf tools threw in every installed copy), so it gets its own
+// coverage: stage the bundled entries where ResourcePaths.NodeLeaf looks first ({base}/res/tools),
+// and assert the tools still work — proving the .cjs is self-contained and NodeLeafTool picks it.
+const serverBin = path.join(repo, 'src', 'server', 'Gatherlight.Server', 'bin', 'Debug', 'net10.0');
+const stagedLeaf = path.join(serverBin, 'res', 'tools', 'pdf-form');
+let srv2;
+try {
+  const build = spawnSync('npm', ['run', 'build'], { cwd: path.join(repo, 'tools', 'pdf-form'), shell: true, encoding: 'utf8' });
+  const dist = path.join(repo, 'tools', 'pdf-form', 'dist');
+  const entries = fs.existsSync(dist) ? fs.readdirSync(dist).filter((f) => f.endsWith('.cjs')) : [];
+  ok('leaf bundles to standalone .cjs', entries.length === 4, `${entries.length} — ${(build.stderr || '').slice(-200)}`);
+
+  fs.mkdirSync(stagedLeaf, { recursive: true });
+  for (const e of entries) fs.copyFileSync(path.join(dist, e), path.join(stagedLeaf, e));
+
+  srv2 = startServer({ dataDir, port: 5391 });
+  const c2 = makeClient(srv2.base);
+  await waitHealthy(srv2.base);
+  const bInspect = await c2.call('pdf_inspect', { path: 'uploads/form.pdf' });
+  ok('bundled leaf: pdf_inspect runs via `node <entry>.cjs`',
+    bInspect.status === 200 && bInspect.result.fields?.some((f) => f.name === 'applicant'), JSON.stringify(bInspect.result)?.slice(0, 160));
+  const bFill = await c2.call('pdf_fill', {
+    templatePath: 'uploads/form.pdf', values: { applicant: 'Bundled' }, outPath: 'uploads/bundled.pdf',
+  });
+  ok('bundled leaf: pdf_fill writes output', bFill.status === 200 && onDisk(dataDir, 'uploads/bundled.pdf'), JSON.stringify(bFill.result));
+} catch (err) {
+  fail('e2e-p10 bundled-leaf fatal: ' + err.message);
+  console.error(srv2?.log().slice(-3000) ?? '');
+} finally {
+  srv2?.stop();
+  // Always remove the staging dir: it is checked BEFORE the source sub-project, so a leftover copy
+  // would silently shadow live src/*.ts edits in every later dev run.
+  try { fs.rmSync(path.join(serverBin, 'res'), { recursive: true, force: true }); } catch { /* best effort */ }
+}
 done();

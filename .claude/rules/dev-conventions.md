@@ -86,6 +86,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   back to `Gatherlight.cmd` where MSVC is absent) into `publish/Gatherlight/` (`libs/`·`res/`·`data/` +
   sha256 `manifest.json` + zip). The launcher carries the app icon (`src/assets/gatherlight.ico`,
   regen via `make-icon.ps1`).
+- **Anything a tool needs at runtime must be IN the bundle** — the release ships `libs/`·`res/`·`data/`
+  and nothing else; a path that resolves only by walking up to a repo root works in dev and is dead on
+  every install. Node leaf tools (`tools/<name>`) therefore ship **esbuild-bundled** into
+  `res/tools/<name>/<entry>.cjs` (self-contained, run by plain `node` — no npm install/npx/tsx/node_modules
+  on the target), resolved by `ResourcePaths.NodeLeaf` (bundle layout first, then the dev walk-up so
+  `src/*.ts` edits stay live). Adding a leaf = add it to `build-production.mjs` step 3.8 **and** its
+  `required()` list. This is a rule because it already shipped broken: nothing under `tools/` was packed,
+  so `pdf_inspect`/`pdf_fill`/`pdf_merge`/`fill_itinerary` threw `工具目录不存在:` in every installed copy
+  and only worked from the source repo. Coverage: `e2e-p10` runs the tools in BOTH shapes.
 - **Large resources are download-at-setup, not bundled** (default lean bundle ~200 MB vs ~350 MB):
   chromium + git are provisioned by `Modules/Resources` (`ResourceProvisioner` → `/api/manage/resources`,
   the 资源 · Resources console panel) into `{data}/state/resources/…` (in the data folder → survives

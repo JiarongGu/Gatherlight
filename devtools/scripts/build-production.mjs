@@ -134,9 +134,14 @@ for (const entry of fs.readdirSync(stage)) {
 }
 fs.rmSync(stage, { recursive: true, force: true });
 
-for (const need of [path.join(libs, 'Gatherlight.Host.exe'), path.join(res, 'wwwroot', 'index.html'), path.join(res, 'template', 'CLAUDE.md')]) {
-  if (!fs.existsSync(need)) die(`expected in bundle but missing: ${path.relative(bundle, need)}`);
-}
+// Required-in-bundle check. The leaf entries are here because their absence is exactly the bug that
+// shipped: a bundle without res/tools/pdf-form leaves pdf_fill · pdf_merge · pdf_inspect ·
+// fill_itinerary permanently broken on the target, and nothing else notices — they only fail when a
+// user asks for one. (Populated by step 3.8 below; this asserts it after the fact.)
+const required = () => [
+  path.join(libs, 'Gatherlight.Host.exe'), path.join(res, 'wwwroot', 'index.html'), path.join(res, 'template', 'CLAUDE.md'),
+  ...['inspect', 'fill', 'fill-itinerary', 'merge'].map((e) => path.join(res, 'tools', 'pdf-form', `${e}.cjs`)),
+];
 
 // 3.5 native C++ launcher → top-level Gatherlight.exe (carries the app icon; launches libs/host).
 // Needs the MSVC toolchain; where it's absent (a dev box without C++ tools) we fall back to the
@@ -228,6 +233,39 @@ if (!offline || rid !== 'win-x64' || skipChromium || !playwrightBundled) {
       console.log('  \x1b[33m⚠ chromium not bundled (install failed) — run playwright.ps1 install on the host.\x1b[0m');
     }
   }
+}
+
+// 3.8 Node leaf tools → res/tools/<name>/<entry>.cjs. The PDF form tools (pdf_fill · pdf_merge ·
+// pdf_inspect · fill_itinerary) shell out to tools/pdf-form; nothing under tools/ used to be packed,
+// so all four were dead in every installed copy (ResolveLeafDir found no tools/ above the exe and
+// threw "工具目录不存在:" with a blank path). We ship esbuild-BUNDLED single files rather than the
+// sub-project: ~7 MB of self-contained .cjs vs ~50 MB of node_modules, and the target runs them with
+// plain `node` — no npm install, no npx, no tsx. Node itself stays a prerequisite (it also arrives
+// with the provisioned Playwright driver, which NodeLeafTool falls back to).
+step(3.8, 'bundling Node leaf tools (pdf-form)…');
+for (const leaf of ['pdf-form']) {
+  const src = path.join(repo, 'tools', leaf);
+  if (!fs.existsSync(path.join(src, 'package.json'))) die(`leaf tool missing: tools/${leaf}`);
+  if (!fs.existsSync(path.join(src, 'node_modules'))) {
+    console.log(`  installing ${leaf} deps…`);
+    runOr('npm', ['install', '--no-audit', '--no-fund'], { cwd: src, shell: true }, `npm install failed in tools/${leaf}`);
+  }
+  runOr('npm', ['run', 'build'], { cwd: src, shell: true }, `leaf bundle failed: tools/${leaf}`);
+  const dist = path.join(src, 'dist');
+  const entries = fs.existsSync(dist) ? fs.readdirSync(dist).filter((f) => f.endsWith('.cjs')) : [];
+  if (!entries.length) die(`leaf bundle produced no .cjs: tools/${leaf}`);
+  const outDir = path.join(res, 'tools', leaf);
+  fs.mkdirSync(outDir, { recursive: true });
+  let bytes = 0;
+  for (const e of entries) {
+    fs.copyFileSync(path.join(dist, e), path.join(outDir, e));
+    bytes += fs.statSync(path.join(dist, e)).size;
+  }
+  console.log(`  \x1b[32m✔\x1b[0m res/tools/${leaf}/  (${entries.length} entries, ${(bytes / 1024 / 1024).toFixed(1)} MB)`);
+}
+
+for (const need of required()) {
+  if (!fs.existsSync(need)) die(`expected in bundle but missing: ${path.relative(bundle, need)}`);
 }
 
 // 4. launcher + README

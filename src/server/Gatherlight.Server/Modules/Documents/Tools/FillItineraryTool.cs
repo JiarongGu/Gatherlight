@@ -14,8 +14,7 @@ namespace Gatherlight.Server.Modules.Documents.Tools;
 public sealed class FillItineraryTool : DocumentToolBase
 {
     private readonly string _leafDir;
-    public FillItineraryTool(IDataContext data, IHostEnvironment env) : base(data)
-        => _leafDir = ResolveLeafDir(env, "pdf-form");
+    public FillItineraryTool(IDataContext data) : base(data) => _leafDir = ResolveLeafDir("pdf-form");
 
     public override string Name => "fill_itinerary";
 
@@ -29,15 +28,12 @@ public sealed class FillItineraryTool : DocumentToolBase
 
     public override async Task<string> RunAsync(JsonElement args, CancellationToken ct)
     {
-        if (!Directory.Exists(_leafDir)) throw new ToolException(500, $"工具目录不存在:{_leafDir}");
         var tmpl = ResolveIn(args, "templatePath");
         var data = ResolveIn(args, "dataPath");
         var outAbs = ResolveOut(args, "outPath");
         Directory.CreateDirectory(Path.GetDirectoryName(outAbs)!);
 
-        return await new FixedNodeLeaf(_leafDir, new[]
-        {
-            "tsx", "src/fill-itinerary.ts", "--in", tmpl, "--data", data, "--out", outAbs,
-        }).RunAsync(args, ct);
+        return await new FixedNodeLeaf(_leafDir, "fill-itinerary",
+            ["--in", tmpl, "--data", data, "--out", outAbs], Data.ResourcesPath).RunAsync(args, ct);
     }
 }
