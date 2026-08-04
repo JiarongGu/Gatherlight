@@ -19,7 +19,7 @@ const systemGuard = path.join(repo, 'guard', 'system-scope-guard.mjs');
 // exercises the exact bytes the server injects into a data folder (WRITE_DIRS = plans/household/.claude).
 function extractPlannerGuard() {
   const cs = fs.readFileSync(
-    path.join(repo, 'src', 'server', 'Gatherlight.Server', 'Modules', 'Chat', 'Services', 'ChatEnvironmentService.cs'),
+    path.join(repo, 'src', 'server', 'Gatherlight.Server', 'Platform', 'Agent', 'Chat', 'Services', 'ChatEnvironmentService.cs'),
     'utf8');
   const m = cs.match(/private const string ScopeGuardMjs = """\r?\n([\s\S]*?)\r?\n[ \t]*""";/);
   if (!m) return null;

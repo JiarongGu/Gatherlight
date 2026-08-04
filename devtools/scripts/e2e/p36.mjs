@@ -2,7 +2,7 @@
 // e2e P36 — hosted judge tools (Lyntai 1.1.0 AddMcpToolHost). The LLM-judge scorers run through the
 // one-shot ILlmClient path, which is the ONLY path Lyntai's ICliToolProvisioner reaches; on each such
 // call it stands up an ephemeral loopback MCP server exposing the app's read-only judge tools
-// (Modules/Scoring/JudgeTools) and passes the CLI an mcp-config carrying a per-host bearer token.
+// (Platform/Ops/Scoring/JudgeTools) and passes the CLI an mcp-config carrying a per-host bearer token.
 //
 // The claude stub plays the judge: when the user message carries JUDGE_TOOLS_PROBE it drives that MCP
 // server for real (initialize → tools/list → tools/call) and reports what it saw in the verdict's

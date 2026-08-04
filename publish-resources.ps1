@@ -31,7 +31,7 @@ $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
 # Keep the package version in lock-step with what the app actually downloads.
-$provCs = 'src/server/Gatherlight.Server/Modules/Resources/Services/ResourceProvisioner.cs'
+$provCs = 'src/server/Gatherlight.Server/Platform/Hosting/Resources/Services/ResourceProvisioner.cs'
 $provVer = (Select-String -Path $provCs -Pattern 'ResourcesPackageVersion\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
 if (-not $Version) {
     $Version = $provVer

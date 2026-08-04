@@ -49,7 +49,7 @@ if (prompt.includes('FORCE_ERROR') && !prompt.includes('未完成(出错)')) {
 
 // ---- judge tool host (Lyntai AddMcpToolHost) -------------------------------------------------
 // On a one-shot ILlmClient call — i.e. an LLM-judge scorer — Lyntai stands up an ephemeral loopback
-// MCP server exposing the app's ITools (Modules/Scoring/JudgeTools) and passes us --mcp-config
+// MCP server exposing the app's ITools (Platform/Ops/Scoring/JudgeTools) and passes us --mcp-config
 // pointing at it, bearer token inside. The real claude would drive it with its built-in MCP client;
 // the stub speaks the streamable-HTTP JSON-RPC directly, which is what lets e2e-p36 assert the host
 // really starts, the token really gates it, and the read jail really holds.
@@ -135,7 +135,7 @@ const probeJudgeTools = async (server) => {
   return out;
 };
 
-// LLM scorer judge (Modules/Scoring): return a canned {score, reason} verdict JSON so the automated
+// LLM scorer judge (Platform/Ops/Scoring): return a canned {score, reason} verdict JSON so the automated
 // scorers produce a deterministic result under the stub. When the e2e plants JUDGE_TOOLS_PROBE in the
 // user message (which reaches the answer-relevancy prompt), first drive the hosted judge tools for
 // real and report the observations in `reason` — other suites skip that and stay fast.
