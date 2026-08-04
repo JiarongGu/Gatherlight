@@ -65,6 +65,11 @@
          collides with our own Include below (NETSDK1022) unless we clear it first. -->
     <Content Remove="Assets\SiteTemplate\**" />
     <Content Include="Assets\SiteTemplate\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The capability sandbox preload (Platform/Capabilities/Sandbox) — loaded via node's import
+         flag before a sandboxed capability's own code; supplies the network denial Node's
+         permission model lacks. Shipped as a build artefact, not embedded, so it stays a single
+         verifiable file. -->
+    <Content Include="Platform\Capabilities\Sandbox\Assets\cap-guard.mjs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
