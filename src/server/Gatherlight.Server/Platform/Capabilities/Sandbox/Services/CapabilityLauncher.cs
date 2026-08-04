@@ -58,6 +58,11 @@ public sealed class NodeCapabilityLauncher : ICapabilityLauncher
             if (!File.Exists(guard))
                 throw new Tools.Models.ToolException(500,
                     "能力沙箱预载缺失(cap-guard.mjs),拒绝以可联网方式运行能力。");
+            // node --permission checks fs-read on an --import target same as any other module the
+            // process loads, and the preload lives under the app's own install dir — never inside
+            // workingDir (a {data}/tools/<name> folder) — so without this it is unreadable and every
+            // network-denied capability fails closed with ERR_ACCESS_DENIED before it can run at all.
+            psi.ArgumentList.Add($"--allow-fs-read={Path.GetDirectoryName(guard)}");
             // Windows rejects a bare drive-letter path here with ERR_UNSUPPORTED_ESM_URL_SCHEME.
             psi.ArgumentList.Add($"--import={new Uri(guard).AbsoluteUri}");
         }

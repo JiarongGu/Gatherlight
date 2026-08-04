@@ -77,9 +77,22 @@ public sealed class ScriptToolProvider : IScriptToolProvider, IHostedService, ID
     private void Reload()
     {
         var tools = new List<IGatherlightTool>();
-        // Resolved fresh each pass so a site.json edit (enable/deny) takes effect on the next
-        // reload — either a tool.json touch (the watcher) or the next process start.
-        var enabled = _manifest.Current.Capabilities.Enabled
+        // Resolved fresh each pass — via Load(), NOT the cached .Current — so a site.json edit
+        // (enable/deny) takes effect on the next reload: either a tool.json touch (the watcher) or
+        // the next process start. ISiteManifestStore.Current caches indefinitely after first read
+        // (by design, elsewhere: a singleton pinning a manifest for the process lifetime is exactly
+        // right for e.g. the chat scope guard), so this is the one caller that deliberately forces a
+        // re-read. A manifest caught mid external write (new-tool, or a hand edit) falls back to the
+        // last-known-good one instead of taking every script tool down with it — same "broken input
+        // never takes healthy tools down" contract as the per-tool try/catch below.
+        IReadOnlyList<CapabilityGrant> enabledGrants;
+        try { enabledGrants = _manifest.Load().Capabilities.Enabled; }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "site.json reload failed — keeping last-known capabilities.enabled");
+            enabledGrants = _manifest.Current.Capabilities.Enabled;
+        }
+        var enabled = enabledGrants
             .Where(g => g.Id.Length > 0)
             .ToDictionary(g => g.Id, g => g, StringComparer.OrdinalIgnoreCase);
         foreach (var manifestPath in Directory.EnumerateFiles(ToolsRoot, "tool.json", SearchOption.AllDirectories))
