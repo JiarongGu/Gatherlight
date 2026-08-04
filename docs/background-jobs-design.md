@@ -108,9 +108,9 @@ snapshot/resume engine. The stage-for-review gate already *is* Mastra's suspend/
 
 ## AI surface
 
-Tools (both surfaces, `Modules/Jobs/Tools/`): `job_schedule` (upsert), `job_list`, `job_cancel`,
+Tools (both surfaces, `Platform/Ops/Jobs/Tools/`): `job_schedule` (upsert), `job_list`, `job_cancel`,
 `job_run_now`, `notify_user` (immediate ping mid-plan). Seeded skill
-`Assets/DataTemplate/.claude/skills/schedule-job/SKILL.md` teaches when/how to schedule; wired into
+`Assets/SiteTemplate/.claude/skills/schedule-job/SKILL.md` teaches when/how to schedule; wired into
 `.claude/keywords/automation.md` + `KEYWORDS_INDEX` + `AI_GUIDE`. Ships via `ZhikuSeeder`
 (hash-guarded).
 
@@ -143,7 +143,7 @@ failures, per-job timeout kills the run.
 
 ## New module surface
 
-`Modules/Jobs/{JobsController, NotificationsController}` · `Services/{JobService, JobRepository,
+`Platform/Ops/Jobs/{JobsController, NotificationsController}` · `Services/{JobService, JobRepository,
 JobSchedulerService, UnattendedRunService, NotificationService, IJobHandler + 4 handlers, AgentGate}`
 · `Models/*` · `Tools/*`. Plus: `202607160001_Jobs.cs`, `JobsConfig` in `ServerConfig`,
 `CapturePatchAsync`/`ApplyPatchAsync` on `IGitCliService`, `IAgentGate` consulted by

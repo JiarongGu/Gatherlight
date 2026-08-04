@@ -148,7 +148,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   when it bumps (it's a security boundary, not editable KB content). The `guard/` folder is
   app-managed (shipped + overlaid by updates), read-only to the agent. Residuals the hook can't
   close (code run *inside* an agent-authored script; exfil via a WebFetch URL) need an OS sandbox.
-- The shipped knowledge base lives in `Assets/DataTemplate/` and is seeded/upgraded by
+- The shipped knowledge base lives in `Assets/SiteTemplate/` and is seeded/upgraded by
   `ZhikuSeeder` (hash-guarded: user-modified files are never overwritten).
 
 ## Dev loop

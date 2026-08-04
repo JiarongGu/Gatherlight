@@ -7,10 +7,12 @@
 **Gatherlight** — a self-hosted, AI-first family planner being productized from a markdown-notebook
 prototype. Target architecture: **ASP.NET Core (net10.0) + SQLite** server (`src/server/`) hosting a
 **React + Vite client** (`src/client/`), with all user data in a configurable untracked **data
-folder** (default `local/`, env `GATHERLIGHT_DATA`). The data folder holds markdown plan/household
-artifacts under **its own private git repo** (audit trail + diff-approval gate), the planner
-knowledge base (`local/.claude/` — CLAUDE.md, rules, skills, templates the spawned agent runs on),
-and app state (`local/state/gatherlight.db`, settings, uploads, caches).
+folder** (default `local/`, env `GATHERLIGHT_DATA`). The data folder holds `site.json` (the site
+manifest — record directories, capability grants, agent config; the scope guard's write-scope
+renders from it), markdown plan/household artifacts under **its own private git repo** (audit
+trail + diff-approval gate), the planner knowledge base (`local/.claude/` — CLAUDE.md, rules,
+skills, templates the spawned agent runs on), and app state (`local/state/gatherlight.db`,
+settings, uploads, caches).
 
 The AI core: chat requests spawn the **local authenticated `claude` CLI** (never API keys) with
 cwd = data folder, through a **two-gate flow** — agent drafts a plan (read-only) → user approves →
@@ -34,9 +36,9 @@ and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,C
   invoked by the C# document tools via `NodeLeafTool` (reliable on real + CJK PDFs where PDFsharp
   threw). The former `tools/puppeteer/` scrapers are fully ported to C#/Playwright and removed —
   Phase 7 is done; the registry can't tell a Node leaf from a native tool.
-- The shipped planner knowledge base lives in `src/server/Gatherlight.Server/Assets/DataTemplate/`
-  (scrubbed, generic) and is seeded/upgraded into data folders by `ZhikuSeeder` — the live family
-  knowledge base in `local/.claude/` is user data and diverges freely.
+- The shipped planner knowledge base lives in `src/server/Gatherlight.Server/Assets/SiteTemplate/`
+  (scrubbed, generic; carries the `site.json` manifest) and is seeded/upgraded into data folders by
+  `ZhikuSeeder` — the live family knowledge base in `local/.claude/` is user data and diverges freely.
 
 ## Rules
 

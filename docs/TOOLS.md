@@ -13,18 +13,18 @@ Implement `IGatherlightTool` (`Name` / `Description` / `InputSchema` via the `To
 
 - **AI / web**: `extract` (one-shot Claude over an uploaded file), `scrape` (Playwright headless
   chromium), `wiki_info` (Wikipedia REST + Wikidata).
-- **Travel verifiers** (C#/Playwright native — `Modules/Scrapers`, no Node): `flight_schedule` +
+- **Travel verifiers** (C#/Playwright native — `Product/Planner/Scrapers`, no Node): `flight_schedule` +
   `policy_check` (single-query, cross-source), `flight_prices` + `hotel_prices` (Kayak/Booking
   price snapshots), `hotel_info` + `restaurant_info` (DuckDuckGo search → trusted-source
   verification). All share `PlaywrightScraper` (navigate+extract on the one browser); parse is
   deterministic and fixture-tested (e2e-p11 + p12).
-- **Documents / media** (`Modules/Documents`): `pdf_inspect` (pages + AcroForm fields + values +
+- **Documents / media** (`Platform/Capabilities/Documents`): `pdf_inspect` (pages + AcroForm fields + values +
   metadata), `pdf_extract_text` (PdfPig, zero-LLM), `pdf_fill` (fill any AcroForm from a field map,
   optional flatten + CJK font — pdf-lib), `pdf_merge`, `image_info`, `image_resize`,
   `image_convert` (ImageSharp). `fill_itinerary` is the visa-specific convenience over `pdf_fill`.
 - **Zero-LLM planner**: `budget_scan` (honest budget figures).
 - **Cross-session memory**: `remember_fact` / `recall_facts`.
-- **Knowledge library** (`Modules/Library`): `library_upsert` / `library_search` / `library_import` / `library_delete` —
+- **Knowledge library** (`Platform/Storage/Library`): `library_upsert` / `library_search` / `library_import` / `library_delete` —
   verified reference entities (attractions/venues/hotels: name, coords, official URL, image,
   confidence) in the first-class `library_item` table, browsed read-only at `GET /api/library`.
   Replaces the old hand-written `ATTRACTIONS.md` pattern: knowledge is queryable data, not a

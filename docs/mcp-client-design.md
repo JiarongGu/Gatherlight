@@ -13,7 +13,7 @@ phase landing with its e2e suite.
 ## Why
 
 Today Gatherlight is an MCP **server** only: it exposes its own tools at `/mcp` to the spawned
-`claude` CLI (`Modules/Tools/Services/McpEndpoint.cs`, hand-rolled JSON-RPC). It has **no MCP
+`claude` CLI (`Platform/Capabilities/Tools/Services/McpEndpoint.cs`, hand-rolled JSON-RPC). It has **no MCP
 client** — it can't consume a third-party MCP server. There is already a native `xhs_search`
 Playwright tool, but the ecosystem ships richer capabilities as MCP servers (e.g. a Xiaohongshu
 MCP). Rather than re-porting each one to C#, we add a general MCP-client subsystem: configure an
@@ -60,7 +60,7 @@ privileged action that a human must confirm.** The design keeps the jail intact:
   spawned claude CLI sees mcp__planner-tools__{serverId}__{tool}
 ```
 
-### Module layout — `Modules/McpClient/`
+### Module layout — `Platform/Capabilities/McpClient/`
 
 - `Models/` — `McpServerConfig` (id, name, transport, command/args/env | url/headers, enabled,
   status, lastError, discoveredTools), `McpServerSecret` (server-side only), `McpServerView`
@@ -117,7 +117,7 @@ chat. Reject → discard the draft, nothing runs.
   → no-op; secrets never surface in list views / transcript.
 - **P3 — Xiaohongshu real case.** Register a real Xiaohongshu MCP through the gate, supply login via
   the credentials field, run a **real query against real xiaohongshu.com**, and report the true
-  result (including if login-walled). Docs in `docs/TOOLS.md` + the DataTemplate CLAUDE.md tool
+  result (including if login-walled). Docs in `docs/TOOLS.md` + the SiteTemplate CLAUDE.md tool
   table. If no community MCP works cleanly under our constraints, fall back to extending the native
   `xhs_search` and record why.
 

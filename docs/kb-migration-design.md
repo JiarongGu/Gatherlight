@@ -34,8 +34,8 @@ never gets rule/skill/workflow improvements we ship. A naive overwrite would clo
 
 ## Surface
 
-- `Modules/Seed/Services/ZhikuMigrator.cs` (`IZhikuMigrator`: Detect / Run / GetStaged / Approve /
-  Reject) + `Modules/Seed/ZhikuMigrationController.cs` (`/api/manage/kb-upgrades*`).
+- `Platform/Site/Seed/Services/ZhikuMigrator.cs` (`IZhikuMigrator`: Detect / Run / GetStaged / Approve /
+  Reject) + `Platform/Site/Seed/ZhikuMigrationController.cs` (`/api/manage/kb-upgrades*`).
 - Merge prompt in `PromptHarness` (tunable, group `system`/`migration`).
 - Startup hook in `GatherlightApp` (detect → notification).
 - Console: a card in the 校准 · Cortex tab (available upgrades → run → review → approve/reject),
