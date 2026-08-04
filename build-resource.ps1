@@ -22,7 +22,7 @@ Set-Location $PSScriptRoot
 
 # Default to the version the app fetches (ResourceProvisioner.ResourcesPackageVersion).
 if (-not $Version) {
-    $provCs = 'src/server/Gatherlight.Server/Modules/Resources/Services/ResourceProvisioner.cs'
+    $provCs = 'src/server/Gatherlight.Server/Platform/Hosting/Resources/Services/ResourceProvisioner.cs'
     $Version = (Select-String -Path $provCs -Pattern 'ResourcesPackageVersion\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
     Write-Host "Version not given -> using ResourcesPackageVersion: $Version" -ForegroundColor DarkGray
 }

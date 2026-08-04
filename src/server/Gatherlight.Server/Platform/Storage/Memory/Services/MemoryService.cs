@@ -1,0 +1,144 @@
+using Dapper;
+using Gatherlight.Server.Platform.Kernel.Services;
+using Gatherlight.Server.Platform.Ops.Cortex.Services;
+using Gatherlight.Server.Platform.Storage.Knowledge.Services;
+using Gatherlight.Server.Platform.Storage.Library.Services;
+
+namespace Gatherlight.Server.Platform.Storage.Memory.Services;
+
+// Classes (not positional records): SQLite's dynamic typing breaks Dapper's strict
+// positional-record materialization — same reason LibraryItem/Facet are classes.
+public sealed class KnowledgeExport
+{
+    public string Kind { get; set; } = "";
+    public string Topic { get; set; } = "";
+    public string Content { get; set; } = "";
+    public string? Source { get; set; }
+    public double Confidence { get; set; }
+}
+
+public sealed class EntityExport
+{
+    public string Kind { get; set; } = "";
+    public string Key { get; set; } = "";
+    public string ValueJson { get; set; } = "";
+}
+
+/// <summary>A portable snapshot of the durable DB "memory" — the knowledge library + learned facts
+/// + generic entity store + the tuned cortex config. Transferable between installs (export here →
+/// import there). Markdown plans/household ride along in the data folder's git repo; this bundle is
+/// the DB half. <see cref="Cortex"/> carries the LLM-ops tuning (app_config prompt-template + model
+/// overrides) so a tuned cortex travels with the memory instead of being lost on transfer.</summary>
+public sealed class MemoryBundle
+{
+    public int GatherlightMemory { get; set; } = 1;
+    public string ExportedAt { get; set; } = "";
+    public List<LibraryItem> Library { get; set; } = new();
+    public List<KnowledgeExport> Knowledge { get; set; } = new();
+    public List<EntityExport> Entities { get; set; } = new();
+    public Dictionary<string, string> Cortex { get; set; } = new();
+}
+
+public sealed record MemoryImportResult(int Library, int Knowledge, int Entities, int Cortex);
+
+public interface IMemoryService
+{
+    Task<MemoryBundle> ExportAsync();
+    /// <summary>Idempotent merge — every row is an upsert, so importing the same bundle twice is safe.</summary>
+    Task<MemoryImportResult> ImportAsync(MemoryBundle bundle);
+}
+
+public sealed class MemoryService : IMemoryService
+{
+    // Only these app_config prefixes are memory (the tuned cortex) — never export/import arbitrary
+    // config (ports, machine-local paths, feature flags don't travel between installs).
+    private static readonly string[] CortexPrefixes = { "cortex.prompt.", "llm.model." };
+
+    private readonly IDbConnectionFactory _db;
+    private readonly ILibraryRepository _library;
+    private readonly IKnowledgeStore _knowledge;
+    private readonly IEntityStore _entity;
+    private readonly IAppConfigService _config;
+    private readonly ICortexConfigService _cortex;
+
+    public MemoryService(IDbConnectionFactory db, ILibraryRepository library, IKnowledgeStore knowledge, IEntityStore entity, IAppConfigService config, ICortexConfigService cortex)
+    {
+        _db = db;
+        _library = library;
+        _knowledge = knowledge;
+        _entity = entity;
+        _config = config;
+        _cortex = cortex;
+    }
+
+    public async Task<MemoryBundle> ExportAsync()
+    {
+        using var conn = _db.Open();
+        var library = (await conn.QueryAsync<LibraryItem>(
+            $"SELECT {LibraryRepository.Cols} FROM library_item ORDER BY kind, key")).ToList();
+        var knowledge = (await conn.QueryAsync<KnowledgeExport>(
+            "SELECT kind, topic, content, source, CAST(confidence AS REAL) AS confidence FROM knowledge ORDER BY id")).ToList();
+        var entities = (await conn.QueryAsync<EntityExport>(
+            "SELECT kind, key, value_json FROM entity ORDER BY kind, key")).ToList();
+        var cortexRows = await conn.QueryAsync(
+            "SELECT key, value FROM app_config WHERE key LIKE 'cortex.prompt.%' OR key LIKE 'llm.model.%' ORDER BY key");
+        var cortex = new Dictionary<string, string>();
+        foreach (var r in cortexRows) cortex[(string)r.key] = (string)r.value;
+        return new MemoryBundle
+        {
+            ExportedAt = DateTime.UtcNow.ToString("o"),
+            Library = library,
+            Knowledge = knowledge,
+            Entities = entities,
+            Cortex = cortex,
+        };
+    }
+
+    public async Task<MemoryImportResult> ImportAsync(MemoryBundle bundle)
+    {
+        var lib = 0;
+        foreach (var it in bundle.Library ?? new())
+        {
+            if (string.IsNullOrEmpty(it.Kind) || string.IsNullOrEmpty(it.Key) || string.IsNullOrEmpty(it.Name)) continue;
+            await _library.UpsertAsync(new LibraryUpsert(
+                it.Kind, it.Key, it.Name, it.NameLocal, it.Region, it.Summary, it.Url, it.ImageUrl,
+                it.Lat, it.Lng, it.Tags, it.Source, it.Confidence, it.VerifiedAt));
+            lib++;
+        }
+        var kn = 0;
+        foreach (var k in bundle.Knowledge ?? new())
+        {
+            if (string.IsNullOrEmpty(k.Kind) || string.IsNullOrEmpty(k.Topic)) continue;
+            await _knowledge.LearnAsync(k.Kind, k.Topic, k.Content, k.Source, k.Confidence);
+            kn++;
+        }
+        var ent = 0;
+        foreach (var e in bundle.Entities ?? new())
+        {
+            if (string.IsNullOrEmpty(e.Kind) || string.IsNullOrEmpty(e.Key)) continue;
+            await _entity.SetAsync(e.Kind, e.Key, e.ValueJson);
+            ent++;
+        }
+        var cx = 0;
+        const string promptPrefix = "cortex.prompt.";
+        foreach (var (key, value) in bundle.Cortex ?? new())
+        {
+            // Prefix-guard: never let a hand-edited bundle inject arbitrary app_config keys.
+            if (string.IsNullOrEmpty(key) || value is null) continue;
+            if (!CortexPrefixes.Any(key.StartsWith)) continue;
+            // Prompt overrides must satisfy the placeholder contract, or the planner breaks quietly on the
+            // target install — route them through the validating cortex writer; model knobs go direct.
+            if (key.StartsWith(promptPrefix))
+            {
+                var r = _cortex.SetPrompt(key[promptPrefix.Length..], value);
+                if (!r.Found || r.MissingPlaceholders.Count > 0) continue;   // unknown/invalid prompt — skip
+            }
+            else
+            {
+                _config.Set(key, value);
+            }
+            cx++;
+        }
+        return new MemoryImportResult(lib, kn, ent, cx);
+    }
+}

@@ -19,11 +19,18 @@ const systemGuard = path.join(repo, 'guard', 'system-scope-guard.mjs');
 // exercises the exact bytes the server injects into a data folder (WRITE_DIRS = plans/household/.claude).
 function extractPlannerGuard() {
   const cs = fs.readFileSync(
-    path.join(repo, 'src', 'server', 'Gatherlight.Server', 'Modules', 'Chat', 'Services', 'ChatEnvironmentService.cs'),
+    path.join(repo, 'src', 'server', 'Gatherlight.Server', 'Platform', 'Agent', 'Chat', 'Services', 'ChatEnvironmentService.cs'),
     'utf8');
   const m = cs.match(/private const string ScopeGuardMjs = """\r?\n([\s\S]*?)\r?\n[ \t]*""";/);
   if (!m) return null;
-  const body = m[1].replace(/^ {8}/gm, '');           // strip the raw-string indentation (closing """ at col 8)
+  const raw = m[1].replace(/^ {8}/gm, '');           // strip the raw-string indentation (closing """ at col 8)
+  // The C# constant is a TEMPLATE: the server fills __WRITE_DIRS__ from the site manifest's
+  // declared records (ChatEnvironmentService.RenderScopeGuard). Substitute the default-manifest
+  // render so the extracted guard is byte-equivalent to what a default site actually gets.
+  // Asserted, not assumed — if the placeholder is ever renamed or inlined, this fails loudly
+  // instead of silently exercising a guard that no longer matches the shipped one.
+  if (!raw.includes('__WRITE_DIRS__')) throw new Error('scope-guard template lost its __WRITE_DIRS__ placeholder — update p24 to match ChatEnvironmentService.RenderScopeGuard');
+  const body = raw.replace('__WRITE_DIRS__', "['plans', 'household', '.claude']");
   const out = path.join(os.tmpdir(), `gl-planner-guard-${process.pid}.mjs`);
   fs.writeFileSync(out, body);
   return out;

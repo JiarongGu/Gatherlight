@@ -7,10 +7,12 @@
 **Gatherlight** — a self-hosted, AI-first family planner being productized from a markdown-notebook
 prototype. Target architecture: **ASP.NET Core (net10.0) + SQLite** server (`src/server/`) hosting a
 **React + Vite client** (`src/client/`), with all user data in a configurable untracked **data
-folder** (default `local/`, env `GATHERLIGHT_DATA`). The data folder holds markdown plan/household
-artifacts under **its own private git repo** (audit trail + diff-approval gate), the planner
-knowledge base (`local/.claude/` — CLAUDE.md, rules, skills, templates the spawned agent runs on),
-and app state (`local/state/gatherlight.db`, settings, uploads, caches).
+folder** (default `local/`, env `GATHERLIGHT_DATA`). The data folder holds `site.json` (the site
+manifest — record directories, capability grants, agent config; the scope guard's write-scope
+renders from it), markdown plan/household artifacts under **its own private git repo** (audit
+trail + diff-approval gate), the planner knowledge base (`local/.claude/` — CLAUDE.md, rules,
+skills, templates the spawned agent runs on), and app state (`local/state/gatherlight.db`,
+settings, uploads, caches).
 
 The AI core: chat requests spawn the **local authenticated `claude` CLI** (never API keys) with
 cwd = data folder, through a **two-gate flow** — agent drafts a plan (read-only) → user approves →
@@ -27,16 +29,16 @@ legacy `viewer/` is deleted. On top of that: an **LLM-ops loop** (per-conversati
 automated scorers + run traces + cortex prompt/model tuning + an eval playground), **FTS5 trigram
 search**, portable **memory transfer**, **remote-access hardening** (access-token gate + TLS +
 security headers + brute-force lockout), a **native C++ launcher** with two-phase **auto-update**,
-and **CI/release** packaging. New server modules: `Modules/{Scoring,Trace,Cortex,Update,Security,
-Playground,Memory}`.
+and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,Cortex,Playground}`,
+`Platform/Hosting/{Update,Security}`, `Platform/Storage/Memory`.
 
 - `tools/pdf-form/` — a Node utility (pdf-lib + fontkit) for PDF AcroForm inspect/fill/merge,
   invoked by the C# document tools via `NodeLeafTool` (reliable on real + CJK PDFs where PDFsharp
   threw). The former `tools/puppeteer/` scrapers are fully ported to C#/Playwright and removed —
   Phase 7 is done; the registry can't tell a Node leaf from a native tool.
-- The shipped planner knowledge base lives in `src/server/Gatherlight.Server/Assets/DataTemplate/`
-  (scrubbed, generic) and is seeded/upgraded into data folders by `ZhikuSeeder` — the live family
-  knowledge base in `local/.claude/` is user data and diverges freely.
+- The shipped planner knowledge base lives in `src/server/Gatherlight.Server/Assets/SiteTemplate/`
+  (scrubbed, generic; carries the `site.json` manifest) and is seeded/upgraded into data folders by
+  `ZhikuSeeder` — the live family knowledge base in `local/.claude/` is user data and diverges freely.
 
 ## Rules
 
@@ -46,9 +48,11 @@ Playground,Memory}`.
   `local/sensitive-patterns.txt`). History was reset on 2026-07-13 to remove exactly such leaks.
 - **User data lives ONLY in `local/`** (own private git repo). Never move it back into this repo.
 - **LLM via the authenticated `claude` CLI only — never an API key.**
-- **Backend = modules** (`Modules/{Name}` controller → service → repository; Dapper + hand-written
-  SQL, snake_case columns, FluentMigrator `YYYYMMDDNNNN` migrations; variation points are
-  interfaces resolved via DI, never if/else chains).
+- **Backend = two-tier modules** (`Platform/<Group>/<Name>` or `Product/Planner/<Name>`,
+  controller → service → repository; Dapper + hand-written SQL, snake_case columns,
+  FluentMigrator `YYYYMMDDNNNN` migrations; variation points are interfaces resolved via DI, never
+  if/else chains). **Platform must never reference Product** — `dev.mjs check-layering` enforces
+  it; details in `.claude/rules/dev-conventions.md`.
 - **Working files** (probes, drafts, captures) go under `devtools/` with a `_` prefix (gitignored),
   never OS temp.
 - **Never commit without explicit user approval.**

@@ -48,7 +48,7 @@
     <PackageReference Include="Lyntai.Storage.Sqlite" Version="2.0.1" />
     <!-- The ephemeral loopback MCP host Lyntai stands up per one-shot ILlmClient call. It reaches ONLY
          the ClaudeCliProvider path — i.e. the two LLM-judge scorers — giving them the read-only judge
-         tools (Modules/Scoring/JudgeTools). The interactive agent path is untouched: that one gets MCP
+         tools (Platform/Ops/Scoring/JudgeTools). The interactive agent path is untouched: that one gets MCP
          via the CLI's mcp-config flag pointed at this server's own persistent /mcp
          (ChatEnvironmentService). Since 2.0.1 the per-call host runs on HttpListener, not Kestrel — no
          ASP.NET framework reference, same public API. -->
@@ -59,8 +59,12 @@
        so `dotnet run` and any future host serve the same bundle. Absent = dev via Vite. -->
   <ItemGroup>
     <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
-    <!-- Shipped knowledge-base template — ZhikuSeeder copies it into new data folders. -->
-    <Content Include="Assets\DataTemplate\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Shipped site template (knowledge base + site.json manifest) — ZhikuSeeder copies it into new
+         data folders. Remove first: the Web SDK default-includes **/*.json outside dot-folders as
+         Content on its own (site.json qualifies, routing.json doesn't — it's under .claude/), which
+         collides with our own Include below (NETSDK1022) unless we clear it first. -->
+    <Content Remove="Assets\SiteTemplate\**" />
+    <Content Include="Assets\SiteTemplate\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

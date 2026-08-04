@@ -1,0 +1,74 @@
+using System.Text.Json;
+using Gatherlight.Server.Platform.Kernel.Services;
+using Gatherlight.Server.Platform.Storage.Files.Services;
+using Gatherlight.Server.Platform.Agent.Llm.Services;
+using Gatherlight.Server.Platform.Capabilities.Tools.Models;
+using Lyntai.Providers.ClaudeCli;
+using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
+
+namespace Gatherlight.Server.Platform.Capabilities.Tools.Services.Tools;
+
+/// <summary>
+/// Reference Claude-backed tool: a one-shot, read-only pass over an uploaded file. Runs from a
+/// neutral cwd with the file's absolute path so the knowledge base is NOT loaded — a simple
+/// extraction must not pay the planner-gate token cost.
+/// </summary>
+public sealed class ExtractTool : IGatherlightTool
+{
+    private readonly IAgentRunner _agent;
+    private readonly IPromptHarness _harness;
+    private readonly IUploadService _uploads;
+    private readonly ISiteContext _data;
+    private readonly IAppConfigService _appConfig;
+
+    public ExtractTool(
+        IAgentRunner agent, IPromptHarness harness, IUploadService uploads,
+        ISiteContext data, IAppConfigService appConfig)
+    {
+        _agent = agent;
+        _harness = harness;
+        _uploads = uploads;
+        _data = data;
+        _appConfig = appConfig;
+    }
+
+    public string Name => "extract";
+
+    public string Description =>
+        "读取上传的文件(PDF/图片),按指令提取或总结内容,返回文本结果(默认:结构化关键信息摘要)。只读,不修改任何文件。";
+
+    public string InputSchema => ToolSchema.Of(b => b
+        .Str("relPath", "上传文件的引用(来自 /api/uploads,位于 uploads/ 下)", required: true)
+        .Str("instruction", "要提取或执行的内容;省略则输出该文件的结构化关键信息摘要"));
+
+    public async Task<string> RunAsync(JsonElement args, CancellationToken ct)
+    {
+        string relPath;
+        try
+        {
+            relPath = _uploads.ResolveAttachment(ToolArgs.Req(args, "relPath"));
+        }
+        catch (ArgumentException ex)
+        {
+            throw new ToolException(400, ex.Message);
+        }
+        var absPath = _data.ResolveSitePath(relPath)!;
+        var instruction = args.TryGetProperty("instruction", out var i) && i.GetString() is { Length: > 0 } s
+            ? s
+            : "读取该文件,提取其中的关键信息,整理成简洁清晰的结构化摘要(用简体中文)。";
+
+        var res = await _agent.RunAsync(new ClaudeAgentOptions
+        {
+            Prompt = await _harness.ProcessFilePrompt(absPath, instruction),
+            WorkingDirectory = Path.GetTempPath(), // neutral: no CLAUDE.md / knowledge-base load
+            ToolPolicy = AgentToolPolicy.ReadOnly, // Read allowed; Edit/Write denied
+            Model = _appConfig.Get("llm.model.extract") ?? "sonnet",
+            TimeoutSeconds = 600,
+        }, label: "extract", onEvent: null, ct: ct); // sync caller: only the final text matters
+
+        var outText = res.FinalText.Trim();
+        if (outText.Length == 0)
+            throw new ToolException(500, "处理没有产出内容(文件可能无法读取或为空)。");
+        return outText;
+    }
+}

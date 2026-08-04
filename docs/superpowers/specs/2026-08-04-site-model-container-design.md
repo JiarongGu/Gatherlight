@@ -1,6 +1,7 @@
 # Site manifest + platform seam — design (S1)
 
-> 2026-08-04 · sub-project **S1** of the platform track. Status: design under review.
+> 2026-08-04 · sub-project **S1** of the platform track. Status: implemented — see
+> `docs/superpowers/plans/2026-08-04-site-manifest-platform-seam.md`.
 
 ## Why
 

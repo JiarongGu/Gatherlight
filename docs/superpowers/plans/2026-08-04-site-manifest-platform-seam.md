@@ -254,8 +254,22 @@ node devtools/scripts/_move-module.mjs Fluent Platform/Hosting/Fluent
 
 - [ ] **Step 2: Build**
 
-Run: `dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo`
-Expected: `Build succeeded. 0 Warning(s) 0 Error(s)`
+Run BOTH — `Gatherlight.Host` is a separate project that also references these namespaces, so building
+only the server hides a broken Host:
+
+```bash
+dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo
+dotnet build src/server/Gatherlight.Host/Gatherlight.Host.csproj -v minimal --nologo
+```
+Expected: `Build succeeded. 0 Error(s)` for both. The Host emits a pre-existing `MSB3277` warning
+(WebView2 vs `WindowsBase` version unification) that is unrelated to this work; any *error*, or any
+other new warning, is a real failure.
+
+Then confirm no stale reference to a moved module survives anywhere:
+```bash
+grep -rn "Modules\.\(Core\|Security\|Update\|Resources\|Migration\|Settings\|Fluent\|Llm\|Chat\|Tools\|McpClient\|Documents\|Library\|Knowledge\|Memory\|Files\|DataRepo\|Backup\|Jobs\|Trace\|Scoring\|Eval\|Playground\|Cortex\|Seed\|PlanIndex\|Scrapers\)" --include=*.cs src/
+```
+Expected: no output for modules moved so far.
 
 If a namespace was missed, the error names the exact file and symbol — fix it and rebuild before moving on.
 
@@ -285,8 +299,22 @@ node devtools/scripts/_move-module.mjs Documents Platform/Capabilities/Documents
 
 - [ ] **Step 2: Build**
 
-Run: `dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo`
-Expected: `Build succeeded. 0 Warning(s) 0 Error(s)`
+Run BOTH — `Gatherlight.Host` is a separate project that also references these namespaces, so building
+only the server hides a broken Host:
+
+```bash
+dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo
+dotnet build src/server/Gatherlight.Host/Gatherlight.Host.csproj -v minimal --nologo
+```
+Expected: `Build succeeded. 0 Error(s)` for both. The Host emits a pre-existing `MSB3277` warning
+(WebView2 vs `WindowsBase` version unification) that is unrelated to this work; any *error*, or any
+other new warning, is a real failure.
+
+Then confirm no stale reference to a moved module survives anywhere:
+```bash
+grep -rn "Modules\.\(Core\|Security\|Update\|Resources\|Migration\|Settings\|Fluent\|Llm\|Chat\|Tools\|McpClient\|Documents\|Library\|Knowledge\|Memory\|Files\|DataRepo\|Backup\|Jobs\|Trace\|Scoring\|Eval\|Playground\|Cortex\|Seed\|PlanIndex\|Scrapers\)" --include=*.cs src/
+```
+Expected: no output for modules moved so far.
 
 - [ ] **Step 3: Commit**
 
@@ -322,8 +350,22 @@ node devtools/scripts/_move-module.mjs Seed Platform/Site/Seed
 
 - [ ] **Step 2: Build**
 
-Run: `dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo`
-Expected: `Build succeeded. 0 Warning(s) 0 Error(s)`
+Run BOTH — `Gatherlight.Host` is a separate project that also references these namespaces, so building
+only the server hides a broken Host:
+
+```bash
+dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo
+dotnet build src/server/Gatherlight.Host/Gatherlight.Host.csproj -v minimal --nologo
+```
+Expected: `Build succeeded. 0 Error(s)` for both. The Host emits a pre-existing `MSB3277` warning
+(WebView2 vs `WindowsBase` version unification) that is unrelated to this work; any *error*, or any
+other new warning, is a real failure.
+
+Then confirm no stale reference to a moved module survives anywhere:
+```bash
+grep -rn "Modules\.\(Core\|Security\|Update\|Resources\|Migration\|Settings\|Fluent\|Llm\|Chat\|Tools\|McpClient\|Documents\|Library\|Knowledge\|Memory\|Files\|DataRepo\|Backup\|Jobs\|Trace\|Scoring\|Eval\|Playground\|Cortex\|Seed\|PlanIndex\|Scrapers\)" --include=*.cs src/
+```
+Expected: no output for modules moved so far.
 
 - [ ] **Step 3: Commit**
 
@@ -348,8 +390,22 @@ node devtools/scripts/_move-module.mjs Scrapers Product/Planner/Scrapers
 
 - [ ] **Step 2: Build**
 
-Run: `dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo`
-Expected: `Build succeeded. 0 Warning(s) 0 Error(s)`
+Run BOTH — `Gatherlight.Host` is a separate project that also references these namespaces, so building
+only the server hides a broken Host:
+
+```bash
+dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo
+dotnet build src/server/Gatherlight.Host/Gatherlight.Host.csproj -v minimal --nologo
+```
+Expected: `Build succeeded. 0 Error(s)` for both. The Host emits a pre-existing `MSB3277` warning
+(WebView2 vs `WindowsBase` version unification) that is unrelated to this work; any *error*, or any
+other new warning, is a real failure.
+
+Then confirm no stale reference to a moved module survives anywhere:
+```bash
+grep -rn "Modules\.\(Core\|Security\|Update\|Resources\|Migration\|Settings\|Fluent\|Llm\|Chat\|Tools\|McpClient\|Documents\|Library\|Knowledge\|Memory\|Files\|DataRepo\|Backup\|Jobs\|Trace\|Scoring\|Eval\|Playground\|Cortex\|Seed\|PlanIndex\|Scrapers\)" --include=*.cs src/
+```
+Expected: no output for modules moved so far.
 
 **This build is the one that matters.** It will likely FAIL, because `GatherlightApp.cs` (the composition root) references both sides — that is legal, since the composition root is neither layer. What must NOT appear is a `Platform/` file referencing `Product`. Any such error is a real coupling to fix, not a rename to patch: move the shared type down into `Platform/Kernel` or invert the dependency behind an interface. Record each one in the commit message.
 
@@ -593,8 +649,22 @@ public sealed class SiteManifestStore : ISiteManifestStore
 
 - [ ] **Step 3: Build**
 
-Run: `dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo`
-Expected: `Build succeeded. 0 Warning(s) 0 Error(s)`
+Run BOTH — `Gatherlight.Host` is a separate project that also references these namespaces, so building
+only the server hides a broken Host:
+
+```bash
+dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo
+dotnet build src/server/Gatherlight.Host/Gatherlight.Host.csproj -v minimal --nologo
+```
+Expected: `Build succeeded. 0 Error(s)` for both. The Host emits a pre-existing `MSB3277` warning
+(WebView2 vs `WindowsBase` version unification) that is unrelated to this work; any *error*, or any
+other new warning, is a real failure.
+
+Then confirm no stale reference to a moved module survives anywhere:
+```bash
+grep -rn "Modules\.\(Core\|Security\|Update\|Resources\|Migration\|Settings\|Fluent\|Llm\|Chat\|Tools\|McpClient\|Documents\|Library\|Knowledge\|Memory\|Files\|DataRepo\|Backup\|Jobs\|Trace\|Scoring\|Eval\|Playground\|Cortex\|Seed\|PlanIndex\|Scrapers\)" --include=*.cs src/
+```
+Expected: no output for modules moved so far.
 
 - [ ] **Step 4: Commit**
 
@@ -843,8 +913,22 @@ Also update `ShippedGuardVersion` to read from the template rather than the rend
 
 - [ ] **Step 3: Build**
 
-Run: `dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo`
-Expected: `Build succeeded. 0 Warning(s) 0 Error(s)`
+Run BOTH — `Gatherlight.Host` is a separate project that also references these namespaces, so building
+only the server hides a broken Host:
+
+```bash
+dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo
+dotnet build src/server/Gatherlight.Host/Gatherlight.Host.csproj -v minimal --nologo
+```
+Expected: `Build succeeded. 0 Error(s)` for both. The Host emits a pre-existing `MSB3277` warning
+(WebView2 vs `WindowsBase` version unification) that is unrelated to this work; any *error*, or any
+other new warning, is a real failure.
+
+Then confirm no stale reference to a moved module survives anywhere:
+```bash
+grep -rn "Modules\.\(Core\|Security\|Update\|Resources\|Migration\|Settings\|Fluent\|Llm\|Chat\|Tools\|McpClient\|Documents\|Library\|Knowledge\|Memory\|Files\|DataRepo\|Backup\|Jobs\|Trace\|Scoring\|Eval\|Playground\|Cortex\|Seed\|PlanIndex\|Scrapers\)" --include=*.cs src/
+```
+Expected: no output for modules moved so far.
 
 - [ ] **Step 4: Verify the rendered guard is byte-identical to today's, apart from the version line**
 
@@ -919,15 +1003,24 @@ public sealed class SiteManifestStep : IMigrationStep
 
     public Task RunAsync(CancellationToken ct)
     {
-        if (_manifest.Exists) return Task.CompletedTask;
 
-        var records = KnownRecordDirs
-            .Where(d => Directory.Exists(Path.Combine(_site.RootPath, d)))
-            .ToArray();
-        if (records.Length == 0) records = KnownRecordDirs;
+        if (!_manifest.Exists)
+        {
+            var records = KnownRecordDirs
+                .Where(d => Directory.Exists(Path.Combine(_site.RootPath, d)))
+                .ToArray();
+            if (records.Length == 0) records = KnownRecordDirs;
 
-        _manifest.Write(new SiteManifest { Records = records });
-        _log.LogInformation("site.json written (records: {Records})", string.Join(", ", records));
+            _manifest.Write(new SiteManifest { Records = records });
+            _log.LogInformation("site.json written (records: {Records})", string.Join(", ", records));
+        }
+
+        // Touch RecordPaths so the declared directories exist. The old DataContext created
+        // plans/ + household/ eagerly in its constructor; that guarantee moved here when the
+        // set became manifest-driven, and nothing else calls RecordPaths — without this line
+        // the directories only appear as a side effect of whichever subsystem happens to write
+        // into them first, which for plans/ is an index write inside a swallowing try/catch.
+        _ = _site.RecordPaths;
         return Task.CompletedTask;
     }
 }
@@ -943,8 +1036,22 @@ In `GatherlightApp.cs`, add it **before** `DbMigrateStep` — everything downstr
 
 - [ ] **Step 3: Build**
 
-Run: `dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo`
-Expected: `Build succeeded. 0 Warning(s) 0 Error(s)`
+Run BOTH — `Gatherlight.Host` is a separate project that also references these namespaces, so building
+only the server hides a broken Host:
+
+```bash
+dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo
+dotnet build src/server/Gatherlight.Host/Gatherlight.Host.csproj -v minimal --nologo
+```
+Expected: `Build succeeded. 0 Error(s)` for both. The Host emits a pre-existing `MSB3277` warning
+(WebView2 vs `WindowsBase` version unification) that is unrelated to this work; any *error*, or any
+other new warning, is a real failure.
+
+Then confirm no stale reference to a moved module survives anywhere:
+```bash
+grep -rn "Modules\.\(Core\|Security\|Update\|Resources\|Migration\|Settings\|Fluent\|Llm\|Chat\|Tools\|McpClient\|Documents\|Library\|Knowledge\|Memory\|Files\|DataRepo\|Backup\|Jobs\|Trace\|Scoring\|Eval\|Playground\|Cortex\|Seed\|PlanIndex\|Scrapers\)" --include=*.cs src/
+```
+Expected: no output for modules moved so far.
 
 - [ ] **Step 4: Verify on a scratch data folder**
 
@@ -1022,8 +1129,22 @@ move(path.join(stage, 'Assets', 'SiteTemplate'), path.join(res, 'template'));
 
 - [ ] **Step 4: Build and confirm the template still seeds**
 
-Run: `dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo`
-Expected: `Build succeeded. 0 Warning(s) 0 Error(s)`
+Run BOTH — `Gatherlight.Host` is a separate project that also references these namespaces, so building
+only the server hides a broken Host:
+
+```bash
+dotnet build src/server/Gatherlight.Server/Gatherlight.Server.csproj -v minimal --nologo
+dotnet build src/server/Gatherlight.Host/Gatherlight.Host.csproj -v minimal --nologo
+```
+Expected: `Build succeeded. 0 Error(s)` for both. The Host emits a pre-existing `MSB3277` warning
+(WebView2 vs `WindowsBase` version unification) that is unrelated to this work; any *error*, or any
+other new warning, is a real failure.
+
+Then confirm no stale reference to a moved module survives anywhere:
+```bash
+grep -rn "Modules\.\(Core\|Security\|Update\|Resources\|Migration\|Settings\|Fluent\|Llm\|Chat\|Tools\|McpClient\|Documents\|Library\|Knowledge\|Memory\|Files\|DataRepo\|Backup\|Jobs\|Trace\|Scoring\|Eval\|Playground\|Cortex\|Seed\|PlanIndex\|Scrapers\)" --include=*.cs src/
+```
+Expected: no output for modules moved so far.
 
 ```bash
 rm -rf devtools/_s1-seed

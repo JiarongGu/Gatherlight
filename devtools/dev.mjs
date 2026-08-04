@@ -15,6 +15,7 @@
 //   node devtools/dev.mjs test-data         - regenerate the synthetic fixture data folder
 //   node devtools/dev.mjs install-hooks     - git core.hooksPath -> devtools/hooks (pre-commit guard)
 //   node devtools/dev.mjs check-sensitive   - scan staged changes (--tree for all tracked files)
+//   node devtools/dev.mjs check-layering    - assert Platform/ never references Product/
 import { spawnSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -121,6 +122,10 @@ switch (cmd) {
 
   case 'check-sensitive':
     run('node', [path.join(repo, 'devtools', 'scripts', 'check-sensitive.mjs'), ...args]);
+    break;
+
+  case 'check-layering':
+    run('node', [path.join(repo, 'devtools', 'scripts', 'check-layering.mjs'), ...args]);
     break;
 
   case 'smoke':
@@ -365,7 +370,7 @@ switch (cmd) {
     // Version single source of truth = ResourceProvisioner.ResourcesPackageVersion (the flat-container
     // URL the app fetches). Derive it so the packed .nupkg version can't drift from what the app asks
     // for; an explicit arg can still override for a one-off.
-    const provCs = path.join(repo, 'src/server/Gatherlight.Server/Modules/Resources/Services/ResourceProvisioner.cs');
+    const provCs = path.join(repo, 'src/server/Gatherlight.Server/Platform/Hosting/Resources/Services/ResourceProvisioner.cs');
     const provVer = (fs.readFileSync(provCs, 'utf8').match(/ResourcesPackageVersion\s*=\s*"([^"]+)"/) || [])[1];
     const version = args[0] || provVer;
     if (!version) { console.error('could not resolve resources version (ResourcesPackageVersion not found)'); process.exitCode = 1; break; }

@@ -1,15 +1,15 @@
 using System.Text.Json;
-using Gatherlight.Server.Modules.Chat.Services;
-using Gatherlight.Server.Modules.Core.Services;
-using Gatherlight.Server.Modules.DataRepo.Services;
-using Gatherlight.Server.Modules.Files.Services;
-using Gatherlight.Server.Modules.Fluent.Services;
-using Gatherlight.Server.Modules.Llm.Services;
-using Gatherlight.Server.Modules.PlanIndex.Services;
-using Gatherlight.Server.Modules.Seed.Services;
-using Gatherlight.Server.Modules.Tools.Models;
-using Gatherlight.Server.Modules.Tools.Services;
-using Gatherlight.Server.Modules.Tools.Services.Tools;
+using Gatherlight.Server.Platform.Agent.Chat.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
+using Gatherlight.Server.Platform.Storage.DataRepo.Services;
+using Gatherlight.Server.Platform.Storage.Files.Services;
+using Gatherlight.Server.Platform.Hosting.Fluent.Services;
+using Gatherlight.Server.Platform.Agent.Llm.Services;
+using Gatherlight.Server.Product.Planner.PlanIndex.Services;
+using Gatherlight.Server.Platform.Site.Seed.Services;
+using Gatherlight.Server.Platform.Capabilities.Tools.Models;
+using Gatherlight.Server.Platform.Capabilities.Tools.Services;
+using Gatherlight.Server.Platform.Capabilities.Tools.Services.Tools;
 using Lyntai; // the shared LLM library (AddClaudeCliProvider / UseDefaultCandidates on the builder)
 
 namespace Gatherlight.Server;
@@ -46,7 +46,7 @@ public static class GatherlightApp
                 "or set security.allowLanWithoutToken=true (GATHERLIGHT_ALLOW_LAN=1) to expose it unauthenticated " +
                 "on a trusted private LAN.");
 
-        var cert = Modules.Security.Services.TlsCertificate.Resolve(options);
+        var cert = Platform.Hosting.Security.Services.TlsCertificate.Resolve(options);
         if (cert is null)
             builder.WebHost.UseUrls($"http://{options.BindAddress}:{options.Port}");
         else
@@ -58,27 +58,34 @@ public static class GatherlightApp
         // at Warning (or the app level if quieter). One ServerConfigService for both this + the DI below.
         config ??= new ServerConfigService(options);
         var logsDir = Path.Combine(Path.GetFullPath(options.DataPath), "state", "logs");
-        var dbPath = Path.Combine(Path.GetFullPath(options.DataPath), "state", "gatherlight.db"); // = IDataContext.DatabasePath (for Lyntai's store)
+        var dbPath = Path.Combine(Path.GetFullPath(options.DataPath), "state", "gatherlight.db"); // = IPlatformContext.DatabasePath (for Lyntai's store)
         var logLevel = ResolveLogLevel(config.Current.LogLevel);
         var fwLevel = logLevel > LogLevel.Warning ? logLevel : LogLevel.Warning;
-        builder.Logging.AddProvider(new Modules.Core.Logging.FileLoggerProvider(logsDir, logLevel));
-        builder.Logging.AddFilter<Modules.Core.Logging.FileLoggerProvider>((string?)null, logLevel);
-        builder.Logging.AddFilter<Modules.Core.Logging.FileLoggerProvider>("Microsoft", fwLevel);
-        builder.Logging.AddFilter<Modules.Core.Logging.FileLoggerProvider>("System", fwLevel);
+        builder.Logging.AddProvider(new Platform.Kernel.Logging.FileLoggerProvider(logsDir, logLevel));
+        builder.Logging.AddFilter<Platform.Kernel.Logging.FileLoggerProvider>((string?)null, logLevel);
+        builder.Logging.AddFilter<Platform.Kernel.Logging.FileLoggerProvider>("Microsoft", fwLevel);
+        builder.Logging.AddFilter<Platform.Kernel.Logging.FileLoggerProvider>("System", fwLevel);
 
         builder.Services
             .AddSingleton(options)
             // The config resolved above (one instance, one settings.json reader).
             .AddSingleton(config)
-            .AddSingleton<IDataContext, DataContext>()
+            .AddSingleton<Platform.Site.Services.ISiteManifestStore, Platform.Site.Services.SiteManifestStore>()
+            .AddSingleton<Platform.Kernel.Services.ISiteContext, Platform.Kernel.Services.SiteContext>()
+            .AddSingleton<Platform.Kernel.Services.IPlatformContext, Platform.Kernel.Services.PlatformContext>()
             .AddSingleton<IDbConnectionFactory, SqliteConnectionFactory>()
             .AddSingleton<IAppConfigService, AppConfigService>()
             // Data repo (the private git repo inside the data folder)
             .AddSingleton<IGitCliService, GitCliService>()
             .AddSingleton<DataWriteLock>()
             .AddSingleton<IDataCommitRepository, DataCommitRepository>()
-            // Plan index — zero-LLM browse/search over the markdown tree
-            .AddSingleton<IPlanIndexService, PlanIndexService>()
+            // Plan index — zero-LLM browse/search over the markdown tree. Registered by concrete type so
+            // IPlanIndexService and IRecordIndex both forward to the SAME singleton instance — anchoring
+            // on the concrete type (not a cast between the two unrelated interfaces) makes it a compile
+            // error, not a runtime surprise, if PlanIndexService ever stops implementing IRecordIndex.
+            .AddSingleton<PlanIndexService>()
+            .AddSingleton<IPlanIndexService>(sp => sp.GetRequiredService<PlanIndexService>())
+            .AddSingleton<IRecordIndex>(sp => sp.GetRequiredService<PlanIndexService>())
             .AddSingleton<IFsOpsService, FsOpsService>()
             .AddSingleton<IIcsExportService, IcsExportService>()
             .AddSingleton<IBudgetService, BudgetService>()
@@ -117,12 +124,12 @@ public static class GatherlightApp
                 // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
                 // collection so its IScoringService iterates + persists them (LLM judges route through
                 // llm.model.scorer, skip via Applies()).
-                .AddScorer<Modules.Scoring.Services.ScopeAdherenceScorer>()
-                .AddScorer<Modules.Scoring.Services.PlanStructureScorer>()
-                .AddScorer<Modules.Scoring.Services.OutcomeScorer>()
-                .AddScorer<Modules.Scoring.Services.CitationScorer>()
-                .AddScorer<Modules.Scoring.Services.AnswerRelevancyScorer>()
-                .AddScorer<Modules.Scoring.Services.FaithfulnessScorer>()
+                .AddScorer<Platform.Ops.Scoring.Services.ScopeAdherenceScorer>()
+                .AddScorer<Platform.Ops.Scoring.Services.PlanStructureScorer>()
+                .AddScorer<Platform.Ops.Scoring.Services.OutcomeScorer>()
+                .AddScorer<Platform.Ops.Scoring.Services.CitationScorer>()
+                .AddScorer<Platform.Ops.Scoring.Services.AnswerRelevancyScorer>()
+                .AddScorer<Platform.Ops.Scoring.Services.FaithfulnessScorer>()
                 // Tool-calling for the LLM judges. AddMcpToolHost registers an ICliToolProvisioner, which
                 // ONLY ClaudeCliProvider reads — i.e. the one-shot ILlmClient path, whose only consumers
                 // here are the two judges above. (The agent path, ClaudeAgentSession, takes no provisioner;
@@ -132,14 +139,14 @@ public static class GatherlightApp
                 // CLAUDE.md/knowledge base being loaded, which is exactly why they run neutral-cwd.
                 // Registering ZERO ITools would make the host a no-op (the provisioner short-circuits).
                 .AddMcpToolHost(new Lyntai.Providers.ClaudeCli.ClaudeCliMcpDialect())
-                .AddTool(sp => new Modules.Scoring.Services.JudgeReadFileTool(
-                    sp.GetRequiredService<Modules.Core.Services.IDataContext>()))
-                .AddTool(sp => new Modules.Scoring.Services.JudgeListFilesTool(
-                    sp.GetRequiredService<Modules.Core.Services.IDataContext>())))
+                .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeReadFileTool(
+                    sp.GetRequiredService<Platform.Kernel.Services.ISiteContext>()))
+                .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeListFilesTool(
+                    sp.GetRequiredService<Platform.Kernel.Services.ISiteContext>())))
             // Lyntai's cortex (IPromptRegistry / IModelRoutingStore) reads/writes the app's OWN app_config
             // table — single source of truth for cortex.prompt.* / llm.model.*, no lyntai_kv duplicate. Plain
             // AddSingleton after AddLyntai wins over its TryAdd SqliteKeyValueStore.
-            .AddSingleton<Lyntai.Storage.IKeyValueStore, Modules.Cortex.Services.AppConfigKeyValueStore>()
+            .AddSingleton<Lyntai.Storage.IKeyValueStore, Platform.Ops.Cortex.Services.AppConfigKeyValueStore>()
             // App-side adapter over Lyntai's IAgentSession — the two-gate / jobs / playground run through this.
             .AddSingleton<IAgentRunner, AgentRunner>()
             // One live agent run at a time across chat AND background jobs (single-writer data tree)
@@ -156,88 +163,88 @@ public static class GatherlightApp
             // Uploads (chat attachments)
             .AddSingleton<IUploadService, UploadService>()
             // Tools — one registry, two surfaces (HTTP + MCP for the spawned agent)
-            .AddSingleton<Modules.Resources.Services.IResourceProvisioner, Modules.Resources.Services.ResourceProvisioner>()
+            .AddSingleton<Platform.Hosting.Resources.Services.IResourceProvisioner, Platform.Hosting.Resources.Services.ResourceProvisioner>()
             .AddSingleton<IPlaywrightHost, PlaywrightHost>()
-            .AddSingleton<Modules.Scrapers.Services.IPlaywrightScraper, Modules.Scrapers.Services.PlaywrightScraper>()
+            .AddSingleton<Product.Planner.Scrapers.Services.IPlaywrightScraper, Product.Planner.Scrapers.Services.PlaywrightScraper>()
             .AddSingleton<IGatherlightTool, ExtractTool>()
             .AddSingleton<IGatherlightTool, WebFetchTool>()   // registers as "scrape" (Playwright-native)
             .AddSingleton<IGatherlightTool, WikiInfoTool>()
             // Native C#/Playwright scraper ports (the Node puppeteer leaves are all gone)
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.FlightScheduleScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.PolicyCheckScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.FlightPricesScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.HotelPricesScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.HotelInfoScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.RestaurantInfoScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.XhsSearchScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.BudgetScanTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.FlightScheduleScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.PolicyCheckScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.FlightPricesScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.HotelPricesScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.HotelInfoScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.RestaurantInfoScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.XhsSearchScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.PlanIndex.Tools.BudgetScanTool>()
             // Document / media processing (PdfPig extract + pdf-lib leaves for AcroForm + ImageSharp)
-            .AddSingleton<Modules.Documents.Services.IPdfProcessor, Modules.Documents.Services.PdfProcessor>()
-            .AddSingleton<Modules.Documents.Services.IImageProcessor, Modules.Documents.Services.ImageProcessor>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.PdfInspectTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.PdfExtractTextTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.PdfFillTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.PdfMergeTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.FillItineraryTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.ImageInfoTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.ImageResizeTool>()
-            .AddSingleton<IGatherlightTool, Modules.Documents.Tools.ImageConvertTool>()
+            .AddSingleton<Platform.Capabilities.Documents.Services.IPdfProcessor, Platform.Capabilities.Documents.Services.PdfProcessor>()
+            .AddSingleton<Platform.Capabilities.Documents.Services.IImageProcessor, Platform.Capabilities.Documents.Services.ImageProcessor>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.PdfInspectTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.PdfExtractTextTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.PdfFillTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.PdfMergeTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.FillItineraryTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageInfoTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageResizeTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageConvertTool>()
             // Generalized stores + agent-writable cross-session memory
-            .AddSingleton<Modules.Knowledge.Services.IEntityStore, Modules.Knowledge.Services.EntityStore>()
-            .AddSingleton<Modules.Knowledge.Services.IKnowledgeStore, Modules.Knowledge.Services.KnowledgeStore>()
-            .AddSingleton<Modules.Knowledge.Services.IProcessLog, Modules.Knowledge.Services.ProcessLog>()
-            .AddSingleton<IGatherlightTool, Modules.Knowledge.Tools.RememberFactTool>()
-            .AddSingleton<IGatherlightTool, Modules.Knowledge.Tools.RecallFactsTool>()
+            .AddSingleton<Platform.Storage.Knowledge.Services.IEntityStore, Platform.Storage.Knowledge.Services.EntityStore>()
+            .AddSingleton<Platform.Storage.Knowledge.Services.IKnowledgeStore, Platform.Storage.Knowledge.Services.KnowledgeStore>()
+            .AddSingleton<Platform.Storage.Knowledge.Services.IProcessLog, Platform.Storage.Knowledge.Services.ProcessLog>()
+            .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RememberFactTool>()
+            .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RecallFactsTool>()
             // Knowledge library — DB-backed reference entities (browse read side + agent write tools)
-            .AddSingleton<Modules.Library.Services.ILibraryRepository, Modules.Library.Services.LibraryRepository>()
-            .AddSingleton<Modules.Library.Services.IImageCache, Modules.Library.Services.ImageCache>()
-            .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryUpsertTool>()
-            .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibrarySearchTool>()
-            .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryImportTool>()
-            .AddSingleton<IGatherlightTool, Modules.Library.Tools.LibraryDeleteTool>()
+            .AddSingleton<Platform.Storage.Library.Services.ILibraryRepository, Platform.Storage.Library.Services.LibraryRepository>()
+            .AddSingleton<Platform.Storage.Library.Services.IImageCache, Platform.Storage.Library.Services.ImageCache>()
+            .AddSingleton<IGatherlightTool, Platform.Storage.Library.Tools.LibraryUpsertTool>()
+            .AddSingleton<IGatherlightTool, Platform.Storage.Library.Tools.LibrarySearchTool>()
+            .AddSingleton<IGatherlightTool, Platform.Storage.Library.Tools.LibraryImportTool>()
+            .AddSingleton<IGatherlightTool, Platform.Storage.Library.Tools.LibraryDeleteTool>()
             // Plan-index navigation (md-driven plans/INDEX.md + these programmatic twins)
-            .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.IndexListTool>()
-            .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.IndexSearchTool>()
-            .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.IndexReindexTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.PlanIndex.Tools.IndexListTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.PlanIndex.Tools.IndexSearchTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.PlanIndex.Tools.IndexReindexTool>()
             // Portable memory transfer (export/import the DB knowledge between installs)
-            .AddSingleton<Modules.Memory.Services.IMemoryService, Modules.Memory.Services.MemoryService>()
+            .AddSingleton<Platform.Storage.Memory.Services.IMemoryService, Platform.Storage.Memory.Services.MemoryService>()
             // Whole-install backup/restore (records + DB memory in one .zip)
-            .AddSingleton<Modules.Backup.Services.IBackupService, Modules.Backup.Services.BackupService>()
+            .AddSingleton<Platform.Storage.Backup.Services.IBackupService, Platform.Storage.Backup.Services.BackupService>()
             // Eval / LLM-ops: per-conversation ranking + observability (tuning dataset)
-            .AddSingleton<Modules.Eval.Services.IFeedbackStore, Modules.Eval.Services.FeedbackStore>()
+            .AddSingleton<Platform.Ops.Eval.Services.IFeedbackStore, Platform.Ops.Eval.Services.FeedbackStore>()
             // Cortex tuning: runtime prompt-template + model-routing overrides (write side of LLM-ops)
-            .AddSingleton<Modules.Cortex.Services.ICortexConfigService, Modules.Cortex.Services.CortexConfigService>()
+            .AddSingleton<Platform.Ops.Cortex.Services.ICortexConfigService, Platform.Ops.Cortex.Services.CortexConfigService>()
             // Automated scorers (Mastra-style): grade each committed conversation on 智库-rule dimensions
-            .AddSingleton<Modules.Scoring.Services.IScoringService, Modules.Scoring.Services.ScoringService>()
+            .AddSingleton<Platform.Ops.Scoring.Services.IScoringService, Platform.Ops.Scoring.Services.ScoringService>()
             // Run traces (Mastra observability): structure the conversation event stream into a run timeline
-            .AddSingleton<Modules.Trace.Services.ITraceService, Modules.Trace.Services.TraceService>()
+            .AddSingleton<Platform.Ops.Trace.Services.ITraceService, Platform.Ops.Trace.Services.TraceService>()
             // Prompt/agent playground (Mastra runEvals): score dry plans over a scenario set (CLI)
-            .AddSingleton<Modules.Playground.Services.IPlaygroundService, Modules.Playground.Services.PlaygroundService>()
+            .AddSingleton<Platform.Ops.Playground.Services.IPlaygroundService, Platform.Ops.Playground.Services.PlaygroundService>()
             // Remote-access gate: loopback trusted, remote needs the shared token
-            .AddSingleton<Modules.Security.Services.ISecurityGuard, Modules.Security.Services.SecurityGuard>()
-            .AddSingleton<Modules.Security.Services.ILoginThrottle, Modules.Security.Services.LoginThrottle>()
+            .AddSingleton<Platform.Hosting.Security.Services.ISecurityGuard, Platform.Hosting.Security.Services.SecurityGuard>()
+            .AddSingleton<Platform.Hosting.Security.Services.ILoginThrottle, Platform.Hosting.Security.Services.LoginThrottle>()
             // Self-update: check GitHub releases + download/stage (launcher applies on restart)
-            .AddSingleton<Modules.Update.Services.IUpdateService, Modules.Update.Services.UpdateService>()
+            .AddSingleton<Platform.Hosting.Update.Services.IUpdateService, Platform.Hosting.Update.Services.UpdateService>()
             // Background jobs: generic scheduled/one-off work (agent tasks, tool calls, notifications,
             // reports) + a browser/in-app notification feed. See docs/background-jobs-design.md.
-            .AddSingleton<Modules.Jobs.Services.IJobRepository, Modules.Jobs.Services.JobRepository>()
-            .AddSingleton<Modules.Jobs.Services.INotificationService, Modules.Jobs.Services.NotificationService>()
-            .AddSingleton<Modules.Jobs.Services.IUnattendedRunService, Modules.Jobs.Services.UnattendedRunService>()
+            .AddSingleton<Platform.Ops.Jobs.Services.IJobRepository, Platform.Ops.Jobs.Services.JobRepository>()
+            .AddSingleton<Platform.Ops.Jobs.Services.INotificationService, Platform.Ops.Jobs.Services.NotificationService>()
+            .AddSingleton<Platform.Ops.Jobs.Services.IUnattendedRunService, Platform.Ops.Jobs.Services.UnattendedRunService>()
             // Job kinds = IJobHandler DI collection (add a kind = add a handler, never an if/else)
-            .AddSingleton<Modules.Jobs.Services.IJobHandler, Modules.Jobs.Services.ToolJobHandler>()
-            .AddSingleton<Modules.Jobs.Services.IJobHandler, Modules.Jobs.Services.NotifyJobHandler>()
-            .AddSingleton<Modules.Jobs.Services.IJobHandler, Modules.Jobs.Services.ReportJobHandler>()
-            .AddSingleton<Modules.Jobs.Services.IJobHandler, Modules.Jobs.Services.AgentJobHandler>()
+            .AddSingleton<Platform.Ops.Jobs.Services.IJobHandler, Platform.Ops.Jobs.Services.ToolJobHandler>()
+            .AddSingleton<Platform.Ops.Jobs.Services.IJobHandler, Platform.Ops.Jobs.Services.NotifyJobHandler>()
+            .AddSingleton<Platform.Ops.Jobs.Services.IJobHandler, Platform.Ops.Jobs.Services.ReportJobHandler>()
+            .AddSingleton<Platform.Ops.Jobs.Services.IJobHandler, Platform.Ops.Jobs.Services.AgentJobHandler>()
             // Orchestration (CRUD + execution engine + staged approve/reject) shared by the scheduler + run-now
-            .AddSingleton<Modules.Jobs.Services.IJobService, Modules.Jobs.Services.JobService>()
+            .AddSingleton<Platform.Ops.Jobs.Services.IJobService, Platform.Ops.Jobs.Services.JobService>()
             // The scheduler loop (polls due jobs, dispatches, catch-up, guardrails)
-            .AddHostedService<Modules.Jobs.Services.JobSchedulerService>()
+            .AddHostedService<Platform.Ops.Jobs.Services.JobSchedulerService>()
             // AI-facing job management tools (both surfaces)
-            .AddSingleton<IGatherlightTool, Modules.Jobs.Tools.JobScheduleTool>()
-            .AddSingleton<IGatherlightTool, Modules.Jobs.Tools.JobListTool>()
-            .AddSingleton<IGatherlightTool, Modules.Jobs.Tools.JobCancelTool>()
-            .AddSingleton<IGatherlightTool, Modules.Jobs.Tools.JobRunNowTool>()
-            .AddSingleton<IGatherlightTool, Modules.Jobs.Tools.NotifyUserTool>()
+            .AddSingleton<IGatherlightTool, Platform.Ops.Jobs.Tools.JobScheduleTool>()
+            .AddSingleton<IGatherlightTool, Platform.Ops.Jobs.Tools.JobListTool>()
+            .AddSingleton<IGatherlightTool, Platform.Ops.Jobs.Tools.JobCancelTool>()
+            .AddSingleton<IGatherlightTool, Platform.Ops.Jobs.Tools.JobRunNowTool>()
+            .AddSingleton<IGatherlightTool, Platform.Ops.Jobs.Tools.NotifyUserTool>()
             // Hot-loadable script tools ({data}/tools/<name>/tool.json — no rebuild needed)
             .AddSingleton<ScriptToolProvider>()
             .AddSingleton<IScriptToolProvider>(sp => sp.GetRequiredService<ScriptToolProvider>())
@@ -246,31 +253,38 @@ public static class GatherlightApp
             // proxy their tools into the registry (namespaced {serverId}__{tool}). Config +secrets in
             // the mcp_server table; add is access-gated / chat-gated, never agent-reachable.
             // See docs/mcp-client-design.md.
-            .AddSingleton<Modules.McpClient.Services.IMcpServerStore, Modules.McpClient.Services.McpServerStore>()
-            .AddSingleton<Modules.McpClient.Services.McpConnectionManager>()
-            .AddSingleton<Modules.McpClient.Services.IMcpConnectionManager>(sp => sp.GetRequiredService<Modules.McpClient.Services.McpConnectionManager>())
-            .AddHostedService(sp => sp.GetRequiredService<Modules.McpClient.Services.McpConnectionManager>())
-            .AddSingleton<Modules.McpClient.Services.IExternalToolProvider, Modules.McpClient.Services.McpProxyToolProvider>()
-            .AddSingleton<Modules.McpClient.Services.IMcpProvisionService, Modules.McpClient.Services.McpProvisionService>()
-            .AddSingleton<Modules.McpClient.Services.IMcpLoginService, Modules.McpClient.Services.McpLoginService>()
+            .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpServerStore, Platform.Capabilities.McpClient.Services.McpServerStore>()
+            .AddSingleton<Platform.Capabilities.McpClient.Services.McpConnectionManager>()
+            .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpConnectionManager>(sp => sp.GetRequiredService<Platform.Capabilities.McpClient.Services.McpConnectionManager>())
+            .AddHostedService(sp => sp.GetRequiredService<Platform.Capabilities.McpClient.Services.McpConnectionManager>())
+            .AddSingleton<Platform.Capabilities.McpClient.Services.IExternalToolProvider, Platform.Capabilities.McpClient.Services.McpProxyToolProvider>()
+            .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpProvisionService, Platform.Capabilities.McpClient.Services.McpProvisionService>()
+            .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpLoginService, Platform.Capabilities.McpClient.Services.McpLoginService>()
             .AddSingleton<IToolRegistry, ToolRegistry>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>()
             // Knowledge-base upgrade migration (LLM-reconcile customized .claude/ files with new templates)
-            .AddSingleton<Modules.Seed.Services.IZhikuMigrator, Modules.Seed.Services.ZhikuMigrator>()
+            .AddSingleton<Platform.Site.Seed.Services.IZhikuMigrator, Platform.Site.Seed.Services.ZhikuMigrator>()
             // Startup migration runner: the versioned, ordered, idempotent upgrade phase (was inline,
             // pre-listen). IMigrationStep is a DI collection — registration order = run order.
-            .AddSingleton<Modules.Migration.Services.MigrationState>()
-            .AddSingleton<Modules.Migration.Services.StartupMigrationRunner>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.DbMigrateStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.SelfHealLocksStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.DataRepoInitStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.KnowledgeBaseStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.PlanIndexStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.SelfHealStateStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.MemorySeedStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.MigrationState>()
+            .AddSingleton<Platform.Hosting.Migration.Services.StartupMigrationRunner>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DbMigrateStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealLocksStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DataRepoInitStep>()
+            // KnowledgeBaseStep (the seeder) BEFORE SiteManifestStep: the shipped template's site.json
+            // is authoritative for a fresh install; the manifest step's on-disk inference is only the
+            // fallback for a folder the seeder didn't cover (e.g. a broken install missing the template).
+            // It must also precede guard issuance (inside KnowledgeBaseStep, via ChatEnvironmentService
+            // .EnsureFiles -> RenderScopeGuard, which reads ISiteManifestStore.Current) so the guard's
+            // WRITE_DIRS reflect the real manifest, not model defaults.
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.KnowledgeBaseStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SiteManifestStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.RecordIndexStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealStateStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.MemorySeedStep>()
             // After the DB is migrated: connect the enabled external MCP servers (best-effort).
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.McpConnectStep>();
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.McpConnectStep>();
 
         builder.Services.AddHttpClient();
 
@@ -288,7 +302,7 @@ public static class GatherlightApp
 
         // Startup banner — the first lines of every log file (version · level · data root · bind · logs).
         app.Logger.LogInformation("=== Gatherlight starting === v{Ver} · level={Lvl} · data={Data} · bind={Bind}:{Port} · logs={Logs}",
-            Modules.Core.Services.AppVersion.Semver,
+            Platform.Kernel.Services.AppVersion.Semver,
             logLevel, options.DataPath, options.BindAddress, options.Port, logsDir);
 
         // Loud, once-at-startup warning when the LAN opt-in is exposing the app unauthenticated.
@@ -301,13 +315,13 @@ public static class GatherlightApp
         // Run the versioned startup migration in the background once we're listening, so /manage can
         // render the progress overlay instead of the app appearing to hang. The gate keeps /api closed
         // until it lifts. MigrationState defaults to migrating=true, so requests before this fires are
-        // already gated. (DB migrate, data-repo init, KB seed/notify, plan-index rescan, memory seed,
+        // already gated. (DB migrate, data-repo init, KB seed/notify, record-index rebuild, memory seed,
         // chat scope-guard, and interrupted-work reconcile now all live as ordered IMigrationSteps.)
         var life = app.Services.GetRequiredService<IHostApplicationLifetime>();
         life.ApplicationStarted.Register(() =>
         {
-            var runner = app.Services.GetRequiredService<Modules.Migration.Services.StartupMigrationRunner>();
-            var state = app.Services.GetRequiredService<Modules.Migration.Services.MigrationState>();
+            var runner = app.Services.GetRequiredService<Platform.Hosting.Migration.Services.StartupMigrationRunner>();
+            var state = app.Services.GetRequiredService<Platform.Hosting.Migration.Services.MigrationState>();
             _ = Task.Run(async () =>
             {
                 try { await runner.RunAsync(life.ApplicationStopping); }
@@ -316,11 +330,11 @@ public static class GatherlightApp
         });
 
         // Block /api + /mcp (except health + /api/migration) while the startup migration runs.
-        app.UseMiddleware<Modules.Migration.MigrationGateMiddleware>();
+        app.UseMiddleware<Platform.Hosting.Migration.MigrationGateMiddleware>();
         // Defense-in-depth response headers (CSP + framing/sniffing) on everything.
-        app.UseMiddleware<Modules.Security.SecurityHeadersMiddleware>();
+        app.UseMiddleware<Platform.Hosting.Security.SecurityHeadersMiddleware>();
         // Gate /api + /mcp before the endpoints run (no-op unless an access token is configured).
-        app.UseMiddleware<Modules.Security.AccessGateMiddleware>();
+        app.UseMiddleware<Platform.Hosting.Security.AccessGateMiddleware>();
 
         app.MapControllers();
         McpEndpoint.Map(app);
