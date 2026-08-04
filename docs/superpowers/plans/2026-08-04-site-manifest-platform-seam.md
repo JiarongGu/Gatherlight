@@ -1003,15 +1003,24 @@ public sealed class SiteManifestStep : IMigrationStep
 
     public Task RunAsync(CancellationToken ct)
     {
-        if (_manifest.Exists) return Task.CompletedTask;
 
-        var records = KnownRecordDirs
-            .Where(d => Directory.Exists(Path.Combine(_site.RootPath, d)))
-            .ToArray();
-        if (records.Length == 0) records = KnownRecordDirs;
+        if (!_manifest.Exists)
+        {
+            var records = KnownRecordDirs
+                .Where(d => Directory.Exists(Path.Combine(_site.RootPath, d)))
+                .ToArray();
+            if (records.Length == 0) records = KnownRecordDirs;
 
-        _manifest.Write(new SiteManifest { Records = records });
-        _log.LogInformation("site.json written (records: {Records})", string.Join(", ", records));
+            _manifest.Write(new SiteManifest { Records = records });
+            _log.LogInformation("site.json written (records: {Records})", string.Join(", ", records));
+        }
+
+        // Touch RecordPaths so the declared directories exist. The old DataContext created
+        // plans/ + household/ eagerly in its constructor; that guarantee moved here when the
+        // set became manifest-driven, and nothing else calls RecordPaths — without this line
+        // the directories only appear as a side effect of whichever subsystem happens to write
+        // into them first, which for plans/ is an index write inside a swallowing try/catch.
+        _ = _site.RecordPaths;
         return Task.CompletedTask;
     }
 }
