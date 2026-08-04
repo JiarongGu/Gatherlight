@@ -269,6 +269,7 @@ public static class GatherlightApp
             // pre-listen). IMigrationStep is a DI collection — registration order = run order.
             .AddSingleton<Platform.Hosting.Migration.Services.MigrationState>()
             .AddSingleton<Platform.Hosting.Migration.Services.StartupMigrationRunner>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SiteManifestStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DbMigrateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealLocksStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DataRepoInitStep>()
