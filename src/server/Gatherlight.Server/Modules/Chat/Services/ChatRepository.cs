@@ -1,5 +1,5 @@
 using Dapper;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using IConversationStore = Lyntai.Storage.IConversationStore;
 
 namespace Gatherlight.Server.Modules.Chat.Services;

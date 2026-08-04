@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
 
 namespace Gatherlight.Server.Modules.PlanIndex.Services;

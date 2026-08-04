@@ -1,7 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 
 namespace Gatherlight.Server.Modules.Library.Services;
 

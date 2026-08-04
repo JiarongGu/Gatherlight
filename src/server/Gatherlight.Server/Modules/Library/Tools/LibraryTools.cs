@@ -1,6 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Modules.Library.Services;
 using Gatherlight.Server.Modules.Tools.Models;
 

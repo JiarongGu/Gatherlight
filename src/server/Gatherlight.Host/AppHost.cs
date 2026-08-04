@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Text.Json;
 using Gatherlight.Server;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 

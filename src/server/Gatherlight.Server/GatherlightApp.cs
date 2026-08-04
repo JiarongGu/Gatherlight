@@ -1,9 +1,9 @@
 using System.Text.Json;
 using Gatherlight.Server.Modules.Chat.Services;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Files.Services;
-using Gatherlight.Server.Modules.Fluent.Services;
+using Gatherlight.Server.Platform.Hosting.Fluent.Services;
 using Gatherlight.Server.Modules.Llm.Services;
 using Gatherlight.Server.Modules.PlanIndex.Services;
 using Gatherlight.Server.Modules.Seed.Services;
@@ -46,7 +46,7 @@ public static class GatherlightApp
                 "or set security.allowLanWithoutToken=true (GATHERLIGHT_ALLOW_LAN=1) to expose it unauthenticated " +
                 "on a trusted private LAN.");
 
-        var cert = Modules.Security.Services.TlsCertificate.Resolve(options);
+        var cert = Platform.Hosting.Security.Services.TlsCertificate.Resolve(options);
         if (cert is null)
             builder.WebHost.UseUrls($"http://{options.BindAddress}:{options.Port}");
         else
@@ -61,10 +61,10 @@ public static class GatherlightApp
         var dbPath = Path.Combine(Path.GetFullPath(options.DataPath), "state", "gatherlight.db"); // = IDataContext.DatabasePath (for Lyntai's store)
         var logLevel = ResolveLogLevel(config.Current.LogLevel);
         var fwLevel = logLevel > LogLevel.Warning ? logLevel : LogLevel.Warning;
-        builder.Logging.AddProvider(new Modules.Core.Logging.FileLoggerProvider(logsDir, logLevel));
-        builder.Logging.AddFilter<Modules.Core.Logging.FileLoggerProvider>((string?)null, logLevel);
-        builder.Logging.AddFilter<Modules.Core.Logging.FileLoggerProvider>("Microsoft", fwLevel);
-        builder.Logging.AddFilter<Modules.Core.Logging.FileLoggerProvider>("System", fwLevel);
+        builder.Logging.AddProvider(new Platform.Kernel.Logging.FileLoggerProvider(logsDir, logLevel));
+        builder.Logging.AddFilter<Platform.Kernel.Logging.FileLoggerProvider>((string?)null, logLevel);
+        builder.Logging.AddFilter<Platform.Kernel.Logging.FileLoggerProvider>("Microsoft", fwLevel);
+        builder.Logging.AddFilter<Platform.Kernel.Logging.FileLoggerProvider>("System", fwLevel);
 
         builder.Services
             .AddSingleton(options)
@@ -133,9 +133,9 @@ public static class GatherlightApp
                 // Registering ZERO ITools would make the host a no-op (the provisioner short-circuits).
                 .AddMcpToolHost(new Lyntai.Providers.ClaudeCli.ClaudeCliMcpDialect())
                 .AddTool(sp => new Modules.Scoring.Services.JudgeReadFileTool(
-                    sp.GetRequiredService<Modules.Core.Services.IDataContext>()))
+                    sp.GetRequiredService<Platform.Kernel.Services.IDataContext>()))
                 .AddTool(sp => new Modules.Scoring.Services.JudgeListFilesTool(
-                    sp.GetRequiredService<Modules.Core.Services.IDataContext>())))
+                    sp.GetRequiredService<Platform.Kernel.Services.IDataContext>())))
             // Lyntai's cortex (IPromptRegistry / IModelRoutingStore) reads/writes the app's OWN app_config
             // table — single source of truth for cortex.prompt.* / llm.model.*, no lyntai_kv duplicate. Plain
             // AddSingleton after AddLyntai wins over its TryAdd SqliteKeyValueStore.
@@ -156,7 +156,7 @@ public static class GatherlightApp
             // Uploads (chat attachments)
             .AddSingleton<IUploadService, UploadService>()
             // Tools — one registry, two surfaces (HTTP + MCP for the spawned agent)
-            .AddSingleton<Modules.Resources.Services.IResourceProvisioner, Modules.Resources.Services.ResourceProvisioner>()
+            .AddSingleton<Platform.Hosting.Resources.Services.IResourceProvisioner, Platform.Hosting.Resources.Services.ResourceProvisioner>()
             .AddSingleton<IPlaywrightHost, PlaywrightHost>()
             .AddSingleton<Modules.Scrapers.Services.IPlaywrightScraper, Modules.Scrapers.Services.PlaywrightScraper>()
             .AddSingleton<IGatherlightTool, ExtractTool>()
@@ -214,10 +214,10 @@ public static class GatherlightApp
             // Prompt/agent playground (Mastra runEvals): score dry plans over a scenario set (CLI)
             .AddSingleton<Modules.Playground.Services.IPlaygroundService, Modules.Playground.Services.PlaygroundService>()
             // Remote-access gate: loopback trusted, remote needs the shared token
-            .AddSingleton<Modules.Security.Services.ISecurityGuard, Modules.Security.Services.SecurityGuard>()
-            .AddSingleton<Modules.Security.Services.ILoginThrottle, Modules.Security.Services.LoginThrottle>()
+            .AddSingleton<Platform.Hosting.Security.Services.ISecurityGuard, Platform.Hosting.Security.Services.SecurityGuard>()
+            .AddSingleton<Platform.Hosting.Security.Services.ILoginThrottle, Platform.Hosting.Security.Services.LoginThrottle>()
             // Self-update: check GitHub releases + download/stage (launcher applies on restart)
-            .AddSingleton<Modules.Update.Services.IUpdateService, Modules.Update.Services.UpdateService>()
+            .AddSingleton<Platform.Hosting.Update.Services.IUpdateService, Platform.Hosting.Update.Services.UpdateService>()
             // Background jobs: generic scheduled/one-off work (agent tasks, tool calls, notifications,
             // reports) + a browser/in-app notification feed. See docs/background-jobs-design.md.
             .AddSingleton<Modules.Jobs.Services.IJobRepository, Modules.Jobs.Services.JobRepository>()
@@ -260,17 +260,17 @@ public static class GatherlightApp
             .AddSingleton<Modules.Seed.Services.IZhikuMigrator, Modules.Seed.Services.ZhikuMigrator>()
             // Startup migration runner: the versioned, ordered, idempotent upgrade phase (was inline,
             // pre-listen). IMigrationStep is a DI collection — registration order = run order.
-            .AddSingleton<Modules.Migration.Services.MigrationState>()
-            .AddSingleton<Modules.Migration.Services.StartupMigrationRunner>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.DbMigrateStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.SelfHealLocksStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.DataRepoInitStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.KnowledgeBaseStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.PlanIndexStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.SelfHealStateStep>()
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.MemorySeedStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.MigrationState>()
+            .AddSingleton<Platform.Hosting.Migration.Services.StartupMigrationRunner>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DbMigrateStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealLocksStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DataRepoInitStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.KnowledgeBaseStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.PlanIndexStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealStateStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.MemorySeedStep>()
             // After the DB is migrated: connect the enabled external MCP servers (best-effort).
-            .AddSingleton<Modules.Migration.Services.IMigrationStep, Modules.Migration.Steps.McpConnectStep>();
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.McpConnectStep>();
 
         builder.Services.AddHttpClient();
 
@@ -288,7 +288,7 @@ public static class GatherlightApp
 
         // Startup banner — the first lines of every log file (version · level · data root · bind · logs).
         app.Logger.LogInformation("=== Gatherlight starting === v{Ver} · level={Lvl} · data={Data} · bind={Bind}:{Port} · logs={Logs}",
-            Modules.Core.Services.AppVersion.Semver,
+            Platform.Kernel.Services.AppVersion.Semver,
             logLevel, options.DataPath, options.BindAddress, options.Port, logsDir);
 
         // Loud, once-at-startup warning when the LAN opt-in is exposing the app unauthenticated.
@@ -306,8 +306,8 @@ public static class GatherlightApp
         var life = app.Services.GetRequiredService<IHostApplicationLifetime>();
         life.ApplicationStarted.Register(() =>
         {
-            var runner = app.Services.GetRequiredService<Modules.Migration.Services.StartupMigrationRunner>();
-            var state = app.Services.GetRequiredService<Modules.Migration.Services.MigrationState>();
+            var runner = app.Services.GetRequiredService<Platform.Hosting.Migration.Services.StartupMigrationRunner>();
+            var state = app.Services.GetRequiredService<Platform.Hosting.Migration.Services.MigrationState>();
             _ = Task.Run(async () =>
             {
                 try { await runner.RunAsync(life.ApplicationStopping); }
@@ -316,11 +316,11 @@ public static class GatherlightApp
         });
 
         // Block /api + /mcp (except health + /api/migration) while the startup migration runs.
-        app.UseMiddleware<Modules.Migration.MigrationGateMiddleware>();
+        app.UseMiddleware<Platform.Hosting.Migration.MigrationGateMiddleware>();
         // Defense-in-depth response headers (CSP + framing/sniffing) on everything.
-        app.UseMiddleware<Modules.Security.SecurityHeadersMiddleware>();
+        app.UseMiddleware<Platform.Hosting.Security.SecurityHeadersMiddleware>();
         // Gate /api + /mcp before the endpoints run (no-op unless an access token is configured).
-        app.UseMiddleware<Modules.Security.AccessGateMiddleware>();
+        app.UseMiddleware<Platform.Hosting.Security.AccessGateMiddleware>();
 
         app.MapControllers();
         McpEndpoint.Map(app);

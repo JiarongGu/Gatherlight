@@ -10,12 +10,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const src = path.join(repo, 'src', 'server', 'Gatherlight.Server');
+const serverRoot = path.join(repo, 'src', 'server', 'Gatherlight.Server');
+// The rewrite must also cover Gatherlight.Host — a separate project (its own .csproj) that
+// references these namespaces but doesn't build as part of Gatherlight.Server. Walk both roots
+// when rewriting; module path resolution (from/to) stays scoped to serverRoot only.
+const rewriteRoots = [serverRoot, path.join(repo, 'src', 'server', 'Gatherlight.Host')];
 const [module, dest] = process.argv.slice(2);
 if (!module || !dest) { console.error('usage: _move-module.mjs <ModuleName> <Dest/Path>'); process.exit(1); }
 
-const from = path.join(src, 'Modules', module);
-const to = path.join(src, ...dest.split('/'));
+const from = path.join(serverRoot, 'Modules', module);
+const to = path.join(serverRoot, ...dest.split('/'));
 if (!fs.existsSync(from)) { console.error(`no such module: Modules/${module}`); process.exit(1); }
 if (fs.existsSync(to)) {
   console.error(`destination already exists: ${dest}\nif a previous run failed, recover with: git reset --hard  (then remove the stale folder)`);
@@ -39,10 +43,13 @@ const walk = (dir, out = []) => {
 
 let touched = 0;
 try {
-  for (const abs of walk(src)) {
-    const body = fs.readFileSync(abs, 'utf8');
-    const next = body.split(oldNs).join(newNs);
-    if (next !== body) { fs.writeFileSync(abs, next); touched++; }
+  for (const root of rewriteRoots) {
+    if (!fs.existsSync(root)) continue;
+    for (const abs of walk(root)) {
+      const body = fs.readFileSync(abs, 'utf8');
+      const next = body.split(oldNs).join(newNs);
+      if (next !== body) { fs.writeFileSync(abs, next); touched++; }
+    }
   }
 } catch (err) {
   console.error(`namespace rewrite failed after the move: ${err.message}`);

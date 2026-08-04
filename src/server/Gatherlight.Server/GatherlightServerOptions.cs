@@ -4,7 +4,7 @@ namespace Gatherlight.Server;
 /// Boot options for the Gatherlight server. The standalone <c>Program.cs</c> (headless dev:
 /// <c>dotnet run</c>) builds from this; a future desktop host would pass explicit values.
 /// Everything else (server name, chat model) is user configuration and lives in
-/// <c>{data}/state/settings.json</c> — see <see cref="Modules.Core.Services.ServerConfigService"/>.
+/// <c>{data}/state/settings.json</c> — see <see cref="Platform.Kernel.Services.ServerConfigService"/>.
 /// </summary>
 public sealed class GatherlightServerOptions
 {

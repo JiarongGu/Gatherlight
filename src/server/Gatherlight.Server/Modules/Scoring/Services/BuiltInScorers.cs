@@ -1,6 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using Lyntai.Cortex; // IScorer / LlmScorerBase / ScoreContext / ScoreResult — the shared scoring framework
 
 namespace Gatherlight.Server.Modules.Scoring.Services;

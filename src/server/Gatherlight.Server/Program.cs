@@ -1,5 +1,5 @@
 using Gatherlight.Server;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 
 // Headless entry point (`dotnet run`) — serves the API + built client on loopback.
 var dataPath = GatherlightServerOptions.ResolveDefaultDataPath();

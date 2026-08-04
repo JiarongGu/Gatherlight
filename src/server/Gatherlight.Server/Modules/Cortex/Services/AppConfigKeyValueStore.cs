@@ -1,4 +1,4 @@
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using Lyntai.Storage;
 
 namespace Gatherlight.Server.Modules.Cortex.Services;

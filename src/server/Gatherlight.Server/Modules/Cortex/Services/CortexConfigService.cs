@@ -1,4 +1,4 @@
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Modules.Llm.Services;
 using Lyntai.Prompts;
 

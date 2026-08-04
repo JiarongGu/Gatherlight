@@ -1,6 +1,6 @@
 using System.Text;
 using System.Text.Json;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 
 namespace Gatherlight.Server.Modules.Llm.Services;
 

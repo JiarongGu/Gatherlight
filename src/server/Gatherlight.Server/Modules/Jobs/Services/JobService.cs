@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Modules.DataRepo.Services;
 using Gatherlight.Server.Modules.Jobs.Models;
 using Gatherlight.Server.Modules.Llm.Services;

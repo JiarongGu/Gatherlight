@@ -1,4 +1,4 @@
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using Microsoft.Extensions.Hosting;
 
 namespace Gatherlight.Server.Modules.Jobs.Services;

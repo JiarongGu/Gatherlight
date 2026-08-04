@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Modules.Files.Services;
 using Gatherlight.Server.Modules.Llm.Services;
 using Gatherlight.Server.Modules.Tools.Models;

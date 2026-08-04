@@ -1,5 +1,5 @@
 using Dapper;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 
 namespace Gatherlight.Server.Modules.Library.Services;
 

@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Text;
-using Gatherlight.Server.Modules.Core.Services;
+using Gatherlight.Server.Platform.Kernel.Services;
 
 namespace Gatherlight.Server.Modules.DataRepo.Services;
 
