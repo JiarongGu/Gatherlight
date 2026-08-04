@@ -2,7 +2,7 @@ using System.Text.Json;
 using Gatherlight.Server.Platform.Capabilities.Tools.Services;
 using Microsoft.Playwright;
 
-namespace Gatherlight.Server.Modules.Scrapers.Services;
+namespace Gatherlight.Server.Product.Planner.Scrapers.Services;
 
 public sealed record PageResult(int Status, string FinalUrl, string Title, string Text, string H1 = "");
 

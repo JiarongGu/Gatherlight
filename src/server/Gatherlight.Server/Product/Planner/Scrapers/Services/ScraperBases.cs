@@ -1,4 +1,4 @@
-namespace Gatherlight.Server.Modules.Scrapers.Services;
+namespace Gatherlight.Server.Product.Planner.Scrapers.Services;
 
 /// <summary>
 /// Base URLs for the scraper tools, each overridable by an env var so e2e can point them at a

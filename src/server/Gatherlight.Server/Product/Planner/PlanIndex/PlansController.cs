@@ -1,8 +1,8 @@
 using Gatherlight.Server.Platform.Kernel.Services;
-using Gatherlight.Server.Modules.PlanIndex.Services;
+using Gatherlight.Server.Product.Planner.PlanIndex.Services;
 using Microsoft.AspNetCore.Mvc;
 
-namespace Gatherlight.Server.Modules.PlanIndex;
+namespace Gatherlight.Server.Product.Planner.PlanIndex;
 
 [ApiController]
 public sealed class PlansController : ControllerBase

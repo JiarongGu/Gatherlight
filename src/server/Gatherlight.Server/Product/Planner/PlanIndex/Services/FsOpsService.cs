@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 
-namespace Gatherlight.Server.Modules.PlanIndex.Services;
+namespace Gatherlight.Server.Product.Planner.PlanIndex.Services;
 
 /// <summary>
 /// Mechanical file operations on the data tree — no AI involved. Each operation commits to the

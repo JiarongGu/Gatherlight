@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 
-namespace Gatherlight.Server.Modules.Scrapers.Services;
+namespace Gatherlight.Server.Product.Planner.Scrapers.Services;
 
 /// <summary>
 /// Argument helpers shared by the scraper tools — batch-`queries` parsing, optional string reads,

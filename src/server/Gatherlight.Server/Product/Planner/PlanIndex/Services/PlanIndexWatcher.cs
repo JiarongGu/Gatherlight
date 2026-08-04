@@ -1,6 +1,6 @@
 using Gatherlight.Server.Platform.Kernel.Services;
 
-namespace Gatherlight.Server.Modules.PlanIndex.Services;
+namespace Gatherlight.Server.Product.Planner.PlanIndex.Services;
 
 /// <summary>
 /// Debounced FileSystemWatcher over the data folder's content trees (plans/, household/,

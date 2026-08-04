@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 using Dapper;
 using Gatherlight.Server.Platform.Kernel.Services;
 
-namespace Gatherlight.Server.Modules.PlanIndex.Services;
+namespace Gatherlight.Server.Product.Planner.PlanIndex.Services;
 
 public sealed record PlanIndexEntry(
     string Path, string Category, string? Subgroup, string Name, string Title,
@@ -27,7 +27,7 @@ public interface IPlanIndexService
     List<PlanIndexEntry> Search(string query, int limit = 50);
 }
 
-public sealed partial class PlanIndexService : IPlanIndexService
+public sealed partial class PlanIndexService : IPlanIndexService, IRecordIndex
 {
     private readonly IDataContext _data;
     private readonly IDbConnectionFactory _db;
@@ -39,6 +39,8 @@ public sealed partial class PlanIndexService : IPlanIndexService
         _db = db;
         _log = log;
     }
+
+    public Task RebuildAsync(CancellationToken ct) => RescanAsync(ct);
 
     public Task RescanAsync(CancellationToken ct = default)
     {

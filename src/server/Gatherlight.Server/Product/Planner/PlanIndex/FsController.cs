@@ -1,8 +1,8 @@
 using Gatherlight.Server.Platform.Agent.Chat.Services;
-using Gatherlight.Server.Modules.PlanIndex.Services;
+using Gatherlight.Server.Product.Planner.PlanIndex.Services;
 using Microsoft.AspNetCore.Mvc;
 
-namespace Gatherlight.Server.Modules.PlanIndex;
+namespace Gatherlight.Server.Product.Planner.PlanIndex;
 
 public sealed record DeleteRequest(List<string>? Paths, List<string>? Dirs, string? Label);
 public sealed record RetitleRequest(string Path, string Title);

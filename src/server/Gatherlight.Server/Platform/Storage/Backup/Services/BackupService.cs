@@ -3,7 +3,6 @@ using System.Text.Json;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 using Gatherlight.Server.Platform.Storage.Memory.Services;
-using Gatherlight.Server.Modules.PlanIndex.Services;
 
 namespace Gatherlight.Server.Platform.Storage.Backup.Services;
 
@@ -45,15 +44,15 @@ public sealed class BackupService : IBackupService
 
     private readonly IDataContext _data;
     private readonly IMemoryService _memory;
-    private readonly IPlanIndexService _index;
+    private readonly IEnumerable<IRecordIndex> _indexes;
     private readonly IGitCliService _git;
     private readonly DataWriteLock _writeLock;
     private readonly ILogger<BackupService> _log;
 
-    public BackupService(IDataContext data, IMemoryService memory, IPlanIndexService index,
+    public BackupService(IDataContext data, IMemoryService memory, IEnumerable<IRecordIndex> indexes,
         IGitCliService git, DataWriteLock writeLock, ILogger<BackupService> log)
     {
-        _data = data; _memory = memory; _index = index; _git = git; _writeLock = writeLock; _log = log;
+        _data = data; _memory = memory; _indexes = indexes; _git = git; _writeLock = writeLock; _log = log;
     }
 
     public async Task ExportAsync(Stream output, CancellationToken ct = default)
@@ -161,7 +160,7 @@ public sealed class BackupService : IBackupService
                 if (bundle is not null) mem = await _memory.ImportAsync(bundle);
             }
 
-            await _index.RescanAsync(ct);
+            foreach (var ix in _indexes) await ix.RebuildAsync(ct);
             try { await _git.EnsureRepoAsync(ct); await _git.CommitAllAsync($"restore: import backup ({restored} files)"); }
             catch (Exception ex) { _log.LogWarning("restore commit skipped: {Msg}", ex.Message); }
 

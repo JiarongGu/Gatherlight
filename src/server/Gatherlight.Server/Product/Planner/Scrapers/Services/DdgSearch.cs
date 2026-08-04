@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Gatherlight.Server.Modules.Scrapers.Services;
+namespace Gatherlight.Server.Product.Planner.Scrapers.Services;
 
 /// <summary>One DuckDuckGo HTML-endpoint result: title, the decoded destination URL, and its host.</summary>
 public sealed record SearchHit(string Title, string Url, string Domain);

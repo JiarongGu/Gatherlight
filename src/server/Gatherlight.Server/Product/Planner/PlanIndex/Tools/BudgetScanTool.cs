@@ -1,9 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Gatherlight.Server.Modules.PlanIndex.Services;
+using Gatherlight.Server.Product.Planner.PlanIndex.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 
-namespace Gatherlight.Server.Modules.PlanIndex.Tools;
+namespace Gatherlight.Server.Product.Planner.PlanIndex.Tools;
 
 /// <summary>
 /// Deterministic (zero-token) budget figures scan the agent can call instead of re-reading a whole

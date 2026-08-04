@@ -1,10 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using Gatherlight.Server.Modules.Scrapers.Services;
+using Gatherlight.Server.Product.Planner.Scrapers.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 
-namespace Gatherlight.Server.Modules.Scrapers.Tools;
+namespace Gatherlight.Server.Product.Planner.Scrapers.Tools;
 
 /// <summary>
 /// Searches Xiaohongshu (小红书) for a keyword in the shared headless browser and returns the visible

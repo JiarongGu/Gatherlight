@@ -1,9 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Gatherlight.Server.Modules.PlanIndex.Services;
+using Gatherlight.Server.Product.Planner.PlanIndex.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 
-namespace Gatherlight.Server.Modules.PlanIndex.Tools;
+namespace Gatherlight.Server.Product.Planner.PlanIndex.Tools;
 
 /// <summary>
 /// Agent-facing navigation of the plan index. The markdown-native <c>plans/INDEX.md</c> is the

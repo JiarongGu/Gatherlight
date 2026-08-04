@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using Gatherlight.Server.Platform.Kernel.Services;
 
-namespace Gatherlight.Server.Modules.PlanIndex.Services;
+namespace Gatherlight.Server.Product.Planner.PlanIndex.Services;
 
 public sealed record BudgetFigure(string Currency, decimal Amount, bool Excluded, string Context);
 

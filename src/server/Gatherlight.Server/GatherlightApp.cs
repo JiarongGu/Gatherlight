@@ -5,7 +5,7 @@ using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 using Gatherlight.Server.Platform.Storage.Files.Services;
 using Gatherlight.Server.Platform.Hosting.Fluent.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Services;
-using Gatherlight.Server.Modules.PlanIndex.Services;
+using Gatherlight.Server.Product.Planner.PlanIndex.Services;
 using Gatherlight.Server.Platform.Site.Seed.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 using Gatherlight.Server.Platform.Capabilities.Tools.Services;
@@ -77,8 +77,13 @@ public static class GatherlightApp
             .AddSingleton<IGitCliService, GitCliService>()
             .AddSingleton<DataWriteLock>()
             .AddSingleton<IDataCommitRepository, DataCommitRepository>()
-            // Plan index — zero-LLM browse/search over the markdown tree
-            .AddSingleton<IPlanIndexService, PlanIndexService>()
+            // Plan index — zero-LLM browse/search over the markdown tree. Registered by concrete type so
+            // IPlanIndexService and IRecordIndex both forward to the SAME singleton instance — anchoring
+            // on the concrete type (not a cast between the two unrelated interfaces) makes it a compile
+            // error, not a runtime surprise, if PlanIndexService ever stops implementing IRecordIndex.
+            .AddSingleton<PlanIndexService>()
+            .AddSingleton<IPlanIndexService>(sp => sp.GetRequiredService<PlanIndexService>())
+            .AddSingleton<IRecordIndex>(sp => sp.GetRequiredService<PlanIndexService>())
             .AddSingleton<IFsOpsService, FsOpsService>()
             .AddSingleton<IIcsExportService, IcsExportService>()
             .AddSingleton<IBudgetService, BudgetService>()
@@ -158,19 +163,19 @@ public static class GatherlightApp
             // Tools — one registry, two surfaces (HTTP + MCP for the spawned agent)
             .AddSingleton<Platform.Hosting.Resources.Services.IResourceProvisioner, Platform.Hosting.Resources.Services.ResourceProvisioner>()
             .AddSingleton<IPlaywrightHost, PlaywrightHost>()
-            .AddSingleton<Modules.Scrapers.Services.IPlaywrightScraper, Modules.Scrapers.Services.PlaywrightScraper>()
+            .AddSingleton<Product.Planner.Scrapers.Services.IPlaywrightScraper, Product.Planner.Scrapers.Services.PlaywrightScraper>()
             .AddSingleton<IGatherlightTool, ExtractTool>()
             .AddSingleton<IGatherlightTool, WebFetchTool>()   // registers as "scrape" (Playwright-native)
             .AddSingleton<IGatherlightTool, WikiInfoTool>()
             // Native C#/Playwright scraper ports (the Node puppeteer leaves are all gone)
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.FlightScheduleScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.PolicyCheckScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.FlightPricesScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.HotelPricesScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.HotelInfoScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.RestaurantInfoScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.Scrapers.Tools.XhsSearchScraperTool>()
-            .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.BudgetScanTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.FlightScheduleScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.PolicyCheckScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.FlightPricesScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.HotelPricesScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.HotelInfoScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.RestaurantInfoScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.XhsSearchScraperTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.PlanIndex.Tools.BudgetScanTool>()
             // Document / media processing (PdfPig extract + pdf-lib leaves for AcroForm + ImageSharp)
             .AddSingleton<Platform.Capabilities.Documents.Services.IPdfProcessor, Platform.Capabilities.Documents.Services.PdfProcessor>()
             .AddSingleton<Platform.Capabilities.Documents.Services.IImageProcessor, Platform.Capabilities.Documents.Services.ImageProcessor>()
@@ -196,9 +201,9 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, Platform.Storage.Library.Tools.LibraryImportTool>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Library.Tools.LibraryDeleteTool>()
             // Plan-index navigation (md-driven plans/INDEX.md + these programmatic twins)
-            .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.IndexListTool>()
-            .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.IndexSearchTool>()
-            .AddSingleton<IGatherlightTool, Modules.PlanIndex.Tools.IndexReindexTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.PlanIndex.Tools.IndexListTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.PlanIndex.Tools.IndexSearchTool>()
+            .AddSingleton<IGatherlightTool, Product.Planner.PlanIndex.Tools.IndexReindexTool>()
             // Portable memory transfer (export/import the DB knowledge between installs)
             .AddSingleton<Platform.Storage.Memory.Services.IMemoryService, Platform.Storage.Memory.Services.MemoryService>()
             // Whole-install backup/restore (records + DB memory in one .zip)
@@ -266,7 +271,7 @@ public static class GatherlightApp
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealLocksStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DataRepoInitStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.KnowledgeBaseStep>()
-            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.PlanIndexStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.RecordIndexStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealStateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.MemorySeedStep>()
             // After the DB is migrated: connect the enabled external MCP servers (best-effort).
@@ -301,7 +306,7 @@ public static class GatherlightApp
         // Run the versioned startup migration in the background once we're listening, so /manage can
         // render the progress overlay instead of the app appearing to hang. The gate keeps /api closed
         // until it lifts. MigrationState defaults to migrating=true, so requests before this fires are
-        // already gated. (DB migrate, data-repo init, KB seed/notify, plan-index rescan, memory seed,
+        // already gated. (DB migrate, data-repo init, KB seed/notify, record-index rebuild, memory seed,
         // chat scope-guard, and interrupted-work reconcile now all live as ordered IMigrationSteps.)
         var life = app.Services.GetRequiredService<IHostApplicationLifetime>();
         life.ApplicationStarted.Register(() =>

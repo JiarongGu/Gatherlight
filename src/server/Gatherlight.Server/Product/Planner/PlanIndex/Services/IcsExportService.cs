@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Gatherlight.Server.Platform.Kernel.Services;
 
-namespace Gatherlight.Server.Modules.PlanIndex.Services;
+namespace Gatherlight.Server.Product.Planner.PlanIndex.Services;
 
 /// <summary>
 /// Deterministic iCalendar (.ics) export from a plan's markdown — a zero-LLM feature so
