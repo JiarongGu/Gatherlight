@@ -190,8 +190,10 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageResizeTool>()
             .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageConvertTool>()
             // Capability sandbox: probes node for --permission + module.registerHooks (fails closed
-            // when unavailable).
+            // when unavailable), then builds the argv (fs scope from the grant + the network preload)
+            // that runs a Script capability under it.
             .AddSingleton<Platform.Capabilities.Sandbox.Services.ICapabilityRuntime, Platform.Capabilities.Sandbox.Services.CapabilityRuntime>()
+            .AddSingleton<Platform.Capabilities.Sandbox.Services.ICapabilityLauncher, Platform.Capabilities.Sandbox.Services.NodeCapabilityLauncher>()
             // Generalized stores + agent-writable cross-session memory
             .AddSingleton<Platform.Storage.Knowledge.Services.IEntityStore, Platform.Storage.Knowledge.Services.EntityStore>()
             .AddSingleton<Platform.Storage.Knowledge.Services.IKnowledgeStore, Platform.Storage.Knowledge.Services.KnowledgeStore>()
