@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Gatherlight.Server.Platform.Agent.Chat.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Storage.DataRepo.Services;
@@ -49,11 +51,19 @@ public static class GatherlightApp
                 "on a trusted private LAN.");
 
         var cert = Platform.Hosting.Security.Services.TlsCertificate.Resolve(options);
-        if (cert is null)
-            builder.WebHost.UseUrls($"http://{options.BindAddress}:{options.Port}");
-        else
-            builder.WebHost.ConfigureKestrel(k =>
-                k.Listen(ParseBindAddress(options.BindAddress), options.Port, lo => lo.UseHttps(cert)));
+        // The agent's channel is a SECOND endpoint: loopback, plain HTTP, ephemeral port. Never TLS —
+        // it is a loopback socket, not a network hop, and a self-signed cert is an obstacle to the
+        // CLI's MCP client with nothing to gain. Added in both branches: the TLS case is precisely
+        // the one where routing the agent through the public listener breaks. UseUrls is gone — it
+        // and ConfigureKestrel listeners do not compose, so the public endpoint moves here too.
+        // Listen(Loopback, 0), not ListenLocalhost(0): Kestrel refuses a dynamic port on the
+        // localhost binding ("Dynamic port binding is not supported when binding to localhost").
+        builder.WebHost.ConfigureKestrel(k =>
+        {
+            if (cert is null) k.Listen(ParseBindAddress(options.BindAddress), options.Port);
+            else k.Listen(ParseBindAddress(options.BindAddress), options.Port, lo => lo.UseHttps(cert));
+            k.Listen(System.Net.IPAddress.Loopback, 0);
+        });
         builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
         // Persist logs to {data}/state/logs/{yyyy-MM-dd}.log so errors are trackable after the fact.
         // Level from settings (GATHERLIGHT_LOG_LEVEL wins); framework (Microsoft/System) noise is capped
@@ -230,6 +240,8 @@ public static class GatherlightApp
             // Remote-access gate: loopback trusted, remote needs the shared token
             .AddSingleton<Platform.Hosting.Security.Services.ISecurityGuard, Platform.Hosting.Security.Services.SecurityGuard>()
             .AddSingleton<Platform.Hosting.Security.Services.ILoginThrottle, Platform.Hosting.Security.Services.LoginThrottle>()
+            // The agent's loopback-only MCP channel — one token per process, so a singleton.
+            .AddSingleton<Platform.Hosting.Security.Services.IInternalMcpEndpoint, Platform.Hosting.Security.Services.InternalMcpEndpoint>()
             // Self-update: check GitHub releases + download/stage (launcher applies on restart)
             .AddSingleton<Platform.Hosting.Update.Services.IUpdateService, Platform.Hosting.Update.Services.UpdateService>()
             // Background jobs: generic scheduled/one-off work (agent tasks, tool calls, notifications,
@@ -370,6 +382,32 @@ public static class GatherlightApp
         // already gated. (DB migrate, data-repo init, KB seed/notify, record-index rebuild, memory seed,
         // chat scope-guard, and interrupted-work reconcile now all live as ordered IMigrationSteps.)
         var life = app.Services.GetRequiredService<IHostApplicationLifetime>();
+
+        // The ephemeral port is only known once Kestrel has bound. Everything that needs it (the
+        // access gate, the agent's session options) reads it from IInternalMcpEndpoint, so nothing
+        // captures it at build time.
+        life.ApplicationStarted.Register(() =>
+        {
+            var addresses = app.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()?.Addresses ?? [];
+            var internalUrl = addresses.FirstOrDefault(a =>
+                a.StartsWith("http://127.0.0.1:", StringComparison.Ordinal)
+                && !a.EndsWith($":{options.Port}", StringComparison.Ordinal));
+            if (internalUrl is not null && Uri.TryCreate(internalUrl, UriKind.Absolute, out var uri))
+            {
+                app.Services.GetRequiredService<Platform.Hosting.Security.Services.IInternalMcpEndpoint>().Bound(uri.Port);
+                app.Logger.LogInformation("Agent MCP channel on loopback port {Port}", uri.Port);
+            }
+            else
+            {
+                // A silent failure here reproduces the exact bug being fixed — no tools, no
+                // explanation — so it must be loud.
+                app.Logger.LogError(
+                    "Agent MCP channel did not bind — the agent will have no server tools. Addresses: {Addr}",
+                    string.Join(", ", addresses));
+            }
+        });
+
         life.ApplicationStarted.Register(() =>
         {
             var runner = app.Services.GetRequiredService<Platform.Hosting.Migration.Services.StartupMigrationRunner>();
