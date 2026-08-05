@@ -49,7 +49,7 @@ and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,C
 - **User data lives ONLY in `local/`** (own private git repo). Never move it back into this repo.
 - **LLM via the authenticated `claude` CLI only — never an API key.**
 - **Backend = three projects** (`Gatherlight.Platform` → `Gatherlight.Planner` → `Gatherlight.Server`
-  → `Gatherlight.Host`; namespaces unchanged, `Platform/<Group>/<Name>` / `Product/Planner/<Name>`),
+  → `Gatherlight.Host`; namespaces unchanged, `Platform/<Group>/<Name>` / `Product/Planner/<Name>`;
   controller → service → repository; Dapper + hand-written SQL, snake_case columns, FluentMigrator
   `YYYYMMDDNNNN` migrations; variation points are interfaces resolved via DI, never if/else chains).
   **Platform must never reference Planner** — the compiler enforces it; `dev.mjs check-layering`

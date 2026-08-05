@@ -57,9 +57,13 @@ for (const abs of platformFiles) {
 // never reappears. Without this check, a re-added reference would quietly turn the rule back into
 // a convention, and the namespace scan above would not catch it (Platform code needn't actually
 // use a Planner type for the reference to compile).
-if (fs.existsSync(platformCsproj)) {
+// A missing csproj is a failure, not a skip: silently not running the assertion is exactly the
+// hole it exists to close. Attribute order is not assumed (Condition= may precede Include=).
+if (!fs.existsSync(platformCsproj)) {
+  errors.push('Gatherlight.Platform.csproj not found — cannot assert the project reference graph');
+} else {
   const csproj = fs.readFileSync(platformCsproj, 'utf8');
-  if (/<ProjectReference\s+Include="[^"]*Gatherlight\.Planner\.csproj"/.test(csproj)) {
+  if (/<ProjectReference[^>]*Gatherlight\.Planner\.csproj/.test(csproj)) {
     errors.push('Gatherlight.Platform.csproj has a ProjectReference to Gatherlight.Planner — Platform must never reference Planner');
   }
 }
