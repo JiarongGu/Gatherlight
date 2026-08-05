@@ -41,10 +41,14 @@ public sealed class AgentRunner : IAgentRunner
         // The one line that makes every LLM call traceable — consumer, cwd, model, policy, flags, prompt
         // SIZE (never content: it may hold family data + rides over stdin). Mirrors the retired runner's
         // spawn line so an instant/empty run stays diagnosable (see the claude-spawn-logging note).
+        // mcp= names the servers rather than saying true/false: an agent handed a server under the
+        // WRONG name loses every tool silently (AllowedTools are mcp__<name>__*), and that is exactly
+        // the failure this log line has to make answerable.
         _log.LogInformation(
             "[{Label}] agent spawn: cwd={Cwd} policy={Policy} model={Model} mcp={Mcp} settings={Set} resume={Res} allowedTools={Tools} promptChars={Len}",
             label, options.WorkingDirectory, options.ToolPolicy, options.Model ?? "(cli-default)",
-            !string.IsNullOrEmpty(options.McpConfigPath), !string.IsNullOrEmpty(options.SettingsPath),
+            options.McpServers.Count > 0 ? string.Join(",", options.McpServers.Select(m => m.Name)) : "(none)",
+            !string.IsNullOrEmpty(options.SettingsPath),
             !string.IsNullOrEmpty(options.ResumeToken), options.AllowedTools.Count, options.Prompt.Length);
 
         AgentSessionResult result;

@@ -66,14 +66,33 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   through Lyntai's `AddMcpToolHost(new ClaudeCliMcpDialect())`, which registers an
   `ICliToolProvisioner` — read ONLY by `ClaudeCliProvider`, i.e. the one-shot `ILlmClient` path,
   so this affects the judges and nothing else (the agent path, `ClaudeAgentSession`, takes no
-  provisioner: its MCP stays the CLI's mcp-config flag pointed at this server's own persistent
-  `/mcp`). Per call Lyntai starts a bearer-gated loopback
+  provisioner — it reaches the app's tools through the loopback channel in the next bullet, a
+  different endpoint with a different lifetime). Per call Lyntai starts a bearer-gated loopback
   Kestrel and tears it down after. **It executes app code, so the jail is the load-bearing part**:
   read-only, text extensions only, size-capped, and a POSITIVE allow-list of `plans/ household/
   .claude/` — never `state/` (access token, TLS pfx, DB), with symlink targets re-checked and every
   listing hit re-resolved. That's the same set the planner agent may already read, so the judges gain
   no reach the scope guard doesn't already grant. Registering zero `ITool`s makes the host a no-op.
   Proof lives in `e2e-p36` (the claude stub drives the MCP server for real and asserts the denials).
+- **The agent's own tools come from a loopback-only channel**, not the public listener: a second
+  Kestrel endpoint on `127.0.0.1:0`, plain HTTP, serving `/mcp` only, behind a per-start bearer token
+  held in memory. `AgentSessionOptions.McpServers` (Lyntai) points each run at it. This exists because
+  the public listener carries TLS and authentication meant for REMOTE HUMANS — with TLS on the agent's
+  `http://` connection failed, and with `trustLoopback:false` it got a 401, and in both cases the CLI
+  surfaced nothing: the server contributed no tools and the agent reported them **missing**. Exposure
+  settings describe how remote humans reach the app; they have nothing to say about a child process on
+  the same machine. Shape: `Platform/Hosting/Security/Services/InternalMcpEndpoint` (port + token,
+  never persisted), `AccessGateMiddleware` telling the two ports apart by `Connection.LocalPort`
+  **ahead of** its own `Enabled` check (a token-less install turns that gate off entirely, and an
+  unrestricted internal port would then serve `/api`), and `Agent/Llm/Services/AgentMcpWiring` building
+  the per-run server list for all three run sites (chat, jobs, the eval playground). The server NAME
+  comes from `IToolRegistry.McpServerName`, not a literal: `AllowedTools` are `mcp__<name>__*`, so a
+  drifted name would leave every tool un-approved — silently, which is the failure this channel exists
+  to end. Naming a server does **not** pre-approve its tools; `AllowedTools` still does that. There is
+  no generated `state/mcp.chat.json` any more, and startup deletes one an older build left behind — a
+  file that configures nothing is worse than no file, because the next person debugging this reads it
+  and believes it. Proof lives in `e2e-p44`, which asserts the TOOL LIST (never merely a 200) in each
+  configuration, and the server name the spawned CLI was actually handed.
 - **Agent-authored UI is a validated node tree, never markup.** The vocabulary is a DI collection of
   `IUiNodeSchema` (`Platform/Agent/Ui`): one class + one registration per component, never a switch.
   The server validates before the client is told a block exists — unknown type, unknown prop, wrong

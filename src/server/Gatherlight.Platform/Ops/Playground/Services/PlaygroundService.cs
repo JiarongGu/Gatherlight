@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Gatherlight.Server.Platform.Agent.Chat.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Models;
 using Gatherlight.Server.Platform.Agent.Llm.Services;
@@ -57,19 +56,20 @@ public sealed class PlaygroundService : IPlaygroundService
     private readonly IScoringService _scoring;
     private readonly ISiteContext _data;
     private readonly IAppConfigService _appConfig;
-    private readonly ChatEnvironmentService _env;
     private readonly IToolRegistry _tools;
+    private readonly Platform.Hosting.Security.Services.IInternalMcpEndpoint _internalMcp;
 
     public PlaygroundService(
         IAgentRunner agent, IPromptHarness harness, IScoringService scoring, ISiteContext data,
-        IAppConfigService appConfig, ChatEnvironmentService env, IToolRegistry tools)
+        IAppConfigService appConfig, IToolRegistry tools,
+        Platform.Hosting.Security.Services.IInternalMcpEndpoint internalMcp)
     {
+        _internalMcp = internalMcp;
         _agent = agent;
         _harness = harness;
         _scoring = scoring;
         _data = data;
         _appConfig = appConfig;
-        _env = env;
         _tools = tools;
     }
 
@@ -107,7 +107,7 @@ public sealed class PlaygroundService : IPlaygroundService
                 ToolPolicy = AgentToolPolicy.ReadOnly,
                 Model = model,
                 TimeoutSeconds = 3600,
-                McpConfigPath = File.Exists(_env.McpConfigPath) ? _env.McpConfigPath : null,
+                McpServers = AgentMcpWiring.ServersFor(_internalMcp, _tools),
                 AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : Array.Empty<string>(),
             }, label: "playground", onEvent: ev =>
             {

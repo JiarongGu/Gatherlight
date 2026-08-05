@@ -206,6 +206,29 @@ if (uiCase) {
   process.exit(0);
 }
 
+// --- MCP wiring echo (e2e-p44) ----------------------------------------------------------------
+// Reports what the SERVER wired up for MCP. The agent losing its tools is silent — the CLI just
+// contributes none — so a test has to look at the config the CLI was actually handed. Read from the
+// CURRENT request (uiRequest); sits after the SCORING branch so a judge prompt quoting an MCP_ECHO
+// turn still returns its {score, reason} verdict instead of this echo.
+if (uiRequest.includes('MCP_ECHO')) {
+  const i = args.indexOf('--mcp-config');
+  const cfgArg = i >= 0 ? args[i + 1] : null;
+  let named = 'NO_MCP_CONFIG';
+  if (cfgArg) {
+    // The flag takes "JSON files or strings" — Lyntai writes a temp FILE today, but handle both so
+    // this row survives a change of that choice rather than silently reporting UNREADABLE.
+    try {
+      const doc = cfgArg.trim().startsWith('{') ? JSON.parse(cfgArg) : JSON.parse(fs.readFileSync(cfgArg, 'utf8'));
+      named = 'MCP_SERVERS:' + Object.keys(doc.mcpServers ?? {}).join(',');
+    } catch { named = 'MCP_CONFIG_UNREADABLE'; }
+  }
+  const text = `计划:${named}`;
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  done(text);
+  process.exit(0);
+}
+
 // --- conversation context echo (e2e-p43) ------------------------------------------------------
 // Reports whether the SERVER put thread context in the prompt — assigning a conversation id without
 // rebuilding its context is a silent no-op the other rows would not catch. The marker is the REAL

@@ -66,13 +66,16 @@ public sealed class UnattendedRunService : IUnattendedRunService
     private readonly IToolRegistry _tools;
     private readonly IAppConfigService _appConfig;
     private readonly ChatEnvironmentService _env;
+    private readonly Platform.Hosting.Security.Services.IInternalMcpEndpoint _internalMcp;
     private readonly ILogger<UnattendedRunService> _log;
 
     public UnattendedRunService(
         IAgentGate gate, IAgentRunner agent, IPromptHarness harness, ISiteContext data,
         IGitCliService git, DataWriteLock writeLock, IToolRegistry tools, IAppConfigService appConfig,
-        ChatEnvironmentService env, ILogger<UnattendedRunService> log)
+        ChatEnvironmentService env, Platform.Hosting.Security.Services.IInternalMcpEndpoint internalMcp,
+        ILogger<UnattendedRunService> log)
     {
+        _internalMcp = internalMcp;
         _gate = gate;
         _agent = agent;
         _harness = harness;
@@ -108,7 +111,9 @@ public sealed class UnattendedRunService : IUnattendedRunService
             ToolPolicy = spec.ReadOnly ? AgentToolPolicy.ReadOnly : AgentToolPolicy.Write,
             Model = _appConfig.Get("llm.model.chat"),
             TimeoutSeconds = Math.Clamp(spec.TimeoutSeconds, 10, 3600),
-            McpConfigPath = File.Exists(_env.McpConfigPath) ? _env.McpConfigPath : null,
+            // Same loopback channel the interactive chat uses — a background job needs the registry
+            // tools just as much, and an unattended run has nobody to notice they went missing.
+            McpServers = AgentMcpWiring.ServersFor(_internalMcp, _tools),
             AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : Array.Empty<string>(),
             SettingsPath = spec.ReadOnly ? null : (File.Exists(_env.SettingsPath) ? _env.SettingsPath : null),
         };

@@ -88,7 +88,13 @@ export function startServer({ dataDir, port, env = {}, cwd = repo }) {
 }
 
 /** Poll `fn` until it returns truthy (thrown errors are swallowed) or `ms` elapses. */
-export async function until(fn, ms = 30000, poll = 250) {
+// The default ceiling is generous ON PURPOSE. The runner runs suites in parallel, so a condition that
+// resolves in two seconds alone can take far longer with eight servers booting on the same box — and a
+// timeout there is a FALSE failure that costs more to investigate than the seconds it saves. p41 (2026-08-05)
+// and p9/p11 (2026-08-06) each failed a full run at the old 30s while passing alone. A genuinely stuck
+// condition now takes longer to report, which is the right trade: suites finish in ~20s, so one real hang
+// paying 90s once is cheaper than a green suite that cries wolf under load.
+export async function until(fn, ms = 90000, poll = 250) {
   const t0 = Date.now();
   for (;;) {
     try { const r = await fn(); if (r) return r; } catch {}
@@ -100,7 +106,9 @@ export async function until(fn, ms = 30000, poll = 250) {
 // Wait until the server is up AND the startup migration has lifted the gate (health.migrating === false).
 // Older behavior (just r.ok) implicitly waited because the port wasn't open until migration finished; the
 // migration now runs while listening, so readiness must be checked explicitly.
-export const waitHealthy = (base, ms = 30000) => until(async () => {
+// Same generous ceiling as `until`, and for a sharper reason: this waits for the STARTUP MIGRATION to
+// lift the gate, which is the slowest thing a booting server does and the first to suffer under load.
+export const waitHealthy = (base, ms = 90000) => until(async () => {
   const r = await fetch(`${base}/api/health`);
   if (!r.ok) return false;
   const j = await r.json().catch(() => ({}));
