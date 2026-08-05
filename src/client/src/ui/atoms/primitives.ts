@@ -19,6 +19,8 @@ export {
   Space,
   App,
   Card,
+  Divider,
+  Table,
   Typography,
   type MenuProps
 } from 'antd';

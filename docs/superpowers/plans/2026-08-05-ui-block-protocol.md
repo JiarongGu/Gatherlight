@@ -992,6 +992,10 @@ try {
   ok('a missing page is 404', (await j('/api/ui/pages/nope')).status === 404);
   const escaped = await j('/api/ui/pages/..%2F..%2Fsite');
   ok('a traversing page name is refused', escaped.status === 404 || escaped.status === 400, String(escaped.status));
+  // A sharper control than the traversal row above: `we.lcome` reaches the route and is rejected by
+  // ValidName's no-dots rule, while `welcome` (asserted ready earlier) proves the route works. The
+  // traversal row alone would pass even with no route at all.
+  ok('a dotted page name is refused by ValidName', (await j('/api/ui/pages/we.lcome')).status === 404);
 
   // --- the image route is narrow ----------------------------------------------------------
   const dbGrab = await fetch(`${base}/api/ui/asset/state/gatherlight.db`);
@@ -1008,7 +1012,7 @@ try {
 } catch (e) {
   fail(e?.stack || String(e));
 } finally {
-  server.kill();
+  server.stop();
 }
 
 done();
@@ -1805,7 +1809,10 @@ with `import type { UiNode } from '@/ui/blocks/registry';`.
 `src/client/src/ui/blocks/BlockSegment.tsx`:
 
 ```tsx
-import { Spin, Collapse } from 'antd';
+// Import primitives from @/ui/atoms, NEVER from antd directly — src/client/src/ui/atoms/primitives.ts
+// states the rule (molecules/organisms/screens go through the kit so it stays swappable). If `Spin`
+// or `Collapse` is missing from the kit, add the re-export there rather than reaching past it.
+import { Spin, Collapse } from '@/ui/atoms';
 import { UiTree } from './UiTree';
 import type { UiBlockEvent } from '@/lib/chatTypes';
 
@@ -1882,6 +1889,20 @@ Replace the assistant branch of `TranscriptRow` (line ~1197):
 references from `ChatPanel` so memoization still holds. `onSend` sets the composer draft and sends
 it through the SAME path a typed message takes — a button must not have a private route into the
 agent.
+
+- [ ] **Step 4b: Style the block classes**
+
+Task 3's renderers emit class names that no stylesheet defines yet — `.site-page`, `.ui-card`,
+`.ui-card-subtitle`, `.ui-caption`, `.ui-link-host`, `.ui-fileref`, `.ui-unknown` — plus the two this
+task adds, `.ui-block-partial` and `.ui-block-fallback` (with `-head` / `-reason`). Until now they
+were invisible because the seeded page only used self-styled components; once blocks appear in the
+transcript, `FileRef` renders as a bare OS-default button and captions float unstyled.
+
+Add a `.ui-*` block to `src/client/src/styles.css`, using the variables that actually exist there
+(`--muted`, `--success`, `--warn`, and the surface/border variables the neighbouring rules use — read
+the file rather than inventing names). Keep it small: the fallback card should read as *calm and
+informational*, not as an error — a household seeing an alarm for a block name we do not ship is a
+support call, not a signal. `.ui-fileref` should look like a link, not a form button.
 
 - [ ] **Step 5: Build**
 
@@ -2269,7 +2290,7 @@ check it came back:
 ```javascript
   // A stale contract must be REPLACED (unlike knowledge-base content, which is never overwritten).
   fs.writeFileSync(uiSpec, '<!-- UI_CONTRACT_VERSION: 0 -->\nstale\n', 'utf8');
-  server.kill();
+  server.stop();
   // `server` is already `let` (see Task 2) — reassign so the suite's finally kills the live one.
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
   await waitHealthy(base);

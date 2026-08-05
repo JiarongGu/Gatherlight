@@ -38,6 +38,13 @@ const usage = { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens:
 const done = (text) =>
   emit({ type: 'result', result: text, usage, total_cost_usd: 0.012 });
 
+// Streamed assistant text. Lyntai's StreamJsonAgentReader deliberately does NOT re-emit an
+// `assistant` message's text blocks as TextDelta ("already streamed via stream_event deltas") — a
+// `stream_event`/content_block_delta frame is the ONLY line shape that reaches the app as a
+// `text-delta` event. Anything asserting on streamed text has to go through here.
+const streamText = (text) =>
+  emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } });
+
 // FORCE_ERROR: emit an empty result so the server's plan phase treats it as "no content produced" →
 // Fail() → records the failed turn to chat_turn. Used by e2e-p25 (error-continuity memory). Guarded by
 // "no prior failure yet" so the FOLLOW-UP chat (whose thread context echoes the original FORCE_ERROR
@@ -149,6 +156,51 @@ if (prompt.includes('SCORING TASK')) {
   const verdict = JSON.stringify({ score: 0.8, reason });
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
   done(verdict);
+  process.exit(0);
+}
+
+// --- S3a: UI block fixtures (e2e-p41) ---------------------------------------------------------
+// Read the trigger from the CURRENT request (after "THE USER'S REQUEST:"), never the whole prompt —
+// the thread-context block echoes PRIOR turns' messages and a whole-prompt scan cross-fires on a
+// follow-up (that's what broke p28). Sits AFTER the SCORING branch so a judge call whose prompt
+// quotes a UI_CASE turn still returns its {score, reason} verdict instead of a fence.
+const uiRequest = prompt.includes("THE USER'S REQUEST:") ? prompt.split("THE USER'S REQUEST:").pop() : prompt;
+const uiCase = (uiRequest.match(/UI_CASE:([A-Z_]+)/) || [])[1];
+if (uiCase) {
+  const fence = (body) => '```ui\n' + body + '\n```';
+  const cases = {
+    VALID: 'Here is the plan.\n\n' + fence(JSON.stringify({
+      type: 'Card', title: 'Day 1', children: [
+        { type: 'Text', text: 'Morning at the museum' },
+        { type: 'Table', columns: ['Item', 'Cost'], rows: [['Entry', '1200']] },
+      ],
+    })) + '\n\nAnything else?',
+    UNKNOWN_TYPE: fence(JSON.stringify({ type: 'Gantt', text: 'nope' })),
+    BAD_JSON: '```ui\n{ "type": "Card", \n```',
+    BAD_PROP: fence(JSON.stringify({ type: 'Text', text: 'hi', colour: 'red' })),
+    BAD_ACTION: fence(JSON.stringify({
+      type: 'Button', label: 'Open', action: { openRecord: 'state/gatherlight.db' },
+    })),
+    REMOTE_IMAGE: fence(JSON.stringify({ type: 'Image', src: 'https://example.com/a.png', alt: 'a' })),
+    EVIL_IMAGE: fence(JSON.stringify({ type: 'Image', src: 'javascript:alert(1)', alt: 'a' })),
+    TOO_BIG: fence(JSON.stringify({
+      type: 'Stack',
+      children: Array.from({ length: 600 }, (_, i) => ({ type: 'Text', text: `row ${i}` })),
+    })),
+    UNTERMINATED: 'Working on it.\n\n```ui\n{ "type": "Card"',
+    // Reports what the SERVER actually put in the prompt. The ui-spec contract is written and
+    // version-gated, but it only does anything if the agent is told to read it — and that pointer
+    // lives in one shared prompt prefix, so an edit there would silently switch the whole feature
+    // off with every other test still green. Reads the WHOLE prompt: the pointer is in the common
+    // preamble, ahead of "THE USER'S REQUEST:".
+    CONTRACT_POINTER: prompt.includes('.claude/ui-spec.md')
+      ? 'CONTRACT_POINTER_PRESENT' : 'CONTRACT_POINTER_MISSING',
+  };
+  const text = cases[uiCase] ?? `unknown UI_CASE ${uiCase}`;
+  // Chunked, so what the suite exercises is the scanner's INCREMENTAL path — a fence marker split
+  // across two deltas is the case a whole-text feed would never reach.
+  for (let i = 0; i < text.length; i += 29) streamText(text.slice(i, i + 29));
+  done(text);
   process.exit(0);
 }
 

@@ -1,0 +1,21 @@
+{
+  "title": "欢迎 · Welcome",
+  "root": {
+    "type": "Stack",
+    "gap": "md",
+    "children": [
+      { "type": "Heading", "text": "这是一个由助手编写的页面 · A page your assistant can write", "level": 2 },
+      { "type": "Text", "tone": "muted", "text": "页面由组件搭成,改动会作为一次可审阅的改动提交。 · Pages are built from components; every change arrives as a diff you approve." },
+      {
+        "type": "Card",
+        "title": "可用的组件 · What it can build with",
+        "children": [
+          { "type": "List", "items": ["Stack · Row · Card · Divider", "Heading · Text · List · Badge", "Image · Table · Map · Link · FileRef", "Button"] }
+        ]
+      },
+      { "type": "Row", "gap": "sm", "children": [
+        { "type": "Button", "label": "问助手能做什么 · Ask what it can do", "action": { "send": "这个站点的页面能做什么?" } }
+      ] }
+    ]
+  }
+}

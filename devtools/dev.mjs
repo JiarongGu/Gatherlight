@@ -16,6 +16,7 @@
 //   node devtools/dev.mjs install-hooks     - git core.hooksPath -> devtools/hooks (pre-commit guard)
 //   node devtools/dev.mjs check-sensitive   - scan staged changes (--tree for all tracked files)
 //   node devtools/dev.mjs check-layering    - assert Platform/ never references Product/
+//   node devtools/dev.mjs check-ui-registry - assert the C# schemas and TS renderers agree
 import { spawnSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -147,6 +148,10 @@ switch (cmd) {
 
   case 'check-layering':
     run('node', [path.join(repo, 'devtools', 'scripts', 'check-layering.mjs'), ...args]);
+    break;
+
+  case 'check-ui-registry':
+    run('node', [path.join(repo, 'devtools', 'scripts', 'check-ui-registry.mjs'), ...args]);
     break;
 
   case 'smoke':
@@ -479,6 +484,6 @@ switch (cmd) {
   }
 
   default:
-    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|smoke|memory|eval|test-data|install-hooks|check-sensitive>');
+    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|smoke|memory|eval|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry>');
     process.exitCode = cmd ? 1 : 0;
 }

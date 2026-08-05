@@ -12,6 +12,7 @@ import {
   PaperClipOutlined
 } from '@ant-design/icons';
 import { MarkdownView } from './MarkdownView';
+import { BlockSegment } from '@/ui/blocks/BlockSegment';
 import { PlanActions, DiffReview } from './ChatReview';
 import { ChatRating } from './ChatRating';
 import {
@@ -45,14 +46,50 @@ import {
   type DraftApprovalView,
   type CapabilityApprovalView,
   type UploadedFile,
+  type UiBlockEvent,
   PHASE_LABELS
 } from '@/lib/chatTypes';
 import { formatFileSize } from '@/lib/format';
+
+/**
+ * One piece of an assistant turn, in the order the server segmented it. Prose and `ui` blocks
+ * interleave by `index` — that index is what lets the transcript put a block back exactly where the
+ * agent wrote it instead of guessing (a block appended at the end reads as a non-sequitur).
+ */
+type Segment =
+  | { kind: 'prose'; index: number; text: string }
+  | { kind: 'block'; index: number; block: UiBlockEvent };
+
+/** Append prose to the segment at `index`, creating it if this is its first delta. */
+function upsertProse(segments: Segment[], index: number, text: string): Segment[] {
+  const at = segments.findIndex((s) => s.index === index && s.kind === 'prose');
+  if (at < 0) return [...segments, { kind: 'prose', index, text }];
+  const next = segments.slice();
+  next[at] = { kind: 'prose', index, text: (next[at] as { text: string }).text + text };
+  return next;
+}
+
+/** Upsert a block at its index — a later ready/invalid REPLACES the partial placeholder. */
+function upsertBlock(segments: Segment[], block: UiBlockEvent): Segment[] {
+  const at = segments.findIndex((s) => s.index === block.segment && s.kind === 'block');
+  if (at < 0) return [...segments, { kind: 'block', index: block.segment, block }];
+  const next = segments.slice();
+  next[at] = { kind: 'block', index: block.segment, block };
+  return next;
+}
+
+/** A turn with nothing but whitespace prose is not worth a transcript row. */
+const hasContent = (segments: Segment[]) =>
+  segments.some((s) => (s.kind === 'prose' ? s.text.trim().length > 0 : true));
+
+const byIndex = (segments: Segment[]) => segments.slice().sort((a, b) => a.index - b.index);
 
 interface TranscriptItem {
   id: number;
   role: 'user' | 'assistant' | 'notice' | 'tool' | 'divider';
   text?: string;
+  /** Assistant rows only — the ordered segments of that turn. */
+  segments?: Segment[];
   tool?: { name: string; detail?: string };
 }
 
@@ -60,7 +97,7 @@ interface ChatState {
   sessionId: string | null;
   phase: Phase;
   items: TranscriptItem[];
-  live: string; // streaming assistant text
+  live: Segment[]; // the in-flight assistant turn, as ordered segments
   thinking: string;
   review: ReviewPayload | null;
   // The agent's question when it paused (phase 'awaiting-input'); shown as a prompt to reply to.
@@ -93,7 +130,7 @@ const initialState: ChatState = {
   sessionId: null,
   phase: 'idle',
   items: [],
-  live: '',
+  live: [],
   thinking: '',
   review: null,
   inputQuestion: null,
@@ -131,8 +168,8 @@ type Action =
   | { type: 'busy'; value: boolean };
 
 function flushLive(state: ChatState): TranscriptItem[] {
-  if (!state.live.trim()) return state.items;
-  return [...state.items, { id: nextId(), role: 'assistant', text: state.live }];
+  if (!hasContent(state.live)) return state.items;
+  return [...state.items, { id: nextId(), role: 'assistant', segments: byIndex(state.live) }];
 }
 
 function reducer(state: ChatState, action: Action): ChatState {
@@ -149,7 +186,7 @@ function reducer(state: ChatState, action: Action): ChatState {
           ...(state.items.length ? [{ id: nextId(), role: 'divider' as const }] : []),
           { id: nextId(), role: 'user' as const, text: action.message }
         ],
-        live: '',
+        live: [],
         thinking: '',
         review: null,
         inputQuestion: null,
@@ -178,7 +215,7 @@ function reducer(state: ChatState, action: Action): ChatState {
         ...state,
         phase: action.phase,
         items: [...state.items, { id: nextId(), role: 'user' as const, text: action.message }],
-        live: '',
+        live: [],
         thinking: '',
         review: null,
         inputQuestion: null,
@@ -197,8 +234,18 @@ function reducer(state: ChatState, action: Action): ChatState {
     case 'event': {
       const ev = action.ev;
       switch (ev.kind) {
-        case 'text-delta':
-          return { ...state, live: state.live + (ev.text ?? '') };
+        case 'text-delta': {
+          // `data.segment` is the server scanner's index for this run of prose. Default 0 so a
+          // producer that never segments (an older server, a non-chat caller) still renders.
+          const index = (ev.data as { segment?: number } | undefined)?.segment ?? 0;
+          return { ...state, live: upsertProse(state.live, index, ev.text ?? '') };
+        }
+
+        case 'ui-block': {
+          const block = ev.data as UiBlockEvent | undefined;
+          if (!block) return state;
+          return { ...state, live: upsertBlock(state.live, block) };
+        }
 
         case 'usage': {
           // Authoritative per-run total — commit it to the session usage and clear the live counter
@@ -233,18 +280,18 @@ function reducer(state: ChatState, action: Action): ChatState {
         case 'thinking':
           return { ...state, thinking: state.thinking + (ev.text ?? '') };
 
-        case 'text': {
-          // Full block — authoritative; replaces whatever streamed into `live`.
-          const items = state.live.trim()
-            ? state.items
-            : [...state.items];
+        case 'text':
+          // Full block — authoritative; replaces whatever streamed into `live`. It arrives
+          // unsegmented, so it becomes one prose segment.
           return {
             ...state,
-            items: [...items, { id: nextId(), role: 'assistant', text: ev.text ?? '' }],
-            live: '',
+            items: [
+              ...state.items,
+              { id: nextId(), role: 'assistant', segments: [{ kind: 'prose', index: 0, text: ev.text ?? '' }] }
+            ],
+            live: [],
             thinking: ''
           };
-        }
 
         case 'tool':
           return {
@@ -253,7 +300,7 @@ function reducer(state: ChatState, action: Action): ChatState {
               ...flushLive(state),
               { id: nextId(), role: 'tool', tool: ev.tool }
             ],
-            live: ''
+            live: []
           };
 
         case 'notice':
@@ -263,7 +310,7 @@ function reducer(state: ChatState, action: Action): ChatState {
               ...flushLive(state),
               { id: nextId(), role: 'notice', text: ev.text }
             ],
-            live: ''
+            live: []
           };
 
         case 'phase': {
@@ -273,7 +320,7 @@ function reducer(state: ChatState, action: Action): ChatState {
             phase,
             busy: false,
             items: flushLive(state),
-            live: ''
+            live: []
           };
           if (phase === 'awaiting-diff-approval' && ev.data) {
             next.review = ev.data as ReviewPayload;
@@ -306,7 +353,7 @@ function reducer(state: ChatState, action: Action): ChatState {
             ...state,
             error: ev.text ?? '出错了',
             items: flushLive(state),
-            live: ''
+            live: []
           };
 
         case 'done':
@@ -668,7 +715,16 @@ const CapabilityApprovalCard = memo(function CapabilityApprovalCard({
   );
 });
 
-export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefillNonce?: number }) {
+export function ChatPanel({
+  prefill,
+  prefillNonce,
+  onOpenRecord
+}: {
+  prefill?: string;
+  prefillNonce?: number;
+  /** Open a record file in the reading column — what a rendered block's `openRecord` button does. */
+  onOpenRecord?: (path: string) => void;
+}) {
   const [state, dispatch] = useReducer(reducer, initialState);
   // Restore any unsent draft (closing the drawer unmounts this component).
   const [draft, setDraft] = useState(() => {
@@ -810,8 +866,10 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
     }
   }, [state]);
 
-  const send = useCallback(async () => {
-    const message = draft.trim();
+  // `override` lets a rendered Button's `send` action reuse this EXACT path (gate refine / input
+  // reply / fresh turn, in that order) instead of getting a private route into the agent.
+  const send = useCallback(async (override?: string) => {
+    const message = (override ?? draft).trim();
     const { phase, sessionId } = state;
     try {
       // At a gate: talk back instead of starting a new turn — the agent revises
@@ -863,6 +921,23 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
       dispatch({ type: 'event', ev: { kind: 'error', text } });
     }
   }, [draft, onEvent, state, attachments, systemMode, replyInput, attachTo]);
+
+  // `send` closes over draft + state, so it changes on every keystroke and every event. Route the
+  // rendered buttons through a ref so the handler they receive is REFERENTIALLY STABLE — otherwise
+  // TranscriptRow's memo is defeated and every finished row re-parses its markdown on each delta.
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const sendText = useCallback((text: string) => {
+    setDraft(text);            // the message is visible in the composer, exactly as if typed
+    void sendRef.current(text);
+  }, []);
+
+  const openRecordRef = useRef(onOpenRecord);
+  openRecordRef.current = onOpenRecord;
+  const openRecordStable = useCallback((path: string) => openRecordRef.current?.(path), []);
+  // Stay undefined when the host gave us no way to open a record — a Button renders itself inert
+  // rather than looking clickable and doing nothing.
+  const openRecord = onOpenRecord ? openRecordStable : undefined;
 
   const act = useCallback(
     async (fn: (id: string) => Promise<unknown>) => {
@@ -958,12 +1033,12 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
         )}
 
         {state.items.map((it) => (
-          <TranscriptRow key={it.id} item={it} />
+          <TranscriptRow key={it.id} item={it} onSend={sendText} onOpenRecord={openRecord} />
         ))}
 
-        {state.live.trim() && (
+        {hasContent(state.live) && (
           <div className="chat-msg assistant">
-            <MarkdownView source={state.live} />
+            <SegmentList segments={byIndex(state.live)} onSend={sendText} onOpenRecord={openRecord} />
           </div>
         )}
 
@@ -1183,11 +1258,39 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
   );
 }
 
+/** The ordered segments of one assistant turn — prose rendered as markdown, blocks as trees. */
+function SegmentList({
+  segments, onSend, onOpenRecord
+}: {
+  segments: Segment[];
+  onSend?: (text: string) => void;
+  onOpenRecord?: (path: string) => void;
+}) {
+  return (
+    <>
+      {segments.map((seg) =>
+        seg.kind === 'prose' ? (
+          <MarkdownView key={seg.index} source={seg.text} />
+        ) : (
+          <BlockSegment key={seg.index} block={seg.block} onSend={onSend} onOpenRecord={onOpenRecord} />
+        )
+      )}
+    </>
+  );
+}
+
 // Memoized: a chat turn streams many `text-delta` events; each re-renders
 // ChatPanel. Without memo, every finished message (each a MarkdownView) would
 // re-parse its markdown on every delta. `item` is referentially stable per id,
 // so finished rows stay static and only the live streaming block re-renders.
-const TranscriptRow = memo(function TranscriptRow({ item }: { item: TranscriptItem }) {
+// `onSend`/`onOpenRecord` must be STABLE refs from ChatPanel or this memo is defeated.
+const TranscriptRow = memo(function TranscriptRow({
+  item, onSend, onOpenRecord
+}: {
+  item: TranscriptItem;
+  onSend?: (text: string) => void;
+  onOpenRecord?: (path: string) => void;
+}) {
   if (item.role === 'divider') {
     return <div className="chat-divider" aria-hidden />;
   }
@@ -1197,7 +1300,7 @@ const TranscriptRow = memo(function TranscriptRow({ item }: { item: TranscriptIt
   if (item.role === 'assistant') {
     return (
       <div className="chat-msg assistant">
-        <MarkdownView source={item.text ?? ''} />
+        <SegmentList segments={item.segments ?? []} onSend={onSend} onOpenRecord={onOpenRecord} />
       </div>
     );
   }
