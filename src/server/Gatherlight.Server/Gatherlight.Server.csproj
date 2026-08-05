@@ -16,6 +16,7 @@
        ProjectReference); this project depends on that assembly plus Gatherlight.Planner below. -->
   <ItemGroup>
     <ProjectReference Include="..\Gatherlight.Platform\Gatherlight.Platform.csproj" />
+    <ProjectReference Include="..\Gatherlight.Planner\Gatherlight.Planner.csproj" />
   </ItemGroup>
 
   <!-- Built client (src/client `npm run build` outputs here; gitignored). Copied next to the exe

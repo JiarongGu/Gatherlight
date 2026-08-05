@@ -321,7 +321,11 @@ public static class GatherlightApp
             // Anchored on HealthController: Platform/Kernel is the base module of the whole
             // Platform tree (check-layering's own map has it depend on nothing), so this type can
             // never itself migrate to another assembly out from under the reference.
-            .AddApplicationPart(typeof(Platform.Kernel.HealthController).Assembly);
+            .AddApplicationPart(typeof(Platform.Kernel.HealthController).Assembly)
+            // Same reasoning for the Planner assembly: PlansController is the flagship controller
+            // of the one Product today (Product/Planner has exactly this and Scrapers, which has
+            // none), so it anchors Product.Planner's routes.
+            .AddApplicationPart(typeof(Product.Planner.PlanIndex.PlansController).Assembly);
 
         var app = builder.Build();
 
