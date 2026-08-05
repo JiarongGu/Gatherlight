@@ -2905,6 +2905,26 @@ kbd, .topbar-kbd {
   color: var(--muted);
 }
 
+/* The site's own pages sit just above the two fixed pins, sharing their button so the rail keeps one
+   visual language. They are a GROWING set, so `pin-page` is the quiet variant — no accent wash, a
+   neutral icon tile — and the section never eats the scrolling plan tree (flex: none + its own
+   scroll once there are many pages). */
+.side-pages { flex: none; margin-top: 10px; max-height: 30vh; overflow-y: auto; }
+.side-lib.pin-page { background: none; padding: 7px 12px; }
+.side-lib.pin-page .side-lib-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  font-size: 13px;
+  background: linear-gradient(150deg, var(--border), var(--border-soft));
+  color: var(--muted);
+}
+.side-lib.pin-page .side-lib-zh { font-size: 13.5px; font-weight: 500; }
+.side-lib.pin-page.active .side-lib-icon {
+  background: linear-gradient(150deg, var(--accent-strong), var(--accent));
+  color: #fff8ee;
+}
+
 /* Growing plan-section headers — a lighter, single-line list (small icon + serif 中文 + count) that
    scales as the user's plans grow, deliberately quieter than the two pins above. */
 .side-grow { display: flex; align-items: center; gap: 9px; min-width: 0; }
