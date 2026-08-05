@@ -16,11 +16,13 @@ public sealed class ChatController : ControllerBase
 {
     private readonly ChatSessionService _chat;
     private readonly IUploadService _uploads;
+    private readonly IChatRepository _repo;
 
-    public ChatController(ChatSessionService chat, IUploadService uploads)
+    public ChatController(ChatSessionService chat, IUploadService uploads, IChatRepository repo)
     {
         _chat = chat;
         _uploads = uploads;
+        _repo = repo;
     }
 
     /// <summary>Gate 0 — start a task (agent plans read-only, then awaits approval).</summary>
@@ -88,6 +90,17 @@ public sealed class ChatController : ControllerBase
             error = s.Error,
         });
     }
+
+    /// <summary>Past conversations, newest first. The live stream only replays a session still in
+    /// memory, so this is the only thing that survives a restart.</summary>
+    [HttpGet("api/chat/history")]
+    public async Task<IActionResult> History([FromQuery] int? limit)
+        => Ok(new { conversations = await _repo.HistoryAsync(limit ?? 30) });
+
+    /// <summary>One conversation's stored events, in the SSE wire shape the client's reducer eats.</summary>
+    [HttpGet("api/chat/history/{id}")]
+    public async Task<IActionResult> Conversation(string id)
+        => await _repo.TranscriptAsync(id) is { } t ? Ok(t) : NotFound(new { error = "conversation not found" });
 
     /// <summary>Live event stream (SSE) with full replay of buffered events.</summary>
     [HttpGet("api/chat/{id}/stream")]
