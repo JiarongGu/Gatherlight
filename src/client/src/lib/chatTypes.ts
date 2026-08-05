@@ -1,6 +1,8 @@
 // Frontend mirror of the backend's event/review types. (We can't import the
 // processors workspace package — it pulls in node:child_process.)
 
+import type { UiNode } from '@/ui/blocks/registry';
+
 export type Phase =
   | 'idle'
   | 'planning'
@@ -25,6 +27,7 @@ export interface AgentEvent {
     | 'phase'
     | 'text'
     | 'text-delta'
+    | 'ui-block'
     | 'thinking'
     | 'tool'
     | 'tool-result'
@@ -39,6 +42,18 @@ export interface AgentEvent {
   tool?: { name: string; detail?: string };
   sessionId?: string;
   data?: unknown;
+}
+
+/**
+ * One `ui-block` event. `partial` carries no payload — half a tree is not something to render —
+ * and `invalid` carries the raw text so the user can see what could not be displayed.
+ */
+export interface UiBlockEvent {
+  segment: number;
+  status: 'partial' | 'ready' | 'invalid';
+  node?: UiNode;
+  raw?: string;
+  reason?: string;
 }
 
 /**

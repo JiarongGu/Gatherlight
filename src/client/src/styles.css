@@ -3046,3 +3046,71 @@ kbd, .topbar-kbd {
 .kbup-progress-live { font-size: 11.5px; opacity: 0.85; font-variant-numeric: tabular-nums; }
 .kbup-progress code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); }
 .kbup-btns { display: flex; gap: 8px; }
+
+/* ===================== Declarative UI blocks (S3a) =====================
+   Class names emitted by src/client/src/ui/blocks/* — in the chat transcript and on a site page.
+   Deliberately quiet: a block is content the agent authored, not app chrome demanding attention. */
+.site-page { max-width: var(--maxw-read); margin: 0 auto; padding: 8px 0 40px; }
+.site-page > h1 { font-family: var(--font-display); font-size: 26px; margin: 0 0 18px; }
+
+.ui-card { background: var(--surface); border-color: var(--border); }
+.ui-card-subtitle { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.ui-caption { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.ui-link-host { color: var(--muted); font-size: 11.5px; }
+
+/* A record reference reads as a link, not as a form control. */
+.ui-fileref {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ui-fileref:hover { color: var(--accent-strong); }
+
+.ui-unknown {
+  color: var(--muted);
+  font-size: 12.5px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+
+/* A block still streaming. */
+.ui-block-partial {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  padding: 8px 2px;
+}
+
+/* A block that failed validation. Calm and informational — a household seeing an alarm for a
+   component name we simply do not ship is a support call, not a signal. */
+.ui-block-fallback {
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  padding: 8px 10px;
+  margin: 6px 0;
+}
+.ui-block-fallback-head { font-size: 12.5px; color: var(--text-2); }
+.ui-block-fallback-reason { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.ui-block-fallback pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

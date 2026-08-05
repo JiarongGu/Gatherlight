@@ -501,7 +501,7 @@ function PlannerApp() {
             aria-label="拖拽调整聊天宽度"
           />
         )}
-        <ChatPanel prefill={chatPrefill} prefillNonce={chatPrefillNonce} />
+        <ChatPanel prefill={chatPrefill} prefillNonce={chatPrefillNonce} onOpenRecord={handleSelect} />
       </Drawer>
 
       <CommandPalette
