@@ -6,7 +6,10 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Gatherlight.Server.Platform.Agent.Chat;
 
-public sealed record StartChatRequest(string? Message, List<string>? Attachments, string? Mode);
+/// <summary><c>ContinuesConversationId</c> = the user typed into an opened past conversation; the new
+/// turn joins it and is given that conversation's context. Omitted → the thread-context rule decides.</summary>
+public sealed record StartChatRequest(string? Message, List<string>? Attachments, string? Mode,
+    string? ContinuesConversationId);
 public sealed record RefineRequest(string? Message);
 public sealed record McpApproveRequest(Dictionary<string, string>? Secrets);
 public sealed record CapabilityAllowRequest(bool? Remember);
@@ -47,7 +50,7 @@ public sealed class ChatController : ControllerBase
         try
         {
             var mode = req.Mode == "system" ? "system" : "plan";
-            var s = await _chat.StartChatAsync(message, attachments, mode);
+            var s = await _chat.StartChatAsync(message, attachments, mode, req.ContinuesConversationId);
             return Ok(new { id = s.Id, phase = s.Phase });
         }
         catch (InvalidOperationException ex) when (ex.Message == "BUSY")

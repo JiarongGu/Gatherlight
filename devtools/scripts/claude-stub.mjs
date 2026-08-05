@@ -204,6 +204,21 @@ if (uiCase) {
   process.exit(0);
 }
 
+// --- conversation context echo (e2e-p43) ------------------------------------------------------
+// Reports whether the SERVER put thread context in the prompt — assigning a conversation id without
+// rebuilding its context is a silent no-op the other rows would not catch. The marker is the REAL
+// label PromptHarness.PlanPrompt writes ahead of the turn lines, not a guess. Read from the CURRENT
+// request (uiRequest) so a LATER turn, whose context block quotes this one's message, can't
+// cross-fire; sits after the SCORING branch so a judge prompt still returns its verdict.
+if (uiRequest.includes('CONTEXT_ECHO')) {
+  const marker = prompt.includes('RECENT REQUESTS IN THIS CONVERSATION') && /^- "/m.test(prompt)
+    ? 'CONTEXT_PRESENT' : 'CONTEXT_MISSING';
+  const text = `## 计划(stub)\n\n1. **What the user asked** — ${marker}`;
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  done(text);
+  process.exit(0);
+}
+
 if (readOnly) {
   // Surface whether the server pre-routed discovery (e2e asserts the marker).
   const routed = prompt.includes('SERVER PRE-ROUTING') ? '[pre-routed]' : '[full-gate]';

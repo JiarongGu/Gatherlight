@@ -54,7 +54,7 @@ public interface IChatRepository
     // on chat_session, so it's not a parameter here.
     Task UpsertSessionAsync(string id, string phase, string mode, string userMessage,
         string? attachmentsJson, string? planText, string? claudeSessionId, string? commitSha,
-        string? error, string createdAt);
+        string? error, string createdAt, string? conversationId);
     Task AppendEventAsync(string sessionId, string kind, string payloadJson);
     /// <summary>Sessions left non-terminal by a dead server → error (an in-flight run cannot
     /// survive a restart; the working tree may hold partial edits the user can inspect).</summary>
@@ -67,6 +67,15 @@ public interface IChatRepository
     /// <summary>Every stored event of every turn in one conversation, in order. Null if unknown.</summary>
     Task<ChatTranscript?> TranscriptAsync(string conversationId);
 
+    /// <summary>The ConversationId of the most recent turn, or null when there is none. Read from
+    /// the store rather than held in memory, so a restart does not silently split a conversation.</summary>
+    Task<string?> LatestConversationIdAsync();
+
+    /// <summary>Thread context rebuilt from one conversation's stored turns — used when continuing a
+    /// conversation whose chat_turn window was already cleared. Same one-line-per-turn shape
+    /// PrepareThreadContextAsync produces, so the prompt sees no difference.</summary>
+    Task<string> ConversationContextAsync(string conversationId);
+
     Task<List<ChatTurnRow>> TurnsAsync();
     Task AddTurnAsync(string message, string outcome);
     Task ClearTurnsAsync();
@@ -75,6 +84,10 @@ public interface IChatRepository
 public sealed class ChatRepository : IChatRepository
 {
     private static readonly string[] TerminalPhases = { "committed", "rejected", "cancelled", "error" };
+
+    // Bound what a resumed conversation drags into the prompt — the same spirit as
+    // ChatSessionService.ThreadMaxTurns, applied to replay rather than to the live window.
+    private const int ThreadContextTurns = 8;
 
     private readonly IDbConnectionFactory _db;
     private readonly IConversationStore _convo;
@@ -90,10 +103,10 @@ public sealed class ChatRepository : IChatRepository
     // owns the lyntai_thread/lyntai_message schema (single source of truth — no app conversation tables).
     public async Task UpsertSessionAsync(string id, string phase, string mode, string userMessage,
         string? attachmentsJson, string? planText, string? claudeSessionId, string? commitSha,
-        string? error, string createdAt)
+        string? error, string createdAt, string? conversationId)
     {
         var metadata = new SessionMetadata(phase, mode, userMessage, planText, claudeSessionId, commitSha,
-            error, attachmentsJson).Serialize();
+            error, attachmentsJson, conversationId).Serialize();
         var existing = await _convo.GetThreadAsync(id);
         if (existing is null) await _convo.CreateThreadAsync(id, title: null, metadata: metadata);
         else await _convo.SetThreadMetadataAsync(id, metadata);
@@ -191,6 +204,35 @@ public sealed class ChatRepository : IChatRepository
         return new ChatTranscript(
             conversationId, TitleOf(first.Meta.UserMessage), last.Meta.Phase ?? "",
             last.Meta.Mode ?? "plan", first.Thread.CreatedAt.ToString("o"), events);
+    }
+
+    public async Task<string?> LatestConversationIdAsync()
+    {
+        var threads = await _convo.ListThreadsAsync(limit: 50);
+        var latest = threads.OrderByDescending(t => t.CreatedAt).FirstOrDefault();
+        if (latest is null) return null;
+        var meta = SessionMetadata.Parse(latest.Metadata);
+        return ConversationOf(meta, latest.Id);
+    }
+
+    public async Task<string> ConversationContextAsync(string conversationId)
+    {
+        var threads = await _convo.ListThreadsAsync(limit: 2000);
+        var turns = threads
+            .Select(t => (Thread: t, Meta: SessionMetadata.Parse(t.Metadata)))
+            .Where(x => ConversationOf(x.Meta, x.Thread.Id) == conversationId)
+            .OrderBy(x => x.Thread.CreatedAt)
+            .TakeLast(ThreadContextTurns)
+            .ToList();
+
+        return string.Join('\n', turns.Select(x =>
+        {
+            var msg = TitleOf(x.Meta.UserMessage);
+            var outcome = x.Meta.CommitSha is { Length: > 0 } sha ? $"已提交 {sha}"
+                : x.Meta.Error is { Length: > 0 } err ? $"出错:{err}"
+                : x.Meta.Phase ?? "";
+            return $"- \"{msg}\" → {outcome}";
+        }));
     }
 
     public async Task<List<ChatTurnRow>> TurnsAsync()
