@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd,
+  dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until,
 } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p41');
@@ -96,6 +96,98 @@ try {
   ok('the asset route serves a record image', pixel.status === 200, String(pixel.status));
   ok('the asset route sets an image content type',
     (pixel.headers.get('content-type') ?? '').startsWith('image/'), pixel.headers.get('content-type') ?? '');
+
+  // --- the chat mount ---------------------------------------------------------------------
+  // GET /api/chat/{id} returns a SNAPSHOT (phase, plan, cards) and NOT the event log, so the block
+  // events have to come off the SSE stream — which replays everything buffered on connect. Same
+  // reader shape e2e-p28/p39/p40 use; reading the wire also proves the events actually ship.
+  const streamEvents = async (id, ms = 4000) => {
+    const res = await fetch(`${base}/api/chat/${id}/stream`);
+    const reader = res.body.getReader();
+    let text = '';
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      const race = await Promise.race([reader.read(), new Promise((r) => setTimeout(() => r(null), 400))]);
+      if (!race || race.done) break;
+      text += Buffer.from(race.value).toString('utf8');
+    }
+    reader.cancel().catch(() => {});
+    const events = [];
+    for (const line of text.split('\n')) {
+      const t = line.trim();
+      if (!t.startsWith('data:')) continue;
+      try { events.push(JSON.parse(t.slice(5).trim())); } catch { /* keep-alive / partial frame */ }
+    }
+    return events;
+  };
+
+  // The agent lease is app-wide and a session parked at awaiting-plan-approval STILL holds it, so a
+  // case that isn't released turns the next POST /api/chat into a 409 BUSY. Same shape as p40.
+  const finishUp = (id) => post(`/api/chat/${id}/cancel`).then(() => until(async () => {
+    const s = (await j(`/api/chat/${id}`)).body;
+    return ['committed', 'rejected', 'cancelled', 'error'].includes(s?.phase) ? s : null;
+  }, 15000));
+
+  const blocksFor = async (uiCase) => {
+    const started = await post('/api/chat', { message: `UI_CASE:${uiCase}`, mode: 'plan' });
+    const id = started.body?.id;
+    if (!id) throw new Error(`no session id for ${uiCase}: ${JSON.stringify(started.body)}`);
+    // Wait for the run to REACH a gate. A bare `phase !== 'planning'` passes instantly — a
+    // just-created session is still 'idle' until the background run flips it.
+    await until(async () => {
+      const p = (await j(`/api/chat/${id}`)).body?.phase;
+      return p && p !== 'idle' && p !== 'planning' ? p : null;
+    }, 20000);
+    const events = await streamEvents(id);
+    await finishUp(id);
+    return {
+      blocks: events.filter((e) => e.kind === 'ui-block').map((e) => e.data),
+      prose: events.filter((e) => e.kind === 'text-delta').map((e) => e.text ?? '').join(''),
+      deltas: events.filter((e) => e.kind === 'text-delta'),
+    };
+  };
+
+  const valid = await blocksFor('VALID');
+  ok('valid fence yields exactly one block', valid.blocks.filter((b) => b.status !== 'partial').length === 1,
+    JSON.stringify(valid.blocks.map((b) => b.status)));
+  const ready = valid.blocks.find((b) => b.status === 'ready');
+  ok('valid fence is ready', Boolean(ready), JSON.stringify(valid.blocks));
+  ok('ready block carries the tree', ready?.node?.type === 'Card');
+  ok('ready block keeps its children', ready?.node?.children?.length === 2);
+  ok('the fence payload never leaks into prose', !/"type"\s*:/.test(valid.prose), valid.prose.slice(0, 200));
+  ok('prose around the block survives', /Here is the plan/.test(valid.prose) && /Anything else/.test(valid.prose));
+  // Three segments in index order: prose · block · prose. This is what lets the client interleave
+  // them without guessing where the block belonged.
+  const segments = [
+    ...valid.deltas.map((e) => ({ index: e.data?.segment ?? 0, kind: 'prose' })),
+    ...valid.blocks.filter((b) => b.status !== 'partial').map((b) => ({ index: b.segment, kind: 'block' })),
+  ];
+  const distinct = [...new Set(segments.map((s) => s.index))].sort((a, b) => a - b);
+  ok('the turn splits into three segments', distinct.length === 3, JSON.stringify(segments));
+  ok('the block sits between the two prose segments',
+    segments.find((s) => s.kind === 'block')?.index === distinct[1], JSON.stringify(segments));
+
+  const rejects = [
+    ['UNKNOWN_TYPE', /Gantt/],
+    ['BAD_JSON', /JSON/i],
+    ['BAD_PROP', /colour/],
+    ['BAD_ACTION', /openRecord|outside the site/],
+    ['EVIL_IMAGE', /record path|https/],
+    ['TOO_BIG', /500|nodes/],
+    ['UNTERMINATED', /unterminated/i],
+  ];
+  for (const [name, pattern] of rejects) {
+    const r = await blocksFor(name);
+    const bad = r.blocks.find((b) => b.status === 'invalid');
+    ok(`${name}: block is invalid`, Boolean(bad), JSON.stringify(r.blocks.map((b) => b.status)));
+    ok(`${name}: reason names the cause`, pattern.test(bad?.reason ?? ''), bad?.reason ?? '');
+    ok(`${name}: no ready block slipped through`, !r.blocks.some((b) => b.status === 'ready'));
+  }
+
+  // The positive control for the image rule: https is ALLOWED, matching markdown and the CSP.
+  const remote = await blocksFor('REMOTE_IMAGE');
+  ok('REMOTE_IMAGE: an https image is allowed',
+    remote.blocks.some((b) => b.status === 'ready'), JSON.stringify(remote.blocks));
 } catch (e) {
   fail(e?.stack || String(e));
   console.error(server.log().slice(-3000));

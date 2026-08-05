@@ -5,6 +5,7 @@ using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Models;
 using Gatherlight.Server.Platform.Agent.Llm.Services;
+using Gatherlight.Server.Platform.Agent.Ui.Services;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Models;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Services;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Services.Transport;
@@ -159,6 +160,7 @@ public sealed class ChatSessionService
     private readonly ICapabilityDenialLog _denials;
     private readonly Platform.Site.Services.ISiteManifestStore _manifestStore;
     private readonly ISessionCapabilityAllowance _sessionAllowance;
+    private readonly IUiTreeValidator _uiValidator;
     private readonly ILogger<ChatSessionService> _log;
 
     private const int MaxBuildRepair = 2;
@@ -173,9 +175,10 @@ public sealed class ChatSessionService
         IMcpProvisionService mcpProvision, IMcpLoginService mcpLogin, IMcpServerStore mcpStore,
         IDraftStore drafts, IScriptToolProvider scripts, ICapabilityRegistry capabilities,
         ICapabilityDenialLog denials, Platform.Site.Services.ISiteManifestStore manifestStore,
-        ISessionCapabilityAllowance sessionAllowance,
+        ISessionCapabilityAllowance sessionAllowance, IUiTreeValidator uiValidator,
         ILogger<ChatSessionService> log)
     {
+        _uiValidator = uiValidator;
         _gate = gate;
         _mcpProvision = mcpProvision;
         _mcpLogin = mcpLogin;
@@ -243,6 +246,21 @@ public sealed class ChatSessionService
         s.PersistChain = s.PersistChain.ContinueWith(
             _ => _repo.AppendEventAsync(s.Id, ev.Kind, payload),
             TaskContinuationOptions.ExecuteSynchronously).Unwrap();
+    }
+
+    /// <summary>The chat emit seam: agent text passes through a per-run UiBlockScanner so a ```ui
+    /// fence becomes a validated block event instead of raw JSON in the transcript. Non-text events
+    /// pass through untouched.</summary>
+    private void EmitScanned(ChatSession s, UiBlockScanner scanner, AgentEvent ev)
+    {
+        foreach (var outEv in scanner.Feed(ev)) Emit(s, outEv);
+    }
+
+    /// <summary>Drain what a finished run left in its scanner. EVERY run gets its own scanner and its
+    /// own flush — a scanner reused across runs would carry a half-open fence into the next turn.</summary>
+    private void FlushScanned(ChatSession s, UiBlockScanner scanner)
+    {
+        foreach (var outEv in scanner.Flush()) Emit(s, outEv);
     }
 
     private void SetPhase(ChatSession s, string phase, object? data = null)
@@ -450,9 +468,11 @@ public sealed class ChatSessionService
         s.Abort = new CancellationTokenSource();
         try
         {
+            var scanner = new UiBlockScanner(_uiValidator);
             var res = await _agent.RunAsync(
                 BaseRunOptions(s, prompt, readOnly: true),
-                label: $"chat:{s.Mode}:plan", onEvent: ev => Emit(s, ev), ct: s.Abort.Token);
+                label: $"chat:{s.Mode}:plan", onEvent: ev => EmitScanned(s, scanner, ev), ct: s.Abort.Token);
+            FlushScanned(s, scanner);
             if (s.Cancelled) return; // cancel() owns the terminal state
             s.ClaudeSessionId = res.SessionId;
             s.PlanText = res.FinalText.Trim();
@@ -492,6 +512,7 @@ public sealed class ChatSessionService
         s.Abort = new CancellationTokenSource();
         try
         {
+            var scanner = new UiBlockScanner(_uiValidator);
             var res = await _agent.RunAsync(
                 BaseRunOptions(s,
                     await (IsSystem(s) ? _harness.SystemExecutePrompt(s.PlanText) : _harness.ExecutePrompt(s.PlanText)),
@@ -500,7 +521,8 @@ public sealed class ChatSessionService
                     ResumeToken = s.ClaudeSessionId,
                     SettingsPath = IsSystem(s) ? _env.SystemSettingsPath : _env.SettingsPath,
                 },
-                label: $"chat:{s.Mode}:exec", onEvent: ev => Emit(s, ev), tracker: s.Tracker, ct: s.Abort.Token);
+                label: $"chat:{s.Mode}:exec", onEvent: ev => EmitScanned(s, scanner, ev), tracker: s.Tracker, ct: s.Abort.Token);
+            FlushScanned(s, scanner);
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
             await FinishExecuteAsync(s, res);
@@ -539,14 +561,16 @@ public sealed class ChatSessionService
             }
             Emit(s, new AgentEvent { Kind = "notice", Text = $"❌ 构建失败,让 AI 修复(第 {attempt + 1} 次)…" });
             SetPhase(s, ChatPhase.Executing);
+            var scanner = new UiBlockScanner(_uiValidator);
             await _agent.RunAsync(
                 BaseRunOptions(s, await _harness.RepairPrompt(result.Output), readOnly: false) with
                 {
                     ResumeToken = s.ClaudeSessionId,
                     SettingsPath = _env.SystemSettingsPath,
                 },
-                label: $"chat:{s.Mode}:repair", onEvent: ev => Emit(s, ev), tracker: s.Tracker,
+                label: $"chat:{s.Mode}:repair", onEvent: ev => EmitScanned(s, scanner, ev), tracker: s.Tracker,
                 ct: s.Abort?.Token ?? default);
+            FlushScanned(s, scanner);
             if (s.Cancelled) return result;
         }
     }
@@ -562,9 +586,11 @@ public sealed class ChatSessionService
             var revisePrompt = await (IsSystem(s)
                 ? _harness.SystemRevisePlanPrompt(s.PlanText, feedback)
                 : _harness.RevisePlanPrompt(s.PlanText, feedback));
+            var scanner = new UiBlockScanner(_uiValidator);
             var res = await _agent.RunAsync(
                 BaseRunOptions(s, revisePrompt, readOnly: true) with { ResumeToken = s.ClaudeSessionId },
-                label: $"chat:{s.Mode}:revise-plan", onEvent: ev => Emit(s, ev), ct: s.Abort.Token);
+                label: $"chat:{s.Mode}:revise-plan", onEvent: ev => EmitScanned(s, scanner, ev), ct: s.Abort.Token);
+            FlushScanned(s, scanner);
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
             var text = res.FinalText.Trim();
@@ -716,6 +742,7 @@ public sealed class ChatSessionService
         s.Abort = new CancellationTokenSource();
         try
         {
+            var scanner = new UiBlockScanner(_uiValidator);
             var res = await _agent.RunAsync(
                 BaseRunOptions(s,
                     await (IsSystem(s) ? _harness.SystemReviseExecutePrompt(feedback) : _harness.ReviseExecutePrompt(feedback)),
@@ -724,7 +751,8 @@ public sealed class ChatSessionService
                     ResumeToken = s.ClaudeSessionId,
                     SettingsPath = IsSystem(s) ? _env.SystemSettingsPath : _env.SettingsPath,
                 },
-                label: $"chat:{s.Mode}:revise-exec", onEvent: ev => Emit(s, ev), tracker: s.Tracker, ct: s.Abort.Token);
+                label: $"chat:{s.Mode}:revise-exec", onEvent: ev => EmitScanned(s, scanner, ev), tracker: s.Tracker, ct: s.Abort.Token);
+            FlushScanned(s, scanner);
             if (s.Cancelled) return;
             if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
             await FinishExecuteAsync(s, res);
