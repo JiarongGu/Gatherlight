@@ -29,16 +29,14 @@
          collides with our own Include below (NETSDK1022) unless we clear it first. -->
     <Content Remove="Assets\SiteTemplate\**" />
     <Content Include="Assets\SiteTemplate\**" CopyToOutputDirectory="PreserveNewest" />
-    <!-- The capability sandbox preload (Platform/Capabilities/Sandbox) — loaded via node's import
-         flag before a sandboxed capability's own code; supplies the network denial Node's
-         permission model lacks. Shipped as a build artefact, not embedded, so it stays a single
-         verifiable file. BROKEN as of the S4 Platform-assembly extraction: the source now lives in
-         Gatherlight.Platform, not here, so this path never resolves and the file no longer lands
-         in the output — Condition="Exists(...)" keeps that a silent no-op instead of an MSB3030
-         build failure. Deliberately left unfixed: S4 Task 3 re-wires all asset linking (content
-         copy is not transitive across a ProjectReference) in one pass. -->
-    <Content Include="Platform\Capabilities\Sandbox\Assets\cap-guard.mjs" CopyToOutputDirectory="PreserveNewest"
-             Condition="Exists('Platform\Capabilities\Sandbox\Assets\cap-guard.mjs')" />
+    <!-- The capability sandbox preload lives in the Platform assembly. Content copy is NOT
+         transitive across a ProjectReference, so link it explicitly — and preserve the relative
+         path, because ResourcePaths.CapGuard probes
+         {BaseDirectory}/Platform/Capabilities/Sandbox/Assets. Absent, the launcher refuses to
+         spawn and every network-denied capability stops working, with a green build. -->
+    <Content Include="..\Gatherlight.Platform\Capabilities\Sandbox\Assets\cap-guard.mjs"
+             Link="Platform\Capabilities\Sandbox\Assets\cap-guard.mjs"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

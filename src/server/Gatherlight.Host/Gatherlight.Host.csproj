@@ -43,6 +43,14 @@
     <Content Include="..\Gatherlight.Server\Assets\SiteTemplate\**"
              Link="Assets\SiteTemplate\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" />
+    <!-- The capability sandbox preload lives in the Platform assembly. Content copy is NOT
+         transitive across a ProjectReference, so link it explicitly — and preserve the relative
+         path, because ResourcePaths.CapGuard probes
+         {BaseDirectory}/Platform/Capabilities/Sandbox/Assets. Absent, the launcher refuses to
+         spawn and every network-denied capability stops working, with a green build. -->
+    <Content Include="..\Gatherlight.Platform\Capabilities\Sandbox\Assets\cap-guard.mjs"
+             Link="Platform\Capabilities\Sandbox\Assets\cap-guard.mjs"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
