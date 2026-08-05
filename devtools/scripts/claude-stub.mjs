@@ -188,6 +188,13 @@ if (uiCase) {
       children: Array.from({ length: 600 }, (_, i) => ({ type: 'Text', text: `row ${i}` })),
     })),
     UNTERMINATED: 'Working on it.\n\n```ui\n{ "type": "Card"',
+    // Reports what the SERVER actually put in the prompt. The ui-spec contract is written and
+    // version-gated, but it only does anything if the agent is told to read it — and that pointer
+    // lives in one shared prompt prefix, so an edit there would silently switch the whole feature
+    // off with every other test still green. Reads the WHOLE prompt: the pointer is in the common
+    // preamble, ahead of "THE USER'S REQUEST:".
+    CONTRACT_POINTER: prompt.includes('.claude/ui-spec.md')
+      ? 'CONTRACT_POINTER_PRESENT' : 'CONTRACT_POINTER_MISSING',
   };
   const text = cases[uiCase] ?? `unknown UI_CASE ${uiCase}`;
   // Chunked, so what the suite exercises is the scanner's INCREMENTAL path — a fence marker split

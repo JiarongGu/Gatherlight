@@ -202,6 +202,14 @@ try {
   ok('REMOTE_IMAGE: an https image is allowed',
     remote.blocks.some((b) => b.status === 'ready'), JSON.stringify(remote.blocks));
 
+  // The contract only does anything if the agent is TOLD to read it. Everything else in this suite
+  // would stay green with that pointer deleted — the file would still be seeded, versioned and
+  // correct, and the agent would simply never emit a block. The stub reports what the server
+  // actually sent it.
+  const pointer = await blocksFor('CONTRACT_POINTER');
+  ok('the prompt points the agent at .claude/ui-spec.md',
+    /CONTRACT_POINTER_PRESENT/.test(pointer.prose), pointer.prose.slice(0, 120));
+
   // --- the UI contract is app-managed -------------------------------------------------------
   // LAST in the try on purpose: the version-gate row restarts the server, and every row above
   // expects the first one.

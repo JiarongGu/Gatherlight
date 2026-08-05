@@ -71,6 +71,7 @@ public sealed class PromptHarness : IPromptHarness
         - You may ONLY create or edit files under: plans/, household/, .claude/. Nothing else — a hook enforces this; if you try, you'll be blocked, so don't.
         - NEVER run git commit / git add / git push / git reset / git restore / git checkout, and never delete files with rm. The human reviews your diff and the system commits for you. Just edit files.
         - Keep edits minimal and on-scope. Don't refactor unrelated content.
+        - You can render REAL UI in your replies, not just text: put a ```ui fenced block holding one component tree (JSON) anywhere in your message. Tables, maps, cards and lists read far better than markdown for a family reading this on a phone. The exact component list, props and limits are in .claude/ui-spec.md — read it before your FIRST ```ui block in a session, and use only what it lists: a component it does not name renders as "content this app cannot display". There is no HTML and no script; if you cannot express something with those components, just say so in prose.
         - ALWAYS communicate with the user in Simplified Chinese (简体中文): your plan, explanations, tool-activity narration, and final summary are all in Chinese. Keep proper nouns / file paths / URLs / code as-is. (Plan FILE content still follows each template's own language conventions.)
         """;
 
