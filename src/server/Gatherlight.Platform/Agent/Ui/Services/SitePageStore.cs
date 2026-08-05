@@ -49,15 +49,25 @@ public sealed class SitePageStore : ISitePageStore
             var name = Path.GetFileNameWithoutExtension(file);
             if (!ValidName(name)) continue;
             var title = name;
+            SitePageFile? parsed = null;
             try
             {
-                var parsed = JsonSerializer.Deserialize<SitePageFile>(File.ReadAllText(file), Json);
+                parsed = JsonSerializer.Deserialize<SitePageFile>(File.ReadAllText(file), Json);
                 if (!string.IsNullOrWhiteSpace(parsed?.Title)) title = parsed!.Title;
             }
             catch (JsonException) { /* listed with its file name; Get() reports the real reason */ }
-            pages.Add(new SitePageSummary(name, title));
+            // A malformed page keeps its file-name title and the defaults below — it still appears,
+            // marked, rather than vanishing from the menu with no trace of why.
+            var nav = parsed?.Nav;
+            pages.Add(new SitePageSummary(
+                name, title,
+                Label: string.IsNullOrWhiteSpace(nav?.Label) ? title : nav!.Label!,
+                Order: nav?.Order ?? 1000,
+                Hidden: nav?.Hidden ?? false));
         }
-        return pages;
+        // Declared order first, then name — a page with no order sorts after the ordered ones
+        // rather than jumping to the front.
+        return pages.OrderBy(p => p.Order).ThenBy(p => p.Name, StringComparer.Ordinal).ToList();
     }
 
     public SitePageView? Get(string name)

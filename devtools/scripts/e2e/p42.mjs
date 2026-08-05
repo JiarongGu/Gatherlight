@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, claudeStubCmd,
+  dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd,
 } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p42');
@@ -18,6 +18,7 @@ const PORT = 5486;
 
 const server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const base = server.base ?? `http://127.0.0.1:${PORT}`;
+const { j } = makeClient(base);
 
 // Ask the generated scope guard whether a write would be allowed. Mirrors p24's invocation: run the
 // hook with a PreToolUse payload on stdin and read its decision.
@@ -43,8 +44,8 @@ try {
     guardBody.match(/WRITE_DIRS = .*/)?.[0] ?? '(no guard)');
 
   // POSITIVE CONTROL first — if this fails, every denial below is meaningless.
-  const page = wouldAllow('ui/tokyo.json');
-  ok('a page file is writable', page.allowed, page.out.slice(0, 160));
+  const pageWrite = wouldAllow('ui/tokyo.json');
+  ok('a page file is writable', pageWrite.allowed, pageWrite.out.slice(0, 160));
   const md = wouldAllow('ui/notes.md');
   ok('a .md under ui/ is denied', !md.allowed);
   ok('the denial names the extension rule', /\.json/.test(md.out), md.out.slice(0, 160));
@@ -56,6 +57,26 @@ try {
   // The other write dirs are untouched by the new rule.
   ok('plans/ is still writable', wouldAllow('plans/trips/x.md').allowed);
   ok('state/ is still denied', !wouldAllow('state/gatherlight.db').allowed);
+
+  // --- navigation ---------------------------------------------------------------------------
+  const uiDir = path.join(dataDir, 'ui');
+  fs.mkdirSync(uiDir, { recursive: true });
+  const page = (name, body) => fs.writeFileSync(path.join(uiDir, `${name}.json`), JSON.stringify(body, null, 2), 'utf8');
+  const leaf = (text) => ({ type: 'Text', text });
+
+  page('zzz-ordered', { title: 'Ordered page', nav: { label: '第一', order: 1 }, root: leaf('a') });
+  page('aaa-plain', { title: 'Plain page', root: leaf('b') });
+  page('secret', { title: 'Hidden page', nav: { hidden: true }, root: leaf('c') });
+
+  const pages = (await j('/api/ui/pages')).body ?? [];
+  const named = (n) => pages.find((p) => p.name === n);
+  ok('a page with nav.order sorts first despite its name',
+    pages.filter((p) => !p.hidden)[0]?.name === 'zzz-ordered', pages.map((p) => p.name).join(','));
+  ok('nav.label wins over the title', named('zzz-ordered')?.label === '第一', named('zzz-ordered')?.label ?? '');
+  ok('a page with no nav falls back to its title', named('aaa-plain')?.label === 'Plain page');
+  ok('a hidden page is marked hidden', named('secret')?.hidden === true);
+  ok('a hidden page is still fetchable by name',
+    (await j('/api/ui/pages/secret')).body?.status === 'ready');
 } catch (e) {
   fail(e?.stack || String(e));
   console.error(server.log().slice(-3000));
