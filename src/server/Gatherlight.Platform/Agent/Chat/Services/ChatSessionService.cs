@@ -171,6 +171,7 @@ public sealed class ChatSessionService
     private readonly ISessionCapabilityAllowance _sessionAllowance;
     private readonly IUiTreeValidator _uiValidator;
     private readonly IPageReviewService _pageReview;
+    private readonly Platform.Hosting.Security.Services.IInternalMcpEndpoint _internalMcp;
     private readonly ILogger<ChatSessionService> _log;
 
     private const int MaxBuildRepair = 2;
@@ -186,10 +187,12 @@ public sealed class ChatSessionService
         IDraftStore drafts, IScriptToolProvider scripts, ICapabilityRegistry capabilities,
         ICapabilityDenialLog denials, Platform.Site.Services.ISiteManifestStore manifestStore,
         ISessionCapabilityAllowance sessionAllowance, IUiTreeValidator uiValidator,
-        IPageReviewService pageReview, ILogger<ChatSessionService> log)
+        IPageReviewService pageReview, Platform.Hosting.Security.Services.IInternalMcpEndpoint internalMcp,
+        ILogger<ChatSessionService> log)
     {
         _uiValidator = uiValidator;
         _pageReview = pageReview;
+        _internalMcp = internalMcp;
         _gate = gate;
         _mcpProvision = mcpProvision;
         _mcpLogin = mcpLogin;
@@ -465,7 +468,11 @@ public sealed class ChatSessionService
         ToolPolicy = readOnly ? AgentToolPolicy.ReadOnly : AgentToolPolicy.Write,
         Model = _appConfig.Get("llm.model.chat"),
         TimeoutSeconds = ChatTimeoutSeconds,
-        McpConfigPath = File.Exists(_env.McpConfigPath) ? _env.McpConfigPath : null,
+        // The agent's tools come from the loopback channel, not the public listener — so they work
+        // whatever TLS/token/bind the household configured. Built per run from the live port: no
+        // generated file, nothing on disk to go stale. Naming a server does not pre-approve its
+        // tools, so AllowedTools below still does that job.
+        McpServers = AgentMcpWiring.ServersFor(_internalMcp, _tools),
         // Pre-approve registry tools so the headless run never stalls on a permission prompt.
         AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : Array.Empty<string>(),
     };

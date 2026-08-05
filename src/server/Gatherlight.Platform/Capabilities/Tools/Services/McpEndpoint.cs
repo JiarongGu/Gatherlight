@@ -5,8 +5,10 @@ using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 namespace Gatherlight.Server.Platform.Capabilities.Tools.Services;
 
 /// <summary>
-/// Minimal MCP "streamable HTTP" endpoint bridging the tool registry to the spawned claude CLI
-/// (configured via state/mcp.chat.json as <c>{"type":"http","url":"http://127.0.0.1:{port}/mcp"}</c>).
+/// Minimal MCP "streamable HTTP" endpoint bridging the tool registry to the spawned claude CLI.
+/// Mapped on BOTH listeners: the public one (for external MCP clients, behind the access gate) and
+/// the agent's loopback-only channel, which is the one a spawned run is actually pointed at — see
+/// <c>Platform/Agent/Llm/Services/AgentMcpWiring</c> and <c>IInternalMcpEndpoint</c>.
 /// Hand-rolled JSON-RPC (initialize / tools/list / tools/call) instead of the prerelease MCP SDK —
 /// our tools are plain string-returning functions, and plain-JSON responses are within spec for
 /// POST when the server chooses not to stream.

@@ -89,11 +89,14 @@ try {
     params: { name: 'extract', arguments: {} } });
   ok('mcp tool failure → isError result', mcpBad.body?.result?.isError === true);
 
-  // --- chat integration: mcp config generated + allowlist passed ----------------------
-  const mcpCfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'state', 'mcp.chat.json'), 'utf8'));
-  ok('mcp.chat.json generated with http url',
-    mcpCfg.mcpServers?.['planner-tools']?.type === 'http'
-    && mcpCfg.mcpServers?.['planner-tools']?.url === `http://127.0.0.1:${PORT}/mcp`);
+  // --- chat integration: how a spawned agent reaches this registry --------------------
+  // No longer a generated state/mcp.chat.json naming the PUBLIC listener — a run is pointed at the
+  // loopback channel instead (AgentMcpWiring), built per run from the live port. p44 owns the
+  // channel's own coverage; these two rows only assert the old file is not resurrected next to it.
+  ok('no generated mcp.chat.json', !fs.existsSync(path.join(dataDir, 'state', 'mcp.chat.json')));
+  const channel = (await j('/api/manage/agent-mcp')).body;
+  ok('the agent MCP channel is bound, and is not the public port',
+    (channel?.port ?? 0) > 0 && channel.port !== PORT, JSON.stringify(channel));
 } catch (err) {
   fail('e2e-p3 fatal: ' + err.message);
   console.error(srv.log().slice(-3000));

@@ -52,7 +52,7 @@ try {
   writeSettings({});
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
   const base = server.base ?? `http://127.0.0.1:${PORT}`;
-  const { j } = makeClient(base);
+  const { j, post } = makeClient(base);
   await waitHealthy(base, 60000);
 
   const ch = (await j('/api/manage/agent-mcp')).body;
@@ -70,8 +70,24 @@ try {
   const apiOnChannel = await fetch(`http://127.0.0.1:${ch.port}/api/health`);
   ok('the channel is not a second door into /api', apiOnChannel.status === 404, String(apiOnChannel.status));
 
-  // (The `state/mcp.chat.json is gone` row belongs to Task 3, which deletes its generator — the file
-  // is still written at startup today.)
+  ok('the generated mcp.chat.json is gone', !fs.existsSync(path.join(dataDir, 'state', 'mcp.chat.json')));
+
+  // The rows above test the CHANNEL. This one tests the AGENT: drive a real turn through the stub and
+  // have it report the MCP servers the config it was handed actually named. `planner-tools` is the
+  // load-bearing part — AllowedTools are mcp__planner-tools__*, so any other name would leave every
+  // tool un-approved with nothing anywhere saying so.
+  const started = await post('/api/chat', { message: 'MCP_ECHO 看看工具', mode: 'plan' });
+  const id = started.body?.id;
+  if (!id) throw new Error(`no session id: ${JSON.stringify(started.body)}`);
+  await until(async () => {
+    const p = (await j(`/api/chat/${id}`)).body?.phase;
+    return p && p !== 'idle' && p !== 'planning';
+  }, 60000);
+  const plan = (await j(`/api/chat/${id}`)).body?.plan ?? '';
+  ok('the spawned agent is given the planner-tools server',
+    /MCP_SERVERS:[^\n]*planner-tools/.test(plan), plan.slice(0, 160));
+  await post(`/api/chat/${id}/cancel`);
+
   server.stop();
   await settle();
 
