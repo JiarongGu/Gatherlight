@@ -105,6 +105,19 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `phase` event's `Data`, a POST through `FireAndAck` supplies the decision, and a FRESH run carries
   `ResumeToken`. A marker naming something that does not exist must NOT park — a gate with nothing to
   decide wedges the session and holds the app-wide agent lease.
+- **Chat history is the stored event stream, replayed.** Every agent event is persisted as its SSE
+  payload verbatim (`AppendEventAsync` → `lyntai_message`), so `GET /api/chat/history{,/id}` returns
+  the wire shape and the client feeds it to the SAME reducer the live stream feeds — one renderer, no
+  history view to drift. Two traps found by building it: the **user's** message is not an agent event
+  (it lives in the turn metadata), so `TranscriptAsync` synthesizes a `kind:"user"` event per turn or
+  a replay shows only the agent's half; and a **thread is one turn** — the conversation the user sees
+  is the run of turns sharing a `ConversationId` in the thread's app-owned metadata, a new one
+  beginning exactly when `PrepareThreadContextAsync` decides on a fresh slate (idle · turn cap ·
+  post-commit). Assigning that id is not enough to resume one: `chat_turn` was cleared, so the
+  context is rebuilt from the conversation's stored turns (`ConversationContextAsync`) or the agent
+  starts blank while every other check stays green. A replayed gate renders its card **without
+  actions** — the in-memory session that could act on it is gone, and an Approve button that silently
+  does nothing is worse than a finished decision.
 - **Cards are platform chrome; the agent's words are labelled as its claim.** Permission clauses are
   rendered server-side from the enforced grant (`PermissionSentence`), never from agent text, and a
   clause with no enforcement behind it is a defect — the household is trusting the sentence, not the
