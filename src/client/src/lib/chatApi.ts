@@ -64,6 +64,17 @@ export const getMcpLoginStatus = (serverId: string) =>
   get<{ loggedIn: boolean; detail: string }>(`/api/manage/mcp-servers/${serverId}/login/status`);
 export const continueLogin = (id: string) => post(`/api/chat/${id}/login/continue`);
 
+// The assistant wrote a tool and wants it enabled (awaiting-draft-approval). Approve enables it
+// for this session and resumes the agent; reject declines and the agent continues without it.
+export const approveDraft = (id: string) => post(`/api/chat/${id}/draft/approve`);
+export const rejectDraft = (id: string) => post(`/api/chat/${id}/draft/reject`);
+
+// A capability call was refused mid-run and the agent is asking to widen its grant
+// (awaiting-capability-approval). `remember` persists the grant beyond this one call.
+export const allowCapability = (id: string, remember: boolean) =>
+  post(`/api/chat/${id}/capability/allow`, { remember });
+export const denyCapability = (id: string) => post(`/api/chat/${id}/capability/deny`);
+
 /**
  * Subscribe to a session's event stream. Returns a close() fn.
  * Reconnects are handled by the browser's EventSource automatically: each frame carries an `id:`,

@@ -12,6 +12,8 @@ export type Phase =
   | 'awaiting-input'
   | 'awaiting-mcp-approval'
   | 'awaiting-login'
+  | 'awaiting-draft-approval'
+  | 'awaiting-capability-approval'
   | 'committing'
   | 'committed'
   | 'rejected'
@@ -104,6 +106,36 @@ export interface McpLoginView {
   message: string;
 }
 
+/**
+ * Shown at the awaiting-draft-approval gate: the assistant wrote a tool and wants it enabled.
+ * `can`/`cannot` are rendered by the SERVER from its reading of the enforced grant — the
+ * authoritative statement. `description` is the assistant's own words about what it built and
+ * why; render it visibly as a claim, never merged into the same visual register as `can`/`cannot`.
+ */
+export interface DraftApprovalView {
+  id: string;
+  title: string;
+  description: string;
+  can: string[];
+  cannot: string[];
+  entrySource: string;
+}
+
+/**
+ * Shown at the awaiting-capability-approval gate: a capability call was refused mid-run and the
+ * agent is asking the human to widen (or confirm) its grant. `can`/`cannot` are the server's
+ * reading of the enforced grant; `agentReason` is the assistant's own account of why it wants the
+ * capability — never presented as if it carries the same authority as `can`/`cannot`.
+ */
+export interface CapabilityApprovalView {
+  id: string;
+  origin: string;
+  state: string;
+  can: string[];
+  cannot: string[];
+  agentReason: string;
+}
+
 export const PHASE_LABELS: Record<Phase, string> = {
   idle: '待命',
   planning: '调研拟定计划',
@@ -115,6 +147,8 @@ export const PHASE_LABELS: Record<Phase, string> = {
   'awaiting-input': '待你回复',
   'awaiting-mcp-approval': '待确认 MCP 服务',
   'awaiting-login': '待登录',
+  'awaiting-draft-approval': '待批准新工具',
+  'awaiting-capability-approval': '待处理权限请求',
   committing: '提交中',
   committed: '已提交',
   rejected: '已撤销',

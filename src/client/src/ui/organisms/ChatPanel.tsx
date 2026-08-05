@@ -1,10 +1,13 @@
 import { useEffect, useReducer, useRef, useCallback, useState, memo } from 'react';
-import { Button, Input, Alert, Tag, Spin, Switch, Tooltip, IconButton, Stepper as StepperBar } from '@/ui/atoms';
+import { Button, Input, Alert, Tag, Spin, Switch, Tooltip, IconButton, Collapse, Stepper as StepperBar } from '@/ui/atoms';
 import {
   SendOutlined,
   RobotOutlined,
   ToolOutlined,
   CheckCircleFilled,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  MessageOutlined,
   StopOutlined,
   PaperClipOutlined
 } from '@ant-design/icons';
@@ -25,6 +28,10 @@ import {
   rejectMcp,
   getMcpLoginStatus,
   continueLogin,
+  approveDraft,
+  rejectDraft,
+  allowCapability,
+  denyCapability,
   getActiveSession,
   cancelChat,
   uploadFiles
@@ -35,6 +42,8 @@ import {
   type ReviewPayload,
   type McpProposalView,
   type McpLoginView,
+  type DraftApprovalView,
+  type CapabilityApprovalView,
   type UploadedFile,
   PHASE_LABELS
 } from '@/lib/chatTypes';
@@ -62,6 +71,11 @@ interface ChatState {
   mcpProposal: McpProposalView | null;
   // The agent's request to log into an MCP server (phase 'awaiting-login').
   mcpLogin: McpLoginView | null;
+  // The agent wrote a tool and wants it enabled (phase 'awaiting-draft-approval').
+  draftApproval: DraftApprovalView | null;
+  // A capability call was refused mid-run; the agent is asking to widen its grant
+  // (phase 'awaiting-capability-approval').
+  capabilityApproval: CapabilityApprovalView | null;
   commitSha: string | null;
   error: string | null;
   busy: boolean; // an approve/reject request is in flight
@@ -86,6 +100,8 @@ const initialState: ChatState = {
   inputOptions: [],
   mcpProposal: null,
   mcpLogin: null,
+  draftApproval: null,
+  capabilityApproval: null,
   commitSha: null,
   error: null,
   busy: false,
@@ -140,6 +156,8 @@ function reducer(state: ChatState, action: Action): ChatState {
         inputOptions: [],
         mcpProposal: null,
         mcpLogin: null,
+        draftApproval: null,
+        capabilityApproval: null,
         commitSha: null,
         error: null,
         busy: false,
@@ -167,6 +185,8 @@ function reducer(state: ChatState, action: Action): ChatState {
         inputOptions: [],
         mcpProposal: null,
         mcpLogin: null,
+        draftApproval: null,
+        capabilityApproval: null,
         error: null,
         busy: false
       };
@@ -269,6 +289,12 @@ function reducer(state: ChatState, action: Action): ChatState {
           if (phase === 'awaiting-login') {
             next.mcpLogin = (ev.data as McpLoginView) ?? null;
           }
+          if (phase === 'awaiting-draft-approval') {
+            next.draftApproval = (ev.data as DraftApprovalView) ?? null;
+          }
+          if (phase === 'awaiting-capability-approval') {
+            next.capabilityApproval = (ev.data as CapabilityApprovalView) ?? null;
+          }
           if (phase === 'committed' && ev.data) {
             next.commitSha = (ev.data as { sha?: string }).sha ?? null;
           }
@@ -287,6 +313,12 @@ function reducer(state: ChatState, action: Action): ChatState {
           return { ...state, busy: false };
 
         default:
+          // A new server event kind that this reducer doesn't know about yet would otherwise be
+          // dropped with zero trace — silent in prod is fine, silent in dev costs hours. DEV-only
+          // so it never fires for a real user.
+          if (import.meta.env.DEV) {
+            console.warn(`[ChatPanel] unhandled event kind: ${(ev as AgentEvent).kind}`);
+          }
           return state;
       }
     }
@@ -314,6 +346,8 @@ const STEP_ORDER: Record<string, number> = {
   'awaiting-input': 2,
   'awaiting-mcp-approval': 2,
   'awaiting-login': 2,
+  'awaiting-draft-approval': 2,
+  'awaiting-capability-approval': 2,
   committing: 4,
   committed: 4
 };
@@ -493,6 +527,141 @@ const McpLoginCard = memo(function McpLoginCard({
               </Button>
             </>
           )}
+        </div>
+      }
+    />
+  );
+});
+
+/** The two permission clauses at the heart of both grant cards below. `can`/`cannot` are rendered
+ *  by the SERVER from its reading of the enforced grant — never something the assistant wrote —
+ *  so this is styled as a structured record (icons + two columns), deliberately NOT a prose block,
+ *  to keep it visually unmistakable from the assistant's own words shown alongside it. */
+function GrantClauses({ can, cannot }: { can: string[]; cannot: string[] }) {
+  return (
+    <div className="grant-clauses">
+      <div className="grant-clause-col grant-can">
+        <div className="grant-clause-title"><CheckCircleOutlined /> 系统允许</div>
+        {can.length > 0 ? (
+          <ul>{can.map((c, i) => <li key={i}>{c}</li>)}</ul>
+        ) : (
+          <div className="grant-clause-empty">(无)</div>
+        )}
+      </div>
+      <div className="grant-clause-col grant-cannot">
+        <div className="grant-clause-title"><CloseCircleOutlined /> 系统禁止</div>
+        {cannot.length > 0 ? (
+          <ul>{cannot.map((c, i) => <li key={i}>{c}</li>)}</ul>
+        ) : (
+          <div className="grant-clause-empty">(无)</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Something the assistant itself wrote — a tool's `description`, an escalation's `agentReason`.
+ *  Rendered as a visible quote (icon + label + italic text), never left to blend into the
+ *  surrounding system copy: an injected agent writes a reassuring description exactly when it
+ *  matters most, so the UI has to make plain whose words these are. */
+function AssistantClaim({ text }: { text: string }) {
+  return (
+    <div className="grant-claim">
+      <div className="grant-claim-label"><MessageOutlined /> AI 是这么说的</div>
+      <div className="grant-claim-text">{text}</div>
+    </div>
+  );
+}
+
+/** The awaiting-draft-approval gate: the assistant wrote a tool during this run and wants it
+ *  enabled. No path here enables anything by default — closing or ignoring the card leaves the
+ *  tool disabled; only an explicit 启用 click does. */
+const DraftApprovalCard = memo(function DraftApprovalCard({
+  draft,
+  busy,
+  onApprove,
+  onReject
+}: {
+  draft: DraftApprovalView;
+  busy: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      style={{ margin: '8px 0' }}
+      message={`AI 写了一个新工具,想要启用:${draft.title}`}
+      description={
+        <div>
+          <AssistantClaim text={draft.description} />
+          <GrantClauses can={draft.can} cannot={draft.cannot} />
+          <Collapse
+            ghost
+            size="small"
+            items={[
+              {
+                key: 'src',
+                label: '查看代码',
+                children: <pre className="grant-code">{draft.entrySource}</pre>
+              }
+            ]}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <Button type="primary" loading={busy} onClick={onApprove}>
+              启用 Enable
+            </Button>
+            <Button danger loading={busy} onClick={onReject}>
+              不用 No thanks
+            </Button>
+          </div>
+        </div>
+      }
+    />
+  );
+});
+
+/** The awaiting-capability-approval gate: a capability call was refused mid-run and the agent is
+ *  asking the human to widen (or confirm) what it can do. Three explicit outcomes, no default —
+ *  仅此一次 grants nothing beyond this one call, 一直允许 persists the grant, 不允许 refuses. */
+const CapabilityApprovalCard = memo(function CapabilityApprovalCard({
+  capability,
+  busy,
+  onAllowOnce,
+  onAllowAlways,
+  onDeny
+}: {
+  capability: CapabilityApprovalView;
+  busy: boolean;
+  onAllowOnce: () => void;
+  onAllowAlways: () => void;
+  onDeny: () => void;
+}) {
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      style={{ margin: '8px 0' }}
+      message={`AI 请求了一项被拒绝的权限:${capability.id}`}
+      description={
+        <div>
+          <div style={{ marginBottom: 6, fontSize: 12, opacity: 0.85 }}>
+            请求来自:<code>{capability.origin}</code> · 当前状态:<code>{capability.state}</code>
+          </div>
+          <AssistantClaim text={capability.agentReason} />
+          <GrantClauses can={capability.can} cannot={capability.cannot} />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+            <Button type="primary" loading={busy} onClick={onAllowOnce}>
+              仅此一次 Allow once
+            </Button>
+            <Button loading={busy} onClick={onAllowAlways}>
+              一直允许 Always allow
+            </Button>
+            <Button danger loading={busy} onClick={onDeny}>
+              不允许 Deny
+            </Button>
+          </div>
         </div>
       }
     />
@@ -871,6 +1040,25 @@ export function ChatPanel({ prefill, prefillNonce }: { prefill?: string; prefill
             sessionId={state.sessionId}
             cancelling={cancelling}
             onCancel={() => void cancel()}
+          />
+        )}
+
+        {state.phase === 'awaiting-draft-approval' && state.draftApproval && (
+          <DraftApprovalCard
+            draft={state.draftApproval}
+            busy={state.busy}
+            onApprove={() => act(approveDraft)}
+            onReject={() => act(rejectDraft)}
+          />
+        )}
+
+        {state.phase === 'awaiting-capability-approval' && state.capabilityApproval && (
+          <CapabilityApprovalCard
+            capability={state.capabilityApproval}
+            busy={state.busy}
+            onAllowOnce={() => act((id) => allowCapability(id, false))}
+            onAllowAlways={() => act((id) => allowCapability(id, true))}
+            onDeny={() => act(denyCapability)}
           />
         )}
 
