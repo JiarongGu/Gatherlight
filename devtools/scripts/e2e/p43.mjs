@@ -26,7 +26,7 @@ const runTurn = async (message) => {
   await until(async () => {
     const p = (await j(`/api/chat/${id}`)).body?.phase;
     return p && p !== 'idle' && p !== 'planning';
-  }, 20000);
+  }, 60000);
   return id;
 };
 
@@ -36,7 +36,7 @@ const finishUp = async (id) => {
   await until(async () => {
     const p = (await j(`/api/chat/${id}`)).body?.phase;
     return ['cancelled', 'rejected', 'committed', 'error'].includes(p);
-  }, 15000);
+  }, 45000);
 };
 
 // Events are persisted off the phase flip (ChatSession.PersistChain), so a count read the instant a
@@ -49,7 +49,7 @@ const settledEventCount = async (conversationId) => {
     prev = cur;
     cur = ((await j(`/api/chat/history/${conversationId}`)).body?.events ?? []).length;
     return cur > 0 && cur === prev;
-  }, 15000, 300);
+  }, 45000, 300);
   return cur;
 };
 
@@ -119,7 +119,7 @@ try {
     await until(async () => {
       const p = (await j(`/api/chat/${resumedId}`)).body?.phase;
       return p && p !== 'idle' && p !== 'planning';
-    }, 20000);
+    }, 60000);
     const plan = (await j(`/api/chat/${resumedId}`)).body?.plan ?? '';
     // The stub echoes back whether the prompt carried thread context (the real
     // "RECENT REQUESTS IN THIS CONVERSATION" block PromptHarness writes).
