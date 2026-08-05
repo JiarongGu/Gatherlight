@@ -691,6 +691,33 @@ h1, h2, h3, .u-display { font-family: var(--font-display); letter-spacing: -0.01
 }
 .chat-title { font-weight: 600; }
 
+/* --- conversation history (chat panel) --- */
+.chat-history { display: flex; flex-direction: column; gap: 2px; padding: 6px 4px; }
+.chat-history-row {
+  display: flex; flex-direction: column; gap: 3px;
+  width: 100%; text-align: left;
+  background: none; border: 0; border-radius: var(--radius-sm);
+  padding: 8px 10px; cursor: pointer;
+  font-family: var(--font-body); color: var(--text);
+}
+.chat-history-row:hover { background: var(--surface-2); }
+.chat-history-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.chat-history-row.is-active { background: var(--accent-soft); }
+.chat-history-title {
+  font-size: 13.5px; line-height: 1.35;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-history-meta {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; color: var(--muted);
+}
+.chat-history-empty { padding: 24px 12px; text-align: center; color: var(--muted); font-size: 13px; }
+.chat-historical-note {
+  padding: 7px 12px; margin-bottom: 8px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text-2); font-size: 12.5px;
+}
+
 /* Resize handle — drag the drawer's left edge to widen/narrow the chat console */
 .chat-resizer {
   position: absolute;

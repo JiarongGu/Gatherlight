@@ -9,6 +9,7 @@ export { TopBar } from './TopBar';
 export { NotificationBell } from './NotificationBell';
 export { CommandPalette } from './CommandPalette';
 export { ChatPanel } from './ChatPanel';
+export { ChatHistory } from './ChatHistory';
 export { TripAssets } from './TripAssets';
 export { PlanActionsMenu, type ActionTarget } from './PlanActionsMenu';
 export { TripMap } from './TripMap';

@@ -35,6 +35,34 @@ export async function uploadFiles(files: File[]): Promise<UploadedFile[]> {
 export const getActiveSession = () =>
   get<{ active: boolean; id: string | null; phase: string | null }>('/api/chat/active');
 
+/** One past conversation in the history list. `title` is the first user message, trimmed. */
+export interface ConversationRow {
+  id: string;
+  title: string;
+  phase: string;
+  mode: string;
+  createdAt: string;
+  turns: number;
+}
+
+export interface ConversationTranscript {
+  id: string;
+  title: string;
+  phase: string;
+  mode: string;
+  createdAt: string;
+  /** Stored SSE payloads, verbatim — fed straight into the chat reducer. */
+  events: AgentEvent[];
+}
+
+// Past conversations, newest first. The live stream only replays a session still in memory, so
+// this is the only thing that survives a server restart.
+export const getChatHistory = (limit = 30) =>
+  get<{ conversations: ConversationRow[] }>(`/api/chat/history?limit=${limit}`);
+
+export const getConversation = (id: string) =>
+  get<ConversationTranscript>(`/api/chat/history/${encodeURIComponent(id)}`);
+
 export const approvePlan = (id: string) => post(`/api/chat/${id}/plan/approve`);
 export const rejectPlan = (id: string) => post(`/api/chat/${id}/plan/reject`);
 export const approveDiff = (id: string) => post(`/api/chat/${id}/diff/approve`);
