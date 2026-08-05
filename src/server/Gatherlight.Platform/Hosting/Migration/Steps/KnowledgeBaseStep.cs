@@ -23,11 +23,12 @@ public sealed class KnowledgeBaseStep : IMigrationStep
     public async Task RunAsync(CancellationToken ct)
     {
         await _seeder.SeedAsync();
-        // Guard re-issue (a security boundary) + commit a newly-seeded hook so the agent's diffs stay clean.
-        if (_chatEnv.EnsureFiles() is { } seededHook)
+        // Re-issue the app-managed agent files (the scope guard — a security boundary — and the UI
+        // block contract) and commit whatever was newly written, so the agent's own diffs stay clean.
+        if (_chatEnv.EnsureFiles() is { Count: > 0 } seeded)
         {
-            var sha = await _git.CommitPathsAsync(new[] { seededHook }, "seed: chat scope-guard hook", ct);
-            _commits.Record(sha, "seed: chat scope-guard hook", "seed");
+            var sha = await _git.CommitPathsAsync(seeded, "seed: app-managed agent files", ct);
+            _commits.Record(sha, "seed: app-managed agent files", "seed");
         }
         // Best-effort: notify (no token spend) that customized .claude files have shipped improvements.
         try { await _migrator.NotifyIfUpgradesAsync(); }

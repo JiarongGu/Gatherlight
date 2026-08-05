@@ -201,6 +201,35 @@ try {
   const remote = await blocksFor('REMOTE_IMAGE');
   ok('REMOTE_IMAGE: an https image is allowed',
     remote.blocks.some((b) => b.status === 'ready'), JSON.stringify(remote.blocks));
+
+  // --- the UI contract is app-managed -------------------------------------------------------
+  // LAST in the try on purpose: the version-gate row restarts the server, and every row above
+  // expects the first one.
+  const uiSpec = path.join(dataDir, '.claude', 'ui-spec.md');
+  ok('the UI contract is seeded into the data folder', fs.existsSync(uiSpec));
+  const specBody = fs.existsSync(uiSpec) ? fs.readFileSync(uiSpec, 'utf8') : '';
+  ok('the contract carries a version', /UI_CONTRACT_VERSION:\s*\d+/.test(specBody));
+  ok('the contract documents every component',
+    ['Stack', 'Row', 'Card', 'Divider', 'Heading', 'Text', 'List', 'Badge', 'Image', 'Table', 'Map', 'Link', 'FileRef', 'Button']
+      .every((c) => specBody.includes(`\`${c}\``)),
+    'a component is missing from the contract the agent reads');
+  // The contract must name the SAME limits the validator enforces (UiTreeValidator.MaxDepth/MaxNodes)
+  // and the SAME two action verbs (UiActionValidator) — a contract that drifts is worse than none.
+  ok('the contract states the enforced limits', /12 levels/.test(specBody) && /500 nodes/.test(specBody));
+  ok('the contract names both action verbs and no third',
+    specBody.includes('"send"') && specBody.includes('"openRecord"'));
+  // CJK survives the C# raw-string → File.WriteAllText → disk round trip (BOM-less UTF-8 both ends).
+  ok('the contract is not mojibake', specBody.includes('界面块'), specBody.split('\n')[1] ?? '');
+
+  // A stale contract must be REPLACED (unlike knowledge-base content, which is never overwritten).
+  fs.writeFileSync(uiSpec, '<!-- UI_CONTRACT_VERSION: 0 -->\nstale\n', 'utf8');
+  server.stop();
+  await new Promise((r) => setTimeout(r, 800));   // let the port free before rebinding it
+  server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+  await waitHealthy(base);
+  const after = fs.readFileSync(uiSpec, 'utf8');
+  ok('a stale contract is re-issued', /UI_CONTRACT_VERSION:\s*1/.test(after) && after.includes('`Button`'),
+    after.slice(0, 80));
 } catch (e) {
   fail(e?.stack || String(e));
   console.error(server.log().slice(-3000));

@@ -24,7 +24,9 @@ public interface IGitCliService
     /// <summary>Per-file diff for exactly the agent-touched paths. New files diff against NUL,
     /// modified/deleted against HEAD. No-op edits are skipped.</summary>
     Task<List<DiffFile>> BuildDiffAsync(IReadOnlyList<string> paths, CancellationToken ct = default);
-    /// <summary>Stage + commit exactly the given paths. Returns the short sha.</summary>
+    /// <summary>Stage + commit exactly the given paths. Returns the short sha — HEAD's own when the
+    /// paths already match HEAD (an idempotent re-issue has nothing to commit, and that is not an
+    /// error).</summary>
     Task<string> CommitPathsAsync(IReadOnlyList<string> paths, string message, CancellationToken ct = default);
     /// <summary>Commit whatever is currently staged/dirty across the whole tree (seeder/import).
     /// Returns the short sha, or null when there was nothing to commit.</summary>
@@ -226,6 +228,14 @@ public class GitCliService : IGitCliService
         if (rels.Count == 0)
             throw new InvalidOperationException("nothing to commit (all given paths missing or untracked)");
         (await RunAsync(new[] { "add", "--" }.Concat(rels).ToArray(), ct)).ThrowOnError("add");
+        // Nothing staged for these paths means the content already IS HEAD — a version-gated re-issue
+        // that rewrote a file byte-identically (ChatEnvironmentService.EnsureFiles), or a no-op edit.
+        // `git commit` exits 1 on an empty commit, and that used to fail the caller for having nothing
+        // to do — which gated the whole app, because the re-issue runs in an ESSENTIAL migration step.
+        // HEAD already carries the content, so report HEAD rather than invent an empty commit.
+        // (Exit 0 = clean; anything else, including an unexpected git failure, falls through to commit.)
+        var staged = await RunAsync(new[] { "diff", "--cached", "--quiet", "--" }.Concat(rels).ToArray(), ct);
+        if (staged.ExitCode == 0) return await GetShortShaAsync(ct);
         (await RunAsync(new[] { "commit", "-m", message, "--" }.Concat(rels).ToArray(), ct)).ThrowOnError("commit");
         return await GetShortShaAsync(ct);
     }
