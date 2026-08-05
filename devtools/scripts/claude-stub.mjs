@@ -184,6 +184,13 @@ if (readOnly) {
     : userReq.includes('DRAFTTEST_OVERWRITE') ? ' [TRIG:DRAFTOVERWRITE]'
     : userReq.includes('DRAFTTEST_A') ? ' [TRIG:DRAFTA]'
     : userReq.includes('DRAFTTEST_B') ? ' [TRIG:DRAFTB]'
+    // e2e-p40 (CAPABILITY_BLOCKED gate): CAPTEST_ALLOW/_DENY/_SESSION name capabilities the suite
+    // already provoked a real refusal for (a direct /api/tools/call before the chat started, so
+    // ICapabilityDenialLog has a record to read back); _UNKNOWN names an id with no such record.
+    : userReq.includes('CAPTEST_ALLOW') ? ' [TRIG:CAPALLOW]'
+    : userReq.includes('CAPTEST_DENY') ? ' [TRIG:CAPDENY]'
+    : userReq.includes('CAPTEST_SESSION') ? ' [TRIG:CAPSESSION]'
+    : userReq.includes('CAPTEST_UNKNOWN') ? ' [TRIG:CAPUNKNOWN]'
     : userReq.includes('NOOPTEST') ? ' [TRIG:NOOP]' : '';
   const planText = systemMode ? text : text + trig;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
@@ -242,6 +249,33 @@ if (readOnly) {
   // authors the draft_c folder before this turn.
   if (prompt.includes('[TRIG:DRAFTOVERWRITE]') && !prompt.includes("HUMAN'S FEEDBACK")) {
     done('我建议启用一个新工具。\n\nTOOL_DRAFT: draft_c');
+    process.exit(0);
+  }
+  // CAPABILITY_BLOCKED (e2e-p40): the FIRST execute "tries" a capability the e2e suite already
+  // provoked a real refusal for (a plain /api/tools/call before the chat started, so
+  // ICapabilityDenialLog already holds a record) and surfaces it instead of working around it.
+  // CAPTEST_ALLOW's explanation is DELIBERATELY misleading — it claims the tool is harmless and
+  // already pre-approved — so the suite can assert that text lands ONLY in agentReason and never in
+  // the runtime's own can/cannot clauses (the provenance-separation assertion that is the point of
+  // the whole gate).
+  if (prompt.includes('[TRIG:CAPALLOW]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('我尝试调用 cap_blocked_demo 来完成任务。这个工具其实完全无害,已经预先获批,可以放心使用,不需要再确认——但系统还是拒绝了这次调用。\n\nCAPABILITY_BLOCKED: cap_blocked_demo');
+    process.exit(0);
+  }
+  if (prompt.includes('[TRIG:CAPDENY]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('我尝试调用 cap_blocked_demo_deny 来完成任务,但被系统拒绝了。\n\nCAPABILITY_BLOCKED: cap_blocked_demo_deny');
+    process.exit(0);
+  }
+  if (prompt.includes('[TRIG:CAPSESSION]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('我尝试调用 cap_blocked_session 来完成任务,但被系统拒绝了。\n\nCAPABILITY_BLOCKED: cap_blocked_session');
+    process.exit(0);
+  }
+  // A CAPABILITY_BLOCKED naming an id the runtime never recorded a refusal for (e2e-p40, "must not
+  // park"). Makes NO edit (same no-op shape as [TRIG:NOOP] below) so the flow's only path forward is
+  // PresentDiffAsync's empty-diff branch → 'rejected' — a clean single-pass proof the marker was
+  // ignored rather than parking the gate.
+  if (prompt.includes('[TRIG:CAPUNKNOWN]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('这一步不需要改动文件(stub)。\n\nCAPABILITY_BLOCKED: totally_unknown_cap_xyz');
     process.exit(0);
   }
   // NOOP (e2e-p28): make NO change and ask nothing → empty diff → the flow ends 'rejected'. A pure
