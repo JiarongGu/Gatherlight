@@ -14,7 +14,7 @@ import {
   PlanActionsMenu,
   type ActionTarget
 } from '@/ui/organisms';
-import { Home, Library, KnowledgeBase, Manage } from '@/screens';
+import { Home, Library, KnowledgeBase, Manage, SitePage } from '@/screens';
 import { loadPlanData, type PlanData, type PlanFile, type TripAsset } from './lib/collectFiles';
 import { extractHeadings, stripFirstH1 } from './lib/markdown';
 import { buildTripExport, downloadAsFile, downloadTripPDF, isTripFile } from './lib/export';
@@ -35,13 +35,16 @@ const EMPTY_FILES: PlanFile[] = [];
 const EMPTY_ASSETS: TripAsset[] = [];
 
 // Planner view ⇄ URL. Query params keep the desktop-hosted app on the same surface across reloads
-// and let the management console deep-link into it (e.g. `?view=library`, `?path=plans/…`). The
-// `/manage` console and `?gallery` surface are separate top-level routes, handled before this.
-type PlannerView = { path: string | null; library: boolean; knowledge: boolean };
+// and let the management console deep-link into it (e.g. `?view=library`, `?path=plans/…`,
+// `?page=welcome`). The `/manage` console and `?gallery` surface are separate top-level routes,
+// handled before this. Exactly one member of the view is ever set, so the params never mix.
+type PlannerView = { path: string | null; library: boolean; knowledge: boolean; page: string | null };
 function readView(): PlannerView {
-  const none = { path: null, library: false, knowledge: false };
+  const none = { path: null, library: false, knowledge: false, page: null };
   if (typeof location === 'undefined') return none;
   const p = new URLSearchParams(location.search);
+  const page = p.get('page');
+  if (page && page.trim()) return { ...none, page: page.trim() };
   const view = p.get('view');
   if (view === 'library') return { ...none, library: true };
   if (view === 'knowledge') return { ...none, knowledge: true };
@@ -50,7 +53,8 @@ function readView(): PlannerView {
 }
 function viewToUrl(v: PlannerView): string {
   const p = new URLSearchParams();
-  if (v.library) p.set('view', 'library');
+  if (v.page) p.set('page', v.page);
+  else if (v.library) p.set('view', 'library');
   else if (v.knowledge) p.set('view', 'knowledge');
   else if (v.path) p.set('path', v.path);
   const qs = p.toString();
@@ -91,6 +95,8 @@ function PlannerApp() {
   // (Library) and the 智库 (Knowledge Base — the AI-infra corpus). Only one is active at a time.
   const [showLibrary, setShowLibrary] = useState(initialView.library);
   const [showKnowledge, setShowKnowledge] = useState(initialView.knowledge);
+  // An agent-authored site page (`{data}/ui/<name>.json`), rendered from the validated block tree.
+  const [activePage, setActivePage] = useState<string | null>(initialView.page);
 
   const screens = useBreakpoint();
   const isMobile = !screens.md; // md = 768px
@@ -225,9 +231,9 @@ function PlannerApp() {
   // land on the same surface and back/forward work. pushState keeps the pathname (`/`) unchanged, so
   // the `/manage`·`?gallery` route guards above stay stable.
   useEffect(() => {
-    const url = viewToUrl({ path: activePath, library: showLibrary, knowledge: showKnowledge });
+    const url = viewToUrl({ path: activePath, library: showLibrary, knowledge: showKnowledge, page: activePage });
     if (url !== location.pathname + location.search) window.history.pushState(null, '', url);
-  }, [activePath, showLibrary, showKnowledge]);
+  }, [activePath, showLibrary, showKnowledge, activePage]);
   // Back/forward → restore the view the URL encodes.
   useEffect(() => {
     const onPop = () => {
@@ -235,6 +241,7 @@ function PlannerApp() {
       setActivePath(v.path);
       setShowLibrary(v.library);
       setShowKnowledge(v.knowledge);
+      setActivePage(v.page);
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -253,6 +260,7 @@ function PlannerApp() {
       setActivePath(path);
       setShowLibrary(false);
       setShowKnowledge(false);
+      setActivePage(null);
       if (isMobile) setSidebarOpen(false);
     },
     [isMobile]
@@ -262,6 +270,7 @@ function PlannerApp() {
     setActivePath(null);
     setShowLibrary(false);
     setShowKnowledge(false);
+    setActivePage(null);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
@@ -269,6 +278,7 @@ function PlannerApp() {
     setShowLibrary(true);
     setShowKnowledge(false);
     setActivePath(null);
+    setActivePage(null);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
@@ -276,6 +286,7 @@ function PlannerApp() {
     setShowKnowledge(true);
     setShowLibrary(false);
     setActivePath(null);
+    setActivePage(null);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
@@ -353,6 +364,12 @@ function PlannerApp() {
     <Library />
   ) : showKnowledge ? (
     <KnowledgeBase files={files} onSelect={handleSelect} />
+  ) : activePage ? (
+    // A page carries no `onSend` — it can compose no message on its own. Opening a record goes
+    // through handleSelect so the page is actually left behind (and `?page=` leaves the URL).
+    <div className="reading">
+      <SitePage name={activePage} onOpenRecord={handleSelect} />
+    </div>
   ) : active ? (
     <>
       {canExport && <TripDayNav headings={headings} />}

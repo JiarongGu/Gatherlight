@@ -4,3 +4,4 @@ export { Library } from './Library';
 export { KnowledgeBase } from './KnowledgeBase';
 export { Manage } from './Manage';
 export { AuthGate } from './AuthGate';
+export { SitePage } from './SitePage';
