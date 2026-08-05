@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Gatherlight.Server.Product.Planner</RootNamespace>
+    <AssemblyName>Gatherlight.Planner</AssemblyName>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <!-- Sources are BOM-less UTF-8; without this, csc on a CJK-locale Windows machine reads
+         them via the ANSI codepage and every Chinese string literal becomes mojibake. -->
+    <CodePage>65001</CodePage>
+  </PropertyGroup>
+
+  <!-- Controllers, IHostedService, ILogger, Kestrel types. Transitive to consumers. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!-- Microsoft.NET.Sdk.Web (which Gatherlight.Server still uses) auto-adds these implicit global
+       usings; the plain classlib SDK does not, even with the FrameworkReference above. Same set
+       restored in Gatherlight.Platform, for the same reason. -->
+  <ItemGroup>
+    <Using Include="Microsoft.AspNetCore.Builder" />
+    <Using Include="Microsoft.AspNetCore.Hosting" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.AspNetCore.Routing" />
+    <Using Include="Microsoft.Extensions.Configuration" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+    <Using Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+
+  <!-- The one-way dependency, now enforced by the compiler rather than by check-layering:
+       Planner may use Platform; Platform cannot name a Planner type, because it does not
+       reference this assembly. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Gatherlight.Platform\Gatherlight.Platform.csproj" />
+  </ItemGroup>
+
+</Project>

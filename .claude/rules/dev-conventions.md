@@ -3,20 +3,25 @@
 The load-bearing patterns for working on Gatherlight's code. These mirror the sibling projects
 (same family patterns); deviations need a reason.
 
-## Backend (src/server/Gatherlight.Server)
+## Backend (src/server)
 
-- **Two-tier modules**: `Platform/<Group>/<Name>/` or `Product/Planner/<Name>/`, each with
-  `{Name}Controller.cs` (thin) → `Services/` (business logic + repository). **A module is Platform
-  if it survives the planner being replaced by a different site** — i.e. it knows nothing about
-  plans, trips, budgets, household or travel. Groups: `Kernel` (contexts, paths, config), `Site`
-  (template seeding, and the site manifest), `Hosting` (security, update, resources, migration,
-  settings, migrations runner), `Agent` (LLM + chat sessions/gates/SSE), `Capabilities` (tool
-  registry, MCP endpoint + client, document/media tooling), `Storage` (library, knowledge, memory,
-  uploads, data repo, backup), `Ops` (jobs, traces, scoring, eval, playground, cortex).
-  **Platform must never reference Product** — enforced by `node devtools/dev.mjs check-layering`,
-  which also fails on a module left unclassified. The composition root (`GatherlightApp.Build()`)
-  is exempt: it wires both layers by definition. Where Platform needs something the Product owns,
-  invert it behind a Platform-owned port resolved as a DI collection — see
+- **Three projects, compiler-enforced**: `Gatherlight.Platform` (classlib, references none of
+  ours) → `Gatherlight.Planner` (classlib, references Platform) → `Gatherlight.Server` (web app,
+  references both — the composition root, exempt by definition) → `Gatherlight.Host` (WinForms,
+  references Server). Namespaces are unchanged from the old single-project layout —
+  `Gatherlight.Server.Platform.<Group>.<Name>` / `Gatherlight.Server.Product.Planner.<Name>` — this
+  was a compilation boundary, not a rename. Each module: `{Name}Controller.cs` (thin) →
+  `Services/` (business logic + repository). **A module is Platform if it survives the planner
+  being replaced by a different site** — i.e. it knows nothing about plans, trips, budgets,
+  household or travel. Groups: `Kernel` (contexts, paths, config), `Site` (template seeding, and
+  the site manifest), `Hosting` (security, update, resources, migration, settings, migrations
+  runner), `Agent` (LLM + chat sessions/gates/SSE), `Capabilities` (tool registry, MCP endpoint +
+  client, document/media tooling), `Storage` (library, knowledge, memory, uploads, data repo,
+  backup), `Ops` (jobs, traces, scoring, eval, playground, cortex). **Platform must never
+  reference Planner** — the compiler enforces it (`Gatherlight.Platform.csproj` carries no
+  `ProjectReference` to Planner); `node devtools/dev.mjs check-layering` is a fast redundancy that
+  also asserts that `ProjectReference` never reappears. Where Platform needs something the Product
+  owns, invert it behind a Platform-owned port resolved as a DI collection — see
   `Platform/Kernel/Services/IRecordIndex.cs`, which lets startup migration and backup restore
   trigger a rebuild without knowing the planner keeps an index. Variation points are interfaces
   resolved via DI collections (e.g. `IGatherlightTool`), never if/else chains.

@@ -1,5 +1,7 @@
 <Solution>
   <Folder Name="/server/">
+    <Project Path="src/server/Gatherlight.Platform/Gatherlight.Platform.csproj" />
+    <Project Path="src/server/Gatherlight.Planner/Gatherlight.Planner.csproj" />
     <Project Path="src/server/Gatherlight.Server/Gatherlight.Server.csproj" />
     <Project Path="src/server/Gatherlight.Host/Gatherlight.Host.csproj" />
   </Folder>

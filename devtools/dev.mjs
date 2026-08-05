@@ -391,7 +391,7 @@ switch (cmd) {
     // Version single source of truth = ResourceProvisioner.ResourcesPackageVersion (the flat-container
     // URL the app fetches). Derive it so the packed .nupkg version can't drift from what the app asks
     // for; an explicit arg can still override for a one-off.
-    const provCs = path.join(repo, 'src/server/Gatherlight.Server/Platform/Hosting/Resources/Services/ResourceProvisioner.cs');
+    const provCs = path.join(repo, 'src/server/Gatherlight.Platform/Hosting/Resources/Services/ResourceProvisioner.cs');
     const provVer = (fs.readFileSync(provCs, 'utf8').match(/ResourcesPackageVersion\s*=\s*"([^"]+)"/) || [])[1];
     const version = args[0] || provVer;
     if (!version) { console.error('could not resolve resources version (ResourcesPackageVersion not found)'); process.exitCode = 1; break; }

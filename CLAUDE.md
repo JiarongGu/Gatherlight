@@ -48,11 +48,12 @@ and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,C
   `local/sensitive-patterns.txt`). History was reset on 2026-07-13 to remove exactly such leaks.
 - **User data lives ONLY in `local/`** (own private git repo). Never move it back into this repo.
 - **LLM via the authenticated `claude` CLI only — never an API key.**
-- **Backend = two-tier modules** (`Platform/<Group>/<Name>` or `Product/Planner/<Name>`,
-  controller → service → repository; Dapper + hand-written SQL, snake_case columns,
-  FluentMigrator `YYYYMMDDNNNN` migrations; variation points are interfaces resolved via DI, never
-  if/else chains). **Platform must never reference Product** — `dev.mjs check-layering` enforces
-  it; details in `.claude/rules/dev-conventions.md`.
+- **Backend = three projects** (`Gatherlight.Platform` → `Gatherlight.Planner` → `Gatherlight.Server`
+  → `Gatherlight.Host`; namespaces unchanged, `Platform/<Group>/<Name>` / `Product/Planner/<Name>`;
+  controller → service → repository; Dapper + hand-written SQL, snake_case columns, FluentMigrator
+  `YYYYMMDDNNNN` migrations; variation points are interfaces resolved via DI, never if/else chains).
+  **Platform must never reference Planner** — the compiler enforces it; `dev.mjs check-layering`
+  guards the reference graph; details in `.claude/rules/dev-conventions.md`.
 - **Working files** (probes, drafts, captures) go under `devtools/` with a `_` prefix (gitignored),
   never OS temp.
 - **Never commit without explicit user approval.**
