@@ -69,6 +69,17 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   listing hit re-resolved. That's the same set the planner agent may already read, so the judges gain
   no reach the scope guard doesn't already grant. Registering zero `ITool`s makes the host a no-op.
   Proof lives in `e2e-p36` (the claude stub drives the MCP server for real and asserts the denials).
+- **Capabilities carry provenance.** `Platform` (compiled, shipped by us) is available by default and
+  runs in-process; `Script` and `Mcp` are off until `site.json` lists them in `capabilities.enabled`;
+  `Draft` is never loaded. Non-platform capabilities run under `node --permission` with filesystem
+  scope from their grant plus `cap-guard.mjs`, the platform preload that removes the network. That
+  network denial holds ONLY because `--permission` already denies `child_process` spawn,
+  `worker_threads` and `process.binding` — relaxing any of those silently breaks it. Two traps found
+  the hard way: the sandbox must be granted read on the preload's own directory or it cannot import
+  it, and a denied CLI built-in must appear in the PreToolUse `matcher` or the guard is never invoked
+  for it. The launcher **fails closed**: no runtime supporting `--permission` + `module.registerHooks`,
+  or a missing preload, means a Script capability refuses to run rather than running unsandboxed.
+  Proof lives in `e2e-p38`, whose denials are real attempts paired with positive controls.
 
 ## LLM / process spawning
 

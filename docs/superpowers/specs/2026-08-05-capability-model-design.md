@@ -1,6 +1,8 @@
 # Capability model, permissions + the escalation harness — design (S2)
 
-> 2026-08-05 · sub-project **S2** of the platform track. Status: design under review.
+> 2026-08-05 · sub-project **S2** of the platform track. Status: **S2a implemented** — see
+> `docs/superpowers/plans/2026-08-05-capability-model-sandbox.md`. S2b (drafts, approval cards,
+> escalation harness, chat ownership) not yet started.
 > Follows S1 (`2026-08-04-site-model-container-design.md`), which is implemented.
 
 ## Why
@@ -81,6 +83,10 @@ project from it, so what the agent sees and what the console shows can never dis
   planes: platform MCP tools, and the CLI's own built-ins — which is how **`WebFetch` finally
   becomes closeable.** For built-ins, the id is omitted from the generated `settings.chat.json`
   allow-list *and* denied by the scope guard, so removing it from one place cannot silently re-open it.
+  The second plane only fires on dispatch: the scope guard's PreToolUse hook is invoked per the
+  `matcher` in its own registration, so a denied built-in must also be added to that `matcher` — omit
+  it and the hook never runs for that tool, so the deny is enforced on paper only. Found the hard way
+  with `WebFetch`, the built-in the mechanism exists to close.
 - **`enabled`** gates registration: a `Script` or `Mcp` capability absent from the list is not
   registered at all, so it never reaches tools/list.
 - Entries in `enabled` grow from a bare id into a grant object. S1's reader already accepts both
@@ -120,9 +126,18 @@ node --permission --allow-fs-read=<site>/<granted read dirs> --allow-fs-write=<s
      --import=<platform>/cap-guard.mjs  <entry>
 ```
 
-Node's permission model enforces the filesystem scope and denies **`child_process`, worker threads
-and native addons** outright. Those three denials are what make the rest hold: a capability cannot
-spawn its way out, thread its way out, or load native code.
+Two implementation traps, both real: on Windows `--import` must be given a `file://` URL — a bare
+drive-letter path throws `ERR_UNSUPPORTED_ESM_URL_SCHEME`. And the sandboxed process must itself be
+granted `--allow-fs-read` on `cap-guard.mjs`'s own directory: without it, importing the preload
+throws `ERR_ACCESS_DENIED` before the capability's own code ever runs, which means every
+network-denied capability would die on launch — that read grant is the launcher's job, not something
+the capability's own grant object provides.
+
+Node's permission model enforces the filesystem scope and denies **`child_process` spawn/exec,
+worker threads and native addons** outright — importing `node:child_process` still succeeds; what
+throws `ERR_ACCESS_DENIED` is the operation itself (`spawnSync`, `execSync`, …). Those three denials
+are what make the rest hold: a capability cannot spawn its way out, thread its way out, or load
+native code.
 
 **Network.** Node's permission model has no network dimension, so the platform supplies one.
 `cap-guard.mjs` (an `--import` preload the platform owns, not the capability) refuses
@@ -257,7 +272,7 @@ agent output is an enrichment, not a dependency.
 | enablement is the only path | copying a tool into `{data}/tools/` without a manifest `enabled` entry leaves it unregistered |
 | deny spans both planes | a denied MCP tool is absent and refused; a denied `WebFetch` is absent from the generated settings **and** refused by the guard |
 | sandbox: filesystem | a script capability cannot read `state/`, nor any record dir outside its grant |
-| sandbox: subprocess | `child_process` is denied |
+| sandbox: subprocess | `child_process` operations (`spawnSync`/`execSync`/…) are denied — the import itself succeeds |
 | **sandbox: network** | `fetch`, `node:http` and `node:net` all fail inside a capability granted `"net": false` |
 | card truthfulness | every permission sentence rendered corresponds to a grant actually enforced |
 | escalation is resumable | a denied call yields an escalation, and allowing it lets the same run continue |
