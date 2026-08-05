@@ -8,6 +8,9 @@ namespace Gatherlight.Server.Platform.Agent.Ui.Services;
 /// user's next message and nothing more — an agent that labels a button "Approve" gets a message,
 /// not an approval, because every consequential step still passes its own gate. `openRecord`
 /// resolves through <see cref="ISiteContext.ResolveSitePath"/>, which refuses `state/`.
+/// `runCapability` names code a human already approved — the page cannot supply the code, only the
+/// id, and the click confirms against the ENFORCED grant before anything runs, because the label
+/// beside it is the agent's own words.
 /// </summary>
 public interface IUiActionValidator
 {
@@ -35,6 +38,13 @@ public sealed class UiActionValidator : IUiActionValidator
             "openRecord" => _site.ResolveSitePath(arg) is null
                 ? $"action 'openRecord' path is outside the site: {arg}"
                 : null,
+            // Validated by SHAPE, not by state: a page may legitimately name a capability enabled
+            // later, and failing validation for that would make the page uncommittable for a reason
+            // that has nothing to do with the page. Enablement is enforced at invocation by
+            // ToolRegistry, which already refuses a NotEnabled capability with a 4xx.
+            "runCapability" => System.Text.RegularExpressions.Regex.IsMatch(arg, @"^[a-z0-9_]{1,64}$")
+                ? null
+                : $"action 'runCapability' needs a capability id (lower-case, digits, underscore): {arg}",
             _ => $"unknown action verb '{verb}'",
         };
     }

@@ -78,6 +78,41 @@ try {
   ok('a hidden page is still fetchable by name',
     (await j('/api/ui/pages/secret')).body?.status === 'ready');
 
+  // --- runCapability --------------------------------------------------------------------------
+  // `budget_scan` is a real registered tool (p9 calls it) — the id is checked against /api/tools
+  // below rather than assumed, because a fixture naming a tool that does not exist would make the
+  // 404 row pass for the wrong reason.
+  const toolNames = ((await j('/api/tools')).body?.tools ?? []).map((t) => t.name);
+  ok('budget_scan is a real capability id', toolNames.includes('budget_scan'), toolNames.slice(0, 8).join(','));
+
+  const actionPage = (action) => ({ title: 'act', root: { type: 'Button', label: '跑一下', action } });
+  page('act-ok', actionPage({ runCapability: 'budget_scan' }));
+  page('act-bad', actionPage({ runCapability: 'Not A Valid Id!' }));
+  // Shape, not state: an id that is well-formed but names nothing yet still VALIDATES — a page must
+  // not become uncommittable because a capability has not been enabled yet.
+  page('act-future', actionPage({ runCapability: 'not_enabled_yet' }));
+
+  ok('a well-formed runCapability validates', (await j('/api/ui/pages/act-ok')).body?.status === 'ready');
+  ok('an id for a capability that does not exist still validates',
+    (await j('/api/ui/pages/act-future')).body?.status === 'ready',
+    (await j('/api/ui/pages/act-future')).body?.reason ?? '');
+  const badAct = (await j('/api/ui/pages/act-bad')).body;
+  ok('a malformed capability id is refused', badAct?.status === 'invalid');
+  ok('the reason names the verb', /runCapability/.test(badAct?.reason ?? ''), badAct?.reason ?? '');
+
+  const cap = await j('/api/ui/capability/budget_scan');
+  ok('the confirmation data comes from the server', cap.status === 200, String(cap.status));
+  ok('it carries the enforced clauses', Array.isArray(cap.body?.can) && Array.isArray(cap.body?.cannot));
+  ok('an unknown capability is 404', (await j('/api/ui/capability/nope_nope')).status === 404);
+
+  // The tree a capability returns is DATA, not a trusted view — it reaches the renderer only through
+  // the same validator. Positive control first, then the href a page could never have gotten past.
+  const okTree = await post('/api/ui/validate', { type: 'Text', text: 'from a capability' });
+  ok('a capability result that IS a tree validates', okTree.body?.status === 'ready', JSON.stringify(okTree.body));
+  const evilTree = await post('/api/ui/validate', { type: 'Link', href: 'javascript:alert(1)', text: 'x' });
+  ok('a javascript: href in a capability result is refused', evilTree.body?.status === 'invalid',
+    JSON.stringify(evilTree.body));
+
   // --- the preview gate ---------------------------------------------------------------------
   const runToGate = async (message) => {
     const started = await post('/api/chat', { message, mode: 'plan' });
