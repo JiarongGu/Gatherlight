@@ -270,6 +270,9 @@ public static class GatherlightApp
             // agent isn't actually allowed to call.
             .AddSingleton<Platform.Capabilities.Services.ICapabilityRegistry, Platform.Capabilities.Services.CapabilityRegistry>()
             .AddSingleton<IToolRegistry, ToolRegistry>()
+            // Agent-drafted tools in .claude/tool-drafts/ — never loaded by the registry above, so a
+            // draft is inert until a human calls IDraftStore.Promote (S2b's approval gate consumes it).
+            .AddSingleton<Platform.Capabilities.Services.IDraftStore, Platform.Capabilities.Services.DraftStore>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>()
             // Knowledge-base upgrade migration (LLM-reconcile customized .claude/ files with new templates)
