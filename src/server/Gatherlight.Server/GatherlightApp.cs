@@ -315,7 +315,13 @@ public static class GatherlightApp
             // Controller discovery scans the ENTRY assembly — under a future host exe that's not
             // this library, and every /api route would silently fall through to the SPA fallback.
             // Register this assembly explicitly.
-            .AddApplicationPart(typeof(GatherlightApp).Assembly);
+            .AddApplicationPart(typeof(GatherlightApp).Assembly)
+            // Controllers live in the Platform/Planner assemblies; AddControllers scans only the
+            // entry assembly, so each must be registered explicitly or its routes 404 silently.
+            // Anchored on HealthController: Platform/Kernel is the base module of the whole
+            // Platform tree (check-layering's own map has it depend on nothing), so this type can
+            // never itself migrate to another assembly out from under the reference.
+            .AddApplicationPart(typeof(Platform.Kernel.HealthController).Assembly);
 
         var app = builder.Build();
 

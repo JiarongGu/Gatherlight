@@ -121,7 +121,7 @@ internal static class JudgeJail
 /// whether a time-sensitive claim is actually backed, the judge has to be able to open the plan and the
 /// household/knowledge file it cites.
 /// </summary>
-internal sealed class JudgeReadFileTool(ISiteContext data) : ITool
+public sealed class JudgeReadFileTool(ISiteContext data) : ITool
 {
     public string Name => "judge_read_file";
 
@@ -160,7 +160,7 @@ internal sealed class JudgeReadFileTool(ISiteContext data) : ITool
 /// path (the score context carries changed files only once a session has committed), so let it list the
 /// readable subtrees rather than guess a filename and read an ERROR.
 /// </summary>
-internal sealed class JudgeListFilesTool(ISiteContext data) : ITool
+public sealed class JudgeListFilesTool(ISiteContext data) : ITool
 {
     public string Name => "judge_list_files";
 

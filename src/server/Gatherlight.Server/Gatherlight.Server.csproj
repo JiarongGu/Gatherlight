@@ -12,47 +12,10 @@
     <CodePage>65001</CodePage>
   </PropertyGroup>
 
+  <!-- PackageReferences live in Gatherlight.Platform now (PackageReference is transitive across a
+       ProjectReference); this project depends on that assembly plus Gatherlight.Planner below. -->
   <ItemGroup>
-    <PackageReference Include="Dapper" Version="2.1.79" />
-    <!-- Cron parsing + next-occurrence (timezone/DST aware) for the background-job scheduler.
-         Small, dependency-free, well-regarded. -->
-    <PackageReference Include="Cronos" Version="0.8.4" />
-    <PackageReference Include="FluentMigrator.Runner.SQLite" Version="8.0.1" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
-    <!-- Headless-browser tooling (web-fetch/scrape + future scraper ports). Browser binaries are
-         fetched once via `node devtools/dev.mjs fetch-tools`, never at server startup. -->
-    <PackageReference Include="Microsoft.Playwright" Version="1.49.0" />
-    <!-- Document/media processing. Properly licensed: PdfPig MIT (PDF text extraction),
-         ImageSharp pinned 3.1.x = Apache-2.0 (4.x is the split license). PDF form-fill / merge /
-         inspect run on pdf-lib (tools/pdf-form leaves) — reliable on real + CJK PDFs where
-         PDFsharp's appearance/import paths throw. Avoid iText (AGPL). -->
-    <PackageReference Include="PdfPig" Version="0.1.15" />
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
-    <!-- Direct pin: Microsoft.Data.Sqlite 10.0.0 pulls SQLitePCLRaw 2.1.11 whose bundled
-         e_sqlite3 has a known CVE (GHSA-2m69-gcr7-jv3q); 3.0.x ships the patched build
-         (no stable 2.1.12 exists). Runtime-verified against Microsoft.Data.Sqlite 10. -->
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
-    <!-- Lyntai (灵台) — the shared LLM library extracted from this family, consumed from NuGet. LLM-judge
-         scorers route through its own-seam ILlmClient + ClaudeCli provider (neutral cwd, verdict-classified,
-         router/fallback). The interactive two-gate chat, background jobs, and playground drive the CLI's own
-         agent loop through its IAgentSession (ClaudeAgentSession) — read-only/write gates, resume, the
-         scope-guard settings file, app-hosted MCP — adapted to the app's SSE wire by AgentRunner.
-         2.0.1 split packages by DEPENDENCY FOOTPRINT, not vendor: Providers.ClaudeCli (+ .CodexCli,
-         .OpenAiCompatible) merged into Providers.Default — namespaces/types/API unchanged, so this is a
-         PackageReference rename only. The `Lyntai` metapackage is deliberately NOT used: it would pull
-         backends this app never spawns. -->
-    <PackageReference Include="Lyntai.Core" Version="2.0.1" />
-    <PackageReference Include="Lyntai.Providers.Default" Version="2.0.1" />
-    <!-- Lyntai's SQLite storage backs the scoring store (lyntai_score_result: upsert + aggregate + export),
-         landed in the same gatherlight.db (lyntai_-prefixed, coexists with the app's own tables). -->
-    <PackageReference Include="Lyntai.Storage.Sqlite" Version="2.0.1" />
-    <!-- The ephemeral loopback MCP host Lyntai stands up per one-shot ILlmClient call. It reaches ONLY
-         the ClaudeCliProvider path — i.e. the two LLM-judge scorers — giving them the read-only judge
-         tools (Platform/Ops/Scoring/JudgeTools). The interactive agent path is untouched: that one gets MCP
-         via the CLI's mcp-config flag pointed at this server's own persistent /mcp
-         (ChatEnvironmentService). Since 2.0.1 the per-call host runs on HttpListener, not Kestrel — no
-         ASP.NET framework reference, same public API. -->
-    <PackageReference Include="Lyntai.Tools.Mcp.Hosting" Version="2.0.1" />
+    <ProjectReference Include="..\Gatherlight.Platform\Gatherlight.Platform.csproj" />
   </ItemGroup>
 
   <!-- Built client (src/client `npm run build` outputs here; gitignored). Copied next to the exe
@@ -68,8 +31,13 @@
     <!-- The capability sandbox preload (Platform/Capabilities/Sandbox) — loaded via node's import
          flag before a sandboxed capability's own code; supplies the network denial Node's
          permission model lacks. Shipped as a build artefact, not embedded, so it stays a single
-         verifiable file. -->
-    <Content Include="Platform\Capabilities\Sandbox\Assets\cap-guard.mjs" CopyToOutputDirectory="PreserveNewest" />
+         verifiable file. BROKEN as of the S4 Platform-assembly extraction: the source now lives in
+         Gatherlight.Platform, not here, so this path never resolves and the file no longer lands
+         in the output — Condition="Exists(...)" keeps that a silent no-op instead of an MSB3030
+         build failure. Deliberately left unfixed: S4 Task 3 re-wires all asset linking (content
+         copy is not transitive across a ProjectReference) in one pass. -->
+    <Content Include="Platform\Capabilities\Sandbox\Assets\cap-guard.mjs" CopyToOutputDirectory="PreserveNewest"
+             Condition="Exists('Platform\Capabilities\Sandbox\Assets\cap-guard.mjs')" />
   </ItemGroup>
 
 </Project>
