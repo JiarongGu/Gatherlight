@@ -31,14 +31,16 @@ public sealed class CapabilityRegistry : ICapabilityRegistry
     private readonly IScriptToolProvider _scripts;
     private readonly IExternalToolProvider _external;
     private readonly ISiteManifestStore _manifest;
+    private readonly ISessionCapabilityAllowance _sessionAllowance;
 
     public CapabilityRegistry(IEnumerable<IGatherlightTool> platform, IScriptToolProvider scripts,
-        IExternalToolProvider external, ISiteManifestStore manifest)
+        IExternalToolProvider external, ISiteManifestStore manifest, ISessionCapabilityAllowance sessionAllowance)
     {
         _platform = platform;
         _scripts = scripts;
         _external = external;
         _manifest = manifest;
+        _sessionAllowance = sessionAllowance;
     }
 
     public IReadOnlyList<CapabilityInfo> All()
@@ -48,19 +50,29 @@ public sealed class CapabilityRegistry : ICapabilityRegistry
         var enabled = caps.Enabled
             .Where(g => g.Id.Length > 0)
             .ToDictionary(g => g.Id, StringComparer.OrdinalIgnoreCase);
+        // The chat escalation gate's "allow once" (S2b) — a human decision at the gate for THIS run,
+        // never persisted. Checked first so it can override even a Deny entry: the human just decided
+        // otherwise, and site.json is not what they were asked to change.
+        var sessionAllowed = _sessionAllowance.Current
+            .Select(g => g.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        CapabilityState StateOf(string id, bool enabledOrPlatform) =>
+            sessionAllowed.Contains(id) ? CapabilityState.Available
+            : denied.Contains(id) ? CapabilityState.Denied
+            : enabledOrPlatform ? CapabilityState.Available
+            : CapabilityState.NotEnabled;
 
         var list = new List<CapabilityInfo>();
         foreach (var t in _platform)
             list.Add(new CapabilityInfo(t.Name, CapabilityOrigin.Platform, t.Name, t.Description, t.InputSchema,
-                denied.Contains(t.Name) ? CapabilityState.Denied : CapabilityState.Available));
+                StateOf(t.Name, enabledOrPlatform: true)));
         foreach (var t in _scripts.Current)
             list.Add(new CapabilityInfo(t.Name, CapabilityOrigin.Script, t.Name, t.Description, t.InputSchema,
-                denied.Contains(t.Name) ? CapabilityState.Denied
-                : enabled.ContainsKey(t.Name) ? CapabilityState.Available
-                : CapabilityState.NotEnabled));
+                StateOf(t.Name, enabledOrPlatform: enabled.ContainsKey(t.Name))));
         foreach (var t in _external.Current)
             list.Add(new CapabilityInfo(t.Name, CapabilityOrigin.Mcp, t.Name, t.Description, t.InputSchema,
-                denied.Contains(t.Name) ? CapabilityState.Denied : CapabilityState.Available));
+                StateOf(t.Name, enabledOrPlatform: true)));
         // Draft: nothing loads drafts yet (S2b) — deliberately no source contributes here.
         return list;
     }
@@ -69,6 +81,7 @@ public sealed class CapabilityRegistry : ICapabilityRegistry
         All().Where(c => c.State == CapabilityState.Available).ToList();
 
     public CapabilityGrant? GrantFor(string id) =>
-        _manifest.Current.Capabilities.Enabled.FirstOrDefault(g =>
+        _sessionAllowance.Current.FirstOrDefault(g => string.Equals(g.Id, id, StringComparison.OrdinalIgnoreCase))
+        ?? _manifest.Current.Capabilities.Enabled.FirstOrDefault(g =>
             string.Equals(g.Id, id, StringComparison.OrdinalIgnoreCase));
 }

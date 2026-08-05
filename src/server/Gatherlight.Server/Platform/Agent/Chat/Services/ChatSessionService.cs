@@ -8,6 +8,8 @@ using Gatherlight.Server.Platform.Agent.Llm.Services;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Models;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Services;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Services.Transport;
+using Gatherlight.Server.Platform.Capabilities.Models;
+using Gatherlight.Server.Platform.Capabilities.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Services;
 using Lyntai.Providers.ClaudeCli;
 using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
@@ -33,6 +35,14 @@ public static class ChatPhase
     // The agent hit a login-walled MCP server and asked for interactive login; a QR/URL is shown in
     // chat, and the agent resumes automatically once the human completes the scan. NON-terminal.
     public const string AwaitingLogin = "awaiting-login";
+    // The agent drafted a new tool (.claude/tool-drafts/<id>/) and wants it enabled; parked showing a
+    // card built from PermissionSentence over the draft's OWN grant, never from the agent's words.
+    // NON-terminal, holds the agent slot — approving promotes it and resumes so the agent can use it.
+    public const string AwaitingDraftApproval = "awaiting-draft-approval";
+    // A capability call was refused (NotEnabled/Denied) and the agent surfaced it instead of working
+    // around it; parked showing a card built from the runtime's OWN record of the denial
+    // (ICapabilityDenialLog), never from the agent's account. NON-terminal, holds the agent slot.
+    public const string AwaitingCapabilityApproval = "awaiting-capability-approval";
     public const string Committing = "committing";
     public const string Building = "building";
     public const string Committed = "committed";
@@ -78,6 +88,22 @@ public sealed class ChatSession
     /// <summary>Set when the agent asked to log into an MCP server (phase awaiting-login): which
     /// server + the QR/URL challenge to show. Cleared when login completes and the agent resumes.</summary>
     public McpLoginPrompt? McpLogin { get; set; }
+    /// <summary>Set when the agent proposed a tool draft (phase awaiting-draft-approval): the parsed
+    /// draft the human is deciding on. Cleared on approve/reject.</summary>
+    public CapabilityDraft? PendingDraft { get; set; }
+    /// <summary>Set when a capability call was refused and the agent surfaced it (phase
+    /// awaiting-capability-approval): the runtime's own record of the denial. Cleared on the
+    /// allow/deny decision.</summary>
+    public CapabilityDenial? PendingDenial { get; set; }
+    /// <summary>The agent's OWN explanation accompanying a CAPABILITY_BLOCKED marker — carried
+    /// separately from <see cref="PendingDenial"/> so the card can label it as the assistant's
+    /// claim rather than the system's account of what happened.</summary>
+    public string? PendingDenialReason { get; set; }
+    /// <summary>The grant the card shown for <see cref="PendingDenial"/> was built from (null for a
+    /// Platform/Mcp origin) — captured once at park time so a reconnecting client's snapshot renders
+    /// the exact same clauses the live SSE card did, not a freshly re-derived (and possibly
+    /// different) one.</summary>
+    public CapabilityGrant? PendingDenialGrant { get; set; }
     /// <summary>Sequential persistence chain so DB writes keep event order without
     /// blocking the emit path.</summary>
     public Task PersistChain = Task.CompletedTask;
@@ -127,6 +153,12 @@ public sealed class ChatSessionService
     private readonly IMcpProvisionService _mcpProvision;
     private readonly IMcpLoginService _mcpLogin;
     private readonly IMcpServerStore _mcpStore;
+    private readonly IDraftStore _drafts;
+    private readonly IScriptToolProvider _scripts;
+    private readonly ICapabilityRegistry _capabilities;
+    private readonly ICapabilityDenialLog _denials;
+    private readonly Platform.Site.Services.ISiteManifestStore _manifestStore;
+    private readonly ISessionCapabilityAllowance _sessionAllowance;
     private readonly ILogger<ChatSessionService> _log;
 
     private const int MaxBuildRepair = 2;
@@ -139,12 +171,21 @@ public sealed class ChatSessionService
         CodeRepoGit codeGit, BuildVerifyService buildVerify, GatherlightServerOptions options,
         Platform.Ops.Scoring.Services.IScoringService scoring, IAgentGate gate,
         IMcpProvisionService mcpProvision, IMcpLoginService mcpLogin, IMcpServerStore mcpStore,
+        IDraftStore drafts, IScriptToolProvider scripts, ICapabilityRegistry capabilities,
+        ICapabilityDenialLog denials, Platform.Site.Services.ISiteManifestStore manifestStore,
+        ISessionCapabilityAllowance sessionAllowance,
         ILogger<ChatSessionService> log)
     {
         _gate = gate;
         _mcpProvision = mcpProvision;
         _mcpLogin = mcpLogin;
         _mcpStore = mcpStore;
+        _drafts = drafts;
+        _scripts = scripts;
+        _capabilities = capabilities;
+        _denials = denials;
+        _manifestStore = manifestStore;
+        _sessionAllowance = sessionAllowance;
         _scoring = scoring;
         _router = router;
         _codeGit = codeGit;
@@ -215,6 +256,16 @@ public sealed class ChatSessionService
         {
             s.GateLease?.Dispose();
             s.GateLease = null;
+            // A capability-escalation "allow once" must not outlive the run that asked for it. Safe to
+            // clear unconditionally: the allowance is ONE global set precisely because at most one
+            // agent task ever runs app-wide, so whatever is in it can only have come from THIS
+            // session's own escalation gate. Reload so any ScriptTool that picked up an ephemeral grant
+            // reverts to its persisted (or absent) one.
+            if (_sessionAllowance.Current.Count > 0)
+            {
+                _sessionAllowance.Clear();
+                _scripts.Reload();
+            }
         }
     }
 
@@ -707,6 +758,37 @@ public sealed class ChatSessionService
             await EnterAwaitingLoginAsync(s, serverRef);
             return;
         }
+        // The agent drafted a new tool and wants it enabled — park for the human's decision, built
+        // from PermissionSentence over the draft's OWN grant, never the agent's description of it. A
+        // marker naming a draft that does not exist (or fails to parse) must NOT park: there is
+        // nothing to decide, and parking anyway would wedge the session holding the agent lease with
+        // no way forward. Notice and fall through to the normal finish tail below instead.
+        if (TryExtractToolDraft(res.FinalText, out var draftId))
+        {
+            var draft = _drafts.Get(draftId);
+            if (draft is null)
+                Emit(s, new AgentEvent { Kind = "notice", Text = $"⚠️ 找不到草稿工具「{draftId}」,已忽略该标记。" });
+            else
+            {
+                EnterAwaitingDraftApproval(s, draft);
+                return;
+            }
+        }
+        // A capability call was refused and the agent surfaced it rather than working around it —
+        // park for the human's decision, built from the RUNTIME's own record of the denial (never the
+        // agent's account of it). A marker naming an id with no recorded refusal must NOT park: same
+        // reasoning as TOOL_DRAFT above, nothing to decide.
+        if (TryExtractCapabilityBlocked(res.FinalText, out var capId, out var agentReason))
+        {
+            var denial = _denials.Last(capId);
+            if (denial is null)
+                Emit(s, new AgentEvent { Kind = "notice", Text = $"⚠️ 找不到能力「{capId}」的拒绝记录,已忽略该标记。" });
+            else
+            {
+                EnterAwaitingCapabilityApproval(s, denial, agentReason);
+                return;
+            }
+        }
         if (TryExtractNeedsInput(res.FinalText, out var question, out var options))
         {
             EnterAwaitingInput(s, question, options);
@@ -855,6 +937,236 @@ public sealed class ChatSessionService
         url = p.Draft.Url,
         neededCredentials = p.NeededCredentials,
     };
+
+    // --- gate: approve/reject an agent-drafted tool (awaiting-draft-approval) ----------------
+
+    /// <summary>Human enabled the drafted tool — promote it (copies the folder into
+    /// <c>{data}/tools/</c> and appends its grant to <c>site.json</c> unchanged) then resume the SAME
+    /// claude session so the agent can actually use what it just gained.</summary>
+    public Task ApproveDraftAsync(string id)
+    {
+        var s = RequirePhase(id, ChatPhase.AwaitingDraftApproval);
+        var draft = s.PendingDraft ?? throw new InvalidOperationException("NO_DRAFT");
+        s.PendingDraft = null;
+        try
+        {
+            _drafts.Promote(draft.Id);
+        }
+        catch (Exception ex)
+        {
+            Fail(s, $"启用工具失败:{ex.Message}", ex);
+            return Task.CompletedTask;
+        }
+        RecordOutcome(s, $"已启用草稿工具 {draft.Id}");
+        return ContinueExecuteAsync(s,
+            $"我已启用工具「{draft.Title}」(id: {draft.Id}),请继续之前的操作。",
+            $"✅ 已启用「{draft.Title}」,正在继续…");
+    }
+
+    /// <summary>Human declined the drafted tool — discard it, then resume so the agent carries on
+    /// without it (never silently retried; the agent's own next turn decides what to do instead).</summary>
+    public Task RejectDraftAsync(string id)
+    {
+        var s = RequirePhase(id, ChatPhase.AwaitingDraftApproval);
+        var draft = s.PendingDraft ?? throw new InvalidOperationException("NO_DRAFT");
+        s.PendingDraft = null;
+        _drafts.Discard(draft.Id);
+        RecordOutcome(s, $"已拒绝草稿工具 {draft.Id}");
+        return ContinueExecuteAsync(s,
+            $"我没有启用工具「{draft.Title}」(id: {draft.Id}),请在没有它的情况下继续。",
+            "已拒绝该工具草稿,正在继续…");
+    }
+
+    // Park waiting for the human's enable/decline decision. Non-terminal (holds the agent slot).
+    private void EnterAwaitingDraftApproval(ChatSession s, CapabilityDraft draft)
+    {
+        s.PendingDraft = draft;
+        Emit(s, new AgentEvent
+        {
+            Kind = "notice",
+            Text = $"⏸️ AI 起草了一个新工具「{draft.Title}」— 请核对下面的权限后决定是否启用(或点「放弃任务」)。",
+        });
+        SetPhase(s, ChatPhase.AwaitingDraftApproval, DraftApprovalView(draft));
+    }
+
+    /// <summary>The approval card's data. <c>can</c>/<c>cannot</c> come from <see cref="PermissionSentence"/>
+    /// over the draft's OWN grant — never from the draft's text — so they cannot be worded more
+    /// reassuringly by whatever wrote the draft. <c>description</c> and <c>entrySource</c> ARE the
+    /// draft's own text and ride in separate fields precisely so the client can label them as the
+    /// assistant's claim rather than fold them into the enforced clauses.</summary>
+    internal static object DraftApprovalView(CapabilityDraft draft) => new
+    {
+        id = draft.Id,
+        title = draft.Title,
+        description = draft.Description,
+        can = PermissionSentence.Can(draft.Grant),
+        cannot = PermissionSentence.Cannot(draft.Grant),
+        entrySource = draft.EntrySource,
+    };
+
+    // The execute prompt tells the agent: to propose a new reusable tool, write
+    // `.claude/tool-drafts/<id>/tool.json` (+ its entry script), then end the final message with a
+    // TOOL_DRAFT marker and STOP — never call the tool itself, it does not exist until a human
+    // approves it (IDraftStore.Promote is the only thing that makes it real).
+    private static readonly System.Text.RegularExpressions.Regex ToolDraftRe = new(
+        @"^[ \t>*_-]*TOOL_DRAFT:[ \t]*(?<id>.+?)[ \t]*$",
+        System.Text.RegularExpressions.RegexOptions.Multiline
+        | System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool TryExtractToolDraft(string? finalText, out string draftId)
+    {
+        draftId = "";
+        if (string.IsNullOrWhiteSpace(finalText)) return false;
+        var m = ToolDraftRe.Match(finalText);
+        if (!m.Success) return false;
+        draftId = m.Groups["id"].Value.Trim();
+        return draftId.Length > 0;
+    }
+
+    // --- gate: allow/deny a refused capability call (awaiting-capability-approval) -----------
+
+    /// <summary>Human allowed the blocked capability. <paramref name="remember"/> true persists the
+    /// grant into <c>site.json</c> (survives restart, un-denies as well as enables); false grants it
+    /// for this run only via <see cref="ISessionCapabilityAllowance"/>. Either way, resume the SAME
+    /// claude session so the agent can retry the call it was refused.</summary>
+    public Task AllowCapabilityAsync(string id, bool remember)
+    {
+        var s = RequirePhase(id, ChatPhase.AwaitingCapabilityApproval);
+        var denial = s.PendingDenial ?? throw new InvalidOperationException("NO_DENIAL");
+        s.PendingDenial = null;
+        s.PendingDenialReason = null;
+        s.PendingDenialGrant = null;
+        try
+        {
+            // The session-allowance / site.json write both need an actual grant object even for a
+            // Platform/Mcp origin (it is used as a plain dictionary/list key there, never shown as a
+            // sandbox promise) — fall back to the id-only default when ScriptOriginGrant returns null.
+            var grant = ScriptOriginGrant(denial) ?? new CapabilityGrant { Id = denial.Id };
+            if (remember) PersistCapabilityAllow(denial, grant);
+            else _sessionAllowance.Allow(grant);
+            _scripts.Reload();
+        }
+        catch (Exception ex)
+        {
+            Fail(s, $"授权失败:{ex.Message}", ex);
+            return Task.CompletedTask;
+        }
+        RecordOutcome(s, $"已{(remember ? "永久" : "本次")}允许能力 {denial.Id}");
+        return ContinueExecuteAsync(s,
+            $"你可以使用「{denial.Id}」了,请重试之前被拒绝的调用。",
+            $"✅ 已允许「{denial.Id}」,正在继续…");
+    }
+
+    /// <summary>Human denied the blocked capability — resume so the agent proceeds without it (the
+    /// default: closing the card or ignoring it must not grant anything, so only this explicit call
+    /// or a fresh CAPABILITY_BLOCKED marker moves the session on).</summary>
+    public Task DenyCapabilityAsync(string id)
+    {
+        var s = RequirePhase(id, ChatPhase.AwaitingCapabilityApproval);
+        var denial = s.PendingDenial ?? throw new InvalidOperationException("NO_DENIAL");
+        s.PendingDenial = null;
+        s.PendingDenialReason = null;
+        s.PendingDenialGrant = null;
+        RecordOutcome(s, $"已拒绝允许能力 {denial.Id}");
+        return ContinueExecuteAsync(s,
+            $"「{denial.Id}」未获允许,请在没有它的情况下继续。",
+            "已拒绝该能力请求,正在继续…");
+    }
+
+    /// <summary>The grant a Script-origin "allow" is about to create: the one the registry already
+    /// knows for it (a re-grant on an already-Denied-but-still-enabled entry), or, when there is none
+    /// (the ordinary NotEnabled case), the most-restricted default — deny-by-default is
+    /// <see cref="CapabilityGrant"/>'s own documented shape, so an id-only grant IS that default, not
+    /// a guess at one. Null for Platform/Mcp origins: neither carries any fs/net grant vocabulary at
+    /// all (Platform is unsandboxed by design; Mcp sandboxing is an explicit non-goal), so there is
+    /// nothing here for either the card or a persisted write to say beyond the id itself.</summary>
+    private CapabilityGrant? ScriptOriginGrant(CapabilityDenial denial) =>
+        denial.Origin == CapabilityOrigin.Script
+            ? _capabilities.GrantFor(denial.Id) ?? new CapabilityGrant { Id = denial.Id }
+            : null;
+
+    /// <summary>Persists an "allow and remember" decision. Handles BOTH refusal reasons with one
+    /// write: NotEnabled (Script only) needs the grant appended to <c>enabled</c>; Denied needs the id
+    /// removed from <c>deny</c> — and, since a Script capability can be denied while never having been
+    /// enabled at all, ALSO needs the grant appended if it is not there yet. Mirrors
+    /// <see cref="IDraftStore.Promote"/>'s own full-manifest read/mutate/write shape.</summary>
+    private void PersistCapabilityAllow(CapabilityDenial denial, CapabilityGrant grant)
+    {
+        var current = _manifestStore.Load();
+        var deny = current.Capabilities.Deny
+            .Where(d => !string.Equals(d, denial.Id, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var enabled = current.Capabilities.Enabled.ToList();
+        if (denial.Origin == CapabilityOrigin.Script
+            && !enabled.Any(g => string.Equals(g.Id, denial.Id, StringComparison.OrdinalIgnoreCase)))
+        {
+            enabled.Add(grant);
+        }
+        _manifestStore.Write(new Platform.Site.Models.SiteManifest
+        {
+            Name = current.Name,
+            Template = current.Template,
+            Agent = current.Agent,
+            Records = current.Records,
+            Capabilities = new Platform.Site.Models.SiteCapabilities { Deny = deny, Enabled = enabled },
+            Ui = current.Ui,
+        });
+    }
+
+    // Park waiting for the human's allow/deny decision. Non-terminal (holds the agent slot).
+    private void EnterAwaitingCapabilityApproval(ChatSession s, CapabilityDenial denial, string agentReason)
+    {
+        s.PendingDenial = denial;
+        s.PendingDenialReason = agentReason;
+        s.PendingDenialGrant = ScriptOriginGrant(denial);
+        Emit(s, new AgentEvent
+        {
+            Kind = "notice",
+            Text = $"⏸️ 有一次调用被拦下(「{denial.Id}」)— 请核对后决定是否允许(或点「放弃任务」)。",
+        });
+        SetPhase(s, ChatPhase.AwaitingCapabilityApproval, CapabilityApprovalView(denial, s.PendingDenialGrant, agentReason));
+    }
+
+    /// <summary>The escalation card's data. <c>can</c>/<c>cannot</c> describe the grant an "allow"
+    /// would create — from <see cref="PermissionSentence"/>, never from the agent — and are empty for
+    /// Platform/Mcp origins, where that vocabulary corresponds to no real enforcement (see
+    /// <see cref="ScriptOriginGrant"/>). <c>agentReason</c> is whatever the agent said and MUST
+    /// stay a separate field: the client labels it as the assistant's claim, never the system's
+    /// account of the denial (that account is <c>id</c>/<c>origin</c>/<c>state</c>, from the runtime's
+    /// own <see cref="ICapabilityDenialLog"/> record).</summary>
+    internal static object CapabilityApprovalView(CapabilityDenial denial, CapabilityGrant? grant, string agentReason) => new
+    {
+        id = denial.Id,
+        origin = denial.Origin.ToString(),
+        state = denial.State.ToString(),
+        can = grant is null ? Array.Empty<string>() : PermissionSentence.Can(grant),
+        cannot = grant is null ? Array.Empty<string>() : PermissionSentence.Cannot(grant),
+        agentReason,
+    };
+
+    // ToolRegistry's refusal message (Denied/NotEnabled) tells the agent to stop and end its final
+    // message with a CAPABILITY_BLOCKED marker instead of working around the refusal. Whatever the
+    // agent wrote BEFORE the marker line is its own explanation — carried as agentReason, kept
+    // strictly separate from the runtime's denial record.
+    private static readonly System.Text.RegularExpressions.Regex CapabilityBlockedRe = new(
+        @"^[ \t>*_-]*CAPABILITY_BLOCKED:[ \t]*(?<id>.+?)[ \t]*$",
+        System.Text.RegularExpressions.RegexOptions.Multiline
+        | System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool TryExtractCapabilityBlocked(string? finalText, out string id, out string agentReason)
+    {
+        id = "";
+        agentReason = "";
+        if (string.IsNullOrWhiteSpace(finalText)) return false;
+        var m = CapabilityBlockedRe.Match(finalText);
+        if (!m.Success) return false;
+        id = m.Groups["id"].Value.Trim();
+        if (id.Length == 0) return false;
+        agentReason = finalText[..m.Index].Trim();
+        return true;
+    }
 
     // The (system-mode) execute prompt tells the agent: to add an external MCP server, end its final
     // message with `MCP_ADD:` followed by a JSON object (name, transport, command/args | url,

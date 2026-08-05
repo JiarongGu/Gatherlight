@@ -32,14 +32,16 @@ public sealed class ToolRegistry : IToolRegistry
     private readonly IScriptToolProvider _scripts;
     private readonly IExternalToolProvider _external;
     private readonly ICapabilityRegistry _capabilities;
+    private readonly ICapabilityDenialLog _denials;
 
     public ToolRegistry(IEnumerable<IGatherlightTool> tools, IScriptToolProvider scripts,
-        IExternalToolProvider external, ICapabilityRegistry capabilities)
+        IExternalToolProvider external, ICapabilityRegistry capabilities, ICapabilityDenialLog denials)
     {
         _builtins = tools.ToDictionary(t => t.Name);
         _scripts = scripts;
         _external = external;
         _capabilities = capabilities;
+        _denials = denials;
     }
 
     public string McpServerName => "planner-tools";
@@ -104,7 +106,16 @@ public sealed class ToolRegistry : IToolRegistry
                     CapabilityState.NotEnabled => "尚未在 site.json 的 capabilities.enabled 中启用",
                     _ => "不可用",
                 };
-                throw new ToolException(403, $"工具 \"{name}\" {reason}。");
+                var message = $"工具 \"{name}\" {reason}。";
+                // Denied/NotEnabled is a decision a human can revisit — record what the runtime just
+                // observed (S2b's escalation gate reads this back to build its card) and tell the
+                // agent to stop and surface it instead of working around the refusal.
+                if (info?.State is CapabilityState.Denied or CapabilityState.NotEnabled)
+                {
+                    _denials.Record(name, info.Origin, info.State);
+                    message += $" 请停止尝试调用它,不要寻找替代做法,在最终消息末尾单独一行输出 CAPABILITY_BLOCKED: {name},交由人来决定是否允许。";
+                }
+                throw new ToolException(403, message);
             }
             var known = tools.Count > 0 ? string.Join(", ", tools.Keys) : "(无)";
             throw new ToolException(400, $"未知工具:\"{name}\"。可用:{known}");

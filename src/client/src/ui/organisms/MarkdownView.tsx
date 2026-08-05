@@ -2,7 +2,8 @@ import { Children, isValidElement, memo, useMemo, type ComponentProps, type Reac
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-import { rehypeStripDangerous } from '@/lib/sanitize';
+import rehypeSanitize from 'rehype-sanitize';
+import { markdownSchema } from '@/lib/sanitize';
 import { Image } from '@/ui/atoms';
 import { Collapsible } from '@/ui/molecules';
 import { TripMap } from './TripMap';
@@ -94,10 +95,14 @@ const FALLBACK_SVG =
 // an 88KB trip doc (+ its Leaflet maps) is only re-parsed when source/collapsible
 // actually change — not on every shell state toggle (chat / ⌘K / theme / resize).
 type MdComponents = ComponentProps<typeof ReactMarkdown>['components'];
+type RehypePlugins = ComponentProps<typeof ReactMarkdown>['rehypePlugins'];
 
-// rehypeRaw parses raw HTML into nodes; rehypeStripDangerous then removes script-ish
-// elements + on* handlers + javascript:/data: URLs (untrusted plan/LLM content).
-const REHYPE_PLUGINS = [rehypeRaw, rehypeStripDangerous];
+// rehypeRaw parses raw HTML into nodes (this is what lets the trip-map/city-map divs
+// through at all); rehypeSanitize then filters the WHOLE tree — raw and markdown-native
+// alike — against markdownSchema, an allow-list (untrusted plan/LLM content: the agent
+// can author HTML, so anything not explicitly permitted is dropped rather than passed).
+// Order matters: raw HTML must be parsed into element nodes before it can be sanitized.
+const REHYPE_PLUGINS: RehypePlugins = [rehypeRaw, [rehypeSanitize, markdownSchema]];
 
 export const MarkdownView = memo(function MarkdownView({ source, collapsible }: Props) {
   const remarkPlugins = useMemo(

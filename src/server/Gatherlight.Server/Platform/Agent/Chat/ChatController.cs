@@ -9,6 +9,7 @@ namespace Gatherlight.Server.Platform.Agent.Chat;
 public sealed record StartChatRequest(string? Message, List<string>? Attachments, string? Mode);
 public sealed record RefineRequest(string? Message);
 public sealed record McpApproveRequest(Dictionary<string, string>? Secrets);
+public sealed record CapabilityAllowRequest(bool? Remember);
 
 [ApiController]
 public sealed class ChatController : ControllerBase
@@ -80,6 +81,9 @@ public sealed class ChatController : ControllerBase
             review = s.Review,
             mcpProposal = s.McpProposal is null ? null : ChatSessionService.McpProposalView(s.McpProposal),
             mcpLogin = s.McpLogin is null ? null : ChatSessionService.McpLoginView(s.McpLogin),
+            draftApproval = s.PendingDraft is null ? null : ChatSessionService.DraftApprovalView(s.PendingDraft),
+            capabilityApproval = s.PendingDenial is null ? null
+                : ChatSessionService.CapabilityApprovalView(s.PendingDenial, s.PendingDenialGrant, s.PendingDenialReason ?? ""),
             commitSha = s.CommitSha,
             error = s.Error,
         });
@@ -224,6 +228,32 @@ public sealed class ChatController : ControllerBase
     [HttpPost("api/chat/{id}/login/continue")]
     public IActionResult ContinueLogin(string id) =>
         FireAndAck(() => _ = _chat.ContinueLoginAsync(id), id, ChatPhase.AwaitingLogin);
+
+    // --- gate: approve/reject an agent-drafted tool (awaiting-draft-approval) ------------
+
+    /// <summary>Enable the drafted tool (promotes it) and resume the agent so it can use it.</summary>
+    [HttpPost("api/chat/{id}/draft/approve")]
+    public IActionResult ApproveDraft(string id) =>
+        FireAndAck(() => _ = _chat.ApproveDraftAsync(id), id, ChatPhase.AwaitingDraftApproval);
+
+    /// <summary>Decline the drafted tool (discards it) and resume the agent without it.</summary>
+    [HttpPost("api/chat/{id}/draft/reject")]
+    public IActionResult RejectDraft(string id) =>
+        FireAndAck(() => _ = _chat.RejectDraftAsync(id), id, ChatPhase.AwaitingDraftApproval);
+
+    // --- gate: allow/deny a refused capability call (awaiting-capability-approval) --------
+
+    /// <summary>Allow the blocked capability and resume the agent so it can retry the call.
+    /// <c>remember:true</c> persists the grant into <c>site.json</c>; <c>remember:false</c> (default)
+    /// allows it for this run only.</summary>
+    [HttpPost("api/chat/{id}/capability/allow")]
+    public IActionResult AllowCapability(string id, [FromBody] CapabilityAllowRequest? req) =>
+        FireAndAck(() => _ = _chat.AllowCapabilityAsync(id, req?.Remember ?? false), id, ChatPhase.AwaitingCapabilityApproval);
+
+    /// <summary>Deny the blocked capability and resume the agent without it.</summary>
+    [HttpPost("api/chat/{id}/capability/deny")]
+    public IActionResult DenyCapability(string id) =>
+        FireAndAck(() => _ = _chat.DenyCapabilityAsync(id), id, ChatPhase.AwaitingCapabilityApproval);
 
     /// <summary>Force-stop — valid from any non-terminal phase.</summary>
     [HttpPost("api/chat/{id}/cancel")]

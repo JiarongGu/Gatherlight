@@ -4,6 +4,7 @@ using System.Text.Json;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Capabilities.Models;
 using Gatherlight.Server.Platform.Capabilities.Sandbox.Services;
+using Gatherlight.Server.Platform.Capabilities.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 using Gatherlight.Server.Platform.Site.Services;
 
@@ -22,6 +23,13 @@ namespace Gatherlight.Server.Platform.Capabilities.Tools.Services;
 public interface IScriptToolProvider
 {
     IReadOnlyList<IGatherlightTool> Current { get; }
+
+    /// <summary>Force an immediate rescan, bypassing the debounce. The watcher already reloads on a
+    /// <c>tool.json</c> file event, but a manifest-only change (nothing enables/allows a capability by
+    /// touching a script's own file) never fires that watcher — a grant written straight to
+    /// <c>site.json</c> (draft promotion aside, which also drops a new file) needs this to take effect
+    /// before the run that requested it resumes.</summary>
+    void Reload();
 }
 
 public sealed class ScriptToolProvider : IScriptToolProvider, IHostedService, IDisposable
@@ -31,17 +39,19 @@ public sealed class ScriptToolProvider : IScriptToolProvider, IHostedService, ID
     private readonly ISiteContext _data;
     private readonly ISiteManifestStore _manifest;
     private readonly ICapabilityLauncher _launcher;
+    private readonly ISessionCapabilityAllowance _sessionAllowance;
     private readonly ILogger<ScriptToolProvider> _log;
     private FileSystemWatcher? _watcher;
     private Timer? _timer;
     private volatile IReadOnlyList<IGatherlightTool> _current = Array.Empty<IGatherlightTool>();
 
     public ScriptToolProvider(ISiteContext data, ISiteManifestStore manifest,
-        ICapabilityLauncher launcher, ILogger<ScriptToolProvider> log)
+        ICapabilityLauncher launcher, ISessionCapabilityAllowance sessionAllowance, ILogger<ScriptToolProvider> log)
     {
         _data = data;
         _manifest = manifest;
         _launcher = launcher;
+        _sessionAllowance = sessionAllowance;
         _log = log;
     }
 
@@ -74,7 +84,7 @@ public sealed class ScriptToolProvider : IScriptToolProvider, IHostedService, ID
         _timer.Change(Debounce, Timeout.InfiniteTimeSpan);
     }
 
-    private void Reload()
+    public void Reload()
     {
         var tools = new List<IGatherlightTool>();
         // Resolved fresh each pass — via Load(), NOT the cached .Current — so a site.json edit
@@ -92,9 +102,13 @@ public sealed class ScriptToolProvider : IScriptToolProvider, IHostedService, ID
             _log.LogWarning(ex, "site.json reload failed — keeping last-known capabilities.enabled");
             enabledGrants = _manifest.Current.Capabilities.Enabled;
         }
-        var enabled = enabledGrants
-            .Where(g => g.Id.Length > 0)
-            .ToDictionary(g => g.Id, g => g, StringComparer.OrdinalIgnoreCase);
+        // Persisted grants first, then the chat escalation gate's session-only ("allow once") grants
+        // layered on top — a plain loop rather than Concat().ToDictionary() because the latter throws
+        // on a duplicate id, and here a duplicate is not an error: the session grant is a deliberate,
+        // more-recent human decision and is meant to win.
+        var enabled = new Dictionary<string, CapabilityGrant>(StringComparer.OrdinalIgnoreCase);
+        foreach (var g in enabledGrants) if (g.Id.Length > 0) enabled[g.Id] = g;
+        foreach (var g in _sessionAllowance.Current) if (g.Id.Length > 0) enabled[g.Id] = g;
         foreach (var manifestPath in Directory.EnumerateFiles(ToolsRoot, "tool.json", SearchOption.AllDirectories))
         {
             try

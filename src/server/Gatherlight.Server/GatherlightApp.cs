@@ -269,7 +269,17 @@ public static class GatherlightApp
             // ToolRegistry projects through it so /api/tools and /mcp can never show something the
             // agent isn't actually allowed to call.
             .AddSingleton<Platform.Capabilities.Services.ICapabilityRegistry, Platform.Capabilities.Services.CapabilityRegistry>()
+            // The chat escalation gate's "allow once" — grants for the CURRENT agent run only, never
+            // written to site.json. A single global set is safe here because at most one agent task
+            // ever runs app-wide; see the type's own doc comment for why that makes it correct.
+            .AddSingleton<Platform.Capabilities.Services.ISessionCapabilityAllowance, Platform.Capabilities.Services.SessionCapabilityAllowance>()
+            // The runtime's own record of each capability refusal — the escalation gate's card is
+            // built from this, never from the agent's account of what happened.
+            .AddSingleton<Platform.Capabilities.Services.ICapabilityDenialLog, Platform.Capabilities.Services.CapabilityDenialLog>()
             .AddSingleton<IToolRegistry, ToolRegistry>()
+            // Agent-drafted tools in .claude/tool-drafts/ — never loaded by the registry above, so a
+            // draft is inert until a human calls IDraftStore.Promote (S2b's approval gate consumes it).
+            .AddSingleton<Platform.Capabilities.Services.IDraftStore, Platform.Capabilities.Services.DraftStore>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>()
             // Knowledge-base upgrade migration (LLM-reconcile customized .claude/ files with new templates)
