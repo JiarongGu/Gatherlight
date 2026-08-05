@@ -32,6 +32,9 @@ security headers + brute-force lockout), a **native C++ launcher** with two-phas
 and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,Cortex,Playground}`,
 `Platform/Hosting/{Update,Security}`, `Platform/Storage/Memory`.
 
+The agent's own UI is declarative: `Platform/Agent/Ui` validates a component tree that renders both
+inline in chat and as site pages from `{data}/ui/` — no raw HTML anywhere in the agent's reach.
+
 - `tools/pdf-form/` — a Node utility (pdf-lib + fontkit) for PDF AcroForm inspect/fill/merge,
   invoked by the C# document tools via `NodeLeafTool` (reliable on real + CJK PDFs where PDFsharp
   threw). The former `tools/puppeteer/` scrapers are fully ported to C#/Playwright and removed —

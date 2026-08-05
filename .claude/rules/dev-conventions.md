@@ -74,6 +74,20 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   listing hit re-resolved. That's the same set the planner agent may already read, so the judges gain
   no reach the scope guard doesn't already grant. Registering zero `ITool`s makes the host a no-op.
   Proof lives in `e2e-p36` (the claude stub drives the MCP server for real and asserts the denials).
+- **Agent-authored UI is a validated node tree, never markup.** The vocabulary is a DI collection of
+  `IUiNodeSchema` (`Platform/Agent/Ui`): one class + one registration per component, never a switch.
+  The server validates before the client is told a block exists — unknown type, unknown prop, wrong
+  type, children on a leaf, or past the depth/node limits all fail, and a failure is SHOWN to the
+  user, never dropped. Two mounts share it: a ```ui fence inside a streamed chat turn (the scanner
+  splits a turn into ordered segments so raw JSON never lands in the transcript) and a page spec in
+  `{data}/ui/`. `rehype-raw` and the sanitize allow-list are gone — legacy `trip-map`/`city-map`
+  divs survive through a remark shim, so agent text has no path to markup at all. A `Button`'s
+  action is a container verb (`send`, `openRecord`), and `send` only composes the user's next
+  message: a button cannot approve anything. The schema is C# and the renderer is TypeScript, so
+  `node devtools/dev.mjs check-ui-registry` guards the two lists against drift. The vocabulary the
+  agent reads (`.claude/ui-spec.md`) is app-managed and version-gated like the scope guard — it is a
+  protocol contract, not knowledge-base content the seeder must preserve, and it has to keep saying
+  exactly what `UiTreeValidator` enforces. Proof lives in `e2e-p41`.
 - **Capabilities carry provenance.** `Platform` (compiled, shipped by us) is available by default and
   runs in-process; `Script` and `Mcp` are off until `site.json` lists them in `capabilities.enabled`;
   `Draft` is never loaded. Non-platform capabilities run under `node --permission` with filesystem
