@@ -219,6 +219,47 @@ if (uiRequest.includes('CONTEXT_ECHO')) {
   process.exit(0);
 }
 
+// --- S3b: page authoring at the diff gate (e2e-p42) -------------------------------------------
+// Writes a page during the EXECUTE phase. `readOnly` is false only on the execute run, so the plan
+// turn returns a plan and the execute turn does the write — matching the real two-gate flow. The
+// marker rides IN the plan text so it survives into the execute prompt ({approvedPlan}), the same
+// mechanism the [TRIG:…] tags below use; read from the CURRENT request so a later turn whose thread
+// context quotes this one cannot cross-fire. Sits after the SCORING branch so the judge call that
+// follows a committed page still returns its {score, reason} verdict.
+const pageCase = (uiRequest.match(/PAGE_CASE:([A-Z_]+)/) || [])[1];
+if (pageCase) {
+  const name = pageCase.toLowerCase();
+  if (readOnly) {
+    const planText = `## 计划(stub)\n\n1. **What the user asked** — 做一个页面\n`
+      + `2. **Files to change** — ui/${name}.json (PAGE_CASE:${pageCase})`;
+    emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
+    done(planText);
+    process.exit(0);
+  }
+  const bodies = {
+    // A page the household can actually read at the gate — a heading and a table.
+    GOOD: {
+      title: '行程面板', nav: { label: '行程', order: 1 },
+      root: {
+        type: 'Stack',
+        children: [
+          { type: 'Heading', text: '东京', level: 2 },
+          { type: 'Table', columns: ['项目', '金额'], rows: [['机票', '82000']] },
+        ],
+      },
+    },
+    // An unknown component: the validator must refuse it and the gate must refuse the commit.
+    BAD: { title: '坏页面', root: { type: 'Gantt', text: 'nope' } },
+  };
+  const abs = path.resolve(process.cwd(), `ui/${name}.json`);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, JSON.stringify(bodies[pageCase], null, 2), 'utf8');
+  emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: abs } }] } });
+  emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+  done(`已写入 ui/${name}.json(stub)`);
+  process.exit(0);
+}
+
 if (readOnly) {
   // Surface whether the server pre-routed discovery (e2e asserts the marker).
   const routed = prompt.includes('SERVER PRE-ROUTING') ? '[pre-routed]' : '[full-gate]';

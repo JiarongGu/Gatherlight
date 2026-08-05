@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd,
+  dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until,
 } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p42');
@@ -18,7 +18,7 @@ const PORT = 5486;
 
 const server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const base = server.base ?? `http://127.0.0.1:${PORT}`;
-const { j } = makeClient(base);
+const { j, post } = makeClient(base);
 
 // Ask the generated scope guard whether a write would be allowed. Mirrors p24's invocation: run the
 // hook with a PreToolUse payload on stdin and read its decision.
@@ -77,6 +77,41 @@ try {
   ok('a hidden page is marked hidden', named('secret')?.hidden === true);
   ok('a hidden page is still fetchable by name',
     (await j('/api/ui/pages/secret')).body?.status === 'ready');
+
+  // --- the preview gate ---------------------------------------------------------------------
+  const runToGate = async (message) => {
+    const started = await post('/api/chat', { message, mode: 'plan' });
+    const id = started.body?.id;
+    await until(async () => (await j(`/api/chat/${id}`)).body?.phase === 'awaiting-plan-approval', 60000);
+    await post(`/api/chat/${id}/plan/approve`);
+    await until(async () => {
+      const p = (await j(`/api/chat/${id}`)).body?.phase;
+      return p === 'awaiting-diff-approval' || p === 'error' || p === 'rejected';
+    }, 60000);
+    return id;
+  };
+
+  const goodId = await runToGate('PAGE_CASE:GOOD 给行程做个面板');
+  const goodReview = (await j(`/api/chat/${goodId}`)).body?.review;
+  const goodPage = (goodReview?.pages ?? [])[0];
+  ok('a page change carries a page preview', Boolean(goodPage), JSON.stringify(goodReview?.pages ?? null));
+  ok('the preview is ready', goodPage?.status === 'ready', goodPage?.reason ?? '');
+  ok('the preview carries the validated tree', goodPage?.root?.type === 'Stack');
+  ok('the summary is computed, not empty', (goodPage?.summary ?? '').length > 0, goodPage?.summary ?? '');
+  ok('a new page says so in the summary', /新页面/.test(goodPage?.summary ?? ''), goodPage?.summary ?? '');
+  // POSITIVE CONTROL: a valid page COMMITS.
+  await post(`/api/chat/${goodId}/diff/approve`);
+  await until(async () => (await j(`/api/chat/${goodId}`)).body?.phase === 'committed', 60000);
+  ok('a valid page commits', (await j(`/api/chat/${goodId}`)).body?.phase === 'committed');
+
+  const badId = await runToGate('PAGE_CASE:BAD 再来一个');
+  const badPage = ((await j(`/api/chat/${badId}`)).body?.review?.pages ?? [])[0];
+  ok('an invalid page is marked invalid', badPage?.status === 'invalid', JSON.stringify(badPage ?? null));
+  ok('the reason names the unknown component', /Gantt/.test(badPage?.reason ?? ''), badPage?.reason ?? '');
+  await post(`/api/chat/${badId}/diff/approve`);
+  const stillAtGate = (await j(`/api/chat/${badId}`)).body?.phase;
+  ok('approving an invalid page is REFUSED', stillAtGate === 'awaiting-diff-approval', String(stillAtGate));
+  await post(`/api/chat/${badId}/diff/reject`);
 } catch (e) {
   fail(e?.stack || String(e));
   console.error(server.log().slice(-3000));
