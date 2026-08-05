@@ -30,7 +30,10 @@ function extractPlannerGuard() {
   // Asserted, not assumed — if the placeholder is ever renamed or inlined, this fails loudly
   // instead of silently exercising a guard that no longer matches the shipped one.
   if (!raw.includes('__WRITE_DIRS__')) throw new Error('scope-guard template lost its __WRITE_DIRS__ placeholder — update p24 to match ChatEnvironmentService.RenderScopeGuard');
-  const body = raw.replace('__WRITE_DIRS__', "['plans', 'household', '.claude']");
+  // Same deal for __DENIED_TOOLS__ (capabilities.deny, rendered as a JS array of tool ids) — a
+  // default manifest denies nothing, so the default-manifest render is `[]`.
+  if (!raw.includes('__DENIED_TOOLS__')) throw new Error('scope-guard template lost its __DENIED_TOOLS__ placeholder — update p24 to match ChatEnvironmentService.RenderScopeGuard');
+  const body = raw.replace('__WRITE_DIRS__', "['plans', 'household', '.claude']").replace('__DENIED_TOOLS__', '[]');
   const out = path.join(os.tmpdir(), `gl-planner-guard-${process.pid}.mjs`);
   fs.writeFileSync(out, body);
   return out;

@@ -97,6 +97,27 @@ switch (cmd) {
       '',
     ].join('\n'));
     console.log(`scaffolded ${dir} — the running server hot-loads it (no rebuild); edit tool.json + run.mjs.`);
+
+    // A script tool absent from capabilities.enabled returns 403 (see docs/TOOLS.md). A developer
+    // running `new-tool` at their own terminal IS the human enablement step — there's no agent
+    // involved and nothing to withhold — so enable it here now, the same way the console will in S2b.
+    const sitePath = path.join(dataDir, 'site.json');
+    if (!fs.existsSync(sitePath)) {
+      console.log(`no site.json at ${sitePath} — not enabling "${name}" (the startup migration creates it on first boot; enable "${name}" from the console, or re-run new-tool, once it exists).`);
+      break;
+    }
+    const site = JSON.parse(fs.readFileSync(sitePath, 'utf8'));
+    site.capabilities ??= {};
+    site.capabilities.deny ??= [];
+    site.capabilities.enabled ??= [];
+    const idOf = (entry) => (typeof entry === 'string' ? entry : entry?.id);
+    if (site.capabilities.enabled.some((entry) => idOf(entry) === name)) {
+      console.log(`"${name}" is already in capabilities.enabled — nothing to do.`);
+      break;
+    }
+    site.capabilities.enabled.push({ id: name });
+    fs.writeFileSync(sitePath, JSON.stringify(site, null, 2) + '\n');
+    console.log(`enabled "${name}" in ${sitePath} — a grant defaults to no network and cache-only writes; widen it there (fs/net) if the tool needs more.`);
     break;
   }
 

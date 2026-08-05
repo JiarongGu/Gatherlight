@@ -46,13 +46,17 @@ For everything else, drop a folder into the **data folder**:
   run.mjs       # or any executable the manifest points at
 ```
 
-The server watches `{data}/tools/` and reloads on any `tool.json` change — the tool appears on
-HTTP + MCP within ~1s, and the chat agent's `--allowedTools` picks it up on its next run.
-Scaffold one with:
+The server watches `{data}/tools/` and reloads on any `tool.json` change, but a script tool is off
+by default: it only appears on HTTP + MCP once its id is named in `site.json`'s
+`capabilities.enabled` (a bare id is the most restricted grant — no network, `cache`-only writes).
+Absent that entry it 403s instead of running. Scaffold one with:
 
 ```bash
-node devtools/dev.mjs new-tool <name>      # into ./local by default
+node devtools/dev.mjs new-tool <name>      # into ./local by default — also enables it (bare grant)
 ```
+
+Once enabled, it appears on HTTP + MCP within ~1s and the chat agent's `--allowedTools` picks it up
+on its next run.
 
 ### tool.json
 
@@ -89,10 +93,13 @@ node devtools/dev.mjs new-tool <name>      # into ./local by default
 
 ### Rules of the road
 
-- Script tools run **with server privileges**. They are authored by you (or a Claude Code dev
-  session on this repo) — never by the chat agent: the scope guard confines agent writes to
+- Script tools run **sandboxed**, never with server privileges: `node --permission` scoped to the
+  filesystem paths named in the tool's `capabilities.enabled` grant (`fs.read`/`fs.write` name
+  manifest record directories or the literal `cache`), plus a platform `--import` preload that
+  removes network access unless the grant sets `"net": true`. They are authored by you (or a Claude
+  Code dev session on this repo) — never by the chat agent: the scope guard confines agent writes to
   `plans/ household/ .claude/`, and that's deliberate. When the agent hits a missing-tool gap it
-  records it via `/remember`; you decide whether to create the tool.
+  records it via `/remember`; you decide whether to create the tool and enable it.
 - A broken manifest is skipped with a warning — it never takes the server or other tools down.
 - Prefer a script tool first; promote to a C# built-in when it needs server internals or becomes
   hot-path (see `docs/ROADMAP.md` phase 7 for the porting pattern).

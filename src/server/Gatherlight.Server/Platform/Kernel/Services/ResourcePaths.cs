@@ -44,6 +44,16 @@ public static class ResourcePaths
         return "";
     }
 
+    /// <summary>The capability sandbox preload. Shipped as a security asset — its absence means a
+    /// sandboxed capability would keep network access, so the launcher treats a miss as fatal
+    /// rather than spawning without it.</summary>
+    public static string CapGuard => Path.Combine(
+        First("cap-guard.mjs",
+            Path.Combine(Base, "Platform", "Capabilities", "Sandbox", "Assets"),
+            Path.Combine(Base, "res"),
+            Path.Combine(Base, "..", "res")),
+        "cap-guard.mjs");
+
     private static string First(string marker, params string[] dirs)
     {
         foreach (var d in dirs)

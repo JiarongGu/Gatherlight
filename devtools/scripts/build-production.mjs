@@ -97,6 +97,10 @@ const move = (from, to) => { if (fs.existsSync(from)) fs.renameSync(from, to); }
 // libs) is moved into libs/ in bulk below — NOT just the exe (FD is a folder of DLLs, not one file).
 move(path.join(stage, 'wwwroot'), path.join(res, 'wwwroot'));
 move(path.join(stage, 'Assets', 'SiteTemplate'), path.join(res, 'template'));
+// The capability sandbox preload — a security asset, not optional content. Its absence would mean
+// a sandboxed capability silently keeps network access, so required() below asserts it.
+move(path.join(stage, 'Platform', 'Capabilities', 'Sandbox', 'Assets', 'cap-guard.mjs'),
+     path.join(res, 'cap-guard.mjs'));
 
 // Playwright DRIVER (~34 MB zip → ~88 MB): download-at-setup by default — the 资源 panel fetches it
 // (from the Gatherlight.Resources nuget package) into {data}/state/resources/.playwright, resolved at
@@ -140,6 +144,7 @@ fs.rmSync(stage, { recursive: true, force: true });
 // user asks for one. (Populated by step 3.8 below; this asserts it after the fact.)
 const required = () => [
   path.join(libs, 'Gatherlight.Host.exe'), path.join(res, 'wwwroot', 'index.html'), path.join(res, 'template', 'CLAUDE.md'),
+  path.join(res, 'cap-guard.mjs'),
   ...['inspect', 'fill', 'fill-itinerary', 'merge'].map((e) => path.join(res, 'tools', 'pdf-form', `${e}.cjs`)),
 ];
 

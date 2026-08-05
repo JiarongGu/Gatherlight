@@ -189,6 +189,11 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageInfoTool>()
             .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageResizeTool>()
             .AddSingleton<IGatherlightTool, Platform.Capabilities.Documents.Tools.ImageConvertTool>()
+            // Capability sandbox: probes node for --permission + module.registerHooks (fails closed
+            // when unavailable), then builds the argv (fs scope from the grant + the network preload)
+            // that runs a Script capability under it.
+            .AddSingleton<Platform.Capabilities.Sandbox.Services.ICapabilityRuntime, Platform.Capabilities.Sandbox.Services.CapabilityRuntime>()
+            .AddSingleton<Platform.Capabilities.Sandbox.Services.ICapabilityLauncher, Platform.Capabilities.Sandbox.Services.NodeCapabilityLauncher>()
             // Generalized stores + agent-writable cross-session memory
             .AddSingleton<Platform.Storage.Knowledge.Services.IEntityStore, Platform.Storage.Knowledge.Services.EntityStore>()
             .AddSingleton<Platform.Storage.Knowledge.Services.IKnowledgeStore, Platform.Storage.Knowledge.Services.KnowledgeStore>()
@@ -260,6 +265,10 @@ public static class GatherlightApp
             .AddSingleton<Platform.Capabilities.McpClient.Services.IExternalToolProvider, Platform.Capabilities.McpClient.Services.McpProxyToolProvider>()
             .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpProvisionService, Platform.Capabilities.McpClient.Services.McpProvisionService>()
             .AddSingleton<Platform.Capabilities.McpClient.Services.IMcpLoginService, Platform.Capabilities.McpClient.Services.McpLoginService>()
+            // One registry carrying provenance + state over every origin (platform/script/mcp/draft);
+            // ToolRegistry projects through it so /api/tools and /mcp can never show something the
+            // agent isn't actually allowed to call.
+            .AddSingleton<Platform.Capabilities.Services.ICapabilityRegistry, Platform.Capabilities.Services.CapabilityRegistry>()
             .AddSingleton<IToolRegistry, ToolRegistry>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>()

@@ -38,7 +38,8 @@ public sealed class ChatEnvironmentService
     /// written (caller commits it to the data repo), else null.</summary>
     public string? EnsureFiles()
     {
-        File.WriteAllText(SettingsPath, BuildChatSettings(PlannerGuardCommand));
+        var deny = _manifest.Current.Capabilities.Deny;
+        File.WriteAllText(SettingsPath, BuildChatSettings(PlannerGuardCommand, deny));
         // 系统模式 settings: same acceptEdits shape, but the PreToolUse hook is the code repo's tracked
         // system scope guard (deny-list: whole repo except guard/, src/server, settings, .git), referenced
         // absolutely since the run's $CLAUDE_PROJECT_DIR is the code repo. Built from the SAME template with
@@ -46,7 +47,7 @@ public sealed class ChatEnvironmentService
         // running the PLANNER scope) if the settings JSON is ever reformatted.
         var systemGuard = Path.Combine(_options.CodeRootPath, "guard", "system-scope-guard.mjs")
             .Replace('\\', '/');
-        File.WriteAllText(SystemSettingsPath, BuildChatSettings($"node \\\"{systemGuard}\\\""));
+        File.WriteAllText(SystemSettingsPath, BuildChatSettings($"node \\\"{systemGuard}\\\"", deny));
         // MCP over HTTP from this same server — the spawned agent calls registry tools mid-run.
         File.WriteAllText(McpConfigPath,
             $$"""
@@ -71,12 +72,16 @@ public sealed class ChatEnvironmentService
     /// <summary>The guard is generated, not shipped verbatim: its WRITE_DIRS come from the site
     /// manifest's declared record directories (plus .claude), so a site that keeps its artifacts
     /// somewhere else is jailed correctly without editing the guard. PROTECTED stays hardcoded —
-    /// a site must not be able to widen its own jail by editing its own manifest.</summary>
+    /// a site must not be able to widen its own jail by editing its own manifest. DENIED comes from
+    /// the same manifest's capabilities.deny — a tool withheld in the allow-list (BuildChatSettings)
+    /// must ALSO be denied here, so re-opening one plane (e.g. hand-editing the generated settings
+    /// file) doesn't quietly reopen the other.</summary>
     private string RenderScopeGuard()
     {
         var dirs = _manifest.Current.Records.Concat([".claude"]).Distinct();
         var literal = "[" + string.Join(", ", dirs.Select(d => $"'{d.Replace("'", "\\'")}'")) + "]";
-        return ScopeGuardMjs.Replace("__WRITE_DIRS__", literal);
+        var deniedLiteral = "[" + string.Join(", ", _manifest.Current.Capabilities.Deny.Select(d => $"'{d.Replace("'", "\\'")}'")) + "]";
+        return ScopeGuardMjs.Replace("__WRITE_DIRS__", literal).Replace("__DENIED_TOOLS__", deniedLiteral);
     }
 
     // The scope guard is a SECURITY boundary, not user content: (re)issue it when missing OR when an
@@ -103,20 +108,44 @@ public sealed class ChatEnvironmentService
     // string.Replace — means a reformat can't silently drop the substitution and mis-scope a run.
     private const string PlannerGuardCommand = "node \\\"$CLAUDE_PROJECT_DIR/.claude/hooks/scope-guard.mjs\\\"";
 
-    private static string BuildChatSettings(string guardCommand) => $$"""
+    /// <summary>The CLI built-ins granted to the agent by default — WebFetch among them, which the
+    /// scope guard's PreToolUse matcher never intercepted (see RenderScopeGuard's DENIED plane for
+    /// the other half of closing that gap).</summary>
+    private static readonly string[] BuiltinTools =
+        ["Read", "Grep", "Glob", "Edit", "Write", "MultiEdit", "TodoWrite", "WebFetch", "WebSearch", "Skill", "Bash"];
+
+    /// <summary>The tool names the guard's PreToolUse logic actually has something to say about
+    /// (path/command inspection). This is the matcher's floor — unchanged from before capabilities.deny
+    /// existed, and NOT widened to every tool: the guard already allow()s anything it doesn't
+    /// recognise, so matching more would only add dispatch latency to calls the hook has no opinion
+    /// on.</summary>
+    private static readonly string[] GuardMatchedTools =
+        ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "Read", "Grep", "Glob"];
+
+    /// <summary>Emits the fixed allow-list minus anything the site's capabilities.deny withholds
+    /// (case-insensitive) — a deny entry must remove a built-in from BOTH this generated allow-list
+    /// AND the guard's DENIED check, or it isn't actually denied.</summary>
+    private static string BuildChatSettings(string guardCommand, IReadOnlyList<string> deny)
+    {
+        var allow = BuiltinTools.Where(t => !deny.Any(d => string.Equals(d, t, StringComparison.OrdinalIgnoreCase)));
+        var allowJson = string.Join(", ", allow.Select(t => $"\"{t}\""));
+        // A denied tool must also be in the SET OF TOOLS THE HOOK FIRES FOR, or the DENIED check
+        // added to the guard body is unreachable — the exact gap that left WebFetch's guard-side
+        // denial decorative. Serialized via JsonSerializer (not manual quoting) because a denied id
+        // is user-controlled (site.json) and Regex.Escape can itself introduce backslashes that need
+        // JSON-escaping in turn.
+        var matcherJson = System.Text.Json.JsonSerializer.Serialize(BuildGuardMatcher(deny));
+        return $$"""
         {
           "$comment": "Generated by Gatherlight at startup — do not edit (changes are overwritten). Isolated Claude Code settings for the chat EXECUTE phase, passed via `claude --settings`. Pre-grants permissions so the headless run never stalls on a prompt; the real safety is (1) the PreToolUse scope-guard hook below and (2) the human plan+diff gates in the server.",
           "permissions": {
             "defaultMode": "acceptEdits",
-            "allow": [
-              "Read", "Grep", "Glob", "Edit", "Write", "MultiEdit",
-              "TodoWrite", "WebFetch", "WebSearch", "Skill", "Bash"
-            ]
+            "allow": [{{allowJson}}]
           },
           "hooks": {
             "PreToolUse": [
               {
-                "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|Read|Grep|Glob",
+                "matcher": {{matcherJson}},
                 "hooks": [
                   {
                     "type": "command",
@@ -128,6 +157,20 @@ public sealed class ChatEnvironmentService
           }
         }
         """;
+    }
+
+    /// <summary>GuardMatchedTools plus any capabilities.deny id not already in that set, each
+    /// regex-escaped (deny ids come from a user-edited site.json and may contain regex metacharacters
+    /// like `.` or `(`), joined into the alternation the PreToolUse hook's "matcher" expects. With
+    /// deny: [] this is byte-identical to the pre-deny hardcoded matcher — no regression for a site
+    /// that denies nothing.</summary>
+    private static string BuildGuardMatcher(IReadOnlyList<string> deny)
+    {
+        var extra = deny
+            .Where(d => !GuardMatchedTools.Contains(d, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        return string.Join("|", GuardMatchedTools.Concat(extra).Select(System.Text.RegularExpressions.Regex.Escape));
+    }
 
     private const string ScopeGuardMjs = """
         #!/usr/bin/env node
@@ -149,12 +192,19 @@ public sealed class ChatEnvironmentService
          * Kept identical to guard/system-scope-guard.mjs except WRITE_DIRS + PROTECTED; e2e suite p24
          * runs both. GUARD_VERSION is the upgrade key: the server re-issues newer logic into an
          * existing data folder (ChatEnvironmentService.EnsureFiles), so hardening reaches old installs.
+         *
+         * DENIED (v6) closes the exfiltration residual this file used to admit to: WebFetch is granted
+         * in state/settings.chat.json but this guard's matcher never intercepted it. A site.json
+         * capabilities.deny entry now removes the tool from BOTH the generated allow-list
+         * (ChatEnvironmentService.BuildChatSettings) AND here — denying a CLI built-in, not just an
+         * MCP tool the guard never saw in the first place.
          */
-        // GUARD_VERSION: 5
+        // GUARD_VERSION: 6
         import path from 'node:path';
 
         const WRITE_DIRS = __WRITE_DIRS__;
         const PROTECTED = ['.claude/hooks', '.claude/settings.json', '.claude/settings.local.json'];
+        const DENIED = __DENIED_TOOLS__;
 
         const HISTORY = [
           /\bgit\s+(commit|add|push|reset|restore|checkout|clean|rebase|stash|rm)\b/,
@@ -238,6 +288,8 @@ public sealed class ChatEnvironmentService
         try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { allow(); }
 
         const toolName = payload.tool_name ?? '';
+        if (DENIED.includes(toolName))
+          deny(`Blocked: ${toolName} is not available in this site (denied in site.json).`);
         const toolInput = payload.tool_input ?? {};
         const projectDir = payload.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 

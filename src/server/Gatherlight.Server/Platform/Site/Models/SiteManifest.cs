@@ -1,3 +1,7 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Gatherlight.Server.Platform.Capabilities.Models;
+
 namespace Gatherlight.Server.Platform.Site.Models;
 
 /// <summary>
@@ -46,12 +50,40 @@ public sealed class SiteCapabilities
     public IReadOnlyList<string> Deny { get; init; } = [];
 
     /// <summary>Capabilities that did NOT come from the platform (an agent-drafted script tool, an
-    /// external MCP server) and are therefore off until a human enables them.</summary>
-    public IReadOnlyList<string> Enabled { get; init; } = [];
+    /// external MCP server) and are therefore off until a human enables them. Each entry may be a
+    /// bare id string (S1's shape, and the shape a hand-edit is likeliest to take) or a full
+    /// <see cref="CapabilityGrant"/> object — <see cref="GrantListConverter"/> accepts either.</summary>
+    [JsonConverter(typeof(GrantListConverter))]
+    public IReadOnlyList<CapabilityGrant> Enabled { get; init; } = [];
 }
 
 public sealed class SiteUiRef
 {
     public string Spec { get; init; } = "ui/";
     public int SpecVersion { get; init; } = 1;
+}
+
+/// <summary>Applies <see cref="CapabilityGrantConverter"/> per element so a mixed list of bare ids
+/// and grant objects round-trips.</summary>
+public sealed class GrantListConverter : JsonConverter<IReadOnlyList<CapabilityGrant>>
+{
+    private static readonly CapabilityGrantConverter Item = new();
+
+    public override IReadOnlyList<CapabilityGrant> Read(
+        ref Utf8JsonReader reader, Type type, JsonSerializerOptions options)
+    {
+        var list = new List<CapabilityGrant>();
+        if (reader.TokenType != JsonTokenType.StartArray) return list;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            list.Add(Item.Read(ref reader, typeof(CapabilityGrant), options));
+        return list;
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer, IReadOnlyList<CapabilityGrant> value, JsonSerializerOptions options)
+    {
+        writer.WriteStartArray();
+        foreach (var g in value) Item.Write(writer, g, options);
+        writer.WriteEndArray();
+    }
 }

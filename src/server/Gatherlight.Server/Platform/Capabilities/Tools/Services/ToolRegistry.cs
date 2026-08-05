@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Services;
+using Gatherlight.Server.Platform.Capabilities.Models;
+using Gatherlight.Server.Platform.Capabilities.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 
 namespace Gatherlight.Server.Platform.Capabilities.Tools.Services;
@@ -29,13 +31,15 @@ public sealed class ToolRegistry : IToolRegistry
     private readonly Dictionary<string, IGatherlightTool> _builtins;
     private readonly IScriptToolProvider _scripts;
     private readonly IExternalToolProvider _external;
+    private readonly ICapabilityRegistry _capabilities;
 
     public ToolRegistry(IEnumerable<IGatherlightTool> tools, IScriptToolProvider scripts,
-        IExternalToolProvider external)
+        IExternalToolProvider external, ICapabilityRegistry capabilities)
     {
         _builtins = tools.ToDictionary(t => t.Name);
         _scripts = scripts;
         _external = external;
+        _capabilities = capabilities;
     }
 
     public string McpServerName => "planner-tools";
@@ -43,10 +47,10 @@ public sealed class ToolRegistry : IToolRegistry
     private static IReadOnlyList<string> SurfacesOf(IGatherlightTool t) =>
         t.Surfaces is { Count: > 0 } s ? s : AllSurfaces;
 
-    /// <summary>Effective tool set, resolved at call time so hot-loaded script tools and
-    /// newly-connected external MCP tools appear immediately. Built-ins win on a name collision,
-    /// then script tools, then external MCP tools.</summary>
-    private Dictionary<string, IGatherlightTool> Resolve()
+    /// <summary>Every tool object that exists, regardless of whether the capability registry would
+    /// let it be called — used only to tell "unknown name" apart from "known but withheld" when a
+    /// call is refused.</summary>
+    private Dictionary<string, IGatherlightTool> ResolveAll()
     {
         var all = new Dictionary<string, IGatherlightTool>(_builtins);
         foreach (var t in _scripts.Current)
@@ -54,6 +58,21 @@ public sealed class ToolRegistry : IToolRegistry
         foreach (var t in _external.Current)
             all.TryAdd(t.Name, t);
         return all;
+    }
+
+    /// <summary>Effective tool set, resolved at call time so hot-loaded script tools and
+    /// newly-connected external MCP tools appear immediately. Built-ins win on a name collision,
+    /// then script tools, then external MCP tools — then filtered to what
+    /// <see cref="ICapabilityRegistry"/> says is <c>Available</c>, so a denied or not-yet-enabled
+    /// capability is absent here exactly as it is absent from the console's own listing.</summary>
+    private Dictionary<string, IGatherlightTool> Resolve()
+    {
+        var all = ResolveAll();
+        var available = _capabilities.Available()
+            .Select(c => c.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return all.Where(kv => available.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
     }
 
     public List<ToolDefinition> List(string? surface = null) =>
@@ -73,6 +92,20 @@ public sealed class ToolRegistry : IToolRegistry
         var tools = Resolve();
         if (!tools.TryGetValue(name, out var tool))
         {
+            // A capability that exists but is withheld by provenance/policy gets a refusal naming
+            // the reason, not a bare "unknown tool" — the console shows the same reason.
+            if (ResolveAll().ContainsKey(name))
+            {
+                var info = _capabilities.All()
+                    .FirstOrDefault(c => string.Equals(c.Id, name, StringComparison.OrdinalIgnoreCase));
+                var reason = info?.State switch
+                {
+                    CapabilityState.Denied => "已被禁用(site.json capabilities.deny)",
+                    CapabilityState.NotEnabled => "尚未在 site.json 的 capabilities.enabled 中启用",
+                    _ => "不可用",
+                };
+                throw new ToolException(403, $"工具 \"{name}\" {reason}。");
+            }
             var known = tools.Count > 0 ? string.Join(", ", tools.Keys) : "(无)";
             throw new ToolException(400, $"未知工具:\"{name}\"。可用:{known}");
         }
