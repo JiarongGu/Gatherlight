@@ -84,6 +84,19 @@ try {
   const escaped = await j('/api/ui/pages/..%2F..%2Fsite');
   ok('a traversing page name is refused', escaped.status === 404 || escaped.status === 400, String(escaped.status));
 
+  // --- legacy map compatibility -----------------------------------------------------------
+  // A plan document written before S3a embeds its map as raw HTML. It must still be readable —
+  // the remark shim converts it at parse time, which is why the raw-HTML rehype stage could go.
+  const legacyDoc = path.join(dataDir, 'plans', 'legacy-map-demo.md');
+  fs.mkdirSync(path.dirname(legacyDoc), { recursive: true });
+  fs.writeFileSync(legacyDoc,
+    '# Legacy\n\n<div class="city-map" data-points="35.71,139.79|Asakusa" data-connect="1"></div>\n', 'utf8');
+  // GET /api/plans/content?path=… returns { path, content } straight off disk for any .md under
+  // the site root — no index round-trip, so no watcher wait is needed here.
+  const doc = (await j('/api/plans/content?path=plans/legacy-map-demo.md')).body;
+  ok('legacy map document is still served intact', /city-map/.test(doc?.content ?? ''),
+    (doc?.content ?? '(no content)').slice(0, 80));
+
   // --- the image route is narrow ----------------------------------------------------------
   const dbGrab = await fetch(`${base}/api/ui/asset/state/gatherlight.db`);
   ok('the asset route refuses a non-image path', dbGrab.status === 404, String(dbGrab.status));

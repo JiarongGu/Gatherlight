@@ -1,9 +1,7 @@
 import { Children, isValidElement, memo, useMemo, type ComponentProps, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
-import rehypeSanitize from 'rehype-sanitize';
-import { markdownSchema } from '@/lib/sanitize';
+import { remarkLegacyMaps } from '@/ui/blocks/legacyMaps';
 import { Image } from '@/ui/atoms';
 import { Collapsible } from '@/ui/molecules';
 import { TripMap } from './TripMap';
@@ -36,11 +34,6 @@ const dayNumber = (children: ReactNode): string | undefined => {
 function lineId(node: unknown): string | undefined {
   const line = (node as { position?: { start?: { line?: number } } })?.position?.start?.line;
   return typeof line === 'number' ? `h-${line}` : undefined;
-}
-
-function parseCities(value: unknown): string[] {
-  if (typeof value !== 'string') return [];
-  return value.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -95,18 +88,17 @@ const FALLBACK_SVG =
 // an 88KB trip doc (+ its Leaflet maps) is only re-parsed when source/collapsible
 // actually change — not on every shell state toggle (chat / ⌘K / theme / resize).
 type MdComponents = ComponentProps<typeof ReactMarkdown>['components'];
-type RehypePlugins = ComponentProps<typeof ReactMarkdown>['rehypePlugins'];
 
-// rehypeRaw parses raw HTML into nodes (this is what lets the trip-map/city-map divs
-// through at all); rehypeSanitize then filters the WHOLE tree — raw and markdown-native
-// alike — against markdownSchema, an allow-list (untrusted plan/LLM content: the agent
-// can author HTML, so anything not explicitly permitted is dropped rather than passed).
-// Order matters: raw HTML must be parsed into element nodes before it can be sanitized.
-const REHYPE_PLUGINS: RehypePlugins = [rehypeRaw, [rehypeSanitize, markdownSchema]];
+// There is NO raw-HTML stage here — no rehype plugins at all. react-markdown turns every leftover
+// raw node into a TEXT node, so markup an agent (or an injected web page) writes into a plan
+// document is displayed, never parsed — which is also why there is no sanitize allow-list left to
+// keep correct. The one thing that used to need raw HTML, the `trip-map`/`city-map` divs in documents
+// written before S3a, is handled by `remarkLegacyMaps`: remark sees those as `html` nodes in the
+// mdast tree and swaps them for real map nodes before rehype ever runs.
 
 export const MarkdownView = memo(function MarkdownView({ source, collapsible }: Props) {
   const remarkPlugins = useMemo(
-    () => (collapsible ? [remarkGfm, remarkSectionizeH2] : [remarkGfm]),
+    () => (collapsible ? [remarkGfm, remarkSectionizeH2, remarkLegacyMaps] : [remarkGfm, remarkLegacyMaps]),
     [collapsible]
   );
 
@@ -150,31 +142,22 @@ export const MarkdownView = memo(function MarkdownView({ source, collapsible }: 
           {...(rest as Record<string, unknown>)}
         />
       ),
-      div: ({ className, children, ...rest }) => {
-        if (className === 'trip-map') {
-          const cities = parseCities((rest as Record<string, unknown>)['data-cities']);
-          return <TripMap cities={cities} />;
-        }
-        if (className === 'city-map') {
-          const attrs = rest as Record<string, unknown>;
-          const pointsRaw = typeof attrs['data-points'] === 'string' ? (attrs['data-points'] as string) : '';
-          const connect = attrs['data-connect'] === '1' || attrs['data-connect'] === 'true';
-          const title = typeof attrs['data-title'] === 'string' ? (attrs['data-title'] as string) : undefined;
-          return <CityMap pointsRaw={pointsRaw} connect={connect} title={title} />;
-        }
-        return (
-          <div className={className} {...(rest as Record<string, unknown>)}>
-            {children}
-          </div>
-        );
+      // The custom element `remarkLegacyMaps` synthesizes. Not an HTML tag, hence the cast on the
+      // map below — react-markdown's `Components` is keyed by intrinsic element names.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      'legacy-map': ({ node, ...rest }: any) => {
+        let cfg: { cities?: string[]; pointsRaw?: string; connect?: boolean; title?: string } = {};
+        try { cfg = JSON.parse((rest as Record<string, string>)['data-config'] ?? '{}'); } catch { /* keep {} */ }
+        if (cfg.cities?.length) return <TripMap cities={cfg.cities} />;
+        return <CityMap pointsRaw={cfg.pointsRaw ?? ''} connect={Boolean(cfg.connect)} title={cfg.title} />;
       }
-    }),
+    }) as MdComponents,
     [collapsible]
   );
 
   return (
     <article className="markdown">
-      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={REHYPE_PLUGINS} components={components}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
         {source}
       </ReactMarkdown>
     </article>
