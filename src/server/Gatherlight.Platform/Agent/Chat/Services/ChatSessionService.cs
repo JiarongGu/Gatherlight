@@ -82,6 +82,10 @@ public sealed class ChatSession
     /// at the diff gate with uncommitted edits). Released in <c>SetPhase</c> on a terminal phase.</summary>
     public IDisposable? GateLease { get; set; }
     public required string ThreadContext { get; init; }
+    /// <summary>The conversation this turn belongs to. A thread is ONE turn; the multi-turn
+    /// conversation the user sees is the run of turns sharing this id (stored in the thread's
+    /// app-owned metadata), so history can group them without a migration.</summary>
+    public required string ConversationId { get; init; }
     /// <summary>Set when the agent proposed adding an external MCP server (phase awaiting-mcp-approval);
     /// the concrete draft the human confirms. Cleared on approve/reject. Never carries secrets — those
     /// are supplied by the human at the gate and go straight to the provision service.</summary>
@@ -293,7 +297,7 @@ public sealed class ChatSessionService
             _ => _repo.UpsertSessionAsync(
                 s.Id, s.Phase, s.Mode, s.UserMessage,
                 JsonSerializer.Serialize(s.Attachments), s.PlanText, s.ClaudeSessionId,
-                s.CommitSha, s.Error, s.CreatedAt.ToString("o")),
+                s.CommitSha, s.Error, s.CreatedAt.ToString("o"), s.ConversationId),
             TaskContinuationOptions.ExecuteSynchronously).Unwrap();
     }
 
@@ -361,7 +365,10 @@ public sealed class ChatSessionService
 
     // --- thread context (compact turn summaries; durable in chat_turn) ------------------
 
-    private async Task<string> PrepareThreadContextAsync()
+    /// <summary>The working context for the turn about to start, plus whether it reset. <c>Fresh</c>
+    /// is what a NEW conversation begins on: the grouping the user sees in history is then exactly
+    /// the grouping the agent gets as context.</summary>
+    private async Task<(string Context, bool Fresh)> PrepareThreadContextAsync()
     {
         var turns = await _repo.TurnsAsync();
         var last = turns.LastOrDefault();
@@ -374,9 +381,9 @@ public sealed class ChatSessionService
         if (idle || tooLong || lastCommitted)
         {
             await _repo.ClearTurnsAsync();
-            return "";
+            return ("", true);
         }
-        return string.Join('\n', turns.Select(t => $"- \"{t.Message}\" → {t.Outcome}"));
+        return (string.Join('\n', turns.Select(t => $"- \"{t.Message}\" → {t.Outcome}")), false);
     }
 
     private void RecordOutcome(ChatSession s, string outcome)
@@ -390,14 +397,27 @@ public sealed class ChatSessionService
 
     // --- gate 0: start ------------------------------------------------------------------
 
-    public async Task<ChatSession> StartChatAsync(string userMessage, IReadOnlyList<string> attachments, string mode = "plan")
+    public async Task<ChatSession> StartChatAsync(string userMessage, IReadOnlyList<string> attachments,
+        string mode = "plan", string? continuesConversationId = null)
     {
         if (IsBusy()) throw new InvalidOperationException("BUSY");
         // Take the app-wide agent slot (shared with background jobs). Held until this session is
         // terminal — a live chat owns the data tree, so no job can mutate it underneath.
         var lease = _gate.TryBegin("chat");
         if (lease is null) throw new InvalidOperationException("BUSY");
-        var threadContext = await PrepareThreadContextAsync();
+        var (threadContext, freshThread) = await PrepareThreadContextAsync();
+        // A conversation is the run of turns sharing a working context. An explicit
+        // continuesConversationId (the user typed into an opened history item) wins; otherwise the
+        // same idle / turn-cap / post-commit rule that resets the context also starts a new
+        // conversation, so the grouping the user sees matches the grouping the agent gets.
+        var conversationId = continuesConversationId
+            ?? (freshThread ? null : await _repo.LatestConversationIdAsync())
+            ?? $"c{DateTime.UtcNow.Ticks:x}";
+        // Continuing an OLD conversation: chat_turn no longer holds it (cleared on idle/commit), so
+        // rebuild the context from that conversation's own stored turns. Only when the live window
+        // is empty — an active thread's own context is fresher and already correct.
+        if (continuesConversationId is not null && threadContext.Length == 0)
+            threadContext = await _repo.ConversationContextAsync(continuesConversationId);
         var isSystem = mode == "system";
         var s = new ChatSession
         {
@@ -407,6 +427,7 @@ public sealed class ChatSessionService
             Attachments = attachments.ToList(),
             Tracker = new EditTracker(isSystem ? _options.CodeRootPath : _data.RootPath),
             ThreadContext = threadContext,
+            ConversationId = conversationId,
             GateLease = lease,
         };
         _sessions[s.Id] = s;

@@ -68,12 +68,19 @@ const WRITE_EXTS = __WRITE_EXTS__;   // { 'ui': ['.json'] } — dirs restricted 
 checked immediately after the allow-list and before `PROTECTED`:
 
 ```
-ui/tokyo.json       ✓        ui/notes.md    ✗
-ui/sub/deep.json    ✓        ui/hack.mjs    ✗
+ui/tokyo.json       ✓        ui/notes.md       ✗   wrong extension
+                             ui/hack.mjs       ✗   wrong extension
+                             ui/sub/deep.json  ✗   ui/ is flat
 ```
 
 Nothing runs a `.mjs` under `ui/` today. The restriction exists so that remains true by
 construction rather than by nobody having thought of it.
+
+**`ui/` is flat**, and that is not arbitrary tidiness. `SitePageStore.List()` enumerates the top
+level only, and a page name is a bare stem with no separators — so a file in a subdirectory would be
+writable and permanently invisible. Making the guard's rule exactly the store's rule gives one
+invariant worth having: **a path the agent may write under `ui/` is a page.** There is no way to
+put something there that never shows up.
 
 **Both guards carry it.** The planner guard and `guard/system-scope-guard.mjs` are identical logic
 with different write scopes, and `e2e-p24` runs both; `WRITE_EXTS` is empty for 系统模式. The
@@ -134,6 +141,39 @@ is nothing to preview and pretending otherwise would be worse than saying so. Th
 produce this case — the guard denies `rm` outright — but a human editing the data repo directly
 can, and the review renders whatever diff it is given rather than assuming who made it.
 
+## Pages that do something
+
+A site is not only pages that render — a button should be able to *act*. The agent can already
+write JavaScript: it drafts a tool into `.claude/tool-drafts/` (inside the write scope), a human
+approves it at the draft gate, and it runs from `{data}/tools/<id>/` under `node --permission` with
+the `cap-guard` preload. S3b does not change that path; it lets a **page reach it**.
+
+`Button.action` gains a third verb:
+
+```json
+{ "type": "Button", "label": "重算预算", "action": { "runCapability": "budget_scan" } }
+```
+
+**Validation is by shape, not by state.** `UiActionValidator` checks the id is well-formed and
+nothing more — a page may legitimately name a capability that is enabled later, and failing
+validation for that would make the page uncommittable for a reason that has nothing to do with the
+page. Enablement is enforced where it matters: at invocation, by `ToolRegistry`, which already
+refuses a `NotEnabled` capability with a 4xx and records it in the denial log.
+
+**The click is confirmed against the enforced grant.** This is the load-bearing part. The button's
+label is agent-authored, and an agent that can put arbitrary words on a button that runs approved
+code has a forgery surface — "重算预算" on a button wired to something destructive. So a
+`runCapability` click renders a platform confirmation first: the capability's id and its
+`can`/`cannot` clauses, from `PermissionSentence` over the enforced grant, never from the page. The
+agent chooses what to offer; the platform states what will happen.
+
+**The result renders as a block.** If the capability's output parses as a valid UI tree it is
+rendered as one, through the same validator; otherwise it appears as preformatted text in a card.
+Nothing about existing tools changes — a tool that returns ordinary JSON still displays.
+
+This keeps the guarantee S3a bought: **no new code-execution path enters the browser.** The JS lives
+in a sandboxed capability a human approved; the page only names it.
+
 ## Telling the agent
 
 S3a's sharpest lesson: the vocabulary contract was seeded, versioned and correct, and completely
@@ -168,7 +208,7 @@ positive control:
 |---|---|
 | Guard: write `ui/x.json` | allowed |
 | Guard: write `ui/x.md` and `ui/x.mjs` | denied, message names the extension rule |
-| Guard: write `ui/sub/deep.json` | allowed — the rule is by extension, not depth |
+| Guard: write `ui/sub/deep.json` | denied — `ui/` is flat, so a writable path is always a page |
 | Guard: 系统模式 unchanged | `p24` stays green with `WRITE_EXTS` empty |
 | A run that edits a page | `ReviewPayload` carries `PageDiffView` with `status: "ready"` and the tree |
 | A run that writes an invalid page | `status: "invalid"`, reason names the cause, and the approve call is **refused** |

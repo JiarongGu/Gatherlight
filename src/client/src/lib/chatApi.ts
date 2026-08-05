@@ -4,14 +4,19 @@ import { get, post } from './apiClient';
 export async function startChat(
   message: string,
   attachments: UploadedFile[] = [],
-  mode: 'plan' | 'system' = 'plan'
+  mode: 'plan' | 'system' = 'plan',
+  // Set when the user typed into an opened PAST conversation: the new turn joins that conversation
+  // and its prompt carries that conversation's rebuilt context. Omitted → the server's own
+  // idle / turn-cap / post-commit rule decides whether this starts a new one.
+  continuesConversationId?: string
 ): Promise<{ id: string; phase: string }> {
   return post('/api/chat', {
     message,
     mode,
     // Send just the server-side references; the server validates each path is
     // inside the uploads dir before handing it to the agent.
-    attachments: attachments.map((a) => a.relPath)
+    attachments: attachments.map((a) => a.relPath),
+    continuesConversationId
   });
 }
 
@@ -34,6 +39,34 @@ export async function uploadFiles(files: File[]): Promise<UploadedFile[]> {
 // session the client lost track of (blip / reload / other browser), e.g. one paused at awaiting-input.
 export const getActiveSession = () =>
   get<{ active: boolean; id: string | null; phase: string | null }>('/api/chat/active');
+
+/** One past conversation in the history list. `title` is the first user message, trimmed. */
+export interface ConversationRow {
+  id: string;
+  title: string;
+  phase: string;
+  mode: string;
+  createdAt: string;
+  turns: number;
+}
+
+export interface ConversationTranscript {
+  id: string;
+  title: string;
+  phase: string;
+  mode: string;
+  createdAt: string;
+  /** Stored SSE payloads, verbatim — fed straight into the chat reducer. */
+  events: AgentEvent[];
+}
+
+// Past conversations, newest first. The live stream only replays a session still in memory, so
+// this is the only thing that survives a server restart.
+export const getChatHistory = (limit = 30) =>
+  get<{ conversations: ConversationRow[] }>(`/api/chat/history?limit=${limit}`);
+
+export const getConversation = (id: string) =>
+  get<ConversationTranscript>(`/api/chat/history/${encodeURIComponent(id)}`);
 
 export const approvePlan = (id: string) => post(`/api/chat/${id}/plan/approve`);
 export const rejectPlan = (id: string) => post(`/api/chat/${id}/plan/reject`);

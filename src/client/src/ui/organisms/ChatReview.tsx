@@ -68,11 +68,15 @@ function FileDiff({ file }: { file: DiffFile }) {
 export function DiffReview({
   review,
   busy,
+  readOnly,
   onApprove,
   onReject
 }: {
   review: ReviewPayload;
   busy: boolean;
+  /** Replaying a finished conversation: the diffs are still the record worth reading, but the
+   *  session that could approve them is gone — so the actions are not offered at all. */
+  readOnly?: boolean;
   onApprove: () => void;
   onReject: () => void;
 }) {
@@ -89,7 +93,7 @@ export function DiffReview({
   return (
     <div className="chat-review">
       <div className="chat-actions-hint">
-        审阅以下改动 — 批准后将提交,拒绝则还原工作区。
+        {readOnly ? '这次对话提出的改动(历史记录,不能再操作):' : '审阅以下改动 — 批准后将提交,拒绝则还原工作区。'}
       </div>
 
       {review.build && (
@@ -159,38 +163,42 @@ export function DiffReview({
             <FileDiff key={f.path} file={f} />
           ))}
 
-          <label className="claude-ack">
-            <input
-              type="checkbox"
-              checked={ackClaude}
-              onChange={(e) => setAckClaude(e.target.checked)}
-            />
-            我已检查上述智库(.claude/)改动,确认无误。
-          </label>
+          {!readOnly && (
+            <label className="claude-ack">
+              <input
+                type="checkbox"
+                checked={ackClaude}
+                onChange={(e) => setAckClaude(e.target.checked)}
+              />
+              我已检查上述智库(.claude/)改动,确认无误。
+            </label>
+          )}
         </div>
       )}
 
-      <div className="chat-actions">
-        <Space>
-          <Button
-            type="primary"
-            icon={<CheckCircleOutlined />}
-            loading={busy}
-            disabled={!canApprove}
-            onClick={onApprove}
-          >
-            批准并提交
-          </Button>
-          <Button
-            danger
-            icon={<CloseCircleOutlined />}
-            disabled={busy}
-            onClick={onReject}
-          >
-            拒绝并还原
-          </Button>
-        </Space>
-      </div>
+      {!readOnly && (
+        <div className="chat-actions">
+          <Space>
+            <Button
+              type="primary"
+              icon={<CheckCircleOutlined />}
+              loading={busy}
+              disabled={!canApprove}
+              onClick={onApprove}
+            >
+              批准并提交
+            </Button>
+            <Button
+              danger
+              icon={<CloseCircleOutlined />}
+              disabled={busy}
+              onClick={onReject}
+            >
+              拒绝并还原
+            </Button>
+          </Space>
+        </div>
+      )}
     </div>
   );
 }

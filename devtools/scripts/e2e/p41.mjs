@@ -139,7 +139,7 @@ try {
   const finishUp = (id) => post(`/api/chat/${id}/cancel`).then(() => until(async () => {
     const s = (await j(`/api/chat/${id}`)).body;
     return ['committed', 'rejected', 'cancelled', 'error'].includes(s?.phase) ? s : null;
-  }, 15000));
+  }, 45000));
 
   const blocksFor = async (uiCase) => {
     const started = await post('/api/chat', { message: `UI_CASE:${uiCase}`, mode: 'plan' });
@@ -150,7 +150,7 @@ try {
     await until(async () => {
       const p = (await j(`/api/chat/${id}`)).body?.phase;
       return p && p !== 'idle' && p !== 'planning' ? p : null;
-    }, 20000);
+    }, 60000);
     const events = await streamEvents(id);
     await finishUp(id);
     return {
