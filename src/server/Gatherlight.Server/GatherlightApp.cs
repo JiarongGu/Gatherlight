@@ -5,6 +5,8 @@ using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 using Gatherlight.Server.Platform.Storage.Files.Services;
 using Gatherlight.Server.Platform.Hosting.Fluent.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Services;
+using Gatherlight.Server.Platform.Agent.Ui.Schemas;
+using Gatherlight.Server.Platform.Agent.Ui.Services;
 using Gatherlight.Server.Product.Planner.PlanIndex.Services;
 using Gatherlight.Server.Platform.Site.Seed.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Models;
@@ -277,6 +279,24 @@ public static class GatherlightApp
             // built from this, never from the agent's account of what happened.
             .AddSingleton<Platform.Capabilities.Services.ICapabilityDenialLog, Platform.Capabilities.Services.CapabilityDenialLog>()
             .AddSingleton<IToolRegistry, ToolRegistry>()
+            // --- declarative UI (S3a): schemas are a DI collection, so adding a component is a
+            // class + one registration and never a switch.
+            .AddSingleton<IUiActionValidator, UiActionValidator>()
+            .AddSingleton<IUiTreeValidator, UiTreeValidator>()
+            .AddSingleton<IUiNodeSchema, StackSchema>()
+            .AddSingleton<IUiNodeSchema, RowSchema>()
+            .AddSingleton<IUiNodeSchema, CardSchema>()
+            .AddSingleton<IUiNodeSchema, DividerSchema>()
+            .AddSingleton<IUiNodeSchema, HeadingSchema>()
+            .AddSingleton<IUiNodeSchema, TextSchema>()
+            .AddSingleton<IUiNodeSchema, ListSchema>()
+            .AddSingleton<IUiNodeSchema, BadgeSchema>()
+            .AddSingleton<IUiNodeSchema, ImageSchema>()
+            .AddSingleton<IUiNodeSchema, TableSchema>()
+            .AddSingleton<IUiNodeSchema, MapSchema>()
+            .AddSingleton<IUiNodeSchema, LinkSchema>()
+            .AddSingleton<IUiNodeSchema, FileRefSchema>()
+            .AddSingleton<IUiNodeSchema, ButtonSchema>()
             // Agent-drafted tools in .claude/tool-drafts/ — never loaded by the registry above, so a
             // draft is inert until a human calls IDraftStore.Promote (S2b's approval gate consumes it).
             .AddSingleton<Platform.Capabilities.Services.IDraftStore, Platform.Capabilities.Services.DraftStore>()
