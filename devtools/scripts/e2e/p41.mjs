@@ -222,10 +222,11 @@ try {
       .every((c) => specBody.includes(`\`${c}\``)),
     'a component is missing from the contract the agent reads');
   // The contract must name the SAME limits the validator enforces (UiTreeValidator.MaxDepth/MaxNodes)
-  // and the SAME two action verbs (UiActionValidator) — a contract that drifts is worse than none.
+  // and the SAME action verbs (UiActionValidator) — a contract that drifts is worse than none.
+  // S3b added the third verb; a fourth appearing here without a validator case is the drift to catch.
   ok('the contract states the enforced limits', /12 levels/.test(specBody) && /500 nodes/.test(specBody));
-  ok('the contract names both action verbs and no third',
-    specBody.includes('"send"') && specBody.includes('"openRecord"'));
+  ok('the contract names all three action verbs',
+    specBody.includes('"send"') && specBody.includes('"openRecord"') && specBody.includes('"runCapability"'));
   // CJK survives the C# raw-string → File.WriteAllText → disk round trip (BOM-less UTF-8 both ends).
   ok('the contract is not mojibake', specBody.includes('界面块'), specBody.split('\n')[1] ?? '');
 
@@ -236,7 +237,7 @@ try {
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
   await waitHealthy(base);
   const after = fs.readFileSync(uiSpec, 'utf8');
-  ok('a stale contract is re-issued', /UI_CONTRACT_VERSION:\s*1/.test(after) && after.includes('`Button`'),
+  ok('a stale contract is re-issued', /UI_CONTRACT_VERSION:\s*2/.test(after) && after.includes('`Button`'),
     after.slice(0, 80));
 } catch (e) {
   fail(e?.stack || String(e));

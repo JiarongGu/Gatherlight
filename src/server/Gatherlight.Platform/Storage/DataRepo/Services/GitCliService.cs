@@ -21,6 +21,10 @@ public interface IGitCliService
     /// when the repo was freshly initialized (caller makes the initial import commit).</summary>
     Task<bool> EnsureRepoAsync(CancellationToken ct = default);
     Task<bool> ExistsInHeadAsync(string rel, CancellationToken ct = default);
+    /// <summary>Contents of one path at a revision (<c>HEAD:some/file</c>), or null when it does not
+    /// exist there (a new file). Never throws on a missing path: "not in HEAD" is an ordinary
+    /// answer, not an error.</summary>
+    Task<string?> ShowAsync(string revPath, CancellationToken ct = default);
     /// <summary>Per-file diff for exactly the agent-touched paths. New files diff against NUL,
     /// modified/deleted against HEAD. No-op edits are skipped.</summary>
     Task<List<DiffFile>> BuildDiffAsync(IReadOnlyList<string> paths, CancellationToken ct = default);
@@ -163,6 +167,14 @@ public class GitCliService : IGitCliService
 
     public async Task<bool> ExistsInHeadAsync(string rel, CancellationToken ct = default) =>
         (await RunAsync(new[] { "cat-file", "-e", $"HEAD:{Norm(rel)}" }, ct)).ExitCode == 0;
+
+    /// <summary>Contents of one path at a revision, or null when it does not exist there (a new
+    /// file). Never throws on a missing path: "not in HEAD" is an ordinary answer, not an error.</summary>
+    public async Task<string?> ShowAsync(string revPath, CancellationToken ct = default)
+    {
+        var r = await RunAsync(new[] { "show", revPath }, ct);
+        return r.ExitCode == 0 ? r.Stdout : null;
+    }
 
     public async Task<bool> IsTrackedAsync(string rel, CancellationToken ct = default) =>
         (await RunAsync(new[] { "ls-files", "--error-unmatch", "--", Norm(rel) }, ct)).ExitCode == 0;

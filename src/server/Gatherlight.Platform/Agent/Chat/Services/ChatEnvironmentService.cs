@@ -82,18 +82,27 @@ public sealed class ChatEnvironmentService
     }
 
     /// <summary>The guard is generated, not shipped verbatim: its WRITE_DIRS come from the site
-    /// manifest's declared record directories (plus .claude), so a site that keeps its artifacts
-    /// somewhere else is jailed correctly without editing the guard. PROTECTED stays hardcoded —
+    /// manifest's declared record directories (plus .claude and the UI directory), so a site that
+    /// keeps its artifacts somewhere else is jailed correctly without editing the guard. WRITE_EXTS
+    /// rides the same manifest: the UI directory is writable only as flat <c>.json</c>, so a path the
+    /// agent may write there is exactly a page. PROTECTED stays hardcoded —
     /// a site must not be able to widen its own jail by editing its own manifest. DENIED comes from
     /// the same manifest's capabilities.deny — a tool withheld in the allow-list (BuildChatSettings)
     /// must ALSO be denied here, so re-opening one plane (e.g. hand-editing the generated settings
     /// file) doesn't quietly reopen the other.</summary>
     private string RenderScopeGuard()
     {
-        var dirs = _manifest.Current.Records.Concat([".claude"]).Distinct();
+        var uiDir = _manifest.Current.Ui.Spec.Trim('/');
+        var dirs = _manifest.Current.Records.Concat([".claude", uiDir]).Where(d => d.Length > 0).Distinct();
         var literal = "[" + string.Join(", ", dirs.Select(d => $"'{d.Replace("'", "\\'")}'")) + "]";
         var deniedLiteral = "[" + string.Join(", ", _manifest.Current.Capabilities.Deny.Select(d => $"'{d.Replace("'", "\\'")}'")) + "]";
-        return ScopeGuardMjs.Replace("__WRITE_DIRS__", literal).Replace("__DENIED_TOOLS__", deniedLiteral);
+        // The UI directory holds pages and nothing else. Rendered from the manifest like WRITE_DIRS,
+        // so a site that relocates its UI directory stays jailed correctly.
+        var extsLiteral = uiDir.Length == 0 ? "{}" : $"{{ '{uiDir.Replace("'", "\\'")}': ['.json'] }}";
+        return ScopeGuardMjs
+            .Replace("__WRITE_DIRS__", literal)
+            .Replace("__DENIED_TOOLS__", deniedLiteral)
+            .Replace("__WRITE_EXTS__", extsLiteral);
     }
 
     // The scope guard is a SECURITY boundary, not user content: (re)issue it when missing OR when an
@@ -209,8 +218,9 @@ public sealed class ChatEnvironmentService
          * Registered in state/settings.chat.json.
          *
          * The spawned agent is JAILED to the data folder. Enforced boundaries:
-         *   WRITE (Edit/Write/MultiEdit/NotebookEdit)  -> under plans/ household/ .claude/ EXCEPT
-         *                                                the PROTECTED set (.claude/hooks/, .claude/settings*.json)
+         *   WRITE (Edit/Write/MultiEdit/NotebookEdit)  -> under plans/ household/ .claude/ ui/ EXCEPT
+         *                                                the PROTECTED set (.claude/hooks/, .claude/settings*.json),
+         *                                                and under ui/ only a flat .json page (WRITE_EXTS)
          *   READ  (Read/Grep/Glob)                     -> only inside the data folder
          *   BASH                                       -> not: git-history / delete, network egress,
          *                                                inline code-eval, filesystem crawl, or any
@@ -219,9 +229,10 @@ public sealed class ChatEnvironmentService
          * Anything genuinely out-of-boundary (fetch a URL, run a scraper, read a shared resource) MUST
          * go through a server MCP tool -- mediated + auditable -- never raw Bash. Else: silent exit 0.
          *
-         * Kept identical to guard/system-scope-guard.mjs except WRITE_DIRS + PROTECTED; e2e suite p24
-         * runs both. GUARD_VERSION is the upgrade key: the server re-issues newer logic into an
-         * existing data folder (ChatEnvironmentService.EnsureFiles), so hardening reaches old installs.
+         * Kept identical to guard/system-scope-guard.mjs except WRITE_DIRS + WRITE_EXTS + PROTECTED;
+         * e2e suite p24 runs both. GUARD_VERSION is the upgrade key: the server re-issues newer logic
+         * into an existing data folder (ChatEnvironmentService.EnsureFiles), so hardening reaches old
+         * installs.
          *
          * DENIED (v6) closes the exfiltration residual this file used to admit to: WebFetch is granted
          * in state/settings.chat.json but this guard's matcher never intercepted it. A site.json
@@ -229,10 +240,15 @@ public sealed class ChatEnvironmentService
          * (ChatEnvironmentService.BuildChatSettings) AND here — denying a CLI built-in, not just an
          * MCP tool the guard never saw in the first place.
          */
-        // GUARD_VERSION: 6
+        // GUARD_VERSION: 7
         import path from 'node:path';
 
         const WRITE_DIRS = __WRITE_DIRS__;
+        // Dirs whose file TYPE is restricted. ui/ holds the site's pages: a path the agent may write
+        // there must be exactly a page, so nothing else can end up in the directory the app renders.
+        // Flat by rule too -- SitePageStore lists the top level only and a page name is a bare stem,
+        // so a file in a subdirectory would be writable and permanently invisible.
+        const WRITE_EXTS = __WRITE_EXTS__;
         const PROTECTED = ['.claude/hooks', '.claude/settings.json', '.claude/settings.local.json'];
         const DENIED = __DENIED_TOOLS__;
 
@@ -352,6 +368,14 @@ public sealed class ChatEnvironmentService
           if (rel === null) deny(`Blocked: ${filePath} is outside the data folder.`);
           if (!underAny(rel, WRITE_DIRS))
             deny(`Blocked: the agent may only edit ${WRITE_DIRS.join(', ')} — not "${rel}".`);
+          for (const [dir, exts] of Object.entries(WRITE_EXTS)) {
+            if (rel !== dir && !rel.startsWith(dir + '/')) continue;
+            const rest = rel.slice(dir.length + 1);
+            if (rest.includes('/'))
+              deny(`Blocked: ${dir}/ is flat — put "${rel}" directly in ${dir}/.`);
+            if (!exts.some((e) => rest.toLowerCase().endsWith(e)))
+              deny(`Blocked: only ${exts.join('/')} files may be written under ${dir}/ — not "${rel}".`);
+          }
           if (underAny(rel, PROTECTED))
             deny(`Blocked: "${rel}" is a protected, app-managed path (the guard / settings) — not editable.`);
           allow();
@@ -366,7 +390,7 @@ public sealed class ChatEnvironmentService
     /// limits are <c>UiTreeValidator.MaxDepth</c>/<c>MaxNodes</c>. A contract that drifts from the
     /// validator is worse than none: the agent follows it and the household gets a fallback card.</summary>
     private const string UiSpecMd = """
-        <!-- UI_CONTRACT_VERSION: 1 — generated by Gatherlight. App-managed: edits are replaced. -->
+        <!-- UI_CONTRACT_VERSION: 2 — generated by Gatherlight. App-managed: edits are replaced. -->
         # 界面块 · UI blocks
 
         You can render real UI, not just text. Write normal prose, and drop ```ui fenced blocks into
@@ -410,21 +434,37 @@ public sealed class ChatEnvironmentService
 
         ## Button actions
 
-        A button does one of exactly two things:
+        A button does one of exactly three things:
 
         - `{ "send": "text" }` — puts that text in as the person's next message.
         - `{ "openRecord": "plans/some-file.md" }` — opens a file from the site.
+        - `{ "runCapability": "budget_scan" }` — runs a capability that was ALREADY approved. You
+          name the id; you never supply code.
 
-        Nothing else is accepted. A button cannot approve anything, run a tool, or open a URL —
-        every real decision still goes through its own confirmation.
+        Nothing else is accepted. A button cannot approve anything, open a URL, or run code you wrote
+        into the page — every real decision still goes through its own confirmation.
 
-        ## Pages
+        ## 页面 · Pages
 
-        A page is the same tree saved as a file in the site's page directory (`ui/` by default):
+        You can also SAVE a tree as a page of this site. Write it to `ui/<name>.json`:
 
         ```json
-        { "title": "Trip dashboard", "root": { "type": "Stack", "children": [] } }
+        { "title": "Trip dashboard",
+          "nav": { "label": "行程", "order": 1 },
+          "root": { "type": "Stack", "children": [] } }
         ```
+
+        - `ui/` is FLAT and holds only `.json` page files — no subdirectories, no other file types.
+        - `<name>` is letters, digits, `-` and `_` only.
+        - `nav` is optional: `label` (defaults to the title), `order` (lower sorts first),
+          `hidden` (keeps it out of the menu but still reachable by link).
+        - Writing the file publishes it. There is no separate list to update.
+        - The person reviews your page by LOOKING at it, rendered, before it is committed. A page
+          that fails validation cannot be committed at all — so use only the components above.
+
+        A `Button` on a page can also run a capability you already had approved:
+        `{ "label": "重算预算", "action": { "runCapability": "budget_scan" } }`. The app shows the
+        person what that capability may do before it runs.
 
         Limits: at most 12 levels deep and 500 nodes per tree.
         """;

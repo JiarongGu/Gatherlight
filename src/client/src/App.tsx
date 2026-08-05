@@ -16,6 +16,7 @@ import {
 } from '@/ui/organisms';
 import { Home, Library, KnowledgeBase, Manage, SitePage } from '@/screens';
 import { loadPlanData, type PlanData, type PlanFile, type TripAsset } from './lib/collectFiles';
+import { loadSitePages, type SitePageSummary } from './lib/sitePages';
 import { extractHeadings, stripFirstH1 } from './lib/markdown';
 import { buildTripExport, downloadAsFile, downloadTripPDF, isTripFile } from './lib/export';
 import { pushRecent } from './lib/recentFiles';
@@ -33,6 +34,7 @@ const { useBreakpoint } = Grid;
 
 const EMPTY_FILES: PlanFile[] = [];
 const EMPTY_ASSETS: TripAsset[] = [];
+const EMPTY_PAGES: SitePageSummary[] = [];
 
 // Planner view ⇄ URL. Query params keep the desktop-hosted app on the same surface across reloads
 // and let the management console deep-link into it (e.g. `?view=library`, `?path=plans/…`,
@@ -82,6 +84,15 @@ function PlannerApp() {
       setLoadError(err instanceof Error ? err.message : String(err))
     );
   }, []);
+  // The site's own pages. Loaded on mount and again after a chat commit — the agent can create a
+  // page in a chat turn, and a page that only appears after a manual reload reads as a failure.
+  // A failed load leaves the rail as it was: no page section is better than an error banner over
+  // a feature the household may not even use.
+  const [pages, setPages] = useState<SitePageSummary[]>(EMPTY_PAGES);
+  const reloadPages = useCallback(() => {
+    loadSitePages().then(setPages, () => { /* keep the rail as it was */ });
+  }, []);
+  useEffect(() => { reloadPages(); }, [reloadPages]);
   const files = planData?.files ?? EMPTY_FILES;
   const tripAssets = planData?.tripAssets ?? EMPTY_ASSETS;
   const planLoading = planData === null && loadError === null;
@@ -290,6 +301,14 @@ function PlannerApp() {
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
+  const handleOpenPage = useCallback((name: string) => {
+    setActivePage(name);
+    setShowLibrary(false);
+    setShowKnowledge(false);
+    setActivePath(null);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
   const handleTocItemClick = () => {
     if (isMobile) setTocOpen(false);
   };
@@ -357,6 +376,9 @@ function PlannerApp() {
       libraryActive={showLibrary}
       onOpenKnowledge={handleOpenKnowledge}
       knowledgeActive={showKnowledge}
+      pages={pages}
+      activePage={activePage}
+      onOpenPage={handleOpenPage}
     />
   );
 
@@ -501,7 +523,12 @@ function PlannerApp() {
             aria-label="拖拽调整聊天宽度"
           />
         )}
-        <ChatPanel prefill={chatPrefill} prefillNonce={chatPrefillNonce} onOpenRecord={handleSelect} />
+        <ChatPanel
+          prefill={chatPrefill}
+          prefillNonce={chatPrefillNonce}
+          onOpenRecord={handleSelect}
+          onCommitted={reloadPages}
+        />
       </Drawer>
 
       <CommandPalette

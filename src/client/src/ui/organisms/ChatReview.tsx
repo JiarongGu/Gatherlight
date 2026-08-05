@@ -6,7 +6,8 @@ import {
   WarningOutlined,
   FileOutlined
 } from '@ant-design/icons';
-import type { ReviewPayload, DiffFile } from '@/lib/chatTypes';
+import { UiTree } from '@/ui/blocks/UiTree';
+import type { ReviewPayload, DiffFile, PageDiffView } from '@/lib/chatTypes';
 
 const STATUS_COLOR: Record<DiffFile['status'], string> = {
   added: 'green',
@@ -65,6 +66,37 @@ function FileDiff({ file }: { file: DiffFile }) {
   );
 }
 
+/** A changed page, reviewed by looking at it. The raw diff stays one disclosure away — the render is
+ *  the review, the diff is the appeal. No `onSend` / `onOpenRecord` is passed: a preview's buttons are
+ *  inert, which is correct — you are approving the page, not operating it. */
+function PageChange({ page, diff }: { page: PageDiffView; diff?: DiffFile }) {
+  return (
+    <div className="page-change">
+      <div className="page-change-head">
+        <Tag color={page.status === 'ready' ? 'blue' : page.status === 'deleted' ? 'default' : 'red'}>
+          {page.status === 'ready' ? '页面' : page.status === 'deleted' ? '删除页面' : '无法显示'}
+        </Tag>
+        <span className="page-change-title">{page.title}</span>
+        <code className="diff-file-path">{page.path}</code>
+      </div>
+      {page.summary && <div className="page-change-summary">{page.summary}</div>}
+      {page.status === 'ready' && page.root && (
+        <div className="page-change-preview"><UiTree node={page.root} /></div>
+      )}
+      {page.status === 'invalid' && (
+        <Alert type="warning" showIcon message="这个页面无法显示,不能提交" description={page.reason} />
+      )}
+      {diff && (
+        <Collapse
+          ghost
+          size="small"
+          items={[{ key: 'd', label: '查看原始差异', children: <DiffBlock diff={diff.diff} /> }]}
+        />
+      )}
+    </div>
+  );
+}
+
 export function DiffReview({
   review,
   busy,
@@ -80,7 +112,11 @@ export function DiffReview({
   onApprove: () => void;
   onReject: () => void;
 }) {
-  const contentFiles = review.files.filter((f) => !f.isClaudeInfra);
+  // A page file is reviewed as a RENDERED page, not as a diff — so it comes out of the content group
+  // and into its own, with the diff itself one disclosure away.
+  const pages = review.pages ?? [];
+  const pagePaths = new Set(pages.map((p) => p.path));
+  const contentFiles = review.files.filter((f) => !f.isClaudeInfra && !pagePaths.has(f.path));
   const claudeFiles = review.files.filter((f) => f.isClaudeInfra);
   const validation = review.validation;
 
@@ -88,7 +124,11 @@ export function DiffReview({
   const [ackClaude, setAckClaude] = useState(false);
   const needsAck = review.hasClaudeInfra;
   const buildFailed = !!review.build && !review.build.ok;
-  const canApprove = !busy && (!needsAck || ackClaude) && !buildFailed;
+  // A page that would not render cannot be committed — the server refuses it too; this is the same
+  // rule made visible, so the button is never dead without a reason.
+  const invalidPages = pages.filter((p) => p.status === 'invalid');
+  const hasInvalidPage = invalidPages.length > 0;
+  const canApprove = !busy && (!needsAck || ackClaude) && !buildFailed && !hasInvalidPage;
 
   return (
     <div className="chat-review">
@@ -119,6 +159,15 @@ export function DiffReview({
             )
           }
         />
+      )}
+
+      {pages.length > 0 && (
+        <div className="diff-group">
+          <div className="diff-group-title">页面改动 ({pages.length})</div>
+          {pages.map((p) => (
+            <PageChange key={p.path} page={p} diff={review.files.find((f) => f.path === p.path)} />
+          ))}
+        </div>
       )}
 
       {contentFiles.length > 0 && (
@@ -174,6 +223,16 @@ export function DiffReview({
             </label>
           )}
         </div>
+      )}
+
+      {!readOnly && hasInvalidPage && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 10 }}
+          message="不能提交 — 有页面无法显示"
+          description={`${invalidPages.map((p) => p.path).join('、')} 不是一个能显示的页面,提交会让它对家人来说是一片空白。让 AI 修正后再批准。`}
+        />
       )}
 
       {!readOnly && (

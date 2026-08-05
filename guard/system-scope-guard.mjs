@@ -17,12 +17,14 @@
  * never raw Bash. Everything else: silent exit 0.
  *
  * This body is kept identical to the planner guard (ChatEnvironmentService.ScopeGuardMjs) except for
- * WRITE_DIRS + PROTECTED; the e2e suite (p24) runs both. GUARD_VERSION lets the server re-issue newer logic.
+ * WRITE_DIRS + WRITE_EXTS + PROTECTED; the e2e suite (p24) runs both. GUARD_VERSION lets the server
+ * re-issue newer logic.
  */
-// GUARD_VERSION: 4
+// GUARD_VERSION: 5
 import path from 'node:path';
 
 const WRITE_DIRS = [''];  // '' = the whole jail (repo); writes are gated by PROTECTED below
+const WRITE_EXTS = {};    // 系统模式 restricts no directory by file type — kept so both guards stay one logic
 const PROTECTED = ['guard', 'src/server', '.claude/settings.json', '.claude/settings.local.json', '.git'];
 
 const HISTORY = [
@@ -139,6 +141,14 @@ if (['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
   if (rel === null) deny(`Blocked: ${filePath} is outside the repo.`);
   if (!underAny(rel, WRITE_DIRS))
     deny(`Blocked: 系统模式 may only edit ${WRITE_DIRS.join(', ') || 'the repo'} — not "${rel}".`);
+  for (const [dir, exts] of Object.entries(WRITE_EXTS)) {
+    if (rel !== dir && !rel.startsWith(dir + '/')) continue;
+    const rest = rel.slice(dir.length + 1);
+    if (rest.includes('/'))
+      deny(`Blocked: ${dir}/ is flat — put "${rel}" directly in ${dir}/.`);
+    if (!exts.some((e) => rest.toLowerCase().endsWith(e)))
+      deny(`Blocked: only ${exts.join('/')} files may be written under ${dir}/ — not "${rel}".`);
+  }
   if (underAny(rel, PROTECTED))
     deny(`Blocked: "${rel}" is a protected, app-managed path (guard / backend / settings / .git) — not editable in 系统模式.`);
   allow();

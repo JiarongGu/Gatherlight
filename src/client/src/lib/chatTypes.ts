@@ -89,11 +89,26 @@ export interface BuildResult {
   output: string;
 }
 
+/**
+ * One changed page at the diff gate. `root` is the validated tree — rendered with the SAME UiTree
+ * the live page uses. `summary` is the server's computed account of what changed, never the agent's.
+ */
+export interface PageDiffView {
+  path: string;
+  name: string;
+  title: string;
+  status: 'ready' | 'invalid' | 'deleted';
+  root?: UiNode;
+  reason?: string;
+  summary: string;
+}
+
 export interface ReviewPayload {
   files: DiffFile[];
   hasClaudeInfra: boolean;
   validation?: ClaudeValidation;
   build?: BuildResult;
+  pages?: PageDiffView[];
 }
 
 /**

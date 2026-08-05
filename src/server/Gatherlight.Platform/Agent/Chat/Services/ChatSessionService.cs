@@ -5,6 +5,7 @@ using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Models;
 using Gatherlight.Server.Platform.Agent.Llm.Services;
+using Gatherlight.Server.Platform.Agent.Ui.Models;
 using Gatherlight.Server.Platform.Agent.Ui.Services;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Models;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Services;
@@ -54,7 +55,11 @@ public static class ChatPhase
     public static readonly string[] Terminal = { Committed, Rejected, Cancelled, Error };
 }
 
-public sealed record ReviewPayload(List<DiffFile> Files, bool HasClaudeInfra, ClaudeValidation? Validation, BuildResult? Build = null);
+/// <summary>What the diff gate shows. <see cref="Pages"/> rides on the PAYLOAD rather than on
+/// <see cref="DiffFile"/> deliberately: DiffFile is git's shape and three other modules consume it
+/// (JobHandlers, UnattendedRunService, ZhikuMigrator).</summary>
+public sealed record ReviewPayload(List<DiffFile> Files, bool HasClaudeInfra, ClaudeValidation? Validation,
+    BuildResult? Build = null, List<PageDiffView>? Pages = null);
 
 public sealed class ChatSession
 {
@@ -165,6 +170,7 @@ public sealed class ChatSessionService
     private readonly Platform.Site.Services.ISiteManifestStore _manifestStore;
     private readonly ISessionCapabilityAllowance _sessionAllowance;
     private readonly IUiTreeValidator _uiValidator;
+    private readonly IPageReviewService _pageReview;
     private readonly ILogger<ChatSessionService> _log;
 
     private const int MaxBuildRepair = 2;
@@ -180,9 +186,10 @@ public sealed class ChatSessionService
         IDraftStore drafts, IScriptToolProvider scripts, ICapabilityRegistry capabilities,
         ICapabilityDenialLog denials, Platform.Site.Services.ISiteManifestStore manifestStore,
         ISessionCapabilityAllowance sessionAllowance, IUiTreeValidator uiValidator,
-        ILogger<ChatSessionService> log)
+        IPageReviewService pageReview, ILogger<ChatSessionService> log)
     {
         _uiValidator = uiValidator;
+        _pageReview = pageReview;
         _gate = gate;
         _mcpProvision = mcpProvision;
         _mcpLogin = mcpLogin;
@@ -672,7 +679,22 @@ public sealed class ChatSessionService
             if (s.Cancelled) return;
         }
 
-        s.Review = new ReviewPayload(files, claudeFiles.Count > 0, validation, build);
+        // Page previews: the gate reviews a page by rendering it, so a non-technical household can
+        // judge what they are approving. Only for the data workspace — 系统模式 edits code, not pages.
+        List<PageDiffView>? pages = null;
+        if (!IsSystem(s))
+        {
+            var pageFiles = files.Where(f => _pageReview.IsPagePath(f.Path)).ToList();
+            if (pageFiles.Count > 0)
+            {
+                // The committed version — what approval would replace. Null for a page being created.
+                pages = new List<PageDiffView>();
+                foreach (var f in pageFiles)
+                    pages.Add(_pageReview.Review(f.Path, await git.ShowAsync($"HEAD:{f.Path}")));
+            }
+        }
+
+        s.Review = new ReviewPayload(files, claudeFiles.Count > 0, validation, build, pages);
         SetPhase(s, ChatPhase.AwaitingDiffApproval, s.Review);
     }
 
@@ -685,6 +707,18 @@ public sealed class ChatSessionService
         if (s.Review?.Build is { Ok: false })
         {
             Emit(s, new AgentEvent { Kind = "error", Text = "构建未通过,不能提交。请「拒绝并还原」或让 AI 继续修复。" });
+            return;
+        }
+        // A page that would not render cannot be committed — the same rule as a failed build. The
+        // thing being approved has already been through the validator, so this is enforcement, not
+        // advice.
+        if (s.Review?.Pages?.FirstOrDefault(p => p.Status == "invalid") is { } bad)
+        {
+            Emit(s, new AgentEvent
+            {
+                Kind = "error",
+                Text = $"页面 {bad.Path} 无法显示({bad.Reason}),不能提交。请让 AI 修正后再试。",
+            });
             return;
         }
         SetPhase(s, ChatPhase.Committing);

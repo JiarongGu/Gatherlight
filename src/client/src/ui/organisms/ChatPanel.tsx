@@ -759,12 +759,16 @@ const CapabilityApprovalCard = memo(function CapabilityApprovalCard({
 export function ChatPanel({
   prefill,
   prefillNonce,
-  onOpenRecord
+  onOpenRecord,
+  onCommitted
 }: {
   prefill?: string;
   prefillNonce?: number;
   /** Open a record file in the reading column — what a rendered block's `openRecord` button does. */
   onOpenRecord?: (path: string) => void;
+  /** A turn's changes were committed to the data repo. The host re-reads whatever the agent may
+   *  have changed (the site's page list) — a page it just wrote must not need a manual reload. */
+  onCommitted?: () => void;
 }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   // Restore any unsent draft (closing the drawer unmounts this component).
@@ -794,11 +798,18 @@ export function ChatPanel({
   // server's log at seq 0). Guards against a re-delivered frame doubling token/cost + transcript if a
   // reconnect ever replays past what Last-Event-ID already covered.
   const lastSeqRef = useRef(-1);
+  // Kept in a ref so onEvent stays referentially stable — it feeds the SSE subscription, and a
+  // handler that changed identity would tear the stream down and reopen it on every host re-render.
+  const committedRef = useRef(onCommitted);
+  committedRef.current = onCommitted;
   // Dispatch an event + drop the persisted session id once it finishes.
   const onEvent = useCallback((ev: AgentEvent, seq: number) => {
     if (seq >= 0 && seq <= lastSeqRef.current) return;   // already applied — skip replay
     if (seq >= 0) lastSeqRef.current = seq;
     if (ev.kind === 'done') localStorage.removeItem(SESSION_KEY);
+    // The commit is the moment the working tree became the committed tree, so it's the moment the
+    // host's view of the data folder is stale.
+    if (ev.kind === 'phase' && ev.phase === 'committed') committedRef.current?.();
     dispatch({ type: 'event', ev });
   }, []);
 

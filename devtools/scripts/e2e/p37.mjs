@@ -62,12 +62,17 @@ try {
   // --- C: the guard is GENERATED from the manifest -------------------------------------------------
   ok('guard file exists after boot', fs.existsSync(guardPath));
   const guardSrc = fs.readFileSync(guardPath, 'utf8');
-  ok("WRITE_DIRS rendered from records + '.claude'",
-    guardSrc.includes("const WRITE_DIRS = ['plans', 'household', '.claude'];"),
+  ok("WRITE_DIRS rendered from records + '.claude' + the UI dir",
+    guardSrc.includes("const WRITE_DIRS = ['plans', 'household', '.claude', 'ui'];"),
     guardSrc.match(/const WRITE_DIRS.*/)?.[0]);
+  // The UI dir is writable ONLY as flat .json — rendered from the same manifest (ui.spec), so a site
+  // that relocates its pages keeps the rule pointed at the right directory.
+  ok('WRITE_EXTS rendered from ui.spec',
+    guardSrc.includes("const WRITE_EXTS = { 'ui': ['.json'] };"), guardSrc.match(/const WRITE_EXTS.*/)?.[0]);
   ok("PROTECTED still hardcoded, beginning '.claude/hooks'",
     guardSrc.includes("const PROTECTED = ['.claude/hooks'"), guardSrc.match(/const PROTECTED.*/)?.[0]);
   ok('no __WRITE_DIRS__ placeholder survives', !guardSrc.includes('__WRITE_DIRS__'));
+  ok('no __WRITE_EXTS__ placeholder survives', !guardSrc.includes('__WRITE_EXTS__'));
 
   // --- D: the jail cannot widen itself ---------------------------------------------------------------
   const denySite = guardDecision('Write', { file_path: 'site.json' });
@@ -107,7 +112,7 @@ try {
 
   const guardSrc2 = fs.readFileSync(guardPath, 'utf8');
   ok('regenerated guard WRITE_DIRS matches the new records',
-    guardSrc2.includes("const WRITE_DIRS = ['notes', '.claude'];"), guardSrc2.match(/const WRITE_DIRS.*/)?.[0]);
+    guardSrc2.includes("const WRITE_DIRS = ['notes', '.claude', 'ui'];"), guardSrc2.match(/const WRITE_DIRS.*/)?.[0]);
   ok('notes/ was created', onDisk(dataDir, 'notes'));
   ok('PROTECTED is unchanged', guardSrc2.includes("const PROTECTED = ['.claude/hooks'"), guardSrc2.match(/const PROTECTED.*/)?.[0]);
   const manifest2 = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));

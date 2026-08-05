@@ -1,5 +1,7 @@
 using Gatherlight.Server.Platform.Agent.Ui.Models;
 using Gatherlight.Server.Platform.Agent.Ui.Services;
+using Gatherlight.Server.Platform.Capabilities.Models;
+using Gatherlight.Server.Platform.Capabilities.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -8,6 +10,10 @@ namespace Gatherlight.Server.Platform.Agent.Ui;
 /// <summary>Client-safe projection of one component's contract.</summary>
 public sealed record UiComponentView(string Type, bool AcceptsChildren, Dictionary<string, string> Props);
 
+/// <summary>The verdict on a tree the client asked about — same <c>ready</c>/<c>invalid</c> shape a
+/// page and a ```ui block already report, so there is one thing for the client to render.</summary>
+public sealed record UiCandidateView(string Status, UiNode? Root, string? Reason);
+
 [ApiController]
 [Route("api/ui")]
 public sealed class UiController : ControllerBase
@@ -15,12 +21,15 @@ public sealed class UiController : ControllerBase
     private readonly IUiTreeValidator _validator;
     private readonly ISitePageStore _pages;
     private readonly ISiteContext _site;
+    private readonly ICapabilityRegistry _capabilities;
 
-    public UiController(IUiTreeValidator validator, ISitePageStore pages, ISiteContext site)
+    public UiController(
+        IUiTreeValidator validator, ISitePageStore pages, ISiteContext site, ICapabilityRegistry capabilities)
     {
         _validator = validator;
         _pages = pages;
         _site = site;
+        _capabilities = capabilities;
     }
 
     /// <summary>The component vocabulary. `dev.mjs check-ui-registry` compares this against the
@@ -38,6 +47,42 @@ public sealed class UiController : ControllerBase
     [HttpGet("pages/{name}")]
     public ActionResult<SitePageView> Page(string name) =>
         _pages.Get(name) is { } page ? Ok(page) : NotFound();
+
+    /// <summary>Validates a candidate tree — the ONE way a tree that did not come from a page or a
+    /// ```ui fence can reach the renderer. A capability's output is data, not a trusted view: the
+    /// client renders it with <c>UiTree</c> only after this returns <c>ready</c>, so a `Link` href or
+    /// an `Image` src invented downstream still has to survive the same validator every other tree
+    /// does. Deliberately no persistence and no side effects — it only answers a question.</summary>
+    [HttpPost("validate")]
+    public ActionResult<UiCandidateView> Validate([FromBody] System.Text.Json.JsonElement root)
+    {
+        var result = _validator.ValidateElement(root);
+        return Ok(result.Ok
+            ? new UiCandidateView("ready", result.Node, null)
+            : new UiCandidateView("invalid", null, result.Reason));
+    }
+
+    /// <summary>What a runCapability button will actually do, for the confirmation the click shows.
+    /// The clauses come from PermissionSentence over the ENFORCED grant — never from the page, whose
+    /// label the agent chose. A Platform capability has no grant entry (it is compiled and shipped by
+    /// us, not sandboxed against one), so both lists come back empty and the client says so rather
+    /// than inventing a promise nothing enforces.</summary>
+    [HttpGet("capability/{id}")]
+    public IActionResult Capability(string id)
+    {
+        var info = _capabilities.All().FirstOrDefault(c => c.Id == id);
+        if (info is null) return NotFound(new { error = "unknown capability" });
+        var grant = _capabilities.GrantFor(id);
+        return Ok(new
+        {
+            id,
+            origin = info.Origin.ToString(),
+            state = info.State.ToString(),
+            description = info.Description,
+            can = grant is null ? Array.Empty<string>() : PermissionSentence.Can(grant),
+            cannot = grant is null ? Array.Empty<string>() : PermissionSentence.Cannot(grant),
+        });
+    }
 
     /// <summary>Images referenced by an Image node's record path. Deliberately narrow: image MIME
     /// types only, inside the site (ResolveSitePath already refuses state/), and no symlink anywhere

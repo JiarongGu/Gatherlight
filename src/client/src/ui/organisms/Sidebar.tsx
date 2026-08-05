@@ -19,9 +19,11 @@ import {
   DatabaseOutlined,
   SafetyCertificateOutlined,
   CodeOutlined,
-  ReadOutlined
+  ReadOutlined,
+  LayoutOutlined
 } from '@ant-design/icons';
 import type { PlanFile } from '@/lib/collectFiles';
+import type { SitePageSummary } from '@/lib/sitePages';
 import { extractSnippet } from '@/lib/markdown';
 import { SnippetText } from '@/ui/molecules';
 import { buildDestinationGroups } from '@/lib/tripGroups';
@@ -39,6 +41,11 @@ interface Props {
   libraryActive: boolean;
   onOpenKnowledge: () => void;
   knowledgeActive: boolean;
+  /** The site's own pages, already ordered by the server. A `hidden` page stays out of this rail
+   *  but is still reachable by link — hidden means unlisted, not unreachable. */
+  pages: SitePageSummary[];
+  activePage: string | null;
+  onOpenPage: (name: string) => void;
 }
 
 // Trip grouping (slug parsing, destination labels, variant numbering) lives in
@@ -116,7 +123,10 @@ export const Sidebar = memo(function Sidebar({
   onOpenLibrary,
   libraryActive,
   onOpenKnowledge,
-  knowledgeActive
+  knowledgeActive,
+  pages,
+  activePage,
+  onOpenPage
 }: Props) {
   const { mode } = useTheme();
   const trimmedSearch = ''; // sidebar tree-filter removed; global ⌘K palette is the search
@@ -303,6 +313,11 @@ export const Sidebar = memo(function Sidebar({
 
   const hasContent = destinationGroups.length > 0 || groupedUser.length > 0;
 
+  // A page the agent wrote is a surface of this site, not a plan file — so it sits with the two
+  // pinned surfaces rather than inside the plan tree, sharing their button so the rail keeps one
+  // visual language. Ordering came from the server; `hidden` pages are filtered out here.
+  const visiblePages = pages.filter((p) => !p.hidden);
+
   return (
     <div className="side-inner">
       {/* The growing plan tree fills the top and scrolls; the two standalone surfaces are pinned to
@@ -334,6 +349,24 @@ export const Sidebar = memo(function Sidebar({
           />
         )}
       </div>
+      {visiblePages.length > 0 && (
+        <div className="side-pins side-pages">
+          {visiblePages.map((p) => (
+            <button
+              key={p.name}
+              className={`side-lib pin-page${activePage === p.name ? ' active' : ''}`}
+              onClick={() => onOpenPage(p.name)}
+              aria-current={activePage === p.name ? 'page' : undefined}
+            >
+              <LayoutOutlined className="side-lib-icon" />
+              <span className="side-lib-text">
+                <span className="side-lib-zh">{p.label}</span>
+                <span className="side-lib-en">PAGE</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
       {/* Two fixed, standalone surfaces pinned at the BOTTOM: the DB-backed 知识库 (Library, amber)
           and the 智库 (Knowledge Base — the AI-infra corpus, celadon). Same pin styling for both. */}
       <div className="side-pins side-foot">
