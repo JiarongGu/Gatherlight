@@ -193,8 +193,10 @@ if (uiCase) {
     // lives in one shared prompt prefix, so an edit there would silently switch the whole feature
     // off with every other test still green. Reads the WHOLE prompt: the pointer is in the common
     // preamble, ahead of "THE USER'S REQUEST:".
-    CONTRACT_POINTER: prompt.includes('.claude/ui-spec.md')
-      ? 'CONTRACT_POINTER_PRESENT' : 'CONTRACT_POINTER_MISSING',
+    // Same reasoning for pages (S3b): the page file shape is documented and enforced, but an agent
+    // never told it can write one will never write one, and every other row stays green.
+    CONTRACT_POINTER: (prompt.includes('.claude/ui-spec.md') ? 'CONTRACT_POINTER_PRESENT' : 'CONTRACT_POINTER_MISSING')
+      + ' ' + (/ui\/<name>\.json|SAVE a tree as a page/.test(prompt) ? 'PAGES_PRESENT' : 'PAGES_MISSING'),
   };
   const text = cases[uiCase] ?? `unknown UI_CASE ${uiCase}`;
   // Chunked, so what the suite exercises is the scanner's INCREMENTAL path — a fence marker split

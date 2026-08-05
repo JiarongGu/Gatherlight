@@ -82,12 +82,26 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   splits a turn into ordered segments so raw JSON never lands in the transcript) and a page spec in
   `{data}/ui/`. `rehype-raw` and the sanitize allow-list are gone — legacy `trip-map`/`city-map`
   divs survive through a remark shim, so agent text has no path to markup at all. A `Button`'s
-  action is a container verb (`send`, `openRecord`), and `send` only composes the user's next
-  message: a button cannot approve anything. The schema is C# and the renderer is TypeScript, so
+  action is a container verb (`send`, `openRecord`, `runCapability`), and `send` only composes the
+  user's next message: a button cannot approve anything. `runCapability` names code a human ALREADY
+  approved — the page supplies an id, never code — and the click confirms first, from
+  `PermissionSentence` over the enforced grant (`GET /api/ui/capability/{id}`), never from the page,
+  whose label the agent wrote. The verb validates by SHAPE, not by state: enablement is enforced at
+  invocation by `ToolRegistry`, so a page naming a capability enabled later is still committable. A
+  capability's OUTPUT is data, not a view — it reaches the renderer only via `POST /api/ui/validate`.
+  The schema is C# and the renderer is TypeScript, so
   `node devtools/dev.mjs check-ui-registry` guards the two lists against drift. The vocabulary the
   agent reads (`.claude/ui-spec.md`) is app-managed and version-gated like the scope guard — it is a
   protocol contract, not knowledge-base content the seeder must preserve, and it has to keep saying
   exactly what `UiTreeValidator` enforces. Proof lives in `e2e-p41`.
+  The agent authors pages too: `ui/` is in the scope guard's write set, restricted to flat `.json`
+  by `WRITE_EXTS` so a path it may write there is exactly a page (the store lists the top level only
+  — without the flat rule it could write a permanently invisible file). A page change is reviewed by
+  RENDERING it at the diff gate from the working tree, with a change summary computed from the two
+  trees rather than written by the agent, and an invalid page **cannot be committed**. Both the
+  contract (`UI_CONTRACT_VERSION`) and the shared prompt preamble name pages — S3a's lesson is that
+  a capability the agent is never told about is unreachable while every check stays green, so
+  `e2e-p42` asserts the prompt pointer itself, not just the file. Proof lives in `e2e-p42`.
 - **Capabilities carry provenance.** `Platform` (compiled, shipped by us) is available by default and
   runs in-process; `Script` and `Mcp` are off until `site.json` lists them in `capabilities.enabled`;
   `Draft` is never loaded. Non-platform capabilities run under `node --permission` with filesystem

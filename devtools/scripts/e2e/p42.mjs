@@ -147,6 +147,40 @@ try {
   const stillAtGate = (await j(`/api/chat/${badId}`)).body?.phase;
   ok('approving an invalid page is REFUSED', stillAtGate === 'awaiting-diff-approval', String(stillAtGate));
   await post(`/api/chat/${badId}/diff/reject`);
+  // The agent lease is app-wide and a rejection settles asynchronously — start the next turn before
+  // that lands and POST /api/chat comes back 409 BUSY with no id.
+  await until(async () => {
+    const p = (await j(`/api/chat/${badId}`)).body?.phase;
+    return ['rejected', 'cancelled', 'error', 'committed'].includes(p) ? p : null;
+  }, 45000);
+
+  // --- the agent is told ----------------------------------------------------------------------
+  // S3a's lesson, applied: the contract was once seeded, versioned and CORRECT while the feature did
+  // nothing, because nothing told the agent to read it — every other row stayed green. These four
+  // rows check the contract's contents, and the two after them check the prompt that points at it.
+  const spec = fs.readFileSync(path.join(dataDir, '.claude', 'ui-spec.md'), 'utf8');
+  ok('the contract is at version 2', /UI_CONTRACT_VERSION:\s*2/.test(spec),
+    spec.split('\n')[0] ?? '(empty)');
+  ok('the contract documents pages', /ui\/<name>\.json/.test(spec));
+  ok('the contract says ui/ is flat', /FLAT/i.test(spec));
+  ok('the contract documents runCapability', /runCapability/.test(spec));
+
+  // The stub reports what the SERVER actually put in the prompt, so deleting the prompt line turns
+  // THIS row red and nothing else. Drives one plan turn and reads its plan text (p41 reads the same
+  // marker off the SSE stream; the point is the assertion, not the transport).
+  const pointerStart = await post('/api/chat', { message: 'UI_CASE:CONTRACT_POINTER', mode: 'plan' });
+  const pointerId = pointerStart.body?.id;
+  if (!pointerId) throw new Error(`no session id for the pointer turn: ${JSON.stringify(pointerStart.body)}`);
+  await until(async () => {
+    const p = (await j(`/api/chat/${pointerId}`)).body?.phase;
+    return p && p !== 'idle' && p !== 'planning' ? p : null;
+  }, 60000);
+  const pointerPlan = (await j(`/api/chat/${pointerId}`)).body?.plan ?? '';
+  ok('the prompt points the agent at the contract', /CONTRACT_POINTER_PRESENT/.test(pointerPlan),
+    pointerPlan.slice(0, 160));
+  ok('the prompt tells the agent it can write pages', /PAGES_PRESENT/.test(pointerPlan),
+    pointerPlan.slice(0, 160));
+  await post(`/api/chat/${pointerId}/cancel`);
 } catch (e) {
   fail(e?.stack || String(e));
   console.error(server.log().slice(-3000));
