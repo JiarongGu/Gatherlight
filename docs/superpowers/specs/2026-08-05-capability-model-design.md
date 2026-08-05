@@ -193,7 +193,32 @@ target — and raises a card built from those facts. Then:
   never have read the attacker's text.
 - The user chooses **allow once**, **allow and remember** (writes the grant into `site.json`), or
   **deny** (default).
-- The blocked call then returns accordingly and **the run continues.**
+- The run then **resumes and retries**, so a denial is a decision point rather than a dead end.
+
+### How it resumes — corrected after reading the run loop
+
+An earlier draft of this section said the blocked call "returns accordingly and the run continues",
+which assumed the server could suspend a tool call in flight. **It cannot, and nothing in the
+codebase does.** Every existing gate — `NEEDS_INPUT`, `MCP_ADD`, `LOGIN_REQUIRED` — happens
+*between* agent turns: `IAgentRunner.RunAsync` blocks until the CLI reaches a terminal result, the
+server inspects the final text for a marker, parks the session in a phase, and later starts a
+**fresh** run carrying `ResumeToken = ClaudeSessionId`. There is no mid-call suspension to reuse.
+
+Escalation therefore follows that same proven shape rather than inventing new run-loop machinery:
+
+1. The refused call returns a refusal that names what was denied and instructs the agent to stop and
+   surface it rather than working around it.
+2. The agent ends its turn with an escalation marker; the server parks in a new phase and emits the
+   card, built from the **runtime's** record of the denial, not from the agent's text.
+3. The decision POSTs to a gate endpoint, and the run resumes via `ResumeToken` and retries.
+
+**The security property is unchanged**, which is why this substitution is safe: consent still
+arrives only through a platform POST. An injected agent that suppresses the marker denies *itself*
+the escalation — it cannot use the omission to obtain the permission.
+
+One consequence to accept: because parked sessions live only in memory, a server restart mid-gate
+fails the session (`SelfHealStateStep` already forces non-terminal threads to `error`). An escalation
+is lost on restart exactly as today's gates are. Persisting parked gates is not in scope here.
 
 ## Drafts
 
@@ -243,6 +268,31 @@ believing a picture, not a script running. A planner gains little from arbitrary
 avatars and progress are composed as **siblings of** the agent's rendered blocks, driven by server
 SSE event types the agent cannot emit — not entries within them. There is no fence syntax that
 reaches them.
+
+### What was actually true when this was written
+
+The claim above described the intent, not the code. Reading `MarkdownView.tsx` found the chat
+renders agent text through `react-markdown` **with `rehype-raw` enabled** and a **deny-list**
+sanitiser (`rehypeStripDangerous`), then dispatches `<div class="trip-map">` / `city-map` to real
+React components. So the agent already authors HTML that becomes components, and **a forged
+approval card is renderable today.**
+
+The invariant that matters survives — a forged card's buttons are wired to nothing, and consent
+cannot arrive through the conversation — but "the agent cannot draw a convincing fake" was false,
+and for a household that cannot read code, a convincing fake is the failure mode that counts.
+
+**The fix is an allow-list sanitiser**, replacing the deny-list: standard markdown elements plus
+only `div.trip-map` / `div.city-map` and their data attributes. Arbitrary agent HTML stops
+rendering; the existing map feature is unaffected. Chosen over migrating the maps to typed blocks
+first, which would be a cleaner end state but puts a migration in front of the cards.
+
+Two smaller realities the same reading turned up, both of which the plan must handle:
+
+- **Unknown SSE event kinds are silently dropped** — the client reducer's `default: return state;`
+  logs nothing. A new card event the client does not yet handle would vanish without trace.
+- **`notify_user` never reaches the chat.** It writes to a `notification` table with its own SSE
+  stream and surfaces on a bell icon in the top bar, decoupled from any chat session. "The agent
+  points at the card in the same breath" therefore needs the chat channel, not `notify_user`.
 
 ## Scope: this is two plans, not one
 
