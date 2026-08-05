@@ -97,9 +97,14 @@ on its next run.
   filesystem paths named in the tool's `capabilities.enabled` grant (`fs.read`/`fs.write` name
   manifest record directories or the literal `cache`), plus a platform `--import` preload that
   removes network access unless the grant sets `"net": true`. They are authored by you (or a Claude
-  Code dev session on this repo) — never by the chat agent: the scope guard confines agent writes to
-  `plans/ household/ .claude/`, and that's deliberate. When the agent hits a missing-tool gap it
-  records it via `/remember`; you decide whether to create the tool and enable it.
+  Code dev session on this repo) — or **drafted by the chat agent itself**: it writes the same
+  `tool.json` + entry-script shape to `.claude/tool-drafts/<id>/` (still inside its own write scope,
+  no scope-guard change needed) and ends its turn with `TOOL_DRAFT: <id>`. A draft is never loaded by
+  the registry — it is inert until a human sees the approval card (built from the draft's own grant,
+  never its description) and enables it, which copies it into `{data}/tools/<id>/` and appends the
+  grant to `capabilities.enabled` unchanged. From there it's a script tool like any other. Absent a
+  draft, when the agent hits a missing-tool gap it records it via `/remember`; you decide whether to
+  create the tool and enable it.
 - A broken manifest is skipped with a warning — it never takes the server or other tools down.
 - Prefer a script tool first; promote to a C# built-in when it needs server internals or becomes
   hot-path (see `docs/ROADMAP.md` phase 7 for the porting pattern).

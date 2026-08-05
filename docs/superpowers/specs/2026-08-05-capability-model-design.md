@@ -1,8 +1,8 @@
 # Capability model, permissions + the escalation harness — design (S2)
 
-> 2026-08-05 · sub-project **S2** of the platform track. Status: **S2a implemented** — see
-> `docs/superpowers/plans/2026-08-05-capability-model-sandbox.md`. S2b (drafts, approval cards,
-> escalation harness, chat ownership) not yet started.
+> 2026-08-05 · sub-project **S2** of the platform track. Status: **implemented** — S2a see
+> `docs/superpowers/plans/2026-08-05-capability-model-sandbox.md`, S2b see
+> `docs/superpowers/plans/2026-08-05-drafts-approval-escalation.md`.
 > Follows S1 (`2026-08-04-site-model-container-design.md`), which is implemented.
 
 ## Why
@@ -183,8 +183,11 @@ makes it true.
 
 ## Escalation: a denial is an answer, not a dead end
 
-When a call is refused mid-run, the runtime records what it **observed** — capability, permission,
-target — and raises a card built from those facts. Then:
+When a call is refused mid-run, the runtime records what it **observed** — the capability id, its
+origin, and why it was refused (`Denied` or `NotEnabled`) — and raises a card built from those
+facts. (The built version does not also capture the refused call's arguments — nothing downstream
+turned out to need them: the card's `can`/`cannot` clauses describe the grant an "allow" would
+create, not the one specific call that tripped it.) Then:
 
 - The agent's own explanation may appear, **labelled as the assistant's account**, not the system's.
 - Any optional LLM analysis runs as a **one-shot fed only the runtime facts**, never the agent's
@@ -227,8 +230,17 @@ change is required**. Drafts are never loaded by the registry, so an unapproved 
 construction* rather than by policy.
 
 Enabling copies the folder to `{data}/tools/<name>/`, appends the grant to `capabilities.enabled`,
-and the existing hot-reload picks it up within a second. `notify_user` lets the agent point at the
-card in the same breath it drafts the tool.
+and the existing hot-reload picks it up within a second.
+
+### Correction: the card needs no separate "pointing" step
+
+An earlier draft of this section said `notify_user` lets the agent point at the card in the same
+breath it drafts the tool. As the chat-ownership section below already found, `notify_user` writes
+to a decoupled notification table with its own SSE stream and a bell icon — it cannot reach chat,
+so it was never wired to this flow and the built version doesn't try to. It also turned out to be
+unnecessary: the `TOOL_DRAFT: <id>` marker itself is what parks the session and emits the card, so
+the card already appears in the same turn the agent drafted the tool in — there is no separate
+"pointing" step for anything to perform.
 
 ## The chat surface belongs to the container
 
@@ -289,7 +301,9 @@ first, which would be a cleaner end state but puts a migration in front of the c
 Two smaller realities the same reading turned up, both of which the plan must handle:
 
 - **Unknown SSE event kinds are silently dropped** — the client reducer's `default: return state;`
-  logs nothing. A new card event the client does not yet handle would vanish without trace.
+  logs nothing. A new card event the client does not yet handle would vanish without trace. (Fixed
+  in the implementation: the reducer now `console.warn`s the unhandled `kind` before falling through,
+  so this describes the state the plan found, not the state it left.)
 - **`notify_user` never reaches the chat.** It writes to a `notification` table with its own SSE
   stream and surfaces on a bell icon in the top bar, decoupled from any chat session. "The agent
   points at the card in the same breath" therefore needs the chat channel, not `notify_user`.
@@ -327,7 +341,7 @@ agent output is an enrichment, not a dependency.
 | card truthfulness | every permission sentence rendered corresponds to a grant actually enforced |
 | escalation is resumable | a denied call yields an escalation, and allowing it lets the same run continue |
 | escalation provenance | the escalation payload contains runtime-observed fields only; agent text is separately attributed |
-| chat ownership | no agent-emitted block type can render an approval control; an unknown fence degrades to text |
+| chat ownership | *(as built)* the allow-list sanitiser drops agent-authored HTML down to markdown plus the two known map divs — verified by hand (build + render a forged card, Task 1 Step 3), not an automated suite. The typed-fenced-block mechanism this row originally described (`table`/`chart`, "an unknown fence degrades to text") was deferred, not built — see "Scope" above |
 
 ## Decisions of record
 

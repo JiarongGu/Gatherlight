@@ -80,6 +80,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   for it. The launcher **fails closed**: no runtime supporting `--permission` + `module.registerHooks`,
   or a missing preload, means a Script capability refuses to run rather than running unsandboxed.
   Proof lives in `e2e-p38`, whose denials are real attempts paired with positive controls.
+- **Chat gates are between-turns markers, not suspensions.** There is no mid-run suspend: the agent
+  ends a turn with a marker in its final text (`NEEDS_INPUT` · `MCP_ADD` · `LOGIN_REQUIRED` ·
+  `TOOL_DRAFT` · `CAPABILITY_BLOCKED`), the server parks in a `ChatPhase` and emits the card on a
+  `phase` event's `Data`, a POST through `FireAndAck` supplies the decision, and a FRESH run carries
+  `ResumeToken`. A marker naming something that does not exist must NOT park — a gate with nothing to
+  decide wedges the session and holds the app-wide agent lease.
+- **Cards are platform chrome; the agent's words are labelled as its claim.** Permission clauses are
+  rendered server-side from the enforced grant (`PermissionSentence`), never from agent text, and a
+  clause with no enforcement behind it is a defect — the household is trusting the sentence, not the
+  code. The agent's own description rides in a separate field and is styled unmistakably differently,
+  because an injected agent writes a reassuring one exactly when it matters. Agent markdown is
+  allow-listed so it cannot forge a card.
 
 ## LLM / process spawning
 
