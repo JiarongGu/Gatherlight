@@ -138,7 +138,7 @@ ships the mount and one seeded starter page in the site template; S3b opens auth
 | `Text` | no | `text`, `weight`, `tone` | `tone` ∈ `default`·`muted`·`positive`·`warning` |
 | `List` | no | `items[]`, `ordered` | items are strings |
 | `Badge` | no | `text`, `tone` | |
-| `Image` | no | `src`, `alt`, `caption` | `src` is **record-relative only** — see below |
+| `Image` | no | `src`, `alt`, `caption` | `src` is a record path or an https URL — see below |
 | `Table` | no | `columns[]`, `rows[][]`, `caption` | |
 | `Map` | no | `points[]`, `cities[]`, `connect`, `title` | replaces both legacy map divs |
 | `Link` | no | `href`, `text` | http/https only, host shown |
@@ -173,12 +173,20 @@ nothing more. An agent that labels a button "Approve" gets a message, not an app
 consequential step still passes its own gate, rendered from enforced state. A button is a shortcut
 for typing, never a shortcut past a decision.
 
-**`Image.src` is record-relative, never remote.** This is the load-bearing restriction. A remote
-image URL is fetched by the browser with no click, so an injected agent can exfiltrate by encoding
-data into the URL of an image it asks the page to display. `src` resolves to a record path served by
-the app's own asset route; an absolute URL of any scheme fails validation. `Link.href` may be
-http/https because following it takes a deliberate click, and the renderer shows the host beside the
-label so the destination is not hidden behind friendly text.
+**`Image.src` accepts a record path or an https URL**, and `Link.href` accepts http/https. The
+renderer shows a link's host beside its label so the destination is not hidden behind friendly text.
+
+A remote image is a genuine zero-click exfiltration channel — the browser fires the GET the moment
+the element renders, and the data rides in the URL, so same-origin policy is irrelevant. It is not
+restricted here because **restricting it at this node would not close the channel.** Plan markdown
+renders `![](https://…)` through react-markdown along a path this sub-project does not touch, and
+the app's own CSP is `img-src 'self' data: blob: https:` because Leaflet loads map tiles from a
+CDN. A rule that stops the agent from putting a hotel photo on a page it built, while the adjacent
+door stays open, buys nothing and costs a real capability.
+
+The channel is recorded as a residual below. The fix, when it is worth doing, is one move at the
+CSP layer rather than a rule per node: proxy map tiles through the server, then tighten `img-src`
+to `'self' data: blob:` — which closes it for markdown, trees and anything added later at once.
 
 ## Streaming and failure (chat mount)
 
@@ -251,14 +259,23 @@ code. What this sub-project changes:
 |---|---|---|
 | Forged approval card | Possible in principle — the agent authors HTML and the allow-list permits the `div` classes maps need | Impossible by construction: gate components are not in the registry |
 | Script injection | Blocked by the allow-list, correctly | No parse path exists |
-| Zero-click exfiltration via image URL | Possible — `defaultSchema` permits `img[src]` with an http(s) URL | Blocked: `src` is record-relative, absolute URLs fail validation |
+| Zero-click exfiltration via image URL | Possible — `defaultSchema` permits `img[src]` with an https URL, and the CSP allows `img-src … https:` | **Unchanged — a named residual.** See below |
 | Click-through exfiltration via link | Possible | Still possible, deliberately: `Link` allows http/https and the host is shown |
 | Renderer denial of service | Unbounded | Bounded by depth and node-count limits |
 
-**What this does not cover.** A tree can still *say* something untrue in a `Text` node — agent words
-remain agent words. The mitigation is unchanged from S2: platform chrome renders from enforced
-state, and the agent's prose is styled as the agent's. Nothing here makes the agent honest; it makes
-the agent unable to impersonate the platform.
+**What this does not cover.**
+
+A tree can still *say* something untrue in a `Text` node — agent words remain agent words. The
+mitigation is unchanged from S2: platform chrome renders from enforced state, and the agent's prose
+is styled as the agent's. Nothing here makes the agent honest; it makes the agent unable to
+impersonate the platform.
+
+**Remote-image exfiltration stays open**, deliberately, and predates this work. Any https URL in an
+`Image` node or in plan markdown fires a GET the moment it renders, with attacker-chosen data in the
+path. Restricting the node alone would be theatre while `![](https://…)` renders next to it. The
+real mitigation is a CSP change, not a validation rule: proxy Leaflet's tiles through the server so
+`img-src` can drop to `'self' data: blob:`. Worth doing on its own merits some day; out of scope
+here, and listed so nobody reads this spec as having handled it.
 
 ## Testing
 
@@ -271,7 +288,8 @@ A new `p41` e2e suite. The claude stub emits each case and the suite asserts the
 | Malformed JSON inside the fence | `status: "invalid"`, reason names the parse failure |
 | Unknown prop on a known component | `status: "invalid"`, reason names the prop |
 | `Button` action `{"openRecord": "state/gatherlight.db"}` | `status: "invalid"` — the path is refused |
-| `Image` with an `https://` src | `status: "invalid"` — remote images are refused |
+| `Image` with an `https://` src | `status: "ready"` — allowed, matching markdown and the CSP |
+| `Image` with a `javascript:` or `file:` src | `status: "invalid"` — only record paths and https |
 | Tree exceeding the node limit | `status: "invalid"`, reason names the limit |
 | Fence open mid-stream | `status: "partial"`, no raw payload on the wire |
 | Fence still open when the turn's text ends | `status: "invalid"`, reason "unterminated block" — never left `partial` |
