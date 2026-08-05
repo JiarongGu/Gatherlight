@@ -297,6 +297,7 @@ public static class GatherlightApp
             .AddSingleton<IUiNodeSchema, LinkSchema>()
             .AddSingleton<IUiNodeSchema, FileRefSchema>()
             .AddSingleton<IUiNodeSchema, ButtonSchema>()
+            .AddSingleton<ISitePageStore, SitePageStore>()
             // Agent-drafted tools in .claude/tool-drafts/ — never loaded by the registry above, so a
             // draft is inert until a human calls IDraftStore.Promote (S2b's approval gate consumes it).
             .AddSingleton<Platform.Capabilities.Services.IDraftStore, Platform.Capabilities.Services.DraftStore>()
