@@ -80,6 +80,7 @@ public sealed class ChatController : ControllerBase
             review = s.Review,
             mcpProposal = s.McpProposal is null ? null : ChatSessionService.McpProposalView(s.McpProposal),
             mcpLogin = s.McpLogin is null ? null : ChatSessionService.McpLoginView(s.McpLogin),
+            draftApproval = s.PendingDraft is null ? null : ChatSessionService.DraftApprovalView(s.PendingDraft),
             commitSha = s.CommitSha,
             error = s.Error,
         });
@@ -224,6 +225,18 @@ public sealed class ChatController : ControllerBase
     [HttpPost("api/chat/{id}/login/continue")]
     public IActionResult ContinueLogin(string id) =>
         FireAndAck(() => _ = _chat.ContinueLoginAsync(id), id, ChatPhase.AwaitingLogin);
+
+    // --- gate: approve/reject an agent-drafted tool (awaiting-draft-approval) ------------
+
+    /// <summary>Enable the drafted tool (promotes it) and resume the agent so it can use it.</summary>
+    [HttpPost("api/chat/{id}/draft/approve")]
+    public IActionResult ApproveDraft(string id) =>
+        FireAndAck(() => _ = _chat.ApproveDraftAsync(id), id, ChatPhase.AwaitingDraftApproval);
+
+    /// <summary>Decline the drafted tool (discards it) and resume the agent without it.</summary>
+    [HttpPost("api/chat/{id}/draft/reject")]
+    public IActionResult RejectDraft(string id) =>
+        FireAndAck(() => _ = _chat.RejectDraftAsync(id), id, ChatPhase.AwaitingDraftApproval);
 
     /// <summary>Force-stop — valid from any non-terminal phase.</summary>
     [HttpPost("api/chat/{id}/cancel")]

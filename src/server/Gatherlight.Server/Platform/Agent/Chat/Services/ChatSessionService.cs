@@ -8,6 +8,8 @@ using Gatherlight.Server.Platform.Agent.Llm.Services;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Models;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Services;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Services.Transport;
+using Gatherlight.Server.Platform.Capabilities.Models;
+using Gatherlight.Server.Platform.Capabilities.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Services;
 using Lyntai.Providers.ClaudeCli;
 using AgentToolPolicy = Lyntai.Agents.AgentToolPolicy;
@@ -33,6 +35,14 @@ public static class ChatPhase
     // The agent hit a login-walled MCP server and asked for interactive login; a QR/URL is shown in
     // chat, and the agent resumes automatically once the human completes the scan. NON-terminal.
     public const string AwaitingLogin = "awaiting-login";
+    // The agent drafted a new tool (.claude/tool-drafts/<id>/) and wants it enabled; parked showing a
+    // card built from PermissionSentence over the draft's OWN grant, never from the agent's words.
+    // NON-terminal, holds the agent slot — approving promotes it and resumes so the agent can use it.
+    public const string AwaitingDraftApproval = "awaiting-draft-approval";
+    // A capability call was refused (NotEnabled/Denied) and the agent surfaced it instead of working
+    // around it; parked showing a card built from the runtime's OWN record of the denial
+    // (ICapabilityDenialLog), never from the agent's account. NON-terminal, holds the agent slot.
+    public const string AwaitingCapabilityApproval = "awaiting-capability-approval";
     public const string Committing = "committing";
     public const string Building = "building";
     public const string Committed = "committed";
@@ -78,6 +88,9 @@ public sealed class ChatSession
     /// <summary>Set when the agent asked to log into an MCP server (phase awaiting-login): which
     /// server + the QR/URL challenge to show. Cleared when login completes and the agent resumes.</summary>
     public McpLoginPrompt? McpLogin { get; set; }
+    /// <summary>Set when the agent proposed a tool draft (phase awaiting-draft-approval): the parsed
+    /// draft the human is deciding on. Cleared on approve/reject.</summary>
+    public CapabilityDraft? PendingDraft { get; set; }
     /// <summary>Sequential persistence chain so DB writes keep event order without
     /// blocking the emit path.</summary>
     public Task PersistChain = Task.CompletedTask;
@@ -127,6 +140,7 @@ public sealed class ChatSessionService
     private readonly IMcpProvisionService _mcpProvision;
     private readonly IMcpLoginService _mcpLogin;
     private readonly IMcpServerStore _mcpStore;
+    private readonly IDraftStore _drafts;
     private readonly ILogger<ChatSessionService> _log;
 
     private const int MaxBuildRepair = 2;
@@ -139,12 +153,14 @@ public sealed class ChatSessionService
         CodeRepoGit codeGit, BuildVerifyService buildVerify, GatherlightServerOptions options,
         Platform.Ops.Scoring.Services.IScoringService scoring, IAgentGate gate,
         IMcpProvisionService mcpProvision, IMcpLoginService mcpLogin, IMcpServerStore mcpStore,
+        IDraftStore drafts,
         ILogger<ChatSessionService> log)
     {
         _gate = gate;
         _mcpProvision = mcpProvision;
         _mcpLogin = mcpLogin;
         _mcpStore = mcpStore;
+        _drafts = drafts;
         _scoring = scoring;
         _router = router;
         _codeGit = codeGit;
@@ -707,6 +723,22 @@ public sealed class ChatSessionService
             await EnterAwaitingLoginAsync(s, serverRef);
             return;
         }
+        // The agent drafted a new tool and wants it enabled — park for the human's decision, built
+        // from PermissionSentence over the draft's OWN grant, never the agent's description of it. A
+        // marker naming a draft that does not exist (or fails to parse) must NOT park: there is
+        // nothing to decide, and parking anyway would wedge the session holding the agent lease with
+        // no way forward. Notice and fall through to the normal finish tail below instead.
+        if (TryExtractToolDraft(res.FinalText, out var draftId))
+        {
+            var draft = _drafts.Get(draftId);
+            if (draft is null)
+                Emit(s, new AgentEvent { Kind = "notice", Text = $"⚠️ 找不到草稿工具「{draftId}」,已忽略该标记。" });
+            else
+            {
+                EnterAwaitingDraftApproval(s, draft);
+                return;
+            }
+        }
         if (TryExtractNeedsInput(res.FinalText, out var question, out var options))
         {
             EnterAwaitingInput(s, question, options);
@@ -855,6 +887,92 @@ public sealed class ChatSessionService
         url = p.Draft.Url,
         neededCredentials = p.NeededCredentials,
     };
+
+    // --- gate: approve/reject an agent-drafted tool (awaiting-draft-approval) ----------------
+
+    /// <summary>Human enabled the drafted tool — promote it (copies the folder into
+    /// <c>{data}/tools/</c> and appends its grant to <c>site.json</c> unchanged) then resume the SAME
+    /// claude session so the agent can actually use what it just gained.</summary>
+    public Task ApproveDraftAsync(string id)
+    {
+        var s = RequirePhase(id, ChatPhase.AwaitingDraftApproval);
+        var draft = s.PendingDraft ?? throw new InvalidOperationException("NO_DRAFT");
+        s.PendingDraft = null;
+        try
+        {
+            _drafts.Promote(draft.Id);
+        }
+        catch (Exception ex)
+        {
+            Fail(s, $"启用工具失败:{ex.Message}", ex);
+            return Task.CompletedTask;
+        }
+        RecordOutcome(s, $"已启用草稿工具 {draft.Id}");
+        return ContinueExecuteAsync(s,
+            $"我已启用工具「{draft.Title}」(id: {draft.Id}),请继续之前的操作。",
+            $"✅ 已启用「{draft.Title}」,正在继续…");
+    }
+
+    /// <summary>Human declined the drafted tool — discard it, then resume so the agent carries on
+    /// without it (never silently retried; the agent's own next turn decides what to do instead).</summary>
+    public Task RejectDraftAsync(string id)
+    {
+        var s = RequirePhase(id, ChatPhase.AwaitingDraftApproval);
+        var draft = s.PendingDraft ?? throw new InvalidOperationException("NO_DRAFT");
+        s.PendingDraft = null;
+        _drafts.Discard(draft.Id);
+        RecordOutcome(s, $"已拒绝草稿工具 {draft.Id}");
+        return ContinueExecuteAsync(s,
+            $"我没有启用工具「{draft.Title}」(id: {draft.Id}),请在没有它的情况下继续。",
+            "已拒绝该工具草稿,正在继续…");
+    }
+
+    // Park waiting for the human's enable/decline decision. Non-terminal (holds the agent slot).
+    private void EnterAwaitingDraftApproval(ChatSession s, CapabilityDraft draft)
+    {
+        s.PendingDraft = draft;
+        Emit(s, new AgentEvent
+        {
+            Kind = "notice",
+            Text = $"⏸️ AI 起草了一个新工具「{draft.Title}」— 请核对下面的权限后决定是否启用(或点「放弃任务」)。",
+        });
+        SetPhase(s, ChatPhase.AwaitingDraftApproval, DraftApprovalView(draft));
+    }
+
+    /// <summary>The approval card's data. <c>can</c>/<c>cannot</c> come from <see cref="PermissionSentence"/>
+    /// over the draft's OWN grant — never from the draft's text — so they cannot be worded more
+    /// reassuringly by whatever wrote the draft. <c>description</c> and <c>entrySource</c> ARE the
+    /// draft's own text and ride in separate fields precisely so the client can label them as the
+    /// assistant's claim rather than fold them into the enforced clauses.</summary>
+    internal static object DraftApprovalView(CapabilityDraft draft) => new
+    {
+        id = draft.Id,
+        title = draft.Title,
+        description = draft.Description,
+        can = PermissionSentence.Can(draft.Grant),
+        cannot = PermissionSentence.Cannot(draft.Grant),
+        entrySource = draft.EntrySource,
+    };
+
+    // The execute prompt tells the agent: to propose a new reusable tool, write
+    // `.claude/tool-drafts/<id>/tool.json` (+ its entry script), then end the final message with a
+    // TOOL_DRAFT marker and STOP — never call the tool itself, it does not exist until a human
+    // approves it (IDraftStore.Promote is the only thing that makes it real).
+    private static readonly System.Text.RegularExpressions.Regex ToolDraftRe = new(
+        @"^[ \t>*_-]*TOOL_DRAFT:[ \t]*(?<id>.+?)[ \t]*$",
+        System.Text.RegularExpressions.RegexOptions.Multiline
+        | System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool TryExtractToolDraft(string? finalText, out string draftId)
+    {
+        draftId = "";
+        if (string.IsNullOrWhiteSpace(finalText)) return false;
+        var m = ToolDraftRe.Match(finalText);
+        if (!m.Success) return false;
+        draftId = m.Groups["id"].Value.Trim();
+        return draftId.Length > 0;
+    }
 
     // The (system-mode) execute prompt tells the agent: to add an external MCP server, end its final
     // message with `MCP_ADD:` followed by a JSON object (name, transport, command/args | url,
