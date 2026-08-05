@@ -176,6 +176,14 @@ if (readOnly) {
     : userReq.includes('NEEDINPUTTEST') ? ' [TRIG:NEEDINPUT]'
     : userReq.includes('MCPADDTEST') ? ' [TRIG:MCPADD]'
     : userReq.includes('LOGINTEST') ? ' [TRIG:LOGIN]'
+    // e2e-p39 (TOOL_DRAFT gate): DRAFTTEST_A/_B name the two contrasting pre-authored drafts
+    // (net:false vs net:true — the load-bearing can/cannot contrast); _MISSING names a draft id
+    // that was never written to disk; _OVERWRITE names one whose id collides with an
+    // already-enabled capability the suite pre-seeded into site.json.
+    : userReq.includes('DRAFTTEST_MISSING') ? ' [TRIG:DRAFTMISSING]'
+    : userReq.includes('DRAFTTEST_OVERWRITE') ? ' [TRIG:DRAFTOVERWRITE]'
+    : userReq.includes('DRAFTTEST_A') ? ' [TRIG:DRAFTA]'
+    : userReq.includes('DRAFTTEST_B') ? ' [TRIG:DRAFTB]'
     : userReq.includes('NOOPTEST') ? ' [TRIG:NOOP]' : '';
   const planText = systemMode ? text : text + trig;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
@@ -206,6 +214,34 @@ if (readOnly) {
   // log in → user scanned → agent continues".
   if (prompt.includes('[TRIG:LOGIN]') && !prompt.includes("HUMAN'S FEEDBACK")) {
     done('要搜索小红书需要先登录。\n\nLOGIN_REQUIRED: login-demo');
+    process.exit(0);
+  }
+  // TOOL_DRAFT (e2e-p39): on the FIRST execute the agent "drafted" a reusable tool — the e2e suite
+  // pre-authored the draft files on disk under .claude/tool-drafts/ (mirroring what a real agent
+  // write would produce) — and asks the human to enable it, writing NOTHING itself → the flow parks
+  // at awaiting-draft-approval. draft_a is net:false (fs.read plans / fs.write cache); draft_b is
+  // net:true — the contrasting pair p39's load-bearing assertion checks the card text against.
+  if (prompt.includes('[TRIG:DRAFTA]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('这个任务需要一个可复用的工具,我已起草好了草稿。\n\nTOOL_DRAFT: draft_a');
+    process.exit(0);
+  }
+  if (prompt.includes('[TRIG:DRAFTB]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('这个任务需要一个可复用的、需要访问网络的工具,我已起草好了草稿。\n\nTOOL_DRAFT: draft_b');
+    process.exit(0);
+  }
+  // A TOOL_DRAFT naming a draft id that was never written to disk (e2e-p39, "must not park"). Makes
+  // NO edit (same no-op shape as [TRIG:NOOP] below) so the flow's only path forward is PresentDiffAsync's
+  // empty-diff branch → 'rejected' — a clean single-pass proof that the marker was ignored rather than
+  // parking the gate, with no resumed second turn to keep idempotent against a prior commit.
+  if (prompt.includes('[TRIG:DRAFTMISSING]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('这一步不需要改动文件(stub)。\n\nTOOL_DRAFT: does_not_exist_xyz');
+    process.exit(0);
+  }
+  // A TOOL_DRAFT naming a draft id that collides with an already-ENABLED capability (e2e-p39's
+  // promotion-refuses-to-overwrite case) — the suite pre-seeds site.json's capabilities.enabled AND
+  // authors the draft_c folder before this turn.
+  if (prompt.includes('[TRIG:DRAFTOVERWRITE]') && !prompt.includes("HUMAN'S FEEDBACK")) {
+    done('我建议启用一个新工具。\n\nTOOL_DRAFT: draft_c');
     process.exit(0);
   }
   // NOOP (e2e-p28): make NO change and ask nothing → empty diff → the flow ends 'rejected'. A pure
