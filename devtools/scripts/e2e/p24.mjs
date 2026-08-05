@@ -16,7 +16,7 @@ const { ok, fail, done } = makeReporter('p24');
 const systemGuard = path.join(repo, 'guard', 'system-scope-guard.mjs');
 
 // Extract the planner guard body from the C# const and materialize it to a temp .mjs, so the test
-// exercises the exact bytes the server injects into a data folder (WRITE_DIRS = plans/household/.claude).
+// exercises the exact bytes the server injects into a data folder (WRITE_DIRS = plans/household/.claude/ui).
 function extractPlannerGuard() {
   const cs = fs.readFileSync(
     path.join(repo, 'src', 'server', 'Gatherlight.Platform', 'Agent', 'Chat', 'Services', 'ChatEnvironmentService.cs'),
@@ -33,7 +33,14 @@ function extractPlannerGuard() {
   // Same deal for __DENIED_TOOLS__ (capabilities.deny, rendered as a JS array of tool ids) — a
   // default manifest denies nothing, so the default-manifest render is `[]`.
   if (!raw.includes('__DENIED_TOOLS__')) throw new Error('scope-guard template lost its __DENIED_TOOLS__ placeholder — update p24 to match ChatEnvironmentService.RenderScopeGuard');
-  const body = raw.replace('__WRITE_DIRS__', "['plans', 'household', '.claude']").replace('__DENIED_TOOLS__', '[]');
+  // And for __WRITE_EXTS__ (ui.spec, rendered as a dir → allowed-extension map). An unsubstituted
+  // placeholder is a SyntaxError, which would make every planner row below report "not denied" — i.e.
+  // a broken guard that looks permissive. Assert it rather than discover it as a battery of failures.
+  if (!raw.includes('__WRITE_EXTS__')) throw new Error('scope-guard template lost its __WRITE_EXTS__ placeholder — update p24 to match ChatEnvironmentService.RenderScopeGuard');
+  const body = raw
+    .replace('__WRITE_DIRS__', "['plans', 'household', '.claude', 'ui']")
+    .replace('__DENIED_TOOLS__', '[]')
+    .replace('__WRITE_EXTS__', "{ 'ui': ['.json'] }");
   const out = path.join(os.tmpdir(), `gl-planner-guard-${process.pid}.mjs`);
   fs.writeFileSync(out, body);
   return out;
@@ -116,6 +123,11 @@ if (plannerGuard) {
     ['write plan md', 'Write', { file_path: 'plans/trips/2026-08-x.md' }, false],
     ['write household md', 'Edit', { file_path: 'household/people.md' }, false],
     ['write .claude skill', 'Write', { file_path: '.claude/skills/xhs-search/xhs-search.mjs' }, false],
+    // ui/ is in the write scope but restricted by file TYPE — the positive control is what proves
+    // the WRITE_EXTS substitution above is real rather than an empty map that denies nothing.
+    ['write ui page', 'Write', { file_path: 'ui/tokyo.json' }, false],
+    ['write ui non-page denied', 'Write', { file_path: 'ui/notes.md' }, true],
+    ['write ui subdirectory denied', 'Write', { file_path: 'ui/sub/deep.json' }, true],
     ['write .claude hooks guard denied', 'Write', { file_path: '.claude/hooks/scope-guard.mjs' }, true],
     ['write .claude settings denied', 'Write', { file_path: '.claude/settings.json' }, true],
     ['write src/client denied', 'Write', { file_path: 'src/client/x.tsx' }, true],
