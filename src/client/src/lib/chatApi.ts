@@ -4,14 +4,19 @@ import { get, post } from './apiClient';
 export async function startChat(
   message: string,
   attachments: UploadedFile[] = [],
-  mode: 'plan' | 'system' = 'plan'
+  mode: 'plan' | 'system' = 'plan',
+  // Set when the user typed into an opened PAST conversation: the new turn joins that conversation
+  // and its prompt carries that conversation's rebuilt context. Omitted → the server's own
+  // idle / turn-cap / post-commit rule decides whether this starts a new one.
+  continuesConversationId?: string
 ): Promise<{ id: string; phase: string }> {
   return post('/api/chat', {
     message,
     mode,
     // Send just the server-side references; the server validates each path is
     // inside the uploads dir before handing it to the agent.
-    attachments: attachments.map((a) => a.relPath)
+    attachments: attachments.map((a) => a.relPath),
+    continuesConversationId
   });
 }
 

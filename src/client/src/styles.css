@@ -690,6 +690,9 @@ h1, h2, h3, .u-display { font-family: var(--font-display); letter-spacing: -0.01
   border-bottom: 1px solid var(--border);
 }
 .chat-title { font-weight: 600; }
+/* Right-hand chrome of the chat header: phase chip, 停止, 新对话, 历史. */
+.chat-head-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.chat-head-actions .icon-btn.is-on { color: var(--accent); background: var(--accent-soft); }
 
 /* --- conversation history (chat panel) --- */
 .chat-history { display: flex; flex-direction: column; gap: 2px; padding: 6px 4px; }

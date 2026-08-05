@@ -25,6 +25,9 @@ export type Phase =
 export interface AgentEvent {
   kind:
     | 'phase'
+    // The human's own message. Never streamed live (the composer puts it in the transcript
+    // itself) — it appears only in a stored transcript, so a replay shows both sides.
+    | 'user'
     | 'text'
     | 'text-delta'
     | 'ui-block'

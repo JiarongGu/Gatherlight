@@ -9,12 +9,15 @@ import {
   CloseCircleOutlined,
   MessageOutlined,
   StopOutlined,
-  PaperClipOutlined
+  PaperClipOutlined,
+  PlusOutlined,
+  HistoryOutlined
 } from '@ant-design/icons';
 import { MarkdownView } from './MarkdownView';
 import { BlockSegment } from '@/ui/blocks/BlockSegment';
 import { PlanActions, DiffReview } from './ChatReview';
 import { ChatRating } from './ChatRating';
+import { ChatHistory } from './ChatHistory';
 import {
   startChat,
   openStream,
@@ -35,7 +38,10 @@ import {
   denyCapability,
   getActiveSession,
   cancelChat,
-  uploadFiles
+  uploadFiles,
+  getChatHistory,
+  getConversation,
+  type ConversationRow
 } from '@/lib/chatApi';
 import {
   type AgentEvent,
@@ -234,6 +240,20 @@ function reducer(state: ChatState, action: Action): ChatState {
     case 'event': {
       const ev = action.ev;
       switch (ev.kind) {
+        case 'user':
+          // Replay only: the live path adds the user's row from the composer ('reset'). Same rows,
+          // same separator — a replayed conversation must not look different from the live one.
+          return {
+            ...state,
+            items: [
+              ...flushLive(state),
+              ...(state.items.length ? [{ id: nextId(), role: 'divider' as const }] : []),
+              { id: nextId(), role: 'user' as const, text: ev.text ?? '' }
+            ],
+            live: [],
+            thinking: ''
+          };
+
         case 'text-delta': {
           // `data.segment` is the server scanner's index for this run of prose. Default 0 so a
           // producer that never segments (an older server, a non-chat caller) still renders.
@@ -434,6 +454,7 @@ const McpApprovalCard = memo(function McpApprovalCard({
   proposal,
   busy,
   cancelling,
+  readOnly,
   onApprove,
   onReject,
   onCancel
@@ -441,6 +462,8 @@ const McpApprovalCard = memo(function McpApprovalCard({
   proposal: McpProposalView;
   busy: boolean;
   cancelling: boolean;
+  /** Replay of a finished conversation — show WHAT was asked for, offer nothing to click. */
+  readOnly?: boolean;
   onApprove: (secrets: Record<string, string>) => void;
   onReject: () => void;
   onCancel: () => void;
@@ -476,7 +499,7 @@ const McpApprovalCard = memo(function McpApprovalCard({
           >
             {launch}
           </pre>
-          {needed.length > 0 && (
+          {!readOnly && needed.length > 0 && (
             <div style={{ marginBottom: 8 }}>
               <div style={{ marginBottom: 4, opacity: 0.85 }}>需要你提供登录凭据(仅存本机,不写入对话记录):</div>
               {needed.map((k) => (
@@ -493,17 +516,21 @@ const McpApprovalCard = memo(function McpApprovalCard({
               ))}
             </div>
           )}
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
-            <Button type="primary" loading={busy} disabled={missing} onClick={() => onApprove(secrets)}>
-              批准并连接
-            </Button>
-            <Button danger loading={busy} onClick={onReject}>
-              拒绝
-            </Button>
-            <Button size="small" danger loading={cancelling} onClick={onCancel} style={{ marginLeft: 'auto' }}>
-              放弃任务
-            </Button>
-          </div>
+          {readOnly ? (
+            <div className="chat-actions-hint">这段对话已结束,这里不能再操作。</div>
+          ) : (
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+              <Button type="primary" loading={busy} disabled={missing} onClick={() => onApprove(secrets)}>
+                批准并连接
+              </Button>
+              <Button danger loading={busy} onClick={onReject}>
+                拒绝
+              </Button>
+              <Button size="small" danger loading={cancelling} onClick={onCancel} style={{ marginLeft: 'auto' }}>
+                放弃任务
+              </Button>
+            </div>
+          )}
         </div>
       }
     />
@@ -626,11 +653,14 @@ function AssistantClaim({ text }: { text: string }) {
 const DraftApprovalCard = memo(function DraftApprovalCard({
   draft,
   busy,
+  readOnly,
   onApprove,
   onReject
 }: {
   draft: DraftApprovalView;
   busy: boolean;
+  /** Replay of a finished conversation — the record of what was asked, with nothing to click. */
+  readOnly?: boolean;
   onApprove: () => void;
   onReject: () => void;
 }) {
@@ -655,14 +685,18 @@ const DraftApprovalCard = memo(function DraftApprovalCard({
               }
             ]}
           />
-          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <Button type="primary" loading={busy} onClick={onApprove}>
-              启用 Enable
-            </Button>
-            <Button danger loading={busy} onClick={onReject}>
-              不用 No thanks
-            </Button>
-          </div>
+          {readOnly ? (
+            <div className="chat-actions-hint">这段对话已结束,这里不能再操作。</div>
+          ) : (
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <Button type="primary" loading={busy} onClick={onApprove}>
+                启用 Enable
+              </Button>
+              <Button danger loading={busy} onClick={onReject}>
+                不用 No thanks
+              </Button>
+            </div>
+          )}
         </div>
       }
     />
@@ -675,12 +709,15 @@ const DraftApprovalCard = memo(function DraftApprovalCard({
 const CapabilityApprovalCard = memo(function CapabilityApprovalCard({
   capability,
   busy,
+  readOnly,
   onAllowOnce,
   onAllowAlways,
   onDeny
 }: {
   capability: CapabilityApprovalView;
   busy: boolean;
+  /** Replay of a finished conversation — the record of what was asked, with nothing to click. */
+  readOnly?: boolean;
   onAllowOnce: () => void;
   onAllowAlways: () => void;
   onDeny: () => void;
@@ -698,17 +735,21 @@ const CapabilityApprovalCard = memo(function CapabilityApprovalCard({
           </div>
           <AssistantClaim text={capability.agentReason} />
           <GrantClauses can={capability.can} cannot={capability.cannot} />
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-            <Button type="primary" loading={busy} onClick={onAllowOnce}>
-              仅此一次 Allow once
-            </Button>
-            <Button loading={busy} onClick={onAllowAlways}>
-              一直允许 Always allow
-            </Button>
-            <Button danger loading={busy} onClick={onDeny}>
-              不允许 Deny
-            </Button>
-          </div>
+          {readOnly ? (
+            <div className="chat-actions-hint">这段对话已结束,这里不能再操作。</div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+              <Button type="primary" loading={busy} onClick={onAllowOnce}>
+                仅此一次 Allow once
+              </Button>
+              <Button loading={busy} onClick={onAllowAlways}>
+                一直允许 Always allow
+              </Button>
+              <Button danger loading={busy} onClick={onDeny}>
+                不允许 Deny
+              </Button>
+            </div>
+          )}
         </div>
       }
     />
@@ -737,6 +778,17 @@ export function ChatPanel({
   // approved change ships on the next refresh. Off = normal planning on the data workspace.
   const [systemMode, setSystemMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // --- conversation history ---------------------------------------------------------
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState<ConversationRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  // The conversation being SHOWN. Null while on a live session that has no id yet.
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  // True when the transcript is a replay of a finished conversation rather than a live session.
+  // Gate ACTIONS render only when false — the in-memory session that could act on them is gone,
+  // and a button that silently does nothing is worse than a finished decision.
+  const [historical, setHistorical] = useState(false);
 
   // Highest SSE frame seq applied — reset to -1 whenever a fresh stream opens (both open from the
   // server's log at seq 0). Guards against a re-delivered frame doubling token/cost + transcript if a
@@ -794,17 +846,75 @@ export function ChatPanel({
     closeRef.current = openStream(id, onEvent);
   }, [onEvent]);
 
-  // Reconnect to an in-flight session after a reload/reopen. Prefer our saved id; if it's gone (a blip
-  // cleared it, a different browser), ask the server for its active session so a parked session is never
-  // unreachable from the UI.
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try { setHistory((await getChatHistory()).conversations ?? []); }
+    catch { setHistory([]); }
+    finally { setHistoryLoading(false); }
+  }, []);
+
+  // Replay a stored conversation through the SAME reducer the live stream feeds. One renderer:
+  // blocks, tool rows, notices and gate cards all come back through the code that already draws
+  // them, so a history view cannot drift from the live one.
+  const openConversation = useCallback(async (id: string) => {
+    setShowHistory(false);
+    closeRef.current?.();            // detach any live stream first — a late frame must not interleave
+    closeRef.current = null;
+    // Nothing live is being shown any more; a stale id here would only 404 the stream on reload.
+    try { localStorage.removeItem(SESSION_KEY); } catch { /* storage disabled */ }
+    dispatch({ type: 'rehydrate', sessionId: '' });
+    setConversationId(id);
+    setHistorical(true);
+    try {
+      const convo = await getConversation(id);
+      for (const ev of convo.events) dispatch({ type: 'event', ev });
+    } catch {
+      dispatch({ type: 'event', ev: { kind: 'error', text: '打不开这段对话。' } });
+    }
+  }, []);
+
+  // Start over on a blank, live slate — the transcript is the app's main surface, so there has to be
+  // a way back to "nothing in progress" that isn't a page reload.
+  const newConversation = useCallback(() => {
+    setShowHistory(false);
+    closeRef.current?.();
+    closeRef.current = null;
+    try { localStorage.removeItem(SESSION_KEY); } catch { /* storage disabled */ }
+    dispatch({ type: 'rehydrate', sessionId: '' });
+    setConversationId(null);
+    setHistorical(false);
+  }, []);
+
+  const toggleHistory = useCallback(() => {
+    setShowHistory((on) => {
+      if (!on) void loadHistory();
+      return !on;
+    });
+  }, [loadHistory]);
+
+  // Reconnect to an in-flight session after a reload/reopen — a live session always wins over
+  // history. The SERVER is the authority on what is live (one app-wide agent lease): a saved id can
+  // be a session a restart already failed, whose stream would only 404. With nothing live, fall
+  // through to the newest stored conversation so reopening the app looks like you left it.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let id = localStorage.getItem(SESSION_KEY);
-      if (!id) {
-        try { const a = await getActiveSession(); if (a.active && a.id) id = a.id; } catch { /* offline */ }
+      let id: string | null = null;
+      try {
+        const a = await getActiveSession();
+        if (a.active && a.id) id = a.id;
+      } catch {
+        id = localStorage.getItem(SESSION_KEY);   // offline — trust the last id we saw
       }
-      if (!cancelled && id) attachTo(id);
+      if (cancelled) return;
+      if (id) { attachTo(id); return; }
+      try { localStorage.removeItem(SESSION_KEY); } catch { /* storage disabled */ }
+      try {
+        const rows = (await getChatHistory()).conversations ?? [];
+        if (cancelled) return;
+        setHistory(rows);
+        if (rows.length > 0) await openConversation(rows[0].id);
+      } catch { /* no history to show */ }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -822,12 +932,16 @@ export function ChatPanel({
   // `inFlow` = a session is ongoing (locks the mode switch). `active` = the AI is
   // actively working (input disabled; use 停止). At the two approval gates AND when the
   // agent paused for input, the input is ENABLED so the user can answer / request adjustments.
+  // A replayed conversation is never in flow, whatever phase it ended in: an interrupted turn is
+  // marked errored in the store but its last STORED phase event can still say 'planning', and a
+  // finished transcript must not disable the composer or offer a 停止 button.
   const inFlow =
-    IN_PROGRESS.includes(state.phase) ||
-    state.phase === 'awaiting-plan-approval' ||
-    state.phase === 'awaiting-diff-approval' ||
-    state.phase === 'awaiting-input';
-  const active = IN_PROGRESS.includes(state.phase);
+    !historical &&
+    (IN_PROGRESS.includes(state.phase) ||
+      state.phase === 'awaiting-plan-approval' ||
+      state.phase === 'awaiting-diff-approval' ||
+      state.phase === 'awaiting-input');
+  const active = !historical && IN_PROGRESS.includes(state.phase);
   // A fresh turn can be sent with text OR attachments alone (attachments-only
   // falls back to a default instruction in send()).
   const canSend =
@@ -901,7 +1015,12 @@ export function ChatPanel({
       if (!message && attachments.length === 0) return;
       const outgoing = message || '请阅读我上传的附件,并据此帮我规划 / 填写行程。';
       closeRef.current?.();
-      const { id } = await startChat(outgoing, attachments, systemMode ? 'system' : 'plan');
+      // Typing into an opened past conversation continues THAT conversation: the new turn joins it
+      // and its prompt carries that conversation's rebuilt context. Either way we are live again.
+      const { id } = await startChat(
+        outgoing, attachments, systemMode ? 'system' : 'plan', conversationId ?? undefined
+      );
+      setHistorical(false);
       localStorage.setItem(SESSION_KEY, id);
       dispatch({ type: 'reset', sessionId: id, message: outgoing });
       setDraft('');
@@ -920,7 +1039,7 @@ export function ChatPanel({
       }
       dispatch({ type: 'event', ev: { kind: 'error', text } });
     }
-  }, [draft, onEvent, state, attachments, systemMode, replyInput, attachTo]);
+  }, [draft, onEvent, state, attachments, systemMode, replyInput, attachTo, conversationId]);
 
   // `send` closes over draft + state, so it changes on every keystroke and every event. Route the
   // rendered buttons through a ref so the handler they receive is REFERENTIALLY STABLE — otherwise
@@ -983,29 +1102,52 @@ export function ChatPanel({
       <div className="chat-head">
         <RobotOutlined style={{ color: 'var(--accent)' }} />
         <span className="chat-title">Claude 助手</span>
-        {state.phase !== 'idle' && (
-          <Tag
-            color={IN_PROGRESS.includes(state.phase) ? 'processing' : undefined}
-            style={{ marginLeft: 'auto' }}
-          >
-            {IN_PROGRESS.includes(state.phase) && <Spin size="small" style={{ marginRight: 6 }} />}
-            {PHASE_LABELS[state.phase]}
-          </Tag>
-        )}
-        {IN_PROGRESS.includes(state.phase) && (
-          <Button
-            danger
-            size="small"
-            icon={<StopOutlined />}
-            loading={cancelling}
-            onClick={() => void cancel()}
-            style={{ marginLeft: 8 }}
-          >
-            停止
-          </Button>
-        )}
+        <div className="chat-head-actions">
+          {state.phase !== 'idle' && (
+            <Tag color={active ? 'processing' : undefined}>
+              {active && <Spin size="small" style={{ marginRight: 6 }} />}
+              {PHASE_LABELS[state.phase]}
+            </Tag>
+          )}
+          {active && (
+            <Button
+              danger
+              size="small"
+              icon={<StopOutlined />}
+              loading={cancelling}
+              onClick={() => void cancel()}
+            >
+              停止
+            </Button>
+          )}
+          <IconButton
+            icon={<PlusOutlined />}
+            title="新对话"
+            ariaLabel="新对话"
+            disabled={inFlow}
+            onClick={newConversation}
+          />
+          <IconButton
+            icon={<HistoryOutlined />}
+            title="历史对话"
+            ariaLabel="历史对话"
+            className={showHistory ? 'is-on' : ''}
+            onClick={toggleHistory}
+          />
+        </div>
       </div>
 
+      {showHistory ? (
+        <div className="chat-scroll">
+          <ChatHistory
+            rows={history}
+            loading={historyLoading}
+            activeId={conversationId}
+            onOpen={openConversation}
+          />
+        </div>
+      ) : (
+      <>
       <Stepper phase={state.phase} />
       <UsageLine usage={state.usage} live={state.liveUsage} />
 
@@ -1015,6 +1157,12 @@ export function ChatPanel({
         </button>
       )}
       <div className="chat-scroll" ref={scrollRef} onScroll={onScrollList} role="log" aria-live="polite" aria-relevant="additions text">
+        {historical && (
+          <div className="chat-historical-note">
+            正在查看历史对话 · 继续输入会开始新的一轮
+          </div>
+        )}
+
         {state.items.length === 0 && state.phase === 'idle' && (
           <div className="chat-empty">
             <p>用大白话告诉我要改什么,点一条试试:</p>
@@ -1042,7 +1190,10 @@ export function ChatPanel({
           </div>
         )}
 
-        {state.phase === 'awaiting-plan-approval' && (
+        {/* Gate ACTIONS are live-only. On a replay the session that could act on them is gone (a
+            restart has already marked it errored), and a button that silently does nothing is the
+            worst of the options. The card CONTENT — diffs, specs, grants — still renders. */}
+        {!historical && state.phase === 'awaiting-plan-approval' && (
           <PlanActions
             busy={state.busy}
             onApprove={() => act(approvePlan)}
@@ -1054,6 +1205,7 @@ export function ChatPanel({
           <DiffReview
             review={state.review}
             busy={state.busy}
+            readOnly={historical}
             onApprove={() => act(approveDiff)}
             onReject={() => act(rejectDiff)}
           />
@@ -1070,7 +1222,7 @@ export function ChatPanel({
                 {state.inputQuestion && (
                   <div style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>{state.inputQuestion}</div>
                 )}
-                {state.inputOptions.length > 0 && (
+                {!historical && state.inputOptions.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
                     {state.inputOptions.map((opt, i) => (
                       <Button key={i} size="small" type="primary" ghost onClick={() => void replyInput(opt)}>
@@ -1080,19 +1232,23 @@ export function ChatPanel({
                   </div>
                 )}
                 <span style={{ opacity: 0.75 }}>
-                  {state.inputOptions.length > 0
-                    ? '点一个选项,或在下方输入框回复。'
-                    : '在下方输入框回复,我会带着你的答复继续这次任务。'}
+                  {historical
+                    ? '这段对话停在这里没有再继续。'
+                    : state.inputOptions.length > 0
+                      ? '点一个选项,或在下方输入框回复。'
+                      : '在下方输入框回复,我会带着你的答复继续这次任务。'}
                 </span>
-                <Button
-                  size="small"
-                  danger
-                  loading={cancelling}
-                  onClick={() => void cancel()}
-                  style={{ marginLeft: 8 }}
-                >
-                  放弃任务
-                </Button>
+                {!historical && (
+                  <Button
+                    size="small"
+                    danger
+                    loading={cancelling}
+                    onClick={() => void cancel()}
+                    style={{ marginLeft: 8 }}
+                  >
+                    放弃任务
+                  </Button>
+                )}
               </div>
             }
           />
@@ -1103,13 +1259,16 @@ export function ChatPanel({
             proposal={state.mcpProposal}
             busy={state.busy}
             cancelling={cancelling}
+            readOnly={historical}
             onApprove={(secrets) => act((id) => approveMcp(id, secrets))}
             onReject={() => act(rejectMcp)}
             onCancel={() => void cancel()}
           />
         )}
 
-        {state.phase === 'awaiting-login' && state.mcpLogin && (
+        {/* Live-only by nature: this card POLLS the login status and resumes the agent when it
+            flips. On a replay there is no agent to resume and the QR it showed has long expired. */}
+        {!historical && state.phase === 'awaiting-login' && state.mcpLogin && (
           <McpLoginCard
             login={state.mcpLogin}
             sessionId={state.sessionId}
@@ -1122,6 +1281,7 @@ export function ChatPanel({
           <DraftApprovalCard
             draft={state.draftApproval}
             busy={state.busy}
+            readOnly={historical}
             onApprove={() => act(approveDraft)}
             onReject={() => act(rejectDraft)}
           />
@@ -1131,6 +1291,7 @@ export function ChatPanel({
           <CapabilityApprovalCard
             capability={state.capabilityApproval}
             busy={state.busy}
+            readOnly={historical}
             onAllowOnce={() => act((id) => allowCapability(id, false))}
             onAllowAlways={() => act((id) => allowCapability(id, true))}
             onDeny={() => act(denyCapability)}
@@ -1169,7 +1330,10 @@ export function ChatPanel({
             state would otherwise persist and lock out rating every turn after the first). */}
         <ChatRating key={state.sessionId ?? 'none'} sessionId={state.sessionId} phase={state.phase} />
       </div>
+      </>
+      )}
 
+      {!showHistory && (
       <div className="chat-composer">
         <div className="chat-mode-row">
           <Tooltip title="开启后,本次对话改的是 Gatherlight 界面本身(src/client 代码),改完自动构建验证,构建不过不能提交;批准后刷新即生效。">
@@ -1254,6 +1418,7 @@ export function ChatPanel({
           />
         </div>
       </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 using Dapper;
+using Gatherlight.Server.Platform.Agent.Llm.Models;
 using Gatherlight.Server.Platform.Kernel.Services;
 using IConversationStore = Lyntai.Storage.IConversationStore;
 
@@ -143,6 +144,14 @@ public sealed class ChatRepository : IChatRepository
         return m.Length <= 60 ? m : m[..60] + "…";
     }
 
+    // The user's own message as a wire-shape event, so a replayed conversation shows both sides.
+    // Serialized through AgentEvent so it is the SAME shape the stream emits (kind + text), not a
+    // second format the client would have to special-case beyond one reducer branch.
+    private static System.Text.Json.JsonElement UserEvent(string message) =>
+        System.Text.Json.JsonDocument.Parse(
+            System.Text.Json.JsonSerializer.Serialize(
+                new AgentEvent { Kind = "user", Text = message }, AgentEvent.WireJson)).RootElement.Clone();
+
     // A turn's conversation: the ConversationId it was written with, or — for a thread written
     // before that field existed — the turn's own id, so old data lists as one conversation each
     // instead of collapsing into a single bucket keyed by null.
@@ -188,8 +197,15 @@ public sealed class ChatRepository : IChatRepository
         if (turns.Count == 0) return null;
 
         var events = new List<System.Text.Json.JsonElement>();
-        foreach (var (thread, _) in turns)
+        foreach (var (thread, meta) in turns)
         {
+            // What the HUMAN said is not an agent event, so it was never streamed and never stored
+            // as one — it lives in the turn's metadata. Replay is the whole conversation or it is a
+            // transcript of one side talking, so each turn opens with its own message, in the same
+            // wire shape the reducer eats.
+            if (!string.IsNullOrWhiteSpace(meta.UserMessage))
+                events.Add(UserEvent(meta.UserMessage!));
+
             foreach (var msg in (await _convo.GetMessagesAsync(thread.Id)).OrderBy(m => m.Seq))
             {
                 // A malformed payload is skipped, never thrown: one bad row must not make a whole
