@@ -48,7 +48,28 @@ public sealed class TableSchema : UiNodeSchema
     public override IReadOnlyDictionary<string, UiPropSpec> Props => P(
         ("columns", new UiPropSpec(UiPropKind.StringArray, Required: true)),
         ("rows", new UiPropSpec(UiPropKind.Rows, Required: true)),
+        ("bind", new UiPropSpec(UiPropKind.Binding)),
         ("caption", new UiPropSpec(UiPropKind.String)));
+    public override IReadOnlyList<string> BindFills => ["rows"];
+}
+
+/// <summary>
+/// The one primitive S3a left out. A household reading a budget on a phone gets eleven numbers in a
+/// table where a bar would answer the question at a glance. No pie: a family budget has too many
+/// categories for one to be readable, and the honest part-of-whole shape here is a stacked bar.
+/// Rendered as inline SVG — no chart library, hence no dependency and nothing the CSP would refuse.
+/// </summary>
+public sealed class ChartSchema : UiNodeSchema
+{
+    public override string Type => "Chart";
+    public override IReadOnlyDictionary<string, UiPropSpec> Props => P(
+        ("kind", new UiPropSpec(UiPropKind.String, OneOf: ["bar", "line"])),
+        ("labels", new UiPropSpec(UiPropKind.StringArray, Required: true)),
+        ("values", new UiPropSpec(UiPropKind.Numbers, Required: true)),
+        ("bind", new UiPropSpec(UiPropKind.Binding)),
+        ("unit", new UiPropSpec(UiPropKind.String)),
+        ("caption", new UiPropSpec(UiPropKind.String)));
+    public override IReadOnlyList<string> BindFills => ["labels", "values"];
 }
 
 public sealed class MapSchema : UiNodeSchema
