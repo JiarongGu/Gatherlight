@@ -308,7 +308,18 @@ public static class GatherlightApp
             .AddSingleton<IUiNodeSchema, MapSchema>()
             .AddSingleton<IUiNodeSchema, LinkSchema>()
             .AddSingleton<IUiNodeSchema, FileRefSchema>()
+            .AddSingleton<IUiNodeSchema, ChartSchema>()
             .AddSingleton<IUiNodeSchema, ButtonSchema>()
+            // S3c: bindable data sources — the same DI-collection shape, one class per named query.
+            // The agent NAMES one and fills declared params; it never writes the query. Resolution is
+            // server-side (UiBindingResolver), so the renderer never learns what a binding is.
+            .AddSingleton<Platform.Agent.Ui.Services.IUiBindingResolver, Platform.Agent.Ui.Services.UiBindingResolver>()
+            .AddSingleton<Platform.Agent.Ui.Data.IUiDataSource, Platform.Storage.Library.Services.LibraryUiSource>()
+            .AddSingleton<Platform.Agent.Ui.Data.IUiDataSource, Product.Planner.PlanIndex.Services.RecordsUiSource>()
+            .AddSingleton<Platform.Agent.Ui.Data.IUiDataSource, Product.Planner.PlanIndex.Services.BudgetUiSource>()
+            // S3c: component definitions live in the same ui/ directory as pages — one guard, one
+            // review path. A file with `define` is a definition; a file with `root` is a page.
+            .AddSingleton<Platform.Agent.Ui.Services.IUiCompositeStore, Platform.Agent.Ui.Services.UiCompositeStore>()
             .AddSingleton<ISitePageStore, SitePageStore>()
             // S3b: the diff gate's page previews — a page change is reviewed by RENDERING it.
             .AddSingleton<IPageReviewService, PageReviewService>()

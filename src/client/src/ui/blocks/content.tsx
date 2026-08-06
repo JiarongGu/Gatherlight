@@ -66,6 +66,62 @@ export function Table({ node }: UiNodeProps) {
   );
 }
 
+/**
+ * Inline SVG, no chart library. Two reasons rather than one: the CSP forbids anything a CDN would
+ * serve, and a bar chart of a family budget is a hundred lines of layout, not a dependency.
+ *
+ * Values are drawn against `max(values)`, never against a fitted axis, so a bar's length is a
+ * truthful fraction of the largest thing on the chart. Negative values would make that claim false,
+ * so the baseline is pinned to zero and the domain never floats.
+ */
+export function Chart({ node }: UiNodeProps) {
+  const labels = (node.labels as string[]) ?? [];
+  const values = (node.values as number[]) ?? [];
+  const unit = node.unit ? String(node.unit) : '';
+  const n = Math.min(labels.length, values.length);
+  if (n === 0) return <div className="ui-caption">(无数据 · no data)</div>;
+
+  const max = Math.max(...values.slice(0, n), 0) || 1;
+  const line = node.kind === 'line';
+  const W = 480, H = 180, PAD_L = 8, PAD_B = 26, PAD_T = 8;
+  const plotH = H - PAD_B - PAD_T;
+  const step = (W - PAD_L * 2) / n;
+  const fmt = (v: number) => `${v.toLocaleString()}${unit ? ` ${unit}` : ''}`;
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img"
+        aria-label={labels.slice(0, n).map((l, i) => `${l}: ${fmt(values[i])}`).join('; ')}>
+        <line x1={PAD_L} y1={H - PAD_B} x2={W - PAD_L} y2={H - PAD_B} stroke="var(--border)" />
+        {line ? (
+          <polyline
+            fill="none" stroke="var(--accent)" strokeWidth={2}
+            points={Array.from({ length: n }, (_, i) =>
+              `${PAD_L + step * (i + 0.5)},${PAD_T + plotH - (values[i] / max) * plotH}`).join(' ')}
+          />
+        ) : (
+          Array.from({ length: n }, (_, i) => {
+            const h = (values[i] / max) * plotH;
+            return (
+              <rect key={i} x={PAD_L + step * i + step * 0.15} y={PAD_T + plotH - h}
+                width={step * 0.7} height={Math.max(h, 1)} fill="var(--accent)" rx={2}>
+                <title>{`${labels[i]}: ${fmt(values[i])}`}</title>
+              </rect>
+            );
+          })
+        )}
+        {Array.from({ length: n }, (_, i) => (
+          <text key={i} x={PAD_L + step * (i + 0.5)} y={H - PAD_B + 14}
+            textAnchor="middle" fontSize={10} fill="var(--muted)">
+            {labels[i].length > 8 ? `${labels[i].slice(0, 7)}…` : labels[i]}
+          </text>
+        ))}
+      </svg>
+      {node.caption ? <div className="ui-caption">{String(node.caption)}</div> : null}
+    </div>
+  );
+}
+
 export function Map({ node }: UiNodeProps) {
   const cities = (node.cities as string[]) ?? [];
   if (cities.length > 0) return <TripMap cities={cities} />;

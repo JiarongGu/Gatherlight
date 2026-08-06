@@ -99,7 +99,9 @@ public sealed class UiBlockScanner
             }
 
             var payload = body[..end];
-            var result = _validator.ValidateJson(payload);
+            // allowBindings:false — see IUiTreeValidator. This seam is synchronous and streaming, so a
+            // binding here could not be resolved before the block reaches the transcript.
+            var result = _validator.ValidateJson(payload, allowBindings: false);
             outp.Add(Block(result.Ok
                 ? new UiBlockEvent(_segment, "ready", Node: result.Node)
                 : new UiBlockEvent(_segment, "invalid", Raw: payload, Reason: result.Reason)));

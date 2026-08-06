@@ -24,12 +24,15 @@ public sealed class SitePageStore : ISitePageStore
     private readonly ISiteContext _site;
     private readonly IUiTreeValidator _validator;
     private readonly ISiteManifestStore _manifest;
+    private readonly IUiCompositeStore _composites;
 
-    public SitePageStore(ISiteContext site, IUiTreeValidator validator, ISiteManifestStore manifest)
+    public SitePageStore(ISiteContext site, IUiTreeValidator validator, ISiteManifestStore manifest,
+        IUiCompositeStore composites)
     {
         _site = site;
         _validator = validator;
         _manifest = manifest;
+        _composites = composites;
     }
 
     private string Dir => _site.ResolveSitePath(_manifest.Current.Ui.Spec.TrimEnd('/')) ?? "";
@@ -48,6 +51,9 @@ public sealed class SitePageStore : ISitePageStore
         {
             var name = Path.GetFileNameWithoutExtension(file);
             if (!ValidName(name)) continue;
+            // A file declaring `define` is a component definition, not a page. It shares the directory
+            // (one guard, one review path) but it has nothing to show in the menu.
+            if (_composites.Definition($"{_manifest.Current.Ui.Spec.Trim('/')}/{Path.GetFileName(file)}") is not null) continue;
             var title = name;
             SitePageFile? parsed = null;
             try

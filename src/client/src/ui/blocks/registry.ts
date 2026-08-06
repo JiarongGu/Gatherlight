@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react';
 import { Stack, Row, Card, Divider } from './layout';
-import { Heading, Text, List, Badge, Image, Table, Map, Link, FileRef } from './content';
+import { Heading, Text, List, Badge, Image, Table, Chart, Map, Link, FileRef } from './content';
 import { Button } from './interactive';
 
 /** A validated node, as the server sends it: flat props, plus children. */
@@ -27,7 +27,7 @@ export interface UiNodeProps {
  */
 export const RENDERERS: Record<string, ComponentType<UiNodeProps>> = {
   Stack, Row, Card, Divider,
-  Heading, Text, List, Badge, Image, Table, Map, Link, FileRef,
+  Heading, Text, List, Badge, Image, Table, Chart, Map, Link, FileRef,
   Button,
 };
 

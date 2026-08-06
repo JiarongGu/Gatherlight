@@ -22,14 +22,17 @@ public sealed class UiController : ControllerBase
     private readonly ISitePageStore _pages;
     private readonly ISiteContext _site;
     private readonly ICapabilityRegistry _capabilities;
+    private readonly IUiBindingResolver _bindings;
 
     public UiController(
-        IUiTreeValidator validator, ISitePageStore pages, ISiteContext site, ICapabilityRegistry capabilities)
+        IUiTreeValidator validator, ISitePageStore pages, ISiteContext site, ICapabilityRegistry capabilities,
+        IUiBindingResolver bindings)
     {
         _validator = validator;
         _pages = pages;
         _site = site;
         _capabilities = capabilities;
+        _bindings = bindings;
     }
 
     /// <summary>The component vocabulary. `dev.mjs check-ui-registry` compares this against the
@@ -44,9 +47,15 @@ public sealed class UiController : ControllerBase
     [HttpGet("pages")]
     public ActionResult<IEnumerable<SitePageSummary>> Pages() => Ok(_pages.List());
 
+    /// <summary>One page, with its bindings already resolved. The tree that goes over the wire has
+    /// its rows filled and <c>bind</c> gone — the client is never handed a query, and a binding is
+    /// never an endpoint the browser can call with parameters of its own choosing.</summary>
     [HttpGet("pages/{name}")]
-    public ActionResult<SitePageView> Page(string name) =>
-        _pages.Get(name) is { } page ? Ok(page) : NotFound();
+    public async Task<ActionResult<SitePageView>> Page(string name, CancellationToken ct)
+    {
+        if (_pages.Get(name) is not { } page) return NotFound();
+        return page.Root is null ? Ok(page) : Ok(page with { Root = await _bindings.ResolveAsync(page.Root, ct) });
+    }
 
     /// <summary>Validates a candidate tree — the ONE way a tree that did not come from a page or a
     /// ```ui fence can reach the renderer. A capability's output is data, not a trusted view: the
@@ -54,11 +63,12 @@ public sealed class UiController : ControllerBase
     /// an `Image` src invented downstream still has to survive the same validator every other tree
     /// does. Deliberately no persistence and no side effects — it only answers a question.</summary>
     [HttpPost("validate")]
-    public ActionResult<UiCandidateView> Validate([FromBody] System.Text.Json.JsonElement root)
+    public async Task<ActionResult<UiCandidateView>> Validate(
+        [FromBody] System.Text.Json.JsonElement root, CancellationToken ct)
     {
         var result = _validator.ValidateElement(root);
         return Ok(result.Ok
-            ? new UiCandidateView("ready", result.Node, null)
+            ? new UiCandidateView("ready", await _bindings.ResolveAsync(result.Node!, ct), null)
             : new UiCandidateView("invalid", null, result.Reason));
     }
 
