@@ -50,7 +50,12 @@ try {
 
   // --- the registry -----------------------------------------------------------------------
   const registry = (await j('/api/ui/registry')).body ?? [];
-  ok('registry lists 14 components', registry.length === 14, `got ${registry.length}`);
+  // The named set, not a bare count: a magic number tells you something moved, this tells you WHAT.
+  const EXPECTED = ['Badge', 'Button', 'Card', 'Chart', 'Divider', 'FileRef', 'Heading', 'Image',
+    'Link', 'List', 'Map', 'Row', 'Stack', 'Table', 'Text'];
+  const got = registry.map((c) => c.type).sort();
+  ok(`registry lists the ${EXPECTED.length} components`, JSON.stringify(got) === JSON.stringify(EXPECTED),
+    `got ${got.join(',')}`);
   ok('registry carries Button.action as an Action prop',
     registry.find((c) => c.type === 'Button')?.props?.action === 'Action');
 
@@ -217,10 +222,11 @@ try {
   ok('the UI contract is seeded into the data folder', fs.existsSync(uiSpec));
   const specBody = fs.existsSync(uiSpec) ? fs.readFileSync(uiSpec, 'utf8') : '';
   ok('the contract carries a version', /UI_CONTRACT_VERSION:\s*\d+/.test(specBody));
+  // Against the REGISTRY, not a second hand-kept list: the contract has to name what the validator
+  // actually enforces, and a list maintained here would drift from both.
   ok('the contract documents every component',
-    ['Stack', 'Row', 'Card', 'Divider', 'Heading', 'Text', 'List', 'Badge', 'Image', 'Table', 'Map', 'Link', 'FileRef', 'Button']
-      .every((c) => specBody.includes(`\`${c}\``)),
-    'a component is missing from the contract the agent reads');
+    EXPECTED.every((c) => specBody.includes(`\`${c}\``)),
+    `missing: ${EXPECTED.filter((c) => !specBody.includes(`\`${c}\``)).join(',')}`);
   // The contract must name the SAME limits the validator enforces (UiTreeValidator.MaxDepth/MaxNodes)
   // and the SAME action verbs (UiActionValidator) — a contract that drifts is worse than none.
   // S3b added the third verb; a fourth appearing here without a validator case is the drift to catch.
@@ -231,14 +237,18 @@ try {
   ok('the contract is not mojibake', specBody.includes('界面块'), specBody.split('\n')[1] ?? '');
 
   // A stale contract must be REPLACED (unlike knowledge-base content, which is never overwritten).
+  // The version to expect back is the one that was just there — pinning a literal here would fail
+  // every time the contract legitimately grows, which teaches the wrong lesson.
+  const shippedVersion = specBody.match(/UI_CONTRACT_VERSION:\s*(\d+)/)?.[1] ?? '0';
   fs.writeFileSync(uiSpec, '<!-- UI_CONTRACT_VERSION: 0 -->\nstale\n', 'utf8');
   server.stop();
   await new Promise((r) => setTimeout(r, 800));   // let the port free before rebinding it
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
   await waitHealthy(base);
   const after = fs.readFileSync(uiSpec, 'utf8');
-  ok('a stale contract is re-issued', /UI_CONTRACT_VERSION:\s*2/.test(after) && after.includes('`Button`'),
-    after.slice(0, 80));
+  ok('a stale contract is re-issued',
+    after.includes(`UI_CONTRACT_VERSION: ${shippedVersion}`) && after.includes('`Button`'),
+    `wanted v${shippedVersion}, got ${after.slice(0, 80)}`);
 } catch (e) {
   fail(e?.stack || String(e));
   console.error(server.log().slice(-3000));

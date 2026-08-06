@@ -159,7 +159,10 @@ try {
   // nothing, because nothing told the agent to read it — every other row stayed green. These four
   // rows check the contract's contents, and the two after them check the prompt that points at it.
   const spec = fs.readFileSync(path.join(dataDir, '.claude', 'ui-spec.md'), 'utf8');
-  ok('the contract is at version 2', /UI_CONTRACT_VERSION:\s*2/.test(spec),
+  // Versioned at all, and past the version that predates pages — not pinned to a literal, which
+  // would fail every time the contract legitimately grows (S3c added bindings and Chart at v3).
+  const contractVersion = Number(spec.match(/UI_CONTRACT_VERSION:\s*(\d+)/)?.[1] ?? 0);
+  ok('the contract is versioned, at or past the one that introduced pages', contractVersion >= 2,
     spec.split('\n')[0] ?? '(empty)');
   ok('the contract documents pages', /ui\/<name>\.json/.test(spec));
   ok('the contract says ui/ is flat', /FLAT/i.test(spec));
