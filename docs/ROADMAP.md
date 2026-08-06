@@ -52,11 +52,47 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 | **Build + release** — root `build-production.ps1` / `build-resource.ps1` / `publish-resources.ps1`; single **manual-trigger** `.github/workflows/release.yml` (`workflow_dispatch`: version bump → e2e gate → bundle → optional tag → GitHub Release zip + manifest). No auto CI on push/PR (D3dx-style). | ✅ 2026-07-13 (release model revised 2026-07-14) |
 | **Auto-update** — two-phase (D3dx-style): server checks the configured GitHub release + downloads/stages `{install}/.update/staged` (sha256-verified against the release manifest); the native launcher overlays it on the next restart. `/manage` 更新 card drives it; `selfUpdate.githubRepo` config. | ✅ 2026-07-13 (e2e-p19 apply + e2e-p20 check/stage) |
 
+### Platform maturity (2026-07-15 → 07-29)
+
+| Item | Status |
+|---|---|
+| **Data foundation** — whole-install backup (git history + settings included), data-structure spec, onboarding, markdown index + MCP surface | ✅ 2026-07-15 |
+| **Knowledge-base upgrade migration** — an LLM-assisted merge for `.claude/` files the household has customized, so a template upgrade never silently overwrites their edits | ✅ 2026-07-16 (e2e-p27) |
+| **Error-continuity memory** — a chat run that FAILS still records its turn to the durable thread, so the next turn knows what was attempted | ✅ (e2e-p25) |
+| **Background jobs** — generic scheduler backend (recurring + one-off) driving report/reminder/tool runs, with `notify_user` | ✅ (e2e-p26) |
+| **Lyntai adoption** — scoring, the two-gate agent session, jobs, the conversation store and the cortex (prompt registry + model routing) all moved onto the shared `Lyntai` library; the native `ClaudeCliRunner` deleted, `chat_score`/`chat_session`/`chat_event` migrated to `lyntai_*`. The app keeps its business logic and reaches Lyntai only through its APIs. | ✅ 2026-07-19 → 07-21 |
+| **Startup migration runner** — versioned ordered steps on `ApplicationStarted` behind a 503 gate, with a `/manage` progress overlay, essential/best-effort policy, retry and self-heal; replaced the inline pre-listen startup block | ✅ 2026-07-21 (e2e-p29) |
+| **Differential auto-update** — `UpdateService` diffs installed vs release manifest and HTTP-Range-fetches only the changed files out of the release zip, with a hard fallback to the full download. No launcher, CI or build change. | ✅ 2026-07-22 (e2e-p30) |
+| **Gatherlight as MCP client** — connect *out* to external MCP servers: client + proxy foundation, an in-chat confirmation gate for adding one, a generic QR/browser interactive-login component the agent can drive, and npx/`.cmd` launch on Windows | ✅ 2026-07-22 (e2e-p31…p35) |
+| **Hosted judge tools** — the LLM-judge scorers can open the real artifact instead of grading a truncated excerpt, through Lyntai's `AddMcpToolHost` on the one-shot `ILlmClient` path only. Jailed read-only to `plans/ household/ .claude/` — never `state/` — so the judges gain no reach the scope guard doesn't already grant. | ✅ 2026-07-29 (e2e-p36) |
+
+## Platform / container track (2026-08)
+
+Gatherlight becomes a **host, container and harness for one agent-driven site**; the planner is that
+site. Design of record: [`superpowers/specs/2026-08-04-site-model-container-design.md`](superpowers/specs/2026-08-04-site-model-container-design.md).
+
+| Sub-project | Scope | Status |
+|---|---|---|
+| **S1** | **Site manifest + platform seam** — `site.json` declares records, capabilities, agent config and template version; `IDataContext` splits into `ISiteContext` / `IPlatformContext`; the scope guard's write scope is generated *from the manifest* instead of hardcoded; the manifest ships in the site template and is written on startup for data folders that predate it | ✅ 2026-08-05 (e2e-p37) |
+| **S2a** | **Capability model + sandbox** — one registry carrying provenance across four origins (`Platform` available by default · `Script`/`Mcp` off until enabled · `Draft` never loaded); non-platform capabilities run under `node --permission` with a platform preload that removes the network; the launcher **fails closed** when the runtime can't sandbox; `deny` spans CLI built-ins as well as MCP tools | ✅ 2026-08-05 (e2e-p38) |
+| **S2b** | **Drafts, approval cards + escalation** — a drafted tool is inert until a human promotes it; a refused capability becomes a **resumable decision** rather than a dead end; permission sentences render server-side from the enforced grant, never from agent text | ✅ 2026-08-05 (e2e-p39, p40) |
+| **S3a** | **Declarative UI protocol** — the agent's UI is a validated node tree, never markup: a DI collection of `IUiNodeSchema` (fourteen components), one validator serving both mounts (a ```ui fence in a streamed turn + a page spec from `{data}/ui/`), `rehype-raw` and the sanitize allow-list deleted, and a drift check between the C# schema and the TS renderer | ✅ 2026-08-05 (e2e-p41) |
+| **S3b** | **Site authoring loop** — the agent may write pages *and only pages* (`ui/` flat, `.json` only); a page change is reviewed by **rendering it** at the diff gate with a change summary computed from the two trees; an invalid page cannot be committed; a page button may call an already-approved capability | ✅ 2026-08-05 (e2e-p42) |
+| **S4** | **Product extraction** — the split into `Gatherlight.Platform` / `Gatherlight.Planner` assemblies, making "Platform must never reference Planner" a compiler fact rather than a tested convention; `dev.mjs check-layering` asserts the reference graph | ✅ 2026-08-05 |
+| **S5** | **Conversation history** — every agent event is persisted as its SSE payload verbatim and replayed through the **same reducer** the live stream feeds, so there is no history view to drift; a thread is one turn, a conversation is the run of turns sharing a `ConversationId`; a replayed gate renders **without** actions | ✅ 2026-08-05 (e2e-p43) |
+| — | **The agent's own MCP channel** — the agent's tools come from a loopback-only Kestrel endpoint (plain HTTP, ephemeral port, per-start bearer token, `/mcp` only), not the public listener. Turning on TLS or `trustLoopback:false` used to leave the agent with **zero tools, silently**. | ✅ 2026-08-06 (e2e-p44) |
+
 ## Optional / future
 
-| Idea | What it's for | Why deferred |
+Reviewed 2026-08-06 and **all four declined** — recorded here with the reasoning so they are not
+re-proposed as oversights. Each was a real deferral, and each is still the right call.
+
+| Idea | What it's for | Why declined |
 |---|---|---|
-| **Semantic recall (embeddings)** — 🔲 optional | Library + fact search is FTS5 **trigram** today — *lexical*: it matches shared characters/keywords. Embeddings would make recall *semantic* (retrieve by MEANING): a query like "peaceful garden" would surface a "Zen temple" entry with no shared words, and a paraphrased fact would still match. Approach: a **local ONNX embedding model** (e.g. Mastra's `fastembed` / a bge-small model) — no API key, fully offline — writing a vector per `library_item`/fact into a `*_embedding` table, ranked by cosine similarity (optionally `sqlite-vec` for speed, with a managed cosine fallback). | Adds `Microsoft.ML.OnnxRuntime` + a ~130 MB model file, ~**doubling the bundle size** — the main tension with Gatherlight's offline/lightweight ethos. FTS5 already covers most real recall, so this is a "nice, not needed" upgrade. |
+| **OS-level sandbox** — ❌ declined | A low-privilege OS account + firewall rules: the containment ceiling above the `node --permission` sandbox, closing the residuals the PreToolUse hook structurally cannot (code run *inside* an agent-authored script, exfil through a `WebFetch` URL). | **Wrong shape for this product.** The `claude` CLI's authentication is per-user, so a low-privilege service account breaks the one mechanism the whole architecture rests on — and the agent already runs with the household's own credentials by design. The honest containment ceiling for a self-hosted personal app is the machine itself; pretending otherwise would buy a security *story* rather than a boundary. |
+| **Sandboxing external MCP servers** — ❌ declined | Contain `Mcp`-origin capabilities the way `Script` ones are contained. | Meaningfully containing an arbitrary `npx` stdio server needs exactly the OS-level work above, and `node --permission` cannot wrap one without breaking most real servers. They are third-party processes a human explicitly added through a gate. **The cheap half was taken instead**: the add-gate now *says* the server runs unsandboxed with the user's privileges, because a card that stays silent about the grant it is asking for is the defect the card model exists to prevent. |
+| **Non-claude agent backend** — ❌ declined | Run `codex` or another CLI behind `IAgentSession`; plus stdio transport for the app's own tools. | Optionality, not capability. The MCP-channel work already removed the claude-only coupling, so this stays cheap to pick up the day a second authenticated CLI is actually available. Building it now would mean maintaining an untested second path. |
+| **Semantic recall (embeddings)** — ❌ declined | Library + fact search is FTS5 **trigram** today — *lexical*: it matches shared characters/keywords. Embeddings would make recall *semantic* (retrieve by MEANING): a query like "peaceful garden" would surface a "Zen temple" entry with no shared words, and a paraphrased fact would still match. Approach: a **local ONNX embedding model** (e.g. Mastra's `fastembed` / a bge-small model) — no API key, fully offline — writing a vector per `library_item`/fact into a `*_embedding` table, ranked by cosine similarity (optionally `sqlite-vec` for speed, with a managed cosine fallback). | Adds `Microsoft.ML.OnnxRuntime` + a ~130 MB model file, ~**doubling the bundle size** — the main tension with Gatherlight's offline/lightweight ethos. FTS5 trigram already gives CJK substring recall at a household's library scale, so this would double the bundle to fix a retrieval problem nobody has hit. Revisit if recall actually fails in use ("I know it's in there and can't find it"), not before. |
 
 ## Architecture decisions of record
 
@@ -68,4 +104,15 @@ Each phase ends buildable/verifiable. Details live in the phase's PR/commit desc
 - **SSE** (not WebSocket) for agent event streaming — one-directional, replayable from DB.
 - **claude CLI only, never API keys**; cheap utility calls use a neutral cwd + small model,
   chat runs cwd = data folder so the planner knowledge base loads.
+- **One site, no registry — because the knowledge is shared.** Multi-site hosting was considered and
+  dropped: the product's value is one accumulated pool (knowledge base + library + memory + entities
+  and the cross-references between them), so isolating sites would wall off the shared brain that
+  makes a plan worth more than the sum of its parts.
+- **Trust follows provenance, and the walls bound a mistake.** Platform-shipped tools are available
+  by default because we wrote and shipped them; only capabilities that did not come from the platform
+  need human enablement. Behaviour is controlled by a boundary that is few, hard and well understood
+  — not by tightening the toolset or scripting the agent's steps.
+- **Cards are platform chrome.** Every permission clause a human approves is rendered server-side
+  from the *enforced* grant, never from agent text, because an injected agent writes a reassuring
+  explanation exactly when it matters most.
 - **Ports**: server 5317, client dev 5173.
