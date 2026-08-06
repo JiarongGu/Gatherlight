@@ -26,7 +26,7 @@ public sealed record ChatTranscript(
 public sealed record SessionMetadata(
     string? Phase = null, string? Mode = null, string? UserMessage = null, string? PlanText = null,
     string? ClaudeSessionId = null, string? CommitSha = null, string? Error = null, string? Attachments = null,
-    string? ConversationId = null)
+    string? ConversationId = null, string? Gate = null)
 {
     public static readonly SessionMetadata Empty = new();
 
@@ -55,11 +55,21 @@ public interface IChatRepository
     // on chat_session, so it's not a parameter here.
     Task UpsertSessionAsync(string id, string phase, string mode, string userMessage,
         string? attachmentsJson, string? planText, string? claudeSessionId, string? commitSha,
-        string? error, string createdAt, string? conversationId);
+        string? error, string createdAt, string? conversationId, string? gateJson);
     Task AppendEventAsync(string sessionId, string kind, string payloadJson);
-    /// <summary>Sessions left non-terminal by a dead server → error (an in-flight run cannot
-    /// survive a restart; the working tree may hold partial edits the user can inspect).</summary>
-    Task<int> FailInterruptedSessionsAsync();
+
+    /// <summary>
+    /// Reconcile what a dead server left behind, and hand back the ONE session worth restoring.
+    ///
+    /// A session that was mid-run cannot survive a restart — its child process is gone — and still
+    /// becomes <c>error</c>. A session PARKED ON A HUMAN DECISION is the opposite case: no process,
+    /// nothing in flight, and its state already durable. Those are returned instead of failed.
+    ///
+    /// At most one, because the app-wide agent lease admits one holder: the newest parked session is
+    /// returned and everything else non-terminal is failed as before. Restoring several would either
+    /// deadlock on the lease or silently drop the extras.
+    /// </summary>
+    Task<(string Id, SessionMetadata Meta)?> ReconcileInterruptedAsync();
 
     /// <summary>Conversations, newest first. A conversation is the group of turns sharing a
     /// ConversationId; a turn whose metadata predates that field is its own conversation.</summary>
@@ -86,6 +96,16 @@ public sealed class ChatRepository : IChatRepository
 {
     private static readonly string[] TerminalPhases = { "committed", "rejected", "cancelled", "error" };
 
+    /// <summary>Phases where a HUMAN owes a decision. Nothing is in flight — no child process, no
+    /// half-written run — so a restart is not a reason to throw the work away. Everything else
+    /// non-terminal was mid-run and still fails, which is the honest outcome for it.</summary>
+    private static readonly string[] ParkedPhases =
+    {
+        "awaiting-plan-approval", "awaiting-diff-approval", "awaiting-input",
+        "awaiting-mcp-approval", "awaiting-login", "awaiting-draft-approval",
+        "awaiting-capability-approval",
+    };
+
     // Bound what a resumed conversation drags into the prompt — the same spirit as
     // ChatSessionService.ThreadMaxTurns, applied to replay rather than to the live window.
     private const int ThreadContextTurns = 8;
@@ -104,10 +124,10 @@ public sealed class ChatRepository : IChatRepository
     // owns the lyntai_thread/lyntai_message schema (single source of truth — no app conversation tables).
     public async Task UpsertSessionAsync(string id, string phase, string mode, string userMessage,
         string? attachmentsJson, string? planText, string? claudeSessionId, string? commitSha,
-        string? error, string createdAt, string? conversationId)
+        string? error, string createdAt, string? conversationId, string? gateJson)
     {
         var metadata = new SessionMetadata(phase, mode, userMessage, planText, claudeSessionId, commitSha,
-            error, attachmentsJson, conversationId).Serialize();
+            error, attachmentsJson, conversationId, gateJson).Serialize();
         var existing = await _convo.GetThreadAsync(id);
         if (existing is null) await _convo.CreateThreadAsync(id, title: null, metadata: metadata);
         else await _convo.SetThreadMetadataAsync(id, metadata);
@@ -118,21 +138,28 @@ public sealed class ChatRepository : IChatRepository
     public async Task AppendEventAsync(string sessionId, string kind, string payloadJson) =>
         await _convo.AppendMessageAsync(sessionId, kind, payloadJson);
 
-    public async Task<int> FailInterruptedSessionsAsync()
+    public async Task<(string Id, SessionMetadata Meta)?> ReconcileInterruptedAsync()
     {
-        // Non-terminal threads left by a dead server → error. Through the IConversationStore API (list +
-        // parse the metadata we own + rewrite) — no raw SQL against Lyntai's table. Startup-only + bounded.
+        // Through the IConversationStore API (list + parse the metadata we own + rewrite) — no raw SQL
+        // against Lyntai's table. Startup-only + bounded. ListThreadsAsync is newest-first, so the
+        // first parked thread encountered is the newest one.
         var threads = await _convo.ListThreadsAsync(limit: 1000);
-        var n = 0;
+        (string, SessionMetadata)? restorable = null;
         foreach (var t in threads)
         {
             var m = SessionMetadata.Parse(t.Metadata);
             if (m.Phase is null || Array.IndexOf(TerminalPhases, m.Phase) >= 0) continue;
+
+            if (restorable is null && Array.IndexOf(ParkedPhases, m.Phase) >= 0)
+            {
+                restorable = (t.Id, m);
+                continue;                      // left non-terminal on purpose — the caller restores it
+            }
+
             await _convo.SetThreadMetadataAsync(
                 t.Id, (m with { Phase = "error", Error = "server restarted mid-run" }).Serialize());
-            n++;
         }
-        return n;
+        return restorable;
     }
 
     // --- history (read back what every turn already stored) --------------------------------

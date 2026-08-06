@@ -61,6 +61,22 @@ public static class ChatPhase
 public sealed record ReviewPayload(List<DiffFile> Files, bool HasClaudeInfra, ClaudeValidation? Validation,
     BuildResult? Build = null, List<PageDiffView>? Pages = null);
 
+/// <summary>The action state behind a parked gate's buttons, stored in the session's own metadata.
+/// See <c>ChatSessionService.GateStateOf</c> for why this is separate from the card.</summary>
+public sealed record GateState(
+    List<string> TrackedPaths,
+    // Card: the phase event's own Data, exactly as it was emitted. Some gates — notably
+    // awaiting-input — carry their question and their option buttons ONLY here; the snapshot endpoint
+    // does not project them, so without this a restored input gate would ask the household to answer
+    // a question it no longer displays.
+    JsonElement? Card,
+    McpProposal? McpProposal,
+    McpLoginPrompt? McpLogin,
+    CapabilityDraft? PendingDraft,
+    CapabilityDenial? PendingDenial,
+    string? PendingDenialReason,
+    CapabilityGrant? PendingDenialGrant);
+
 public sealed class ChatSession
 {
     public required string Id { get; init; }
@@ -114,6 +130,9 @@ public sealed class ChatSession
     /// the exact same clauses the live SSE card did, not a freshly re-derived (and possibly
     /// different) one.</summary>
     public CapabilityGrant? PendingDenialGrant { get; set; }
+    /// <summary>The most recent phase event's Data — the card the client was last shown. Kept so a
+    /// restart can re-emit it; see <see cref="GateState.Card"/>.</summary>
+    public JsonElement? LastPhaseCard { get; set; }
     /// <summary>Sequential persistence chain so DB writes keep event order without
     /// blocking the emit path.</summary>
     public Task PersistChain = Task.CompletedTask;
@@ -280,6 +299,11 @@ public sealed class ChatSessionService
     private void SetPhase(ChatSession s, string phase, object? data = null)
     {
         s.Phase = phase;
+        // Keep the card so a restart can put it back on screen verbatim. Round-tripped through JSON
+        // here rather than held as the live object: what has to survive is what the client was SHOWN.
+        s.LastPhaseCard = data is null
+            ? null
+            : JsonSerializer.SerializeToElement(data, AgentEvent.WireJson);
         Emit(s, new AgentEvent { Kind = "phase", Phase = phase, Data = data });
         PersistSession(s);
         // Release the app-wide agent slot the moment this session is done, so background jobs
@@ -303,13 +327,36 @@ public sealed class ChatSessionService
 
     private void PersistSession(ChatSession s)
     {
+        var gate = GateStateOf(s);
         s.PersistChain = s.PersistChain.ContinueWith(
             _ => _repo.UpsertSessionAsync(
                 s.Id, s.Phase, s.Mode, s.UserMessage,
                 JsonSerializer.Serialize(s.Attachments), s.PlanText, s.ClaudeSessionId,
-                s.CommitSha, s.Error, s.CreatedAt.ToString("o"), s.ConversationId),
+                s.CommitSha, s.Error, s.CreatedAt.ToString("o"), s.ConversationId, gate),
             TaskContinuationOptions.ExecuteSynchronously).Unwrap();
     }
+
+    /// <summary>
+    /// What a parked gate needs in order to ACT after a restart — deliberately not the same as what
+    /// it needs to display. The card is already durable (every phase event's Data is persisted
+    /// verbatim); what is not is the state behind the buttons: the parsed MCP request the card
+    /// deliberately strips secrets from, the parsed draft, the denial the clauses were built from,
+    /// and — for the diff gate — the tracked path list, without which a restored review would rebuild
+    /// an EMPTY diff and approve a commit of nothing.
+    ///
+    /// Null while the session is running: there is no decision outstanding, and a mid-run session is
+    /// not restorable anyway.
+    /// </summary>
+    private static string? GateStateOf(ChatSession s) => s.Phase switch
+    {
+        ChatPhase.AwaitingPlanApproval or ChatPhase.AwaitingInput or ChatPhase.AwaitingDiffApproval
+            or ChatPhase.AwaitingMcpApproval or ChatPhase.AwaitingLogin
+            or ChatPhase.AwaitingDraftApproval or ChatPhase.AwaitingCapabilityApproval =>
+            JsonSerializer.Serialize(new GateState(
+                s.Tracker.List(), s.LastPhaseCard, s.McpProposal, s.McpLogin, s.PendingDraft,
+                s.PendingDenial, s.PendingDenialReason, s.PendingDenialGrant)),
+        _ => null,
+    };
 
     private void Fail(ChatSession s, string message, Exception? ex = null)
     {
@@ -449,6 +496,94 @@ public sealed class ChatSessionService
             s.Id, s.Mode, userMessage.Length, s.Attachments.Count, _appConfig.Get("llm.model.chat") ?? "(cli-default)");
         _ = Task.Run(() => RunPlanningAsync(s));
         return s;
+    }
+
+    /// <summary>
+    /// Bring back the one session a restart left parked on a human decision, so the decision can
+    /// still be made. Called by the self-heal startup step with what
+    /// <see cref="IChatRepository.ReconcileInterruptedAsync"/> chose to keep.
+    ///
+    /// The restored session RE-TAKES the app-wide agent lease. A parked session holds it for a
+    /// reason — a background job must not mutate the tree under an unreviewed diff — so restoring the
+    /// gate without the lease would quietly remove the guarantee the gate exists to provide. If the
+    /// lease cannot be taken, the session falls back to the old behaviour rather than half-existing.
+    ///
+    /// The diff gate is rebuilt rather than remembered: <see cref="PresentDiffAsync"/> re-reads the
+    /// WORKING TREE, so the household approves what is on disk now. A remembered file list could
+    /// commit something other than what the reviewer was shown, which is the one thing a review
+    /// surface must never do. It also means a restored diff gate whose edits are gone ends cleanly
+    /// instead of committing an empty set.
+    /// </summary>
+    public async Task<bool> RestoreParkedAsync(string id, SessionMetadata meta)
+    {
+        GateState? gate = null;
+        try { gate = meta.Gate is null ? null : JsonSerializer.Deserialize<GateState>(meta.Gate); }
+        catch (JsonException ex) { _log.LogWarning(ex, "restore: session {Session} has unreadable gate state", id); }
+
+        var lease = _gate.TryBegin("chat");
+        if (lease is null)
+        {
+            _log.LogWarning("restore: session {Session} could not take the agent lease — left interrupted", id);
+            return false;
+        }
+
+        var isSystem = meta.Mode == "system";
+        var tracker = new EditTracker(isSystem ? _options.CodeRootPath : _data.RootPath);
+        foreach (var rel in gate?.TrackedPaths ?? []) tracker.Record("Write", rel);
+
+        var s = new ChatSession
+        {
+            Id = id,
+            Mode = isSystem ? "system" : "plan",
+            UserMessage = meta.UserMessage ?? "",
+            Attachments = Attachments(meta.Attachments),
+            Tracker = tracker,
+            ThreadContext = "",                        // the next run rebuilds it from stored turns
+            ConversationId = meta.ConversationId ?? id,
+            GateLease = lease,
+            Phase = meta.Phase ?? ChatPhase.Idle,
+            PlanText = meta.PlanText ?? "",
+            ClaudeSessionId = meta.ClaudeSessionId,
+            McpProposal = gate?.McpProposal,
+            McpLogin = gate?.McpLogin,
+            PendingDraft = gate?.PendingDraft,
+            PendingDenial = gate?.PendingDenial,
+            PendingDenialReason = gate?.PendingDenialReason,
+            PendingDenialGrant = gate?.PendingDenialGrant,
+            LastPhaseCard = gate?.Card,
+        };
+        _sessions[s.Id] = s;
+        _activeId = s.Id;
+
+        // The diff gate is the one phase whose card cannot simply be re-shown: approving it commits a
+        // file list, so that list is rebuilt from the working tree here. PresentDiffAsync sets the
+        // phase itself (including ending the session cleanly when nothing is left to commit).
+        if (s.Phase == ChatPhase.AwaitingDiffApproval)
+        {
+            try { await PresentDiffAsync(s); }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "restore: session {Session} could not rebuild its diff", id);
+                Fail(s, "重启后无法重建改动预览,请重新发起。");
+                return false;
+            }
+        }
+
+        _log.LogInformation("restore: session {Session} resumed at {Phase}", id, s.Phase);
+        Emit(s, new AgentEvent { Kind = "notice", Text = "服务已重启 —— 这个待办决定还在,可以继续。" });
+        // Put the card back on screen. The diff gate already re-emitted its own, rebuilt one above;
+        // for every other gate this is the ONLY way the question and its buttons come back, because
+        // the snapshot endpoint does not project them.
+        if (s.Phase != ChatPhase.AwaitingDiffApproval && s.LastPhaseCard is { } card)
+            Emit(s, new AgentEvent { Kind = "phase", Phase = s.Phase, Data = card });
+        return true;
+    }
+
+    private static List<string> Attachments(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
+        catch (JsonException) { return []; }
     }
 
     private bool IsSystem(ChatSession s) => s.Mode == "system";
@@ -695,9 +830,15 @@ public sealed class ChatSessionService
             if (pageFiles.Count > 0)
             {
                 // The committed version — what approval would replace. Null for a page being created.
+                // PagesToReview expands a changed COMPONENT DEFINITION into the pages it alters, whose
+                // own files did not change — deduped, so two edited definitions sharing a page render
+                // it once.
                 pages = new List<PageDiffView>();
+                var reviewed = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var f in pageFiles)
-                    pages.Add(_pageReview.Review(f.Path, await git.ShowAsync($"HEAD:{f.Path}")));
+                    foreach (var target in _pageReview.PagesToReview(f.Path))
+                        if (reviewed.Add(target))
+                            pages.Add(await _pageReview.ReviewAsync(target, await git.ShowAsync($"HEAD:{target}")));
             }
         }
 
