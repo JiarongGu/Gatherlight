@@ -121,6 +121,38 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   contract (`UI_CONTRACT_VERSION`) and the shared prompt preamble name pages — S3a's lesson is that
   a capability the agent is never told about is unreachable while every check stays green, so
   `e2e-p42` asserts the prompt pointer itself, not just the file. Proof lives in `e2e-p42`.
+- **A page reads live data by NAMING a query, and the resolution happens server-side.** `bind` on a
+  `Table`/`Chart` replaces the literal prop (`BindFills`; carrying both fails, because two sources of
+  truth for the same cells is a page that can disagree with itself). The query is an `IUiDataSource`
+  id with a CLOSED parameter set — one class + one registration per query, `Platform/Agent/Ui/Data`,
+  implementations free to live in Planner. This is `runCapability`'s rule applied to reading: an
+  agent-authored filter expression is an agent-authored program evaluated against the household's
+  database, so the agent picks a name and fills declared slots and never writes the query.
+  `UiBindingResolver` fills the tree wherever it is already being validated, and the node that goes
+  over the wire has `bind` GONE — so the renderer never learns what a binding is (`check-ui-registry`
+  keeps its meaning), the browser can never call a query with parameters of its own, and the S3b diff
+  gate reviews a bound page against live data, which is what the reviewer actually needs to see.
+  Two failure classes, deliberately different: a **shape** error (unknown query/param, both props)
+  fails validation and therefore blocks the commit; a **runtime** error renders a visible warning
+  where the data would have been and leaves the rest of the page standing. Neither ever yields an
+  empty table — an empty table is indistinguishable from "you have nothing", which is a lie told on
+  the household's own data. Same reason `Truncated` exists: a capped result SAYS there was more.
+  Bindings are refused in a ```ui chat block (`allowBindings:false`) because that seam is synchronous
+  and streaming — and in chat the agent already holds the data.
+- **A composite is one level of whole-value substitution, and nothing more.** A file in `ui/` with
+  `define` is a component definition; one with `root` is a page — same directory, same guard, same
+  gate. Expansion happens BEFORE validation so the depth/node limits apply to what actually renders.
+  Three constructions rather than three checks: a definition may not use another definition (so
+  recursion cannot exist), a placeholder must be the whole value (so a parameter injects a value into
+  a slot the definition chose, never structure), and a definition may not take a primitive's name
+  (whose violation is *carried* as `UiComposite.Problem` and shown at the gate — a definition that
+  silently never renders is the worst outcome). Editing a definition changes pages whose own files
+  did not change, so `PagesToReview` expands a changed definition into those pages and the gate
+  renders them. Proof lives in `e2e-p45`.
+- **`remarkLegacyMaps` stays.** Its deletion was tied to dropping `rehype-raw`, which S3a already did
+  by another route; the shim never enables raw-HTML parsing, nothing creates that shape any more, and
+  the only thing left to migrate is the household's own existing documents. Recorded so it is not
+  re-proposed as leftover cruft.
 - **Capabilities carry provenance.** `Platform` (compiled, shipped by us) is available by default and
   runs in-process; `Script` and `Mcp` are off until `site.json` lists them in `capabilities.enabled`;
   `Draft` is never loaded. Non-platform capabilities run under `node --permission` with filesystem
@@ -138,6 +170,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `phase` event's `Data`, a POST through `FireAndAck` supplies the decision, and a FRESH run carries
   `ResumeToken`. A marker naming something that does not exist must NOT park — a gate with nothing to
   decide wedges the session and holds the app-wide agent lease.
+- **A gate parked on a human decision survives a restart; a mid-run session still fails.** Those are
+  opposite cases and `SelfHealStateStep` used to treat them alike. A running session's child process
+  is gone — `error` is honest. A parked one has nothing in flight and its state is already durable, so
+  `ReconcileInterruptedAsync` returns the newest parked thread (ONE — the agent lease admits one
+  holder) and `RestoreParkedAsync` rebuilds it, **re-taking the lease**: restoring the gate without it
+  would silently remove the single-writer guarantee the gate exists to provide. What gets persisted is
+  the state a gate needs to ACT (`GateState` in the session's own metadata — the parsed MCP request,
+  the draft, the denial + its grant, the tracked paths), which is deliberately not what it needs to
+  DISPLAY (already durable: every phase event's `Data` is the card, stored verbatim). The diff gate is
+  **rebuilt, never remembered** — `PresentDiffAsync` re-reads the working tree, because approving a
+  remembered file list could commit something other than what the reviewer was shown. This matters
+  more since auto-update restarts the server. Proof lives in `e2e-p46`.
 - **Chat history is the stored event stream, replayed.** Every agent event is persisted as its SSE
   payload verbatim (`AppendEventAsync` → `lyntai_message`), so `GET /api/chat/history{,/id}` returns
   the wire shape and the client feeds it to the SAME reducer the live stream feeds — one renderer, no
