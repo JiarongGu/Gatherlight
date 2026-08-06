@@ -115,6 +115,11 @@ export interface ReviewPayload {
  * The concrete, secret-free spec shown at the awaiting-mcp-approval gate. Rendered by the server
  * from the agent's parsed proposal — the human confirms the exact command/url before anything
  * connects, and fills a value for each `neededCredentials` key (which never crosses the wire back).
+ *
+ * `sandboxed` is false for every external server, and `can` is the server-rendered list of what one
+ * will be able to do: unlike a Script capability it runs as a plain child process with the host
+ * account's privileges. Render that prominently — the launch command alone implies a containment
+ * that isn't there, and this gate is the household's only chance to decline.
  */
 export interface McpProposalView {
   name: string;
@@ -123,6 +128,8 @@ export interface McpProposalView {
   args: string[];
   url?: string | null;
   neededCredentials: string[];
+  sandboxed?: boolean;
+  can?: string[];
 }
 
 /**

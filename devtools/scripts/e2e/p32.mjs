@@ -40,6 +40,20 @@ try {
   ok('proposal lists needed credential', (prop?.neededCredentials ?? []).includes('STUB_TOKEN'));
   ok('proposal carries NO secret value', !JSON.stringify(prop).includes('s3cr3t'));
 
+  // The gate is HONEST about what approving costs. An external server is spawned by a plain
+  // Process.Start — no --permission, no cap-guard, no path jail — so the card must say so instead
+  // of letting the launch command imply a containment that does not exist. Server-rendered from
+  // PermissionSentence.ExternalMcp(), like every other clause: the agent proposes the server, never
+  // the words describing what saying yes to it means.
+  ok('gate declares the server is NOT sandboxed', prop?.sandboxed === false, JSON.stringify(prop));
+  const mcpCan = prop?.can ?? [];
+  ok('gate states it runs with the user\'s privileges', mcpCan.some((c) => c.includes('run on this computer as you')), JSON.stringify(mcpCan));
+  ok('gate states it can reach files + network', mcpCan.some((c) => c.includes('read and change your files')) && mcpCan.some((c) => c.includes('reach the internet')), JSON.stringify(mcpCan));
+  // No 'cannot' list, and that absence is deliberate: every Cannot clause is a promise the sandbox
+  // keeps, and there is no sandbox here. A reassuring one would be exactly the unenforced-plain-
+  // language failure the card model exists to prevent.
+  ok('gate promises NOTHING it cannot enforce', prop?.cannot === undefined, JSON.stringify(prop));
+
   // approve WITH the credential the human "entered" at the gate
   const appr = await j(`/api/chat/${id}/mcp/approve`, {
     method: 'POST', headers: { 'content-type': 'application/json' },

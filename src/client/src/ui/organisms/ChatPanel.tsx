@@ -11,7 +11,8 @@ import {
   StopOutlined,
   PaperClipOutlined,
   PlusOutlined,
-  HistoryOutlined
+  HistoryOutlined,
+  WarningOutlined
 } from '@ant-design/icons';
 import { MarkdownView } from './MarkdownView';
 import { BlockSegment } from '@/ui/blocks/BlockSegment';
@@ -499,6 +500,7 @@ const McpApprovalCard = memo(function McpApprovalCard({
           >
             {launch}
           </pre>
+          <UnsandboxedNotice can={proposal.can ?? []} />
           {!readOnly && needed.length > 0 && (
             <div style={{ marginBottom: 8 }}>
               <div style={{ marginBottom: 4, opacity: 0.85 }}>需要你提供登录凭据(仅存本机,不写入对话记录):</div>
@@ -629,6 +631,27 @@ function GrantClauses({ can, cannot }: { can: string[]; cannot: string[] }) {
         ) : (
           <div className="grant-clause-empty">(无)</div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** The counterpart to `GrantClauses` for something that is NOT contained: an external MCP server
+ *  runs as a plain child process with this account's privileges. Deliberately not rendered through
+ *  `GrantClauses` — that component's 系统禁止 column would show "(无)", which reads as a missing
+ *  value rather than as the warning it actually is. The clauses are server-rendered; the agent
+ *  proposes the server but never the words describing what saying yes to it means. */
+function UnsandboxedNotice({ can }: { can: string[] }) {
+  if (can.length === 0) return null;
+  return (
+    <div className="grant-unsandboxed">
+      <div className="grant-unsandboxed-title">
+        <WarningOutlined /> 这个服务不在沙箱内 · this service is not sandboxed
+      </div>
+      <div className="grant-unsandboxed-body">
+        这是第三方程序,批准后它可以:
+        <ul>{can.map((c, i) => <li key={i}>{c}</li>)}</ul>
+        只在你信任该软件来源时批准。
       </div>
     </div>
   );

@@ -1017,7 +1017,15 @@ public sealed class ChatSessionService
     }
 
     /// <summary>The concrete, secret-free spec shown at the gate — rendered from the PARSED draft, so a
-    /// prompt-injection can propose but the human sees the exact command/url before approving.</summary>
+    /// prompt-injection can propose but the human sees the exact command/url before approving.
+    ///
+    /// <c>sandboxed:false</c> + <c>can</c> are the honesty half, and they are NOT decoration: unlike a
+    /// Script capability, an external MCP server is spawned by a plain <c>Process.Start</c> and runs
+    /// with the host account's full privileges. The household is being asked to trust a third-party
+    /// package, so the card states what it will be able to do rather than staying silent and letting
+    /// the launch command imply a containment that does not exist. Server-rendered from
+    /// <see cref="PermissionSentence"/> like every other clause — the agent proposes the server, never
+    /// the words describing what approving it means.</summary>
     internal static object McpProposalView(McpProposal p) => new
     {
         name = p.Draft.Name,
@@ -1026,6 +1034,8 @@ public sealed class ChatSessionService
         args = p.Draft.Args ?? Array.Empty<string>(),
         url = p.Draft.Url,
         neededCredentials = p.NeededCredentials,
+        sandboxed = false,
+        can = PermissionSentence.ExternalMcp(),
     };
 
     // --- gate: approve/reject an agent-drafted tool (awaiting-draft-approval) ----------------

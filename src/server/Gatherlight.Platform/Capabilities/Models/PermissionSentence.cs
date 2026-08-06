@@ -63,4 +63,25 @@ public static class PermissionSentence
         cannot.Add("运行其它程序 · run other programs");
         return cannot;
     }
+
+    /// <summary>
+    /// What an EXTERNAL MCP server may do once approved. This is the honest counterpart to
+    /// <see cref="Can"/>/<see cref="Cannot"/>, and it is deliberately shaped differently, because the
+    /// thing being described is different: a <c>Script</c> capability is contained, an <c>Mcp</c> one
+    /// is not. <c>StdioMcpConnection.Start</c> is a plain <c>Process.Start</c> — no
+    /// <c>--permission</c>, no <c>cap-guard.mjs</c>, no path jail — so the process runs with exactly
+    /// the privileges of the account hosting Gatherlight.
+    ///
+    /// There is deliberately NO <c>Cannot</c> counterpart here, and that absence is the whole point.
+    /// Every clause in <see cref="Cannot"/> is a promise the sandbox keeps; for an external server
+    /// there is no sandbox, so there is no promise to make, and inventing a reassuring one would be
+    /// precisely the unenforced-plain-language failure this class exists to prevent. A household that
+    /// approves one of these is trusting the third-party package, not us — the card has to say so.
+    /// </summary>
+    public static IReadOnlyList<string> ExternalMcp() =>
+    [
+        "以你的身份在这台电脑上运行 · run on this computer as you",
+        "读取和修改你的文件 · read and change your files",
+        "访问网络 · reach the internet",
+    ];
 }
