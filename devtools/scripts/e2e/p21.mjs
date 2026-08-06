@@ -53,6 +53,32 @@ try {
   const rerun = await post(`/api/manage/scores/run/${id}`);
   ok('manual re-run scores + returns them', rerun.status === 200 && rerun.body.scored === 6 && rerun.body.scores.length === 6, JSON.stringify(rerun.body.scored));
 
+  // --- egress is auditable on BOTH planes ----------------------------------------------------
+  // The agent reaches the network two ways: the CLI's built-in WebFetch, and the registry's
+  // mediated `scrape`. Neither can be closed for a planner that has to read arbitrary travel sites
+  // (and denying WebFetch alone would only move the channel), so the control is that every outbound
+  // URL lands in the durable event stream. Recording only the built-in — which is what happened
+  // before this — left the MEDIATED path the less auditable of the two, which is backwards.
+  // Runs BEFORE run-all: that batch spawns a judge per conversation, and a chat competing with it
+  // for the app-wide agent lease is a flake, not a finding. The stub's EGRESS branch writes its own
+  // dated file, so this turn has a real diff to approve rather than re-writing the first one's.
+  const eg = await post('/api/chat', { message: 'EGRESSTEST 给后天建一个日计划,这次提交' });
+  const egId = eg.body.id;
+  await waitPhase(egId, 'awaiting-plan-approval');
+  await post(`/api/chat/${egId}/plan/approve`);
+  await waitPhase(egId, 'awaiting-diff-approval');
+  await post(`/api/chat/${egId}/diff/approve`);
+  await waitPhase(egId, 'committed');
+
+  const egTrace = (await j(`/api/manage/trace/${egId}`)).body;
+  const toolSteps = egTrace.steps.filter((s) => s.kind === 'tool');
+  const builtin = toolSteps.find((s) => s.label === 'WebFetch');
+  const mediated = toolSteps.find((s) => s.label === 'mcp__planner-tools__scrape');
+  ok('trace: the built-in fetch is recorded', !!builtin, JSON.stringify(toolSteps.map((s) => s.label)));
+  ok('trace: the built-in fetch records WHERE it went', builtin?.detail === 'https://example.invalid/builtin-plane', JSON.stringify(builtin));
+  ok('trace: the mediated fetch is recorded', !!mediated, JSON.stringify(toolSteps.map((s) => s.label)));
+  ok('trace: the mediated fetch records WHERE it went', mediated?.detail === 'https://example.invalid/mediated-plane', JSON.stringify(mediated));
+
   // run-all (background)
   const all = await post('/api/manage/scores/run-all');
   ok('run-all starts a batch', all.status === 200 && all.body.started === true);

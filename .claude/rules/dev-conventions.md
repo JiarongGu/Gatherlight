@@ -235,7 +235,27 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   trust. The guard carries a `GUARD_VERSION`; the server re-issues it into existing data folders
   when it bumps (it's a security boundary, not editable KB content). The `guard/` folder is
   app-managed (shipped + overlaid by updates), read-only to the agent. Residuals the hook can't
-  close (code run *inside* an agent-authored script; exfil via a WebFetch URL) need an OS sandbox.
+  close (code run *inside* an agent-authored script; exfil via a fetched URL) need an OS sandbox —
+  **declined**, and the reasoning is on the record in `docs/ROADMAP.md`: the `claude` CLI authenticates
+  per-user, so a low-privilege service account breaks the mechanism the whole product rests on.
+- **Egress is audited, not closed — and both planes are audited the same.** The agent reaches the
+  network two ways: the CLI's built-in `WebFetch` and the registry's `scrape`. Neither can be shut for
+  a planner whose job is reading arbitrary travel sites, and denying `WebFetch` alone only moves the
+  channel — `scrape` takes the same arbitrary URL (`SsrfGuard` blocks *internal* targets, which is a
+  different threat). So `capabilities.deny` is a **lever, not a default**: the shipped manifest denies
+  nothing, and a household that wants the built-in closed gets a mechanism that removes it from the
+  generated allow-list AND the guard together (`e2e-p24`). What is always on is the record — every
+  outbound URL lands in the durable event stream via `AgentRunner.ToolDetail`, which is why it has an
+  `mcp__*` case: without it the MEDIATED path was the less auditable of the two, which is backwards.
+  Proof lives in `e2e-p21`, which drives one turn through both planes and asserts each URL in the trace.
+- **An external MCP server is the one capability we do NOT contain, and its card says so.**
+  `StdioMcpConnection.Start` is a plain `Process.Start` — no `--permission`, no `cap-guard.mjs`, no
+  path jail — so the process runs with the host account's full privileges. The add-gate therefore
+  carries `sandboxed:false` plus `PermissionSentence.ExternalMcp()`, and deliberately has **no
+  `cannot` list**: every clause in `Cannot` is a promise the sandbox keeps, there is no sandbox here,
+  and inventing a reassuring one is precisely the unenforced-plain-language failure the card model
+  exists to prevent. The client renders it through `UnsandboxedNotice`, never `GrantClauses`, whose
+  empty 系统禁止 column would read as a missing value rather than a warning. Proof lives in `e2e-p32`.
 - The shipped knowledge base lives in `Assets/SiteTemplate/` and is seeded/upgraded by
   `ZhikuSeeder` (hash-guarded: user-modified files are never overwritten).
 

@@ -151,8 +151,22 @@ public sealed class AgentRunner : IAgentRunner
         "Skill" => First(input, "skill", "command"),
         "WebSearch" => First(input, "query"),
         "WebFetch" => First(input, "url"),
+        _ when name.StartsWith("mcp__", StringComparison.Ordinal) => McpDetail(input),
         _ => null,
     };
+
+    /// <summary>
+    /// Detail for a call to one of our own (or a proxied external) MCP tools. <c>url</c> comes first
+    /// and is the reason this exists: the agent reaches the network through BOTH planes — the CLI's
+    /// built-in <c>WebFetch</c> and the registry's <c>scrape</c> — and until this was here only the
+    /// built-in recorded where it went. That left the MEDIATED path the less auditable of the two,
+    /// which is backwards. Egress cannot be closed for a planner that has to read arbitrary travel
+    /// sites (and denying <c>WebFetch</c> alone would only move the channel, not shut it), so the
+    /// control is that every outbound URL lands in the durable event stream the household can read
+    /// back. Truncated, because a detail line is a trace label, not a payload store.
+    /// </summary>
+    private static string? McpDetail(JsonElement input) =>
+        Trunc(First(input, "url", "query", "relPath", "path", "name", "key"), 120);
 
     private static string? First(JsonElement obj, params string[] keys)
     {

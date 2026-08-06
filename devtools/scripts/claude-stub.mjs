@@ -324,6 +324,9 @@ if (readOnly) {
     : userReq.includes('CAPTEST_DENY') ? ' [TRIG:CAPDENY]'
     : userReq.includes('CAPTEST_SESSION') ? ' [TRIG:CAPSESSION]'
     : userReq.includes('CAPTEST_UNKNOWN') ? ' [TRIG:CAPUNKNOWN]'
+    // e2e-p21 (egress audit): the agent reaches the network through BOTH planes — the CLI's built-in
+    // WebFetch and the registry's mediated scrape — so the run trace has to record where each went.
+    : userReq.includes('EGRESSTEST') ? ' [TRIG:EGRESS]'
     : userReq.includes('NOOPTEST') ? ' [TRIG:NOOP]' : '';
   const planText = systemMode ? text : text + trig;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
@@ -435,6 +438,25 @@ if (readOnly) {
     emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: ghostAbs } }] } });
     emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
     done('已创建 plans/daily/2026-07-15.md;另有一个文件未落地(stub 幻影路径)');
+    process.exit(0);
+  }
+  // Egress audit (e2e-p21): fetch the SAME kind of thing through both planes — the CLI built-in and
+  // a mediated MCP tool — so the trace can be asserted to record WHERE each one went. Recording only
+  // the built-in leaves the mediated path (the one we control) the less auditable of the two.
+  // Writes its OWN dated file rather than falling through to the shared 2026-07-14.md: a suite that
+  // already committed that file would get a byte-identical second write, hence no diff, hence no
+  // awaiting-diff-approval — a timeout that looks nothing like its cause.
+  if (prompt.includes('[TRIG:EGRESS]')) {
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'WebFetch', input: { url: 'https://example.invalid/builtin-plane' } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__planner-tools__scrape', input: { url: 'https://example.invalid/mediated-plane' } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    const egAbs = path.resolve(process.cwd(), 'plans/daily/2026-07-16.md');
+    fs.mkdirSync(path.dirname(egAbs), { recursive: true });
+    fs.writeFileSync(egAbs, `# 2026-07-16 计划(fixture)\n\n- written-by-stub ${process.pid}\n`, 'utf8');
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: egAbs } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    done('已创建 plans/daily/2026-07-16.md,并通过两条通道各取了一次网页(stub)');
     process.exit(0);
   }
   const rel = systemMode ? 'src/client/src/stub-touch.txt' : 'plans/daily/2026-07-14.md';
