@@ -22,7 +22,14 @@ export function makeReporter(suite) {
   };
   const fail = (msg) => { if (msg) console.error(msg); failures++; };
   const done = () => {
-    console.log(failures === 0 ? `\ne2e-${suite} PASS` : `\ne2e-${suite} FAIL (${failures})`);
+    // fs.writeSync, NOT console.log: on Windows a piped stdout is ASYNCHRONOUS, so console.log
+    // leaves the line in a buffer that process.exit() does not wait for — and if the process then
+    // dies in teardown (the libuv UV_HANDLE_CLOSING abort, exit 0xC0000409, which undici's pool
+    // reliably provokes), the buffered line is lost with it. The runner tolerates that abort by
+    // trusting this marker, so a marker that vanishes in the very crash it exists to survive made
+    // the tolerance useless: a random suite was reported failed on roughly every other full run.
+    // Writing it synchronously puts it in the pipe before anything can abort.
+    fs.writeSync(1, failures === 0 ? `\ne2e-${suite} PASS\n` : `\ne2e-${suite} FAIL (${failures})\n`);
     process.exit(failures === 0 ? 0 : 1);
   };
   return { ok, fail, done };
