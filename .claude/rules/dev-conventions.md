@@ -224,6 +224,30 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the explicit **`security.allowLanWithoutToken`** opt-in (`GATHERLIGHT_ALLOW_LAN=1`) is set, for a
   trusted private LAN (logs a loud startup warning; the gate is then a no-op). The `/manage` Settings
   tab surfaces this as a 3-way **Local / LAN / WAN** access mode (WAN = `0.0.0.0` + token required).
+- **Every remote image goes through `/api/img`, so `img-src` is `'self' data: blob:`.** Map tiles,
+  library covers, an `Image` node's https src and a picture in plan markdown all route through the
+  one same-origin door (`ImageProxyController` over `ImageCache` — SSRF guard, image content-type,
+  size cap, disk cache). With `img-src https:` any URL that reached a rendered page made the
+  household's BROWSER call that host, leaking their IP and that they were reading it, on render,
+  unrecorded — and an image URL can come from agent text. Proxying does not make an arbitrary URL
+  safe to FETCH; it moves the fetch to the server, where it is guarded and visible. The tile route
+  takes three bounded integers and pins the upstream host, so nothing agent-written reaches an
+  outbound URL. **Adding `https:` back re-opens the residual** — `e2e-p17` asserts its absence, not
+  the directive's presence, and the CSP stays calibrated against a real render.
+- **Every fail-closed rule needs its opt-in asserted too.** `p17` case C proved an unauthenticated
+  LAN bind is refused — which passes whether the refusal is conditional or unconditional. It was
+  unconditional in the headless entry point for months: `Gatherlight.Server/Program.cs` built its
+  options from config for port/bind/token/trustLoopback/TLS and never read `AllowLanWithoutToken`,
+  so a household that chose LAN mode and took the documented opt-in got a refusal quoting the setting
+  they had already set — while `Gatherlight.Host` honoured it. A denial without its positive control
+  is half a test.
+- **The sandbox's node is a provisioned resource, not an assumption.** The capability sandbox needs
+  `--permission` + `module.registerHooks` (Node 22.15+); the node inside the Playwright driver is
+  older, so this used to depend on whatever the machine had, and a clean install had every Script
+  capability refusing to run with nothing offering a fix. A pinned Node LTS is now a catalog entry
+  (sha256-pinned, since nodejs.org serves a mutable path — bump version and checksum together), and
+  `CapabilityRuntime` still PROBES whatever it picks, so a wrong pin fails closed rather than
+  pretending.
 - **TLS is Kestrel-native** (`TlsCertificate.Resolve`): a self-signed cert generated + reused from
   `state/gatherlight-tls.pfx`, or a configured PFX. Config lives in `security.*` (settings.json) +
   `GATHERLIGHT_BIND`·`_ACCESS_TOKEN`·`_TRUST_LOOPBACK`·`_TLS[_CERT]` env overrides.
