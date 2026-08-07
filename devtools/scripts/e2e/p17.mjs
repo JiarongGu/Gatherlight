@@ -11,7 +11,7 @@
 import { dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p17');
-const PA = 5401, PB = 5402, PC = 5403;
+const PA = 5401, PB = 5402, PC = 5403, PD = 5404;
 const TOKEN = 'e2e-secret-42';
 
 const { ok, fail, done } = makeReporter('p17');
@@ -19,7 +19,7 @@ makeTestData(dataDir);
 
 const status = (res) => res.status;
 
-let a = null, b = null, c = null;
+let a = null, b = null, c = null, d = null;
 try {
   // ---------- A) no token: auth disabled, API open ----------
   a = startServer({ dataDir, port: PA });
@@ -35,6 +35,15 @@ try {
   ok("A: CSP present (script-src 'self' + frame-ancestors 'none')", /script-src 'self'/.test(csp) && /frame-ancestors 'none'/.test(csp), csp.slice(0, 48));
   ok('A: nosniff + frame-deny + referrer + permissions headers', hdr.headers.get('x-content-type-options') === 'nosniff'
     && hdr.headers.get('x-frame-options') === 'DENY' && !!hdr.headers.get('referrer-policy') && !!hdr.headers.get('permissions-policy'));
+  // Every remote image now routes through /api/img, so the browser cannot be pointed at an arbitrary
+  // host by something the household is merely reading — the remote-image residual. `https:` here
+  // would re-open it, which is why this asserts its ABSENCE rather than the directive's presence.
+  ok('A: img-src is same-origin only (no https:)', /img-src 'self' data: blob:;/.test(csp) && !/img-src[^;]*https:/.test(csp),
+    csp.match(/img-src[^;]*/)?.[0] ?? '(none)');
+  // The tile route takes three integers and pins the upstream host, so nothing a page or a plan
+  // writes reaches the outbound URL. Out-of-range coordinates are refused rather than forwarded.
+  ok('A: a tile outside the zoom range is refused', (await fetch(`${baseA}/api/img/tile/40/0/0`)).status === 404);
+  ok('A: a tile outside the coordinate range is refused', (await fetch(`${baseA}/api/img/tile/1/9/0`)).status === 404);
   a.stop(); a = null;
   await new Promise((r) => setTimeout(r, 1200));
 
@@ -87,10 +96,24 @@ try {
   try { await until(() => fetch(`http://127.0.0.1:${PC}/api/auth/status`).then((r) => r.ok), 8000); started = true; } catch {}
   ok('C: refuses to serve when bound 0.0.0.0 without a token', started === false);
   ok('C: logs the refusal reason', /Refusing to bind/.test(c.log()), c.log().split('\n').find((l) => l.includes('Refusing'))?.slice(0, 80) ?? '(no reason logged)');
+  c.stop(); c = null;
+  await new Promise((r) => setTimeout(r, 1200));
+
+  // ---------- D) the OPT-IN actually opts in (the positive control C was missing) ----------
+  // Without this row, C passes whether the refusal is conditional or unconditional — which is how a
+  // headless entry point that never read allowLanWithoutToken shipped: the desktop host honoured the
+  // setting, `dev.mjs server` refused to start quoting the very setting the household had set.
+  d = startServer({ dataDir, port: PD, env: { GATHERLIGHT_BIND: '0.0.0.0', GATHERLIGHT_ALLOW_LAN: '1' } });
+  let lanUp = false;
+  try { await until(() => fetch(`http://127.0.0.1:${PD}/api/auth/status`).then((r) => r.ok), 30000); lanUp = true; } catch {}
+  ok('D: allowLanWithoutToken lets it serve on 0.0.0.0', lanUp,
+    d.log().split('\n').find((l) => l.includes('Refusing'))?.slice(0, 100) ?? d.log().slice(-200));
+  ok('D: and says so loudly in the log', /trusted private network|unauthenticated/i.test(d.log()),
+    d.log().split('\n').filter((l) => /LAN|unauthenticated|private/i.test(l))[0]?.slice(0, 120) ?? '(no warning logged)');
 } catch (err) {
   fail('e2e-p17 fatal: ' + err.message);
-  console.error([a, b, c].map((s) => s?.log() ?? '').join('').slice(-2000));
+  console.error([a, b, c, d].map((s) => s?.log() ?? '').join('').slice(-2000));
 } finally {
-  a?.stop(); b?.stop(); c?.stop();
+  a?.stop(); b?.stop(); c?.stop(); d?.stop();
 }
 done();

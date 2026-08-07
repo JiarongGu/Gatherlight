@@ -12,6 +12,11 @@ var options = new GatherlightServerOptions
     BindAddress = GatherlightServerOptions.ResolveBindAddress(config.Current.Security.BindAddress),
     AccessToken = GatherlightServerOptions.ResolveAccessToken(config.Current.Security.AccessToken),
     TrustLoopback = GatherlightServerOptions.ResolveTrustLoopback(config.Current.Security.TrustLoopback),
+    // Read the LAN opt-in like every other security setting. Omitting it made the fail-closed bind
+    // check unconditional HERE while the desktop host honoured it — so a household that chose LAN
+    // mode in Settings, took the documented allowLanWithoutToken opt-in, and ran the headless server
+    // got a refusal quoting the very setting they had already set.
+    AllowLanWithoutToken = GatherlightServerOptions.ResolveAllowLanWithoutToken(config.Current.Security.AllowLanWithoutToken),
     TlsEnabled = GatherlightServerOptions.ResolveTlsEnabled(config.Current.Security.Tls.Enabled),
     TlsCertPath = GatherlightServerOptions.ResolveTlsCertPath(config.Current.Security.Tls.CertPath),
     TlsCertPassword = GatherlightServerOptions.ResolveTlsCertPassword(config.Current.Security.Tls.CertPassword),
