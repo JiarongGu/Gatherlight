@@ -309,12 +309,28 @@ public sealed class UiTreeValidator : IUiTreeValidator
             {
                 if (v.ValueKind != JsonValueKind.String) throw new UiInvalidException(Bad("must be a string"));
                 var s = v.GetString()!;
-                // https is allowed — it matches what plan markdown already renders and what the app's
-                // CSP permits (img-src … https:, for Leaflet tiles). Anything else must be a record path.
+                // https is allowed — it matches what plan markdown already renders. The renderer sends
+                // it through the same-origin image proxy, which is why the CSP can be `img-src 'self'
+                // data: blob:` and still show it. Anything else must be a record path.
                 if (s.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) break;
                 if (s.Contains("://") || s.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
                     || s.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
                     throw new UiInvalidException(Bad("must be a record path or an https URL"));
+                if (_site.ResolveSitePath(s) is null) throw new UiInvalidException(Bad($"path is outside the site: {s}"));
+                break;
+            }
+
+            case UiPropKind.RecordPath:
+            {
+                if (v.ValueKind != JsonValueKind.String) throw new UiInvalidException(Bad("must be a string"));
+                var s = v.GetString()!;
+                if (s.Contains("://") || s.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                    || s.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
+                    throw new UiInvalidException(Bad("must be a path inside the site, not a URL"));
+                // The BOUNDARY, not existence: ResolveSitePath refuses state/ and any escape, while a
+                // page may legitimately name a record the household has not written yet. Same shape-not-
+                // state rule runCapability follows — failing here would make a page uncommittable for a
+                // reason that has nothing to do with the page.
                 if (_site.ResolveSitePath(s) is null) throw new UiInvalidException(Bad($"path is outside the site: {s}"));
                 break;
             }

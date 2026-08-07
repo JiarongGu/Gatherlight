@@ -47,6 +47,23 @@ try {
   ok('a Chart with mismatched labels/values is refused', uneven?.status === 'invalid');
   ok('the reason names the pairing', /same length/.test(uneven?.reason ?? ''), uneven?.reason ?? '');
 
+  // --- FileRef.path is held to the site boundary, like openRecord ---------------------------
+  // It was a bare string, so the contract promised "a path inside the site" while the validator
+  // accepted anything and the boundary was only enforced downstream, when the file was opened.
+  write('ref-ok', { title: 'r', root: { type: 'FileRef', path: 'plans/trips/2026-08-kyoto.md', label: '行程' } });
+  write('ref-state', { title: 'r', root: { type: 'FileRef', path: 'state/gatherlight.db' } });
+  write('ref-escape', { title: 'r', root: { type: 'FileRef', path: '../../etc/passwd' } });
+  write('ref-url', { title: 'r', root: { type: 'FileRef', path: 'https://example.invalid/x' } });
+  write('ref-future', { title: 'r', root: { type: 'FileRef', path: 'plans/trips/not-written-yet.md' } });
+
+  ok('a record path validates', (await pageOf('ref-ok'))?.status === 'ready', (await pageOf('ref-ok'))?.reason ?? '');
+  ok('a state/ path is refused', (await pageOf('ref-state'))?.status === 'invalid', (await pageOf('ref-state'))?.reason ?? '');
+  ok('a path escaping the site is refused', (await pageOf('ref-escape'))?.status === 'invalid');
+  ok('a URL is refused', (await pageOf('ref-url'))?.status === 'invalid', (await pageOf('ref-url'))?.reason ?? '');
+  // Shape, not state — same rule runCapability follows. A page may name a record not written yet.
+  ok('a path to a record that does not exist yet still validates',
+    (await pageOf('ref-future'))?.status === 'ready', (await pageOf('ref-future'))?.reason ?? '');
+
   // --- a bound table reads live state -------------------------------------------------------
   write('live', {
     title: 'Live',

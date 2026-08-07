@@ -94,6 +94,9 @@ public sealed class FileRefSchema : UiNodeSchema
 {
     public override string Type => "FileRef";
     public override IReadOnlyDictionary<string, UiPropSpec> Props => P(
-        ("path", new UiPropSpec(UiPropKind.String, Required: true)),
+        // A FileRef opens a record, exactly as a Button's `openRecord` does — so it resolves through
+        // the same site boundary. It was a bare String, which left the contract ("a path inside the
+        // site") stricter than the validator and the boundary enforced only downstream at open time.
+        ("path", new UiPropSpec(UiPropKind.RecordPath, Required: true)),
         ("label", new UiPropSpec(UiPropKind.String)));
 }

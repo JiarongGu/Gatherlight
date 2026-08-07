@@ -10,6 +10,7 @@ public enum UiPropKind
     Points,       // [{name,lat,lng}] — map points
     Action,       // {"send":"…"} | {"openRecord":"…"} — validated by IUiActionValidator
     Src,          // a record path or an https URL
+    RecordPath,   // a path to a file inside the site — no scheme, never state/
     Href,         // an http/https URL
     Numbers,      // [1, 2, 3] — array of numbers
     Binding,      // {"query":"records","params":{…}} — names a registered IUiDataSource
