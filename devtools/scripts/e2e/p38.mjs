@@ -185,6 +185,19 @@ try {
   const call4 = await client.call('cap_escape', { site: dataDir });
   ok('calling a denied capability is refused (4xx)',
     call4.status >= 400 && call4.status < 500, JSON.stringify(call4));
+
+  // --- the runtime the sandbox depends on is OFFERED, not assumed --------------------------
+  // The sandbox needs a node with --permission + module.registerHooks and fails closed without one.
+  // It used to depend on whatever node the machine happened to have: on a clean install every Script
+  // capability refused to run and nothing anywhere offered the fix. It is now a provisionable
+  // resource, so the panel that reports the problem also carries the remedy.
+  const resources = (await client.j('/api/manage/resources')).body ?? [];
+  const rows = Array.isArray(resources) ? resources : (resources.resources ?? []);
+  const nodeRes = rows.find((r) => r.id === 'node');
+  ok('the resources catalog offers a node runtime', !!nodeRes, JSON.stringify(rows.map((r) => r.id)));
+  ok('and says what it is for', /沙箱|sandbox|能力/.test(String(nodeRes?.neededFor ?? '')), String(nodeRes?.neededFor));
+  ok('the runtime bundle is still offered beside it', rows.some((r) => r.id === 'runtime'),
+    JSON.stringify(rows.map((r) => r.id)));
 } catch (err) {
   fail('e2e-p38 fatal: ' + err.message);
   console.error(srv?.log?.().slice(-3000) ?? '');

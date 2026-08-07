@@ -89,7 +89,18 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         ("content/browsers", "browsers", ""),
     };
 
-    // One catalog entry: the whole runtime in a single download (the user's "bundle everything").
+    // The pinned Node the capability sandbox needs. Node 24 LTS ("Krypton"): the sandbox requires BOTH
+    // --permission and module.registerHooks (22.15+), and the node.exe inside the Playwright driver is
+    // older than that — so without this the sandbox depended on whatever node the machine happened to
+    // have, and a clean install had Script capabilities refusing to run with nothing offering a fix.
+    // CapabilityRuntime still PROBES whatever it picks, so a wrong pin fails closed rather than
+    // pretending; this entry just makes the right answer available and one click away.
+    //
+    // sha256-pinned, unlike the nuget bundle: nodejs.org serves a mutable path, so the checksum from
+    // that release's SHASUMS256.txt is the integrity guarantee. Bump the two together, never one.
+    public const string NodeVersion = "v24.19.0";
+    private const string NodeSha256 = "57f71ab3652e797d84acddc79c81cc9ff1c6ddb2a1974cdb83f00fee9bff4c73";
+
     public static readonly IReadOnlyList<ResourceSpec> Catalog = new[]
     {
         new ResourceSpec(
@@ -98,7 +109,19 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             Kind: ResourceKind.Bundle, InstallDir: "", ReadyMarker: "",
             ApproxBytes: 235_000_000,
             Url: ResourcesUrl),
+        new ResourceSpec(
+            Id: "node", Name: $"Node 运行时({NodeVersion})",
+            NeededFor: "自定义能力的沙箱 —— 没有它,脚本能力会拒绝运行",
+            Kind: ResourceKind.Zip, InstallDir: "node", ReadyMarker: "node.exe",
+            ApproxBytes: 32_000_000,
+            Url: $"https://nodejs.org/dist/{NodeVersion}/node-{NodeVersion}-win-x64.zip",
+            Sha256: NodeSha256),
     };
+
+    /// <summary>Where a provisioned node lands. Read by the sandbox probe and the Node leaf tools, so
+    /// the path exists in exactly one place.</summary>
+    public static string ProvisionedNode(string resourcesPath) =>
+        Path.Combine(resourcesPath, "node", "node.exe");
 
     private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 

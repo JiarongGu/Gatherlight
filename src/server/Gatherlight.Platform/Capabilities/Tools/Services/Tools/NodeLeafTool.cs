@@ -25,8 +25,8 @@ public abstract class NodeLeafTool : IGatherlightTool
     private static string? _nodeExe;                // resolved once (see ResolveNode)
 
     /// <summary>
-    /// The <c>node</c> to run. PATH first; failing that, the <c>node.exe</c> inside the Playwright
-    /// driver the 资源 · Resources panel provisions into the data folder — so a target that never
+    /// The <c>node</c> to run. PATH first; failing that, the pinned node or the Playwright driver's own,
+    /// both provisioned into the data folder by the 资源 · Resources panel — so a target that never
     /// installed Node still runs these tools. Same `where.exe`-once discipline as the claude CLI.
     /// </summary>
     private static string ResolveNode(string? resourcesPath)
@@ -45,11 +45,17 @@ public abstract class NodeLeafTool : IGatherlightTool
                 var exe = hits.FirstOrDefault(h => h.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) ?? hits.FirstOrDefault();
                 if (exe is not null && File.Exists(exe)) return _nodeExe = exe;
             }
-            catch { /* fall through to the provisioned copy */ }
-            var provisioned = string.IsNullOrEmpty(resourcesPath)
-                ? null
-                : Path.Combine(resourcesPath, ".playwright", "node", "win32_x64", "node.exe");
-            if (provisioned is not null && File.Exists(provisioned)) return _nodeExe = provisioned;
+            catch { /* fall through to the provisioned copies */ }
+            if (!string.IsNullOrEmpty(resourcesPath))
+            {
+                // The pinned node the 资源 panel provisions, then the Playwright driver's own. A leaf
+                // tool needs no sandbox features, so any of these runs it — PATH stays first so a dev
+                // machine behaves as its owner expects.
+                var pinned = Hosting.Resources.Services.ResourceProvisioner.ProvisionedNode(resourcesPath);
+                if (File.Exists(pinned)) return _nodeExe = pinned;
+                var driver = Path.Combine(resourcesPath, ".playwright", "node", "win32_x64", "node.exe");
+                if (File.Exists(driver)) return _nodeExe = driver;
+            }
         }
         return _nodeExe = "node";   // POSIX / last resort: let PATH resolution fail loudly at spawn
     }

@@ -32,7 +32,7 @@ public sealed class CapabilityRuntime : ICapabilityRuntime
             log.LogInformation("Capability sandbox: using {Node}", candidate);
             return;
         }
-        Unavailable = "no node runtime supporting --permission + module.registerHooks (Node 22.15+) was found";
+        Unavailable = "no node runtime supporting --permission + module.registerHooks (Node 22.15+) was found — install the Node runtime from the 资源 · Resources panel";
         log.LogWarning("Capability sandbox UNAVAILABLE — {Reason}. Script capabilities will refuse to run.", Unavailable);
     }
 
@@ -41,8 +41,14 @@ public sealed class CapabilityRuntime : ICapabilityRuntime
 
     private static IEnumerable<string> Candidates(Kernel.Services.IPlatformContext platform)
     {
-        var provisioned = Path.Combine(platform.ResourcesPath, ".playwright", "node", "win32_x64", "node.exe");
-        if (File.Exists(provisioned)) yield return provisioned;
+        // The PINNED node first — provisioned through the 资源 panel specifically so this does not
+        // depend on whatever the machine happens to have. Then the Playwright driver's own node (older,
+        // usually fails the probe, but free to try), then PATH. Every one of them is probed, so order
+        // is a preference and never an assumption.
+        var pinned = Hosting.Resources.Services.ResourceProvisioner.ProvisionedNode(platform.ResourcesPath);
+        if (File.Exists(pinned)) yield return pinned;
+        var driver = Path.Combine(platform.ResourcesPath, ".playwright", "node", "win32_x64", "node.exe");
+        if (File.Exists(driver)) yield return driver;
         yield return "node";
     }
 
