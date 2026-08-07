@@ -129,6 +129,23 @@ try {
   ok('the external server\'s tools reach the agent channel too', !!proxied,
     JSON.stringify(proxied ?? []).slice(0, 160));
 
+  // Visible is not the same as usable. The agent extends its OWN toolset this way (PromptHarness
+  // tells it to raise MCP_ADD and a human approves at the gate), so what matters is that the tools
+  // it gained can actually be CALLED — a proxied tool that lists but refuses at invocation would
+  // look identical in the console and leave the agent reporting a tool it cannot use.
+  const proxiedNames = (proxied ?? []).filter((n) => !registry.includes(n));
+  ok('the added server contributed named tools', proxiedNames.length > 0, JSON.stringify(proxiedNames));
+  const proxiedUnreachable = [];
+  for (const name of proxiedNames) {
+    const r = await rpc(ch, 'tools/call', { name, arguments: {} });
+    const text = JSON.stringify(r.body ?? {});
+    // Routed = the proxy reached the external process. A missing-argument complaint proves that as
+    // well as a success does; "unknown tool" or a transport error does not.
+    if (r.status !== 200 || /未知工具/.test(text) || r.body?.error?.code === -32601) proxiedUnreachable.push(`${name}: ${text.slice(0, 70)}`);
+  }
+  ok('and every one of them is CALLABLE by the agent, not merely listed',
+    proxiedUnreachable.length === 0, proxiedUnreachable.slice(0, 4).join(' | '));
+
   // --- 4. the backup carries MCP servers ------------------------------------------------------
   const exported = await fetch(`${base}/api/backup/export`);
   const zipBytes = Buffer.from(await exported.arrayBuffer());

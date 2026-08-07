@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until,
+  dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until, repo,
 } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p39');
@@ -41,8 +41,13 @@ function writeDraft(id, { title, description, grant }) {
     grant: { id, ...grant },
     command: { exe: 'node', args: ['run.mjs'] },
   }, null, 2) + '\n', 'utf8');
+  // The entry follows the contract the agent is handed (.claude/tool-spec.md): ONE json object in on
+  // stdin, ONE json object out on stdout. It ECHOES what it received so a call can prove the round
+  // trip actually happened, rather than that something returned successfully.
   fs.writeFileSync(path.join(dir, 'run.mjs'),
-    "#!/usr/bin/env node\nlet input = ''; for await (const c of process.stdin) input += c;\nprocess.stdout.write(JSON.stringify({ ok: true }));\n",
+    "#!/usr/bin/env node\nlet input = ''; for await (const c of process.stdin) input += c;\n"
+    + "const args = JSON.parse(input || '{}');\n"
+    + "process.stdout.write(JSON.stringify({ ok: true, echoed: args.probe ?? null, tool: " + JSON.stringify(id) + " }));\n",
     'utf8');
 }
 
@@ -95,7 +100,7 @@ async function readPhaseEventData(base, id, phase, ms = 2500) {
 const mentionsInternet = (clauses) => (clauses ?? []).some((c) => c.includes('网络') || c.toLowerCase().includes('internet'));
 
 const srv = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
-const { j, post, waitPhase } = makeClient(srv.base);
+const { j, post, waitPhase, call } = makeClient(srv.base);
 
 const rpc = async (payload) => {
   const res = await fetch(`${srv.base}/mcp`, {
@@ -184,6 +189,17 @@ try {
   }, 15000);
   ok('draft_a listed in GET /api/tools after approval', namesAfterA.includes('draft_a'), JSON.stringify(namesAfterA));
 
+  // THE LOOP CLOSED: listed is not the same as usable. Everything up to here proves promotion put a
+  // NAME in the registry; this proves the thing the agent authored actually RUNS — spawned through
+  // the sandboxed launcher, fed the stdin json the contract documents, and answering on stdout.
+  // Without it a promotion that produced a broken tool would pass every row above, and the agent
+  // would be told it had gained a capability it cannot use.
+  const ran = await call('draft_a', { probe: 'round-trip' });
+  ok('a promoted draft actually RUNS when called', ran.status === 200, JSON.stringify(ran).slice(0, 200));
+  ok('it received the arguments on stdin and answered on stdout',
+    ran.result?.ok === true && ran.result?.echoed === 'round-trip' && ran.result?.tool === 'draft_a',
+    JSON.stringify(ran.result).slice(0, 200));
+
   await finishUp(idA);
 
   // === draft_b: park, capture the CONTRASTING card, then reject =================================
@@ -244,6 +260,30 @@ try {
   const afterOverwrite = readManifest();
   const draftCEntries = (afterOverwrite.capabilities?.enabled ?? []).filter((g) => (typeof g === 'string' ? g : g.id) === 'draft_c');
   ok('overwrite: capabilities.enabled has exactly ONE draft_c entry (not duplicated)', draftCEntries.length === 1, JSON.stringify(draftCEntries));
+
+  // --- the authoring CONTRACT ------------------------------------------------------------------
+  // The agent has always been TOLD it may draft a tool. Until this file existed, the schema, the
+  // grant vocabulary and — the part that bites — what the sandbox refuses lived in one paragraph of
+  // the system prompt, so a draft reaching for fetch or child_process failed at RUN time, after a
+  // human had already approved it. The refusals are generated from the shipped cap-guard, so the
+  // contract cannot drift from what is enforced.
+  const specPath = path.join(dataDir, '.claude', 'tool-spec.md');
+  ok('the tool-authoring contract is issued into the data folder', fs.existsSync(specPath));
+  const spec = fs.existsSync(specPath) ? fs.readFileSync(specPath, 'utf8') : '';
+  ok('it carries a version', /TOOL_CONTRACT_VERSION:\s*\d+/.test(spec), spec.split('\n')[0] ?? '(empty)');
+  ok('it shows the tool.json schema', /"grant"/.test(spec) && /"command"/.test(spec) && /tool-drafts/.test(spec));
+  ok('it names the marker that submits a draft', /TOOL_DRAFT:/.test(spec));
+  ok('it states the blocked network modules (from the real preload)',
+    /`http`/.test(spec) && /`net`/.test(spec) && /`dns`/.test(spec),
+    (spec.match(/`net`[^\n]{0,80}/) ?? ['(absent)'])[0]);
+  ok('it says fetch is removed outright', /fetch/.test(spec) && /removed/.test(spec));
+  ok('it says other programs are denied whatever the grant says',
+    /child_process/.test(spec) && /whatever the grant says/.test(spec));
+  ok("it names THIS site's record dirs as the grant vocabulary", /`plans`/.test(spec) && /`cache`/.test(spec));
+  ok('no placeholder survived rendering', !/__[A-Z_]+__/.test(spec), (spec.match(/__[A-Z_]+__/) ?? [''])[0]);
+  // S3a's lesson, re-applied: a contract nothing points at is a contract nobody reads.
+  ok('the agent is told to read it before drafting', /tool-spec\.md/.test(fs.readFileSync(
+    path.join(repo, 'src/server/Gatherlight.Platform/Agent/Llm/Services/PromptHarness.cs'), 'utf8')));
 } catch (err) {
   fail('e2e-p39 fatal: ' + err.message);
   console.error(srv.log().slice(-3000));

@@ -145,6 +145,10 @@ fs.rmSync(stage, { recursive: true, force: true });
 const required = () => [
   path.join(libs, 'Gatherlight.Host.exe'), path.join(res, 'wwwroot', 'index.html'), path.join(res, 'template', 'CLAUDE.md'),
   path.join(res, 'cap-guard.mjs'),
+  // The form map fill_itinerary reads. It rides along because the whole template directory is moved,
+  // but "rides along" is how the pdf-form leaves were shipped broken too — a missing map fails only
+  // when someone tries to fill a visa form, which is months after the release.
+  path.join(res, 'template', '.claude', 'forms', 'japan-visa-itinerary.json'),
   ...['inspect', 'fill', 'fill-itinerary', 'merge'].map((e) => path.join(res, 'tools', 'pdf-form', `${e}.cjs`)),
 ];
 
