@@ -224,6 +224,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the explicit **`security.allowLanWithoutToken`** opt-in (`GATHERLIGHT_ALLOW_LAN=1`) is set, for a
   trusted private LAN (logs a loud startup warning; the gate is then a no-op). The `/manage` Settings
   tab surfaces this as a 3-way **Local / LAN / WAN** access mode (WAN = `0.0.0.0` + token required).
+- **Anything that replaces a record subtree must RE-ISSUE the app-managed files** — one seam,
+  `IAppManagedFiles.ReissueAsync` (template seed + `ChatEnvironmentService.EnsureFiles`), called by
+  startup AND by backup import. `.claude/` holds files the APP owns, not the household: the scope
+  guard, the UI contract, the shipped form maps. They are derived from the app version — the same
+  class as the plan index, which import already rebuilt — so restoring an older archive rolled them
+  BACK. Measured on a real 2026-07-28 backup: the guard went from v7 to **v4** (losing S2's `DENIED`
+  plane and S3b's `WRITE_EXTS`), the UI contract and form maps vanished, and because `EnsureFiles`
+  only ran at startup the downgrade lasted the whole session. It surfaced as a visa PDF failing to
+  generate — the loud symptom of a silent security regression. Two traps in the fix itself:
+  `DataWriteLock` is a **non-reentrant** `SemaphoreSlim(1,1)` and the seeder takes it, so the re-issue
+  must sit OUTSIDE import's lock scope (holding it deadlocks the import outright); and the re-issue
+  must run BEFORE the restore commit so its files land in the same commit. Proof lives in `e2e-p47`.
 - **Data where it churns, code where it doesn't** — `fill_itinerary`'s form map. A form's *shape*
   (field names, `{n}` row templates, `maxRows`, font sizes, flatten) lives in `.claude/forms/*.json`,
   seeded by the template and editable by the agent through the normal diff gate; the PDF machinery

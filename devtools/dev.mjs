@@ -380,7 +380,18 @@ switch (cmd) {
     const slow = [...results].sort((a, b) => b.ms - a.ms).slice(0, 3).map((r) => `${r.suite} ${(r.ms / 1000).toFixed(0)}s`);
     console.log(`\ne2e: ${results.length - failed.length}/${results.length} suites passed in ${wall}s${limit > 1 ? ` (parallel ×${limit})` : ''}`);
     if (slow.length) console.log(`  slowest: ${slow.join(' · ')}`);
-    for (const f of failed) console.log(`  ✗ ${f.suite} — ${f.signal ? `signal ${f.signal}` : `exit ${f.status}`}`);
+    for (const f of failed) {
+      // Say WHERE it died, not just that it did. A suite that printed its PASS marker and then
+      // aborted is a teardown crash; one that stopped mid-assertions is a real failure — and the
+      // exit code is identical for both (the Windows 0xC0000409 abort), so without this the next
+      // person re-runs the suite just to learn which kind they have.
+      const checks = (f.out.match(/^ {2}[✓✗]/gm) ?? []).length;
+      const bad = (f.out.match(/^ {2}✗/gm) ?? []).length;
+      const marked = new RegExp(`\\ne2e-${f.suite} (PASS|FAIL)`).test(f.out);
+      const where = marked ? 'finished' : `stopped after ${checks} check(s)`;
+      console.log(`  ✗ ${f.suite} — ${f.signal ? `signal ${f.signal}` : `exit ${f.status}`}`
+        + ` · ${where}${bad ? `, ${bad} failing` : ''}`);
+    }
     if (failed.length) process.exitCode = 1;
     break;
   }
