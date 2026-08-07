@@ -224,6 +224,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the explicit **`security.allowLanWithoutToken`** opt-in (`GATHERLIGHT_ALLOW_LAN=1`) is set, for a
   trusted private LAN (logs a loud startup warning; the gate is then a no-op). The `/manage` Settings
   tab surfaces this as a 3-way **Local / LAN / WAN** access mode (WAN = `0.0.0.0` + token required).
+- **Data where it churns, code where it doesn't** — `fill_itinerary`'s form map. A form's *shape*
+  (field names, `{n}` row templates, `maxRows`, font sizes, flatten) lives in `.claude/forms/*.json`,
+  seeded by the template and editable by the agent through the normal diff gate; the PDF machinery
+  (pdf-lib, fontkit, CJK embedding) stays compiled and shipped. So a revised visa form is a file
+  edit, not a release — without the cost of the S1 proposal to make the whole tool a Script
+  capability, which would have vendored pdf-lib + fontkit into every household's data folder (a
+  grant's fs vocabulary is site-relative; the leaf lives in the install's `res/`). The map path is
+  agent-nameable, so it resolves through the SAME `ResolveSitePath` guard as the PDF it describes,
+  and a field the PDF lacks is reported BY NAME — a blank form otherwise looks like a filled one.
+  Proof lives in `e2e-p10`, whose fixture fields are deliberately nothing like the visa form's.
 - **Every remote image goes through `/api/img`, so `img-src` is `'self' data: blob:`.** Map tiles,
   library covers, an `Image` node's https src and a picture in plan markdown all route through the
   one same-origin door (`ImageProxyController` over `ImageCache` — SSRF guard, image content-type,
