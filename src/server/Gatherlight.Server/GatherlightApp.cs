@@ -328,6 +328,10 @@ public static class GatherlightApp
             .AddSingleton<Platform.Capabilities.Services.IDraftStore, Platform.Capabilities.Services.DraftStore>()
             // Knowledge-base seeder (template → data folder, hash-guarded upgrades)
             .AddSingleton<IZhikuSeeder, ZhikuSeeder>()
+            // What the APP owns inside the site (template + scope guard + UI contract + form maps).
+            // One seam, so every path that replaces a record subtree re-issues the same set — startup
+            // and backup import both, since a restore rolls those files back to the archive's version.
+            .AddSingleton<Platform.Site.Seed.Services.IAppManagedFiles, Platform.Site.Seed.Services.AppManagedFiles>()
             // Knowledge-base upgrade migration (LLM-reconcile customized .claude/ files with new templates)
             .AddSingleton<Platform.Site.Seed.Services.IZhikuMigrator, Platform.Site.Seed.Services.ZhikuMigrator>()
             // Startup migration runner: the versioned, ordered, idempotent upgrade phase (was inline,

@@ -1,17 +1,23 @@
 using System.IO.Compression;
 using System.Text.Json;
+using Gatherlight.Server.Platform.Capabilities.McpClient.Models;
+using Gatherlight.Server.Platform.Capabilities.McpClient.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 using Gatherlight.Server.Platform.Storage.Memory.Services;
 
 namespace Gatherlight.Server.Platform.Storage.Backup.Services;
 
-/// <summary>Metadata at the root of a backup .zip — lets import validate it's ours + show a summary.</summary>
+/// <summary>Metadata at the root of a backup .zip — lets import validate it's ours + show a summary.
+/// <c>ContainsCredentials</c> is stated rather than implied: the zip carries external MCP servers
+/// with their env, so whoever holds the file holds those logins.</summary>
 public sealed record BackupManifest(
     int GatherlightBackup, string CreatedAt, string Version, int Files,
-    int MemoryLibrary, int MemoryKnowledge, int MemoryEntities, int MemoryCortex);
+    int MemoryLibrary, int MemoryKnowledge, int MemoryEntities, int MemoryCortex,
+    int McpServers = 0, bool ContainsCredentials = false);
 
-public sealed record BackupImportResult(int Files, int Library, int Knowledge, int Entities, int Cortex);
+public sealed record BackupImportResult(
+    int Files, int Library, int Knowledge, int Entities, int Cortex, int McpServers = 0);
 
 public interface IBackupService
 {
@@ -29,8 +35,10 @@ public interface IBackupService
 /// same bundle as /api/memory; the raw DB isn't copied because its durable half travels here and the
 /// rest — plan index, chat — is rebuildable). Only the regenerable/transient bits are left out:
 /// <c>state/resources</c> (from nuget), <c>state/logs</c>, <c>state/cache</c>, <c>cache/</c>,
-/// <c>archive/</c>. Import serializes on the <see cref="DataWriteLock"/>, replaces those subtrees,
-/// reindexes, and commits.
+/// <c>archive/</c>. The external MCP servers travel too (<c>mcp-servers.json</c>) WITH their
+/// credentials, which makes the .zip itself a secret — so the manifest states that rather than
+/// leaving it to be discovered. Import serializes on the <see cref="DataWriteLock"/>, replaces those
+/// subtrees, reindexes, and commits.
 /// </summary>
 public sealed class BackupService : IBackupService
 {
@@ -44,18 +52,29 @@ public sealed class BackupService : IBackupService
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
+    /// <summary>The external MCP servers, with their env. WITH their credentials: a restore that gave
+    /// back a server minus the token it needs would look complete and then fail at first use, and an
+    /// interactive login the household did once would have to be redone with nothing saying so. The
+    /// cost is stated in the manifest (<c>containsCredentials</c>) rather than left to be discovered —
+    /// a backup .zip is now a secret, and it says so.</summary>
+    private const string McpFile = "mcp-servers.json";
+
     private readonly ISiteContext _data;
     private readonly IPlatformContext _platform;
     private readonly IMemoryService _memory;
+    private readonly IMcpServerStore _mcp;
+    private readonly Site.Seed.Services.IAppManagedFiles _appManaged;
     private readonly IEnumerable<IRecordIndex> _indexes;
     private readonly IGitCliService _git;
     private readonly DataWriteLock _writeLock;
     private readonly ILogger<BackupService> _log;
 
-    public BackupService(ISiteContext data, IPlatformContext platform, IMemoryService memory, IEnumerable<IRecordIndex> indexes,
-        IGitCliService git, DataWriteLock writeLock, ILogger<BackupService> log)
+    public BackupService(ISiteContext data, IPlatformContext platform, IMemoryService memory, IMcpServerStore mcp,
+        IEnumerable<IRecordIndex> indexes, IGitCliService git, DataWriteLock writeLock,
+        Site.Seed.Services.IAppManagedFiles appManaged, ILogger<BackupService> log)
     {
-        _data = data; _platform = platform; _memory = memory; _indexes = indexes; _git = git; _writeLock = writeLock; _log = log;
+        _data = data; _platform = platform; _memory = memory; _mcp = mcp;
+        _indexes = indexes; _git = git; _writeLock = writeLock; _appManaged = appManaged; _log = log;
     }
 
     public async Task ExportAsync(Stream output, CancellationToken ct = default)
@@ -70,6 +89,7 @@ public sealed class BackupService : IBackupService
             using (await _writeLock.AcquireAsync(ct))
             {
                 var mem = await _memory.ExportAsync();
+                var servers = await _mcp.ListAsync();
                 // Build into a temp FILE (sync file IO is fine); Kestrel disallows sync IO on the response
                 // body, and ZipArchive writes synchronously.
                 using var zfs = File.Create(tmp);
@@ -103,8 +123,15 @@ public sealed class BackupService : IBackupService
                 using (var ms = zip.CreateEntry("memory.json", CompressionLevel.Optimal).Open())
                     JsonSerializer.Serialize(ms, mem, Json);
 
+                // The external MCP servers. They live in the mcp_server table, which nothing else here
+                // carried — so a restore used to come back complete in every visible way and silently
+                // without them, and every server had to be re-added (and re-logged-into) by hand.
+                using (var ms = zip.CreateEntry(McpFile, CompressionLevel.Optimal).Open())
+                    JsonSerializer.Serialize(ms, servers, Json);
+
                 var manifest = new BackupManifest(1, DateTime.UtcNow.ToString("O"), Ver(), files,
-                    mem.Library.Count, mem.Knowledge.Count, mem.Entities.Count, mem.Cortex.Count);
+                    mem.Library.Count, mem.Knowledge.Count, mem.Entities.Count, mem.Cortex.Count,
+                    servers.Count, ContainsCredentials: servers.Count > 0);
                 using (var ms = zip.CreateEntry("manifest.json", CompressionLevel.Optimal).Open())
                     JsonSerializer.Serialize(ms, manifest, Json);
             }
@@ -133,11 +160,20 @@ public sealed class BackupService : IBackupService
             var manifest = JsonSerializer.Deserialize<BackupManifest>(await File.ReadAllTextAsync(manifestPath, ct), Json);
             if (manifest is null || manifest.GatherlightBackup < 1) throw new InvalidOperationException("不是有效的 Gatherlight 备份");
 
-            using var _ = await _writeLock.AcquireAsync(ct);
+            // Declared out here because the write lock below is SCOPED rather than `using var`: the
+            // re-issue after it calls the seeder, which takes this same lock — and DataWriteLock is a
+            // non-reentrant SemaphoreSlim(1,1), so holding it across that call deadlocks the import
+            // outright (found exactly that way: the suite hung at the import step rather than failing).
+            var restored = 0;
+            var mcpRestored = 0;
+            MemoryImportResult mem = new(0, 0, 0, 0);
+
+            // The lock covers the tree replacement; the re-issue takes it again on its own.
+            using (await _writeLock.AcquireAsync(ct))
+            {
 
             // Replace the record subtrees with the backup's copy.
             var dataDir = Path.Combine(staging, "data");
-            var restored = 0;
             foreach (var folder in Folders)
             {
                 var src = Path.Combine(dataDir, folder);
@@ -167,7 +203,6 @@ public sealed class BackupService : IBackupService
             }
 
             // Restore the DB memory half (idempotent upsert).
-            MemoryImportResult mem = new(0, 0, 0, 0);
             var memPath = Path.Combine(staging, "memory.json");
             if (File.Exists(memPath))
             {
@@ -175,12 +210,49 @@ public sealed class BackupService : IBackupService
                 if (bundle is not null) mem = await _memory.ImportAsync(bundle);
             }
 
-            foreach (var ix in _indexes) await ix.RebuildAsync(ct);
-            try { await _git.EnsureRepoAsync(ct); await _git.CommitAllAsync($"restore: import backup ({restored} files)"); }
-            catch (Exception ex) { _log.LogWarning("restore commit skipped: {Msg}", ex.Message); }
+            // Restore the external MCP servers (upsert by id, so re-importing is idempotent). Absent in
+            // a backup taken before they travelled — that is a fine older zip, not a broken one.
+            var mcpPath = Path.Combine(staging, McpFile);
+            if (File.Exists(mcpPath))
+            {
+                var servers = JsonSerializer.Deserialize<List<McpServerConfig>>(
+                    await File.ReadAllTextAsync(mcpPath, ct), Json) ?? [];
+                foreach (var s in servers)
+                {
+                    // Status is CONNECTION state, not configuration: a restored server has not been
+                    // reached yet, and importing "connected" would make the console claim a live link
+                    // to a process that does not exist. Back to pending; the connect pass decides.
+                    s.Status = McpServerStatus.Pending;
+                    s.LastError = null;
+                    s.DiscoveredToolsJson = null;
+                    await _mcp.UpsertAsync(s);
+                    mcpRestored++;
+                }
+            }
 
-            _log.LogInformation("Backup imported: {Files} files · memory lib+{Lib} kn+{Kn}", restored, mem.Library, mem.Knowledge);
-            return new BackupImportResult(restored, mem.Library, mem.Knowledge, mem.Entities, mem.Cortex);
+            }   // ← write lock released; the re-issue below acquires it itself
+
+            // The restore replaced .claude/ with the ARCHIVE's copy, so every app-owned file in there
+            // is now whatever the backup was taken with — the scope guard rolled back to an older
+            // version, the UI contract and form maps simply gone if the archive predates them. Those
+            // are derived from the app version, not household content, exactly like the record index
+            // rebuilt below; and the only other caller of the re-issue is startup, so without this the
+            // downgrade would last until the next restart.
+            var reissued = await _appManaged.ReissueAsync(ct);
+            if (reissued.Count > 0)
+                _log.LogInformation("restore: re-issued {N} app-managed file(s) over the imported ones", reissued.Count);
+
+            foreach (var ix in _indexes) await ix.RebuildAsync(ct);
+            // Re-taken for the commit, so the restored tree and the re-issued files land in one
+            // commit and no other writer can interleave between them.
+            using (await _writeLock.AcquireAsync(ct))
+            {
+                try { await _git.EnsureRepoAsync(ct); await _git.CommitAllAsync($"restore: import backup ({restored} files)"); }
+                catch (Exception ex) { _log.LogWarning("restore commit skipped: {Msg}", ex.Message); }
+            }
+
+            _log.LogInformation("Backup imported: {Files} files · memory lib+{Lib} kn+{Kn} · mcp servers {Mcp}", restored, mem.Library, mem.Knowledge, mcpRestored);
+            return new BackupImportResult(restored, mem.Library, mem.Knowledge, mem.Entities, mem.Cortex, mcpRestored);
         }
         finally
         {
