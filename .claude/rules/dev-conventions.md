@@ -224,6 +224,20 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the explicit **`security.allowLanWithoutToken`** opt-in (`GATHERLIGHT_ALLOW_LAN=1`) is set, for a
   trusted private LAN (logs a loud startup warning; the gate is then a no-op). The `/manage` Settings
   tab surfaces this as a 3-way **Local / LAN / WAN** access mode (WAN = `0.0.0.0` + token required).
+- **The agent authors capabilities as SANDBOXED SCRIPT TOOLS, never as MCP servers.** It drafts
+  `.claude/tool-drafts/<id>/` (tool.json + entry script), raises `TOOL_DRAFT`, a human promotes it,
+  and it runs under `node --permission` + `cap-guard.mjs` with a grant. Authoring an *MCP server*
+  instead would take the same agent-written code and run it via plain `Process.Start` with the
+  household's full privileges and no jail — strictly worse, for an identical capability. The contract
+  it writes against is `.claude/tool-spec.md`: app-managed and version-gated like `ui-spec.md`, with
+  the grant vocabulary rendered from THIS site's record dirs and — the load-bearing part — **the
+  blocked-module list parsed out of the shipped `cap-guard.mjs` at render time**, not restated. A
+  contract that merely describes the sandbox drifts the first time the sandbox changes, and the agent
+  only finds out when an approved capability throws at run time, after a human said yes to a card
+  promising it could not reach the internet. Proof lives in `e2e-p39`, which asserts the contract's
+  contents, that the prompt points at it, and — the row that was missing for months — that a promoted
+  draft **actually runs**, not merely that it appears in `/api/tools`. "Listed" is not "usable"; the
+  same gap existed for platform tools and for proxied MCP tools (`e2e-p47`).
 - **Anything that replaces a record subtree must RE-ISSUE the app-managed files** — one seam,
   `IAppManagedFiles.ReissueAsync` (template seed + `ChatEnvironmentService.EnsureFiles`), called by
   startup AND by backup import. `.claude/` holds files the APP owns, not the household: the scope
