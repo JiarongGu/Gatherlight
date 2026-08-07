@@ -2,6 +2,7 @@ import { Children, isValidElement, memo, useMemo, type ComponentProps, type Reac
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { remarkLegacyMaps } from '@/ui/blocks/legacyMaps';
+import { remoteImage } from '@/lib/images';
 import { Image } from '@/ui/atoms';
 import { Collapsible } from '@/ui/molecules';
 import { TripMap } from './TripMap';
@@ -132,9 +133,11 @@ export const MarkdownView = memo(function MarkdownView({ source, collapsible }: 
           {children}
         </h3>
       ),
+      // A remote picture in a plan goes through the same-origin proxy, like every other remote image
+      // the app renders — so opening a document never has the browser calling the host that wrote it.
       img: ({ src, alt, ...rest }) => (
         <Image
-          src={src as string}
+          src={remoteImage(src as string)}
           alt={alt as string | undefined}
           fallback={FALLBACK_SVG}
           style={{ maxWidth: '100%', borderRadius: 6, margin: '12px 0' }}

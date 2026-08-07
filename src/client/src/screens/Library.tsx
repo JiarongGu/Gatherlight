@@ -3,9 +3,9 @@ import { SearchOutlined, EnvironmentOutlined, LinkOutlined, ReloadOutlined } fro
 import { loadLibrary, KIND_LABEL, type LibraryItem, type LibraryFacets } from '@/lib/libraryApi';
 import { toPlainText } from '@/lib/markdown';
 import { safeUrl } from '@/lib/sanitize';
-
-// Route cover images through the server proxy — fetch-once, disk-cached, offline-safe.
-const proxied = (url: string) => `/api/library/image?url=${encodeURIComponent(url)}`;
+// Route cover images through the server proxy — fetch-once, disk-cached, offline-safe. Now the SAME
+// helper every other remote image uses, so there is one door rather than a library-shaped one.
+import { remoteImage as proxied } from '@/lib/images';
 
 // The 知识库 gallery — verified reference entities from the DB, browsed read-only. Family-scale, so
 // we load everything once and filter client-side (snappy chips + search, no round-trips).

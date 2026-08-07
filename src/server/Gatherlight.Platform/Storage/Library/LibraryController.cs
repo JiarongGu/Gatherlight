@@ -12,12 +12,7 @@ namespace Gatherlight.Server.Platform.Storage.Library;
 public sealed class LibraryController : ControllerBase
 {
     private readonly ILibraryRepository _repo;
-    private readonly IImageCache _images;
-    public LibraryController(ILibraryRepository repo, IImageCache images)
-    {
-        _repo = repo;
-        _images = images;
-    }
+    public LibraryController(ILibraryRepository repo) => _repo = repo;
 
     /// <summary>Filtered list + facet counts (kinds / regions) for the gallery filters.</summary>
     [HttpGet("api/library")]
@@ -41,15 +36,9 @@ public sealed class LibraryController : ControllerBase
 
     /// <summary>Cover-image proxy: fetch-once, disk-cached, so images work offline and never hit a
     /// live CDN from the browser. Returns 404 on a dead/blocked URL → client falls back to a glyph.</summary>
-    [HttpGet("api/library/image")]
-    public async Task<IActionResult> Image([FromQuery] string url, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(url)) return BadRequest(new { error = "url is required" });
-        var img = await _images.GetAsync(url, ct);
-        if (img is null) return NotFound();
-        Response.Headers.CacheControl = "public, max-age=604800";
-        return File(img.Bytes, img.ContentType);
-    }
+    // The cover-image proxy moved to /api/img (Capabilities/Documents/ImageProxyController): it is
+    // the ONE same-origin door every remote image now goes through, and a library-shaped copy of it
+    // would be a second one to keep in step.
 
     private static string? Norm(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 }

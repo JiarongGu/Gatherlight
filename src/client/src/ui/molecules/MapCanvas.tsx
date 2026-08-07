@@ -22,10 +22,12 @@ interface Props {
 
 const ACCENT = '#3b6fe0';
 
-// Colored basemap (CARTO Voyager) — reads better than a flat/dark map and works
-// in both themes.
+// Colored basemap (CARTO Voyager) — reads better than a flat/dark map and works in both themes.
+// Served through our own origin: the upstream host is pinned server-side and a tile request carries
+// only z/x/y, so opening a map no longer has the household's browser calling a CDN directly. That is
+// what lets img-src stay 'self' data: blob: instead of https:.
 const TILE = {
-  url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+  url: '/api/img/tile/{z}/{x}/{y}',
   attribution: '&copy; OpenStreetMap &copy; CARTO'
 };
 

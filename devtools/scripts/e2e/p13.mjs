@@ -160,15 +160,15 @@ try {
   const reimport = await getJson('/api/library');
   ok('library_import idempotent (no dupes)', reimport.items.length === imported.items.length, `${imported.items.length}→${reimport.items.length}`);
 
-  // --- image cache proxy (offline-safe cover images) ---
-  const img1 = await fetch(`${srv.base}/api/library/image?url=${encodeURIComponent(imgBase + '/img.png')}`);
+  // --- the same-origin image proxy (offline-safe covers; also what lets img-src drop https:) ---
+  const img1 = await fetch(`${srv.base}/api/img?url=${encodeURIComponent(imgBase + '/img.png')}`);
   ok('image proxy: 200 + image/png', img1.status === 200 && (img1.headers.get('content-type') ?? '').startsWith('image/png'),
     `${img1.status} ${img1.headers.get('content-type')}`);
   ok('image proxy: upstream hit once', imgHits === 1, `hits=${imgHits}`);
-  const img2 = await fetch(`${srv.base}/api/library/image?url=${encodeURIComponent(imgBase + '/img.png')}`);
+  const img2 = await fetch(`${srv.base}/api/img?url=${encodeURIComponent(imgBase + '/img.png')}`);
   ok('image proxy: second call served', img2.status === 200);
   ok('image proxy: cache hit (no 2nd upstream fetch)', imgHits === 1, `hits=${imgHits}`);
-  const nonImg = await fetch(`${srv.base}/api/library/image?url=${encodeURIComponent(imgBase + '/not-image')}`);
+  const nonImg = await fetch(`${srv.base}/api/img?url=${encodeURIComponent(imgBase + '/not-image')}`);
   ok('image proxy: non-image → 404', nonImg.status === 404, String(nonImg.status));
 } catch (err) {
   fail('e2e-p13 fatal: ' + err.message);
