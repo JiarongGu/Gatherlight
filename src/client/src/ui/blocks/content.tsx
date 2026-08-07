@@ -1,4 +1,5 @@
 import { Table as AntTable, Tag, Image as AntImage } from '@/ui/atoms';
+import { remoteImage } from '@/lib/images';
 import { CityMap } from '@/ui/organisms/CityMap';
 import { TripMap } from '@/ui/organisms/TripMap';
 import type { UiNodeProps } from './registry';
@@ -39,9 +40,10 @@ export function Badge({ node }: UiNodeProps) {
 export function Image({ node }: UiNodeProps) {
   const src = String(node.src);
   // A record path is served by the narrow asset route added in Task 2 (image MIME types only,
-  // inside the site, no symlinks); https URLs pass straight through.
+  // inside the site, no symlinks); an https URL goes through the same-origin image proxy, so a page
+  // cannot make the household's browser call an arbitrary host just by being opened.
   const url = src.startsWith('https://')
-    ? src
+    ? remoteImage(src)
     : `/api/ui/asset/${src.split('/').map(encodeURIComponent).join('/')}`;
   return (
     <figure style={{ margin: 0 }}>
@@ -87,9 +89,17 @@ export function Chart({ node }: UiNodeProps) {
   const plotH = H - PAD_B - PAD_T;
   const step = (W - PAD_L * 2) / n;
   const fmt = (v: number) => `${v.toLocaleString()}${unit ? ` ${unit}` : ''}`;
+  // Label budget from the space a label actually gets, at ~5.5px per character for the 10px type.
+  // A bound chart's labels can be whole prose lines (the budget source hands back a context line),
+  // and a fixed 8-character cut turned those into "Lodging…" / "Food | …" — present but useless.
+  // The full text always stays in <title>, so hovering recovers what the axis cannot show.
+  const maxChars = Math.max(4, Math.floor(step / 5.5));
+  const short = (s: string) => (s.length <= maxChars ? s : `${s.slice(0, maxChars - 1)}…`);
 
   return (
-    <div style={{ overflowX: 'auto' }}>
+    // Capped, not full-bleed: at 100% of a desktop reading pane the 480×180 viewBox scales to well
+    // over 300px tall, so a five-bar chart swallowed the page. It still shrinks freely below this.
+    <div style={{ overflowX: 'auto', maxWidth: 560 }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img"
         aria-label={labels.slice(0, n).map((l, i) => `${l}: ${fmt(values[i])}`).join('; ')}>
         <line x1={PAD_L} y1={H - PAD_B} x2={W - PAD_L} y2={H - PAD_B} stroke="var(--border)" />
@@ -113,7 +123,8 @@ export function Chart({ node }: UiNodeProps) {
         {Array.from({ length: n }, (_, i) => (
           <text key={i} x={PAD_L + step * (i + 0.5)} y={H - PAD_B + 14}
             textAnchor="middle" fontSize={10} fill="var(--muted)">
-            {labels[i].length > 8 ? `${labels[i].slice(0, 7)}…` : labels[i]}
+            <title>{`${labels[i]}: ${fmt(values[i])}`}</title>
+            {short(labels[i])}
           </text>
         ))}
       </svg>
