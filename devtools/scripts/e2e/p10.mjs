@@ -88,6 +88,89 @@ try {
   ok('pdf_fill: flatten removes the field', flat.status === 200
     && (await call('pdf_inspect', { path: 'uploads/flat.pdf' })).result.fields.length === 0);
 
+  // --- fill_itinerary: the FORM MAP is data, not code -----------------------------------------
+  // The whole point of the map is that a form which renames a field or grows a row is a file edit,
+  // not a release. So this fixture's fields are deliberately nothing like the shipped visa form's:
+  // if the mapping were still hardcoded, none of them could be filled.
+  const itinPdf = `
+const { PDFDocument } = require('pdf-lib');
+(async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([320, 240]);
+  const form = doc.getForm();
+  let y = 200;
+  for (const name of ['yy', 'mm', 'dd', 'when1', 'what1', 'when2', 'what2']) {
+    const f = form.createTextField(name);
+    f.addToPage(page, { x: 20, y, width: 120, height: 14 });
+    y -= 20;
+  }
+  require('fs').writeFileSync(process.argv[1], Buffer.from(await doc.save()));
+})();`;
+  const itinPath = path.join(up, 'itinerary.pdf');
+  spawnSync('node', ['-e', itinPdf, itinPath], { cwd: path.join(repo, 'tools', 'pdf-form'), encoding: 'utf8' });
+  ok('itinerary fixture generated', fs.existsSync(itinPath));
+
+  fs.mkdirSync(path.join(dataDir, '.claude', 'forms'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, '.claude', 'forms', 'custom.json'), JSON.stringify({
+    name: 'p10 custom form', maxRows: 2, flatten: false, bodyFontSize: 7,
+    header: { year: 'yy', month: 'mm', day: 'dd' },
+    columns: { date: 'when{n}', activity: 'what{n}' },
+  }), 'utf8');
+  fs.writeFileSync(path.join(up, 'itinerary.json'), JSON.stringify({
+    applicationDate: { year: '2026', month: '09', day: '01' },
+    rows: [
+      { date: 'Sep 1', activity: 'Arrive' },
+      { date: 'Sep 2', activity: 'Museum' },
+      { date: 'Sep 3', activity: 'Dropped — past maxRows' },
+    ],
+  }), 'utf8');
+
+  const itin = await call('fill_itinerary', {
+    templatePath: 'uploads/itinerary.pdf', dataPath: 'uploads/itinerary.json',
+    formMap: '.claude/forms/custom.json', outPath: 'uploads/itinerary-filled.pdf',
+  });
+  ok('fill_itinerary: runs against a custom form map', itin.status === 200, JSON.stringify(itin.result).slice(0, 200));
+  ok('fill_itinerary: the map named the form', itin.result?.form === 'p10 custom form', String(itin.result?.form));
+  ok('fill_itinerary: filled the mapped cells', itin.result?.cellsSet === 4, String(itin.result?.cellsSet));
+  ok('fill_itinerary: nothing was missing', (itin.result?.missingFields ?? ['?']).length === 0,
+    JSON.stringify(itin.result?.missingFields));
+  ok('fill_itinerary: maxRows from the map truncated the third row', itin.result?.rowsFilled === 2,
+    String(itin.result?.rowsFilled));
+  ok("fill_itinerary: the map's flatten:false left it editable", itin.result?.flattened === false);
+  // Values actually reached the PDF, under the names the MAP chose.
+  const itinBack = await call('pdf_inspect', { path: 'uploads/itinerary-filled.pdf' });
+  const valueOf = (n) => itinBack.result.fields?.find((f) => f.name === n)?.value;
+  ok('fill_itinerary: header went to the mapped fields', valueOf('yy') === '2026' && valueOf('dd') === '01',
+    JSON.stringify({ yy: valueOf('yy'), dd: valueOf('dd') }));
+  ok('fill_itinerary: {n} expanded per row', valueOf('when1') === 'Sep 1' && valueOf('what2') === 'Museum',
+    JSON.stringify({ when1: valueOf('when1'), what2: valueOf('what2') }));
+
+  // A map naming fields the PDF does not have NAMES them rather than reporting a silent success —
+  // a blank form otherwise looks exactly like a filled one.
+  fs.writeFileSync(path.join(dataDir, '.claude', 'forms', 'wrong.json'), JSON.stringify({
+    name: 'wrong', maxRows: 1, header: {}, columns: { date: 'nope{n}' },
+  }), 'utf8');
+  const wrong = await call('fill_itinerary', {
+    templatePath: 'uploads/itinerary.pdf', dataPath: 'uploads/itinerary.json',
+    formMap: '.claude/forms/wrong.json', outPath: 'uploads/itinerary-wrong.pdf',
+  });
+  ok('fill_itinerary: a field the PDF lacks is reported by name',
+    (wrong.result?.missingFields ?? []).includes('nope1'), JSON.stringify(wrong.result?.missingFields));
+
+  // The map is a path the agent can name, so it gets the same guard as every other path here.
+  const escapeMap = await call('fill_itinerary', {
+    templatePath: 'uploads/itinerary.pdf', dataPath: 'uploads/itinerary.json',
+    formMap: '../CLAUDE.md', outPath: 'uploads/nope.pdf',
+  });
+  ok('fill_itinerary: a form map outside the data folder is refused', escapeMap.status >= 400,
+    JSON.stringify(escapeMap.result).slice(0, 120));
+  const missingMap = await call('fill_itinerary', {
+    templatePath: 'uploads/itinerary.pdf', dataPath: 'uploads/itinerary.json',
+    formMap: '.claude/forms/absent.json', outPath: 'uploads/nope.pdf',
+  });
+  ok('fill_itinerary: a missing form map says how to make one', missingMap.status >= 400
+    && /pdf_inspect/.test(JSON.stringify(missingMap.result)), JSON.stringify(missingMap.result).slice(0, 160));
+
   const merge = await call('pdf_merge', { paths: ['uploads/form.pdf', 'uploads/filled.pdf'], outPath: 'uploads/merged.pdf' });
   ok('pdf_merge: 2 pages', merge.status === 200 && merge.result?.pages === 2 && onDisk(dataDir, 'uploads/merged.pdf'),
     JSON.stringify(merge.result));
@@ -106,7 +189,7 @@ try {
 
   // --- registered on both surfaces ---
   const tools = (await (await fetch(`${srv.base}/api/tools`)).json()).tools.map((t) => t.name);
-  const docTools = ['pdf_inspect', 'pdf_extract_text', 'pdf_fill', 'pdf_merge', 'image_info', 'image_resize', 'image_convert'];
+  const docTools = ['pdf_inspect', 'pdf_extract_text', 'pdf_fill', 'pdf_merge', 'fill_itinerary', 'image_info', 'image_resize', 'image_convert'];
   ok('all document tools registered', docTools.every((n) => tools.includes(n)), docTools.filter((n) => !tools.includes(n)).join(','));
 
   // --- guard ---

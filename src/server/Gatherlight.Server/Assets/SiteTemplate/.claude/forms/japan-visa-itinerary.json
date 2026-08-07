@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "How a Travel Itinerary PDF's form fields are named, so fill_itinerary can fill it.",
+    "This is DATA, not code: if the form changes its field names, adds rows, or wants a different",
+    "font size, edit this file — no new Gatherlight release needed. The PDF machinery itself stays",
+    "compiled and shipped with the app.",
+    "",
+    "Run pdf_inspect on the blank form to see its real field names, then map them here.",
+    "'{n}' in a column field is replaced by the 1-based row number.",
+    "Copy this file to describe another form and pass its path as fill_itinerary's formMap."
+  ],
+  "name": "日本签证 · Travel Itinerary (application7.pdf)",
+  "maxRows": 16,
+  "flatten": true,
+  "headerFontSize": 10,
+  "bodyFontSize": 8,
+  "header": {
+    "year": "Year",
+    "month": "Month",
+    "day": "Day"
+  },
+  "columns": {
+    "date": "DateRow{n}",
+    "activity": "Activity PlanRow{n}",
+    "contact": "ContactRow{n}",
+    "accommodation": "AccommodationRow{n}"
+  }
+}

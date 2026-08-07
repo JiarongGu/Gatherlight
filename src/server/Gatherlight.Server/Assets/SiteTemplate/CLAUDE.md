@@ -93,8 +93,20 @@ The agent does **not** write or run code in this workspace. Deterministic work �
 | `extract` | `mcp__planner-tools__extract` with `{relPath, instruction?}` | Read an uploaded file (PDF / image) under `uploads/` and return extracted or summarised text. Read-only. |
 | `library_*` | `mcp__planner-tools__library_upsert` / `library_search` / `library_import` | The DB **knowledge library** (景点/餐厅/酒店/体验). `search` before researching (skip re-verified work); `upsert` verified entities instead of hand-writing an ATTRACTIONS.md; `import` migrates a legacy markdown library once. See [tool-first.md](.claude/rules/tool-first.md). |
 | `job_*` / `notify_user` | `mcp__planner-tools__job_schedule` / `job_list` / `job_run_now` / `job_cancel` / `notify_user` | Schedule **background jobs** (recurring or one-off: periodic report / reminder / recurring task / tool run) and send notifications. Use when the user wants something to happen *later* or *on a repeat*, not now. See [/schedule-job](.claude/skills/schedule-job/SKILL.md). |
-| `pdf_*` / `fill_itinerary` | `mcp__planner-tools__pdf_inspect` / `pdf_extract_text` / `pdf_fill` / `pdf_merge` / `fill_itinerary` | **PDF forms + text.** `pdf_inspect` first (page count + AcroForm field names), then `pdf_fill` (name→value map, optional `flatten`, optional `fontPath` to embed a CJK font). `fill_itinerary` is the convenience wrapper for a visa-style day-by-day table (`{applicationDate, rows}` JSON → flattened printable PDF). `pdf_extract_text` reads a text PDF for zero tokens; `pdf_merge` concatenates. All paths are workspace-relative (e.g. `plans/visa/<trip-slug>/…`). |
+| `pdf_*` / `fill_itinerary` | `mcp__planner-tools__pdf_inspect` / `pdf_extract_text` / `pdf_fill` / `pdf_merge` / `fill_itinerary` | **PDF forms + text.** `pdf_inspect` first (page count + AcroForm field names), then `pdf_fill` (name→value map, optional `flatten`, optional `fontPath` to embed a CJK font). `fill_itinerary` is the convenience wrapper for a visa-style day-by-day table (`{applicationDate, rows}` JSON → printable PDF). **Its field names come from a form map you can edit** — see below. `pdf_extract_text` reads a text PDF for zero tokens; `pdf_merge` concatenates. All paths are workspace-relative (e.g. `plans/visa/<trip-slug>/…`). |
 | `image_*` | `mcp__planner-tools__image_info` / `image_resize` / `image_convert` | Dimensions/format, resize to a box, convert (png/jpeg/webp). Also workspace-relative paths. |
+
+**Form maps (`.claude/forms/*.json`)** — `fill_itinerary` gets a form's field names from a map file,
+not from compiled code. If a visa form is revised, or you need to fill a different table PDF:
+
+1. `pdf_inspect` the blank form to see its real field names.
+2. Copy `.claude/forms/japan-visa-itinerary.json`, point `header` + `columns` at those names
+   (`{n}` becomes the row number), set `maxRows`, and save it under `.claude/forms/`.
+3. Pass it as `fill_itinerary`'s `formMap`.
+
+The tool reports any field the PDF does not have, by name — check `missingFields` in its output
+rather than assuming a silent run worked. Editing a map is a normal workspace change: the user sees
+it in the diff and approves it like any other.
 
 Ground rules:
 
