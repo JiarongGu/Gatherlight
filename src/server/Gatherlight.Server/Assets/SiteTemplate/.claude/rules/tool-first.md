@@ -28,6 +28,10 @@ This is the same principle as [no-fabrication.md](no-fabrication.md), extended: 
 
 Before hand-curating, ask:
 
+0. **Have you already verified this?** `recall_facts` (`mcp__planner-tools__recall_facts`) holds the
+   fine-grained things earlier sessions checked — a URL that resolved, a price with its date, a venue's
+   status. Ask it first: a hit is work you do not have to repeat, and a miss costs one call. `library_search`
+   is its counterpart for whole reference ENTITIES; this one is for loose facts about them.
 1. **Does an MCP tool cover this?** (Check the [`/tool-loader`](../skills/tool-loader/SKILL.md) catalog.)
    - `scrape` (`mcp__planner-tools__scrape`) — official sites, Wikipedia pages, JS-rendered pages, directory pages
    - `extract` (`mcp__planner-tools__extract`) — data locked inside user-uploaded PDFs / images

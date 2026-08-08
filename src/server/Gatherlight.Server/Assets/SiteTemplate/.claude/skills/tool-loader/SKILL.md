@@ -21,6 +21,9 @@ Parallels `/skill-loader` but for the **MCP tools** the Gatherlight server expos
 | `pdf_merge` | `mcp__planner-tools__pdf_merge` | `{paths (2+, ordered), outPath}` | Concatenates PDFs in order. |
 | `fill_itinerary` | `mcp__planner-tools__fill_itinerary` | `{templatePath, dataPath, outPath}` | The visa-style **day-by-day table** convenience wrapper over `pdf_fill`: a JSON of `{applicationDate, rows[]}` (date / activity / contact / accommodation) → a flattened, printable schedule-of-stay PDF. |
 | `image_info` / `image_resize` / `image_convert` | `mcp__planner-tools__image_info` / `…_resize` / `…_convert` | `{path}` / `{path, outPath, maxWidth?, maxHeight?}` / `{path, outPath, format}` | Dimensions + format; resize to fit a box; convert between png/jpeg/webp. |
+| `recall_facts` | `mcp__planner-tools__recall_facts` | `{query (required), kind?, limit?}` | Looks up facts verified in EARLIER sessions — a checked URL, a price with its date, a venue's status. Ranked so what keeps proving useful comes first; each hit carries a `ref`. |
+| `remember_fact` | `mcp__planner-tools__remember_fact` | `{kind, topic, content, source?, confidence?}` | Stores one verified fine-grained fact for later sessions. Policies and preferences do NOT go here — those belong in `household/` or `.claude/`. Same kind+topic updates in place. |
+| `expand_fact` | `mcp__planner-tools__expand_fact` | `{ref (required)}` | Opens a `recall_facts` hit: full text plus the facts it is linked to. Facts recalled together become linked, so this often surfaces something the query never matched. |
 
 All paths above are **workspace-relative** (e.g. `plans/visa/<trip-slug>/template.pdf`, `uploads/scan.pdf`).
 
@@ -36,11 +39,20 @@ Tools are provided by the server — there is nothing to install, and no code to
 | user uploaded a PDF / image / document and wants its content used | `mcp__planner-tools__extract` (no wrapper skill — call directly with the upload's `relPath`) |
 | fill in a form PDF, visa application, schedule of stay, "what fields does this PDF have" | `pdf_inspect` first → then `pdf_fill` (or `fill_itinerary` for a day-by-day table) |
 | read a text PDF, combine PDFs, resize/convert an image | `pdf_extract_text` · `pdf_merge` · `image_resize` / `image_convert` |
+| **about to research a venue, price, opening time, booking policy or URL** | `recall_facts` **FIRST** — it may already be verified. Then `expand_fact` on a hit to reach what it is linked to. |
+| just verified something fine-grained and worth keeping (a URL that resolved, a price with its date, a venue's status) | `remember_fact` — so the next session does not pay for the same research |
+
+**`recall_facts` before you research.** This is the one routing rule that saves real work: the household
+accumulates verified facts across sessions, and re-scraping something already checked costs tokens, time
+and a fresh chance to get it wrong. A recall that finds nothing costs one call — the asymmetry is not
+close. Facts fade when they stop being used, so a stale hit ranks low rather than misleading you, and
+each hit reports how well remembered it is.
 
 ## Output Format
 
 ```
 ### Tools to INVOKE:
+- recall_facts — the venue may already have been verified in an earlier session
 - scrape — page is JS-rendered, WebFetch would return the empty shell
 
 ### Tools to SKIP:

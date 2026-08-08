@@ -42,6 +42,19 @@ try {
   const names = (Array.isArray(tools) ? tools : tools.tools ?? []).map((t) => t.name);
   ok('expand_fact is registered', names.includes('expand_fact'), names.filter((n) => n.includes('fact')).join(','));
 
+  // A tool the agent is never TOLD about stays unused while every other check passes — which is
+  // exactly what happened here: the fact store had 16 entries and zero recalls because nothing in the
+  // seeded knowledge base mentioned it. Assert the ROUTING, not just the registration.
+  const seededClaudeMd = fs.readFileSync(path.join(dataDir, 'CLAUDE.md'), 'utf8');
+  ok('the auto-loaded CLAUDE.md tells the agent the fact store exists',
+    seededClaudeMd.includes('recall_facts') && seededClaudeMd.includes('remember_fact'),
+    'CLAUDE.md is loaded every session — a tool absent from it is one the agent has no reason to reach for');
+  const toolLoader = fs.readFileSync(
+    path.join(dataDir, '.claude', 'skills', 'tool-loader', 'SKILL.md'), 'utf8');
+  ok('the tool-loader routes a research task to recall_facts FIRST',
+    toolLoader.includes('recall_facts') && /before you research|BEFORE researching|recall_facts \*\*FIRST\*\*/i.test(toolLoader),
+    'the routing table is what turns a registered tool into a used one');
+
   const wrote = await remember(c, 'venue-url', 'harbour teahouse listing',
     'The harbour teahouse listing is verified at listing-id 4417 and open on weekends.');
   ok('remember_fact stores a fact', wrote.status === 200 && wrote.result?.ok === true, JSON.stringify(wrote.result));
