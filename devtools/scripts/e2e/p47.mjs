@@ -146,7 +146,27 @@ try {
   ok('and every one of them is CALLABLE by the agent, not merely listed',
     proxiedUnreachable.length === 0, proxiedUnreachable.slice(0, 4).join(' | '));
 
-  // --- 4. the backup carries MCP servers ------------------------------------------------------
+  // --- 4. the backup carries MCP servers, the site's PAGES, and the site MANIFEST ----------------
+  // A page is household work — the agent authors it, a human approves it at the diff gate — and
+  // site.json is household CONFIGURATION: it carries capabilities.enabled (every capability a human
+  // promoted) and records (which the scope guard renders its write-scope from). Neither travelled.
+  // The page loss was invisible because the seeder re-creates the template's welcome page, so `ui/`
+  // came back looking intact with the household's own dashboards gone; the manifest loss was
+  // invisible because a fresh default is written at startup and the app simply forgets what it was
+  // allowed to do.
+  const authoredPage = { title: 'Household dashboard', root: { type: 'Text', text: 'authored by the agent' } };
+  fs.writeFileSync(path.join(dataDir, 'ui', 'household-dashboard.json'), JSON.stringify(authoredPage, null, 2));
+  const manifestPath = path.join(dataDir, 'site.json');
+  const siteManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  siteManifest.capabilities = { ...(siteManifest.capabilities ?? {}), enabled: ['a_promoted_capability'] };
+  fs.writeFileSync(manifestPath, JSON.stringify(siteManifest, null, 2));
+
+  // PACK the source repo before exporting. Without this the fixture's refs stay loose files, they ride
+  // into the zip, and the restored repo works whether or not anything repairs it — the assertion below
+  // then passes while proving nothing (measured: it did). A packed repo is the REAL state now, because
+  // the app packs after every import of its own accord.
+  try { git(dataDir, 'gc', '--quiet', '--prune=now'); } catch { /* no repo yet is its own failure below */ }
+
   const exported = await fetch(`${base}/api/backup/export`);
   const zipBytes = Buffer.from(await exported.arrayBuffer());
   ok('backup exported', exported.ok && zipBytes.length > 0, `${exported.status} ${zipBytes.length}b`);
@@ -166,6 +186,18 @@ try {
   ok('backup imported', imported.ok, `${imported.status} ${JSON.stringify(impBody).slice(0, 120)}`);
   ok('the import reports the MCP servers it restored', (impBody?.restored?.mcpServers ?? 0) >= 1,
     JSON.stringify(impBody?.restored));
+
+  // Named for the page the AGENT wrote, never the template's welcome.json — the seeder re-creates
+  // that one, so asserting on it would pass with `ui/` left out of the backup entirely.
+  const restoredPage = path.join(restoreDir, 'ui', 'household-dashboard.json');
+  ok('THE POINT: an agent-authored PAGE survives the backup round trip', fs.existsSync(restoredPage),
+    'ui/household-dashboard.json is missing after restore');
+  const restoredManifest = (() => {
+    try { return JSON.parse(fs.readFileSync(path.join(restoreDir, 'site.json'), 'utf8')); } catch { return null; }
+  })();
+  ok('THE POINT: the site manifest survives, so approved capabilities are not silently un-approved',
+    (restoredManifest?.capabilities?.enabled ?? []).includes('a_promoted_capability'),
+    JSON.stringify(restoredManifest?.capabilities ?? '(no site.json)'));
 
   const after = (await rc.j('/api/manage/mcp-servers')).body ?? [];
   const restored = after.find?.((s) => s.id === stubId);
@@ -263,6 +295,17 @@ try {
       return { loose: field('count:'), packs: field('packs:'), inPack: field('in-pack:') };
     } catch { return { loose: -1, packs: -1, inPack: -1 }; }
   })();
+  // A PACKED repo has empty directories (gc moves refs into packed-refs and deletes refs/heads/<branch>),
+  // and a zip built from a file enumeration cannot carry an empty directory. Restored without them git
+  // refuses to see a repo at all — `fatal: not in a git directory` — which surfaces as the very first
+  // startup step failing, with no hint that the history is intact in packed-refs. Reported from a real
+  // install after the app started packing on its own.
+  let gitUsable = false;
+  try { git(restoreDir, 'log', '--oneline', '-1'); gitUsable = true; } catch { gitUsable = false; }
+  ok('THE POINT: the restored .git is a USABLE repo (the ref skeleton a zip cannot carry is rebuilt)',
+    gitUsable && fs.existsSync(path.join(restoreDir, '.git', 'refs', 'heads')),
+    `refs/heads exists=${fs.existsSync(path.join(restoreDir, '.git', 'refs', 'heads'))} gitUsable=${gitUsable}`);
+
   ok('THE POINT: a restore leaves the repo PACKED, not a pile of loose objects',
     objects.packs >= 1 && objects.inPack > 0 && objects.loose < 150,
     `loose=${objects.loose} packs=${objects.packs} in-pack=${objects.inPack}`);

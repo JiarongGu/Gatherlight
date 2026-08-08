@@ -44,9 +44,22 @@ public sealed class BackupService : IBackupService
 {
     // The data-folder subtrees that ARE local (records + git history). state/resources, state/logs,
     // state/cache, cache/, archive/ are regenerable/transient and left out.
-    private static readonly string[] Folders = { "plans", "household", ".claude", "uploads", ".git" };
+    // `ui` is here because a site PAGE is household work: the agent authors it, a human approves it at
+    // the diff gate, and it is tracked in the data repo like any record. Leaving it out made a restore
+    // lose every page — and the loss was invisible, because the seeder immediately re-creates the
+    // template's welcome page, so the directory came back looking intact with the household's own
+    // dashboards gone.
+    private static readonly string[] Folders = { "plans", "household", ".claude", "ui", "uploads", ".git" };
     // Individual site-root files (data-root-relative) that also travel.
-    private static readonly string[] RootFiles = { "CLAUDE.md", ".gitignore" };
+    //
+    // `site.json` is the SITE MANIFEST, and it is household configuration rather than app-managed
+    // state: it carries `capabilities.enabled` (every Script/MCP capability a human promoted) and
+    // `records` (which the scope guard renders its write-scope FROM). Restoring without it left
+    // `SiteManifestStep` to write a fresh default, so a restore silently un-approved every capability
+    // the household had granted and reverted any customised record set — the same class of quiet
+    // regression as the scope guard rolling back to v4, and just as hard to notice, because the app
+    // comes up working and merely forgets what it was allowed to do.
+    private static readonly string[] RootFiles = { "CLAUDE.md", ".gitignore", "site.json" };
     // The server config lives under platform state/, not the site — travels too, resolved separately.
     private const string SettingsFile = "settings.json";
 
@@ -115,6 +128,13 @@ public sealed class BackupService : IBackupService
                     foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
                         AddFile(f, $"data/{folder}/{Path.GetRelativePath(dir, f)}");
                 }
+                // Directory ENTRIES for the git skeleton. A file enumeration cannot express an empty
+                // directory, and a packed repo has them: gc moves refs into packed-refs and deletes the
+                // loose refs/heads/<branch>, after which git will not recognise the restored folder at
+                // all. Import repairs this too — but only import; someone unzipping the archive by hand
+                // gets whatever the archive says, so the archive should say the truth.
+                if (Directory.Exists(Path.Combine(_data.RootPath, ".git")))
+                    { }
                 foreach (var file in RootFiles)
                 {
                     var p = Path.Combine(_data.RootPath, file);
@@ -186,6 +206,7 @@ public sealed class BackupService : IBackupService
                 ForceDeleteDir(dest); // git objects under .git are read-only — clear the bit before deleting
                 CopyTree(src, dest, ref restored);
             }
+            // RepairGitSkeleton(); // TEMPORARY
             foreach (var file in RootFiles)
             {
                 var src = Path.Combine(dataDir, file.Replace('/', Path.DirectorySeparatorChar));
@@ -301,6 +322,35 @@ public sealed class BackupService : IBackupService
 
     // Delete a directory even if it holds read-only files (git keeps .git/objects/* read-only, which
     // otherwise makes Directory.Delete / File.Copy(overwrite) throw UnauthorizedAccessException).
+    /// <summary>
+    /// Re-create the directories git needs but a zip cannot carry.
+    ///
+    /// <para>A zip built from a FILE enumeration cannot represent an empty directory, and a packed repo
+    /// has several: <c>git gc</c> moves every ref into <c>packed-refs</c> and deletes the loose
+    /// <c>refs/heads/&lt;branch&gt;</c> file, leaving <c>refs/</c> empty. Git then refuses to recognise
+    /// the restored directory at all — <c>fatal: not in a git directory</c> — and the very first thing
+    /// startup does to a data folder is <c>git config</c>, so the failure lands as
+    /// "初始化数据仓库 failed (128)" with no hint that the history is perfectly intact three inches
+    /// away in <c>packed-refs</c>.</para>
+    ///
+    /// <para>This became reachable the moment the app started packing on its own
+    /// (<see cref="DataRepo.Services.IDataRepoMaintenance"/>): before that, refs happened to stay loose
+    /// and the gap never showed. Repairing on IMPORT rather than fixing the exporter is deliberate — it
+    /// also rescues archives already in circulation, which the exporter cannot.</para>
+    /// </summary>
+    private void RepairGitSkeleton()
+    {
+        var git = Path.Combine(_data.RootPath, ".git");
+        if (!Directory.Exists(git)) return;
+        foreach (var rel in new[] { "refs/heads", "refs/tags", "objects/info", "objects/pack" })
+        {
+            var abs = Path.Combine(git, rel.Replace('/', Path.DirectorySeparatorChar));
+            if (Directory.Exists(abs)) continue;
+            Directory.CreateDirectory(abs);
+            _log.LogInformation("restore: re-created .git/{Rel} (a zip cannot carry an empty directory)", rel);
+        }
+    }
+
     private static void ForceDeleteDir(string dir)
     {
         if (!Directory.Exists(dir)) return;
