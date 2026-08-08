@@ -16,10 +16,7 @@
 
 ## Backlog
 
-### Verification (user-side — needs a real environment I can't reach)
-- [ ] **Browser Notification permission prompt:** the only unverified piece of the notification path —
-  granting it changes a browser setting, so it needs you, not an agent. Everything behind it (bell,
-  badge, notification list) is verified against real data.
+### Release
 - [ ] **Cut a release:** the manual `release.yml` (Actions → Run workflow). The `e2e all` gate is
   green at 47/47. Write `docs/release-notes/next.md` first — it becomes the release body, and without
   it the body is the raw commit log.
