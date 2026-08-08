@@ -12,11 +12,14 @@ namespace Gatherlight.Server.Platform.Agent.Chat.Services;
 /// path-escape). Because it's a security boundary (not editable knowledge-base content), it's
 /// re-issued whenever its <c>GUARD_VERSION</c> is missing or older than the shipped one, so hardening
 /// reaches folders seeded by an earlier build. Out-of-boundary work must route through an MCP tool.
-/// <para><c>.claude/ui-spec.md</c> — the block vocabulary — rides the same version gate
-/// (<c>UI_CONTRACT_VERSION</c>) for the same reason: it is a protocol contract, not knowledge-base
-/// content, and the seeder deliberately never overwrites a file the household edited. A stale
-/// vocabulary means the agent emits trees the validator rejects and the household sees fallback
-/// cards instead of a plan.</para>
+/// <para>Two CONTRACTS ride the same version gate for the same reason — they are protocol, not
+/// knowledge-base content, and the seeder deliberately never overwrites a file the household edited:
+/// <c>.claude/ui-spec.md</c> (the block vocabulary, <c>UI_CONTRACT_VERSION</c>) and
+/// <c>.claude/tool-spec.md</c> (how to author a capability, <c>TOOL_CONTRACT_VERSION</c>). A stale
+/// one is not inert: the agent emits trees the validator rejects, or drafts a tool that reaches for
+/// something the sandbox denies and fails at run time, after a human approved it.</para>
+/// <para>All three go through one <c>ShouldReissue</c>; the rule is identical and was written three
+/// times before it was written once.</para>
 /// </summary>
 public sealed class ChatEnvironmentService
 {
@@ -65,13 +68,13 @@ public sealed class ChatEnvironmentService
         RemoveStaleMcpConfig();
 
         var created = new List<string>();
-        if (ShouldReissueGuard(ScopeGuardPath))
+        if (ShouldReissue(ScopeGuardPath, ShippedGuardVersion, GuardVersionRe))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ScopeGuardPath)!);
             File.WriteAllText(ScopeGuardPath, RenderScopeGuard());
             created.Add(".claude/hooks/scope-guard.mjs");
         }
-        if (ShouldReissueUiSpec(UiSpecPath))
+        if (ShouldReissue(UiSpecPath, ShippedUiContractVersion, UiVersionRe))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(UiSpecPath)!);
             File.WriteAllText(UiSpecPath, RenderUiSpec());
@@ -124,29 +127,20 @@ public sealed class ChatEnvironmentService
             .Replace("__WRITE_EXTS__", extsLiteral);
     }
 
-    // The scope guard is a SECURITY boundary, not user content: (re)issue it when missing OR when an
-    // older GUARD_VERSION is on disk, so a hardened guard reaches data folders seeded by an earlier
-    // build (and a weakened/tampered copy is replaced). Same-version files are left as-is — no
-    // spurious data-repo commit. A newer on-disk version (dev ahead of server) is also left alone.
-    private static readonly int ShippedGuardVersion = ReadGuardVersion(ScopeGuardMjs);
+    // Every app-managed file follows the SAME rule, so it is written once: (re)issue when missing OR
+    // when an older version is on disk, so a hardened guard / a grown contract reaches data folders
+    // seeded by an earlier build (and a weakened or tampered copy is replaced). Same-version files
+    // are left alone — no spurious data-repo commit — and so is a NEWER on-disk version (a dev ahead
+    // of the server). An unreadable file re-issues: a guard we cannot read is not one we can trust.
+    private const string GuardVersionRe = @"GUARD_VERSION:\s*(\d+)";
+    private static readonly int ShippedGuardVersion = ReadVersion(ScopeGuardMjs, GuardVersionRe);
 
-    private static bool ShouldReissueGuard(string guardPath)
-    {
-        if (!File.Exists(guardPath)) return true;
-        try { return ReadGuardVersion(File.ReadAllText(guardPath)) < ShippedGuardVersion; }
-        catch { return true; }
-    }
-
-    private static int ReadGuardVersion(string body)
-    {
-        var m = System.Text.RegularExpressions.Regex.Match(body, @"GUARD_VERSION:\s*(\d+)");
-        return m.Success && int.TryParse(m.Groups[1].Value, out var v) ? v : 0;
-    }
 
     // The UI contract is app-managed, not knowledge-base content: an agent working from a stale
     // vocabulary emits trees that fail validation and the household sees fallback cards. Same
     // version-gated re-issue as the scope guard — a newer on-disk version is left alone.
-    private static readonly int ShippedUiContractVersion = ReadContractVersion(UiSpecTemplate);
+    private const string UiVersionRe = @"UI_CONTRACT_VERSION:\s*(\d+)";
+    private static readonly int ShippedUiContractVersion = ReadVersion(UiSpecTemplate, UiVersionRe);
 
     /// <summary>
     /// The contract the agent reads, with the bindable queries rendered from the ACTUAL registered
@@ -172,19 +166,6 @@ public sealed class ChatEnvironmentService
         }.Concat(rows));
 
         return UiSpecTemplate.Replace("__QUERIES__", table, StringComparison.Ordinal);
-    }
-
-    private static bool ShouldReissueUiSpec(string path)
-    {
-        if (!File.Exists(path)) return true;
-        try { return ReadContractVersion(File.ReadAllText(path)) < ShippedUiContractVersion; }
-        catch { return true; }
-    }
-
-    private static int ReadContractVersion(string body)
-    {
-        var m = System.Text.RegularExpressions.Regex.Match(body, @"UI_CONTRACT_VERSION:\s*(\d+)");
-        return m.Success && int.TryParse(m.Groups[1].Value, out var v) ? v : 0;
     }
 
     private const string ToolVersionRe = @"TOOL_CONTRACT_VERSION:\s*(\d+)";
