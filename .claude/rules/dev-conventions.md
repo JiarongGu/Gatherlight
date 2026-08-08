@@ -224,6 +224,29 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the explicit **`security.allowLanWithoutToken`** opt-in (`GATHERLIGHT_ALLOW_LAN=1`) is set, for a
   trusted private LAN (logs a loud startup warning; the gate is then a no-op). The `/manage` Settings
   tab surfaces this as a 3-way **Local / LAN / WAN** access mode (WAN = `0.0.0.0` + token required).
+- **Every remote image goes through `/api/img`, so `img-src` is `'self' data: blob:`.** Map tiles,
+  library covers, an `Image` node's https src and a picture in plan markdown all route through the
+  one same-origin door (`ImageProxyController` over `ImageCache` — SSRF guard, image content-type,
+  size cap, disk cache). With `img-src https:` any URL that reached a rendered page made the
+  household's BROWSER call that host, leaking their IP and that they were reading it, on render,
+  unrecorded — and an image URL can come from agent text. Proxying does not make an arbitrary URL
+  safe to FETCH; it moves the fetch to the server, where it is guarded and visible. The tile route
+  takes three bounded integers and pins the upstream host, so nothing agent-written reaches an
+  outbound URL. **Adding `https:` back re-opens the residual** — `e2e-p17` asserts its absence, not
+  the directive's presence, and the CSP stays calibrated against a real render.
+- **Every fail-closed rule needs its opt-in asserted too.** `p17` case C proved an unauthenticated
+  LAN bind is refused — which passes whether the refusal is conditional or unconditional. It was
+  unconditional in the headless entry point for months: `Gatherlight.Server/Program.cs` built its
+  options from config for port/bind/token/trustLoopback/TLS and never read `AllowLanWithoutToken`,
+  so a household that chose LAN mode and took the documented opt-in got a refusal quoting the setting
+  they had already set — while `Gatherlight.Host` honoured it. A denial without its positive control
+  is half a test.
+- **TLS is Kestrel-native** (`TlsCertificate.Resolve`): a self-signed cert generated + reused from
+  `state/gatherlight-tls.pfx`, or a configured PFX. Config lives in `security.*` (settings.json) +
+  `GATHERLIGHT_BIND`·`_ACCESS_TOKEN`·`_TRUST_LOOPBACK`·`_TLS[_CERT]` env overrides.
+
+## Capabilities, the sandbox & app-managed files
+
 - **The agent authors capabilities as SANDBOXED SCRIPT TOOLS, never as MCP servers.** It drafts
   `.claude/tool-drafts/<id>/` (tool.json + entry script), raises `TOOL_DRAFT`, a human promotes it,
   and it runs under `node --permission` + `cap-guard.mjs` with a grant. Authoring an *MCP server*
@@ -238,6 +261,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   contents, that the prompt points at it, and — the row that was missing for months — that a promoted
   draft **actually runs**, not merely that it appears in `/api/tools`. "Listed" is not "usable"; the
   same gap existed for platform tools and for proxied MCP tools (`e2e-p47`).
+- **An external MCP server is the one capability we do NOT contain, and its card says so.**
+  `StdioMcpConnection.Start` is a plain `Process.Start` — no `--permission`, no `cap-guard.mjs`, no
+  path jail — so the process runs with the host account's full privileges. The add-gate therefore
+  carries `sandboxed:false` plus `PermissionSentence.ExternalMcp()`, and deliberately has **no
+  `cannot` list**: every clause in `Cannot` is a promise the sandbox keeps, there is no sandbox here,
+  and inventing a reassuring one is precisely the unenforced-plain-language failure the card model
+  exists to prevent. The client renders it through `UnsandboxedNotice`, never `GrantClauses`, whose
+  empty 系统禁止 column would read as a missing value rather than a warning. Proof lives in `e2e-p32`.
 - **Anything that replaces a record subtree must RE-ISSUE the app-managed files** — one seam,
   `IAppManagedFiles.ReissueAsync` (template seed + `ChatEnvironmentService.EnsureFiles`), called by
   startup AND by backup import. `.claude/` holds files the APP owns, not the household: the scope
@@ -260,23 +291,6 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   agent-nameable, so it resolves through the SAME `ResolveSitePath` guard as the PDF it describes,
   and a field the PDF lacks is reported BY NAME — a blank form otherwise looks like a filled one.
   Proof lives in `e2e-p10`, whose fixture fields are deliberately nothing like the visa form's.
-- **Every remote image goes through `/api/img`, so `img-src` is `'self' data: blob:`.** Map tiles,
-  library covers, an `Image` node's https src and a picture in plan markdown all route through the
-  one same-origin door (`ImageProxyController` over `ImageCache` — SSRF guard, image content-type,
-  size cap, disk cache). With `img-src https:` any URL that reached a rendered page made the
-  household's BROWSER call that host, leaking their IP and that they were reading it, on render,
-  unrecorded — and an image URL can come from agent text. Proxying does not make an arbitrary URL
-  safe to FETCH; it moves the fetch to the server, where it is guarded and visible. The tile route
-  takes three bounded integers and pins the upstream host, so nothing agent-written reaches an
-  outbound URL. **Adding `https:` back re-opens the residual** — `e2e-p17` asserts its absence, not
-  the directive's presence, and the CSP stays calibrated against a real render.
-- **Every fail-closed rule needs its opt-in asserted too.** `p17` case C proved an unauthenticated
-  LAN bind is refused — which passes whether the refusal is conditional or unconditional. It was
-  unconditional in the headless entry point for months: `Gatherlight.Server/Program.cs` built its
-  options from config for port/bind/token/trustLoopback/TLS and never read `AllowLanWithoutToken`,
-  so a household that chose LAN mode and took the documented opt-in got a refusal quoting the setting
-  they had already set — while `Gatherlight.Host` honoured it. A denial without its positive control
-  is half a test.
 - **The sandbox's node is a provisioned resource, not an assumption.** The capability sandbox needs
   `--permission` + `module.registerHooks` (Node 22.15+); the node inside the Playwright driver is
   older, so this used to depend on whatever the machine had, and a clean install had every Script
@@ -284,9 +298,6 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (sha256-pinned, since nodejs.org serves a mutable path — bump version and checksum together), and
   `CapabilityRuntime` still PROBES whatever it picks, so a wrong pin fails closed rather than
   pretending.
-- **TLS is Kestrel-native** (`TlsCertificate.Resolve`): a self-signed cert generated + reused from
-  `state/gatherlight-tls.pfx`, or a configured PFX. Config lives in `security.*` (settings.json) +
-  `GATHERLIGHT_BIND`·`_ACCESS_TOKEN`·`_TRUST_LOOPBACK`·`_TLS[_CERT]` env overrides.
 
 ## Packaging & auto-update
 
@@ -352,20 +363,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   outbound URL lands in the durable event stream via `AgentRunner.ToolDetail`, which is why it has an
   `mcp__*` case: without it the MEDIATED path was the less auditable of the two, which is backwards.
   Proof lives in `e2e-p21`, which drives one turn through both planes and asserts each URL in the trace.
-- **An external MCP server is the one capability we do NOT contain, and its card says so.**
-  `StdioMcpConnection.Start` is a plain `Process.Start` — no `--permission`, no `cap-guard.mjs`, no
-  path jail — so the process runs with the host account's full privileges. The add-gate therefore
-  carries `sandboxed:false` plus `PermissionSentence.ExternalMcp()`, and deliberately has **no
-  `cannot` list**: every clause in `Cannot` is a promise the sandbox keeps, there is no sandbox here,
-  and inventing a reassuring one is precisely the unenforced-plain-language failure the card model
-  exists to prevent. The client renders it through `UnsandboxedNotice`, never `GrantClauses`, whose
-  empty 系统禁止 column would read as a missing value rather than a warning. Proof lives in `e2e-p32`.
 - The shipped knowledge base lives in `Assets/SiteTemplate/` and is seeded/upgraded by
   `ZhikuSeeder` (hash-guarded: user-modified files are never overwritten).
 
 ## Dev loop
 
-- `node devtools/dev.mjs <server|host|vite|build|publish|e2e|smoke|memory|eval|test-data|check-sensitive|install-hooks>`.
+- `node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|smoke|memory|eval|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry>`
+  — kept in step with the tool's own usage line (`dev.mjs`, bottom of the switch).
 - e2e suites live in `devtools/scripts/e2e/` as `pN.mjs` (discovered by `^p\d+\.mjs$`); they self-host
   the server against isolated `devtools/_e2e-*` data folders with the claude stub; every phase of work
   lands with its suite green. Shared harness: `devtools/scripts/e2e/_e2e-common.mjs` (leading `_` → not

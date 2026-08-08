@@ -32,8 +32,22 @@ security headers + brute-force lockout), a **native C++ launcher** with two-phas
 and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,Cortex,Playground}`,
 `Platform/Hosting/{Update,Security}`, `Platform/Storage/Memory`.
 
+On top of THAT, the **platform/container track** (S1–S6, `docs/ROADMAP.md`) turned the app into a
+host for one agent-driven site: `site.json` declares the site and drives the scope guard; capabilities
+carry provenance and non-platform ones run sandboxed; drafts, escalations and approval cards are
+platform chrome built from enforced grants; `Gatherlight.Platform` → `Gatherlight.Planner` is a
+compiler-enforced boundary; chat history replays the stored event stream; and a gate parked on a human
+decision survives a restart.
+
 The agent's own UI is declarative: `Platform/Agent/Ui` validates a component tree that renders both
-inline in chat and as site pages from `{data}/ui/` — no raw HTML anywhere in the agent's reach.
+inline in chat and as site pages from `{data}/ui/` — no raw HTML anywhere in the agent's reach. A
+`Table`/`Chart` can `bind` to a named server-side query, so a page reads live data instead of a copy.
+
+**The agent works against three app-managed files in `{data}/.claude/`**, all version-gated and
+re-issued by the app (never editable knowledge-base content): `hooks/scope-guard.mjs` (its jail),
+`ui-spec.md` (the component vocabulary) and `tool-spec.md` (how to author its own capability —
+including what the sandbox refuses, parsed from the shipped `cap-guard.mjs` so it cannot drift).
+Anything that replaces a record subtree — notably backup import — must re-issue them.
 
 - `tools/pdf-form/` — a Node utility (pdf-lib + fontkit) for PDF AcroForm inspect/fill/merge,
   invoked by the C# document tools via `NodeLeafTool` (reliable on real + CJK PDFs where PDFsharp
