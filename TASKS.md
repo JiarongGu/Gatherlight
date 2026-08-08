@@ -16,11 +16,6 @@
 
 ## Backlog
 
-### Release
-- [ ] **Cut a release:** the manual `release.yml` (Actions → Run workflow), `bump: minor`. Gate is
-  green at 48/48; `docs/release-notes/next.md` is written and becomes the release body (the workflow
-  archives it as `<version>.md` in the bump commit). Nothing else is outstanding.
-
 ### Product (deferred, not urgent)
 - [ ] **Phase B embeddings:** ONNX embedding model as a provisioned resource (into Gatherlight.Resources
   or its own package) + EmbeddingService + vector tables + hybrid search over the FTS index.
