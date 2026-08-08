@@ -133,6 +133,21 @@ public static class GatherlightApp
                 // migrate), but there's no reason to defer, so leave it eager. Lyntai 1.0's own migrations are
                 // a fresh baseline reset (202607280001..) — a pre-1.0 DB must be reset, not upgraded in place.
                 .UseSqliteStorage(dbPath)
+                // The DERIVED recall index over the `knowledge` fact store (Platform/Storage/Knowledge
+                // FactIndex). `knowledge` stays the record of truth — it is what the backup carries and
+                // what the index rebuilds FROM; the graph only ranks it. What it adds over the FTS
+                // recall underneath: entries decay by what has happened in the index rather than by the
+                // clock (so a scraped price nobody has used sinks beneath fresher material), recall
+                // reinforces what it returned, and facts recalled together get linked so a later query
+                // reaches material it never literally matched. Registered AFTER UseSqliteStorage, which
+                // is what supplies the IMemoryGraphStore this engine persists through (StorageFeature
+                // .Memory, Lyntai's own lyntai_memory_* migrations).
+                //
+                // Deliberately the ASSOCIATIVE tier. Lyntai can also hold authoritative material that
+                // never decays, and that is not this: the household's policies and preferences live in
+                // curated markdown the CLI loads directly, so grading facts authoritative here would
+                // exempt them from the decay that is the only reason to index them.
+                .AddMemoryEngine("facts", e => e.UseGraph())
                 // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
                 // collection so its IScoringService iterates + persists them (LLM judges route through
                 // llm.model.scorer, skip via Applies()).
@@ -212,9 +227,19 @@ public static class GatherlightApp
             // Generalized stores + agent-writable cross-session memory
             .AddSingleton<Platform.Storage.Knowledge.Services.IEntityStore, Platform.Storage.Knowledge.Services.EntityStore>()
             .AddSingleton<Platform.Storage.Knowledge.Services.IKnowledgeStore, Platform.Storage.Knowledge.Services.KnowledgeStore>()
+            // Resolves the "facts" memory engine registered above. Every dependency is optional on
+            // purpose: with no engine (or no memory storage) the index reports itself unavailable and
+            // recall falls back to FTS, which is exactly what it did before this existed.
+            .AddSingleton<Platform.Storage.Knowledge.Services.IFactIndex>(sp =>
+                new Platform.Storage.Knowledge.Services.FactIndex(
+                    sp.GetService<Lyntai.Memory.IMemoryEngineFactory>(),
+                    sp.GetRequiredService<Platform.Storage.Knowledge.Services.IKnowledgeStore>(),
+                    sp.GetService<Lyntai.Memory.IMemoryGraphStore>(),
+                    sp.GetService<ILogger<Platform.Storage.Knowledge.Services.FactIndex>>()))
             .AddSingleton<Platform.Storage.Knowledge.Services.IProcessLog, Platform.Storage.Knowledge.Services.ProcessLog>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RememberFactTool>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RecallFactsTool>()
+            .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.ExpandFactTool>()
             // Knowledge library — DB-backed reference entities (browse read side + agent write tools)
             .AddSingleton<Platform.Storage.Library.Services.ILibraryRepository, Platform.Storage.Library.Services.LibraryRepository>()
             .AddSingleton<Platform.Storage.Library.Services.IImageCache, Platform.Storage.Library.Services.ImageCache>()
@@ -353,6 +378,9 @@ public static class GatherlightApp
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.KnowledgeBaseStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SiteManifestStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.RecordIndexStep>()
+            // After RecordIndexStep, and NOT part of it: this one back-fills rather than rebuilds,
+            // because a rebuild every boot would erase the decay + link state the index accumulates.
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.FactIndexStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealStateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.MemorySeedStep>()
             // After the DB is migrated: connect the enabled external MCP servers (best-effort).

@@ -293,6 +293,23 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `DataWriteLock` is a **non-reentrant** `SemaphoreSlim(1,1)` and the seeder takes it, so the re-issue
   must sit OUTSIDE import's lock scope (holding it deadlocks the import outright); and the re-issue
   must run BEFORE the restore commit so its files land in the same commit. Proof lives in `e2e-p47`.
+- **The fact index is DERIVED, and rebuilding it is destructive.** `knowledge` is the record of truth —
+  it is what the backup carries and what the index rebuilds FROM; Lyntai's graph memory engine
+  (`Storage/Knowledge/FactIndex`, engine `facts`, scope = the fact's `kind`) only ranks it, adding
+  decay-by-what-has-happened, reinforcement on recall, and model-free linking of facts recalled
+  together. Deliberately the **associative** tier: Lyntai can hold authoritative material that never
+  decays, and that is the curated markdown the CLI loads directly, so grading facts authoritative here
+  would exempt them from the only thing indexing them buys. Three traps: it is **not** an
+  `IRecordIndex`, because that collection is rebuilt at every startup and the discard would erase the
+  decay positions and links the index spends weeks accumulating — startup gets `SyncAsync` (back-fill
+  only, via `FactIndexStep`) and a backup import gets the destructive `RebuildAsync`, because there the
+  facts themselves were replaced. The graph dedups on **content hash**, so editing a fact orphans its
+  previous node; recall over-asks and filters to resolvable refs so an orphan never shrinks the page.
+  And every operation degrades to FTS rather than throwing — an index that fails closed is worse than
+  one that ranks by relevance alone, and an empty result reads to the agent as "the household knows
+  nothing", which is a lie told on their own data. `recall_facts` therefore reports `ranked:
+  graph|fts`, because a graph answer and a fallback answer are otherwise indistinguishable. Proof lives
+  in `e2e-p48`, whose restore assertion was confirmed to FAIL with the rebuild removed.
 - **Data where it churns, code where it doesn't** — `fill_itinerary`'s form map. A form's *shape*
   (field names, `{n}` row templates, `maxRows`, font sizes, flatten) lives in `.claude/forms/*.json`,
   seeded by the template and editable by the agent through the normal diff gate; the PDF machinery

@@ -30,6 +30,17 @@ what gets saved.
 
 Past conversations are readable again, and a restart no longer empties the chat.
 
+### It remembers what keeps proving useful
+
+The assistant has always been able to note a verified fact — a checked price, a venue's opening hours,
+a booking policy — and look it up again later. Until now every one of those ranked the same forever, so
+a price you checked in March competed with one you checked yesterday.
+
+Facts now **fade when they stop being used** and **firm up when they keep being right**. Nothing is
+deleted: a faint fact still comes back when it's the best thing you have, and it tells the assistant how
+faint it has become. Facts looked up together also become **linked**, so recalling one can surface a
+related one you never searched for — the booking policy turning up beside the price.
+
 ### Your privacy, tightened
 
 Every image the app shows — map tiles, library covers, pictures inside plans — now loads **through

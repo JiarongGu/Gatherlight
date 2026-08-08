@@ -67,6 +67,19 @@ public interface IKnowledgeStore
     Task<List<KnowledgeRow>> RecallAsync(string query, string? kind, int limit);
     /// <summary>EMA reinforcement: confirmations pull confidence toward 1, refutations toward 0.</summary>
     Task ReinforceAsync(long id, bool positive);
+
+    /// <summary>Record where this fact lives in the derived graph index. Null clears it.</summary>
+    Task SetGraphRefAsync(long id, string? graphRef);
+
+    /// <summary>Resolve graph references back to their rows, IN THE ORDER GIVEN — the graph did the
+    /// ranking, so re-sorting here would throw it away. Each row comes back paired with the ref that
+    /// found it, so the caller can attach that hit's retrievability. A ref with no row is skipped
+    /// rather than faked: it means the index outlived a deleted fact, which a rebuild fixes.</summary>
+    Task<List<(KnowledgeRow Row, string GraphRef)>> ByGraphRefsAsync(IReadOnlyList<string> graphRefs, string? kind);
+
+    /// <summary>Every fact with its index address, for rebuilding the derived index from the record of
+    /// truth (all of them) or back-filling it (the ones whose ref is still null).</summary>
+    Task<List<(KnowledgeRow Row, string? GraphRef)>> AllAsync();
 }
 
 public sealed class KnowledgeStore : IKnowledgeStore
@@ -147,6 +160,59 @@ public sealed class KnowledgeStore : IKnowledgeStore
             "UPDATE knowledge SET confidence = CAST(confidence AS REAL) * (1 - @a) + @a * @target, updated_at = @now WHERE id = @id",
             new { a = Alpha, target = positive ? 1.0 : 0.0, now = DateTime.UtcNow.ToString("o"), id });
     }
+
+    public async Task SetGraphRefAsync(long id, string? graphRef)
+    {
+        using var conn = _db.Open();
+        // Deliberately NOT touching updated_at: indexing is bookkeeping about a fact, not a change to
+        // it, and bumping the timestamp would make every rebuild look like the household edited
+        // everything they know.
+        await conn.ExecuteAsync("UPDATE knowledge SET graph_ref = @graphRef WHERE id = @id", new { graphRef, id });
+    }
+
+    public async Task<List<(KnowledgeRow Row, string GraphRef)>> ByGraphRefsAsync(
+        IReadOnlyList<string> graphRefs, string? kind)
+    {
+        if (graphRefs.Count == 0) return [];
+        using var conn = _db.Open();
+        var raw = await conn.QueryAsync(
+            "SELECT id, kind, topic, content, source, confidence, hits, created_at, updated_at, graph_ref " +
+            "FROM knowledge WHERE graph_ref IN @refs AND (@kind IS NULL OR kind = @kind)",
+            new { refs = graphRefs, kind });
+        var byRef = raw
+            .Select(Map)
+            .Where(x => x.GraphRef is not null)
+            .ToDictionary(x => x.GraphRef!, x => x.Row, StringComparer.Ordinal);
+        // Rank order is the graph's answer; preserve it exactly.
+        var ordered = new List<(KnowledgeRow, string)>(graphRefs.Count);
+        foreach (var r in graphRefs)
+            if (byRef.TryGetValue(r, out var row)) ordered.Add((row, r));
+        if (ordered.Count > 0)
+        {
+            await conn.ExecuteAsync(
+                $"UPDATE knowledge SET hits = hits + 1 WHERE id IN ({string.Join(',', ordered.Select(o => o.Item1.Id))})");
+        }
+        return ordered;
+    }
+
+    public async Task<List<(KnowledgeRow Row, string? GraphRef)>> AllAsync()
+    {
+        using var conn = _db.Open();
+        var raw = await conn.QueryAsync(
+            "SELECT id, kind, topic, content, source, confidence, hits, created_at, updated_at, graph_ref " +
+            "FROM knowledge ORDER BY id");
+        // Explicit loop, not Select: over a dynamic sequence the projection infers List<dynamic>.
+        var rows = new List<(KnowledgeRow, string?)>();
+        foreach (var d in raw) rows.Add(Map(d));
+        return rows;
+    }
+
+    private static (KnowledgeRow Row, string? GraphRef) Map(dynamic d) => (
+        new KnowledgeRow(
+            Convert.ToInt64(d.id), (string)d.kind, (string)d.topic, (string)d.content,
+            (string?)d.source, CoerceDouble((object)d.confidence), Convert.ToInt32(d.hits),
+            (string)d.created_at, (string)d.updated_at),
+        (string?)d.graph_ref);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -23,7 +23,14 @@ Implement `IGatherlightTool` (`Name` / `Description` / `InputSchema` via the `To
   optional flatten + CJK font — pdf-lib), `pdf_merge`, `image_info`, `image_resize`,
   `image_convert` (ImageSharp). `fill_itinerary` is the visa-specific convenience over `pdf_fill`.
 - **Zero-LLM planner**: `budget_scan` (honest budget figures).
-- **Cross-session memory**: `remember_fact` / `recall_facts`.
+- **Cross-session memory**: `remember_fact` / `recall_facts` / `expand_fact`. The `knowledge` table is
+  the record of truth; a **derived graph index** (Lyntai's memory engine, `Storage/Knowledge/FactIndex`)
+  ranks it. Entries decay by what has happened in the index rather than by the clock, so a scraped
+  price nobody has used sinks beneath fresher material; recall reinforces what it returned; and facts
+  recalled together get linked, so `expand_fact` on a hit's `ref` reaches material the query never
+  matched. No embedder is involved. Recall reports which ranker answered (`ranked: graph|fts`) and
+  falls back to FTS whenever the index has nothing — an empty index must never read as "you know
+  nothing". Back-filled at startup (`FactIndexStep`), fully rebuilt after a backup import.
 - **Knowledge library** (`Platform/Storage/Library`): `library_upsert` / `library_search` / `library_import` / `library_delete` —
   verified reference entities (attractions/venues/hotels: name, coords, official URL, image,
   confidence) in the first-class `library_item` table, browsed read-only at `GET /api/library`.

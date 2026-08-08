@@ -65,16 +65,19 @@ public sealed class BackupService : IBackupService
     private readonly IMcpServerStore _mcp;
     private readonly Site.Seed.Services.IAppManagedFiles _appManaged;
     private readonly IEnumerable<IRecordIndex> _indexes;
+    private readonly Knowledge.Services.IFactIndex _factIndex;
     private readonly IGitCliService _git;
     private readonly DataWriteLock _writeLock;
     private readonly ILogger<BackupService> _log;
 
     public BackupService(ISiteContext data, IPlatformContext platform, IMemoryService memory, IMcpServerStore mcp,
         IEnumerable<IRecordIndex> indexes, IGitCliService git, DataWriteLock writeLock,
-        Site.Seed.Services.IAppManagedFiles appManaged, ILogger<BackupService> log)
+        Site.Seed.Services.IAppManagedFiles appManaged, Knowledge.Services.IFactIndex factIndex,
+        ILogger<BackupService> log)
     {
         _data = data; _platform = platform; _memory = memory; _mcp = mcp;
-        _indexes = indexes; _git = git; _writeLock = writeLock; _appManaged = appManaged; _log = log;
+        _indexes = indexes; _git = git; _writeLock = writeLock; _appManaged = appManaged;
+        _factIndex = factIndex; _log = log;
     }
 
     public async Task ExportAsync(Stream output, CancellationToken ct = default)
@@ -243,6 +246,14 @@ public sealed class BackupService : IBackupService
                 _log.LogInformation("restore: re-issued {N} app-managed file(s) over the imported ones", reissued.Count);
 
             foreach (var ix in _indexes) await ix.RebuildAsync(ct);
+            // The fact index is derived too, but it is NOT an IRecordIndex — that collection is
+            // rebuilt at every startup, which would erase the decay and link state this one
+            // accumulates. Import is the one moment a full rebuild is right: the facts themselves were
+            // just replaced, so every graph_ref restored from the archive addresses a node that this
+            // install's index never had. Left alone, recall would rank confidently against nothing and
+            // silently fall through to FTS for the household's entire history.
+            var reindexed = await _factIndex.RebuildAsync(ct);
+            if (reindexed > 0) _log.LogInformation("restore: re-indexed {N} fact(s) for recall", reindexed);
             // Re-taken for the commit, so the restored tree and the re-issued files land in one
             // commit and no other writer can interleave between them.
             using (await _writeLock.AcquireAsync(ct))
