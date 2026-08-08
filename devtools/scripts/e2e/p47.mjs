@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until,
+  dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until, git,
 } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p47');
@@ -247,6 +247,25 @@ try {
   });
   ok('fill_itinerary no longer fails for a MISSING FORM MAP after a restore',
     !/找不到表单映射文件/.test(JSON.stringify(fill.result ?? {})), JSON.stringify(fill.result).slice(0, 160));
+
+  // A restore writes a whole tree as LOOSE git objects, and a loose object is already-compressed data
+  // that a zip cannot squeeze — so they ride into the next export and grow it by roughly a megabyte per
+  // restore cycle with nothing added. Measured on a real data folder: 223 loose objects, a 4.86 MB
+  // export; packed, 2.79 MB — smaller than the archive taken before any of it. Import now packs.
+  //
+  // Assert that packing HAPPENED, not merely that the count is low: this fixture's repo holds ~119
+  // loose objects, which already sits under any sane threshold, so a count-only check passes whether
+  // or not maintenance ran. `packs` is the honest signal — it is 0 until something packs.
+  const objects = (() => {
+    try {
+      const out = git(restoreDir, 'count-objects', '-v');
+      const field = (k) => Number((out.split('\n').find((l) => l.startsWith(k)) ?? `${k} -1`).split(':')[1].trim());
+      return { loose: field('count:'), packs: field('packs:'), inPack: field('in-pack:') };
+    } catch { return { loose: -1, packs: -1, inPack: -1 }; }
+  })();
+  ok('THE POINT: a restore leaves the repo PACKED, not a pile of loose objects',
+    objects.packs >= 1 && objects.inPack > 0 && objects.loose < 150,
+    `loose=${objects.loose} packs=${objects.packs} in-pack=${objects.inPack}`);
 } catch (err) {
   fail('e2e-p47 fatal: ' + err.message);
   console.error((server?.log?.() ?? '').slice(-2500));

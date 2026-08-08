@@ -293,6 +293,24 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `DataWriteLock` is a **non-reentrant** `SemaphoreSlim(1,1)` and the seeder takes it, so the re-issue
   must sit OUTSIDE import's lock scope (holding it deadlocks the import outright); and the re-issue
   must run BEFORE the restore commit so its files land in the same commit. Proof lives in `e2e-p47`.
+- **The backup carries `.git`, so LOOSE OBJECTS are a backup-size problem.** Git writes every new
+  object loose — one zlib file each — and only packs when told; a loose object is already-compressed
+  data a zip cannot squeeze. A restore writes a whole tree that way, so the objects ride into the NEXT
+  export. Measured on a real data folder: 223 loose at 1.93 MiB against 158 packed at 790 KiB, and the
+  export had grown 3.42 MB → 4.86 MB with **nothing of the household's added** (`plans/`, `household/`
+  and `memory.json` were byte-identical; the knowledge base had actually shrunk). `git gc` took `.git`
+  from 3.1 MB to 1.1 MB and the export to 2.79 MB — smaller than the archive taken before any of it.
+  So `IDataRepoMaintenance` packs: threshold-gated at startup, and **forced after an import**, because
+  import is a known bulk-object event and a small household would otherwise sit under any threshold
+  forever while every export carried the pile. It expires reflogs first (per-clone breadcrumbs that pin
+  unreachable objects and travel in the backup for nobody), takes `DataWriteLock` (gc rewrites the
+  object store; a commit landing mid-pack is corruption found much later, in a backup nobody can
+  restore) and is therefore called OUTSIDE any lock scope, the lock being non-reentrant. It is
+  **lossless on purpose** — it never drops a commit. Bounding how far back history goes is a separate,
+  destructive decision: the data repo is the audit trail the diff gate rests on, and "what did the
+  agent change last Tuesday" is answerable only while that history exists. Proof lives in `e2e-p47`,
+  which asserts `packs >= 1` and not merely a low loose count — the fixture's ~119 objects already sit
+  under any sane threshold, so a count-only check passed while maintenance had never run.
 - **The fact index is DERIVED, and rebuilding it is destructive.** `knowledge` is the record of truth —
   it is what the backup carries and what the index rebuilds FROM; Lyntai's graph memory engine
   (`Storage/Knowledge/FactIndex`, engine `facts`, scope = the fact's `kind`) only ranks it, adding

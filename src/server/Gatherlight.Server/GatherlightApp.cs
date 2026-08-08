@@ -90,6 +90,9 @@ public static class GatherlightApp
             // Data repo (the private git repo inside the data folder)
             .AddSingleton<IGitCliService, GitCliService>()
             .AddSingleton<DataWriteLock>()
+            // Packs the data repo when loose objects pile up. Threshold-gated and lossless — it never
+            // drops a commit, because the data repo is the audit trail the diff gate rests on.
+            .AddSingleton<IDataRepoMaintenance, DataRepoMaintenance>()
             .AddSingleton<IDataCommitRepository, DataCommitRepository>()
             // Plan index — zero-LLM browse/search over the markdown tree. Registered by concrete type so
             // IPlanIndexService and IRecordIndex both forward to the SAME singleton instance — anchoring
@@ -381,6 +384,7 @@ public static class GatherlightApp
             // After RecordIndexStep, and NOT part of it: this one back-fills rather than rebuilds,
             // because a rebuild every boot would erase the decay + link state the index accumulates.
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.FactIndexStep>()
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DataRepoMaintenanceStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealStateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.MemorySeedStep>()
             // After the DB is migrated: connect the enabled external MCP servers (best-effort).
