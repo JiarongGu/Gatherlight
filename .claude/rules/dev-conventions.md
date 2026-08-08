@@ -341,7 +341,28 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   overlays it on the next restart (a running exe can't replace itself) and is itself excluded
   from the overlay. That split is the whole reason the launcher exists. Release: a single
   **manual-trigger** `.github/workflows/release.yml` (`workflow_dispatch`; version bump → e2e
-  gate → bundle → optional tag → GitHub Release) — no auto CI on push/PR (D3dx-style).
+  gate → bundle → optional tag → GitHub Release) — no auto CI on push/PR (D3dx-style). The release
+  BODY comes from `docs/release-notes/next.md` when present (generated commit log underneath,
+  collapsed), and the workflow archives it to `<version>.md` in the bump commit — a `next.md` left
+  behind is republished verbatim on the next release.
+- **The launcher's failure paths must not block, because nothing is watching them.** The overlay's
+  "could not apply the update" branch raised a modal `MessageBoxW`, which waits forever; on the
+  unattended `--apply-and-exit` seam that turned the file's own "never fatal — the current version
+  still starts" promise into a launcher that never returns, and a harness could only ever report a
+  timeout, never the failure the seam exists to catch. `ApplyPendingUpdate` now takes `unattended`.
+  Testing it needed care worth keeping: robocopy answers a file/directory collision with **4** and a
+  read-only destination with **0**, both `< 8` and therefore SUCCESS here, so the obvious fixtures
+  make a **vacuous** test. A staged path that is not a directory gives 16 — and is a real corruption
+  case, since the "marker without staged files" guard uses `PathFileExistsW`, which tests existence,
+  not type. `p19` pairs it with an anti-vacuity control (removals are skipped only if the overlay
+  really failed) and was confirmed to FAIL against the pre-fix binary.
+- **A >260-char install root is not a supported scenario, and not a bug we can fix.** Windows cannot
+  create a process from an image path past MAX_PATH: measured at 347 chars, a stock `system32` binary
+  copied there fails identically to ours, by `CreateProcess` **and** by `ShellExecute` (a
+  double-click), against a positive control of the same binary at 62 chars. So `longPathAware` in a
+  manifest would buy nothing — it governs what a RUNNING process does with paths, not whether the
+  loader will start one. Don't re-open it. The launcher's 32768-wide buffers are still load-bearing
+  for the real case: a root under the limit holding individual FILES past it.
 
 ## Data folder discipline
 

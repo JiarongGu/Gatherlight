@@ -201,7 +201,7 @@ bool IsUnsafeRel(const std::string& p)
 
 } // namespace
 
-bool ApplyPendingUpdate(const std::wstring& installDir)
+bool ApplyPendingUpdate(const std::wstring& installDir, bool unattended)
 {
     const std::wstring stagingRoot = installDir + L"\\.update";
     const std::wstring readyMarker = stagingRoot + L"\\ready.json";
@@ -280,7 +280,10 @@ bool ApplyPendingUpdate(const std::wstring& installDir)
     DeleteDirRecursive(stagingRoot);
     if (status) DestroyWindow(status);
 
-    if (!ok)
+    // Tell the human the update didn't take — but ONLY when there is one. MessageBoxW is modal and
+    // waits forever, so on the unattended `--apply-and-exit` seam it converts this function's "never
+    // fatal, the current version still starts" promise into a launcher that never returns at all.
+    if (!ok && !unattended)
     {
         MessageBoxW(nullptr,
             L"The downloaded update could not be applied. The current version will start instead.\n\n"

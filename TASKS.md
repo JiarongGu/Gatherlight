@@ -22,14 +22,6 @@
   available + staged-diff states) and a tz-display bug was fixed. A pass on YOUR real data + the
   browser-Notification permission prompt is still worth a glance. Backends fully e2e-covered
   (jobs `p26` 19/19, KB migration `p27` 8/8).
-- [ ] **Runtime bootstrap on a clean machine:** on a Windows box WITHOUT .NET 10, run the bundle's
-  `Gatherlight.exe` → confirm it installs the runtime (one UAC prompt) then the app starts. Verified
-  only on a machine that already has .NET 10 (app launches, 19 MB bundle). The missing→install path is
-  untestable here.
-- [ ] **Launcher long-path (#13):** on a >260-char install path, confirm (a) `Gatherlight.exe` still
-  opens the host window (LauncherDir not truncated), and (b) with the host running, a staged update
-  (`{install}/.update/`) applies on relaunch — the running host is killed and the overlay lands
-  (CloseRunningHost). Enable Windows `LongPathsEnabled=1` for such installs. Compile-verified only.
 - [ ] **Cut a release:** the manual `release.yml` (Actions → Run workflow). The `e2e all` gate is
   green at 47/47. Write `docs/release-notes/next.md` first — it becomes the release body, and without
   it the body is the raw commit log.

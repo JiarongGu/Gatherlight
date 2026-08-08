@@ -74,6 +74,35 @@ try {
   // Idempotent: a second run with nothing staged is a clean no-op.
   const r2 = spawnSync(path.join(sandbox, 'Gatherlight.exe'), ['--apply-and-exit'], { cwd: sandbox, timeout: 30000 });
   ok('second run is a no-op (nothing staged)', r2.status === 0 && read('new.txt') === 'brand-new');
+
+  // A FAILING overlay must still RETURN. The failure path raised a modal MessageBox, which waits for a
+  // click that never comes when nothing is attended — so the launcher hung instead of falling back to
+  // the current version, and a harness could only ever report a timeout, never the failure it exists
+  // to catch.
+  //
+  // Failing it deterministically is fussier than it looks: robocopy answers a file/directory collision
+  // with 4 (MISMATCH) and a read-only destination with 0, both of which are < 8 and therefore SUCCESS
+  // here. A test built on those would pass while proving nothing. What does fail is a staged path that
+  // is not a directory — rc 16 — which is also a REAL corruption case, because the "marker without
+  // staged files" guard above uses PathFileExistsW: that tests existence, not type, so a staged FILE
+  // walks straight past it into the overlay.
+  fs.mkdirSync(path.join(sandbox, '.update'), { recursive: true });
+  fs.writeFileSync(path.join(sandbox, '.update', 'staged'), 'corrupt: a file where the staged tree should be');
+  write('.update/ready.json', JSON.stringify({ version: '9.9.10' }));
+
+  const started = Date.now();
+  const r3 = spawnSync(path.join(sandbox, 'Gatherlight.exe'), ['--apply-and-exit'], { cwd: sandbox, timeout: 30000 });
+  const elapsed = Date.now() - started;
+  ok('a failed overlay still returns (no blocking modal)', r3.status === 0,
+    r3.status === null ? `timed out after ${elapsed}ms — the failure path is blocking again` : `status ${r3.status}`);
+  ok('the failed overlay returned promptly', elapsed < 20000, `${elapsed}ms`);
+  ok('staging cleared even when the overlay failed', !fs.existsSync(path.join(sandbox, '.update')));
+  // Anti-vacuity control: this only holds if the overlay REALLY failed. The corrupt staging carries no
+  // readable manifest, so had it been counted a success the removal step would have run with an empty
+  // new-manifest and deleted every file the old one listed. Their survival is the proof.
+  ok('the failed overlay skipped removals (proves the failure path ran)',
+    read('new.txt') === 'brand-new' && read('keep.txt') === 'new-content',
+    `new.txt=${JSON.stringify(read('new.txt'))} keep.txt=${JSON.stringify(read('keep.txt'))}`);
 } catch (err) {
   fail('e2e-p19 fatal: ' + err.message);
 } finally {

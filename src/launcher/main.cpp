@@ -17,8 +17,15 @@
 constexpr auto HOST_EXE = L"libs\\Gatherlight.Host.exe";
 
 // Directory the launcher exe lives in = the install root. Long-path-safe buffer: installDir is
-// derived from this and used to build every other path, so truncation here would break the whole
-// launch/update on a deep install path (>260 chars).
+// derived from this and used to build every other path, so truncation here would corrupt every path
+// the update flow builds.
+//
+// What that does NOT buy: an install root past MAX_PATH. Windows cannot create a process from an
+// image path over ~260 chars at all — measured, and a stock system32 binary copied to the same depth
+// fails identically, by CreateProcess AND by ShellExecute (i.e. by double-click). So there is no
+// application-side fix and no point manifesting longPathAware for it. What the wide buffer does buy
+// is real: a root comfortably under the limit can still hold individual FILES past it (deep res/
+// trees, a long user name), and those are the paths robocopy and the removal step walk.
 static std::wstring LauncherDir()
 {
     wchar_t path[32768];
@@ -41,11 +48,13 @@ int WINAPI wWinMain(
     const std::wstring hostPath = root + L"\\" + HOST_EXE;
 
     // Test/diagnostic seam: apply any staged update against this dir and exit WITHOUT launching the
-    // host (no MessageBox on the happy path). Lets a harness exercise the real apply on a sandbox
-    // install (devtools/scripts/e2e-p19). Not used in normal launches.
+    // host. Lets a harness exercise the real apply on a sandbox install (devtools/scripts/e2e-p19).
+    // Not used in normal launches. Runs UNATTENDED — "no MessageBox on the happy path" was not enough:
+    // the FAILURE path raised a modal and blocked forever, so a harness saw a timeout instead of a
+    // failed overlay, and the one thing this seam exists to test was the thing it couldn't report.
     if (lpCmdLine != nullptr && wcsstr(lpCmdLine, L"--apply-and-exit") != nullptr)
     {
-        ApplyPendingUpdate(root);
+        ApplyPendingUpdate(root, /*unattended:*/ true);
         return 0;
     }
 
