@@ -46,6 +46,12 @@ there is deliberately no auto CI on push/PR. Run it from the Actions tab: it bum
 bundle, optionally tags, and attaches the zip + `manifest.json` to a GitHub Release (draft by
 default). GitHub Actions builds the launcher with the v143 toolset (v145 locally).
 
+**Write `docs/release-notes/next.md` before cutting one.** It becomes the top of the release body,
+with the generated commit log filed underneath it, collapsed — without it the body is that log alone,
+which reads like a dev log rather than something a household can decide to update on. The workflow
+archives it as `<version>.md` in the version-bump commit, because a `next.md` left behind would be
+republished verbatim on the following release. See `docs/release-notes/README.md`.
+
 ## Run it
 
 Launch `publish/Gatherlight/Gatherlight.exe` (or `Gatherlight.cmd`; `node devtools/dev.mjs host` in

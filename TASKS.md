@@ -31,9 +31,8 @@
   (`{install}/.update/`) applies on relaunch — the running host is killed and the overlay lands
   (CloseRunningHost). Enable Windows `LongPathsEnabled=1` for such installs. Compile-verified only.
 - [ ] **Cut a release:** the manual `release.yml` (Actions → Run workflow). The `e2e all` gate is
-  green as of `89e91bd` (23/23); the first real run also exercises the new bump-after-gate + version
-  single-source flow.
-- [ ] **Push:** the review-fix + data-foundation + packaging commits are on local `master`, unpushed.
+  green at 47/47. Write `docs/release-notes/next.md` first — it becomes the release body, and without
+  it the body is the raw commit log.
 
 ### Product (deferred, not urgent)
 - [ ] **Phase B embeddings:** ONNX embedding model as a provisioned resource (into Gatherlight.Resources

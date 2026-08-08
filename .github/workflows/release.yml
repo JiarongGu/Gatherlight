@@ -162,15 +162,31 @@ jobs:
 
       # Commit + push the version bump ONLY now that e2e + the bundle succeeded — so a failed release
       # leaves no phantom "chore: release vX" commit on the branch (and never burns a version number).
-      - name: Commit version bump
-        if: steps.version.outputs.changed == 'true'
+      # The same commit ARCHIVES the curated notes (next.md -> <version>.md). That rename is not
+      # tidiness: a next.md left behind is republished verbatim on the FOLLOWING release, which ships
+      # a confident summary of the wrong release. Renaming here — not after the notes step — keeps it
+      # to one commit; the notes step below looks for the archived name first for exactly that reason.
+      - name: Commit version bump + archive release notes
+        if: steps.version.outputs.changed == 'true' || hashFiles('docs/release-notes/next.md') != ''
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add src/Directory.Build.props
-          git commit -m "chore: release v${{ steps.version.outputs.version }}"
-          git push
+          if (Test-Path "docs/release-notes/next.md") {
+            git mv docs/release-notes/next.md "docs/release-notes/${{ steps.version.outputs.version }}.md"
+            Write-Host "archived curated notes as ${{ steps.version.outputs.version }}.md"
+          }
+          git add src/Directory.Build.props docs/release-notes
+          # --quiet communicates through the EXIT CODE and prints nothing, so `if (git diff ...)` would
+          # test an empty string and always fall through to the commit — failing the step on a re-run
+          # with nothing staged.
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "nothing staged — no release commit needed"
+          } else {
+            git commit -m "chore: release v${{ steps.version.outputs.version }}"
+            git push
+          }
 
       # Only tag AFTER a green e2e + a successful bundle (+ the bump commit), so tags always point at
       # shippable commits.
@@ -235,11 +251,31 @@ jobs:
             else { $other += $msg }
           }
 
+          # A HAND-WRITTEN summary wins the top of the body when docs/release-notes/next.md exists.
+          # The generated list is a dev log: this release would have led with 53 flat bullets like
+          # "the node model, fourteen component schemas and the tree validator" — true, and meaningless
+          # to the household reading the release page. The commit log is still published, below and
+          # collapsed, because it is the honest detail; it just stops being the headline.
           $notes = @("## Gatherlight $currentTag", "")
+          # Archived name first (the bump step above renamed it), then next.md — which is what a re-run
+          # or a `bump: none` release still sees.
+          $curated = "docs/release-notes/${{ steps.version.outputs.version }}.md"
+          if (-not (Test-Path $curated)) { $curated = "docs/release-notes/next.md" }
+          $hasCurated = Test-Path $curated
+          if ($hasCurated) { Write-Host "curated notes: $curated" } else { Write-Host "no curated notes — generated log only" }
+          if ($hasCurated) {
+            # Explicit -Encoding utf8: the notes are full of em-dashes, and a shell default of ANSI
+            # turns every one of them into mojibake in the published body.
+            $notes += (Get-Content $curated -Raw -Encoding utf8).TrimEnd()
+            $notes += ""
+            $notes += "<details><summary>All changes in this release</summary>"
+            $notes += ""
+          }
           if ($features.Count) { $notes += "### New features"; $notes += ""; $features | ForEach-Object { $notes += "- $_" }; $notes += "" }
           if ($fixes.Count)    { $notes += "### Fixes";        $notes += ""; $fixes    | ForEach-Object { $notes += "- $_" }; $notes += "" }
           if ($other.Count)    { $notes += "### Other changes"; $notes += ""; $other   | ForEach-Object { $notes += "- $_" }; $notes += "" }
           if (($features.Count + $fixes.Count + $other.Count) -eq 0) { $notes += "No notable changes."; $notes += "" }
+          if ($hasCurated) { $notes += "</details>"; $notes += "" }
 
           $notes += "---"; $notes += ""
           $notes += "Download the zip, extract, and run **Gatherlight.exe**. On first run the launcher installs the .NET 10 runtime if it's missing (one-time). Windows 10/11 (x64)."
