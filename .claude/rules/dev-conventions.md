@@ -164,6 +164,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   for it. The launcher **fails closed**: no runtime supporting `--permission` + `module.registerHooks`,
   or a missing preload, means a Script capability refuses to run rather than running unsandboxed.
   Proof lives in `e2e-p38`, whose denials are real attempts paired with positive controls.
+- **Split a growing class into SERVICES, not `partial`s.** `ChatSessionService` reached 1615 lines;
+  a `partial` split made the files smaller and changed nothing that mattered, because the class could
+  still absorb anything and nobody ever felt the cost. It is now four types — `ChatSessionService`
+  (sessions + the two-gate pipeline), `ChatGateService` (the five between-turns gates), `GateMarkers`
+  (final text → marker, pure) and `GateCards` (runtime facts → card, pure). The boundary is
+  structural: `ChatGateService`'s constructor takes the provision/login/draft/capability/manifest
+  services the session pipeline does not need, so a sixth gate lands where those dependencies already
+  are. The cycle you would expect is avoided by passing the host per CALL rather than injecting it —
+  `ChatSessionService` implements `IChatGateHost` explicitly (seven members), so the seam does not
+  widen its public API and anything a gate wants beyond those seven is a design question. `GateCards`
+  gains a real guarantee from the move: unable to reach session state or a service, a card cannot
+  describe anything other than what is enforced.
 - **Chat gates are between-turns markers, not suspensions.** There is no mid-run suspend: the agent
   ends a turn with a marker in its final text (`NEEDS_INPUT` · `MCP_ADD` · `LOGIN_REQUIRED` ·
   `TOOL_DRAFT` · `CAPABILITY_BLOCKED`), the server parks in a `ChatPhase` and emits the card on a
