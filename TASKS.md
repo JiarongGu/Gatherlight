@@ -17,11 +17,9 @@
 ## Backlog
 
 ### Verification (user-side — needs a real environment I can't reach)
-- [ ] **New UI on your live instance:** the 自动化 · Jobs panel, the planner notification bell, and the
-  知识库升级 (KB-upgrade) card were all browser-verified here (create/run/run-history/bell; KB-upgrade
-  available + staged-diff states) and a tz-display bug was fixed. A pass on YOUR real data + the
-  browser-Notification permission prompt is still worth a glance. Backends fully e2e-covered
-  (jobs `p26` 19/19, KB migration `p27` 8/8).
+- [ ] **Browser Notification permission prompt:** the only unverified piece of the notification path —
+  granting it changes a browser setting, so it needs you, not an agent. Everything behind it (bell,
+  badge, notification list) is verified against real data.
 - [ ] **Cut a release:** the manual `release.yml` (Actions → Run workflow). The `e2e all` gate is
   green at 47/47. Write `docs/release-notes/next.md` first — it becomes the release body, and without
   it the body is the raw commit log.

@@ -14,7 +14,7 @@
         ]
       },
       { "type": "Row", "gap": "sm", "children": [
-        { "type": "Button", "label": "问助手能做什么 · Ask what it can do", "action": { "send": "这个站点的页面能做什么?" } }
+        { "type": "Button", "label": "打开家庭档案 · Open the household file", "action": { "openRecord": "household/README.md" } }
       ] }
     ]
   }
