@@ -24,6 +24,14 @@
 ### Product (deferred, not urgent)
 - [ ] **Phase B embeddings:** ONNX embedding model as a provisioned resource (into Gatherlight.Resources
   or its own package) + EmbeddingService + vector tables + hybrid search over the FTS index.
+- [ ] **Decay for `recall_facts` (Lyntai 2.5.0 graph memory):** the fact store holds exactly what goes
+  stale — a scraped price, a venue's status — and FTS ranks a six-month-old fact level with today's
+  forever. Lyntai's graph engine decays by what has HAPPENED in the store (not wall-clock) and links
+  whatever is recalled together, and the model-free half needs **no embedder**, so it does not drag in
+  the declined Phase B above. Only worth it if recall quality becomes a felt problem: it is a new store
+  + tables + migration, and `remember_fact` already handles staleness by same-kind+topic overwrite.
+  Not a version bump: we are already ON 2.5.0 and it is inert, because none of it is reachable until
+  something calls `AddMemory`/`AddMemoryEngine`.
 
 ## Parked (with reasons — don't pick up without a decision)
 - OS-level sandbox for the spawned claude (AppContainer/restricted-token + FS ACL + network-egress

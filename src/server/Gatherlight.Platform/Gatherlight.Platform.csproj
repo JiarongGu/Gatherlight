@@ -61,18 +61,18 @@
          .OpenAiCompatible) merged into Providers.Default — namespaces/types/API unchanged, so this is a
          PackageReference rename only. The `Lyntai` metapackage is deliberately NOT used: it would pull
          backends this app never spawns. -->
-    <PackageReference Include="Lyntai.Core" Version="2.4.0" />
-    <PackageReference Include="Lyntai.Providers.Default" Version="2.4.0" />
+    <PackageReference Include="Lyntai.Core" Version="2.5.0" />
+    <PackageReference Include="Lyntai.Providers.Default" Version="2.5.0" />
     <!-- Lyntai's SQLite storage backs the scoring store (lyntai_score_result: upsert + aggregate + export),
          landed in the same gatherlight.db (lyntai_-prefixed, coexists with the app's own tables). -->
-    <PackageReference Include="Lyntai.Storage.Sqlite" Version="2.4.0" />
+    <PackageReference Include="Lyntai.Storage.Sqlite" Version="2.5.0" />
     <!-- The ephemeral loopback MCP host Lyntai stands up per one-shot ILlmClient call. It reaches ONLY
          the ClaudeCliProvider path — i.e. the two LLM-judge scorers — giving them the read-only judge
          tools (Platform/Ops/Scoring/JudgeTools). The interactive agent path is untouched: that one gets MCP
          via the CLI's mcp-config flag pointed at this server's own persistent /mcp
          (ChatEnvironmentService). Since 2.0.1 the per-call host runs on HttpListener, not Kestrel — no
          ASP.NET framework reference, same public API. -->
-    <PackageReference Include="Lyntai.Tools.Mcp.Hosting" Version="2.4.0" />
+    <PackageReference Include="Lyntai.Tools.Mcp.Hosting" Version="2.5.0" />
   </ItemGroup>
 
 </Project>
