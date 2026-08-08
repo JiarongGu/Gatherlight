@@ -84,11 +84,11 @@ public sealed class ChatController : ControllerBase
             userMessage = s.UserMessage,
             plan = s.PlanText.Length > 0 ? s.PlanText : null,
             review = s.Review,
-            mcpProposal = s.McpProposal is null ? null : ChatSessionService.McpProposalView(s.McpProposal),
-            mcpLogin = s.McpLogin is null ? null : ChatSessionService.McpLoginView(s.McpLogin),
-            draftApproval = s.PendingDraft is null ? null : ChatSessionService.DraftApprovalView(s.PendingDraft),
+            mcpProposal = s.McpProposal is null ? null : GateCards.McpProposal(s.McpProposal),
+            mcpLogin = s.McpLogin is null ? null : GateCards.McpLogin(s.McpLogin),
+            draftApproval = s.PendingDraft is null ? null : GateCards.DraftApproval(s.PendingDraft),
             capabilityApproval = s.PendingDenial is null ? null
-                : ChatSessionService.CapabilityApprovalView(s.PendingDenial, s.PendingDenialGrant, s.PendingDenialReason ?? ""),
+                : GateCards.CapabilityApproval(s.PendingDenial, s.PendingDenialGrant, s.PendingDenialReason ?? ""),
             commitSha = s.CommitSha,
             error = s.Error,
         });

@@ -171,6 +171,9 @@ public static class GatherlightApp
             .AddSingleton<ChatEnvironmentService>()
             .AddSingleton<CodeRepoGit>()
             .AddSingleton<BuildVerifyService>()
+            // The five between-turns gates are their own service; ChatSessionService holds it and
+            // hands itself over as IChatGateHost per call, so neither depends on the other in a cycle.
+            .AddSingleton<ChatGateService>()
             .AddSingleton<ChatSessionService>()
             // Uploads (chat attachments)
             .AddSingleton<IUploadService, UploadService>()

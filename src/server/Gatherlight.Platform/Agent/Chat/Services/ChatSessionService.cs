@@ -26,7 +26,7 @@ namespace Gatherlight.Server.Platform.Agent.Chat.Services;
 /// concurrent runs would corrupt the shared data tree. Behavioral port of the legacy viewer's
 /// ChatController (session.ts), minus system mode.
 /// </summary>
-public sealed partial class ChatSessionService
+public sealed class ChatSessionService : IChatGateHost
 {
     private static readonly TimeSpan ThreadIdle = TimeSpan.FromMinutes(30);
     private const int ThreadMaxTurns = 6;
@@ -64,6 +64,7 @@ public sealed partial class ChatSessionService
     private readonly IUiTreeValidator _uiValidator;
     private readonly IPageReviewService _pageReview;
     private readonly Platform.Hosting.Security.Services.IInternalMcpEndpoint _internalMcp;
+    private readonly ChatGateService _gates;
     private readonly ILogger<ChatSessionService> _log;
 
     private const int MaxBuildRepair = 2;
@@ -80,7 +81,7 @@ public sealed partial class ChatSessionService
         ICapabilityDenialLog denials, Platform.Site.Services.ISiteManifestStore manifestStore,
         ISessionCapabilityAllowance sessionAllowance, IUiTreeValidator uiValidator,
         IPageReviewService pageReview, Platform.Hosting.Security.Services.IInternalMcpEndpoint internalMcp,
-        ILogger<ChatSessionService> log)
+        ChatGateService gates, ILogger<ChatSessionService> log)
     {
         _uiValidator = uiValidator;
         _pageReview = pageReview;
@@ -111,6 +112,7 @@ public sealed partial class ChatSessionService
         _env = env;
         _writeLock = writeLock;
         _tools = tools;
+        _gates = gates;
         _log = log;
     }
 
@@ -838,4 +840,124 @@ public sealed partial class ChatSessionService
         if (s.Phase != expected) throw new InvalidOperationException($"BAD_PHASE:{s.Phase}");
         return s;
     }
+    // Resume execute with the human's text (a diff-refine OR an input-reply), then run the shared finish
+    // tail. Identical to the initial execute except it carries the human's feedback as the prompt.
+    private async Task ContinueExecuteAsync(ChatSession s, string feedback, string notice)
+    {
+        SetPhase(s, ChatPhase.Executing);
+        Emit(s, new AgentEvent { Kind = "notice", Text = notice });
+        s.Abort = new CancellationTokenSource();
+        try
+        {
+            var scanner = new UiBlockScanner(_uiValidator);
+            var res = await _agent.RunAsync(
+                BaseRunOptions(s,
+                    await (IsSystem(s) ? _harness.SystemReviseExecutePrompt(feedback) : _harness.ReviseExecutePrompt(feedback)),
+                    readOnly: false) with
+                {
+                    ResumeToken = s.ClaudeSessionId,
+                    SettingsPath = IsSystem(s) ? _env.SystemSettingsPath : _env.SettingsPath,
+                },
+                label: $"chat:{s.Mode}:revise-exec", onEvent: ev => EmitScanned(s, scanner, ev), tracker: s.Tracker, ct: s.Abort.Token);
+            FlushScanned(s, scanner);
+            if (s.Cancelled) return;
+            if (res.SessionId is not null) s.ClaudeSessionId = res.SessionId;
+            await FinishExecuteAsync(s, res);
+        }
+        catch (OperationCanceledException) when (s.Cancelled) { }
+        catch (Exception ex)
+        {
+            if (s.Cancelled) return;
+            Fail(s, $"调整阶段失败:{ex.Message}", ex);
+        }
+    }
+
+    // Shared tail of every EXECUTE run (initial approve, diff-refine, input-reply). If the agent
+    // signalled it needs a human decision (a NEEDS_INPUT marker), PAUSE for a reply instead of
+    // presenting a (partial) diff — the tracked edits stay on disk and are built on when the human
+    // replies. Otherwise: (system-mode build then) present the diff.
+    private async Task FinishExecuteAsync(ChatSession s, AgentSessionResult res)
+    {
+        // An MCP_ADD proposal is a privileged, out-of-band action (register a server that runs with
+        // server privileges) — park for explicit human confirmation of the concrete spec, never edit
+        // files for it. Checked before NEEDS_INPUT so a proposal isn't mistaken for a free-text pause.
+        if (GateMarkers.TryExtractMcpAdd(res.FinalText, out var proposal))
+        {
+            _gates.EnterAwaitingMcpApproval(this, s, proposal);
+            return;
+        }
+        // The agent hit a login-walled server and asked for interactive login — show the QR/URL in
+        // chat and pause; the agent resumes once the human completes the scan (login is LLM-decided).
+        if (GateMarkers.TryExtractLoginRequired(res.FinalText, out var serverRef))
+        {
+            await _gates.EnterAwaitingLoginAsync(this, s, serverRef);
+            return;
+        }
+        // The agent drafted a new tool and wants it enabled — park for the human's decision, built
+        // from PermissionSentence over the draft's OWN grant, never the agent's description of it. A
+        // marker naming a draft that does not exist (or fails to parse) must NOT park: there is
+        // nothing to decide, and parking anyway would wedge the session holding the agent lease with
+        // no way forward. Notice and fall through to the normal finish tail below instead.
+        if (GateMarkers.TryExtractToolDraft(res.FinalText, out var draftId))
+        {
+            var draft = _drafts.Get(draftId);
+            if (draft is null)
+                Emit(s, new AgentEvent { Kind = "notice", Text = $"⚠️ 找不到草稿工具「{draftId}」,已忽略该标记。" });
+            else
+            {
+                _gates.EnterAwaitingDraftApproval(this, s, draft);
+                return;
+            }
+        }
+        // A capability call was refused and the agent surfaced it rather than working around it —
+        // park for the human's decision, built from the RUNTIME's own record of the denial (never the
+        // agent's account of it). A marker naming an id with no recorded refusal must NOT park: same
+        // reasoning as TOOL_DRAFT above, nothing to decide.
+        if (GateMarkers.TryExtractCapabilityBlocked(res.FinalText, out var capId, out var agentReason))
+        {
+            var denial = _denials.Last(capId);
+            if (denial is null)
+                Emit(s, new AgentEvent { Kind = "notice", Text = $"⚠️ 找不到能力「{capId}」的拒绝记录,已忽略该标记。" });
+            else
+            {
+                _gates.EnterAwaitingCapabilityApproval(this, s, denial, agentReason);
+                return;
+            }
+        }
+        if (GateMarkers.TryExtractNeedsInput(res.FinalText, out var question, out var options))
+        {
+            _gates.EnterAwaitingInput(this, s, question, options);
+            return;
+        }
+        BuildResult? build = null;
+        if (IsSystem(s))
+        {
+            build = await BuildWithRepairAsync(s);
+            if (s.Cancelled) return;
+        }
+        await PresentDiffAsync(s, build);
+    }
+
+
+    // --- the five between-turns gates -----------------------------------------------------
+    // Thin by design: ChatGateService owns what each decision DOES; this stays the one door the
+    // controller knocks on, and hands it the session host for the duration of the call.
+    public Task RespondInputAsync(string id, string message) => _gates.RespondInputAsync(this, id, message);
+    public Task ApproveMcpAsync(string id, IReadOnlyDictionary<string, string>? secrets) => _gates.ApproveMcpAsync(this, id, secrets);
+    public Task RejectMcpAsync(string id) => _gates.RejectMcpAsync(this, id);
+    public Task ApproveDraftAsync(string id) => _gates.ApproveDraftAsync(this, id);
+    public Task RejectDraftAsync(string id) => _gates.RejectDraftAsync(this, id);
+    public Task AllowCapabilityAsync(string id, bool remember) => _gates.AllowCapabilityAsync(this, id, remember);
+    public Task DenyCapabilityAsync(string id) => _gates.DenyCapabilityAsync(this, id);
+    public Task ContinueLoginAsync(string id) => _gates.ContinueLoginAsync(this, id);
+
+    // IChatGateHost — explicit, so the gate seam does not widen ChatSessionService's public surface.
+    ChatSession IChatGateHost.RequirePhase(string id, string phase) => RequirePhase(id, phase);
+    void IChatGateHost.SetPhase(ChatSession s, string phase, object? data) => SetPhase(s, phase, data);
+    void IChatGateHost.Emit(ChatSession s, AgentEvent ev) => Emit(s, ev);
+    void IChatGateHost.Fail(ChatSession s, string message, Exception? ex) => Fail(s, message, ex);
+    void IChatGateHost.RecordOutcome(ChatSession s, string outcome) => RecordOutcome(s, outcome);
+    Task IChatGateHost.ContinueExecuteAsync(ChatSession s, string feedback, string notice) => ContinueExecuteAsync(s, feedback, notice);
+    Task IChatGateHost.PresentDiffAsync(ChatSession s) => PresentDiffAsync(s);
+
 }
