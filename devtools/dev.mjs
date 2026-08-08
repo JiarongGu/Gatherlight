@@ -17,6 +17,7 @@
 //   node devtools/dev.mjs check-sensitive   - scan staged changes (--tree for all tracked files)
 //   node devtools/dev.mjs check-layering    - assert Platform/ never references Product/
 //   node devtools/dev.mjs check-ui-registry - assert the C# schemas and TS renderers agree
+//   node devtools/dev.mjs check-tool-docs   - assert every registered tool is one the agent is TOLD about
 import { spawnSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -152,6 +153,10 @@ switch (cmd) {
 
   case 'check-ui-registry':
     run('node', [path.join(repo, 'devtools', 'scripts', 'check-ui-registry.mjs'), ...args]);
+    break;
+
+  case 'check-tool-docs':
+    run('node', [path.join(repo, 'devtools', 'scripts', 'check-tool-docs.mjs'), ...args]);
     break;
 
   case 'smoke':
@@ -495,6 +500,6 @@ switch (cmd) {
   }
 
   default:
-    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|smoke|memory|eval|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry>');
+    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|smoke|memory|eval|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs>');
     process.exitCode = cmd ? 1 : 0;
 }

@@ -39,6 +39,16 @@ Tools are provided by the server — there is nothing to install, and no code to
 | user uploaded a PDF / image / document and wants its content used | `mcp__planner-tools__extract` (no wrapper skill — call directly with the upload's `relPath`) |
 | fill in a form PDF, visa application, schedule of stay, "what fields does this PDF have" | `pdf_inspect` first → then `pdf_fill` (or `fill_itinerary` for a day-by-day table) |
 | read a text PDF, combine PDFs, resize/convert an image | `pdf_extract_text` · `pdf_merge` · `image_resize` / `image_convert` |
+| flight price / fare across dates · hotel room rate | `flight_prices` · `hotel_prices` — purpose-built, not raw `scrape` |
+| does this restaurant exist / is this the right URL · hotel address + phone | `restaurant_info` · `hotel_info` |
+| flight number, carrier code, schedule check | `flight_schedule` |
+| visa rules, passport requirements, entry policy | `policy_check` — official sources, not model recall |
+| encyclopedia summary for a reference entity | `wiki_info`, then `library_upsert` to keep it |
+| reusable reference entity (attraction / venue / hotel) — look up or save | `library_search` **before** researching · `library_upsert` after verifying · `library_import` · `library_delete` |
+| find a past plan by keyword, list what plans exist | `index_search` · `index_list` (faster and more precise than a Grep sweep); `index_reindex` only if a plan you just wrote is missing from a search |
+| honest totals from a budget file | `budget_scan` — arithmetic in code, so the figures cannot drift |
+| 小红书 / XHS inspiration search | `xhs_search` |
+| schedule something for later or on a repeat · notify the user | `job_schedule` · `job_list` · `job_run_now` · `job_cancel` · `notify_user` |
 | **about to research a venue, price, opening time, booking policy or URL** | `recall_facts` **FIRST** — it may already be verified. Then `expand_fact` on a hit to reach what it is linked to. |
 | just verified something fine-grained and worth keeping (a URL that resolved, a price with its date, a venue's status) | `remember_fact` — so the next session does not pay for the same research |
 

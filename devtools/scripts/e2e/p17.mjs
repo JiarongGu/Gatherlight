@@ -8,10 +8,29 @@
 // The auth gate is the product here, so the gated requests stay bespoke `fetch` calls — we need to
 // control (or omit) the token header and assert on raw status codes. Only the harness boilerplate
 // (reporter / server spawn / poll) is shared.
+import net from 'node:net';
 import { dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p17');
-const PA = 5401, PB = 5402, PC = 5403, PD = 5404;
+const PA = 5401, PB = 5402, PC = 5403;
+
+// Cases C and D bind the WILDCARD address, and a wildcard bind fails if ANY socket on the box holds
+// that port on ANY interface — including an unrelated program's outbound connection that happened to
+// be assigned it as a local port. Measured: netstat showed `192.168.50.175:5404 -> …:443 CLOSE_WAIT`
+// owned by another process, so 0.0.0.0:5404 was refused while 127.0.0.1:5404 bound fine. The server
+// was right to fail; the TEST was wrong to assume a fixed wildcard port is free. So probe for one.
+const wildcardFree = (port) => new Promise((resolve) => {
+  const s = net.createServer();
+  s.once('error', () => resolve(false));
+  s.listen(port, '0.0.0.0', () => s.close(() => resolve(true)));
+});
+// Range stops well short of 5468, where the other suites' ports begin — the runner keeps suites
+// port-disjoint by scanning each file for literal 5xxx, and it cannot see a port chosen at runtime.
+const pickWildcardPort = async (from, span = 30) => {
+  for (let p = from; p < from + span; p++) if (await wildcardFree(p)) return p;
+  throw new Error(`no wildcard-bindable port free in ${from}..${from + span - 1}`);
+};
+const PD = await pickWildcardPort(5404);
 const TOKEN = 'e2e-secret-42';
 
 const { ok, fail, done } = makeReporter('p17');
