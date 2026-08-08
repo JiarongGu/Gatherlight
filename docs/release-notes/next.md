@@ -54,3 +54,6 @@ version until the next restart.
 - Visa itinerary forms are now described by an **editable file** rather than baked into the app, so a
   revised form no longer needs a new Gatherlight release. Any field the form does not have is
   reported by name instead of silently left blank.
+- If an update failed to install, Gatherlight could **hang on startup** instead of falling back to the
+  version you already had. It now starts, every time.
+- The welcome page's button did nothing and looked greyed out. It opens your household file now.
