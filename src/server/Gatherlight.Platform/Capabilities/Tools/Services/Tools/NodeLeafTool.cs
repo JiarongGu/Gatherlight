@@ -25,13 +25,36 @@ public abstract class NodeLeafTool : IGatherlightTool
     private static string? _nodeExe;                // resolved once (see ResolveNode)
 
     /// <summary>
-    /// The <c>node</c> to run. PATH first; failing that, the pinned node or the Playwright driver's own,
-    /// both provisioned into the data folder by the 资源 · Resources panel — so a target that never
-    /// installed Node still runs these tools. Same `where.exe`-once discipline as the claude CLI.
+    /// The <c>node</c> to run: the runtime WE manage first, the machine's only as a last resort.
+    ///
+    /// <para>Order is <c>GATHERLIGHT_NODE</c> → the pinned node the 资源 panel provisions into
+    /// <c>{data}/state/resources/node</c> → the Playwright driver's own → PATH. It used to be the
+    /// reverse, and that was the odd one out: <see cref="Storage.DataRepo.Services.IGitCliService"/>
+    /// already prefers the provisioned git, and the capability sandbox insists on the provisioned node
+    /// and fails closed without it. Preferring PATH here meant these tools ran on whatever node the
+    /// machine happened to have — a different runtime per install, and behaviour that changes when
+    /// someone upgrades an unrelated global toolchain. A resource the app downloads, versions and pins
+    /// is only worth downloading if it is also the one that RUNS.</para>
+    ///
+    /// <para>PATH stays as the final fallback rather than being removed: a source checkout with no
+    /// provisioned resources still needs to run the leaf, and failing closed there would break the dev
+    /// loop for no safety gain — unlike the sandbox, a leaf tool needs no particular Node version.</para>
     /// </summary>
     private static string ResolveNode(string? resourcesPath)
     {
         if (_nodeExe is not null) return _nodeExe;
+
+        var env = Environment.GetEnvironmentVariable("GATHERLIGHT_NODE");
+        if (!string.IsNullOrWhiteSpace(env) && File.Exists(env)) return _nodeExe = env;
+
+        if (!string.IsNullOrEmpty(resourcesPath))
+        {
+            var pinned = Hosting.Resources.Services.ResourceProvisioner.ProvisionedNode(resourcesPath);
+            if (File.Exists(pinned)) return _nodeExe = pinned;
+            var driver = Path.Combine(resourcesPath, ".playwright", "node", "win32_x64", "node.exe");
+            if (File.Exists(driver)) return _nodeExe = driver;
+        }
+
         if (OperatingSystem.IsWindows())
         {
             try
@@ -45,17 +68,7 @@ public abstract class NodeLeafTool : IGatherlightTool
                 var exe = hits.FirstOrDefault(h => h.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) ?? hits.FirstOrDefault();
                 if (exe is not null && File.Exists(exe)) return _nodeExe = exe;
             }
-            catch { /* fall through to the provisioned copies */ }
-            if (!string.IsNullOrEmpty(resourcesPath))
-            {
-                // The pinned node the 资源 panel provisions, then the Playwright driver's own. A leaf
-                // tool needs no sandbox features, so any of these runs it — PATH stays first so a dev
-                // machine behaves as its owner expects.
-                var pinned = Hosting.Resources.Services.ResourceProvisioner.ProvisionedNode(resourcesPath);
-                if (File.Exists(pinned)) return _nodeExe = pinned;
-                var driver = Path.Combine(resourcesPath, ".playwright", "node", "win32_x64", "node.exe");
-                if (File.Exists(driver)) return _nodeExe = driver;
-            }
+            catch { /* fall through */ }
         }
         return _nodeExe = "node";   // POSIX / last resort: let PATH resolution fail loudly at spawn
     }

@@ -293,6 +293,28 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `DataWriteLock` is a **non-reentrant** `SemaphoreSlim(1,1)` and the seeder takes it, so the re-issue
   must sit OUTSIDE import's lock scope (holding it deadlocks the import outright); and the re-issue
   must run BEFORE the restore commit so its files land in the same commit. Proof lives in `e2e-p47`.
+- **A zip cannot carry an empty directory, and a PACKED git repo has them.** `git gc` moves every ref
+  into `packed-refs` and deletes the loose `refs/heads/<branch>`, leaving `refs/` empty. The export
+  enumerates FILES, so `refs/` simply is not in the archive, and git then refuses to recognise the
+  restored folder at all — `fatal: not in a git directory`. It surfaces as the FIRST thing startup does
+  to a data folder (`初始化数据仓库: git config … failed (128)`) with no hint that the history is intact
+  in `packed-refs` three inches away. Worse, the diagnosis is easy to get wrong: run `git` anywhere
+  inside another repo and it walks UP, finds that parent, and reports success — which is why the first
+  repro looked fine and the first e2e assertion passed while proving nothing. **Adding auto-packing is
+  what made this reachable**, so the two changes belong together: `RepairGitSkeleton()` re-creates
+  `refs/heads`, `refs/tags`, `objects/info`, `objects/pack` on IMPORT (which also rescues archives
+  already in circulation, as fixing only the exporter cannot), and the exporter additionally writes
+  directory ENTRIES so a hand-unzipped archive is valid too. `e2e-p47` packs the source repo before
+  exporting — without that the fixture's refs stay loose and the whole case evaporates.
+- **The backup MUST carry every directory the household writes to.** `Folders` was a hard-coded list
+  that had drifted from the site: `ui/` (agent-authored pages, approved at the diff gate, tracked in
+  the data repo) and `site.json` (the manifest holding `capabilities.enabled` — every capability a
+  human promoted — and `records`, which the scope guard renders its write-scope FROM) were both absent.
+  Neither loss was visible: the seeder immediately re-creates the template's `welcome.json`, so `ui/`
+  came back looking intact with the household's own pages gone, and `SiteManifestStep` writes a fresh
+  default, so the app came up working and merely forgot what it was allowed to do. When a new record
+  directory is added to the site, add it here — and assert it in `p47` by NAME, never by the
+  template-seeded file that would come back anyway.
 - **The backup carries `.git`, so LOOSE OBJECTS are a backup-size problem.** Git writes every new
   object loose — one zlib file each — and only packs when told; a loose object is already-compressed
   data a zip cannot squeeze. A restore writes a whole tree that way, so the objects ride into the NEXT

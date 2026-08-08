@@ -134,7 +134,8 @@ public sealed class BackupService : IBackupService
                 // all. Import repairs this too — but only import; someone unzipping the archive by hand
                 // gets whatever the archive says, so the archive should say the truth.
                 if (Directory.Exists(Path.Combine(_data.RootPath, ".git")))
-                    { }
+                    foreach (var rel in new[] { "refs/heads", "refs/tags", "objects/info", "objects/pack" })
+                        zip.CreateEntry($"data/.git/{rel}/");
                 foreach (var file in RootFiles)
                 {
                     var p = Path.Combine(_data.RootPath, file);
@@ -206,7 +207,7 @@ public sealed class BackupService : IBackupService
                 ForceDeleteDir(dest); // git objects under .git are read-only — clear the bit before deleting
                 CopyTree(src, dest, ref restored);
             }
-            // RepairGitSkeleton(); // TEMPORARY
+            RepairGitSkeleton();
             foreach (var file in RootFiles)
             {
                 var src = Path.Combine(dataDir, file.Replace('/', Path.DirectorySeparatorChar));
