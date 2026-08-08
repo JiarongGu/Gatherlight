@@ -110,6 +110,19 @@ public class GitCliService : IGitCliService
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        // STOP GIT WALKING UP. Without a ceiling, a git command run in a data folder whose own repo is
+        // missing or damaged discovers the nearest ANCESTOR repo and operates on that instead — silently
+        // and successfully. Observed for real: a restore into a data folder with a broken .git committed
+        // the surrounding project's staged changes under the message "restore: import backup (N files)".
+        // For a household whose data folder happens to sit inside any other repository, that is the
+        // app committing their files somewhere they never chose.
+        //
+        // The ceiling is the data root's PARENT, so discovery may find _root/.git and may not climb past
+        // it. `git init` still works — the ceiling bounds the SEARCH, not creation — and a genuinely
+        // missing repo now fails where it should, instead of quietly succeeding against someone else's.
+        var parent = Path.GetDirectoryName(_root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (!string.IsNullOrEmpty(parent)) psi.Environment["GIT_CEILING_DIRECTORIES"] = parent;
+
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         using var proc = new Process { StartInfo = psi };
