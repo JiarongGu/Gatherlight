@@ -198,18 +198,35 @@ public sealed class FactIndex : IFactIndex
         }
     }
 
+    /// <summary>How many facts index concurrently in a backfill/rebuild. Each index write can carry a
+    /// model call (annotation), so serial cost is seconds PER FACT and a restore of a real corpus paid
+    /// it N times over. Bounded, not unbounded: every slot is a spawned claude CLI process, and
+    /// concurrent annotations cannot reuse each other's just-coined subject labels — a wider bound
+    /// buys little and coins more near-duplicate subjects (they steer linking only, never recall).</summary>
+    private const int IndexConcurrency = 4;
+
     private async Task<int> IndexEachAsync(IEnumerable<KnowledgeRow> facts, CancellationToken ct)
     {
         var indexed = 0;
-        foreach (var fact in facts)
+        using var slots = new SemaphoreSlim(IndexConcurrency, IndexConcurrency);
+        var tasks = facts.Select(async fact =>
         {
-            ct.ThrowIfCancellationRequested();
-            var reference = await IndexAsync(fact.Kind, fact.Topic, fact.Content, ct);
-            // Written even when null: it clears a ref left over from a discarded index, so a row is
-            // never pointing at a node that no longer exists.
-            await _store.SetGraphRefAsync(fact.Id, reference);
-            if (reference is not null) indexed++;
-        }
+            await slots.WaitAsync(ct);
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                var reference = await IndexAsync(fact.Kind, fact.Topic, fact.Content, ct);
+                // Written even when null: it clears a ref left over from a discarded index, so a row is
+                // never pointing at a node that no longer exists.
+                await _store.SetGraphRefAsync(fact.Id, reference);
+                if (reference is not null) Interlocked.Increment(ref indexed);
+            }
+            finally
+            {
+                slots.Release();
+            }
+        }).ToList();
+        await Task.WhenAll(tasks);
         return indexed;
     }
 
