@@ -20,9 +20,11 @@ public sealed record FactExpansion(string GraphRef, string Headline, string? Con
 ///
 /// <para>What it adds over the FTS recall it sits in front of: entries <b>decay</b> by what has happened
 /// in the index rather than by the clock, so a scraped price nobody has used since sinks beneath fresher
-/// material; recall <b>reinforces</b> what it returned, so facts that keep proving useful become durable;
-/// and facts recalled together get <b>linked</b>, so a later query can reach material it never literally
-/// matched. Decay only ever ranks — nothing is deleted here.</para>
+/// material; expanding a fact <b>reinforces</b> it (the engine runs ReinforceOn = Expansion — an
+/// expansion is the agent paying for full content, where a recall would reinforce whatever the ranker
+/// returned, mistakes included), so facts that keep proving useful become durable; and facts recalled
+/// together get <b>linked</b>, so a later query can reach material it never literally matched. Decay
+/// only ever ranks — nothing is deleted here.</para>
 ///
 /// <para><b>Every method degrades to nothing rather than throwing.</b> A fact store that fails closed is
 /// worse than one that ranks by relevance alone: the caller falls back to FTS and the household still

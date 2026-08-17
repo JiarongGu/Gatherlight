@@ -140,17 +140,27 @@ public static class GatherlightApp
                 // FactIndex). `knowledge` stays the record of truth — it is what the backup carries and
                 // what the index rebuilds FROM; the graph only ranks it. What it adds over the FTS
                 // recall underneath: entries decay by what has happened in the index rather than by the
-                // clock (so a scraped price nobody has used sinks beneath fresher material), recall
-                // reinforces what it returned, and facts recalled together get linked so a later query
+                // clock (so a scraped price nobody has used sinks beneath fresher material), expanding
+                // a fact reinforces it, and facts recalled together get linked so a later query
                 // reaches material it never literally matched. Registered AFTER UseSqliteStorage, which
                 // is what supplies the IMemoryGraphStore this engine persists through (StorageFeature
                 // .Memory, Lyntai's own lyntai_memory_* migrations).
+                //
+                // ReinforceOn = Expansion (not the All default): expand_fact is the agent choosing to
+                // pay for a fact's full content — the closest thing the engine observes to a VERIFIED
+                // retrieval — while a plain recall would reinforce whatever the ranker returned,
+                // mistakes included. Measured better on both miss and pollution for apps that expand
+                // (Lyntai D58); Lyntai's own default stays All only because an app that never expands
+                // would then reinforce nothing, and this app expands.
                 //
                 // Deliberately the ASSOCIATIVE tier. Lyntai can also hold authoritative material that
                 // never decays, and that is not this: the household's policies and preferences live in
                 // curated markdown the CLI loads directly, so grading facts authoritative here would
                 // exempt them from the decay that is the only reason to index them.
-                .AddMemoryEngine("facts", e => e.UseGraph())
+                .AddMemoryEngine("facts", e => e.UseGraph(new Lyntai.Memory.GraphMemoryOptions
+                {
+                    ReinforceOn = Lyntai.Memory.MemoryReinforcementActs.Expansion,
+                }))
                 // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
                 // collection so its IScoringService iterates + persists them (LLM judges route through
                 // llm.model.scorer, skip via Applies()).
