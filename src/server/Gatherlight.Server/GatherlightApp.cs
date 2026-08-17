@@ -124,6 +124,9 @@ public static class GatherlightApp
                     o.PromptKeyPrefix = "cortex.prompt.";
                     o.ModelKeyPrefix = "llm.model.";
                     o.DefaultModelByConsumer["scorer"] = "haiku"; // cheap-judge default; llm.model.scorer overrides live
+                    // The memory judges (annotation per write, verification per recall) bill to
+                    // Lyntai's own "memory" consumer tag; llm.model.memory overrides live.
+                    o.DefaultModelByConsumer["memory"] = "haiku";
                 })
                 // Live per-consumer model routing (the scorers' judge model) read from app_config each call.
                 .AddLiveModelRouting()
@@ -140,27 +143,38 @@ public static class GatherlightApp
                 // FactIndex). `knowledge` stays the record of truth — it is what the backup carries and
                 // what the index rebuilds FROM; the graph only ranks it. What it adds over the FTS
                 // recall underneath: entries decay by what has happened in the index rather than by the
-                // clock (so a scraped price nobody has used sinks beneath fresher material), expanding
-                // a fact reinforces it, and facts recalled together get linked so a later query
+                // clock (so a scraped price nobody has used sinks beneath fresher material), recall
+                // reinforces what it returned, and facts recalled together get linked so a later query
                 // reaches material it never literally matched. Registered AFTER UseSqliteStorage, which
                 // is what supplies the IMemoryGraphStore this engine persists through (StorageFeature
                 // .Memory, Lyntai's own lyntai_memory_* migrations).
                 //
-                // ReinforceOn = Expansion (not the All default): expand_fact is the agent choosing to
-                // pay for a fact's full content — the closest thing the engine observes to a VERIFIED
-                // retrieval — while a plain recall would reinforce whatever the ranker returned,
-                // mistakes included. Measured better on both miss and pollution for apps that expand
-                // (Lyntai D58); Lyntai's own default stays All only because an app that never expands
-                // would then reinforce nothing, and this app expands.
+                // ReinforceOn stays at the All default, and that is a FINDING, not an omission:
+                // Expansion-only (Lyntai D58's measured-better setting) was tried and reverted,
+                // because co-activation linking rides the same gated reinforcement step — with
+                // recalls excluded, facts recalled together simply never link (e2e-p48 caught it:
+                // degrees all 0, expand_fact reaching nothing). The entrenchment D58 guards against
+                // is already mostly gone in 3.0 anyway: DsrOptions.ReinforceGain ships at 0, so a
+                // recall refreshes an entry's age but no longer permanently lengthens its half-life.
                 //
                 // Deliberately the ASSOCIATIVE tier. Lyntai can also hold authoritative material that
                 // never decays, and that is not this: the household's policies and preferences live in
                 // curated markdown the CLI loads directly, so grading facts authoritative here would
                 // exempt them from the decay that is the only reason to index them.
-                .AddMemoryEngine("facts", e => e.UseGraph(new Lyntai.Memory.GraphMemoryOptions
-                {
-                    ReinforceOn = Lyntai.Memory.MemoryReinforcementActs.Expansion,
-                }))
+                .AddMemoryEngine("facts", e => e.UseGraph())
+                // The model-backed memory steps (both fail-open — a judge failure leaves behaviour
+                // exactly as it was, which is also what keeps the stubbed-CLI e2e honest):
+                // annotation labels each fact write with what it is ABOUT so entries about the same
+                // entity link even when their text never names it (one haiku call per remember_fact;
+                // NOTE: a backup import's RebuildAsync re-writes every fact, so import now annotates
+                // the corpus — slow but fail-open, it can never fail the import); verification has a
+                // model judge which recalled candidates actually ANSWERED the query — on Lyntai's
+                // measured corpus the model-free ranking IS the miss rate (every missed answer was a
+                // candidate ranked below the cut), and a haiku judge roughly halves it. A verdict
+                // only ever reorders (VerificationFilters stays false); Model stays null so the
+                // "memory" consumer routing above decides, live-overridable.
+                .AddMemoryAnnotation()
+                .AddMemoryVerification()
                 // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
                 // collection so its IScoringService iterates + persists them (LLM judges route through
                 // llm.model.scorer, skip via Applies()).
