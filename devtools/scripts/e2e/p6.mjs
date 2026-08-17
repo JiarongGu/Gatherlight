@@ -26,7 +26,12 @@ try {
   const rec = await call('recall_facts', { query: 'Fixture Ramen' });
   const facts = rec.result.facts;
   ok('recall finds both facts', facts.length === 2);
-  ok('confidence ordering', facts[0].confidence > facts[1].confidence);
+  // Since Lyntai 3.0 the graph index answers this recall and order is ITS ranking (decay /
+  // reinforcement / links — RRF; p48 owns those assertions). Confidence-first is the FTS path's
+  // contract (KnowledgeStore.RecallAsync's ORDER BY), no longer observable through a graph-ranked
+  // recall — what must hold here is that every hit still CARRIES its confidence from the record
+  // of truth, so the agent can weigh a verified fact over a scraped one whatever the order.
+  ok('both facts carry confidence', facts.every((f) => typeof f.confidence === 'number' && f.confidence > 0));
 
   // kind filter
   const filtered = await call('recall_facts', { query: 'Fixture', kind: 'price' });
