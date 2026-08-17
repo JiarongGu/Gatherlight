@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// e2e P48 — the derived graph recall index over the fact store (Lyntai 2.5.0 memory engine).
+// e2e P48 — the derived graph recall index over the fact store (Lyntai memory engine).
 //
 // `knowledge` stays the record of truth; the graph ranks it. What has to hold:
 //   1. a remembered fact is indexed, and recall says which ranker answered
@@ -70,6 +70,11 @@ try {
   ok('recall_facts returns the facts', facts.length >= 3, `got ${facts.length}`);
   ok('THE POINT: the graph index answered, not the FTS fallback', recalled.result?.ranked === 'graph',
     `ranked=${recalled.result?.ranked}`);
+  // Pins the ASYMMETRIC fail-open: the stub judge cannot produce a parseable verdict, so nothing
+  // was judged and `answered` must be ABSENT — never false. A future change mapping a failed judge
+  // to false would tell the agent "nothing answered" on every CLI outage, with the fleet green.
+  ok('answered is absent when nothing was judged (failed judge = null, never false)',
+    !('answered' in recalled.result), JSON.stringify(recalled.result?.answered));
   ok('each hit carries a ref to expand', facts.every((f) => typeof f.ref === 'string' && f.ref.includes('#')),
     JSON.stringify(facts[0]));
   ok('each hit reports how well remembered it is',

@@ -77,6 +77,12 @@ public interface IKnowledgeStore
     /// rather than faked: it means the index outlived a deleted fact, which a rebuild fixes.</summary>
     Task<List<(KnowledgeRow Row, string GraphRef)>> ByGraphRefsAsync(IReadOnlyList<string> graphRefs, string? kind);
 
+    /// <summary>Detach every fact from the graph in one statement — the rebuild's first move after
+    /// discarding the graph itself. An aborted rebuild then leaves EMPTY refs, which the startup
+    /// back-fill heals; without this it leaves refs addressing deleted nodes, which nothing heals
+    /// (the back-fill only looks at empty ones). Returns rows detached.</summary>
+    Task<int> ClearGraphRefsAsync();
+
     /// <summary>Every fact with its index address, for rebuilding the derived index from the record of
     /// truth (all of them) or back-filling it (the ones whose ref is still null).</summary>
     Task<List<(KnowledgeRow Row, string? GraphRef)>> AllAsync();
@@ -193,6 +199,12 @@ public sealed class KnowledgeStore : IKnowledgeStore
                 $"UPDATE knowledge SET hits = hits + 1 WHERE id IN ({string.Join(',', ordered.Select(o => o.Item1.Id))})");
         }
         return ordered;
+    }
+
+    public async Task<int> ClearGraphRefsAsync()
+    {
+        using var conn = _db.Open();
+        return await conn.ExecuteAsync("UPDATE knowledge SET graph_ref = NULL WHERE graph_ref IS NOT NULL");
     }
 
     public async Task<List<(KnowledgeRow Row, string? GraphRef)>> AllAsync()

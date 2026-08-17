@@ -144,7 +144,7 @@ public static class GatherlightApp
                 // what the index rebuilds FROM; the graph only ranks it. What it adds over the FTS
                 // recall underneath: entries decay by what has happened in the index rather than by the
                 // clock (so a scraped price nobody has used sinks beneath fresher material), recall
-                // reinforces what it returned, and facts recalled together get linked so a later query
+                // refreshes what it returned, and facts recalled together get linked so a later query
                 // reaches material it never literally matched. Registered AFTER UseSqliteStorage, which
                 // is what supplies the IMemoryGraphStore this engine persists through (StorageFeature
                 // .Memory, Lyntai's own lyntai_memory_* migrations).

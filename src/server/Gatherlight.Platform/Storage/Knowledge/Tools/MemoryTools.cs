@@ -50,9 +50,9 @@ public sealed class RememberFactTool : IGatherlightTool
 /// Recall, ranked by the graph index when it is there and by FTS when it is not.
 ///
 /// <para>The index contributes what keyword search cannot: entries decay unless they get used, so a
-/// price nobody has looked at in months sinks beneath fresher material; recall reinforces what it
-/// returns, so facts that keep proving useful last; and facts recalled together become linked, so a
-/// query can reach a fact it never literally matched. Nothing is deleted — decay only ranks.</para>
+/// price nobody has looked at in months sinks beneath fresher material; recall refreshes what it
+/// returns, so a fact that keeps proving useful never looks stale; and facts recalled together become
+/// linked, so a query can reach a fact it never literally matched. Nothing is deleted — decay only ranks.</para>
 ///
 /// <para><b>The fallback is not a nicety.</b> An empty index, an unindexed fact, an engine that failed
 /// — each must degrade to the keyword recall this tool has always done, because returning nothing reads
@@ -115,9 +115,12 @@ public sealed class RecallFactsTool : IGatherlightTool
         // `ranked` is not decoration: without it a graph result and a fallback result are
         // indistinguishable, and the first question about a surprising recall is which one ran.
         var result = new JsonObject { ["facts"] = arr, ["ranked"] = ranked };
-        // Absent when nothing was judged: "a judge found none of these answer" and "no judge ran"
-        // call for different next moves, same reason `ranked` exists.
-        if (ranking.Answered is { } answered) result["answered"] = answered;
+        // Absent when nothing was judged — and attached ONLY to a graph result: on the FTS fallback
+        // (every graph ref an orphan) the judged candidates are not the facts being shown, and a
+        // verdict about material the caller cannot see is exactly the confusion this field exists
+        // to prevent. "A judge found none of these answer" and "no judge ran" still call for
+        // different next moves, same reason `ranked` exists.
+        if (ranked == "graph" && ranking.Answered is { } answered) result["answered"] = answered;
         return result.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 

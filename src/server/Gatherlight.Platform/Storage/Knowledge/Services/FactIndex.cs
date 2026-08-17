@@ -28,9 +28,9 @@ public sealed record FactRanking(IReadOnlyList<FactHit> Hits, bool? Answered)
 ///
 /// <para>What it adds over the FTS recall it sits in front of: entries <b>decay</b> by what has happened
 /// in the index rather than by the clock, so a scraped price nobody has used since sinks beneath fresher
-/// material; recall <b>reinforces</b> what it returned, so facts that keep proving useful become durable;
-/// and facts recalled together get <b>linked</b>, so a later query can reach material it never literally
-/// matched. Decay only ever ranks — nothing is deleted here.</para>
+/// material; recall <b>refreshes</b> what it returned, so a fact that keeps proving useful never looks
+/// stale; and facts recalled together get <b>linked</b>, so a later query can reach material it never
+/// literally matched. Decay only ever ranks — nothing is deleted here.</para>
 ///
 /// <para><b>Every method degrades to nothing rather than throwing.</b> A fact store that fails closed is
 /// worse than one that ranks by relevance alone: the caller falls back to FTS and the household still
@@ -185,8 +185,17 @@ public sealed class FactIndex : IFactIndex
             // is NOT wired to IRecordIndex, whose step runs at every startup: the discard would erase
             // the decay positions, reinforcement and links that are the whole point.
             if (_graph is not null) await _graph.ForgetAsync(GraphMember, TaskKey, scope: null, ct);
+            // Detach every row NOW, not one-by-one as each re-index lands: annotation makes this
+            // loop minutes long on a real corpus, and an abort mid-way (client gone, an update
+            // restart) would otherwise strand refs pointing at the discarded graph — which
+            // SyncAsync cannot heal, because it back-fills only EMPTY refs. Cleared up front, an
+            // aborted rebuild degrades to exactly the state the startup back-fill already repairs.
+            await _store.ClearGraphRefsAsync();
 
             var facts = await _store.AllAsync();
+            _log?.LogInformation(
+                "fact index: rebuilding {Count} facts ({Concurrency} at a time; annotation may add a model call each)",
+                facts.Count, IndexConcurrency);
             var indexed = await IndexEachAsync(facts.Select(f => f.Row), ct);
             _log?.LogInformation("fact index: rebuilt — {Indexed}/{Total} facts indexed", indexed, facts.Count);
             return indexed;

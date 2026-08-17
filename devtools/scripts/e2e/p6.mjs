@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // e2e P6 — generalized stores: remember_fact/recall_facts roundtrip (both surfaces), update-in-
-// place on same kind+topic, kind filter, confidence ordering; process_log records the seed run.
+// place on same kind+topic, kind filter, confidence carried through a graph-ranked recall;
+// process_log records the seed run.
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p6');
@@ -31,7 +32,8 @@ try {
   // contract (KnowledgeStore.RecallAsync's ORDER BY), no longer observable through a graph-ranked
   // recall — what must hold here is that every hit still CARRIES its confidence from the record
   // of truth, so the agent can weigh a verified fact over a scraped one whatever the order.
-  ok('both facts carry confidence', facts.every((f) => typeof f.confidence === 'number' && f.confidence > 0));
+  const confs = facts.map((f) => f.confidence).sort((a, b) => a - b);
+  ok('both facts carry their stored confidence', JSON.stringify(confs) === '[0.6,0.95]', JSON.stringify(confs));
 
   // kind filter
   const filtered = await call('recall_facts', { query: 'Fixture', kind: 'price' });
