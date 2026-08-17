@@ -86,7 +86,8 @@ public sealed class RecallFactsTool : IGatherlightTool
         var arr = new JsonArray();
         var ranked = "fts";
 
-        var hits = await _index.RankAsync(query, kind, limit, ct);
+        var ranking = await _index.RankAsync(query, kind, limit, ct);
+        var hits = ranking.Hits;
         if (hits.Count > 0)
         {
             var byRef = hits.ToDictionary(h => h.GraphRef, h => h, StringComparer.Ordinal);
@@ -113,8 +114,11 @@ public sealed class RecallFactsTool : IGatherlightTool
 
         // `ranked` is not decoration: without it a graph result and a fallback result are
         // indistinguishable, and the first question about a surprising recall is which one ran.
-        return new JsonObject { ["facts"] = arr, ["ranked"] = ranked }
-            .ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        var result = new JsonObject { ["facts"] = arr, ["ranked"] = ranked };
+        // Absent when nothing was judged: "a judge found none of these answer" and "no judge ran"
+        // call for different next moves, same reason `ranked` exists.
+        if (ranking.Answered is { } answered) result["answered"] = answered;
+        return result.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
     internal static JsonObject Row(KnowledgeRow r) => new()

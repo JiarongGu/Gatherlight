@@ -14,17 +14,23 @@ public sealed record FactHit(string GraphRef, double Retrievability, int Degree)
 public sealed record FactExpansion(string GraphRef, string Headline, string? Content,
     IReadOnlyList<string> Neighbours);
 
+/// <summary>A ranking plus 3.0's abstention signal: <c>Answered</c> is true when a judge found an
+/// answer, false when a judge looked and found none, null when nothing was judged (no judge
+/// registered, or it failed — fail-open).</summary>
+public sealed record FactRanking(IReadOnlyList<FactHit> Hits, bool? Answered)
+{
+    public static readonly FactRanking Empty = new([], null);
+}
+
 /// <summary>
 /// The graph recall index over <c>knowledge</c> — Lyntai's <see cref="IMemoryEngine"/> in the shape this
 /// app needs. DERIVED, always: <c>knowledge</c> is the record of truth, this ranks it.
 ///
 /// <para>What it adds over the FTS recall it sits in front of: entries <b>decay</b> by what has happened
 /// in the index rather than by the clock, so a scraped price nobody has used since sinks beneath fresher
-/// material; expanding a fact <b>reinforces</b> it (the engine runs ReinforceOn = Expansion — an
-/// expansion is the agent paying for full content, where a recall would reinforce whatever the ranker
-/// returned, mistakes included), so facts that keep proving useful become durable; and facts recalled
-/// together get <b>linked</b>, so a later query can reach material it never literally matched. Decay
-/// only ever ranks — nothing is deleted here.</para>
+/// material; recall <b>reinforces</b> what it returned, so facts that keep proving useful become durable;
+/// and facts recalled together get <b>linked</b>, so a later query can reach material it never literally
+/// matched. Decay only ever ranks — nothing is deleted here.</para>
 ///
 /// <para><b>Every method degrades to nothing rather than throwing.</b> A fact store that fails closed is
 /// worse than one that ranks by relevance alone: the caller falls back to FTS and the household still
@@ -40,7 +46,7 @@ public interface IFactIndex
     Task<string?> IndexAsync(string kind, string topic, string content, CancellationToken ct = default);
 
     /// <summary>Rank facts for a query, best first. Empty means "use FTS", never "you have nothing".</summary>
-    Task<IReadOnlyList<FactHit>> RankAsync(string query, string? kind, int limit, CancellationToken ct = default);
+    Task<FactRanking> RankAsync(string query, string? kind, int limit, CancellationToken ct = default);
 
     /// <summary>Open one fact: full text plus what it is linked to.</summary>
     Task<FactExpansion?> ExpandAsync(string graphRef, CancellationToken ct = default);
@@ -106,10 +112,10 @@ public sealed class FactIndex : IFactIndex
         }
     }
 
-    public async Task<IReadOnlyList<FactHit>> RankAsync(string query, string? kind, int limit,
+    public async Task<FactRanking> RankAsync(string query, string? kind, int limit,
         CancellationToken ct = default)
     {
-        if (_engine is null) return [];
+        if (_engine is null) return FactRanking.Empty;
         try
         {
             // Over-ask. The graph dedups by CONTENT HASH, so editing a fact leaves its previous node
@@ -118,12 +124,14 @@ public sealed class FactIndex : IFactIndex
             var want = Math.Min(limit * 3, 100);
             var recall = await _engine.RecallAsync(
                 new MemoryQuery(TaskKey, Scope: kind, Query: query, Limit: want), ct);
-            return [.. recall.Items.Select(i => new FactHit(Encode(i.Reference), i.Retrievability, i.Degree))];
+            return new FactRanking(
+                [.. recall.Items.Select(i => new FactHit(Encode(i.Reference), i.Retrievability, i.Degree))],
+                recall.Answered);
         }
         catch (Exception ex)
         {
             _log?.LogWarning(ex, "fact index: recall failed; falling back to FTS");
-            return [];
+            return FactRanking.Empty;
         }
     }
 
