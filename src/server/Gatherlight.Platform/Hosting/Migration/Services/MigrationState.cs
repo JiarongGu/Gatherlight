@@ -42,6 +42,18 @@ public sealed class MigrationState
             st.Status = status;
             if (error is not null) st.Error = error;
             if (ms > 0) st.Ms = ms;
+            st.Detail = null;   // a settled step's progress line describes work that is over
+        }
+    }
+
+    /// <summary>Live progress for the step currently running (the git download's percent). A step that
+    /// takes a minute on a fresh install must SAY so — silence there reads as a hang.</summary>
+    public void SetStepDetail(string id, string? detail)
+    {
+        lock (_lock)
+        {
+            var st = _steps.Find(s => s.Id == id);
+            if (st is not null) st.Detail = detail;
         }
     }
 
@@ -68,7 +80,7 @@ public sealed class MigrationState
     {
         lock (_lock)
         {
-            foreach (var s in _steps) { s.Status = StepStatus.Pending; s.Error = null; s.Ms = 0; }
+            foreach (var s in _steps) { s.Status = StepStatus.Pending; s.Error = null; s.Ms = 0; s.Detail = null; }
             _warnings.Clear();
             _phase = MigrationPhase.Running;
             _error = null;
@@ -80,7 +92,8 @@ public sealed class MigrationState
     {
         lock (_lock)
         {
-            var views = _steps.ConvertAll(s => new MigrationStepView(s.Id, s.Title, s.Essential, s.Status, s.Error, s.Ms));
+            var views = _steps.ConvertAll(s =>
+                new MigrationStepView(s.Id, s.Title, s.Essential, s.Status, s.Error, s.Ms, s.Detail));
             return new MigrationSnapshot(_phase, IsUpgrade, FromVersion, ToVersion, views, _warnings.ToArray(), _error);
         }
     }

@@ -182,21 +182,34 @@ if (rid === 'win-x64') {
 // {data}/state/resources/git — GitCliService resolves that first). --offline bundles it into libs/git/
 // for air-gapped installs. Cached under devtools/_cache/.
 step(3.6, offline ? 'bundling portable git (MinGit)…' : 'git → download-at-setup (lean bundle)');
-const MINGIT_VER = '2.55.0.2';
-const MINGIT_URL = `https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.2/MinGit-${MINGIT_VER}-64-bit.zip`;
+// Version + tag + checksum come from ResourceProvisioner's constants, which is also what a lean install
+// DOWNLOADS at first boot (GitRuntimeStep). Read, never restated: an air-gapped install running a
+// different git build than every other install is a difference nobody would think to look for.
+const provCs = fs.readFileSync(
+  path.join(repo, 'src/server/Gatherlight.Platform/Hosting/Resources/Services/ResourceProvisioner.cs'), 'utf8');
+const csConst = (name) => (provCs.match(new RegExp(`${name}\\s*=\\s*"([^"]+)"`)) || [])[1];
+const MINGIT_VER = csConst('GitVersion');
+const MINGIT_TAG = csConst('GitTag');
+const MINGIT_SHA = csConst('GitSha256');
+const MINGIT_URL = `https://github.com/git-for-windows/git/releases/download/${MINGIT_TAG}/MinGit-${MINGIT_VER}-64-bit.zip`;
 let gitBundled = false;
 if (!offline) {
-  console.log('  (skipped — provisioned at setup via 资源 · Resources; falls back to git on PATH)');
+  console.log('  (skipped — a lean install downloads it on first boot when the machine has no git)');
 } else if (rid === 'win-x64') {
   const cacheDir = path.join(repo, 'devtools', '_cache');
   fs.mkdirSync(cacheDir, { recursive: true });
   const zip = path.join(cacheDir, `MinGit-${MINGIT_VER}-64-bit.zip`);
   try {
+    if (!MINGIT_VER || !MINGIT_TAG || !MINGIT_SHA) throw new Error('git constants not found in ResourceProvisioner.cs');
     if (!fs.existsSync(zip)) {
       console.log(`  downloading ${path.basename(zip)} (~37 MB)…`);
       const dl = spawnSync('curl', ['-fsSL', '-o', zip, MINGIT_URL], { stdio: 'inherit' });
       if (dl.status !== 0 || !fs.existsSync(zip)) throw new Error('download failed');
     }
+    // Same pin the server enforces on the download path — a cached zip in devtools/_cache is not a
+    // trusted artifact just because it is local, and this is an executable we ship to households.
+    const sha = crypto.createHash('sha256').update(fs.readFileSync(zip)).digest('hex');
+    if (sha !== MINGIT_SHA) throw new Error(`sha256 mismatch (expected ${MINGIT_SHA.slice(0, 12)}…, got ${sha.slice(0, 12)}…)`);
     const gitDir = path.join(libs, 'git');
     const ex = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
       `Expand-Archive -Path '${zip}' -DestinationPath '${gitDir}' -Force`], { stdio: 'inherit' });
@@ -309,7 +322,7 @@ fs.writeFileSync(path.join(bundle, 'README.txt'), [
   '前置 / Prerequisites:',
   '  · git —— ' + (gitBundled
     ? '已内置于 libs\\git(数据仓库引擎,无需另装) / bundled in libs\\git (the data-repo engine; no install needed)'
-    : '首次在控制台「资源 · Resources」一键下载(或系统已装 git) / download once from the 资源 · Resources panel (or git on PATH)'),
+    : '无需安装:系统没有 git 时,首次启动会自动下载便携版(约 37MB,存入 data\\) / no install needed — downloaded automatically on first run (~37 MB, into data\\) when the machine has none'),
   '  · 已登录的 claude CLI —— 仅 AI 规划需要,浏览/导入无需 / an authenticated claude CLI — only for AI planning (browsing/import work without it)',
   '  · chromium(仅网页抓取工具)—— ' + (chromiumBundled
     ? '已内置于 libs\\browsers,无需安装 / bundled in libs\\browsers (no install needed)'
@@ -357,7 +370,7 @@ if (doZip) {
 const exeMb = (fs.statSync(path.join(libs, 'Gatherlight.Host.exe')).size / 1048576).toFixed(0);
 console.log(`\n\x1b[32m✔ bundle\x1b[0m  publish/Gatherlight/  (host ${exeMb} MB, ${files.length} manifest files, framework-dependent — runtime auto-installed on first run, sha256 manifest)`);
 console.log(`  layout:   ${launcherBuilt ? 'Gatherlight.exe · ' : ''}Gatherlight.cmd · libs/${gitBundled ? ' +git' : ''}${chromiumBundled ? ' +chromium' : ''}${playwrightBundled ? ' +driver' : ''} · res/ · data/`);
-console.log(`  git:      ${gitBundled ? 'bundled (libs/git) — no host git install needed' : '⚠ NOT bundled — host needs git on PATH'}`);
+console.log(`  git:      ${gitBundled ? 'bundled (libs/git) — no host git install needed' : 'not bundled — auto-downloaded on first boot (GitRuntimeStep) when the host has none'}`);
 console.log(`  scrapers: ${playwrightBundled && chromiumBundled ? 'bundled driver + chromium — work out of the box' : playwrightBundled ? 'driver bundled; chromium via playwright.ps1 install' : 'dev-only (no driver bundled)'}`);
 if (doZip) console.log(zipped ? `  package:  publish/${path.basename(zip)}  (${(fs.statSync(zip).size / 1048576).toFixed(0)} MB)` : '  ⚠ zip failed');
 else console.log('  package:  (folder only — pass --zip for the release .zip)');

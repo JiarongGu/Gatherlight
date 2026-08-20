@@ -142,15 +142,22 @@ repo (versioned); the library is the one knowledge surface whose durability ride
 ## Host prerequisites
 
 **Large resources download at setup, not bundled** — the shipped zip is lean (~200 MB vs ~350 MB;
-chromium ~120 MB + git ~37 MB are omitted). First run, open the console's **资源 · Resources** panel
-and click download; each lands in the data folder (`{data}/state/resources/…`, downloaded once,
-preserved across app updates). `--offline` bundles them for an air-gapped install.
+chromium ~120 MB + git ~37 MB are omitted). Each lands in the data folder
+(`{data}/state/resources/…`, downloaded once, preserved across app updates): **git automatically on
+first boot** (see below — the app cannot start without it, so it is never left to a click), the rest
+from the console's **资源 · Resources** panel when you first want the feature. `--offline` bundles them
+for an air-gapped install.
 
-**git** is the data repo's engine (init / diff / commit / restore — the two-gate audit trail). The
-server resolves it automatically (`GitCliService`: `GATHERLIGHT_GIT` override → provisioned
-`{data}/state/resources/git/cmd/git.exe` → bundled `libs/git` if `--offline` → `git` on PATH), so
-provision it from the 资源 panel (or have git on PATH). The items below each gate one optional
-feature, and none blocks the app from starting:
+**git needs no setup at all** — it is the data repo's engine (init / diff / commit / restore, the
+two-gate audit trail) and therefore the one resource the app cannot serve without, so the **first
+boot installs it itself**: `GitRuntimeStep` runs immediately before the data-repo step, probes for a
+usable git and, finding none, downloads the sha256-pinned portable MinGit (~37 MB, once) into
+`{data}/state/resources/git`. A host that already has git downloads nothing. The resolution order is
+`GATHERLIGHT_GIT` override → provisioned copy → bundled `libs/git` (`--offline`) → `git` on PATH, and
+it is re-checked per call, so a git that arrives mid-session is picked up without a restart.
+`GATHERLIGHT_GIT_URL` points the download at a mirror (https, or http to loopback; the checksum pin
+still applies). With no network at that moment the startup overlay says so and 「重试」 re-attempts it.
+The items below each gate one optional feature, and none blocks the app from starting:
 
 1. **The authenticated `claude` CLI** — only for the AI chat/planning gate. The core spawns the local
    `claude` CLI (never an API key). Install Claude Code and sign in on the host once; the server

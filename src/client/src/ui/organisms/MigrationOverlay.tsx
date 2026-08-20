@@ -60,6 +60,10 @@ export function MigrationOverlay() {
               {s.status === 'running' ? <Spin size="small" /> : STEP_ICON[s.status]}
             </span>
             <span style={{ color: 'var(--text)' }}>{s.title}</span>
+            {/* A first boot with no git spends a minute downloading one; silence there reads as a hang. */}
+            {s.status === 'running' && s.detail && (
+              <span style={{ color: 'var(--muted, #888)', fontSize: 12 }}>— {s.detail}</span>
+            )}
             {s.status === 'failed' && s.error && <span style={{ color: 'var(--danger, #d33)', fontSize: 12 }}>— {s.error}</span>}
           </li>
         ))}

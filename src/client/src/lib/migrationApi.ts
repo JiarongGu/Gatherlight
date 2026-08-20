@@ -7,6 +7,8 @@ export interface MigrationStep {
   status: 'pending' | 'running' | 'ok' | 'failed' | 'skipped';
   error?: string | null;
   ms: number;
+  /** Live progress for a slow, explicable step (the first-run git download). Cleared when it settles. */
+  detail?: string | null;
 }
 
 export interface MigrationSnapshot {

@@ -46,6 +46,11 @@ public interface IResourceProvisioner
     /// <summary>Start provisioning in the background (no-op if already running or installed). Returns
     /// false if the id is unknown.</summary>
     bool Start(string id);
+    /// <summary>Provision a resource and WAIT for it — a no-op when it is already installed. For the
+    /// resource the app cannot serve without (git): startup provisions it inline instead of failing and
+    /// pointing at a panel, so a fresh install needs no click. Throws when it did not end up installed;
+    /// <paramref name="onProgress"/> receives (percent, message) for the startup overlay.</summary>
+    Task EnsureAsync(string id, Action<int, string?>? onProgress = null, CancellationToken ct = default);
 }
 
 public sealed class ResourceProvisioner : IResourceProvisioner
@@ -60,24 +65,39 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     // upgrade); it is NOT equal to the Playwright version. Bump this + re-publish the package together.
     public const string ResourcesPackageId = "gatherlight.resources";     // lower-case (flat-container)
     public const string ResourcesPackageVersion = "1.0.0";
-    private static string ResourcesUrl
+    private static string ResourcesUrl =>
+        Override("GATHERLIGHT_RESOURCES_URL")
+        ?? $"https://api.nuget.org/v3-flatcontainer/{ResourcesPackageId}/{ResourcesPackageVersion}/{ResourcesPackageId}.{ResourcesPackageVersion}.nupkg";
+
+    /// <summary>An operator's source override (a mirror, or a local server in a test), rejected when it
+    /// would fetch over remote cleartext. Every resource is unpacked into executables the app then RUNS,
+    /// so a MITM-able source is a code-execution channel; https, or http to loopback only.</summary>
+    private static string? Override(string envVar)
     {
-        get
-        {
-            var o = Environment.GetEnvironmentVariable("GATHERLIGHT_RESOURCES_URL");
-            if (o is { Length: > 0 })
-            {
-                // The bundle is unpacked into executables (chromium/git) the app runs — a REMOTE cleartext
-                // source is MITM-able. Allow https, or http only to loopback (a local test server/mirror).
-                if (o.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                    && !(Uri.TryCreate(o, UriKind.Absolute, out var u) && u.IsLoopback))
-                    throw new InvalidOperationException(
-                        "GATHERLIGHT_RESOURCES_URL over http must target loopback — refusing a remote cleartext resource source.");
-                return o;
-            }
-            return $"https://api.nuget.org/v3-flatcontainer/{ResourcesPackageId}/{ResourcesPackageVersion}/{ResourcesPackageId}.{ResourcesPackageVersion}.nupkg";
-        }
+        var o = Environment.GetEnvironmentVariable(envVar);
+        if (o is not { Length: > 0 }) return null;
+        if (o.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            && !(Uri.TryCreate(o, UriKind.Absolute, out var u) && u.IsLoopback))
+            throw new InvalidOperationException(
+                $"{envVar} over http must target loopback — refusing a remote cleartext resource source.");
+        return o;
     }
+
+    // The portable git the data repo runs on (MinGit from git-for-windows). Git is the data repo's engine
+    // — init, diff, commit, restore — so it is the ONE resource the app cannot serve without, which is why
+    // startup provisions it inline (GitRuntimeStep) instead of failing with a pointer at the 资源 panel.
+    //
+    // sha256-pinned, like the node entry and unlike the nuget bundle: a GitHub release asset can be
+    // replaced by its publisher, so the checksum — not the URL — is what guarantees the bytes of an
+    // executable we are about to run. Bump version, tag and checksum together, never one.
+    // build-production.mjs reads these constants for its --offline bundle, so the git it embeds and the
+    // git a lean install downloads are the same build by construction rather than by remembering.
+    public const string GitVersion = "2.55.0.2";
+    public const string GitTag = "v2.55.0.windows.2";
+    private const string GitSha256 = "e3ea2944cea4b3fabcd69c7c1669ef69b1b66c05ac7806d81224d0abad2dec31";
+    private static string GitUrl =>
+        Override("GATHERLIGHT_GIT_URL")   // the pin still applies: a mirror serves the same file
+        ?? $"https://github.com/git-for-windows/git/releases/download/{GitTag}/MinGit-{GitVersion}-64-bit.zip";
 
     // What the bundle contains (content/<Archive> inside the .nupkg) and where each part unpacks under
     // the resources root — the exact dirs the runtime resolvers look in (PlaywrightHost → .playwright +
@@ -109,6 +129,13 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             Kind: ResourceKind.Bundle, InstallDir: "", ReadyMarker: "",
             ApproxBytes: 235_000_000,
             Url: ResourcesUrl),
+        new ResourceSpec(
+            Id: "git", Name: $"Git 版本管理({GitVersion})",
+            NeededFor: "数据仓库的引擎(改动审阅 + 历史记录)—— 系统未装 git 时,启动时自动下载",
+            Kind: ResourceKind.Zip, InstallDir: "git", ReadyMarker: "cmd/git.exe",
+            ApproxBytes: 38_839_825,
+            Url: GitUrl,
+            Sha256: GitSha256),
         new ResourceSpec(
             Id: "node", Name: $"Node 运行时({NodeVersion})",
             NeededFor: "自定义能力的沙箱 —— 没有它,脚本能力会拒绝运行",
@@ -174,6 +201,43 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         _ = Task.Run(() => ProvisionAsync(spec, p));
         return true;
     }
+
+    public async Task EnsureAsync(string id, Action<int, string?>? onProgress = null, CancellationToken ct = default)
+    {
+        var spec = Catalog.FirstOrDefault(s => s.Id == id)
+            ?? throw new InvalidOperationException($"unknown resource '{id}'");
+        if (IsInstalled(spec)) return;
+
+        var p = _prog.GetOrAdd(id, _ => new Prog());
+        bool mine;
+        lock (p)
+        {
+            mine = !p.Running;
+            if (mine) { p.Running = true; p.State = "running"; p.Percent = 0; p.Message = "准备中…"; }
+        }
+        // Not ours = the 资源 panel already kicked this off; ride along rather than downloading twice
+        // into the same directory (ProvisionZipAsync deletes the destination before moving into it).
+        var work = mine ? ProvisionAsync(spec, p) : null;
+        while (true)
+        {
+            var (pct, msg) = Read(p);
+            onProgress?.Invoke(pct, msg);        // outside the lock — the observer takes its own
+            if (work is not null ? work.IsCompleted : !Running(p)) break;
+            if (work is not null) await Task.WhenAny(work, Task.Delay(400, ct));
+            else await Task.Delay(400, ct);
+            ct.ThrowIfCancellationRequested();
+        }
+        if (work is not null) await work;        // surface a cancellation/fault, never swallow it here
+
+        // ProvisionAsync records failures on the progress record instead of throwing (the panel polls
+        // it). A CALLER that is waiting needs the failure itself, with the reason it recorded.
+        if (!IsInstalled(spec))
+            throw new InvalidOperationException($"{spec.Name} 安装失败:{Message(p) ?? "未知错误"}");
+    }
+
+    private static bool Running(Prog p) { lock (p) return p.Running; }
+    private static string? Message(Prog p) { lock (p) return p.Message; }
+    private static (int Pct, string? Msg) Read(Prog p) { lock (p) return (p.Percent, p.Message); }
 
     private async Task ProvisionAsync(ResourceSpec spec, Prog p)
     {

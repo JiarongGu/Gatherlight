@@ -11,8 +11,9 @@ public sealed record DataCommitInfo(string Sha, string Subject, string Date);
 /// <summary>
 /// Git operations on the DATA repo (the private repo inside the data folder — never this code
 /// repo). Shells out to the git CLI: behavior parity with the prototype depends on CLI semantics
-/// (`cat-file -e`, `diff --no-index` against NUL). The CLI is resolved by <see cref="GitExe"/> —
-/// a bundled portable git ships with the app, so no separate git install is needed on the host.
+/// (`cat-file -e`, `diff --no-index` against NUL). The CLI is resolved per call (see
+/// <c>GitCliService.Exe</c>): an explicit override, else the portable git provisioned into the data
+/// folder, else a bundled copy, else PATH — so no separate git install is needed on the host.
 /// All paths are data-root-relative with forward slashes.
 /// </summary>
 public interface IGitCliService
@@ -20,6 +21,10 @@ public interface IGitCliService
     /// <summary>Init the data repo if missing + repo-local identity/CRLF config. Returns true
     /// when the repo was freshly initialized (caller makes the initial import commit).</summary>
     Task<bool> EnsureRepoAsync(CancellationToken ct = default);
+    /// <summary>Is a git CLI actually RUNNABLE? Returns the resolved executable, or null when there is
+    /// none (nothing on disk and no usable <c>git</c> on PATH) — which is a fresh machine, and the cue
+    /// for startup to provision the portable git rather than fail. Never throws.</summary>
+    Task<string?> ProbeAsync(CancellationToken ct = default);
     Task<bool> ExistsInHeadAsync(string rel, CancellationToken ct = default);
     /// <summary>Contents of one path at a revision (<c>HEAD:some/file</c>), or null when it does not
     /// exist there (a new file). Never throws on a missing path: "not in HEAD" is an ordinary
@@ -61,15 +66,29 @@ public sealed record GitResult(int ExitCode, string Stdout, string Stderr)
     }
 }
 
+/// <summary>No git CLI could be started. Raised INSTEAD of the raw <see cref="System.ComponentModel.Win32Exception"/>
+/// (whose "系统找不到指定的文件" never mentions git, and read as a mystery in the one place it mattered most:
+/// a fresh install's first boot). Startup provisions git when this is the situation — see GitRuntimeStep.</summary>
+public sealed class GitUnavailableException : Exception
+{
+    public string Attempted { get; }
+    public GitUnavailableException(string attempted, Exception inner)
+        : base($"未找到可用的 Git(尝试:{attempted})—— 数据仓库需要它。", inner) => Attempted = attempted;
+}
+
 public class GitCliService : IGitCliService
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);
 
-    // The git executable, resolved per instance. An explicit GATHERLIGHT_GIT override wins (tests/dev);
-    // else a portable git provisioned at setup into the data folder ({data}/state/resources/git); else a
-    // copy bundled next to the host (libs/git); else "git" from PATH. Git is the data repo's engine
+    // Last resort: whatever "git" PATH resolves to. Not a resolution — a guess, and on a fresh household
+    // machine a wrong one. LocateGit returns null rather than this so callers can tell the two apart.
+    private const string PathFallback = "git";
+
+    // Where an explicit git may live. An explicit GATHERLIGHT_GIT override wins (tests/dev); else a
+    // portable git provisioned at setup into the data folder ({data}/state/resources/git); else a copy
+    // bundled next to the host (libs/git). Null = nothing on disk. Git is the data repo's engine
     // (init + diff + commit + restore), so provisioning it makes a fresh machine self-sufficient.
-    private static string ResolveGit(string? resourcesDir)
+    private static string? LocateGit(string? resourcesDir)
     {
         var env = Environment.GetEnvironmentVariable("GATHERLIGHT_GIT");
         if (!string.IsNullOrWhiteSpace(env) && File.Exists(env)) return env;
@@ -80,12 +99,15 @@ public class GitCliService : IGitCliService
         }
         var bundled = Path.Combine(AppContext.BaseDirectory, "git", "cmd", "git.exe");
         if (File.Exists(bundled)) return bundled;
-        return "git";
+        return null;
     }
 
     private readonly string _root;
     private readonly ILogger _log;
-    private readonly string GitExe;
+    private readonly string? _resourcesDir;
+    private readonly object _exeLock = new();
+    private string _exe = PathFallback;
+    private bool _pinned;
 
     public GitCliService(ISiteContext site, IPlatformContext platform, ILogger<GitCliService> log)
         : this(site.RootPath, log, platform.ResourcesPath) { }
@@ -94,14 +116,34 @@ public class GitCliService : IGitCliService
     {
         _root = Path.GetFullPath(root);
         _log = log;
-        GitExe = ResolveGit(resourcesDir);
+        _resourcesDir = resourcesDir;
+    }
+
+    /// <summary>The executable for THIS invocation. Resolved lazily, and re-resolved until an explicit
+    /// copy is found on disk — because startup DOWNLOADS git into the data folder (GitRuntimeStep) after
+    /// DI has already built this singleton. Resolving once in the constructor made the answer stale
+    /// exactly when it mattered: with the portable git freshly installed three steps earlier, a retry
+    /// still spawned the absent PATH "git" and the app stayed gated with its own remedy already on disk.</summary>
+    private string Exe()
+    {
+        lock (_exeLock)
+        {
+            if (_pinned) return _exe;
+            var found = LocateGit(_resourcesDir);
+            if (found is null) return _exe;                 // still only the PATH guess — look again next call
+            _exe = found;
+            _pinned = true;
+            _log.LogInformation("Data repo git: {Git}", found);
+            return _exe;
+        }
     }
 
     public async Task<GitResult> RunAsync(string[] args, CancellationToken ct = default)
     {
+        var exe = Exe();
         var psi = new ProcessStartInfo
         {
-            FileName = GitExe,
+            FileName = exe,
             WorkingDirectory = _root,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -126,16 +168,33 @@ public class GitCliService : IGitCliService
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         using var proc = new Process { StartInfo = psi };
-        proc.Start();
+        try { proc.Start(); }
+        catch (System.ComponentModel.Win32Exception ex) { throw new GitUnavailableException(exe, ex); }
         var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
         var stderrTask = proc.StandardError.ReadToEndAsync(ct);
         await proc.WaitForExitAsync(ct);
         return new GitResult(proc.ExitCode, await stdoutTask, await stderrTask);
     }
 
+    /// <summary>Can we actually run git? A resolution is only a path; this is the answer that matters,
+    /// and it also catches a git that resolves but cannot start (a broken PATH shim). Never throws —
+    /// "no git" is the ordinary state of a fresh machine, not an error.</summary>
+    public async Task<string?> ProbeAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var r = await RunAsync(new[] { "--version" }, ct);
+            if (r.ExitCode == 0 && r.Stdout.Contains("git version", StringComparison.OrdinalIgnoreCase))
+                return Exe();
+            _log.LogWarning("git probe failed ({Code}): {Err}", r.ExitCode, r.Stderr.Trim());
+        }
+        catch (GitUnavailableException) { /* the fresh-machine case — the caller provisions */ }
+        catch (Exception ex) { _log.LogWarning(ex, "git probe failed"); }
+        return null;
+    }
+
     public async Task<bool> EnsureRepoAsync(CancellationToken ct = default)
     {
-        _log.LogInformation("Data repo git: {Git}", GitExe);
         var fresh = !Directory.Exists(Path.Combine(_root, ".git"));
         if (fresh)
         {

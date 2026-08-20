@@ -393,6 +393,24 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (`PlaywrightHost` browsers path, `GitCliService.GitExe` data-aware). `build-production.mjs
   --offline` bundles them for air-gapped installs. The Playwright **driver** (`libs/.playwright`,
   the chromium-install bootstrap) is still bundled.
+- **A resource the app cannot BOOT without is provisioned automatically, never reported.** git is that
+  one — the data repo is the audit trail the diff gate rests on — and being download-at-setup like
+  chromium, a fresh install on a machine with no git spawned the PATH `git` that wasn't there and died
+  in `DataRepoInitStep` with a raw Win32 `系统找不到指定的文件`. That step is essential, so the gate stayed
+  closed; and the remedy the product documented — the 资源 panel — is `/api`, which the same gate 503s
+  (settings too, so even the first-run wizard never appeared). **The failure sealed the door to its own
+  fix**: 重试 re-ran a step that could not succeed, on an install with no way to reach the thing it
+  needed. Before adding an essential step, ask what its failure leaves the household able to DO. Now
+  `GitRuntimeStep` runs immediately before `data-repo` and downloads MinGit (sha256-pinned; the same
+  constants `build-production.mjs` reads for `--offline`, so the bundled and downloaded gits cannot
+  drift) into `{data}/state/resources/git`. Three traps: `GitCliService` resolved its exe **once in the
+  constructor**, which DI builds before any step runs — so the download three steps earlier was
+  invisible and a retry still spawned the missing PATH `git` (it re-resolves per call until it finds a
+  real file); *installed* is not *usable*, so the step probes what it will actually run and says so when
+  that fails; and a fixture that puts git in place before the boot passes against all of it, which is
+  why `e2e-p49`'s case C makes git appear **mid-life** (confirmed to hang the gate against the pre-fix
+  binary). A household that already has git downloads nothing — `p49` asserts that too, because a
+  surprise 37 MB is its own defect.
 - **Auto-update is two-phase**: the server (`Platform/Hosting/Update`) checks the configured
   GitHub release + downloads/sha256-verifies into `{install}/.update/staged`; the C++ launcher
   overlays it on the next restart (a running exe can't replace itself) and is itself excluded

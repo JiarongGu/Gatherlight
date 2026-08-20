@@ -395,6 +395,11 @@ public static class GatherlightApp
             .AddSingleton<Platform.Hosting.Migration.Services.StartupMigrationRunner>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DbMigrateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealLocksStep>()
+            // Immediately BEFORE DataRepoInitStep, which cannot run without a git CLI: on a machine that
+            // has none (a fresh install — the lean bundle ships no git by design) this downloads the
+            // portable one instead of failing. It used to fail, and being essential it closed the gate
+            // over the 资源 panel that was the documented fix — the failure locked its own remedy away.
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.GitRuntimeStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DataRepoInitStep>()
             // KnowledgeBaseStep (the seeder) BEFORE SiteManifestStep: the shipped template's site.json
             // is authoritative for a fresh install; the manifest step's on-disk inference is only the

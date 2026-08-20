@@ -26,6 +26,10 @@ public sealed class MigrationStepState
     public string Status { get; set; } = StepStatus.Pending;
     public string? Error { get; set; }
     public long Ms { get; set; }
+    /// <summary>Live progress line for a step that is doing something slow and explicable — the git
+    /// download on a fresh install. Shown beside the title, and cleared the moment the step settles: a
+    /// "下载中 87%" left standing next to a ✓ would describe work that already finished.</summary>
+    public string? Detail { get; set; }
 }
 
 /// <summary>Immutable snapshot returned by GET /api/migration/status (serialized camelCase).</summary>
@@ -33,4 +37,5 @@ public sealed record MigrationSnapshot(
     string Phase, bool IsUpgrade, string FromVersion, string ToVersion,
     IReadOnlyList<MigrationStepView> Steps, IReadOnlyList<string> Warnings, string? Error);
 
-public sealed record MigrationStepView(string Id, string Title, bool Essential, string Status, string? Error, long Ms);
+public sealed record MigrationStepView(
+    string Id, string Title, bool Essential, string Status, string? Error, long Ms, string? Detail);
