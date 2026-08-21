@@ -14,19 +14,33 @@ const dataDir = dataDirFor('p46');
 const { ok, fail, done } = makeReporter('p46');
 makeTestData(dataDir);
 
-const PORT = 5492;
-let server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
-const base = server.base ?? `http://127.0.0.1:${PORT}`;
-const { j, post } = makeClient(base);
+// TWO ports, alternating, so a restart never rebinds the one just released. The pause below is not
+// enough on its own and the reason is specific: a stopping server keeps answering /api/health until
+// it actually exits, so `waitHealthy` can be satisfied by the PREDECESSOR — after which the next
+// request lands on a process on its way out and the session it created is simply gone. That reads as
+// "the parked gate did not survive the restart", i.e. as this suite's feature failing, which is why
+// it cost several investigations. Under a parallel fleet it failed nearly every run and passed solo.
+//
+// What this suite is actually about is the DATA FOLDER surviving a restart; which port the replacement
+// binds is incidental to that, so alternating costs the test nothing. The runner reads 5xxx literals to
+// schedule port-disjoint suites, so naming both here keeps that correct too.
+const PORTS = [5492, 5493];
+let boot = 0;
+const portFor = () => PORTS[boot++ % PORTS.length];
 
-// Same pause p41 uses: let the old process release the port (and finish its last write) before the
-// replacement binds it. Without it the "restart" races its own predecessor and the failure looks
-// like a lost session rather than a lost port.
+let server = startServer({ dataDir, port: portFor(), env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+let base = server.base ?? `http://127.0.0.1:${PORTS[0]}`;
+let { j, post } = makeClient(base);
+
 const restart = async (between = async () => {}) => {
   server.stop();
+  // Still pause: the replacement reads the same data folder, and the old process may not have
+  // finished its last write. This is about the FILES now, not about the port.
   await new Promise((r) => setTimeout(r, 1200));
   await between();
-  server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+  server = startServer({ dataDir, port: portFor(), env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+  base = server.base;
+  ({ j, post } = makeClient(base));
   await waitHealthy(base);
 };
 const snap = async (id) => (await j(`/api/chat/${id}`)).body;

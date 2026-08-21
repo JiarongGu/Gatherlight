@@ -78,9 +78,22 @@ export const makeTestData = (dataDir) =>
 
 /** Boot the server against an isolated data folder. Returns { server, base, log(), stop() }. */
 export function startServer({ dataDir, port, env = {}, cwd = repo }) {
+  // THE STUB IS THE DEFAULT, because the alternative is a test that spends money. A suite that named
+  // no CLI used to get the machine's real, authenticated `claude` — and since the Lyntai 3.0 memory
+  // steps annotate every fact write and verify every recall, a plain remember/recall suite quietly
+  // made real model calls. Measured on p6 (2026-08-21): SIX `router: claude-cli (model haiku) → Ok`
+  // lines spanning 74 seconds of its ~98s runtime, billed, on every developer machine with a
+  // signed-in CLI. It stayed invisible because it is fail-open — CI has no CLI, so there the same
+  // calls fail fast and the suite is merely fast and green.
+  //
+  // Defaulted only when the caller names NEITHER, so the two deliberate cases still work: p50 passes
+  // `GATHERLIGHT_CLAUDE_CMD: ''` to mean "this machine has no CLI", and an explicit process-env value
+  // is somebody asking for the real thing on purpose.
+  const stub = ('GATHERLIGHT_CLAUDE_CMD' in env) || process.env.GATHERLIGHT_CLAUDE_CMD
+    ? {} : { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd };
   const server = spawn('dotnet', ['run', '--project', 'src/server/Gatherlight.Server', '--no-build'], {
     cwd,
-    env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(port), ...env },
+    env: { ...process.env, GATHERLIGHT_DATA: dataDir, GATHERLIGHT_PORT: String(port), ...stub, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let logBuf = '';

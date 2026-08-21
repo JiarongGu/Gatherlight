@@ -2,7 +2,8 @@ name: Release
 
 # Manual-trigger only. There is intentionally NO auto CI on push/PR and NO tag-push trigger — cutting
 # a release is a deliberate act you start from the Actions tab (Run workflow). Mirrors the sibling
-# D3dxSkinManager release model. The full e2e suite still gates every release below.
+# D3dxSkinManager release model. The e2e suite is an OPT-IN gate (`run_e2e`, off by default): it is run
+# locally before a release, and every release compiles the whole bundle regardless.
 on:
   workflow_dispatch:
     inputs:
@@ -20,6 +21,11 @@ on:
           - patch
           - minor
           - major
+      run_e2e:
+        description: 'Run the full e2e suite as a release gate (~10 min; off = you have run it locally)'
+        required: false
+        type: boolean
+        default: false
       create_tag:
         description: 'Create + push a git tag for this version'
         required: false
@@ -129,10 +135,32 @@ jobs:
         working-directory: tools/pdf-form
         run: npm ci
 
-      # Gate the release on the full e2e suite against the exact commit we're about to bundle.
-      # --build guarantees a fresh client + server first; a red suite fails the release.
+      # OPTIONAL gate, off by default. One developer works on this project and runs the suite locally
+      # before cutting a release, so ~10 minutes of runner time per release re-proves something already
+      # proven rather than reducing a risk. Turn it on from the Run-workflow form when a release is worth
+      # re-checking in a clean environment — a dependency bump, a packaging change, a long gap since the
+      # last local run.
+      #
+      # What still gates a release with this off: the bundle step below compiles the client, the server
+      # and the native launcher, so nothing that fails to BUILD can ship. What is no longer checked here
+      # is BEHAVIOUR — that is the trade, and the summary step below records which one this release got.
+      #
+      # Deliberately serial (no --parallel). When you ask for the gate you want a trustworthy answer, not
+      # a fast one, and the parallel path has a known flake set on Windows whose suites all pass solo —
+      # a false red on a release is worse than the minutes it saves.
       - name: e2e gate
+        if: inputs.run_e2e
         run: node devtools/dev.mjs e2e all --build
+
+      # Say so, in the run's own summary. "Was this release tested?" must not be answerable only by
+      # remembering which box was ticked weeks ago.
+      - name: Record that the gate was skipped
+        if: ${{ !inputs.run_e2e }}
+        shell: pwsh
+        run: |
+          "### e2e gate: skipped" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "This release was cut without running the e2e suite in CI (``run_e2e`` was off). The bundle still had to compile — client, server and native launcher — so this release is build-checked, not behaviour-checked." >> $env:GITHUB_STEP_SUMMARY
 
       # Builds client -> self-contained host -> native C++ launcher -> publish/Gatherlight/ + zip.
       # GitHub Actions sets CI=true, so Gatherlight.Launcher.vcxproj selects the v143 toolset. --zip

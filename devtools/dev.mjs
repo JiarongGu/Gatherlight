@@ -363,7 +363,14 @@ switch (cmd) {
     const wallStart = Date.now();
 
     if (limit <= 1) {
-      for (const suite of suites) results.push(await runOne(suite, false));
+      for (const suite of suites) {
+        const rec = await runOne(suite, false);
+        // Print the duration in serial too. Only the parallel path used to, so the one mode the
+        // RELEASE GATE actually runs was the one with no per-suite timing — and "the gate takes ten
+        // minutes" could not be answered without re-running it instrumented.
+        console.log(`  ${rec.passed ? '✓' : '✗'} ${rec.suite} (${(rec.ms / 1000).toFixed(0)}s)`);
+        results.push(rec);
+      }
     } else {
       console.log(`e2e: ${suites.length} suites, up to ${limit} at once (port-disjoint)…`);
       const pending = [...suites];
@@ -394,12 +401,47 @@ switch (cmd) {
       }
     }
 
+    // ONE serial retry for anything that failed a PARALLEL run. The Windows teardown abort
+    // (0xC0000409, usually "stopped after 0 check(s)") is not a property of the code under test:
+    // p5 and p20 died that way in an otherwise-green parallel fleet and both pass alone — and p14
+    // and p18 did the same in SERIAL fleets, so concurrency does not cause it, it only raises the
+    // odds. Without this, the fast path costs a false red roughly every run, which is exactly the
+    // reason to distrust a gate.
+    //
+    // Only under --parallel, so a serial run's answer stays precisely as trustworthy as before. It
+    // cannot hide a real failure: a suite that fails twice is still failed, and one that needed the
+    // retry is NAMED below — a suite that starts needing it every time is a suite to fix, and that
+    // has to stay visible rather than being quietly absorbed.
+    const recovered = [];
+    if (limit > 1) {
+      const toRetry = results.filter((r) => !r.passed).map((r) => r.suite);
+      if (toRetry.length) {
+        console.log(`\ne2e: retrying ${toRetry.length} failed suite(s) serially — ${toRetry.join(', ')}`);
+        for (const suite of toRetry) {
+          const rec = await runOne(suite, true);
+          if (rec.passed) recovered.push(suite);
+          else process.stdout.write(rec.out);
+          results[results.findIndex((r) => r.suite === suite)] = rec;
+          console.log(`  ${rec.passed ? '✓' : '✗'} ${suite} on retry (${(rec.ms / 1000).toFixed(0)}s)`);
+        }
+      }
+    }
+
     results.sort((a, b) => Number(a.suite.slice(1)) - Number(b.suite.slice(1)));
     const wall = ((Date.now() - wallStart) / 1000).toFixed(0);
     const failed = results.filter((r) => !r.passed);
     const slow = [...results].sort((a, b) => b.ms - a.ms).slice(0, 3).map((r) => `${r.suite} ${(r.ms / 1000).toFixed(0)}s`);
     console.log(`\ne2e: ${results.length - failed.length}/${results.length} suites passed in ${wall}s${limit > 1 ? ` (parallel ×${limit})` : ''}`);
+    // Named, never just counted: "2 flaky" is a number you learn to skip past, whereas the same suite
+    // appearing here run after run is the signal that it is not flaky at all.
+    if (recovered.length) console.log(`  recovered on a serial retry: ${recovered.join(', ')}`);
     if (slow.length) console.log(`  slowest: ${slow.join(' · ')}`);
+    // Where the wall-clock went, in one line. A gate is a budget: without the total-of-suites figure
+    // beside the wall figure there is no way to tell "one slow suite" from "fifty average ones", and
+    // those have opposite fixes.
+    const totalSuiteSec = results.reduce((n, r) => n + r.ms, 0) / 1000;
+    console.log(`  suite time total ${totalSuiteSec.toFixed(0)}s across ${results.length}`
+      + ` · median ${(results.map((r) => r.ms).sort((a, b) => a - b)[results.length >> 1] / 1000).toFixed(0)}s`);
     for (const f of failed) {
       // Say WHERE it died, not just that it did. A suite that printed its PASS marker and then
       // aborted is a teardown crash; one that stopped mid-assertions is a real failure — and the

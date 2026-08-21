@@ -517,8 +517,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   GitHub release + downloads/sha256-verifies into `{install}/.update/staged`; the C++ launcher
   overlays it on the next restart (a running exe can't replace itself) and is itself excluded
   from the overlay. That split is the whole reason the launcher exists. Release: a single
-  **manual-trigger** `.github/workflows/release.yml` (`workflow_dispatch`; version bump → e2e
-  gate → bundle → optional tag → GitHub Release) — no auto CI on push/PR (D3dx-style). The release
+  **manual-trigger** `.github/workflows/release.yml` (`workflow_dispatch`; version bump → **optional**
+  e2e gate → bundle → optional tag → GitHub Release) — no auto CI on push/PR (D3dx-style). **The e2e
+  gate is opt-in (`run_e2e`, default off)**: it is run locally before a release, and ~10 min of runner
+  time per release re-proves that rather than reducing a risk. Every release still COMPILES the client,
+  server and launcher, so a release is build-checked even when it is not behaviour-checked — and the run
+  summary says which it was. Turn it on for a dependency bump, a packaging change, or a long gap since
+  the last local run; it stays SERIAL there, because a gate you asked for should give a trustworthy
+  answer rather than a fast one. The release
   BODY comes from `docs/release-notes/next.md` when present (generated commit log underneath,
   collapsed), and the workflow archives it to `<version>.md` in the bump commit — a `next.md` left
   behind is republished verbatim on the next release.
