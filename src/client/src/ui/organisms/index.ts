@@ -15,3 +15,7 @@ export { PlanActionsMenu, type ActionTarget } from './PlanActionsMenu';
 export { TripMap } from './TripMap';
 export { CityMap } from './CityMap';
 export { MigrationOverlay } from './MigrationOverlay';
+// Sections of the management console, not routed screens — they used to live in screens/ purely because
+// that is where they were first written. A screen is a surface you navigate TO; these render inside one.
+export { MemoryRecallPanel } from './MemoryRecallPanel';
+export { LocalModelsPanel, type BuiltInModelRow } from './LocalModelsPanel';

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ResourceRow } from '@/ui/molecules';
+import { ResourceRow, PullProgress, ModelPullField, type ModelPullState } from '@/ui/molecules';
 
 /**
  * 本机模型 · Local models — the provisioning half of 资源 · Resources.
@@ -34,14 +34,8 @@ interface OfferedModel {
   note: string; vintage: string | null; measured: Measured | null;
 }
 
-/** A download in flight, or one that finished in the last few minutes. */
-interface ModelPull {
-  model: string; running: boolean;
-  // Null while Ollama is resolving manifests and has no total to divide by — rendered as indeterminate,
-  // because a bar pinned at 0% reads as stuck.
-  percent: number | null;
-  status: string | null; error: string | null;
-}
+// A download's shape belongs to the molecule that renders it (PullProgress) — imported as
+// ModelPullState rather than redeclared here, so the two cannot drift.
 
 interface Inventory {
   runtime: {
@@ -52,7 +46,7 @@ interface Inventory {
   offers: OfferedModel[];
   recommendation: { id: string; reason: string; caution: string | null };
   measuredOn: string;
-  pulls: ModelPull[];
+  pulls: ModelPullState[];
 }
 
 const LAYER_NAMES: Record<string, string> = { judge: '判断', semantic: '语义' };
@@ -64,7 +58,7 @@ export interface BuiltInModelRow {
   installed: boolean; state: string; percent: number; message: string | null;
 }
 
-export function ModelsSection(
+export function LocalModelsPanel(
   { toast, builtIn, provision }:
   {
     toast: (t: string, k?: 'ok' | 'err') => void;
@@ -304,64 +298,16 @@ export function ModelsSection(
             it — which is exactly how this panel shipped without the two best models available at the time.
             Anything Ollama can pull is usable the day it exists — which is the one thing 内置 cannot offer,
             and the reason these two are separate groups rather than one list. */}
-        <OtherModelField busy={busy} post={post} pullOf={pullOf} />
+        <ModelPullField
+          busy={busy}
+          pullOf={pullOf}
+          onPull={(id) => post('/api/manage/models/pull', { model: id }, 'pull:other')}
+          label="其他模型 · 直接填写 Ollama 模型名"
+          placeholder="例如 nomic-embed-text-v2-moe 或 qwen3:4b"
+          hint="下载后回到「校准 · Cortex → 记忆检索」,在对应的一层里选它 —— 嵌入模型给「语义」,对话模型给「判断」。"
+        />
       </div>
     </div>
   );
 }
 
-/** A download in flight, or the outcome of one that just finished.
- *
- *  It exists because the pull used to be awaited INSIDE the POST: the button said 下载中… and nothing else
- *  changed for however long a gigabyte takes on the household's line — indistinguishable from a hang.
- *  Renders nothing when there is no download, so every caller can mount it unconditionally. */
-function PullProgress({ pull }: { pull: ModelPull | null }) {
-  if (!pull) return null;
-  if (!pull.running) {
-    return pull.error
-      ? <div className="mem-fine danger">下载失败:{pull.error}</div>
-      : <div className="mem-fine">下载完成。</div>;
-  }
-  return (
-    <div className="mem-prog">
-      {/* The 6% floor is for the indeterminate case only: a bar with no width at all reads as one that has
-          not started, which is exactly wrong while manifests are being fetched. */}
-      <div className="res-prog"><span className="res-bar" style={{ width: `${pull.percent ?? 6}%` }} /></div>
-      <div className="mem-fine">
-        {pull.percent === null ? '正在准备…' : `${pull.percent}%`}
-        {pull.status ? ` · ${pull.status}` : ''}
-      </div>
-    </div>
-  );
-}
-
-/** Pull a model the shortlist has never heard of. */
-function OtherModelField(
-  { busy, post, pullOf }:
-  { busy: string | null; post: (u: string, b: unknown, k: string) => void;
-    pullOf: (id: string) => ModelPull | null },
-) {
-  const [id, setId] = useState('');
-  const pull = id ? pullOf(id) : null;
-  return (
-    <div className="mem-other">
-      <label className="set-field">
-        <span>其他模型 · 直接填写 Ollama 模型名</span>
-        <input value={id} onChange={(e) => setId(e.target.value.trim())}
-          placeholder="例如 nomic-embed-text-v2-moe 或 qwen3:4b" />
-      </label>
-      <div className="mem-other-act">
-        {pull?.running ? (
-          <span className="res-running">下载中…</span>
-        ) : (
-          <button className="cx-btn" disabled={!id || busy === 'pull:other'}
-            onClick={() => post('/api/manage/models/pull', { model: id }, 'pull:other')}>下载</button>
-        )}
-      </div>
-      <PullProgress pull={pull} />
-      <div className="mem-fine">
-        下载后回到「校准 · Cortex → 记忆检索」,在对应的一层里选它 —— 嵌入模型给「语义」,对话模型给「判断」。
-      </div>
-    </div>
-  );
-}

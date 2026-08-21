@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MemoryRecallSection } from './MemoryRecall';
-import { ModelsSection } from './Models';
+import { MemoryRecallPanel, LocalModelsPanel } from '@/ui/organisms';
 import { ResourceRow } from '@/ui/molecules';
 import SetupWizard from './SetupWizard';
 import { MigrationOverlay } from '@/ui/organisms/MigrationOverlay';
@@ -1048,7 +1047,7 @@ function CortexView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' 
 
       <KbUpgradesCard toast={toast} />
 
-      <MemoryRecallSection toast={toast} onRestart={onRestart} inHost={inHost} />
+      <MemoryRecallPanel toast={toast} onRestart={onRestart} inHost={inHost} />
 
       <div className="mng-title">模型路由 · Model routing</div>
       <div className="cx-models">
@@ -1256,7 +1255,7 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
           everything downloaded into the data folder, including the runtime that hosts them. Which model
           each recall layer USES stays in 校准 · Cortex → 记忆检索, because that is a recall decision and
           not a provisioning one. */}
-      <ModelsSection toast={toast} builtIn={modelRows} provision={provision} />
+      <LocalModelsPanel toast={toast} builtIn={modelRows} provision={provision} />
       {inHost && (
         <div className="set-actions">
           <button className="cx-btn" onClick={onRestart}>重启服务</button>
