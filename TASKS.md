@@ -27,9 +27,12 @@
   tool itself refuses to call a conclusion. At a few hundred facts the magnitude becomes quotable, and the
   panel's attributed wording can finally be replaced with our own number. 语义 needs two runs (it is a
   startup registration, so it cannot be A/B'd in one).
-  **Also found there and worth acting on independently: 判断 costs 8.9 s per recall via the CLI against
-  37 ms for the floor** — 240×, from a process spawn per call. That is an argument for the local-model arm
-  that has nothing to do with tokens, and nothing had measured it before.
+  The 8.9 s / 37 ms latency found there is now STATED in 判断's cost line (with the 公式 floor beside it, and
+  asserted by `p51`), so a household sees it before recall starts feeling slow. What is still unmeasured is
+  the LOCAL arm's own latency — the panel says only that it avoids the CLI's process spawn, because quoting
+  a figure nobody took here is the thing that panel refuses to do. Measuring it needs a second run: the
+  backend is a `settings.json` binding consumed at DI registration, so it is bind → restart → `recall-bench`,
+  which `recall-bench` already tells you at the end of its own output.
 - [ ] **Measure the decay constants against real use.** The graph index now ranks `recall_facts`, but
   Lyntai ships several of its constants explicitly unmeasured (half-life, reinforce factor, and the
   three governing connectedness, which have to be measured *together* since edge decay erodes the

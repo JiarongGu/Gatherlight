@@ -112,9 +112,20 @@ public sealed class MemoryRecallController : ControllerBase
                     // so the two kinds of change are reported differently rather than looking alike.
                     on = MemoryEnrichment.IsOn(_appConfig), live = true,
                     what = "写入事实时标注主题,检索时判断哪些结果真正回答了问题(明显提升召回质量)。",
+                    // COST IS TWO THINGS, and only one of them was stated. The token cost was here from the
+                    // start; the LATENCY was measured later (docs/memory-recall-resharpen.md §3c, on this
+                    // household's own facts) at 8.9 s per recall against 37 ms for the 公式 floor — 240×,
+                    // essentially all of it a CLI process spawn per call. A household deciding whether to
+                    // leave 判断 on is entitled to that before they notice recall feeling slow, and it is
+                    // OUR number, so unlike the weighting note below it needs no attribution.
+                    // The local arm avoids the spawn; its own latency is deliberately NOT quoted, because
+                    // nobody has measured it here and a plausible figure is the thing this panel refuses.
                     cost = boundJudge.Id == MemorySources.DefaultJudgeSource
                         ? "每次记录事实与每次检索各消耗一次 Claude CLI 调用(使用已登录的账号)。"
-                        : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。",
+                          + "实测每次检索约 9 秒 —— 每次调用都要启动一次 CLI 进程;只用「公式」时是 0.04 秒。"
+                          + "换成本机模型可以省掉这次进程启动。"
+                        : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
+                          + "没有 CLI 那条的进程启动开销(那条实测每次检索约 9 秒)。",
                     source = boundJudge.Id, model = MemorySources.ResolveJudgeModel(Settings()),
                     activeSource = _judgeWiring.Transport, activeModel = _judgeWiring.Model,
                     sources = await SourceViews(MemorySources.Judge, MemorySources.JudgeDeclined, ctx, MemoryLayers.Judge),

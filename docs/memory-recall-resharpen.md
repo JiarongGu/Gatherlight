@@ -112,6 +112,12 @@ On this development machine — **16 facts, 12 probes, limit 3, 语义 off**:
 - **A cost nobody had measured: 240× the latency.** 8.9 s per recall against 37 ms. Lyntai measured 3.0 s
   for a Haiku judge; the gap is a CLI process spawn per call. Every `recall_facts` the agent makes pays it.
   That is a real argument for the local-model arm that has nothing to do with tokens.
+  **Acted on 2026-08-22:** 判断's cost line in 记忆检索 now names it — "实测每次检索约 9 秒 …… 只用「公式」时是
+  0.04 秒" — because cost was two things and only the token half was ever stated. The floor travels with it;
+  a duration with nothing to compare it against is not a decision. `p51` asserts both, so it cannot quietly
+  go back to mentioning only tokens. The LOCAL arm's latency is still unquoted: the panel says only that it
+  skips the spawn, since nobody has measured it on this corpus and this is the panel that refuses plausible
+  figures.
 - **It is NOT a conclusion, and the tool says so itself.** 12 probes moves the rate by 0.08 per query. The
   first version of this bench nearly reported something worse than a borrowed number: at `limit 8` on a
   16-fact corpus, random ranking "finds" the answer 50% of the time, so 0.667 → 0.500 was measuring page

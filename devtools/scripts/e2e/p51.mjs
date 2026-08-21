@@ -63,6 +63,15 @@ try {
     typeof judge.on === 'boolean' && judge.live === true, JSON.stringify({ on: judge.on, live: judge.live }));
   ok('and states its cost, because someone pays it',
     /token|调用/.test(String(judge.cost ?? '')), judge.cost);
+  // COST IS TWO THINGS. The token cost was stated from the start; the LATENCY was measured later at 8.9 s
+  // per recall against 37 ms for the 公式 floor (240×, essentially all of it a CLI process spawn) and was
+  // not stated anywhere. A household leaving 判断 on is entitled to that before recall starts feeling slow,
+  // so the CLI arm's cost line has to keep naming a time — and a baseline, since a duration with nothing to
+  // compare it against is not a decision.
+  if (judge.source === 'claude-cli') {
+    ok('and, on the CLI arm, names the LATENCY too — with the 公式 floor to compare it against',
+      /秒/.test(String(judge.cost ?? '')) && /0\.04|公式/.test(String(judge.cost ?? '')), judge.cost);
+  }
   // Defaults ON: flipping that default would silently degrade recall for every existing household on
   // upgrade, which is a different (and worse) defect than the cost it was hiding.
   ok('判断 defaults ON, so an upgrade does not silently degrade recall', judge.on === true);
