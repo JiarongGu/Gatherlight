@@ -203,6 +203,12 @@ try {
     JSON.stringify(judgeSources));
   ok('语义 lists all three backends too — including the ones it cannot use',
     BACKENDS.every((b) => semanticSources.includes(b)), JSON.stringify(semanticSources));
+  // SAME ORDER on every layer. Sorting by status put the same four labels in different positions on the
+  // two rows, so position could never become a landmark a household learns. Usability is carried by how a
+  // button is DRAWN, not by where it sits.
+  ok('and both layers list them in the SAME order, so position is stable',
+    judgeSources.join() === BACKENDS.join() && semanticSources.join() === BACKENDS.join(),
+    JSON.stringify({ judge: judgeSources, semantic: semanticSources }));
 
   // …and `bindable` is what separates "cannot, ever" from "cannot yet". THE load-bearing pair of this
   // design: Claude is unbindable under 语义 because no class implements that layer's interface (no

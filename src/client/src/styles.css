@@ -3381,10 +3381,16 @@ kbd, .topbar-kbd {
    same components new class names at their new address would be two idioms for one thing. */
 .res-models { margin-top: 26px; }
 .res-models .res-item { margin-bottom: 4px; }
-/* Two ways to get a local model, named rather than left to be inferred from the rows. Quiet — it is a
-   caption over a group, not a heading competing with 本机模型 above it. */
-.res-models-group { display: block; margin: 16px 0 7px; }
-.res-models-group:first-of-type { margin-top: 10px; }
+/* TWO WAYS TO GET A LOCAL MODEL, contained rather than merely labelled. A caption with no boundary left
+   the comparison table floating between the groups, where it read as applying to both — and 内置 pulls
+   nothing, so that reading is simply wrong. The rule down the left is what makes the nesting a fact. */
+.res-group { padding-left: 13px; border-left: 2px solid var(--border-soft); margin: 18px 0 4px; }
+.res-group + .res-group { margin-top: 22px; }
+/* Quiet: a caption over a group, not a heading competing with 本机模型 above it. */
+.res-group-h {
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em;
+  color: var(--muted); margin-bottom: 9px;
+}
 
 /* What Ollama holds, and what it costs in disk. */
 .mem-disk { margin-top: 18px; }

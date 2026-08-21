@@ -182,11 +182,14 @@ public sealed class MemoryRecallController : ControllerBase
         IEnumerable<IMemorySource> sources, IEnumerable<DeclinedBackend> declined, MemorySourceContext ctx,
         string layer)
     {
-        var views = new List<object>();
+        // (rank, view) so the two loops below can append in whatever order they like and the result still
+        // comes out in MemoryBackends.Order — see there for why the order is FIXED rather than
+        // usable-ones-first.
+        var views = new List<(int Rank, object View)>();
         foreach (var s in sources)
         {
             var status = await s.StatusAsync(ctx);
-            views.Add(new
+            views.Add((MemoryBackends.Rank(s.Id), new
             {
                 id = s.Id, name = s.Name, description = s.Description, bindable = true,
                 available = status.Available, reason = status.Reason, suggest = status.Suggest,
@@ -205,19 +208,20 @@ public sealed class MemoryRecallController : ControllerBase
                         queries = m.Measured.Queries, msPerQuery = m.Measured.MsPerQuery,
                     },
                 }),
-            });
+            }));
         }
         foreach (var d in declined)
         {
-            views.Add(new
+            views.Add((MemoryBackends.Rank(d.Id), new
             {
                 id = d.Id, name = d.Name, description = d.Reason, bindable = false,
                 available = false, reason = d.Reason, suggest = (string?)null,
                 needsEndpoint = false, endpoint = (string?)null,
                 models = Enumerable.Empty<object>(),
-            });
+            }));
         }
-        return views.ToArray();
+        // OrderBy is stable, so two backends of equal rank (an id nobody listed) keep their arrival order.
+        return views.OrderBy(v => v.Rank).Select(v => v.View).ToArray();
     }
 
     /// <summary>What the household actually typed for this layer's address, unresolved. Shown back to them

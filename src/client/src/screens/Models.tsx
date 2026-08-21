@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ResourceRow } from '@/ui/molecules';
 
 /**
  * 本机模型 · Local models — the provisioning half of 资源 · Resources.
@@ -129,65 +130,72 @@ export function ModelsSection(
           resource row (the provisioner owns it), rendered HERE rather than in the list above: it is a
           model, and this is where models live. */}
       {builtIn.length > 0 && (
-        <>
-          <div className="mem-src-lbl res-models-group">内置 —— 不需要另外安装任何东西</div>
+        <div className="res-group">
+          <div className="res-group-h">内置 —— 不需要另外安装任何东西</div>
           {builtIn.map((r) => (
-            <div className={`res-item${r.installed ? ' ok' : ''}${r.state === 'error' ? ' err' : ''}`} key={r.id}>
-              <div className="res-main">
-                <div className="res-name">
-                  {r.name}
-                  {r.installed && <span className="res-badge">已安装</span>}
-                  {r.installed && <span className="res-badge">嵌入</span>}
-                </div>
-                <div className="res-need">{r.neededFor}</div>
-                {r.state === 'running' && (
-                  <>
-                    <div className="res-prog"><span className="res-bar" style={{ width: `${r.percent}%` }} /></div>
-                    <div className="res-msg">{r.message} · {r.percent}%</div>
-                  </>
-                )}
-                {r.state === 'error' && <div className="res-msg danger">下载失败:{r.message}</div>}
-              </div>
-              <div className="res-side">
-                <div className="res-size">≈ {mb(r.approxBytes)}</div>
-                {r.state === 'running'
-                  ? <span className="res-running">下载中…</span>
-                  : (
-                    <button className={`cx-btn${r.installed ? '' : ' primary'}`} onClick={() => provision(r.id)}>
-                      {r.installed ? '重新下载' : '下载'}
-                    </button>
-                  )}
-              </div>
-            </div>
+            <ResourceRow
+              key={r.id}
+              name={r.name}
+              badges={r.installed && (
+                <>
+                  <span className="res-badge">已安装</span>
+                  {/* What it can DO, the same word the Ollama disk list uses — so one glance down the
+                      section tells you which layer each model can serve, whoever provides it. */}
+                  <span className="res-badge">嵌入</span>
+                </>
+              )}
+              installed={r.installed}
+              failed={r.state === 'error'}
+              lines={<div className="res-need">{r.neededFor}</div>}
+              progress={r.state === 'running' ? { percent: r.percent, message: r.message } : null}
+              problem={r.state === 'error' ? `下载失败:${r.message}` : null}
+              approxBytes={r.approxBytes}
+              action={r.state === 'running' ? (
+                <span className="res-running">下载中…</span>
+              ) : (
+                <button className={`cx-btn${r.installed ? '' : ' primary'}`} onClick={() => provision(r.id)}>
+                  {r.installed ? '重新下载' : '下载'}
+                </button>
+              )}
+            />
           ))}
-          <div className="mem-src-lbl res-models-group">Ollama —— 需要一个常驻服务,但模型可以随便换</div>
-        </>
+        </div>
       )}
 
-      {/* The runtime line. It carries its own problem sentence because "no models" and "no daemon" have
-          completely different fixes, and a list that is simply empty says neither. */}
-      <div className={`res-item${rt.installed ? ' ok' : ''}${rt.problem ? ' err' : ''}`}>
-        <div className="res-main">
-          <div className="res-name">
-            Ollama 运行时
-            {rt.installed && <span className="res-badge">已安装</span>}
-            {rt.serving && <span className="res-badge">运行中</span>}
-            {rt.gpuLikely && <span className="res-badge">GPU 可用</span>}
-          </div>
-          <div className="res-need">
-            {rt.installed
-              ? `${rt.serving ? `运行中 ${rt.version ?? ''}` : '已安装,未运行'} · ${rt.baseUrl}`
-              : '未安装 —— 在上面的资源列表里下载,或自行安装后重启应用。'}
-          </div>
-          {rt.problem && <div className="res-msg danger">{rt.problem}</div>}
-        </div>
-        <div className="res-side">
-          {rt.installed && !rt.serving && (
+      {/* EVERYTHING below belongs to Ollama — the runtime, what is on its disk, the comparison of what it
+          could pull, and the free-form pull field. Contained rather than merely labelled: a heading with
+          no boundary left the comparison table floating, where it read as applying to the whole section
+          including 内置 (which offers exactly one curated model and pulls nothing). */}
+      <div className="res-group">
+        <div className="res-group-h">Ollama —— 需要一个常驻服务,但模型可以随便换</div>
+
+        {/* The runtime line. It carries its own problem sentence because "no models" and "no daemon" have
+            completely different fixes, and a list that is simply empty says neither. No size: there is
+            nothing to download here — the runtime itself is a row in the list above. */}
+        <ResourceRow
+          name="Ollama 运行时"
+          badges={
+            <>
+              {rt.installed && <span className="res-badge">已安装</span>}
+              {rt.serving && <span className="res-badge">运行中</span>}
+              {rt.gpuLikely && <span className="res-badge">GPU 可用</span>}
+            </>
+          }
+          installed={rt.installed}
+          failed={!!rt.problem}
+          lines={
+            <div className="res-need">
+              {rt.installed
+                ? `${rt.serving ? `运行中 ${rt.version ?? ''}` : '已安装,未运行'} · ${rt.baseUrl}`
+                : '未安装 —— 在上面的资源列表里下载,或自行安装后重启应用。'}
+            </div>
+          }
+          problem={rt.problem}
+          action={rt.installed && !rt.serving && (
             <button className="cx-btn primary" disabled={busy === 'start'}
               onClick={() => post('/api/manage/models/start', undefined, 'start')}>启动</button>
           )}
-        </div>
-      </div>
+        />
 
       {/* ON DISK — what it costs, what it can do, and what is holding it. Without this, "free up space"
           means leaving the app for a terminal, and a household that tried several models has no way to
@@ -292,10 +300,12 @@ export function ModelsSection(
         </>
       )}
 
-      {/* THE LIST IS NOT THE LIMIT. A catalog baked into a release cannot contain a model published after
-          it — which is exactly how this panel shipped without the two best models available at the time.
-          Anything Ollama can pull is usable the day it exists. */}
-      <OtherModelField busy={busy} post={post} pullOf={pullOf} />
+        {/* THE LIST IS NOT THE LIMIT. A catalog baked into a release cannot contain a model published after
+            it — which is exactly how this panel shipped without the two best models available at the time.
+            Anything Ollama can pull is usable the day it exists — which is the one thing 内置 cannot offer,
+            and the reason these two are separate groups rather than one list. */}
+        <OtherModelField busy={busy} post={post} pullOf={pullOf} />
+      </div>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MemoryRecallSection } from './MemoryRecall';
 import { ModelsSection } from './Models';
+import { ResourceRow } from '@/ui/molecules';
 import SetupWizard from './SetupWizard';
 import { MigrationOverlay } from '@/ui/organisms/MigrationOverlay';
 
@@ -1201,7 +1202,7 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
     }
   };
 
-  const mb = (n: number) => `${Math.round(n / 1_000_000)} MB`;
+  // (size formatting now belongs to ResourceRow, which is the thing that renders it)
   if (!items) return <div className="eval-empty">加载中…</div>;
 
   // A MODEL goes in the models section, even though the provisioner owns it like any other resource.
@@ -1219,39 +1220,36 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
       </div>
       <div className="res-list">
         {runtimes.map((r) => (
-          <div className={`res-item${r.installed ? ' ok' : ''}${r.state === 'error' ? ' err' : ''}`} key={r.id}>
-            <div className="res-main">
-              <div className="res-name">
-                {r.name}
-                {r.installed && <span className="res-badge">已安装</span>}
-              </div>
-              <div className="res-need">{r.neededFor}</div>
-              {r.detail && <div className="res-need">{r.detail}</div>}
-              {r.version && (
-                <div className="res-need">
-                  当前版本 {r.version}
-                  {hasUpdate(r) && <span className="res-badge">可更新 → {r.available}</span>}
-                </div>
-              )}
-              {r.state === 'running' && (
-                <>
-                  <div className="res-prog"><span className="res-bar" style={{ width: `${r.percent}%` }} /></div>
-                  <div className="res-msg">{r.message} · {r.percent}%</div>
-                </>
-              )}
-              {r.state === 'error' && <div className="res-msg danger">下载失败:{r.message}</div>}
-            </div>
-            <div className="res-side">
-              <div className="res-size">≈ {mb(r.approxBytes)}</div>
-              {r.state === 'running' ? (
-                <span className="res-running">下载中…</span>
-              ) : (
-                <button className={`cx-btn${r.installed && !hasUpdate(r) ? '' : ' primary'}`} onClick={() => provision(r.id)}>
-                  {hasUpdate(r) ? '更新' : r.installed ? '重新下载' : '下载'}
-                </button>
-              )}
-            </div>
-          </div>
+          <ResourceRow
+            key={r.id}
+            name={r.name}
+            badges={r.installed && <span className="res-badge">已安装</span>}
+            installed={r.installed}
+            failed={r.state === 'error'}
+            lines={
+              <>
+                <div className="res-need">{r.neededFor}</div>
+                {/* The CLI's login state rides here — the difference between installed and usable. */}
+                {r.detail && <div className="res-need">{r.detail}</div>}
+                {r.version && (
+                  <div className="res-need">
+                    当前版本 {r.version}
+                    {hasUpdate(r) && <span className="res-badge">可更新 → {r.available}</span>}
+                  </div>
+                )}
+              </>
+            }
+            progress={r.state === 'running' ? { percent: r.percent, message: r.message } : null}
+            problem={r.state === 'error' ? `下载失败:${r.message}` : null}
+            approxBytes={r.approxBytes}
+            action={r.state === 'running' ? (
+              <span className="res-running">下载中…</span>
+            ) : (
+              <button className={`cx-btn${r.installed && !hasUpdate(r) ? '' : ' primary'}`} onClick={() => provision(r.id)}>
+                {hasUpdate(r) ? '更新' : r.installed ? '重新下载' : '下载'}
+              </button>
+            )}
+          />
         ))}
       </div>
       {/* Models are provisioned artifacts too, so they live beside chromium and git — one panel for

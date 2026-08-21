@@ -36,9 +36,29 @@ public static class MemoryBackends
     public const string OpenAiCompatible = "openai-compat";
 
     /// <summary>A model runtime shipped INSIDE the install (<c>res/</c>) rather than found on the machine —
-    /// nothing to install, nothing to keep running. Nothing implements it yet; it is listed anyway, with
-    /// that as its reason, so the option is visible before it is available.</summary>
+    /// nothing to install, nothing to keep running.</summary>
     public const string BuiltIn = "builtin";
+
+    /// <summary>The order every layer lists them in — FIXED, and deliberately not "usable ones first".
+    ///
+    /// <para>Sorting by status looked more actionable and cost more than it bought: the same four labels
+    /// appeared in different positions on 判断 and 语义, so a household could never learn where a backend
+    /// sits. Position is a landmark; whether an option is usable is carried by how it is DRAWN (muted, and
+    /// with its reason on selection), which is a job styling does better than ordering.</para>
+    ///
+    /// <para>Cheapest first, in the sense of what the household has to have: the account they already use,
+    /// then a daemon, then a daemon they must configure, then a download.</para></summary>
+    private static readonly string[] Ordered = { ClaudeCli, Ollama, OpenAiCompatible, BuiltIn };
+
+    public static IReadOnlyList<string> Order => Ordered;
+
+    /// <summary>Where an id sits in <see cref="Order"/>; anything unlisted sorts LAST rather than throwing,
+    /// so a backend added without touching this line still appears — just at the end.</summary>
+    public static int Rank(string id)
+    {
+        var i = Array.IndexOf(Ordered, id);
+        return i < 0 ? int.MaxValue : i;
+    }
 }
 
 /// <summary>A backend a layer CANNOT run on, and why — stated rather than derived.
