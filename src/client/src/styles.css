@@ -3286,13 +3286,21 @@ kbd, .topbar-kbd {
 
 /* ---- the model manager, behind a disclosure ---- */
 .mem-mgr { margin-top: 14px; }
+/* A BUTTON, and it has to look like one. The first pass styled this as a group label — 10px muted
+   letterspaced caps, no border, no background — which is the console's caption idiom, so it stopped
+   reading as something you can press and took the whole model chooser (and the 使用 that applies a
+   choice) out of reach with it. Quiet is fine; invisible is not. */
 .mem-mgr-h {
-  width: 100%; text-align: left; display: flex; align-items: center; gap: 9px;
-  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
-  color: var(--muted); background: none; border: 0; border-top: 1px solid var(--border-soft);
-  padding: 13px 0 0; cursor: pointer; transition: color 0.15s;
+  width: 100%; text-align: left; display: flex; align-items: center; gap: 10px;
+  font-family: var(--font-body); font-size: 13px; color: var(--text-2);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 15px; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
-.mem-mgr-h:hover, .mem-mgr-h.on { color: var(--accent); }
+.mem-mgr-h:hover { color: var(--text); background: var(--surface-2); border-color: var(--accent); }
+.mem-mgr-h.on { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.mem-mgr-h .cx-caret { color: var(--accent); font-size: 11px; }
+.mem-mgr-label { font-weight: 500; }
+.mem-mgr-meta { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
 .mem-mgr-body { margin-top: 14px; }
 .mem-rec {
   font-size: 12.5px; line-height: 1.65; color: var(--text-2);

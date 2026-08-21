@@ -1384,7 +1384,7 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
           Open by default only when you are MID-SETUP (the feature is on but no model is chosen), because
           that is the one state where the table is the thing you came for. */}
       {o.serving && (
-        <ModelManager defaultOpen={lm.enabled && !lm.model} count={lm.options.length} current={lm.model}>
+        <ModelManager defaultOpen={!lm.model} count={lm.options.length} current={lm.model}>
           <div className="mem-rec">
             <b>推荐 {lm.recommendation.id}</b> —— {lm.recommendation.reason}
             {lm.recommendation.caution && <div className="mem-fine">注意:{lm.recommendation.caution}</div>}
@@ -1479,9 +1479,10 @@ function ModelManager(
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="mem-mgr">
-      <button className={`cx-btn mem-mgr-h${open ? ' on' : ''}`} onClick={() => setOpen(!open)}>
+      <button className={`mem-mgr-h${open ? ' on' : ''}`} onClick={() => setOpen(!open)}>
         <span className="cx-caret">{open ? '▾' : '▸'}</span>
-        选择嵌入模型 · {count} 个已实测{current ? ` · 当前 ${current}` : ' · 尚未选择'}
+        <span className="mem-mgr-label">{open ? '收起模型列表' : '选择 · 下载 · 删除嵌入模型'}</span>
+        <span className="mem-mgr-meta">{current ? `当前 ${current}` : '尚未选择'} · {count} 个已实测</span>
       </button>
       {open && <div className="mem-mgr-body">{children}</div>}
     </div>
