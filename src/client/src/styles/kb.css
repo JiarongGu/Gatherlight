@@ -1,0 +1,95 @@
+/* kb.css — lifted out of styles.css, which had grown past 3400 lines with every area interleaved.
+   This block was CLOSED when it moved: every rule for its selectors was inside it and nothing else was,
+   so importing it after styles.css cannot reorder it against anything. Keep it that way — a rule for
+   another area added here, or one of these added back to styles.css, breaks that guarantee. */
+
+.kb { max-width: 1120px; margin: 0 auto; padding: 30px 4px 60px; }
+@media (min-width: 1600px) { .kb { max-width: 1320px; } }
+.kb-hero { padding: 6px 0 22px; }
+.kb-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  margin-bottom: 8px;
+}
+.kb-hero h1 {
+  font-family: var(--font-display);
+  font-size: 42px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.02em;
+  line-height: 1.04;
+  color: var(--text);
+}
+.kb-hero h1 .accent { color: var(--accent-2); }
+.kb-sub { color: var(--muted); font-size: 14.5px; margin: 10px 0 0; max-width: 560px; line-height: 1.6; }
+.kb-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+  margin: 20px 0 22px;
+}
+.kb-search input { flex: 1; border: none; background: none; outline: none; color: var(--text); font-size: 14px; }
+.kb-search:focus-within { border-color: color-mix(in srgb, var(--accent-2) 45%, var(--border)); }
+.kb-count { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.kb-group { margin-bottom: 30px; }
+.kb-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 16px;
+}
+.kb-group-icon { color: var(--accent-2); font-size: 15px; align-self: center; }
+.kb-group-head h2 { font-family: var(--font-display); font-size: 19px; font-weight: 600; margin: 0; color: var(--text); }
+.kb-group-n { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.kb-group-blurb { margin-left: auto; font-size: 12px; color: var(--muted); font-style: italic; }
+.kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(258px, 1fr)); gap: 12px; }
+.kb-card {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.16s, transform 0.16s, box-shadow 0.16s;
+}
+.kb-card:hover {
+  border-color: color-mix(in srgb, var(--accent-2) 45%, var(--border));
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+.kb-card-title { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); }
+.kb-card-preview {
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.kb-card-path {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+.kb-empty .seal { font-family: var(--font-display); font-size: 40px; color: var(--accent-2); opacity: 0.5; }
+.kb-empty h3 { font-family: var(--font-display); color: var(--text-2); margin: 10px 0 6px; }
