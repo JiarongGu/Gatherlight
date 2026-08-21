@@ -53,7 +53,7 @@ public sealed class CortexConfigService : ICortexConfigService
             "自动评分的 LLM 评判(切题 / 事实可靠等维度,中性 cwd,廉价调用)。默认 haiku。", "haiku"),
         ("memory", "记忆增强 · Memory",
             "记录事实时标注主题、检索时判断哪些结果真正回答了问题(每次写入与检索各一次调用)。" +
-            "可在「记忆」面板整体关闭。默认 haiku。", "haiku"),
+            "可在本页「记忆检索」中整体关闭。默认 haiku。", "haiku"),
     };
 
     // Ordered from cheapest to most capable; "" = fall back to the CLI/consumer default.

@@ -39,7 +39,7 @@ export function Manage() {
   const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
   const [uptime, setUptime] = useState('0s');
   const [accessMode, setAccessMode] = useState<'local' | 'lan' | 'wan' | null>(null);
-  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'jobs' | 'mcp' | 'memory' | 'resources' | 'logs' | 'settings'>('overview');
+  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'jobs' | 'mcp' | 'resources' | 'logs' | 'settings'>('overview');
   const [needsSetup, setNeedsSetup] = useState(false);
   const [info, setInfo] = useState<{ serverName?: string; dataRoot?: string; version?: string }>({});
   const started = useRef(Date.now());
@@ -244,7 +244,6 @@ export function Manage() {
           <button className={`mng-tab${view === 'cortex' ? ' on' : ''}`} onClick={() => setView('cortex')}>校准 · Cortex</button>
           <button className={`mng-tab${view === 'jobs' ? ' on' : ''}`} onClick={() => setView('jobs')}>自动化 · Jobs</button>
           <button className={`mng-tab${view === 'mcp' ? ' on' : ''}`} onClick={() => setView('mcp')}>MCP 服务 · MCP</button>
-          <button className={`mng-tab${view === 'memory' ? ' on' : ''}`} onClick={() => setView('memory')}>记忆 · Memory</button>
           <button className={`mng-tab${view === 'resources' ? ' on' : ''}`} onClick={() => setView('resources')}>资源 · Resources</button>
           <button className={`mng-tab${view === 'logs' ? ' on' : ''}`} onClick={() => setView('logs')}>日志 · Logs</button>
           <button className={`mng-tab${view === 'settings' ? ' on' : ''}`} onClick={() => setView('settings')}>设置 · Settings</button>
@@ -252,10 +251,9 @@ export function Manage() {
       </div>
 
       {view === 'eval' && <EvalView />}
-      {view === 'cortex' && <CortexView toast={toast} />}
+      {view === 'cortex' && <CortexView toast={toast} onRestart={restart} inHost={inHost} />}
       {view === 'jobs' && <JobsView toast={toast} confirm={confirm} />}
       {view === 'mcp' && <McpView toast={toast} confirm={confirm} />}
-      {view === 'memory' && <MemoryView toast={toast} onRestart={restart} inHost={inHost} />}
       {view === 'resources' && <ResourcesView toast={toast} onRestart={restart} inHost={inHost} />}
       {view === 'logs' && <LogsView inHost={inHost} />}
       {view === 'settings' && <SettingsView inHost={inHost} toast={toast} onRestart={restart} />}
@@ -948,7 +946,7 @@ function KbUpgradesCard({ toast }: { toast: (t: string, k?: 'ok' | 'err') => voi
   );
 }
 
-function CortexView({ toast }: { toast: (t: string, k?: 'ok' | 'err') => void }) {
+function CortexView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean }) {
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [models, setModels] = useState<ModelItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1047,6 +1045,7 @@ function CortexView({ toast }: { toast: (t: string, k?: 'ok' | 'err') => void })
 
       <KbUpgradesCard toast={toast} />
 
+      <MemoryRecallSection toast={toast} onRestart={onRestart} inHost={inHost} />
 
       <div className="mng-title">模型路由 · Model routing</div>
       <div className="cx-models">
@@ -1168,7 +1167,11 @@ interface MemoryState {
   };
 }
 
-function MemoryView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean }) {
+// Lives INSIDE Cortex rather than in a tab of its own: cortex is 校准 — where you tune how the brain
+// works — and this is exactly that. The enrichment's model routing is already a row in the table below
+// it, so a separate tab put one feature's controls in two places. Only the Ollama runtime DOWNLOAD stays
+// in 资源, which is the panel for large files fetched into the data folder.
+function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean }) {
   const [s, setS] = useState<MemoryState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const load = async (refresh = false) => {
@@ -1201,7 +1204,8 @@ function MemoryView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' 
   const pending = lm.enabled !== lm.active;
 
   return (
-    <div className="mng-view set">
+    <>
+      <div className="mng-title">记忆检索 · Memory recall</div>
       <div className="set-lead">
         检索质量由三项独立开关决定 —— 它们互补而不是互相替代:核对只调整已检索结果的排序,向量则改变「能不能被检索到」。
       </div>
@@ -1322,7 +1326,7 @@ function MemoryView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' 
           </div>
         </>
       )}
-    </div>
+    </>
   );
 }
 

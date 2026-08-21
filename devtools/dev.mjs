@@ -253,7 +253,13 @@ switch (cmd) {
       let ready = false;
       for (let i = 0; i < 60; i++) {
         try {
-          if ((await fetch(health)).ok) {
+          // `migrating === false`, not merely a reachable /api/health. The startup migration runs WHILE
+          // the server is already listening and the console covers itself with the boot overlay until it
+          // finishes — so a reachable-health check hands the UI test a page whose panels have not
+          // rendered yet. That is what made desktop-e2e assert against the overlay and report the restart
+          // control and the Settings form "missing"; the same lesson the API harness's waitHealthy carries.
+          const r = await fetch(health);
+          if (r.ok && (await r.json().catch(() => ({}))).migrating === false) {
             const t = await (await fetch(`http://127.0.0.1:${cdp}/json/list`)).json();
             if (t.some((x) => x.type === 'page' && /manage/.test(x.url))) { ready = true; break; }
           }
@@ -265,7 +271,16 @@ switch (cmd) {
       process.exitCode = r.status ?? 1;
     } finally {
       killAll();
-      for (const d of [dataDir, udf]) fs.rmSync(d, { recursive: true, force: true });
+      // Teardown must not decide the RESULT. WebView2 releases its user-data folder a moment after the
+      // process dies, so an immediate rmSync throws EPERM and — from a finally block — replaced a
+      // passing run's exit code with a crash. Retry briefly, then leave it: the next run deletes it up
+      // front anyway, and a leftover folder is a smaller problem than a green test reported as failed.
+      for (const d of [dataDir, udf]) {
+        for (let i = 0; i < 10; i++) {
+          try { fs.rmSync(d, { recursive: true, force: true }); break; }
+          catch { await new Promise((r) => setTimeout(r, 300)); }
+        }
+      }
     }
     break;
   }

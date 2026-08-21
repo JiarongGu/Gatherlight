@@ -47,16 +47,52 @@ await c.ready;
 try {
   // 1. the WebView2 is actually showing /manage
   ok('WebView2 shows /manage', /Gatherlight|拾光/.test((await c.evalJs('document.title')) || ''), page.url);
-  ok('health panel rendered', /Healthy|运行/.test((await c.evalJs("document.querySelector('.mng-status .t')?.textContent || ''")) || ''));
+  // Poll: the console mounts as soon as the migration gate lifts, but its first health poll lands a
+  // moment later. Asserting on the first frame made this pass or fail on timing rather than on health.
+  let healthText = '';
+  for (let i = 0; i < 20; i++) {
+    healthText = (await c.evalJs("document.querySelector('.mng-status .t')?.textContent || ''")) || '';
+    if (/Healthy|运行/.test(healthText)) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  ok('health panel rendered', /Healthy|运行/.test(healthText), healthText || '(empty)');
 
-  // 2. host-only controls are present (the page detected __gatherlightHost)
-  const hasRestart = await c.evalJs("[...document.querySelectorAll('.mng-btn')].some(b => /重启/.test(b.textContent))");
+  // 2. host-only controls are present (the page detected the host bridge)
+  // Query every button rather than one class: this asserted `.mng-btn` and went stale when the control
+  // was reclassed to `.mng-srv-b`, so it reported "missing" for a button sitting right there. The
+  // assertion means "a restart control exists", so ask that question instead of naming a class.
+  const hasRestart = await c.evalJs("[...document.querySelectorAll('button')].some(b => /重启/.test(b.textContent))");
   ok('restart control present (inHost)', hasRestart === true);
 
   // 3. a tab switch works over CDP (click 校准·Cortex, confirm the view changed)
   await c.evalJs("[...document.querySelectorAll('.mng-tab')].find(t=>/Cortex/.test(t.textContent))?.click()");
   await new Promise((r) => setTimeout(r, 400));
   ok('tab switch (Cortex) works', (await c.evalJs("!!document.querySelector('.cx, .cx-lead, .cx-models')")) === true);
+
+  // 3b. Memory recall — the three switches, which live INSIDE Cortex (we are already on that tab).
+  // Checked in the DESKTOP CLIENT rather than a browser, and the enrichment switch is the one worth
+  // driving through the real UI: it is an app_config value read per call, so it must flip with NO
+  // restart — and "no restart" is a claim only a live UI can falsify.
+  await new Promise((r) => setTimeout(r, 900));
+  const cards = await c.evalJs("[...document.querySelectorAll('.res-item .res-name')].map(n=>n.textContent).join('|')");
+  ok('Cortex renders the three memory-recall switches',
+    /Formula/.test(cards) && /Claude CLI/.test(cards) && /Local model/.test(cards), cards);
+  ok('and marks the formula floor as always on', /始终启用/.test(cards), cards);
+
+  // The button label IS the state, so flipping it and re-reading is a real round-trip through the API.
+  const enrichBtn = "[...document.querySelectorAll('.res-item')].find(i=>/Claude CLI/.test(i.textContent))?.querySelector('.cx-btn')";
+  const before = await c.evalJs(`${enrichBtn}?.textContent || ''`);
+  await c.evalJs(`${enrichBtn}?.click()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const after = await c.evalJs(`${enrichBtn}?.textContent || ''`);
+  ok('the claude-CLI enrichment toggles live, with no restart',
+    before.trim().length > 0 && after.trim().length > 0 && before !== after, `${before} -> ${after}`);
+  // Put it back: this fixture is disposable, but a test that leaves a switch off teaches the next
+  // reader that off is the default.
+  await c.evalJs(`${enrichBtn}?.click()`);
+  await new Promise((r) => setTimeout(r, 900));
+  ok('and toggles back', (await c.evalJs(`${enrichBtn}?.textContent || ''`)) === before, before);
+
   // Settings tab renders its config form (the surface for editing settings.json)
   await c.evalJs("[...document.querySelectorAll('.mng-tab')].find(t=>/Settings/.test(t.textContent))?.click()");
   await new Promise((r) => setTimeout(r, 700));

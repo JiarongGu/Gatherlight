@@ -16,6 +16,13 @@ const write = (rel, content) => {
   fs.writeFileSync(abs, content, 'utf8');
 };
 
+// The fixture stands in for an EXISTING install, so mark first-run setup done. Without this the
+// console renders the setup wizard over itself, and any test that drives the /manage UI silently
+// asserts against a modal instead of the panel it meant to check — which is exactly what left
+// `desktop-e2e` red (restart control + Settings form "missing", both behind the wizard). API-only
+// suites never noticed, because they never look at the UI.
+write('state/settings.json', JSON.stringify({ setupCompleted: true }, null, 2) + '\n');
+
 write('plans/trips/2026-08-kyoto.md', `# 京都 5 天(fixture)
 
 | Field | Value |
