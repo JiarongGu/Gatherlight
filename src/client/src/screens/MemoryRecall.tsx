@@ -113,7 +113,13 @@ export function MemoryRecallSection(
 
   // Saved but not running = a restart is owed. Only a BINDING can be in that state; 判断's on/off is live,
   // so it must never contribute here or every toggle would ask for a restart it does not need.
-  const owed = (l: LayerView) => l.source !== l.activeSource || l.model !== l.activeModel;
+  //
+  // The MODEL is only compared when a source is actually bound. Turning 语义 off REMEMBERS its model on
+  // purpose (so switching back costs neither a download nor a rebuild), and comparing that remembered value
+  // against a running model of null made the banner permanent: an unbound layer would ask forever for a
+  // restart that changes nothing. A restart prompt that never goes away is one nobody reads when it matters.
+  const owed = (l: LayerView) =>
+    l.source !== l.activeSource || (!!l.source && l.model !== l.activeModel);
   const pending = owed(judge) || owed(semantic);
 
   const bind = (layer: string) => (source: string, model: string, endpoint?: string) =>
@@ -335,14 +341,18 @@ function SourcePicker(
           ))}
         </select>
       )}
-      {source.bindable && (
+      {/* ALREADY APPLIED is a STATUS, not a disabled button. A greyed-out amber primary reading 使用中 is a
+          dead control wearing the colour that means "this does something" — and this panel's own rule is
+          that a disabled control saying nothing is a dead end. So when there is nothing to apply, the
+          affordance goes away and a quiet label takes its place. */}
+      {source.bindable && unchanged && <span className="mem-src-cur">使用中</span>}
+      {source.bindable && !unchanged && (
         <button className="cx-btn primary"
           // A NEW address is bindable before its model list exists — that request is what fetches the list.
           // Requiring a model first would make the field impossible to submit.
-          disabled={busy !== null || unchanged
-            || (source.needsEndpoint ? !url : (!model || !source.available))}
+          disabled={busy !== null || (source.needsEndpoint ? !url : (!model || !source.available))}
           onClick={() => bind(source.id, model, source.needsEndpoint ? url : undefined)}>
-          {busy?.startsWith('bind:') ? '保存中…' : unchanged ? '使用中' : urlChanged && !model ? '连接' : '使用'}
+          {busy?.startsWith('bind:') ? '保存中…' : urlChanged && !model ? '连接' : '使用'}
         </button>
       )}
       {!source.bindable && <span className="mem-src-na">这一层用不了</span>}

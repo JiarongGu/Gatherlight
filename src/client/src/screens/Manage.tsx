@@ -1204,13 +1204,21 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
   const mb = (n: number) => `${Math.round(n / 1_000_000)} MB`;
   if (!items) return <div className="eval-empty">加载中…</div>;
 
+  // A MODEL goes in the models section, even though the provisioner owns it like any other resource.
+  // Listing it up here beside Git and Chromium put models in two places again — the split this panel's
+  // 本机模型 section exists to end — and made that section's own lead text ("both layers take their models
+  // from here") false for the one backend that needs nothing installed.
+  const MODEL_RESOURCES = ['embed-model'];
+  const runtimes = items.filter((r) => !MODEL_RESOURCES.includes(r.id));
+  const modelRows = items.filter((r) => MODEL_RESOURCES.includes(r.id));
+
   return (
     <div className="mng-view set">
       <div className="set-lead">
         大型资源(Chromium、Git、Claude CLI 等)按需下载到数据文件夹,不打包进安装包 —— 保持安装包小巧。下载一次即长期保留(应用更新不会清除)。
       </div>
       <div className="res-list">
-        {items.map((r) => (
+        {runtimes.map((r) => (
           <div className={`res-item${r.installed ? ' ok' : ''}${r.state === 'error' ? ' err' : ''}`} key={r.id}>
             <div className="res-main">
               <div className="res-name">
@@ -1250,7 +1258,7 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
           everything downloaded into the data folder, including the runtime that hosts them. Which model
           each recall layer USES stays in 校准 · Cortex → 记忆检索, because that is a recall decision and
           not a provisioning one. */}
-      <ModelsSection toast={toast} />
+      <ModelsSection toast={toast} builtIn={modelRows} provision={provision} />
       {inHost && (
         <div className="set-actions">
           <button className="cx-btn" onClick={onRestart}>重启服务</button>

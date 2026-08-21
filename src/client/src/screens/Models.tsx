@@ -56,7 +56,25 @@ interface Inventory {
 
 const LAYER_NAMES: Record<string, string> = { judge: '判断', semantic: '语义' };
 
-export function ModelsSection({ toast }: { toast: (t: string, k?: 'ok' | 'err') => void }) {
+/** The built-in model as the resource list knows it — passed down rather than fetched, so 资源 and this
+ *  section cannot disagree about whether it is installed. */
+export interface BuiltInModelRow {
+  id: string; name: string; neededFor: string; approxBytes: number;
+  installed: boolean; state: string; percent: number; message: string | null;
+}
+
+export function ModelsSection(
+  { toast, builtIn, provision }:
+  {
+    toast: (t: string, k?: 'ok' | 'err') => void;
+    // 内置 arrives from the resource list because it IS a provisioned resource — but it is a MODEL, and
+    // this is where models live. Leaving it up there made 资源 list models in two places, which is the
+    // exact split this whole section exists to end, and made this section's own lead text false: it says
+    // both recall layers take their models from here, and one of them could not.
+    builtIn: BuiltInModelRow[];
+    provision: (id: string) => void;
+  },
+) {
   const [inv, setInv] = useState<Inventory | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -102,9 +120,49 @@ export function ModelsSection({ toast }: { toast: (t: string, k?: 'ok' | 'err') 
     <div className="res-models">
       <div className="mng-title">本机模型 · Local models</div>
       <div className="set-lead">
-        「记忆检索」的两层都从这里取模型:判断用对话模型,语义用嵌入模型 —— 同一个 Ollama,只是模型不同。
-        这里只负责下载与删除;哪一层用哪个,在「校准 · Cortex → 记忆检索」里选。
+        「记忆检索」的两层都从这里取模型。这里只负责下载与删除;哪一层用哪个,在
+        「校准 · Cortex → 记忆检索」里选。
       </div>
+
+      {/* 内置 FIRST, because it is the one that needs nothing else installed — and because a household
+          reading top-to-bottom should meet the no-setup option before the one with a daemon. It is a
+          resource row (the provisioner owns it), rendered HERE rather than in the list above: it is a
+          model, and this is where models live. */}
+      {builtIn.length > 0 && (
+        <>
+          <div className="mem-src-lbl res-models-group">内置 —— 不需要另外安装任何东西</div>
+          {builtIn.map((r) => (
+            <div className={`res-item${r.installed ? ' ok' : ''}${r.state === 'error' ? ' err' : ''}`} key={r.id}>
+              <div className="res-main">
+                <div className="res-name">
+                  {r.name}
+                  {r.installed && <span className="res-badge">已安装</span>}
+                  {r.installed && <span className="res-badge">嵌入</span>}
+                </div>
+                <div className="res-need">{r.neededFor}</div>
+                {r.state === 'running' && (
+                  <>
+                    <div className="res-prog"><span className="res-bar" style={{ width: `${r.percent}%` }} /></div>
+                    <div className="res-msg">{r.message} · {r.percent}%</div>
+                  </>
+                )}
+                {r.state === 'error' && <div className="res-msg danger">下载失败:{r.message}</div>}
+              </div>
+              <div className="res-side">
+                <div className="res-size">≈ {mb(r.approxBytes)}</div>
+                {r.state === 'running'
+                  ? <span className="res-running">下载中…</span>
+                  : (
+                    <button className={`cx-btn${r.installed ? '' : ' primary'}`} onClick={() => provision(r.id)}>
+                      {r.installed ? '重新下载' : '下载'}
+                    </button>
+                  )}
+              </div>
+            </div>
+          ))}
+          <div className="mem-src-lbl res-models-group">Ollama —— 需要一个常驻服务,但模型可以随便换</div>
+        </>
+      )}
 
       {/* The runtime line. It carries its own problem sentence because "no models" and "no daemon" have
           completely different fixes, and a list that is simply empty says neither. */}

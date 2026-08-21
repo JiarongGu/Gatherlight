@@ -3288,10 +3288,36 @@ kbd, .topbar-kbd {
    purpose: omitting it answers "why isn't this an option?" by making the question unaskable. Dimmed and
    dashed rather than `disabled`, because it must stay pressable — pressing it is how you read the reason.
    Selected, it reads as inert rather than as a choice you have made. */
-.cx-seg-b.na { color: var(--muted); border-style: dashed; }
-.cx-seg-b.na.on { background: transparent; color: var(--text-2); border-style: dashed; }
+/* A backend this LAYER cannot use — Claude under 语义, the built-in runtime under 判断. Listed on purpose:
+   omitting it answers "why isn't this an option?" by making the question unaskable.
+
+   It must read QUIETER than the options that work. The first attempt did the opposite by accident: it set
+   `border-style: dashed` on a base rule whose `border: none` leaves border-WIDTH at its initial `medium`,
+   so the style revived a 3px dashed box and the unusable buttons became the loudest thing in the control.
+   Hence no border here at all — weight and contrast carry it, and any border width is stated explicitly. */
+.cx-seg-b.na { color: var(--muted); opacity: 0.6; font-weight: 400; }
+.cx-seg-b.na:hover { opacity: 0.85; color: var(--text-2); }
+/* Selected, it is INERT rather than chosen: a 1px dotted outline says "you are reading this one" without
+   borrowing the amber that means "this is what runs". */
+.cx-seg-b.na.on {
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--text-2); opacity: 1; box-shadow: none; font-weight: 500;
+  outline: 1px dotted color-mix(in srgb, var(--muted) 60%, transparent); outline-offset: -3px;
+}
 /* Stands where 使用 would be, so the row does not reflow between a bindable backend and a declined one. */
 .mem-src-na { font-size: 11.5px; color: var(--muted); font-style: italic; }
+/* …and where 使用 would be for the backend that is ALREADY the one bound. A status, deliberately not a
+   button. Celadon (--accent-2), the console's own "this is a settled state" colour from .res-badge —
+   NOT amber, which throughout this UI means "this is the thing doing the work"; the running badge in the
+   layer header already carries that, and two amber marks in one row would compete. */
+.mem-src-cur {
+  font-family: var(--font-mono); font-size: 11px; color: var(--accent-2);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.mem-src-cur::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; opacity: 0.85;
+}
 
 /* The address of a service we do not manage. Mono because it is a URL you type and compare, and sized to
    fit a loopback address plus a port without wrapping the row. */
@@ -3355,6 +3381,10 @@ kbd, .topbar-kbd {
    same components new class names at their new address would be two idioms for one thing. */
 .res-models { margin-top: 26px; }
 .res-models .res-item { margin-bottom: 4px; }
+/* Two ways to get a local model, named rather than left to be inferred from the rows. Quiet — it is a
+   caption over a group, not a heading competing with 本机模型 above it. */
+.res-models-group { display: block; margin: 16px 0 7px; }
+.res-models-group:first-of-type { margin-top: 10px; }
 
 /* What Ollama holds, and what it costs in disk. */
 .mem-disk { margin-top: 18px; }
