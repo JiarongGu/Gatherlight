@@ -1,259 +1,198 @@
 using Gatherlight.Server.Platform.Agent.Llm.Services;
+using Gatherlight.Server.Platform.Agent.Llm.Sources;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Gatherlight.Server.Platform.Agent.Llm;
 
 /// <summary>
-/// 记忆检索 · Memory recall setup. Recall quality is THREE independent switches, not one setting, and this
-/// surface exists to make that visible and choosable:
+/// 记忆检索 · Memory recall setup — three layers, each a ROW with a backend and a model.
 ///
 /// <list type="bullet">
 /// <item><b>公式 · Formula</b> — graph decay + rank fusion + FTS trigram. Always on, no setup, no cost.
-/// The floor, and what remains when both others are off.</item>
-/// <item><b>判断 · Judgement</b> — a subject label on every write, a judgement of which candidates
+/// The floor, and what remains when the other two are off.</item>
+/// <item><b>判断 · Judgement</b> — a subject label on every write, a verdict on which candidates actually
 /// answered on every recall. On by default because it already shipped that way; the point of this surface
-/// is that declining it is now a setting rather than a code edit. Its BACKEND is a choice: the
-/// authenticated Claude CLI (costs tokens per write and per recall) or a chat model on this machine
-/// (costs local compute).</item>
-/// <item><b>语义 · Semantic</b> — real semantic vectors from a local Ollama embedding model. Costs disk
-/// and local compute, no tokens, and nothing leaves the machine.</item>
+/// is that declining it is a setting rather than a code edit.</item>
+/// <item><b>语义 · Semantic</b> — real vectors, so a paraphrase finds the fact.</item>
 /// </list>
 ///
-/// <para><b>The two are named for what they DO, not for what runs them</b> — the second one used to be
-/// called <c>Claude CLI 增强</c>, which asserted a backend the very control inside it moves elsewhere, and
-/// its 本机模型 option sat one card above a layer then called 本地模型 · Local model: two near-synonyms
-/// meaning different things, adjacent. A backend is now a badge, and a badge reports what is RUNNING (see
-/// <see cref="MemoryJudgeWiring"/>), never what was merely saved.</para>
+/// <para><b>A layer's backend is a source, and a source serves a layer by EXISTING.</b> This controller
+/// holds no list of which backend can do what: it renders <see cref="MemorySources"/>, where a backend
+/// appears under a layer because a class implementing that layer's interface is in the list. That is why
+/// 语义 offers no Claude arm — not a filter, an absent class. It is also why nothing here has to change
+/// when a backend is added.</para>
 ///
-/// <para>They are independent because they are complements, not alternatives: verification REORDERS what
-/// was retrieved, embeddings change what is RETRIEVABLE. A household must be able to drop the token cost
-/// without losing local semantics.</para>
+/// <para><b>What this controller no longer owns:</b> downloading and deleting models. A model is a file
+/// with a size and a capability, and it lives in 资源 with the runtime that hosts it — see
+/// <c>ModelsController</c>. What stays here is the only part that IS a recall decision.</para>
 ///
-/// <para>Every switch is a startup registration, so a change takes effect on restart — the responses say
-/// so rather than pretending otherwise, and report the SAVED setting separately from what is actually
-/// running, because between the two a panel that reads only the setting would be lying.</para>
+/// <para><b>Two kinds of change, reported differently.</b> 判断's on/off is an <c>app_config</c> value read
+/// per call and takes effect at once; a BINDING is a startup registration (a provider, a named client, an
+/// embedder, a vector store) and needs a restart. Every layer therefore reports the SAVED backend beside
+/// the RUNNING one — in the same vocabulary, because two vocabularies for one comparison can never come
+/// out equal, which reads on screen as a restart that is permanently owed.</para>
 /// </summary>
 [ApiController]
 public sealed class MemoryRecallController : ControllerBase
 {
     private readonly IOllamaRuntime _ollama;
+    private readonly IClaudeCliRuntime _claude;
     private readonly ServerConfigService _config;
     private readonly Storage.Knowledge.Services.IFactIndex _facts;
     private readonly ILogger<MemoryRecallController> _log;
 
-    // Non-null only when actually wired at startup — the honest answer to "is the local model running
-    // right now", which is NOT the saved setting: between saving and restarting the two disagree. The
-    // enrichment needs no such field, because it is read live from app_config.
+    // Non-null only when an embedder was actually registered at startup — the honest answer to "is 语义
+    // running right now", which is NOT the saved setting: between saving and restarting the two disagree.
+    // 判断 needs no such field, because its on/off is read live from app_config.
     private readonly Lyntai.Memory.ISemanticMemory? _semantic;
     private readonly IAppConfigService _appConfig;
     private readonly IReindexStatus _reindex;
-    private readonly IModelPullStatus _pulls;
     // What the judge is RUNNING on, as opposed to what is saved — see MemoryJudgeWiring.
     private readonly MemoryJudgeWiring _judgeWiring;
     private readonly Storage.Knowledge.Services.IKnowledgeStore _knowledge;
 
-    public MemoryRecallController(IOllamaRuntime ollama, ServerConfigService config,
+    public MemoryRecallController(IOllamaRuntime ollama, IClaudeCliRuntime claude, ServerConfigService config,
         Storage.Knowledge.Services.IFactIndex facts, IAppConfigService appConfig,
         Storage.Knowledge.Services.IKnowledgeStore knowledge,
-        IReindexStatus reindex, IModelPullStatus pulls, MemoryJudgeWiring judgeWiring,
+        IReindexStatus reindex, MemoryJudgeWiring judgeWiring,
         ILogger<MemoryRecallController> log,
         Lyntai.Memory.ISemanticMemory? semantic = null)
     {
         _judgeWiring = judgeWiring;
         _ollama = ollama;
+        _claude = claude;
         _config = config;
         _facts = facts;
         _appConfig = appConfig;
         _knowledge = knowledge;
         _reindex = reindex;
-        _pulls = pulls;
         _log = log;
         _semantic = semantic;
     }
 
-    /// <summary>Models on this machine that could answer a memory JUDGEMENT.
-    ///
-    /// <para>The filter is Ollama's own <c>capabilities</c> array, falling back to "not in our embedding
-    /// shortlist" only when the daemon is too old to report one. The shortlist WAS the filter until
-    /// 2026-08-21, and it was wrong in both directions. A household whose local models happened to all be
-    /// catalogued embedders got an empty list, which disabled the 本机模型 switch with no explanation on a
-    /// panel that was simultaneously listing those models under 本机模型占用. And the first embedder we had
-    /// not catalogued — there is always one — was offered as a judge and then sailed through
-    /// <see cref="SetJudge"/>'s catalog check into a fail-open policy, where the only symptom would have
-    /// been recall that quietly never improved.</para></summary>
-    private static List<OllamaModel> JudgeCandidates(OllamaState s) => s.Models
-        .Where(m => m.CanComplete ?? !EmbeddingCatalog.Options.Any(o => OllamaState.Matches(m.Name, o.Id)))
-        .ToList();
-
-    /// <summary>A small chat model to offer when the household has an Ollama running but nothing on it can
-    /// hold a conversation. Not in <see cref="EmbeddingCatalog"/> on purpose — that list is a MEASURED
-    /// shortlist of embedders, and a chat model has no business in it.</summary>
-    private const string SuggestedJudgeModel = "gemma3:4b";
-
-    /// <summary>Why the 本机模型 switch is unavailable — and, when the fix is a download, WHICH model.
-    ///
-    /// <para>Three causes with three different fixes, so they get three different sentences. The panel used
-    /// to have exactly one — and it lived inside the <c>&lt;select&gt;</c>, which only renders when there is
-    /// something to select, so the single case it explained was the single case it could never appear
-    /// in.</para>
-    ///
-    /// <para><b><c>Suggest</c> exists because the local judge and the local embedder are ONE provider.</b>
-    /// They are the same Ollama at the same URL with the same <c>/api/pull</c>; only the model differs. So
-    /// a panel that installs an embedding model with a button and answers "you need a chat model" with a
-    /// terminal command is drawing a line the system does not have — and sending the household to a shell
-    /// for a capability it already has wired, one card away.</para></summary>
-    private static (string? Reason, string? Suggest) JudgeBlocked(OllamaState s) =>
-        JudgeCandidates(s).Count > 0 ? (null, null)
-        : !s.Installed ? ("这台机器没有安装 Ollama —— 本机判断需要它,可在「资源 · Resources」面板安装。", null)
-        : !s.Serving ? ("Ollama 已安装但没有运行 —— 在下面「语义」一栏点「启动」,这里就能选了。", null)
-        : ($"这台机器上只有嵌入模型,没有能对话的 —— 判断需要一个对话模型。可以直接下载 {SuggestedJudgeModel}"
-            + "(约 3.3 GB,和嵌入模型装在同一个 Ollama 里),或自己 pull 别的再回来选。", SuggestedJudgeModel);
+    private MemorySourceContext Context() => new(_ollama, _claude, _config.Current.Memory);
 
     [HttpGet("api/manage/memory")]
     public async Task<IActionResult> Get([FromQuery] bool refresh = false)
     {
+        if (refresh) await _ollama.ProbeAsync(refresh: true);
+
         var mem = _config.Current.Memory;
-        var s = await _ollama.ProbeAsync(refresh);
-        var rec = EmbeddingCatalog.Recommend(s.GpuLikely);
-        // The SAVED backend, named in the same vocabulary MemoryJudgeWiring reports the RUNNING one in.
-        // Two vocabularies for one comparison is a saved-vs-running check that can never come out equal —
-        // which reads on screen as a restart that is permanently owed.
-        var judgeSource = Sources.MemorySources.ResolveJudge(mem);
-        var judgeLocal = judgeSource.Id != Sources.MemorySources.DefaultJudgeSource;
+        var ctx = Context();
+        var boundJudge = MemorySources.ResolveJudge(mem);
+        var boundSemantic = MemorySources.ResolveSemantic(mem);
         var (indexed, totalFacts) = await _knowledge.CoverageAsync();
 
         return Ok(new
         {
-            formula = new
+            layers = new object[]
             {
-                alwaysOn = true,
-                what = "图谱衰减 + 排名融合 + 三元组全文检索。不需要设置,不产生费用 —— 其余两项都建立在它之上。",
-            },
-            llmEnrichment = new
-            {
-                // Live: it is an app_config value read per call, so there is no saved-vs-running gap to
-                // report here — unlike the local model, whose wiring is fixed at startup.
-                enabled = MemoryEnrichment.IsOn(_appConfig),
-                live = true,
-                what = "写入事实时标注主题,检索时判断哪些结果真正回答了问题(明显提升召回质量)。",
-                cost = judgeLocal
-                    ? "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
-                    : "每次记录事实与每次检索各消耗一次 Claude CLI 调用(使用已登录的账号)。",
-                model = "使用的模型在本页「记忆判断 · Memory」一行调整。",
-                // WHERE it runs, separately from WHETHER it runs. The transport is a startup registration
-                // (a provider + a named client), so unlike the on/off switch it needs a restart — and the
-                // console says which of the two kinds of change the household just made.
-                transport = judgeSource.Id,
-                localModel = mem.JudgeModel,
-                // …and what is ACTUALLY running, which is not the same thing until the restart happens.
-                // The layer's header now names its backend, so it has to name the one doing the work.
-                transportActive = _judgeWiring.Transport,
-                activeModel = _judgeWiring.Model,
-                // Chat-capable models on this machine — see JudgeCandidates for why that is Ollama's answer
-                // rather than ours.
-                localCandidates = JudgeCandidates(s)
-                    .Select(m => new { name = m.Name, sizeBytes = m.SizeBytes }),
-                // …and, when there are none, WHY. A disabled control that says nothing is a dead end: the
-                // household can see their models listed further down the same panel and has no way to learn
-                // that the daemon is stopped, or that none of them can hold a conversation.
-                // `localSuggest` names a model the panel can PULL for them — same Ollama, same endpoint the
-                // embedding table's 下载 button already uses.
-                localBlocked = JudgeBlocked(s).Reason,
-                localSuggest = JudgeBlocked(s).Suggest,
-                // Says WHICH local runtime, because it is the same Ollama the 语义 layer below uses — one
-                // daemon, one URL, a chat model here and an embedding model there. The panel used to name
-                // Ollama only on the 语义 card, which read as though that layer were the Ollama one and
-                // this 本机模型 were something else.
-                localNote = $"「本机模型」就是下面「语义」用的那个 Ollama({s.BaseUrl}),只是换成对话模型。"
-                    + "本机判断在 Lyntai 的实测中,漏检与误收都优于 ground-truth 参考,且不消耗额度;"
-                    + "换成本机模型需要重启服务。避免选「会思考」的模型 —— 检索在每次回忆的必经路径上。",
-            },
-            localModel = new
-            {
-                enabled = mem.SemanticEnabled,
-                active = _semantic is not null,
-                model = mem.EmbeddingModel,
-                what = "用本地模型为事实生成向量,按语义检索 —— 问法与原文用词完全不同也能找到。",
-                cost = "占用磁盘与本机算力,不消耗 token;资料不离开这台电脑。",
-                // WHY this layer has no backend picker while 判断 does — the question the rename makes
-                // obvious, so the panel answers it instead of leaving an unexplained asymmetry.
-                //
-                // It leads with the thing that is easy to get wrong: BOTH layers' local arm is the same
-                // Ollama at the same URL (GatherlightApp passes one `ollamaUrl` to AddOllamaProvider for
-                // the judge and to AddOpenAiCompatibleEmbedder for this one) — only the model differs.
-                // So the asymmetry is not "this layer is the Ollama one"; it is that 判断 has a SECOND
-                // option and this layer does not. Both reasons for that are constraints rather than
-                // preferences: Claude has no embeddings endpoint at all, and a cloud embedder would post
-                // every household fact off this machine on every write — the rule OllamaRuntime enforces
-                // by refusing a non-loopback URL.
-                backend = "和「判断」的本机选项是同一个 Ollama,只是这里装的是嵌入模型、那里是对话模型。"
-                    + "这一层没有 Claude CLI 选项,是因为 Claude 不提供嵌入接口(生成文字,不生成向量)"
-                    + "—— 但这不代表 Claude 帮不上按语义找东西:Lyntai 实测里,把「答对了却排在后面」捞上来的"
-                    + "主要就是「判断」那一层(漏检 0.54 → 0.19),换句话说想让改写的问法也能问到,"
-                    + "先开「判断」比先开这一层更划算。",
-                // The limitation reported here until 2026-08-21 ("only kind-filtered recalls benefit") is
-                // gone: it was this app's own doing, not an upstream gap — see FactIndex.AllFacts. Re-measured
-                // after the fix, unscoped recall improved on 3/3 probe queries.
-                //
-                // Turning this on re-embeds by REBUILDING, so say so where the household decides: the
-                // ranking the index has accumulated is reset, and on a large corpus it is not quick.
-                note = _semantic is null ? null
-                    : "开启或更换模型后需要重建索引:会重新计算全部向量,并重置已积累的排序权重(事实本身不受影响)。",
-                // The reindex a household may be watching. Reported inside localModel because that is the
-                // control that starts it, so the bar renders where the button is.
-                reindex = ReindexView(),
-                // Downloads in flight (and the last few that finished), so the panel can put a real bar on
-                // the row whose button started one. Read from memory, not from the probe, so it stays live
-                // while the 20s probe cache does its job.
-                pulls = _pulls.Current.Select(p => new
+                new
                 {
-                    model = p.Model, running = p.Running, percent = p.Percent, status = p.Status, error = p.Error,
-                }),
-                // COVERAGE, not a history of rebuilds. It answers the question a household actually has —
-                // is what I know searchable right now — and it is self-correcting: an interrupted rebuild
-                // shows as < 100% and the next startup back-fill repairs it (measured 2026-08-21: 2/6 →
-                // 6/6 across a restart). A durable record of runs would answer a question nobody asked and
-                // could outlive the in-process work it described.
-                coverage = new { indexed, total = totalFacts },
-                ollama = new
-                {
-                    baseUrl = s.BaseUrl, installed = s.Installed, serving = s.Serving, version = s.Version,
-                    executable = s.Executable, gpuLikely = s.GpuLikely, problem = s.Problem,
-                    // `capabilities` is Ollama's own (null on an older daemon) and it is reported rather
-                    // than kept server-side for two reasons: the disk list can then say WHY a model the
-                    // household owns is not offered as a judge, and it makes the capability filter
-                    // assertable from the API — with no response carrying it, e2e could only ever check
-                    // that the endpoint answered.
-                    models = s.Models.Select(m => new
-                    {
-                        name = m.Name, sizeBytes = m.SizeBytes, capabilities = m.Capabilities,
-                    }),
+                    id = MemoryLayers.Formula, name = "公式 · Formula",
+                    alwaysOn = true, on = true, live = true,
+                    what = "图谱衰减 + 排名融合 + 三元组全文检索。不需要设置,不产生费用 —— 其余两层都建立在它之上。",
+                    cost = "不产生任何费用。",
+                    source = (string?)null, model = (string?)null,
+                    activeSource = (string?)null, activeModel = (string?)null,
+                    sources = Array.Empty<object>(),
                 },
-                // The shortlist is not the limit — the UI lets the household name any model, so it also
-                // reports whether the one in use is on this list (`catalogued`) rather than implying the
-                // list is exhaustive.
-                current = mem.EmbeddingModel,
-                currentCatalogued = EmbeddingCatalog.Find(mem.EmbeddingModel) is not null,
-                measuredOn = "20 条中英混排事实 · 10 个改写提问 · 2026-08-21",
-                options = EmbeddingCatalog.Options.Select(o => new
+                new
                 {
-                    measured = o.Measured is null ? null : new
-                    {
-                        top1 = o.Measured.RecallTop1, top3 = o.Measured.RecallTop3,
-                        queries = o.Measured.Queries, msPerQuery = o.Measured.MsPerQuery,
-                    },
-                    vintage = o.Vintage,
-                    id = o.Id, name = o.Name, approxBytes = o.ApproxBytes, dimensions = o.Dimensions,
-                    multilingual = o.Multilingual, note = o.Note, present = s.Has(o.Id),
-                }),
-                recommendation = new { id = rec.Id, reason = rec.Reason, caution = rec.Caution },
+                    id = MemoryLayers.Judge, name = "判断 · Judgement",
+                    alwaysOn = false,
+                    // LIVE: an app_config value read per call. The BINDING below is a startup registration,
+                    // so the two kinds of change are reported differently rather than looking alike.
+                    on = MemoryEnrichment.IsOn(_appConfig), live = true,
+                    what = "写入事实时标注主题,检索时判断哪些结果真正回答了问题(明显提升召回质量)。",
+                    cost = boundJudge.Id == MemorySources.DefaultJudgeSource
+                        ? "每次记录事实与每次检索各消耗一次 Claude CLI 调用(使用已登录的账号)。"
+                        : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。",
+                    source = boundJudge.Id, model = MemorySources.ResolveJudgeModel(mem),
+                    activeSource = _judgeWiring.Transport, activeModel = _judgeWiring.Model,
+                    sources = await SourceViews(MemorySources.Judge, ctx),
+                },
+                new
+                {
+                    id = MemoryLayers.Semantic, name = "语义 · Semantic",
+                    alwaysOn = false,
+                    on = boundSemantic is not null, live = false,
+                    what = "用本机模型为事实生成向量,按语义检索 —— 问法与原文用词完全不同也能找到。",
+                    cost = "占用磁盘与本机算力,不消耗 token;资料不离开这台电脑。",
+                    source = boundSemantic?.Id, model = mem.EmbeddingModel,
+                    // Only this layer can OBSERVE its own running state: ISemanticMemory resolves exactly
+                    // when an embedder was registered.
+                    activeSource = _semantic is not null ? boundSemantic?.Id : null,
+                    activeModel = _semantic is not null ? mem.EmbeddingModel : null,
+                    sources = await SourceViews(MemorySources.Semantic, ctx),
+                    // Turning this on re-embeds by REBUILDING, so say so where the household decides: the
+                    // ranking the index has accumulated is reset, and on a large corpus it is not quick.
+                    note = "开启或更换模型后需要重建索引:会重新计算全部向量,并重置已积累的排序权重(事实本身不受影响)。",
+                    reindex = ReindexView(),
+                    // COVERAGE, not a history of rebuilds. It answers the question a household actually
+                    // has — is what I know searchable right now — and it is self-correcting: an interrupted
+                    // rebuild shows as < 100% and the next startup back-fill repairs it. A durable record
+                    // of runs would answer a question nobody asked and could outlive the work it described.
+                    coverage = new { indexed, total = totalFacts },
+                },
             },
+            // WHY 语义 is presented as the advanced one rather than a co-equal third.
+            //
+            // ATTRIBUTED, deliberately and permanently. This is LYNTAI's measurement on LYNTAI's corpus,
+            // and this household's material is not that corpus. Presenting someone else's numbers as ours
+            // would be exactly the unearned confidence the card model exists to prevent — so the sentence
+            // names its source, and stays named until somebody measures it here.
+            weighting = new
+            {
+                primary = MemoryLayers.Judge,
+                note = "Lyntai 在自己的语料上实测:漏检里 0% 是「没检索到」—— 答案本来就在候选里,只是排在了后面。"
+                    + "所以想让改写过的问法也能问到,先开「判断」比先开「语义」更划算(漏检 0.54 → 0.19)。"
+                    + "这份实测来自 Lyntai 的语料,不是这个家庭的;两层是互补的,不是二选一。",
+            },
+            // Where the models themselves are managed now, so the panel can say so rather than leaving a
+            // household looking for a download button that used to be here.
+            modelsAt = "资源 · Resources",
         });
     }
 
-    /// <summary>Turn the claude-CLI enrichment on or off. Off keeps the deterministic floor intact — it
-    /// removes an enrichment, not the feature.</summary>
+    /// <summary>Every source for a layer, whether or not it can serve right now.
+    ///
+    /// <para><b>An unavailable source is still LISTED, with its reason.</b> Dropping it answers "why can't
+    /// I pick this?" by making the question unaskable — which is the dead-control failure this surface
+    /// exists to end: the previous panel disabled 本机模型 with no explanation while listing, three inches
+    /// below, the very models the household was wondering about.</para>
+    ///
+    /// <para>Takes the shared base rather than each layer's interface, so one helper serves both lists. The
+    /// layer-specific members (RejectAsync, ProveAsync) are not needed to DESCRIBE a source — only to bind
+    /// one — which is why the split sits where it does.</para></summary>
+    private static async Task<object[]> SourceViews(IEnumerable<IMemorySource> sources, MemorySourceContext ctx)
+    {
+        var views = new List<object>();
+        foreach (var s in sources)
+        {
+            var status = await s.StatusAsync(ctx);
+            views.Add(new
+            {
+                id = s.Id, name = s.Name, description = s.Description,
+                available = status.Available, reason = status.Reason, suggest = status.Suggest,
+                models = (await s.ModelsAsync(ctx)).Select(m => new
+                {
+                    id = m.Id, name = m.Name, installed = m.Installed, sizeBytes = m.SizeBytes,
+                    note = m.Note, vintage = m.Vintage,
+                    measured = m.Measured is null ? null : new
+                    {
+                        top1 = m.Measured.RecallTop1, top3 = m.Measured.RecallTop3,
+                        queries = m.Measured.Queries, msPerQuery = m.Measured.MsPerQuery,
+                    },
+                }),
+            });
+        }
+        return views.ToArray();
+    }
+
+    /// <summary>Turn 判断 on or off. Off keeps the deterministic floor intact — it removes an enrichment,
+    /// not the feature.</summary>
     [HttpPost("api/manage/memory/enrichment")]
     public IActionResult Enrichment([FromBody] EnabledRequest body)
     {
@@ -263,158 +202,125 @@ public sealed class MemoryRecallController : ControllerBase
         return Ok(new { ok = true, enabled = body.Enabled, restartRequired = false });
     }
 
-    /// <summary>Move the memory judge between the authenticated Claude CLI and a model on this machine.
-    /// <para>A restart is owed either way — the transport is a provider + named-client registration, built
-    /// while the container is. The on/off switch beside it stays live, and the console distinguishes the
-    /// two rather than making every change look like it needs a restart.</para></summary>
-    [HttpPost("api/manage/memory/judge")]
-    public async Task<IActionResult> SetJudge([FromBody] JudgeRequest body)
+    /// <summary>Bind a layer to a backend and a model — the one action that used to be three, spread across
+    /// two stores and two panels.
+    ///
+    /// <para>A restart is owed either way: a backend is a provider, a named client, an embedder or a vector
+    /// store, all registered while the container is built. 判断's on/off beside it stays live, and the
+    /// console distinguishes the two rather than making every change look like it needs a restart.</para></summary>
+    [HttpPost("api/manage/memory/layer/{layer}")]
+    public async Task<IActionResult> Bind(string layer, [FromBody] BindRequest body)
     {
-        var transport = body?.Transport?.Trim().ToLowerInvariant();
-        if (transport is not ("cli" or "local"))
-            return BadRequest(new { error = "transport 必须是 cli 或 local。" });
+        var model = body?.Model?.Trim();
+        var ctx = Context();
 
-        if (transport == "cli")
+        if (string.Equals(layer, MemoryLayers.Judge, StringComparison.OrdinalIgnoreCase))
         {
-            // The model is REMEMBERED rather than cleared: going back to the CLI should not throw away a
-            // choice that cost a download, in case it goes back the other way.
-            _config.Update(c => c.Memory.JudgeTransport = "cli");
-            return Ok(new { ok = true, transport, restartRequired = true });
+            var source = MemorySources.FindJudge(body?.Source);
+            if (source is null) return BadRequest(new { error = $"未知的后端:{body?.Source}" });
+            if (string.IsNullOrWhiteSpace(model)) return BadRequest(new { error = "model is required" });
+            if (!EmbeddingCatalog.IsWellFormedId(model))
+                return BadRequest(new { error = $"模型名称格式不正确:{model}" });
+
+            // A model that is installed, well-formed and unable to judge would sail into a FAIL-OPEN
+            // policy, where the only symptom is recall that quietly never improves.
+            if (await source.RejectAsync(ctx, model!) is { } why) return StatusCode(409, new { error = why });
+
+            _config.Update(c =>
+            {
+                c.Memory.JudgeSource = source.Id;
+                c.Memory.JudgeModel = model;
+                // Cleared on the first write through this path, so no install carries two answers to one
+                // question for longer than it takes to make a choice.
+                c.Memory.JudgeTransport = null;
+            });
+            // ONE key names the model. Cortex used to offer a second, and its value OVERRODE this one —
+            // which is how "haiku" got handed to an Ollama that had never heard of it, silently, because
+            // both memory policies are fail-open.
+            _appConfig.Set("llm.model.memory", model!);
+            _log.LogInformation("memory judge bound to {Source}/{Model}", source.Id, model);
+
+            return Ok(new
+            {
+                ok = true, layer, source = source.Id, model, restartRequired = true,
+                note = "设置已保存。重启服务后,标注与核对将由这个后端完成。",
+            });
         }
 
-        var model = body?.Model?.Trim();
-        if (!EmbeddingCatalog.IsWellFormedId(model))
-            return BadRequest(new { error = $"模型名称格式不正确:{body?.Model}" });
+        if (string.Equals(layer, MemoryLayers.Semantic, StringComparison.OrdinalIgnoreCase))
+        {
+            var source = MemorySources.FindSemantic(body?.Source);
+            if (source is null) return BadRequest(new { error = $"未知的后端:{body?.Source}" });
+            if (string.IsNullOrWhiteSpace(model)) return BadRequest(new { error = "model is required" });
+            if (!EmbeddingCatalog.IsWellFormedId(model))
+                return BadRequest(new { error = $"模型名称格式不正确:{model}" });
 
-        var state = await _ollama.ProbeAsync(refresh: true);
-        if (!state.Serving) return StatusCode(409, new { error = state.Problem ?? "Ollama 未运行。" });
-        var held = state.Find(model!);
-        if (held is null)
-            return StatusCode(409, new { error = $"模型 {model} 尚未下载 —— 请先下载再启用。" });
+            // PROVE it embeds before saving. Installed is not usable, and the failure would surface only as
+            // recall that finds nothing — indistinguishable from a household that knows nothing.
+            var probe = await source.ProveAsync(ctx, model!);
+            if (probe is null)
+                return StatusCode(409, new
+                {
+                    error = $"{model} 没有返回向量 —— 它可能不是嵌入模型,或 Ollama 未运行。"
+                        + "请换一个,或先在「资源 · Resources」面板确认。",
+                });
 
-        // An EMBEDDING model named here would be installed, well-formed, and unable to answer a judgement —
-        // and both memory policies are fail-open, so the failure would surface as recall that quietly never
-        // improves. Refuse it rather than let it be chosen.
-        //
-        // OLLAMA's capability list decides; the catalog is only the fallback for a daemon too old to report
-        // one. Asking the catalog FIRST was the defect: it knows the nine models we measured and nothing
-        // else, so the first uncatalogued embedder — and there is always one — passed straight through the
-        // check written to stop exactly it.
-        if (held.CanComplete is false || (held.CanComplete is null && EmbeddingCatalog.Find(model) is not null))
-            return StatusCode(409, new
+            var previous = _config.Current.Memory.EmbeddingModel;
+            _config.Update(c =>
             {
-                error = $"{model} 不是对话模型,不能用来判断检索结果 —— 请选一个对话模型(例如 gemma3:4b)。",
+                c.Memory.SemanticSource = source.Id;
+                c.Memory.EmbeddingModel = model;
+                c.Memory.SemanticEnabled = true;   // keeps a legacy reader correct
             });
+            // A CHANGED model invalidates every stored vector — they keep the old width, and recall then
+            // matches nothing rather than erroring — so the reindex is not optional, and saying so here is
+            // what stops a household sitting on silently empty recall.
+            var modelChanged = previous is not null && !OllamaState.Matches(previous, model!);
+            _log.LogInformation("semantic recall bound to {Source}/{Model} ({Dims}d)",
+                source.Id, model, probe.Dimensions);
 
-        _config.Update(c =>
-        {
-            c.Memory.JudgeTransport = "local";
-            c.Memory.JudgeModel = model;
-        });
-        return Ok(new
-        {
-            ok = true, transport, model, restartRequired = true,
-            note = "设置已保存。重启服务后,标注与核对将由本机模型完成,不再消耗账号额度。",
-        });
-    }
-
-    public sealed record JudgeRequest(string? Transport, string? Model);
-
-    private object ReindexView()
-    {
-        var r = _reindex.Current;
-        return new
-        {
-            running = r.Running, done = r.Done, total = r.Total, embedded = r.Embedded, error = r.Error,
-            // Computed here rather than in the client so "no total yet" reads as indeterminate rather than
-            // as 0% — a bar pinned at zero looks stuck, which is the impression this whole change removes.
-            percent = r.Total > 0 ? (int)Math.Round(100.0 * r.Done / r.Total) : (int?)null,
-        };
-    }
-
-    /// <summary>Turn local-model recall on with a chosen model. Refuses when the model is not on the
-    /// machine: enabling against a missing model would embed nothing and leave recall looking broken with
-    /// no error anywhere — pull first, which is a button away.</summary>
-    [HttpPost("api/manage/memory/local/enable")]
-    public async Task<IActionResult> EnableLocal([FromBody] ModelRequest body)
-    {
-        var model = body?.Model?.Trim();
-        if (!EmbeddingCatalog.IsWellFormedId(model))
-            return BadRequest(new { error = $"模型名称格式不正确:{body?.Model}" });
-
-        var state = await _ollama.ProbeAsync(refresh: true);
-        if (!state.Serving) return StatusCode(409, new { error = state.Problem ?? "Ollama 未运行。" });
-        var held = state.Find(model!);
-        if (held is null)
-            return StatusCode(409, new { error = $"模型 {model} 尚未下载 —— 请先下载再启用。" });
-
-        // The CHEAP no, before the expensive one. The probe below is the load-bearing check and stays, but
-        // it costs a cold model load — the code below budgets three minutes for it — and a model Ollama has
-        // already said cannot embed will not start embedding once it is in memory. Nothing is refused here
-        // that the probe would have accepted; the household just stops waiting out a load for a certain no.
-        if (held.CanEmbed is false)
-            return StatusCode(409, new
+            return Ok(new
             {
-                error = $"{model} 不是嵌入模型(Ollama 报告它不能生成向量)—— 请换一个。",
+                ok = true, layer, source = source.Id, model, restartRequired = true, reindexRequired = true,
+                modelChanged, dimensions = probe.Dimensions, probeMs = probe.Milliseconds,
+                catalogued = EmbeddingCatalog.Find(model) is not null,
+                note = "设置已保存。重启服务后生效,然后请重新建立一次语义索引。",
             });
+        }
 
-        // PROVE it embeds before saving. Being installed is not being usable: a chat model named here by
-        // mistake is on the machine and will never produce a vector, and the failure would surface only as
-        // recall that finds nothing — indistinguishable from a household with no facts. This also gets the
-        // vector WIDTH from the model itself, which is what a catalog lookup used to supply and cannot for a
-        // model nobody catalogued.
-        var probe = await _ollama.ProbeEmbeddingAsync(model!);
-        if (probe is null)
-            return StatusCode(409, new
-            {
-                error = $"{model} 没有返回向量 —— 它可能不是嵌入模型。请换一个,或先在「资源」面板确认 Ollama 正常。",
-            });
-
-        var previous = _config.Current.Memory.EmbeddingModel;
-        _config.Update(c =>
-        {
-            c.Memory.SemanticEnabled = true;
-            c.Memory.EmbeddingModel = model;
-        });
-        // A CHANGED model invalidates every stored vector — they keep the old width, and recall then
-        // matches nothing rather than erroring — so the reindex is not optional, and saying so here is what
-        // stops a household from sitting on silently empty recall.
-        var modelChanged = previous is not null && !OllamaState.Matches(previous, model!);
-        return Ok(new
-        {
-            ok = true, model, restartRequired = true, reindexRequired = true, modelChanged,
-            dimensions = probe.Dimensions, probeMs = probe.Milliseconds,
-            // Named for a model outside the shortlist too — a household that typed one gets the same
-            // width/latency facts as a catalogued pick, rather than a blank where the numbers would be.
-            catalogued = EmbeddingCatalog.Find(model) is not null,
-            note = "设置已保存。重启服务后生效,然后请重新建立一次语义索引。",
-        });
+        return NotFound(new { error = $"未知的层:{layer}" });
     }
 
-    [HttpPost("api/manage/memory/local/disable")]
-    public IActionResult DisableLocal()
+    /// <summary>Unbind a layer.
+    /// <para>The model and its vectors are left alone on purpose: turning a feature off should not throw
+    /// away something that cost a large download and a long reindex, in case it goes back on.</para>
+    /// <para>判断 is NOT unbindable — it is turned off by its own live switch. Conflating the two would put
+    /// a restart in front of a change that needs none, and would leave the layer with no backend to turn
+    /// back ON to.</para></summary>
+    [HttpPost("api/manage/memory/layer/{layer}/off")]
+    public IActionResult Unbind(string layer)
     {
-        // The model and its vectors are left alone on purpose: turning a feature off should not throw away
-        // something that cost a large download and a long reindex, in case it goes back on.
-        _config.Update(c => c.Memory.SemanticEnabled = false);
-        return Ok(new { ok = true, restartRequired = true });
+        if (!string.Equals(layer, MemoryLayers.Semantic, StringComparison.OrdinalIgnoreCase))
+            return NotFound(new { error = "只有「语义」可以这样停用;「判断」请用它自己的开关。" });
+
+        _config.Update(c => { c.Memory.SemanticSource = null; c.Memory.SemanticEnabled = false; });
+        return Ok(new { ok = true, layer, restartRequired = true });
     }
 
-    /// <summary>(Re)build the vector index over every fact. Needed on first enable — the graph is already
+    /// <summary>(Re)build the vector index over every fact. Needed on first bind — the graph is already
     /// populated, so the ordinary back-fill (which touches only rows with no ref) would embed nothing —
     /// and after any model change.</summary>
-    [HttpPost("api/manage/memory/local/reindex")]
+    [HttpPost("api/manage/memory/layer/semantic/reindex")]
     public IActionResult Reindex()
     {
-        if (!_config.Current.Memory.SemanticEnabled)
-            return StatusCode(409, new { error = "本地模型检索尚未启用。" });
+        if (MemorySources.ResolveSemantic(_config.Current.Memory) is null)
+            return StatusCode(409, new { error = "「语义」这一层尚未启用。" });
         if (!_reindex.TryStart())
             return StatusCode(409, new { error = "已经有一次重建在进行中。" });
 
         // DETACHED, and deliberately not tied to the request's CancellationToken: the work outlives the
-        // POST, so binding it to the request would cancel the rebuild the moment the browser stopped
-        // waiting — which is precisely what happens on an operation this long. Progress is read back from
-        // /api/manage/memory instead.
+        // POST, so binding it would cancel the rebuild the moment the browser stopped waiting — which is
+        // precisely what happens on an operation this long. Progress is read back from GET /api/manage/memory.
         _ = Task.Run(async () =>
         {
             try
@@ -437,6 +343,18 @@ public sealed class MemoryRecallController : ControllerBase
         return Accepted(new { ok = true, started = true });
     }
 
-    public sealed record ModelRequest(string Model);
+    private object ReindexView()
+    {
+        var r = _reindex.Current;
+        return new
+        {
+            running = r.Running, done = r.Done, total = r.Total, embedded = r.Embedded, error = r.Error,
+            // Computed here rather than in the client so "no total yet" reads as indeterminate rather than
+            // as 0% — a bar pinned at zero looks stuck, which is the impression this exists to remove.
+            percent = r.Total > 0 ? (int)Math.Round(100.0 * r.Done / r.Total) : (int?)null,
+        };
+    }
+
+    public sealed record BindRequest(string? Source, string? Model);
     public sealed record EnabledRequest(bool Enabled);
 }

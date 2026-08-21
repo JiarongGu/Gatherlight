@@ -1,98 +1,70 @@
 import { useEffect, useState } from 'react';
 
 /**
- * 记忆检索 · Memory recall — the setup surface for how the assistant searches what it knows.
+ * 记忆检索 · Memory recall — which backend and which model each recall layer uses.
  *
- * Lives in its own file because it reached 440 lines inside Manage.tsx (18% of it) as five
- * components with one subject between them, which is the client-side shape of the rule this
- * codebase already applies to growing C# classes: split into units with a boundary, not into
- * partials that keep absorbing.
+ * It renders INSIDE 校准 · Cortex, so it follows Cortex's vocabulary rather than inventing one — the amber
+ * left edge for active, display serif names, mono for anything you compare.
  *
- * It renders INSIDE 校准 · Cortex, so it follows Cortex's vocabulary rather than inventing one —
- * the amber left edge for active, display serif names, mono for anything you compare. See the
- * 记忆检索 block in styles.css for why that mattered.
+ * TWO THINGS IT DELIBERATELY NO LONGER DOES. It does not download or delete models: a model is a file with
+ * a size and a capability, so it lives in 资源 beside the runtime that hosts it. And it holds no list of
+ * which backend can serve which layer — the server sends the sources for each layer, and a backend is in
+ * that list because a class implementing the layer's interface exists. That is why 语义 shows no Claude
+ * arm: not a filter here, an absent class there.
  */
 
 const memBytes = (n: number) =>
   n >= 1_000_000_000 ? `${(n / 1_000_000_000).toFixed(1)} GB` : `${Math.round(n / 1_000_000)} MB`;
 
-interface MemoryOption {
-  id: string; name: string; approxBytes: number; dimensions: number;
-  multilingual: boolean; note: string; present: boolean;
-  // Approximate release, from ollama.com's own "updated N ago". A column because age turned out to be a
-  // strong NEGATIVE filter here: every model that scores badly is two years old.
-  vintage: string | null;
-  // Null on a model nobody measured — rendered as "未实测" rather than left blank, because an empty cell
-  // in a comparison table reads as a zero.
+interface SourceModel {
+  id: string; name: string; installed: boolean; sizeBytes: number | null;
+  note: string | null; vintage: string | null;
   measured: { top1: number; top3: number; queries: number; msPerQuery: number } | null;
 }
-/** A model download in flight, or one that finished in the last few minutes. */
-interface ModelPull {
-  model: string; running: boolean;
-  // Null while Ollama is resolving manifests and has no total to divide by — rendered as indeterminate,
-  // because a bar pinned at 0% reads as stuck.
-  percent: number | null;
-  status: string | null; error: string | null;
+
+interface SourceView {
+  id: string; name: string; description: string;
+  // Whether it can serve THIS layer on THIS machine right now. An unavailable source is still shown, with
+  // its reason: hiding it answers "why can't I pick this?" by making the question unaskable.
+  available: boolean; reason: string | null;
+  // A model 资源 could fetch, when the fix IS a download.
+  suggest: string | null;
+  models: SourceModel[];
+}
+
+interface LayerView {
+  id: 'formula' | 'judge' | 'semantic';
+  name: string; alwaysOn: boolean; on: boolean;
+  // `live` = takes effect immediately. A BINDING never is — it is a startup registration — so the two
+  // kinds of change are shown differently rather than as two switches that look alike.
+  live: boolean;
+  what: string; cost: string;
+  source: string | null; model: string | null;
+  // What is RUNNING, as opposed to what is saved — in the SAME vocabulary, because two vocabularies for
+  // one comparison can never come out equal, which reads as a restart permanently owed.
+  activeSource: string | null; activeModel: string | null;
+  sources: SourceView[];
+  note?: string | null;
+  reindex?: {
+    running: boolean; done: number; total: number;
+    embedded: number | null; error: string | null;
+    // Null until the run has counted its facts: a bar pinned at 0% reads as stuck.
+    percent: number | null;
+  };
+  // STATE, not history: how much of what the household knows is actually searchable.
+  coverage?: { indexed: number; total: number };
 }
 
 interface MemoryState {
-  formula: { alwaysOn: boolean; what: string };
-  // `live` = takes effect immediately (an app_config value read per call). The local model below is a
-  // startup registration instead, which is why only IT reports enabled-vs-active.
-  llmEnrichment: {
-    enabled: boolean; live: boolean; what: string; cost: string; model: string;
-    // WHERE it runs, as opposed to WHETHER. Unlike `enabled` this is a startup registration, so the two
-    // are shown as different kinds of change rather than two switches that look alike.
-    // A SOURCE id (`claude-cli` · `ollama`), the same vocabulary `transportActive` speaks. They were once
-    // two different vocabularies for one comparison, which can never come out equal — and reads on screen
-    // as a restart that is permanently owed.
-    transport: string; localModel: string | null; localNote: string;
-    // What is RUNNING, as opposed to what is saved. The header names its backend, so it has to name the
-    // one doing the work — between saving and restarting those are different answers.
-    transportActive: string; activeModel: string | null;
-    localCandidates: { name: string; sizeBytes: number }[];
-    // Why there are no candidates, when there are none. The server names WHICH of the three causes it is
-    // (no Ollama · not running · only embedders) because they have three different fixes.
-    localBlocked: string | null;
-    // A chat model the panel can pull, when that IS the fix. Same Ollama and same endpoint the embedding
-    // table downloads through — the judge and the embedder are one provider with two models on it.
-    localSuggest: string | null;
-  };
-  localModel: {
-    enabled: boolean; active: boolean; model: string | null; what: string; cost: string;
-    // Why this layer has no backend picker while 判断 has one.
-    backend: string;
-    note: string | null;
-    ollama: {
-      baseUrl: string; installed: boolean; serving: boolean; version: string | null;
-      executable: string | null; gpuLikely: boolean; problem: string | null;
-      // `capabilities` is Ollama's own answer and is null on a daemon too old to report it — which is why
-      // the disk list below tests for the word rather than for "not completion".
-      models: { name: string; sizeBytes: number; capabilities: string[] | null }[];
-    };
-    options: MemoryOption[];
-    recommendation: { id: string; reason: string; caution: string | null };
-    current: string | null;
-    currentCatalogued: boolean;
-    measuredOn: string;
-    // `percent` is null until the run has counted its facts: a bar pinned at 0% reads as stuck, which is
-    // the impression this whole thing exists to remove.
-    reindex: {
-      running: boolean; done: number; total: number;
-      embedded: number | null; error: string | null; percent: number | null;
-    };
-    // STATE, not history: how much of what the household knows is actually searchable.
-    coverage: { indexed: number; total: number };
-    // Downloads the server has in flight. Keyed by the id the row asked for, so a row can find its own.
-    pulls: ModelPull[];
-  };
+  layers: LayerView[];
+  weighting: { primary: string; note: string };
+  modelsAt: string;
 }
 
-// Lives INSIDE Cortex rather than in a tab of its own: cortex is 校准 — where you tune how the brain
-// works — and this is exactly that. The enrichment's model routing is already a row in the table below
-// it, so a separate tab put one feature's controls in two places. Only the Ollama runtime DOWNLOAD stays
-// in 资源, which is the panel for large files fetched into the data folder.
-export function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean }) {
+export function MemoryRecallSection(
+  { toast, onRestart, inHost }:
+  { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean },
+) {
   const [s, setS] = useState<MemoryState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const load = async (refresh = false) => {
@@ -101,21 +73,16 @@ export function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: s
   };
   useEffect(() => { load(true); }, []);
 
-  // Poll ONLY while long work is running — a rebuild or a model download. Both outlive the request that
-  // started them, so the panel has to go and look; polling all the time would spend a probe of Ollama every
-  // two seconds for a screen that is usually idle.
-  // `load(false)` on purpose: the probe's own 20s cache keeps these ticks cheap, and the two things that
-  // must stay live (reindex + pulls) are read from memory, not from the probe. A finished pull invalidates
-  // the cache itself, so the model list still refreshes promptly when one lands.
-  // Gate on a DERIVED boolean — keying the effect on `s` would tear down and recreate the interval on
-  // every tick.
-  const working = (s?.localModel.reindex.running ?? false)
-    || (s?.localModel.pulls.some((p) => p.running) ?? false);
+  const semantic = s?.layers.find((l) => l.id === 'semantic');
+  // Poll ONLY while a rebuild runs. It outlives the request that started it, so the panel has to go and
+  // look; polling always would spend a probe of Ollama every second and a half on an idle screen.
+  // Gate on a DERIVED boolean — keying the effect on `s` would tear down the interval every tick.
+  const rebuilding = semantic?.reindex?.running ?? false;
   useEffect(() => {
-    if (!working) return;
+    if (!rebuilding) return;
     const t = setInterval(() => { load(false); }, 1500);
     return () => clearInterval(t);
-  }, [working]);
+  }, [rebuilding]);
 
   const post = async (path: string, body?: unknown, label = '') => {
     setBusy(label || path);
@@ -132,46 +99,36 @@ export function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: s
     } catch { toast('请求失败', 'err'); return null; } finally { setBusy(null); }
   };
 
-  const mb = (n: number) => (n >= 1_000_000_000 ? `${(n / 1_000_000_000).toFixed(1)} GB` : `${Math.round(n / 1_000_000)} MB`);
-  if (!s) return <div className="eval-empty">加载中…</div>;
-  const lm = s.localModel;
-  const o = lm.ollama;
-  // A row's own download. Matched on the id the row SENT rather than on Ollama's normalised name, because
-  // a pull of `bge-m3` is reported by Ollama as `bge-m3:latest` and the row would never find itself.
-  const pullOf = (id: string) => lm.pulls.find((p) => p.model === id) ?? null;
-  // Saved but not running = a restart is owed. TWO things can be in that state, and for the same reason:
-  // both are startup registrations. The judge's on/off switch is not one of them — it is live — so the
-  // restart is offered for the transport and the semantic layer only, never for the switch.
-  const en = s.llmEnrichment;
-  const judgePending = en.transport !== en.transportActive
-    || (en.transport !== 'claude-cli' && en.localModel !== en.activeModel);
-  const pending = lm.enabled !== lm.active || judgePending;
-  // The backend RUNNING the judge, named. `本机` rather than `本地`: 本地 belongs to the semantic layer's
-  // own vocabulary, and the two used to sit one card apart meaning different things.
-  const judgeBackend = en.transportActive === 'claude-cli' ? 'Claude CLI' : `本机 ${en.activeModel}`;
+  if (!s || !semantic) return <div className="eval-empty">加载中…</div>;
+  const formula = s.layers.find((l) => l.id === 'formula')!;
+  const judge = s.layers.find((l) => l.id === 'judge')!;
+
+  // Saved but not running = a restart is owed. Only a BINDING can be in that state; 判断's on/off is live,
+  // so it must never contribute here or every toggle would ask for a restart it does not need.
+  const owed = (l: LayerView) => l.source !== l.activeSource || l.model !== l.activeModel;
+  const pending = owed(judge) || owed(semantic);
+
+  const bind = (layer: string) => (source: string, model: string) =>
+    post(`/api/manage/memory/layer/${layer}`, { source, model }, `bind:${layer}`);
 
   return (
     <>
       <div className="mng-title">记忆检索 · Memory recall</div>
 
-      {/* WHAT IS ON, in one line, before any of the controls. The previous layout opened with three
-          equal-weight prose blocks, so answering "what is running right now" meant reading all of them. */}
-      {/* Each layer is named for WHAT IT DOES, and carries the backend running it. The middle one used to
-          be called Claude CLI 增强 — a name that asserted a backend it may not be using, since the very
-          control inside it moves the work to a model on this machine. Worse, its 本机模型 option sat one
-          card above a layer called 本地模型 · Local model: two near-synonyms, different meanings, adjacent.
-          Naming by function makes the backend a property rather than the title. */}
+      {/* WHAT IS ON, in one line, before any of the controls — including 语义 even though it sits under
+          高级 below. State is state: a layer being secondary is a reason to present it later, not a reason
+          to leave it out of the answer to "what is running right now". */}
       <div className="mem-sum">
-        <span className={`mem-pill on`}>公式</span>
-        <span className={`mem-pill${en.enabled ? ' on' : ''}`}>
-          判断{en.enabled ? `(${judgeBackend})` : '(关)'}
-        </span>
-        <span className={`mem-pill${lm.active ? ' on' : ''}`}>
-          语义{lm.active ? `(${lm.model})` : lm.enabled ? '(待重启)' : '(关)'}
-        </span>
+        {s.layers.map((l) => (
+          <span key={l.id} className={`mem-pill${l.on ? ' on' : ''}`}>
+            {l.name.split(' · ')[0]}
+            {l.alwaysOn ? '' : l.on ? `(${backendLabel(l, l.activeSource, l.activeModel)})` : '(关)'}
+          </span>
+        ))}
       </div>
       <div className="set-lead">
-        三项互补,不是三选一:<b>公式</b>永远在跑;<b>判断</b>只调整已检索结果的顺序;<b>语义</b>改变「能不能被检索到」。
+        三层互补,不是三选一:<b>公式</b>永远在跑;<b>判断</b>调整已检索结果的顺序;<b>语义</b>改变「能不能被检索到」。
+        模型的下载与删除在「{s.modelsAt}」面板;这里只决定每一层用哪个。
       </div>
       {pending && (
         <div className="set-actions">
@@ -184,428 +141,223 @@ export function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: s
         {/* 1 — the floor */}
         <div className="mem-layer on">
           <div className="mem-layer-main">
-            <div className="mem-layer-name">公式 · Formula<span className="res-badge">始终启用</span></div>
-            <div className="mem-layer-desc">{s.formula.what}</div>
+            <div className="mem-layer-name">{formula.name}<span className="res-badge">始终启用</span></div>
+            <div className="mem-layer-desc">{formula.what}</div>
           </div>
         </div>
 
-        {/* 2 — judgement: annotate on write, reorder on recall. Backend is a CHOICE, hence a badge. */}
-        <div className={`mem-layer${en.enabled ? ' on' : ''}`}>
+        {/* 2 — judgement. Its backend is a CHOICE, so it is a picker; its on/off is LIVE, so it is not. */}
+        <div className={`mem-layer${judge.on ? ' on' : ''}`}>
           <div className="mem-layer-main">
             <div className="mem-layer-name">
-              判断 · Judgement
-              {en.enabled && <span className="res-badge">运行中</span>}
+              {judge.name}
+              {judge.on && <span className="res-badge">运行中</span>}
               {/* The RUNNING backend, not the saved one. Shown only while the layer is on, because a
-                  backend named for work that is not happening is the same false label as the old title. */}
-              {en.enabled && <span className="res-badge">{judgeBackend}</span>}
+                  backend named for work that is not happening is a false label. */}
+              {judge.on && <span className="res-badge">{backendLabel(judge, judge.activeSource, judge.activeModel)}</span>}
               <span className="res-badge">即时生效</span>
             </div>
-            <div className="mem-layer-desc">{en.what}</div>
-            <div className="mem-layer-desc"><b>费用</b> {en.cost}</div>
-            <div className="mem-layer-desc">{en.model}</div>
-            {en.enabled && <JudgeTransportPicker en={en} busy={busy} post={post} pullOf={pullOf} />}
+            <div className="mem-layer-desc">{judge.what}</div>
+            <div className="mem-layer-desc"><b>费用</b> {judge.cost}</div>
+            {judge.on && <SourcePicker layer={judge} busy={busy} bind={bind('judge')} modelsAt={s.modelsAt} />}
           </div>
           <div className="mem-layer-side">
             <button
-              className={`cx-btn${en.enabled ? '' : ' primary'}`}
+              className={`cx-btn${judge.on ? '' : ' primary'}`}
               disabled={busy === 'enrich'}
-              onClick={() => post('/api/manage/memory/enrichment', { enabled: !en.enabled }, 'enrich')}
+              onClick={() => post('/api/manage/memory/enrichment', { enabled: !judge.on }, 'enrich')}
             >
-              {en.enabled ? '关闭' : '启用'}
+              {judge.on ? '关闭' : '启用'}
             </button>
-          </div>
-        </div>
-
-        {/* 3 — semantic: real vectors, so a paraphrase finds the fact. Named for what it does; the local
-            model is its backend, the same way the CLI is the judge's — not its title. */}
-        <div className={`mem-layer${lm.active ? ' on' : ''}${o.problem && lm.enabled ? ' err' : ''}`}>
-          <div className="mem-layer-main">
-            <div className="mem-layer-name">
-              语义 · Semantic
-              {lm.active && <span className="res-badge">运行中</span>}
-              {lm.active && lm.model && <span className="res-badge">本机 {lm.model}</span>}
-              {o.gpuLikely && <span className="res-badge">GPU 可用</span>}
-            </div>
-            <div className="mem-layer-desc">{lm.what}</div>
-            <div className="mem-layer-desc"><b>费用</b> {lm.cost}</div>
-            <div className="mem-layer-desc">
-              运行于 Ollama:{o.installed ? (o.serving ? `运行中 ${o.version ?? ''}` : '已安装,未运行') : '未安装'}
-              {o.installed && ` · ${o.baseUrl}`}
-            </div>
-            {/* 判断 offers two backends and this one offers none — an asymmetry the by-function naming
-                makes plain, so say why rather than leaving it to be read as an omission. */}
-            <div className="mem-fine">{lm.backend}</div>
-            {o.problem && <div className="res-msg danger">{o.problem}</div>}
-            {!o.installed && (
-              <div className="mem-fine warn">在「资源 · Resources」面板下载 Ollama 运行时,或自行安装后重启应用。</div>
-            )}
-            {lm.note && <div className="mem-fine">说明:{lm.note}</div>}
-            {/* The rebuild, while it runs and after it ends. It used to be a greyed-out button and
-                nothing else, for minutes — indistinguishable from a hang. */}
-            {lm.reindex.running && (
-              <div className="mem-reindex">
-                <div className="res-prog">
-                  <span className="res-bar" style={{ width: `${lm.reindex.percent ?? 8}%` }} />
-                </div>
-                <div className="mem-fine">
-                  {lm.reindex.total > 0
-                    ? `重建索引中:${lm.reindex.done}/${lm.reindex.total} 条事实`
-                    : '重建索引中:正在统计事实…'}
-                  {en.enabled && ' · 开启了判断,每条事实会多一次模型调用,请耐心等待'}
-                </div>
-              </div>
-            )}
-            {/* Coverage sits above the rebuild's own messages because it is the standing answer; the
-                rebuild is an event that changes it. Shown only when it is NOT complete — "25/25" every
-                day is noise, whereas a shortfall is the one thing worth acting on. */}
-            {!lm.reindex.running && lm.coverage.total > 0 && lm.coverage.indexed < lm.coverage.total && (
-              <div className="mem-fine warn">
-                索引覆盖 {lm.coverage.indexed}/{lm.coverage.total} 条事实 —— 其余仍可用关键词找到,
-                重启后会自动补齐,也可以现在「重建索引」。
-              </div>
-            )}
-            {!lm.reindex.running && lm.reindex.error && (
-              <div className="mem-fine danger">上次重建:{lm.reindex.error}</div>
-            )}
-            {!lm.reindex.running && lm.reindex.embedded ? (
-              <div className="mem-fine">上次重建完成:{lm.reindex.embedded} 条事实已重新索引。</div>
-            ) : null}
-          </div>
-          <div className="mem-layer-side">
-            {o.installed && !o.serving && (
-              <button className="cx-btn primary" disabled={busy === 'start'}
-                onClick={() => post('/api/manage/models/start', undefined, 'start')}>启动</button>
-            )}
-            {lm.enabled && (
-              <>
-                <button className="cx-btn" disabled={busy === 'reindex' || lm.reindex.running}
-                  onClick={() => post('/api/manage/memory/local/reindex', undefined, 'reindex')}>
-                  {lm.reindex.running ? '重建中…' : '重建索引'}
-                </button>
-                <button className="cx-btn" disabled={busy === 'off'}
-                  onClick={() => post('/api/manage/memory/local/disable', undefined, 'off')}>停用</button>
-              </>
-            )}
           </div>
         </div>
       </div>
 
-      {/* MODEL CHOICE AS A COMPARISON, NOT A READING TASK. Five models across quality / size / speed is a
-          table; the previous layout stacked them as prose blocks, so choosing meant reading five
-          paragraphs and holding the numbers in your head. Everything that decides the choice is now a
-          column, and the recommendation names its evidence instead of asserting itself. */}
-      {/* PROGRESSIVE DISCLOSURE, not a sub-tab. The bulk of this section is a comparison table, and a
-          comparison is a SETUP-TIME artifact: you read it once, choose, and never look at it again — yet
-          it was rendering at full size even with 语义 switched off, which is what made the section feel
-          oversized. A sub-tab would have treated the symptom and cost more: a second level of navigation
-          on a rarely-visited screen, and — worse — it would put the 语义 switch and the table that
-          satisfies it in different places, so turning the feature on would mean going somewhere else to
-          finish. Collapsed, they stay one click apart.
+      {/* 3 — semantic, under 高级. NOT hidden: one click away, with its state already reported in the pill
+          row above. The ordering is a measurement, and the measurement is SOMEONE ELSE'S — so the sentence
+          says whose, and keeps saying it until somebody measures this household's own material. */}
+      <Advanced defaultOpen={semantic.on} note={s.weighting.note}>
+        <div className="mem-layers">
+          <div className={`mem-layer${semantic.activeSource ? ' on' : ''}`}>
+            <div className="mem-layer-main">
+              <div className="mem-layer-name">
+                {semantic.name}
+                {semantic.activeSource && <span className="res-badge">运行中</span>}
+                {semantic.activeSource && semantic.activeModel &&
+                  <span className="res-badge">{backendLabel(semantic, semantic.activeSource, semantic.activeModel)}</span>}
+                {semantic.on && !semantic.activeSource && <span className="res-badge">待重启</span>}
+              </div>
+              <div className="mem-layer-desc">{semantic.what}</div>
+              <div className="mem-layer-desc"><b>费用</b> {semantic.cost}</div>
+              <SourcePicker layer={semantic} busy={busy} bind={bind('semantic')} modelsAt={s.modelsAt} />
+              {semantic.note && <div className="mem-fine">说明:{semantic.note}</div>}
 
-          Open by default only when you are MID-SETUP (the feature is on but no model is chosen), because
-          that is the one state where the table is the thing you came for. */}
-      {o.serving && (
-        <ModelManager defaultOpen={!lm.model} count={lm.options.length} current={lm.model}>
-          <div className="mem-rec">
-            <b>推荐 {lm.recommendation.id}</b> —— {lm.recommendation.reason}
-            {lm.recommendation.caution && <div className="mem-fine">注意:{lm.recommendation.caution}</div>}
+              {/* The rebuild, while it runs and after it ends. It used to be a greyed-out button and
+                  nothing else, for minutes — indistinguishable from a hang. */}
+              {semantic.reindex?.running && (
+                <div className="mem-reindex">
+                  <div className="res-prog">
+                    <span className="res-bar" style={{ width: `${semantic.reindex.percent ?? 8}%` }} />
+                  </div>
+                  <div className="mem-fine">
+                    {semantic.reindex.total > 0
+                      ? `重建索引中:${semantic.reindex.done}/${semantic.reindex.total} 条事实`
+                      : '重建索引中:正在统计事实…'}
+                    {judge.on && ' · 开启了判断,每条事实会多一次模型调用,请耐心等待'}
+                  </div>
+                </div>
+              )}
+              {/* Coverage is the standing answer; the rebuild is an event that changes it. Shown only when
+                  it is NOT complete — "25/25" every day is noise, a shortfall is worth acting on. */}
+              {!semantic.reindex?.running && semantic.coverage && semantic.coverage.total > 0
+                && semantic.coverage.indexed < semantic.coverage.total && (
+                <div className="mem-fine warn">
+                  索引覆盖 {semantic.coverage.indexed}/{semantic.coverage.total} 条事实 —— 其余仍可用关键词找到,
+                  重启后会自动补齐,也可以现在「重建索引」。
+                </div>
+              )}
+              {!semantic.reindex?.running && semantic.reindex?.error && (
+                <div className="mem-fine danger">上次重建:{semantic.reindex.error}</div>
+              )}
+              {!semantic.reindex?.running && semantic.reindex?.embedded ? (
+                <div className="mem-fine">上次重建完成:{semantic.reindex.embedded} 条事实已重新索引。</div>
+              ) : null}
+            </div>
+            <div className="mem-layer-side">
+              {semantic.on && (
+                <>
+                  <button className="cx-btn" disabled={busy === 'reindex' || semantic.reindex?.running}
+                    onClick={() => post('/api/manage/memory/layer/semantic/reindex', undefined, 'reindex')}>
+                    {semantic.reindex?.running ? '重建中…' : '重建索引'}
+                  </button>
+                  <button className="cx-btn" disabled={busy === 'off'}
+                    onClick={() => post('/api/manage/memory/layer/semantic/off', undefined, 'off')}>停用</button>
+                </>
+              )}
+            </div>
           </div>
-          <div className="mem-tbl-wrap">
-            <table className="mem-tbl">
-              <thead>
-                <tr>
-                  <th>模型</th><th>检索质量</th><th>每次查询</th><th>体积</th><th>维度</th><th>发布</th><th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {lm.options.map((m) => (
-                  <tr key={m.id} className={lm.model === m.id ? 'on' : ''}>
-                    <td>
-                      <div className="mem-m-name">
-                        <b>{m.name}</b>
-                        {m.id === lm.recommendation.id && <span className="res-badge">推荐</span>}
-                        {lm.model === m.id && <span className="res-badge">使用中</span>}
-                      </div>
-                      <div className="mem-m-note">{m.note}</div>
-                      {/* Progress goes in the NAME cell, where there is room for a bar and a status line —
-                          the action cell is a narrow, right-aligned, nowrap column. Same split the
-                          Resources panel uses: bar in the main column, 下载中… in the side column. */}
-                      <PullProgress pull={pullOf(m.id)} />
-                      {busy === `use:${m.id}` && <EnablingNote />}
-                    </td>
-                    {/* The measurement, as a number with its denominator. "9/10" invites the right
-                        question (out of how many? — the footnote answers) where "很好" does not. */}
-                    <td className={`num${m.measured && m.measured.top3 * 2 <= m.measured.queries ? ' bad' : ''}`}>
-                      {m.measured
-                        ? <><b>{m.measured.top3}/{m.measured.queries}</b><div className="mem-m-sub">首位 {m.measured.top1}</div></>
-                        : <span className="mem-m-sub">未实测</span>}
-                    </td>
-                    <td className="num">{m.measured ? `${m.measured.msPerQuery} ms` : <span className="mem-m-sub">—</span>}</td>
-                    <td className="num">{mb(m.approxBytes)}</td>
-                    <td className="num">{m.dimensions}</td>
-                    <td className={`num${m.vintage && m.vintage < '2025' ? ' mem-old' : ''}`}>
-                      {m.vintage ?? <span className="mem-m-sub">—</span>}
-                    </td>
-                    <td className="mem-act">
-                      {pullOf(m.id)?.running ? (
-                        <span className="res-running">下载中…</span>
-                      ) : !m.present ? (
-                        <button className="cx-btn" disabled={busy === `pull:${m.id}`}
-                          onClick={() => post('/api/manage/models/pull', { model: m.id }, `pull:${m.id}`)}>
-                          下载
-                        </button>
-                      ) : lm.model === m.id && lm.enabled ? (
-                        <span className="res-running">使用中</span>
-                      ) : (
-                        <div className="mem-act-pair">
-                          {/* Primary on the RECOMMENDED row only. Every row carrying a filled amber
-                              button made eight equal shouts out of a table whose whole job is to help
-                              you pick one — emphasis that is everywhere is emphasis nowhere. */}
-                          <button className={`cx-btn${m.id === lm.recommendation.id ? ' primary' : ''}`}
-                            disabled={busy === `use:${m.id}`}
-                            onClick={() => post('/api/manage/memory/local/enable', { model: m.id }, `use:${m.id}`)}>
-                            {busy === `use:${m.id}` ? '启用中…' : '使用'}
-                          </button>
-                          {/* Downloaded but unused = disk doing nothing. The server refuses to delete one
-                              that is configured, so this never has to guess. */}
-                          <button className="cx-btn" disabled={busy === `rm:${m.id}`}
-                            onClick={() => post('/api/manage/models/remove', { model: m.id }, `rm:${m.id}`)}
-                            title={`删除 ${m.id},释放 ${mb(m.approxBytes)}`}>删除</button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mem-fine">
-            质量为实测:{lm.measuredOn}。样本不大 —— 它足以分辨「能用」与「不能用」,不足以在前几名之间排座次;
-            速度与体积则按你自己的机器换算。发布时间取自 Ollama 官方页面:表里所有表现差的都是两年前的模型
-            (同一家的 nomic 新版 9/10、旧版 4/10),但 BGE-M3 同样是两年前的却仍并列最好 —— 所以「越新越好」
-            用来决定值不值得一试,真正拍板的还是实测。
-          </div>
-
-          <LocalDisk models={o.models} inUse={[lm.model, en.localModel]} busy={busy} post={post} />
-
-          {/* THE LIST IS NOT THE LIMIT. A catalog baked into a release cannot contain a model published
-              after it — which is exactly how this panel shipped without the two best models available at
-              the time. Anything Ollama can pull is usable here the day it exists. */}
-          <OtherModelField busy={busy} post={post} installed={o.models.map((x) => x.name)} pullOf={pullOf} />
-        </ModelManager>
-      )}
+        </div>
+      </Advanced>
     </>
   );
 }
 
-/** A download in flight, or the outcome of one that just finished. Reuses the Resources bar — the app has
- *  one progress idiom and this is it.
+/** The backend a layer is on, named for a badge. Falls back to the raw id rather than to a guess: a source
+ *  this client has never heard of is one the server added, and inventing a label for it would be a lie the
+ *  moment it mattered. */
+function backendLabel(layer: LayerView, sourceId: string | null, model: string | null) {
+  if (!sourceId) return '未设置';
+  const src = layer.sources.find((x) => x.id === sourceId);
+  const name = src?.name ?? sourceId;
+  // The CLI arm's model is one of three well-known names, so it reads fine inline; a local model id is
+  // long, and the badge is the wrong place for it only when there is nothing else to say.
+  return model ? `${name} · ${model}` : name;
+}
+
+/** WHERE a layer runs, and on which model.
  *
- *  It exists because the pull used to be awaited INSIDE the POST: the button said 下载中… and nothing else
- *  changed for however long a gigabyte takes on the household's line, which is the same "greyed-out button,
- *  indistinguishable from a hang" the rebuild was fixed for. Renders nothing when there is no download, so
- *  every caller can mount it unconditionally. */
-function PullProgress({ pull }: { pull: ModelPull | null }) {
-  if (!pull) return null;
-  if (!pull.running) {
-    return pull.error
-      ? <div className="mem-fine danger">下载失败:{pull.error}</div>
-      : <div className="mem-fine">下载完成。</div>;
-  }
-  return (
-    <div className="mem-prog">
-      {/* The 6% floor is for the indeterminate case only: a bar with no width at all reads as a bar that
-          has not started, which is exactly wrong while manifests are being fetched. */}
-      <div className="res-prog"><span className="res-bar" style={{ width: `${pull.percent ?? 6}%` }} /></div>
-      <div className="mem-fine">
-        {pull.percent === null ? '正在准备…' : `${pull.percent}%`}
-        {pull.status ? ` · ${pull.status}` : ''}
-      </div>
-    </div>
-  );
-}
-
-/** What 「使用」 is doing while it sits there disabled. There is no progress to report — it is one embed
- *  call that blocks until the model is in memory — so the honest thing is to say WHAT is being waited on
- *  and that tens of seconds is normal, rather than leaving a dead button to be read as a hang. */
-function EnablingNote() {
-  return (
-    <div className="mem-fine">
-      正在让它真的算一次向量 —— 首次调用要把模型读进内存,可能要几十秒。算不出来就不会保存。
-    </div>
-  );
-}
-
-/** The model comparison + disk + free-form field, behind one disclosure. Summarised when closed, so the
- *  section still ANSWERS "which model am I using and how many are there" without unfolding. */
-function ModelManager(
-  { defaultOpen, count, current, children }:
-  { defaultOpen: boolean; count: number; current: string | null; children: React.ReactNode },
+ *  Rendered from the sources the SERVER reports for this layer — so 语义 shows one button today and grows
+ *  a second the day a class implementing its interface is registered, with no edit here. An unavailable
+ *  source stays visible and carries its own sentence: a disabled control that says nothing is a dead end,
+ *  and the household can see their models listed on another panel and has no way to learn why. */
+function SourcePicker(
+  { layer, busy, bind, modelsAt }:
+  { layer: LayerView; busy: string | null;
+    bind: (source: string, model: string) => void; modelsAt: string },
 ) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="mem-mgr">
-      <button className={`mem-mgr-h${open ? ' on' : ''}`} onClick={() => setOpen(!open)}>
-        <span className="cx-caret">{open ? '▾' : '▸'}</span>
-        <span className="mem-mgr-label">{open ? '收起模型列表' : '选择 · 下载 · 删除嵌入模型'}</span>
-        <span className="mem-mgr-meta">{current ? `当前 ${current}` : '尚未选择'} · {count} 个已实测</span>
-      </button>
-      {open && <div className="mem-mgr-body">{children}</div>}
-    </div>
-  );
-}
+  // DERIVED from the latest props, with an explicit pick layered on top — never seeded into state. A
+  // useState initialiser runs once and this component is not remounted when the panel reloads, so a
+  // household who started Ollama and watched their models appear would otherwise be left holding ''.
+  const [pickedSource, setPickedSource] = useState<string | null>(null);
+  const [pickedModel, setPickedModel] = useState<string | null>(null);
 
-/** Everything Ollama holds, with what it costs in disk — including models this panel's shortlist has
- *  never heard of. Without this, "free up space" means leaving the app for a terminal, and a household
- *  that tried several models has no way to see what the trying cost them. */
-function LocalDisk(
-  { models, inUse, busy, post }:
-  { models: { name: string; sizeBytes: number; capabilities: string[] | null }[]; inUse: (string | null)[];
-    busy: string | null; post: (u: string, b: unknown, k: string) => void },
-) {
-  const [open, setOpen] = useState(false);
-  const total = models.reduce((n, m) => n + m.sizeBytes, 0);
-  const used = (n: string) => inUse.some((u) => !!u && (u === n || u.split(':')[0] === n.split(':')[0]));
-  if (models.length === 0) return null;
-  return (
-    <div className="mem-disk">
-      <button className="cx-btn" onClick={() => setOpen(!open)}>
-        {open ? '收起' : '本机模型占用'} · {models.length} 个 · {memBytes(total)}
-      </button>
-      {open && (
-        <div className="mem-disk-list">
-          {models.map((m) => (
-            <div className="mem-disk-row" key={m.name}>
-              {/* Name and badges share ONE grid cell: the badges are conditional, and letting them be
-                  their own columns would reflow the whole list depending on which models are installed. */}
-              <span className="mem-disk-id">
-                <span className="mem-disk-name">{m.name}</span>
-                {/* What Ollama says it can DO, so this list answers the question it used to raise: "I have
-                    nine models here — why can't I pick one as the judge?". Tested for the word rather than
-                    for its absence, because an older daemon reports no capabilities at all and a guess
-                    printed as a fact is worse than a blank. */}
-                {m.capabilities?.includes('embedding') && <span className="res-badge">嵌入</span>}
-                {m.capabilities?.includes('completion') && <span className="res-badge">对话</span>}
-              </span>
-              <span className="mem-disk-size">{memBytes(m.sizeBytes)}</span>
-              {used(m.name)
-                ? <span className="res-running">使用中</span>
-                : (
-                  <button className="cx-btn" disabled={busy === `rm:${m.name}`}
-                    onClick={() => post('/api/manage/models/remove', { model: m.name }, `rm:${m.name}`)}>
-                    删除
-                  </button>
-                )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+  const source = layer.sources.find((x) => x.id === (pickedSource ?? layer.source)) ?? layer.sources[0];
+  if (!source) return null;
 
-/** WHERE the judge runs. Two backends, same feature — so a segmented control, the same idiom the
- *  Local/LAN/WAN access picker uses, rather than a third toggle that would read as a third feature. */
-function JudgeTransportPicker(
-  { en, busy, post, pullOf }:
-  { en: MemoryState['llmEnrichment']; busy: string | null; post: (u: string, b: unknown, k: string) => void;
-    pullOf: (id: string) => ModelPull | null },
-) {
-  // DERIVED from the latest props, with an explicit pick layered on top — never seeded into state.
-  // `useState(en.localCandidates[0]?.name ?? '')` ran its initialiser once, on the first render, and this
-  // component is not remounted when the panel reloads. So a household that opened the panel with Ollama
-  // stopped, hit 启动, and watched their models appear was left holding '' — and the 本机模型 button, which
-  // is disabled on `!model`, stayed dead with every model on screen and no way to explain it.
-  const [picked, setPicked] = useState<string | null>(null);
-  const names = en.localCandidates.map((c) => c.name);
-  // First of: what they chose, what is saved, the first candidate — that still EXISTS. A pick or a saved
-  // model that has since been deleted must not survive as a value the <select> cannot show.
-  const model = [picked, en.localModel, names[0]].find((n) => !!n && names.includes(n)) ?? '';
-  const canLocal = names.length > 0;
+  // Only what is ON THIS MACHINE can be bound. The rest of the list is what 资源 could fetch, and offering
+  // it here would be a control that fails on click.
+  const usable = source.models.filter((m) => m.installed);
+  const names = usable.map((m) => m.id);
+  // First of: what they chose, what is saved, the first option — that still EXISTS. A pick or a saved
+  // model since deleted must not survive as a value the <select> cannot show.
+  const model = [pickedModel, layer.model, names[0]].find((n) => !!n && names.includes(n)) ?? '';
+  const unchanged = source.id === layer.source && model === layer.model;
+  const fetchable = source.models.filter((m) => !m.installed).length;
+
   return (
-    <div className="mem-judge">
-      {/* Labelled, because the layer is no longer NAMED after one of these two. When the title said
-          Claude CLI 增强, the picker read as a modifier on a Claude feature; under 判断 it reads as what
-          it is — the same work, on a backend you choose. */}
-      <span className="mem-judge-lbl">运行于</span>
+    <div className="mem-src">
+      <span className="mem-src-lbl">运行于</span>
       <div className="cx-seg">
-        <button className={`cx-seg-b${en.transport === 'claude-cli' ? ' on' : ''}`} disabled={busy === 'judge'}
-          onClick={() => post('/api/manage/memory/judge', { transport: 'cli' }, 'judge')}>Claude CLI</button>
-        <button className={`cx-seg-b${en.transport !== 'claude-cli' ? ' on' : ''}`}
-          disabled={busy === 'judge' || !canLocal || !model}
-          onClick={() => post('/api/manage/memory/judge', { transport: 'local', model }, 'judge')}>
-          {busy === 'judge' ? '切换中…' : '本机模型'}
-        </button>
+        {layer.sources.map((x) => (
+          <button key={x.id} className={`cx-seg-b${source.id === x.id ? ' on' : ''}`}
+            disabled={busy !== null} onClick={() => { setPickedSource(x.id); setPickedModel(null); }}>
+            {x.name}
+          </button>
+        ))}
       </div>
-      {canLocal && (
-        <select className="mem-judge-sel" value={model} onChange={(e) => setPicked(e.target.value)}>
-          {en.localCandidates.map((m) => (
-            <option key={m.name} value={m.name}>{m.name} · {memBytes(m.sizeBytes)}</option>
+      {usable.length > 0 && (
+        <select className="mem-src-sel" value={model} onChange={(e) => setPickedModel(e.target.value)}>
+          {usable.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}{m.sizeBytes ? ` · ${memBytes(m.sizeBytes)}` : ''}
+            </option>
           ))}
         </select>
       )}
-      {/* WHY the switch is unavailable — outside the <select>, which is the whole point. The previous
-          version put this sentence in an <option>, so it could only render when there was something to
-          select: the one case it existed to explain was the one case it could never appear in. */}
-      {en.localBlocked && <div className="mem-fine warn">{en.localBlocked}</div>}
-      {/* …and the FIX, as a button. The local judge and the local embedder are one provider — same Ollama,
-          same /api/pull — so a panel that downloads an embedding model with a click has no reason to
-          answer "you need a chat model" with a terminal command. */}
-      {en.localSuggest && (
-        <div className="mem-judge-fix">
-          {pullOf(en.localSuggest)?.running ? (
-            <span className="res-running">下载中…</span>
-          ) : (
-            <button className="cx-btn primary" disabled={busy === 'pull:judge'}
-              onClick={() => post('/api/manage/models/pull', { model: en.localSuggest }, 'pull:judge')}>
-              下载 {en.localSuggest}
-            </button>
-          )}
-          <PullProgress pull={pullOf(en.localSuggest)} />
+      <button className="cx-btn primary"
+        disabled={busy !== null || !model || !source.available || unchanged}
+        onClick={() => bind(source.id, model)}>
+        {busy?.startsWith('bind:') ? '保存中…' : unchanged ? '使用中' : '使用'}
+      </button>
+
+      <div className="mem-fine">{source.description}</div>
+      {/* WHY it is unavailable — outside the <select>, which is the whole point. The previous version put
+          this sentence in an <option>, so it could only render when there was something to select: the one
+          case it existed to explain was the one case it could never appear in. */}
+      {!source.available && source.reason && <div className="mem-fine warn">{source.reason}</div>}
+      {/* …and where the fix is. Not a button: downloading is 资源's job now, and a second download control
+          here would be the two-writers problem this whole pass exists to remove. */}
+      {source.suggest && (
+        <div className="mem-fine">
+          需要的模型可在「{modelsAt}」面板一键下载:<b className="mem-mono">{source.suggest}</b>
         </div>
       )}
-      <div className="mem-fine">{en.localNote}</div>
+      {source.available && usable.length === 0 && (
+        <div className="mem-fine warn">这个后端还没有可用的模型 —— 请先在「{modelsAt}」面板下载。</div>
+      )}
+      {fetchable > 0 && (
+        <div className="mem-fine">还有 {fetchable} 个可以下载的模型,在「{modelsAt}」面板。</div>
+      )}
     </div>
   );
 }
 
-/** Use a model the shortlist does not know about — pulled first if this machine does not have it. */
-function OtherModelField(
-  { busy, post, installed, pullOf }:
-  { busy: string | null; post: (u: string, b: unknown, k: string) => void; installed: string[];
-    pullOf: (id: string) => ModelPull | null },
+/** 高级 · Advanced — 语义 lives here rather than as a co-equal third card.
+ *
+ *  One click, not hidden, and its state is already in the pill row above. The reason is a measurement and
+ *  the measurement is Lyntai's, on Lyntai's corpus — so the note that justifies the demotion is the note
+ *  that names whose numbers they are. */
+function Advanced(
+  { defaultOpen, note, children }:
+  { defaultOpen: boolean; note: string; children: React.ReactNode },
 ) {
-  const [id, setId] = useState('');
-  const have = installed.some((n) => n === id || n.split(':')[0] === id.split(':')[0]);
-  const pull = id ? pullOf(id) : null;
+  // Derived-with-override, the same pattern SourcePicker uses and for the same reason: `defaultOpen`
+  // arrives with the data, so a plain useState initialiser would capture `false` from the first render.
+  const [picked, setPicked] = useState<boolean | null>(null);
+  const open = picked ?? defaultOpen;
   return (
-    <div className="mem-other">
-      <label className="set-field">
-        <span>其他模型 · 直接填写 Ollama 模型名</span>
-        <input value={id} onChange={(e) => setId(e.target.value.trim())}
-          placeholder="例如 nomic-embed-text-v2-moe 或 snowflake-arctic-embed2" />
-      </label>
-      <div className="mem-other-act">
-        {pull?.running ? (
-          <span className="res-running">下载中…</span>
-        ) : (
-          <button className="cx-btn" disabled={!id || busy === 'pull:other'}
-            onClick={() => post('/api/manage/models/pull', { model: id }, 'pull:other')}>下载</button>
-        )}
-        <button className="cx-btn primary" disabled={!id || busy === 'use:other'}
-          onClick={() => post('/api/manage/memory/local/enable', { model: id }, 'use:other')}>
-          {busy === 'use:other' ? '启用中…' : '使用'}
-        </button>
-      </div>
-      {/* Same two components the table rows use — the free-form field starts exactly the same two long
-          operations, so it must not be the one place that still goes quiet during them. */}
-      <PullProgress pull={pull} />
-      {busy === 'use:other' && <EnablingNote />}
-      <div className="mem-fine">
-        {id && !have && '这台机器还没有它 —— 先「下载」,再「使用」。'}
-        {id && have && '已在本机,可直接「使用」。'}
-        {!id && '启用前会先让它真的算一次向量:算不出来就不会保存,免得检索静悄悄地空掉。'}
-      </div>
+    <div className="mem-adv">
+      <button className={`mem-adv-h${open ? ' on' : ''}`} onClick={() => setPicked(!open)}>
+        <span className="cx-caret">{open ? '▾' : '▸'}</span>
+        <span className="mem-adv-label">高级 · Advanced</span>
+        <span className="mem-adv-meta">语义检索(本机嵌入模型)</span>
+      </button>
+      {open && (
+        <div className="mem-adv-body">
+          <div className="mem-fine">{note}</div>
+          {children}
+        </div>
+      )}
     </div>
   );
 }

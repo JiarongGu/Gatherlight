@@ -38,11 +38,16 @@ public interface ICortexConfigService
 
 public sealed class CortexConfigService : ICortexConfigService
 {
-    // Consumers that resolve their model from app_config at spawn time. Keep in sync with the
-    // llm.model.{consumer} lookups AND with GatherlightApp's DefaultModelByConsumer — a consumer routed
-    // there but absent here is routable in principle and unreachable in practice: SetModel returns
-    // "unknown consumer" and the panel never shows it. `memory` was exactly that for a while, with a code
-    // comment promising a live override the product gave no way to set.
+    // Consumers whose model is chosen HERE. Keep in sync with the llm.model.{consumer} lookups AND with
+    // GatherlightApp's DefaultModelByConsumer — a consumer routed there and settable NOWHERE is routable in
+    // principle and unreachable in practice, which `memory` was for a while, with a code comment promising
+    // a live override the product gave no way to set.
+    //
+    // `memory` is routed but deliberately ABSENT from this list now. 记忆检索 binds it together with its
+    // BACKEND, and this row was a second place to set one value — worse, the one that won. A household who
+    // set 记忆判断 to haiku here and later moved the judge to a local model had the router asking OLLAMA for
+    // a model called "haiku"; both memory policies are fail-open, so the symptom was no calls and no error.
+    // One decision, one control. The rule this bends is recorded in .claude/rules/dev-conventions.md.
     private static readonly (string Consumer, string Label, string Description, string? Default)[] ModelCatalog =
     {
         ("chat", "对话智能体 · Planner chat",
@@ -51,11 +56,6 @@ public sealed class CortexConfigService : ICortexConfigService
             "一次性文件提取工具(中性 cwd,廉价调用)。默认 sonnet。", "sonnet"),
         ("scorer", "自动评分 · Scorer",
             "自动评分的 LLM 评判(切题 / 事实可靠等维度,中性 cwd,廉价调用)。默认 haiku。", "haiku"),
-        // Labelled 判断 to match the layer it belongs to in 记忆检索. The consumer ID stays "memory" — it is
-        // the routing key in DefaultModelByConsumer, not a display string.
-        ("memory", "记忆判断 · Memory",
-            "记录事实时标注主题、检索时判断哪些结果真正回答了问题(每次写入与检索各一次调用)。" +
-            "可在本页「记忆检索」中整体关闭。默认 haiku。", "haiku"),
     };
 
     // Ordered from cheapest to most capable; "" = fall back to the CLI/consumer default.

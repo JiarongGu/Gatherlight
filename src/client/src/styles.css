@@ -3265,20 +3265,24 @@ kbd, .topbar-kbd {
 .mem-layer-desc { font-size: 11.5px; color: var(--muted); margin-top: 5px; line-height: 1.55; }
 .mem-layer-desc b { color: var(--text-2); font-weight: 500; }
 
-/* WHERE the judge runs — a segmented control, as the access-mode picker is. */
-.mem-judge { margin-top: 11px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-.mem-judge .cx-seg { flex: 0 0 auto; }
+/* WHERE a layer runs — a segmented control, as the access-mode picker is. Named for the LAYER's source
+   rather than for the judge: both layers use it now, and the buttons are rendered from what the server
+   reports rather than from a fixed pair, so a rule named .mem-judge would have been a second thing to
+   rename the day 语义 grows a second backend. */
+.mem-src { margin-top: 11px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.mem-src .cx-seg { flex: 0 0 auto; }
 /* Quiet: it names the control beside it, it is not a heading. */
-.mem-judge-lbl { flex: none; font-size: 11.5px; color: var(--muted); }
-/* The fix-it button for "no chat model on this machine", on its own row under the reason. */
-.mem-judge-fix { flex: 1 1 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
-.mem-judge-fix .mem-prog { width: 100%; max-width: 44ch; margin-top: 4px; }
-.mem-judge-sel {
+.mem-src-lbl { flex: none; font-size: 11.5px; color: var(--muted); }
+.mem-src-sel {
   font-family: var(--font-mono); font-size: 11px; padding: 5px 9px;
   border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--surface-2); color: var(--text-2); max-width: 100%;
 }
-.mem-judge .mem-fine { flex: 1 1 100%; }
+/* Every explanatory line under the picker takes its own row — a reason, a pointer to 资源 and a count of
+   what could still be downloaded are sentences, not chips. */
+.mem-src .mem-fine { flex: 1 1 100%; }
+/* A model id inside a sentence. Mono because it is something you type or compare, not something you read. */
+.mem-mono { font-family: var(--font-mono); font-size: 11px; color: var(--text-2); }
 
 /* Long-operation progress — reuses the Resources bar, the app's one progress idiom. `.mem-reindex` is the
    rebuild under the 本地模型 layer; `.mem-prog` is the same block inside a table row, where a download
@@ -3294,24 +3298,27 @@ kbd, .topbar-kbd {
 .mem-fine.warn { color: var(--warn); }
 .mem-fine.danger { color: var(--danger); }
 
-/* ---- the model manager, behind a disclosure ---- */
-.mem-mgr { margin-top: 14px; }
+/* ---- 高级 · Advanced, behind a disclosure ---- */
+/* Was the model manager's disclosure; the models moved to 资源 and this now holds 语义. Same idiom,
+   same reason: a setup-time surface that should not sit at full size on a screen you visit to check
+   what is running. */
+.mem-adv { margin-top: 14px; }
 /* A BUTTON, and it has to look like one. The first pass styled this as a group label — 10px muted
    letterspaced caps, no border, no background — which is the console's caption idiom, so it stopped
    reading as something you can press and took the whole model chooser (and the 使用 that applies a
    choice) out of reach with it. Quiet is fine; invisible is not. */
-.mem-mgr-h {
+.mem-adv-h {
   width: 100%; text-align: left; display: flex; align-items: center; gap: 10px;
   font-family: var(--font-body); font-size: 13px; color: var(--text-2);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 12px 15px; cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
-.mem-mgr-h:hover { color: var(--text); background: var(--surface-2); border-color: var(--accent); }
-.mem-mgr-h.on { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.mem-mgr-h .cx-caret { color: var(--accent); font-size: 11px; }
-.mem-mgr-label { font-weight: 500; }
-.mem-mgr-meta { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
-.mem-mgr-body { margin-top: 14px; }
+.mem-adv-h:hover { color: var(--text); background: var(--surface-2); border-color: var(--accent); }
+.mem-adv-h.on { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.mem-adv-h .cx-caret { color: var(--accent); font-size: 11px; }
+.mem-adv-label { font-weight: 500; }
+.mem-adv-meta { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.mem-adv-body { margin-top: 14px; }
 .mem-rec {
   font-size: 12.5px; line-height: 1.65; color: var(--text-2);
   border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));

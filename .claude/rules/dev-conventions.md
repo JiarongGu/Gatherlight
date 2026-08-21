@@ -390,10 +390,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   found nothing useful and teaches the engine exactly the wrong thing. The LOCAL MODEL is the honest
   exception and stays in `settings.json`: the embedder, vector store and engine member are consumed at DI
   REGISTRATION time, before the container — and therefore the DB — exists, the same reason `security.*`
-  lives there. **A consumer routed in
-  `DefaultModelByConsumer` must also be listed in cortex's `ModelCatalog`** or its model is routable in
-  principle and unreachable in practice: `memory` was exactly that, with a comment promising a live
-  override the product gave no way to set. Proof lives in `e2e-p51`.
+  lives there. **A consumer routed in `DefaultModelByConsumer` must be settable SOMEWHERE the household can
+  reach** — otherwise its model is routable in principle and unreachable in practice, which `memory` was for
+  a while, with a comment promising a live override the product gave no way to set. Cortex's `ModelCatalog`
+  is the default home and the right one for `chat`/`extract`/`scorer`. **`memory` is the exception and is
+  deliberately absent from it**: 记忆检索 binds the judge's model together with its BACKEND, and a cortex row
+  beside that was a SECOND writer of one value — the one that won. A household who set 记忆判断 to `haiku`
+  there and later moved the judge to a local model had the router asking the Ollama provider for a model
+  called `haiku`; both memory policies are fail-open, so the symptom was zero model calls and no error at
+  all. Two controls for one value is worse than one control in an unexpected place. Proof lives in
+  `e2e-p51`, which asserts the cortex row is GONE as well as that the binding writes the key.
 - **Meaning-based fact recall is a GRAPH OPTION and ONE SCOPE — not a second engine member.** Both halves
   were got wrong first, both failed silently, and neither was visible from any API response, so the
   reasoning is on the record. (1) With an embedder + vector store registered, `UseGraph()` already embeds

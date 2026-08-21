@@ -69,13 +69,30 @@ public static class MemorySources
     }
 
     /// <summary>The model 判断 is bound to. The CLI arm has a default; the local arm cannot have one,
-    /// because a machine-specific model is not something a release can guess.</summary>
+    /// because a machine-specific model is not something a release can guess.
+    ///
+    /// <para><b>The legacy trap, found on a real data folder and not by the fixture.</b> Before the source
+    /// model, <c>JudgeModel</c> belonged to the LOCAL arm alone, and the old switch deliberately REMEMBERED
+    /// it when moving back to the CLI — "going back should not throw away a choice that cost a download".
+    /// So an install written before 2026-08-22 can hold <c>transport: cli</c> beside
+    /// <c>judgeModel: gemma3:4b</c>. Reading that as the CLI's model hands an Ollama model id to Claude and
+    /// writes it into <c>DefaultModelByConsumer</c> — the exact mirror of the two-writers bug this pass
+    /// removed, pointing the other way, and just as silent because the policies are fail-open. It showed up
+    /// as a badge reading <c>Claude CLI · gemma3:4b</c>.</para>
+    ///
+    /// <para>A settings.json carrying <see cref="MemoryConfig.JudgeSource"/> was written by the binding
+    /// endpoint, which always writes source and model TOGETHER, so that pair is trustworthy. Only the
+    /// legacy shape needs the guard.</para></summary>
     public static string? ResolveJudgeModel(MemoryConfig c)
     {
         var source = ResolveJudge(c);
+        var paired = !string.IsNullOrWhiteSpace(c.JudgeSource)
+            || string.Equals(c.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase);
+        var model = paired ? c.JudgeModel : null;
+
         return source.Id == DefaultJudgeSource
-            ? (string.IsNullOrWhiteSpace(c.JudgeModel) ? DefaultJudgeModel : c.JudgeModel)
-            : c.JudgeModel;
+            ? (string.IsNullOrWhiteSpace(model) ? DefaultJudgeModel : model)
+            : model;
     }
 
     /// <summary>Which source 语义 is bound to, or null when the layer is off — honouring the legacy
