@@ -156,18 +156,10 @@ public sealed class TlsConfig
 /// </summary>
 public sealed class MemoryConfig
 {
-    /// <summary>Whether the claude CLI enriches memory: a subject label on every fact WRITE (annotation)
-    /// and a judgement of which candidates actually answered a RECALL (verification).
-    ///
-    /// <para><b>Default true, because that is what already ships</b> — the Lyntai 3.0 adoption turned both
-    /// on, and flipping the default would silently degrade recall for every existing household on upgrade.
-    /// But it is a SWITCH now rather than a fact of the build, because it spends tokens on every fact write
-    /// and every recall, and until this existed there was no way to decline that short of editing code.
-    /// The household paying for it should be able to see it and turn it off.</para>
-    ///
-    /// <para>Off leaves the deterministic floor intact: graph decay, rank fusion and FTS trigram recall all
-    /// still work. It removes an enrichment, not the feature.</para></summary>
-    public bool LlmEnrichmentEnabled { get; set; } = true;
+    // NOTE: the claude-CLI enrichment switch is deliberately NOT here. It is a tunable value, so it lives
+    // in app_config beside its own model routing (llm.model.memory) and takes effect without a restart —
+    // see MemoryEnrichment. This class is for what must exist before the DB opens, which the settings
+    // below genuinely are: they are consumed at DI REGISTRATION time, before the container exists.
 
     /// <summary>Whether to embed facts and fuse semantic hits into recall. Requires
     /// <see cref="EmbeddingModel"/>; without one there is nothing to embed with, so both are checked

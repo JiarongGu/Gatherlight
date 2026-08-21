@@ -34,25 +34,23 @@ public sealed class MemoryRecallController : ControllerBase
     private readonly Storage.Knowledge.Services.IFactIndex _facts;
     private readonly ILogger<MemoryRecallController> _log;
 
-    // Non-null only when actually wired at startup — the honest answer to "is it running right now",
-    // which is NOT the saved setting. Between saving and restarting the two disagree.
+    // Non-null only when actually wired at startup — the honest answer to "is the local model running
+    // right now", which is NOT the saved setting: between saving and restarting the two disagree. The
+    // enrichment needs no such field, because it is read live from app_config.
     private readonly Lyntai.Memory.ISemanticMemory? _semantic;
-    private readonly Lyntai.Memory.Annotation.IMemoryAnnotationPolicy? _annotation;
-    private readonly Lyntai.Memory.Verification.IMemoryVerificationPolicy? _verification;
+    private readonly IAppConfigService _appConfig;
 
     public MemoryRecallController(IOllamaRuntime ollama, ServerConfigService config,
-        Storage.Knowledge.Services.IFactIndex facts, ILogger<MemoryRecallController> log,
-        Lyntai.Memory.ISemanticMemory? semantic = null,
-        Lyntai.Memory.Annotation.IMemoryAnnotationPolicy? annotation = null,
-        Lyntai.Memory.Verification.IMemoryVerificationPolicy? verification = null)
+        Storage.Knowledge.Services.IFactIndex facts, IAppConfigService appConfig,
+        ILogger<MemoryRecallController> log,
+        Lyntai.Memory.ISemanticMemory? semantic = null)
     {
         _ollama = ollama;
         _config = config;
         _facts = facts;
+        _appConfig = appConfig;
         _log = log;
         _semantic = semantic;
-        _annotation = annotation;
-        _verification = verification;
     }
 
     [HttpGet("api/manage/memory")]
@@ -71,10 +69,13 @@ public sealed class MemoryRecallController : ControllerBase
             },
             llmEnrichment = new
             {
-                enabled = mem.LlmEnrichmentEnabled,
-                active = _annotation is not null || _verification is not null,
+                // Live: it is an app_config value read per call, so there is no saved-vs-running gap to
+                // report here — unlike the local model, whose wiring is fixed at startup.
+                enabled = MemoryEnrichment.IsOn(_appConfig),
+                live = true,
                 what = "写入事实时标注主题,检索时判断哪些结果真正回答了问题(明显提升召回质量)。",
                 cost = "每次记录事实与每次检索各消耗一次 haiku 调用(使用已登录的 Claude CLI,不需额外配置)。",
+                model = "使用的模型在「大脑 · Cortex」面板调整(记忆增强 · Memory)。",
             },
             localModel = new
             {
@@ -109,9 +110,9 @@ public sealed class MemoryRecallController : ControllerBase
     public IActionResult Enrichment([FromBody] EnabledRequest body)
     {
         if (body is null) return BadRequest(new { error = "enabled is required" });
-        _config.Update(c => c.Memory.LlmEnrichmentEnabled = body.Enabled);
-        _log.LogInformation("Memory LLM enrichment set to {Enabled} (takes effect on restart)", body.Enabled);
-        return Ok(new { ok = true, enabled = body.Enabled, restartRequired = true });
+        MemoryEnrichment.Set(_appConfig, body.Enabled);
+        _log.LogInformation("Memory LLM enrichment set to {Enabled} (live, no restart)", body.Enabled);
+        return Ok(new { ok = true, enabled = body.Enabled, restartRequired = false });
     }
 
     /// <summary>Start Ollama ONLY when nothing is answering — a household's own instance is left alone.</summary>

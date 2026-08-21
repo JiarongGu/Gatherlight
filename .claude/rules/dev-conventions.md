@@ -370,6 +370,35 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing", which is a lie told on their own data. `recall_facts` therefore reports `ranked:
   graph|fts`, because a graph answer and a fallback answer are otherwise indistinguishable. Proof lives
   in `e2e-p48`, whose restore assertion was confirmed to FAIL with the rebuild removed.
+- **Recall quality is THREE INDEPENDENT SWITCHES, and where each one's config lives is decided by WHEN it
+  is read.** *Formula* (graph decay + rank fusion + FTS trigram) is the floor: always on, no setup, no
+  cost. *Claude CLI* adds annotation per write and verification per recall — and costs a model call for
+  each, measured at 4 for 3 writes + 1 recall. *Local model* adds real semantic vectors from a LOCAL
+  Ollama: disk and local compute, no tokens, and nothing leaves the machine. They are independent rather
+  than tiered because they are complements — verification REORDERS what was retrieved, embeddings change
+  what is RETRIEVABLE — so a household must be able to drop the token cost without losing local semantics.
+  The enrichment was adopted wholesale with Lyntai 3.0 and spent that per-operation cost for months with
+  no way to decline it; the default stays ON (turning it off by default would silently degrade recall on
+  upgrade) but declining is now a setting. **It is an `app_config` value read per call, not a
+  registration** — `ServerConfig` reserves `settings.json` for "what must exist before the DB opens", its
+  model already lived in cortex as `llm.model.memory`, and splitting one feature's controls across two
+  stores also made it need a restart. The decorators that make it live are registered BEFORE
+  `AddMemoryAnnotation`/`AddMemoryVerification`, whose `TryAddSingleton` then stands down — the BYO seam
+  those registrations document — and "off" returns the library's own `MemoryAnnotation.None` /
+  `MemoryVerification.NoOpinion`, a state the engine already treats as "no policy registered", which is
+  what makes runtime flipping safe. **NoOpinion, never `NothingRelevant`**: the latter asserts every recall
+  found nothing useful and teaches the engine exactly the wrong thing. The LOCAL MODEL is the honest
+  exception and stays in `settings.json`: the embedder, vector store and engine member are consumed at DI
+  REGISTRATION time, before the container — and therefore the DB — exists, the same reason `security.*`
+  lives there. Two traps found by reading Lyntai rather than guessing: a composite ROUTES a write to the
+  first member supporting the grade, so `UseGraph().UseSemantic()` alone leaves the vector store
+  permanently empty (FactIndex embeds explicitly, fail-open, because Lyntai's semantic write deliberately
+  throws and an uncaught one would break `remember_fact` for a recall nicety); and semantic recall needs a
+  CONCRETE scope, so it currently helps only kind-filtered recalls — filed upstream as Lyntai TASKS Part
+  90, and the status endpoint SAYS so rather than overstating the feature. **A consumer routed in
+  `DefaultModelByConsumer` must also be listed in cortex's `ModelCatalog`** or its model is routable in
+  principle and unreachable in practice: `memory` was exactly that, with a comment promising a live
+  override the product gave no way to set. Proof lives in `e2e-p51`.
 - **Data where it churns, code where it doesn't** — `fill_itinerary`'s form map. A form's *shape*
   (field names, `{n}` row templates, `maxRows`, font sizes, flatten) lives in `.claude/forms/*.json`,
   seeded by the template and editable by the agent through the normal diff gate; the PDF machinery

@@ -161,6 +161,28 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         : System.Runtime.InteropServices.RuntimeInformation.OSArchitecture
             == System.Runtime.InteropServices.Architecture.Arm64 ? "win32-arm64" : "win32-x64";
 
+    // Ollama — the LOCAL model runtime behind optional semantic recall. Only needed when the household
+    // turns "本地模型" on, and not at all when they already have Ollama (OllamaRuntime prefers a
+    // machine-wide install, which is also the one carrying their GPU runtimes).
+    //
+    // sha256-PINNED, like MinGit and node rather than like the claude CLI, and for the reason this file
+    // already states: a GitHub release asset can be replaced by its publisher, so the checksum — not the
+    // URL — is what guarantees the bytes of an executable we are about to run. Staleness costs little
+    // here (Ollama's local API is stable, and an old runtime keeps working) whereas a stale claude CLI
+    // eventually stops talking to the API, which is why that one reads its version live instead.
+    // Bump version and BOTH checksums together, never one.
+    public const string OllamaVersion = "0.32.15";
+    private const string OllamaSha256X64 = "a1d11d46a944f9c7521f5e9a3a5db51cd3365401da627d96c204698fc6914ff9";
+    private const string OllamaSha256Arm64 = "51655f2700236bdff09c8cfb174b0855d354ec40775e66069d9b63f32a666937";
+    private static bool OllamaArm64 =>
+        System.Runtime.InteropServices.RuntimeInformation.OSArchitecture
+            == System.Runtime.InteropServices.Architecture.Arm64;
+    private static string OllamaSha256 => OllamaArm64 ? OllamaSha256Arm64 : OllamaSha256X64;
+    private static string OllamaUrl =>
+        Override("GATHERLIGHT_OLLAMA_ZIP_URL")   // the pin still applies: a mirror serves the same file
+        ?? $"https://github.com/ollama/ollama/releases/download/v{OllamaVersion}/"
+           + (OllamaArm64 ? "ollama-windows-arm64.zip" : "ollama-windows-amd64.zip");
+
     public static readonly IReadOnlyList<ResourceSpec> Catalog = new[]
     {
         new ResourceSpec(
@@ -183,6 +205,16 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             ApproxBytes: 32_000_000,
             Url: $"https://nodejs.org/dist/{NodeVersion}/node-{NodeVersion}-win-x64.zip",
             Sha256: NodeSha256),
+        new ResourceSpec(
+            Id: "ollama", Name: $"Ollama 本地模型运行时({OllamaVersion})",
+            NeededFor: "「本地模型」语义检索的运行时 —— 仅在启用该项时需要;已自行安装 Ollama 则无需下载",
+            Kind: ResourceKind.Zip, InstallDir: "ollama", ReadyMarker: "ollama.exe",
+            // The official package, GPU runtimes included. A CPU-only subset was considered and rejected:
+            // it would install a SECOND, weaker Ollama beside a household's real one, and optimising the
+            // download size against whether the thing performs is the wrong trade.
+            ApproxBytes: OllamaArm64 ? 210_000_000 : 1_460_000_000,
+            Url: OllamaUrl,
+            Sha256: OllamaSha256),
         new ResourceSpec(
             Id: "claude", Name: "Claude CLI(智能体引擎)",
             NeededFor: "计划与执行对话的引擎 —— 没有它,聊天无法进行;下载后还需登录一次",
@@ -396,7 +428,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         try
         {
             Set(p, "running", 0, "下载运行环境…(约 220MB,首次可能需要几分钟)");
-            await DownloadAsync(spec.Url, pkg, pct => Set(p, "running", (int)(pct * 0.80), "下载运行环境…"));
+            await DownloadAsync(spec.Url, pkg, pct => Set(p, "running", (int)(pct * 0.80), "下载运行环境…"), CapFor(spec));
 
             Set(p, "running", 82, "解压中…");
             if (Directory.Exists(extract)) Directory.Delete(extract, true);
@@ -433,7 +465,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         try
         {
             Set(p, "running", 0, "下载中…");
-            await DownloadAsync(spec.Url, zip, pct => Set(p, "running", (int)(pct * 0.85), "下载中…"));
+            await DownloadAsync(spec.Url, zip, pct => Set(p, "running", (int)(pct * 0.85), "下载中…"), CapFor(spec));
 
             if (!string.IsNullOrEmpty(spec.Sha256))
             {
@@ -496,7 +528,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         {
             Set(p, "running", 3, "下载 Claude CLI…(约 265MB,首次可能需要几分钟)");
             await DownloadAsync($"{ClaudeSource}/{version}/{platform}/claude.exe", staged,
-                pct => Set(p, "running", 3 + (int)(pct * 0.90), "下载 Claude CLI…"));
+                pct => Set(p, "running", 3 + (int)(pct * 0.90), "下载 Claude CLI…"), CapFor(spec));
 
             Set(p, "running", 94, "校验中…");
             var actual = await Sha256Async(staged);
@@ -558,16 +590,21 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         lock (p) { p.State = state; p.Percent = Math.Clamp(pct, 0, 100); p.Message = msg; }
     }
 
-    private const long MaxDownloadBytes = 600L * 1024 * 1024;   // hard ceiling — a wrong/hostile URL can't fill the disk
+    /// <summary>Ceiling for one download, so a wrong or hostile URL cannot fill the disk. PER RESOURCE
+    /// rather than one global number: a single constant has to be as large as the biggest entry, which
+    /// would leave every small one effectively unguarded. Half again over the expected size absorbs a
+    /// legitimate release growing without letting anything run away.</summary>
+    private static long CapFor(ResourceSpec s) =>
+        Math.Max(600L * 1024 * 1024, (long)(s.ApproxBytes * 1.5));
 
-    private static async Task DownloadAsync(string url, string dest, Action<int> onPct)
+    private static async Task DownloadAsync(string url, string dest, Action<int> onPct, long maxBytes)
     {
         // Per-download deadline (the shared HttpClient timeout is infinite for large provisioning fetches).
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
         using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
         resp.EnsureSuccessStatusCode();
         var total = resp.Content.Headers.ContentLength ?? -1;
-        if (total > MaxDownloadBytes) throw new InvalidOperationException($"download too large ({total} bytes)");
+        if (total > maxBytes) throw new InvalidOperationException($"download too large ({total} bytes)");
         await using var src = await resp.Content.ReadAsStreamAsync(cts.Token);
         await using var dst = File.Create(dest);
         var buf = new byte[81920];
@@ -575,7 +612,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         while ((n = await src.ReadAsync(buf, cts.Token)) > 0)
         {
             read += n;
-            if (read > MaxDownloadBytes) throw new InvalidOperationException("download exceeded size cap");
+            if (read > maxBytes) throw new InvalidOperationException("download exceeded size cap");
             await dst.WriteAsync(buf.AsMemory(0, n), cts.Token);
             if (total > 0) { var pct = (int)(read * 100 / total); if (pct != lastPct) { lastPct = pct; onPct(pct); } }
         }

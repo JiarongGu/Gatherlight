@@ -39,7 +39,10 @@ public interface ICortexConfigService
 public sealed class CortexConfigService : ICortexConfigService
 {
     // Consumers that resolve their model from app_config at spawn time. Keep in sync with the
-    // llm.model.{consumer} lookups: ChatSessionService (chat), ExtractTool (extract).
+    // llm.model.{consumer} lookups AND with GatherlightApp's DefaultModelByConsumer — a consumer routed
+    // there but absent here is routable in principle and unreachable in practice: SetModel returns
+    // "unknown consumer" and the panel never shows it. `memory` was exactly that for a while, with a code
+    // comment promising a live override the product gave no way to set.
     private static readonly (string Consumer, string Label, string Description, string? Default)[] ModelCatalog =
     {
         ("chat", "对话智能体 · Planner chat",
@@ -48,6 +51,9 @@ public sealed class CortexConfigService : ICortexConfigService
             "一次性文件提取工具(中性 cwd,廉价调用)。默认 sonnet。", "sonnet"),
         ("scorer", "自动评分 · Scorer",
             "自动评分的 LLM 评判(切题 / 事实可靠等维度,中性 cwd,廉价调用)。默认 haiku。", "haiku"),
+        ("memory", "记忆增强 · Memory",
+            "记录事实时标注主题、检索时判断哪些结果真正回答了问题(每次写入与检索各一次调用)。" +
+            "可在「记忆」面板整体关闭。默认 haiku。", "haiku"),
     };
 
     // Ordered from cheapest to most capable; "" = fall back to the CLI/consumer default.

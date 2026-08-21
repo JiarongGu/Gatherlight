@@ -39,7 +39,7 @@ export function Manage() {
   const [counts, setCounts] = useState<{ plans?: number; library?: number; tools?: number }>({});
   const [uptime, setUptime] = useState('0s');
   const [accessMode, setAccessMode] = useState<'local' | 'lan' | 'wan' | null>(null);
-  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'jobs' | 'mcp' | 'resources' | 'logs' | 'settings'>('overview');
+  const [view, setView] = useState<'overview' | 'eval' | 'cortex' | 'jobs' | 'mcp' | 'memory' | 'resources' | 'logs' | 'settings'>('overview');
   const [needsSetup, setNeedsSetup] = useState(false);
   const [info, setInfo] = useState<{ serverName?: string; dataRoot?: string; version?: string }>({});
   const started = useRef(Date.now());
@@ -244,6 +244,7 @@ export function Manage() {
           <button className={`mng-tab${view === 'cortex' ? ' on' : ''}`} onClick={() => setView('cortex')}>校准 · Cortex</button>
           <button className={`mng-tab${view === 'jobs' ? ' on' : ''}`} onClick={() => setView('jobs')}>自动化 · Jobs</button>
           <button className={`mng-tab${view === 'mcp' ? ' on' : ''}`} onClick={() => setView('mcp')}>MCP 服务 · MCP</button>
+          <button className={`mng-tab${view === 'memory' ? ' on' : ''}`} onClick={() => setView('memory')}>记忆 · Memory</button>
           <button className={`mng-tab${view === 'resources' ? ' on' : ''}`} onClick={() => setView('resources')}>资源 · Resources</button>
           <button className={`mng-tab${view === 'logs' ? ' on' : ''}`} onClick={() => setView('logs')}>日志 · Logs</button>
           <button className={`mng-tab${view === 'settings' ? ' on' : ''}`} onClick={() => setView('settings')}>设置 · Settings</button>
@@ -254,6 +255,7 @@ export function Manage() {
       {view === 'cortex' && <CortexView toast={toast} />}
       {view === 'jobs' && <JobsView toast={toast} confirm={confirm} />}
       {view === 'mcp' && <McpView toast={toast} confirm={confirm} />}
+      {view === 'memory' && <MemoryView toast={toast} onRestart={restart} inHost={inHost} />}
       {view === 'resources' && <ResourcesView toast={toast} onRestart={restart} inHost={inHost} />}
       {view === 'logs' && <LogsView inHost={inHost} />}
       {view === 'settings' && <SettingsView inHost={inHost} toast={toast} onRestart={restart} />}
@@ -1134,6 +1136,192 @@ function CortexView({ toast }: { toast: (t: string, k?: 'ok' | 'err') => void })
             ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ---- Memory view (记忆检索 — three INDEPENDENT switches, not one setting) ------------------------
+// Formula is the floor and always on; the other two cost different things and improve different things,
+// so they toggle separately: verification REORDERS what was retrieved, embeddings change what is
+// RETRIEVABLE. Every switch is a startup registration, so `enabled` (saved) and `active` (running) are
+// reported separately — between saving and restarting they disagree, and showing only the saved value
+// would claim a feature that is not running.
+interface MemoryOption {
+  id: string; name: string; approxBytes: number; dimensions: number;
+  multilingual: boolean; note: string; present: boolean;
+}
+interface MemoryState {
+  formula: { alwaysOn: boolean; what: string };
+  // `live` = takes effect immediately (an app_config value read per call). The local model below is a
+  // startup registration instead, which is why only IT reports enabled-vs-active.
+  llmEnrichment: { enabled: boolean; live: boolean; what: string; cost: string; model: string };
+  localModel: {
+    enabled: boolean; active: boolean; model: string | null; what: string; cost: string;
+    limitation: string | null;
+    ollama: {
+      baseUrl: string; installed: boolean; serving: boolean; version: string | null;
+      executable: string | null; gpuLikely: boolean; problem: string | null;
+      models: { name: string; sizeBytes: number }[];
+    };
+    options: MemoryOption[];
+    recommendation: { id: string; reason: string; caution: string | null };
+  };
+}
+
+function MemoryView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean }) {
+  const [s, setS] = useState<MemoryState | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const load = async (refresh = false) => {
+    try { setS(await (await fetch(`/api/manage/memory${refresh ? '?refresh=true' : ''}`)).json()); }
+    catch { /* keep last */ }
+  };
+  useEffect(() => { load(true); }, []);
+
+  const post = async (path: string, body?: unknown, label = '') => {
+    setBusy(label || path);
+    try {
+      const r = await fetch(path, {
+        method: 'POST',
+        headers: body ? { 'content-type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) { toast(j.note ?? '已完成'); await load(true); return j; }
+      toast(j.error ?? '操作失败', 'err');
+      return null;
+    } catch { toast('请求失败', 'err'); return null; } finally { setBusy(null); }
+  };
+
+  const mb = (n: number) => (n >= 1_000_000_000 ? `${(n / 1_000_000_000).toFixed(1)} GB` : `${Math.round(n / 1_000_000)} MB`);
+  if (!s) return <div className="eval-empty">加载中…</div>;
+  const lm = s.localModel;
+  const o = lm.ollama;
+  // Saved but not running = a restart is owed. Only the local model can be in that state; the
+  // enrichment is live, so offering a restart for it would be theatre.
+  const pending = lm.enabled !== lm.active;
+
+  return (
+    <div className="mng-view set">
+      <div className="set-lead">
+        检索质量由三项独立开关决定 —— 它们互补而不是互相替代:核对只调整已检索结果的排序,向量则改变「能不能被检索到」。
+      </div>
+      {pending && (
+        <div className="set-actions">
+          {inHost && <button className="cx-btn primary" onClick={onRestart}>重启服务以生效</button>}
+          <span className="set-saved">设置已保存,重启后生效</span>
+        </div>
+      )}
+
+      <div className="res-list">
+        {/* 1 — the floor */}
+        <div className="res-item ok">
+          <div className="res-main">
+            <div className="res-name">公式 · Formula<span className="res-badge">始终启用</span></div>
+            <div className="res-need">{s.formula.what}</div>
+          </div>
+        </div>
+
+        {/* 2 — claude CLI enrichment */}
+        <div className={`res-item${s.llmEnrichment.enabled ? ' ok' : ''}`}>
+          <div className="res-main">
+            <div className="res-name">
+              Claude CLI 增强
+              {s.llmEnrichment.enabled && <span className="res-badge">运行中</span>}
+              <span className="res-badge">即时生效</span>
+            </div>
+            <div className="res-need">{s.llmEnrichment.what}</div>
+            <div className="res-need">费用:{s.llmEnrichment.cost}</div>
+            <div className="res-need">{s.llmEnrichment.model}</div>
+          </div>
+          <div className="res-side">
+            <button
+              className={`cx-btn${s.llmEnrichment.enabled ? '' : ' primary'}`}
+              disabled={busy === 'enrich'}
+              onClick={() => post('/api/manage/memory/enrichment', { enabled: !s.llmEnrichment.enabled }, 'enrich')}
+            >
+              {s.llmEnrichment.enabled ? '关闭' : '启用'}
+            </button>
+          </div>
+        </div>
+
+        {/* 3 — local model */}
+        <div className={`res-item${lm.active ? ' ok' : ''}${o.problem && lm.enabled ? ' err' : ''}`}>
+          <div className="res-main">
+            <div className="res-name">
+              本地模型 · Local model
+              {lm.active && <span className="res-badge">运行中</span>}
+              {o.gpuLikely && <span className="res-badge">GPU 可用</span>}
+            </div>
+            <div className="res-need">{lm.what}</div>
+            <div className="res-need">费用:{lm.cost}</div>
+            <div className="res-need">
+              Ollama:{o.installed ? (o.serving ? `运行中 ${o.version ?? ''}` : '已安装,未运行') : '未安装'}
+              {o.installed && ` · ${o.baseUrl}`}
+            </div>
+            {o.problem && <div className="res-msg danger">{o.problem}</div>}
+            {!o.installed && (
+              <div className="res-need">在「资源 · Resources」面板下载 Ollama 运行时,或自行安装后重启应用。</div>
+            )}
+            {lm.limitation && <div className="res-msg">说明:{lm.limitation}</div>}
+          </div>
+          <div className="res-side">
+            {o.installed && !o.serving && (
+              <button className="cx-btn primary" disabled={busy === 'start'}
+                onClick={() => post('/api/manage/memory/local/start', undefined, 'start')}>启动</button>
+            )}
+            {lm.enabled && (
+              <>
+                <button className="cx-btn" disabled={busy === 'reindex'}
+                  onClick={() => post('/api/manage/memory/local/reindex', undefined, 'reindex')}>重建索引</button>
+                <button className="cx-btn" disabled={busy === 'off'}
+                  onClick={() => post('/api/manage/memory/local/disable', undefined, 'off')}>停用</button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* model picker — the household chooses; we advise, and say WHY */}
+      {o.serving && (
+        <>
+          <div className="set-lead">
+            推荐:<b>{lm.recommendation.id}</b> —— {lm.recommendation.reason}
+            {lm.recommendation.caution && <><br /><span className="set-saved">注意:{lm.recommendation.caution}</span></>}
+          </div>
+          <div className="res-list">
+            {lm.options.map((m) => (
+              <div className={`res-item${lm.model === m.id ? ' ok' : ''}`} key={m.id}>
+                <div className="res-main">
+                  <div className="res-name">
+                    {m.name}
+                    {m.id === lm.recommendation.id && <span className="res-badge">推荐</span>}
+                    {m.present && <span className="res-badge">已下载</span>}
+                    {lm.model === m.id && <span className="res-badge">使用中</span>}
+                  </div>
+                  <div className="res-need">{m.note}</div>
+                  <div className="res-need">向量维度 {m.dimensions}{m.multilingual ? ' · 多语言' : ''}</div>
+                </div>
+                <div className="res-side">
+                  <div className="res-size">≈ {mb(m.approxBytes)}</div>
+                  {!m.present ? (
+                    <button className="cx-btn" disabled={busy === `pull:${m.id}`}
+                      onClick={() => post('/api/manage/memory/local/pull', { model: m.id }, `pull:${m.id}`)}>
+                      {busy === `pull:${m.id}` ? '下载中…' : '下载'}
+                    </button>
+                  ) : lm.model === m.id && lm.enabled ? (
+                    <span className="res-running">使用中</span>
+                  ) : (
+                    <button className="cx-btn primary" disabled={busy === `use:${m.id}`}
+                      onClick={() => post('/api/manage/memory/local/enable', { model: m.id }, `use:${m.id}`)}>
+                      使用
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

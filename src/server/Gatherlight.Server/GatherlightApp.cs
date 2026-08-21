@@ -86,7 +86,6 @@ public static class GatherlightApp
         var memoryConfig = config.Current.Memory;
         var embeddingModel = memoryConfig.EmbeddingModel;
         var semanticOn = memoryConfig.SemanticEnabled && !string.IsNullOrWhiteSpace(embeddingModel);
-        var llmEnrichmentOn = memoryConfig.LlmEnrichmentEnabled;
         var ollamaUrl = Platform.Agent.Llm.Services.OllamaRuntime.ResolveBaseUrl(memoryConfig.OllamaUrl);
 
         builder.Services
@@ -207,12 +206,37 @@ public static class GatherlightApp
                 // only ever reorders (VerificationFilters stays false); Model stays null so the
                 // "memory" consumer routing above decides, live-overridable.
                 ;
-                // Both are OPT-OUTABLE now, and until this switch existed they were not. They were adopted
-                // wholesale with Lyntai 3.0 and have been spending a haiku call on every remember_fact and
-                // every recall since — measured in the router log, never chosen by the household paying
-                // for it. Default stays ON so an upgrade does not silently degrade recall; the difference
-                // is that declining it is now a setting rather than a code edit.
-                if (llmEnrichmentOn) b.AddMemoryAnnotation().AddMemoryVerification();
+                // Both are OPT-OUTABLE now, and until this they were not: adopted wholesale with Lyntai
+                // 3.0, they have spent a haiku call on every remember_fact and every recall since —
+                // measured in the router log, never chosen by the household paying for it.
+                //
+                // The switch is LIVE (app_config, the cortex store) rather than a registration, because
+                // this codebase already says where a tunable value belongs: settings.json is "what must
+                // exist before the DB opens", everything tunable is app_config. The enrichment's MODEL was
+                // already there (llm.model.memory) — keeping its on/off in settings.json split one
+                // feature's controls across two stores AND made it need a restart.
+                //
+                // Registering the decorators BEFORE AddMemory* is the whole mechanism: those use
+                // TryAddSingleton precisely so a consumer's own policy wins, which their remarks call the
+                // BYO seam. Off returns the library's own no-opinion values, a state the engine already
+                // treats as "no policy registered" — so the switch is safe to flip at runtime.
+                b.Services.AddSingleton<Lyntai.Memory.Annotation.IMemoryAnnotationPolicy>(sp =>
+                    new Platform.Agent.Llm.Services.SwitchableAnnotationPolicy(
+                        new Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy(
+                            sp.GetRequiredService<Lyntai.Llm.ILlmClientFactory>(),
+                            new Lyntai.Memory.Annotation.LlmAnnotationOptions(),
+                            sp.GetService<ILogger<Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy>>()),
+                        sp.GetRequiredService<IAppConfigService>()));
+                b.Services.AddSingleton<Lyntai.Memory.Verification.IMemoryVerificationPolicy>(sp =>
+                    new Platform.Agent.Llm.Services.SwitchableVerificationPolicy(
+                        new Lyntai.Memory.Verification.LlmMemoryVerificationPolicy(
+                            sp.GetRequiredService<Lyntai.Llm.ILlmClientFactory>(),
+                            new Lyntai.Memory.Verification.LlmVerificationOptions(),
+                            sp.GetService<ILogger<Lyntai.Memory.Verification.LlmMemoryVerificationPolicy>>()),
+                        sp.GetRequiredService<IAppConfigService>()));
+                // Still called: their TryAdd now stands down, but calling them keeps any future
+                // side-effect of those registrations rather than silently missing it.
+                b.AddMemoryAnnotation().AddMemoryVerification();
                 b
                 // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
                 // collection so its IScoringService iterates + persists them (LLM judges route through
