@@ -611,7 +611,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 ## Dev loop
 
-- `node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|smoke|memory|eval|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry>`
+- `node devtools/dev.mjs <server|host|desktop-e2e|vite|build|publish|resources-pack|e2e|smoke|memory|eval|embed-bench|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs>`
   — kept in step with the tool's own usage line (`dev.mjs`, bottom of the switch).
 - e2e suites live in `devtools/scripts/e2e/` as `pN.mjs` (discovered by `^p\d+\.mjs$`); they self-host
   the server against isolated `devtools/_e2e-*` data folders with the claude stub; every phase of work
@@ -619,5 +619,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   discovered as a suite).
 - `dev.mjs eval [scenarios.json]` = the prompt/agent playground (dry-plan + auto-score, a quality
   benchmark); `dev.mjs memory <export|import>` transfers DB memory; `host`/`publish` run/build the
-  desktop bundle.
+  desktop bundle; `dev.mjs desktop-e2e` drives the host's WebView2 over CDP.
+- **`dev.mjs embed-bench [models…]` re-measures the embedding shortlist** on this app's own recall job
+  (fictional zh/en corpus, paraphrase queries), defaulting to whatever embedding models are installed.
+  It is committed rather than scratch BECAUSE `EmbeddingCatalog.cs` carries measured numbers and models
+  keep appearing — a figure nobody can reproduce decays into an opinion with a number on it. It embeds
+  through the OpenAI-compatible endpoint and prompts symmetrically, exactly as the product does; a
+  benchmark that embeds differently measures a product we do not ship.
 - Scratch files: `devtools/_*` (gitignored). Never OS temp.

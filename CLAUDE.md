@@ -32,6 +32,15 @@ security headers + brute-force lockout), a **native C++ launcher** with two-phas
 and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,Cortex,Playground}`,
 `Platform/Hosting/{Update,Security}`, `Platform/Storage/Memory`.
 
+**Memory recall is a set-up surface, not a fixed behaviour** (校准 · Cortex → 记忆检索). Three
+independent, complementary switches: the always-on FORMULA floor (graph decay + rank fusion + FTS
+trigram), a JUDGE that annotates every write and reorders every recall, and LOCAL SEMANTIC vectors
+from an Ollama on the household's own machine. The judge runs on the authenticated CLI or on a local
+model (`memory.judgeTransport`); the embedding model is chosen from a MEASURED shortlist
+(`EmbeddingCatalog`, re-measurable with `dev.mjs embed-bench`) or by naming any Ollama model, and the
+console downloads, selects and deletes them. Rebuilding the index runs detached with progress, and the
+panel reports index COVERAGE rather than a history of runs.
+
 On top of THAT, the **platform/container track** (S1–S6, `docs/ROADMAP.md`) turned the app into a
 host for one agent-driven site: `site.json` declares the site and drives the scope guard; capabilities
 carry provenance and non-platform ones run sandboxed; drafts, escalations and approval cards are
@@ -89,7 +98,8 @@ Anything that replaces a record subtree — notably backup import — must re-is
   monitors health); `publish` builds the shippable bundle (framework-dependent host — the launcher
   installs the .NET 10 runtime on first run — + native launcher).
 - `node devtools/dev.mjs eval [scenarios.json]` — the prompt/agent playground (dry-plan + auto-score,
-  a quality benchmark to run before/after tuning); `memory <export|import>` transfers DB memory.
+  a quality benchmark to run before/after tuning); `memory <export|import>` transfers DB memory;
+  `embed-bench [models…]` re-measures the embedding shortlist that `EmbeddingCatalog` quotes.
 
 Interactive family planning happens in the data folder, not here: run `claude` from `local/`
 (its own CLAUDE.md + knowledge base apply there).

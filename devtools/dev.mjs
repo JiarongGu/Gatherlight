@@ -18,6 +18,7 @@
 //   node devtools/dev.mjs check-layering    - assert Platform/ never references Product/
 //   node devtools/dev.mjs check-ui-registry - assert the C# schemas and TS renderers agree
 //   node devtools/dev.mjs check-tool-docs   - assert every registered tool is one the agent is TOLD about
+//   node devtools/dev.mjs embed-bench [models…] - measure embedding models on this app's own recall job
 import { spawnSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -294,6 +295,12 @@ switch (cmd) {
     }
     break;
   }
+
+  case 'embed-bench':
+    // Re-measure the embedding shortlist. The numbers in EmbeddingCatalog.cs came from here, and models
+    // keep appearing — a measured claim nobody can reproduce is just an opinion with a number on it.
+    run('node', [path.join(repo, 'devtools', 'scripts', 'embed-bench.mjs'), ...args]);
+    break;
 
   case 'publish':
     // Full production bundle: self-contained single-file management host + loose resources +
