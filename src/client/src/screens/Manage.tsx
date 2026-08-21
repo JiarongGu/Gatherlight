@@ -3,18 +3,12 @@ import { MemoryRecallPanel, LocalModelsPanel } from '@/ui/organisms';
 import { ResourceRow } from '@/ui/molecules';
 import SetupWizard from './SetupWizard';
 import { MigrationOverlay } from '@/ui/organisms/MigrationOverlay';
-
-// The desktop host injects window.__gatherlightHost + a WebView2 message bridge for native actions
-// (restart / open data folder / open planner in browser / exit / memory file dialogs). Opened in a
-// plain browser, the page still monitors health + counts and does what it can in-page.
-const inHost = typeof window !== 'undefined' && (window as { __gatherlightHost?: boolean }).__gatherlightHost === true;
-function host(action: string) {
-  try {
-    (window as unknown as { chrome?: { webview?: { postMessage(m: string): void } } }).chrome?.webview?.postMessage(action);
-  } catch {
-    /* not in the host */
-  }
-}
+// The desktop host's native actions (restart / open data folder / open planner / exit / file dialogs)
+// go through the one seam in lib/host.ts — see its header for why this is not three call sites any
+// more. Opened in a plain browser, the page still monitors health + counts and does what it can
+// in-page; every helper there no-ops and reports it, so nothing here needs an `inHost` branch except
+// where the BROWSER has a real alternative.
+import { documentTheme, hostClose, hostPost, hostTheme, inHost, onHostMessage, type HostAction } from '@/lib/host';
 
 const STRIP = 44;
 
@@ -99,35 +93,22 @@ export function Manage() {
   const [rememberClose, setRememberClose] = useState(false);
   const answerClose = (choice: 'tray' | 'exit' | 'cancel') => {
     setClosing(false);
-    host(`close:${choice}${rememberClose && choice !== 'cancel' ? ':remember' : ''}`);
+    hostClose(choice, rememberClose);
   };
 
   // Host → web bridge: the desktop host posts result notices (backup / restore / memory export+import)
   // back to the console so they render as styled in-page toasts, not native MessageBoxes.
-  useEffect(() => {
-    if (!inHost) return;
-    const cw = (window as unknown as {
-      chrome?: { webview?: {
-        addEventListener?: (t: string, h: (e: { data: unknown }) => void) => void;
-        removeEventListener?: (t: string, h: (e: { data: unknown }) => void) => void;
-      } };
-    }).chrome?.webview;
-    if (!cw?.addEventListener) return;
-    const handler = (e: { data: unknown }) => {
-      const d = e.data as { type?: string; kind?: string; text?: string } | null;
-      if (!d) return;
-      if (d.type === 'toast') toast(String(d.text ?? ''), d.kind === 'err' ? 'err' : 'ok');
-      else if (d.type === 'close-prompt') { setRememberClose(false); setClosing(true); }
-    };
-    cw.addEventListener('message', handler);
-    return () => cw.removeEventListener?.('message', handler);
-  }, [toast]);
+  useEffect(() =>
+    onHostMessage((m) => {
+      if (m.type === 'toast') toast(String(m.text ?? ''), m.kind === 'err' ? 'err' : 'ok');
+      else { setRememberClose(false); setClosing(true); }
+    }), [toast]);
 
   // Mirror the console's active theme to the desktop host so its native window + tray menu match
   // whichever theme (light ↔ dark) the user is running — posted on mount and on every change.
   useEffect(() => {
     if (!inHost) return;
-    const send = () => host('theme:' + (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'));
+    const send = () => hostTheme(documentTheme());
     send();
     const obs = new MutationObserver(send);
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
@@ -175,24 +156,26 @@ export function Manage() {
   }, []);
 
   const plannerUrl = `${location.origin}/`;
-  const openPlanner = () => (inHost ? host('openPlanner') : window.open(plannerUrl, '_blank'));
+  // These read "ask the host; if there is no host, do the browser thing" — hostPost reports whether it
+  // was delivered, so the fallback hangs off the attempt rather than off a separate `inHost` test that
+  // could drift out of step with it.
+  const openPlanner = () => { if (!hostPost('openPlanner')) window.open(plannerUrl, '_blank'); };
 
   const exportMemory = () => {
-    if (inHost) host('exportMemory');
-    else window.open('/api/memory/export', '_blank');
+    if (!hostPost('exportMemory')) window.open('/api/memory/export', '_blank');
     toast('正在导出记忆(知识库 + 事实 + 校准)…');
   };
   // Shared "pick a file → POST it → toast the result" flow. In-host defers the file dialog + upload to
   // the native host, but the destructive confirm is shown here (styled) first. In a plain browser the
   // file is picked (keeping the click's user-gesture), then confirmed, then POSTed.
   const importFile = async (opts: {
-    hostAction: string; accept: string; url: string; contentType: string;
+    hostAction: HostAction; accept: string; url: string; contentType: string;
     body: (f: File) => BodyInit | Promise<BodyInit>; confirm?: string;
     ok: (j: any) => string; errPrefix: string;
   }) => {
     if (inHost) {
       if (opts.confirm && !(await confirm(opts.confirm, { danger: true, okText: '继续恢复' }))) return;
-      host(opts.hostAction);
+      hostPost(opts.hostAction);
       return;
     }
     const input = document.createElement('input');
@@ -218,8 +201,7 @@ export function Manage() {
     body: (f) => f.text(), ok: (j) => `已导入记忆:${summarizeImported(j.imported)}`, errPrefix: '导入失败',
   });
   const exportBackup = () => {
-    if (inHost) host('exportBackup');
-    else window.open('/api/backup/export', '_blank');
+    if (!hostPost('exportBackup')) window.open('/api/backup/export', '_blank');
     toast('正在导出完整备份(整个数据文件夹:计划 · 家庭 · 知识库 · 历史 · 记忆)…');
   };
   const importBackup = () => importFile({
@@ -227,9 +209,9 @@ export function Manage() {
     body: (f) => f, confirm: '恢复将覆盖当前的计划 / 家庭 / 知识库,并合并记忆。确定继续?',
     ok: (j) => `已从备份恢复:${j.restored?.files ?? 0} 个文件`, errPrefix: '恢复失败',
   });
-  const restart = () => { host('serverRestart'); toast('已发送重启指令,服务将很快恢复…'); };
-  const stopServer = () => { host('serverStop'); toast('已停止本地服务 —— 需要时点「启动」恢复。'); };
-  const startServer = () => { host('serverStart'); toast('正在启动本地服务…'); };
+  const restart = () => { hostPost('serverRestart'); toast('已发送重启指令,服务将很快恢复…'); };
+  const stopServer = () => { hostPost('serverStop'); toast('已停止本地服务 —— 需要时点「启动」恢复。'); };
+  const startServer = () => { hostPost('serverStart'); toast('正在启动本地服务…'); };
 
   const hColor = healthy === null ? 'var(--muted)' : healthy ? 'var(--success)' : 'var(--danger)';
   const statusText = healthy === null ? '检查中…' : healthy ? '运行正常 · Healthy' : '无响应 · Not responding';
@@ -253,12 +235,12 @@ export function Manage() {
       </div>
 
       {view === 'eval' && <EvalView />}
-      {view === 'cortex' && <CortexView toast={toast} onRestart={restart} inHost={inHost} />}
+      {view === 'cortex' && <CortexView toast={toast} onRestart={restart} />}
       {view === 'jobs' && <JobsView toast={toast} confirm={confirm} />}
       {view === 'mcp' && <McpView toast={toast} confirm={confirm} />}
-      {view === 'resources' && <ResourcesView toast={toast} onRestart={restart} inHost={inHost} />}
-      {view === 'logs' && <LogsView inHost={inHost} />}
-      {view === 'settings' && <SettingsView inHost={inHost} toast={toast} onRestart={restart} />}
+      {view === 'resources' && <ResourcesView toast={toast} onRestart={restart} />}
+      {view === 'logs' && <LogsView />}
+      {view === 'settings' && <SettingsView toast={toast} onRestart={restart} />}
 
       {view === 'overview' && (
       <div className="mng-view mng-overview">
@@ -327,7 +309,7 @@ export function Manage() {
           </div>
         )}
         {inHost && (
-          <button className="mng-btn" onClick={() => host('openDataFolder')}>
+          <button className="mng-btn" onClick={() => hostPost('openDataFolder')}>
             打开数据文件夹<span className="sub">plans · household · 知识库 · SQLite</span>
           </button>
         )}
@@ -344,13 +326,13 @@ export function Manage() {
           恢复备份<span className="sub">从 .zip 还原(覆盖记录 · 合并记忆)</span>
         </button>
         {inHost && (
-          <button className="mng-btn danger" onClick={() => host('exit')}>
+          <button className="mng-btn danger" onClick={() => hostPost('exit')}>
             退出<span className="sub">stop the server + quit</span>
           </button>
         )}
       </div>
 
-      <UpdateCard inHost={inHost} />
+      <UpdateCard />
       </div>
       </div>
 
@@ -387,7 +369,7 @@ export function Manage() {
       )}
 
       {needsSetup && (
-        <SetupWizard inHost={inHost} toast={toast} onRestart={restart} onDone={() => setNeedsSetup(false)} />
+        <SetupWizard toast={toast} onRestart={restart} onDone={() => setNeedsSetup(false)} />
       )}
 
       {ask && (
@@ -705,7 +687,7 @@ interface UpdateStatus {
   error?: string;
 }
 
-function UpdateCard({ inHost }: { inHost: boolean }) {
+function UpdateCard() {
   const [check, setCheck] = useState<UpdateCheck | null>(null);
   const [st, setSt] = useState<UpdateStatus | null>(null);
   const timer = useRef<number | null>(null);
@@ -756,7 +738,7 @@ function UpdateCard({ inHost }: { inHost: boolean }) {
               <span className="sub">当前 v{check.currentVersion}</span>
             </span>
             {inHost ? (
-              <button className="mng-btn primary compact" onClick={() => host('applyUpdate')}>重启并安装</button>
+              <button className="mng-btn primary compact" onClick={() => hostPost('applyUpdate')}>重启并安装</button>
             ) : (
               <span className="mng-update-hint">在桌面管理端点击「重启并安装」以完成</span>
             )}
@@ -948,7 +930,7 @@ function KbUpgradesCard({ toast }: { toast: (t: string, k?: 'ok' | 'err') => voi
   );
 }
 
-function CortexView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean }) {
+function CortexView({ toast, onRestart }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void }) {
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [models, setModels] = useState<ModelItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1047,7 +1029,7 @@ function CortexView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' 
 
       <KbUpgradesCard toast={toast} />
 
-      <MemoryRecallPanel toast={toast} onRestart={onRestart} inHost={inHost} />
+      <MemoryRecallPanel toast={toast} onRestart={onRestart} />
 
       <div className="mng-title">模型路由 · Model routing</div>
       <div className="cx-models">
@@ -1171,7 +1153,7 @@ interface ResourceStatus {
 // something we never installed would be a button that quietly replaces their own install.
 const hasUpdate = (r: ResourceStatus) => !!r.version && !!r.available && r.version !== r.available;
 
-function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean }) {
+function ResourcesView({ toast, onRestart }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void }) {
   const [items, setItems] = useState<ResourceStatus[] | null>(null);
   const load = async () => {
     try {
@@ -1273,7 +1255,7 @@ interface LogsData {
   file: string | null;
   lines: string[];
 }
-function LogsView({ inHost }: { inHost: boolean }) {
+function LogsView() {
   const [data, setData] = useState<LogsData | null>(null);
   const [file, setFile] = useState('');
   const [auto, setAuto] = useState(false);
@@ -1312,7 +1294,7 @@ function LogsView({ inHost }: { inHost: boolean }) {
         </select>
         <button className="cx-btn" onClick={() => load()}>刷新</button>
         <label className="set-check"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> 自动刷新(3s)</label>
-        {inHost && <button className="cx-btn" onClick={() => host('openLogs')}>打开日志文件夹</button>}
+        {inHost && <button className="cx-btn" onClick={() => hostPost('openLogs')}>打开日志文件夹</button>}
         <span className="logs-path" title={data.dir}>{data.dir}</span>
       </div>
       {data.files.length === 0 ? (
@@ -1341,7 +1323,7 @@ interface SettingsData {
   envOverrides: string[];
 }
 
-function SettingsView({ inHost, toast, onRestart }: { inHost: boolean; toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void }) {
+function SettingsView({ toast, onRestart }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void }) {
   const [data, setData] = useState<SettingsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { BackendPicker, type BackendView } from '@/ui/molecules';
+import { inHost } from '@/lib/host';
 
 /**
  * 记忆检索 · Memory recall — which backend and which model each recall layer uses.
@@ -47,8 +48,8 @@ interface MemoryState {
 }
 
 export function MemoryRecallPanel(
-  { toast, onRestart, inHost }:
-  { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean },
+  { toast, onRestart }:
+  { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void },
 ) {
   const [s, setS] = useState<MemoryState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);

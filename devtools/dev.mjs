@@ -18,6 +18,7 @@
 //   node devtools/dev.mjs check-layering    - assert Platform/ never references Product/
 //   node devtools/dev.mjs check-ui-registry - assert the C# schemas and TS renderers agree
 //   node devtools/dev.mjs check-tool-docs   - assert every registered tool is one the agent is TOLD about
+//   node devtools/dev.mjs check-host-actions - assert the desktop host's actions and lib/host.ts agree
 //   node devtools/dev.mjs embed-bench [models…] - measure embedding models on this app's own recall job
 import { spawnSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -158,6 +159,10 @@ switch (cmd) {
 
   case 'check-tool-docs':
     run('node', [path.join(repo, 'devtools', 'scripts', 'check-tool-docs.mjs'), ...args]);
+    break;
+
+  case 'check-host-actions':
+    run('node', [path.join(repo, 'devtools', 'scripts', 'check-host-actions.mjs'), ...args]);
     break;
 
   case 'smoke':
@@ -586,6 +591,6 @@ switch (cmd) {
 // new-tool and shot were all missing), and a usage line that omits a command is how a tool goes unused.
 console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|desktop-e2e'
   + '|smoke|shot|memory|eval|embed-bench|recall-bench|test-data|new-tool|fetch-tools|install-hooks'
-  + '|check-sensitive|check-layering|check-ui-registry|check-tool-docs>');
+  + '|check-sensitive|check-layering|check-ui-registry|check-tool-docs|check-host-actions>');
     process.exitCode = cmd ? 1 : 0;
 }

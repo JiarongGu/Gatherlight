@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { hostPost, inHost } from '@/lib/host';
 
 // First-run setup wizard. Shown by Manage when GET /api/manage/settings reports setupCompleted=false
 // (a truly fresh install — settings.json didn't exist yet). Walks server name → access mode → done,
@@ -14,9 +15,8 @@ const MODES: { key: Mode; icon: string; title: string; desc: string }[] = [
 ];
 
 export default function SetupWizard({
-  inHost, onDone, onRestart, toast,
+  onDone, onRestart, toast,
 }: {
-  inHost: boolean;
   onDone: () => void;
   onRestart: () => void;
   toast: (t: string, k?: 'ok' | 'err') => void;
@@ -67,9 +67,9 @@ export default function SetupWizard({
     }
   };
 
-  const openPlanner = () => (inHost
-    ? (window as unknown as { chrome?: { webview?: { postMessage(m: string): void } } }).chrome?.webview?.postMessage('openPlanner')
-    : window.open(`${location.origin}/`, '_blank'));
+  const openPlanner = () => {
+    if (!hostPost('openPlanner')) window.open(`${location.origin}/`, '_blank');
+  };
 
   return (
     <div className="mng-modal-overlay wiz" role="dialog" aria-modal="true">
