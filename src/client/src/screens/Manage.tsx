@@ -1180,6 +1180,12 @@ interface MemoryState {
     current: string | null;
     currentCatalogued: boolean;
     measuredOn: string;
+    // `percent` is null until the run has counted its facts: a bar pinned at 0% reads as stuck, which is
+    // the impression this whole thing exists to remove.
+    reindex: {
+      running: boolean; done: number; total: number;
+      embedded: number | null; error: string | null; percent: number | null;
+    };
   };
 }
 
@@ -1195,6 +1201,16 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
     catch { /* keep last */ }
   };
   useEffect(() => { load(true); }, []);
+
+  // Poll ONLY while a rebuild is running. It is minutes of work that outlives the request which started
+  // it, so the panel has to go and look; polling all the time would spend a probe of Ollama every two
+  // seconds for a screen that is usually idle.
+  const reindexing = s?.localModel.reindex.running ?? false;
+  useEffect(() => {
+    if (!reindexing) return;
+    const t = setInterval(() => { load(false); }, 2000);
+    return () => clearInterval(t);
+  }, [reindexing]);
 
   const post = async (path: string, body?: unknown, label = '') => {
     setBusy(label || path);
@@ -1298,6 +1314,27 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
               <div className="res-need">在「资源 · Resources」面板下载 Ollama 运行时,或自行安装后重启应用。</div>
             )}
             {lm.note && <div className="res-msg">说明:{lm.note}</div>}
+            {/* The rebuild, while it runs and after it ends. It used to be a greyed-out button and
+                nothing else, for minutes — indistinguishable from a hang. */}
+            {lm.reindex.running && (
+              <div className="mem-reindex">
+                <div className="res-prog">
+                  <span className="res-bar" style={{ width: `${lm.reindex.percent ?? 8}%` }} />
+                </div>
+                <div className="res-need">
+                  {lm.reindex.total > 0
+                    ? `重建索引中:${lm.reindex.done}/${lm.reindex.total} 条事实`
+                    : '重建索引中:正在统计事实…'}
+                  {s.llmEnrichment.enabled && ' · 开启了增强,每条事实会多一次模型调用,请耐心等待'}
+                </div>
+              </div>
+            )}
+            {!lm.reindex.running && lm.reindex.error && (
+              <div className="res-msg danger">上次重建:{lm.reindex.error}</div>
+            )}
+            {!lm.reindex.running && lm.reindex.embedded ? (
+              <div className="res-msg">上次重建完成:{lm.reindex.embedded} 条事实已重新索引。</div>
+            ) : null}
           </div>
           <div className="res-side">
             {o.installed && !o.serving && (
@@ -1306,8 +1343,10 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
             )}
             {lm.enabled && (
               <>
-                <button className="cx-btn" disabled={busy === 'reindex'}
-                  onClick={() => post('/api/manage/memory/local/reindex', undefined, 'reindex')}>重建索引</button>
+                <button className="cx-btn" disabled={busy === 'reindex' || lm.reindex.running}
+                  onClick={() => post('/api/manage/memory/local/reindex', undefined, 'reindex')}>
+                  {lm.reindex.running ? '重建中…' : '重建索引'}
+                </button>
                 <button className="cx-btn" disabled={busy === 'off'}
                   onClick={() => post('/api/manage/memory/local/disable', undefined, 'off')}>停用</button>
               </>

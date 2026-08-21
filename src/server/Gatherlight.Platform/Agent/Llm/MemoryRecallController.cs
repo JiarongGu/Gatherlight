@@ -39,16 +39,18 @@ public sealed class MemoryRecallController : ControllerBase
     // enrichment needs no such field, because it is read live from app_config.
     private readonly Lyntai.Memory.ISemanticMemory? _semantic;
     private readonly IAppConfigService _appConfig;
+    private readonly IReindexStatus _reindex;
 
     public MemoryRecallController(IOllamaRuntime ollama, ServerConfigService config,
         Storage.Knowledge.Services.IFactIndex facts, IAppConfigService appConfig,
-        ILogger<MemoryRecallController> log,
+        IReindexStatus reindex, ILogger<MemoryRecallController> log,
         Lyntai.Memory.ISemanticMemory? semantic = null)
     {
         _ollama = ollama;
         _config = config;
         _facts = facts;
         _appConfig = appConfig;
+        _reindex = reindex;
         _log = log;
         _semantic = semantic;
     }
@@ -109,6 +111,9 @@ public sealed class MemoryRecallController : ControllerBase
                 // ranking the index has accumulated is reset, and on a large corpus it is not quick.
                 note = _semantic is null ? null
                     : "开启或更换模型后需要重建索引:会重新计算全部向量,并重置已积累的排序权重(事实本身不受影响)。",
+                // The reindex a household may be watching. Reported inside localModel because that is the
+                // control that starts it, so the bar renders where the button is.
+                reindex = ReindexView(),
                 ollama = new
                 {
                     baseUrl = s.BaseUrl, installed = s.Installed, serving = s.Serving, version = s.Version,
@@ -208,6 +213,18 @@ public sealed class MemoryRecallController : ControllerBase
 
     public sealed record JudgeRequest(string? Transport, string? Model);
 
+    private object ReindexView()
+    {
+        var r = _reindex.Current;
+        return new
+        {
+            running = r.Running, done = r.Done, total = r.Total, embedded = r.Embedded, error = r.Error,
+            // Computed here rather than in the client so "no total yet" reads as indeterminate rather than
+            // as 0% — a bar pinned at zero looks stuck, which is the impression this whole change removes.
+            percent = r.Total > 0 ? (int)Math.Round(100.0 * r.Done / r.Total) : (int?)null,
+        };
+    }
+
     [HttpPost("api/manage/memory/local/pull")]
     public async Task<IActionResult> Pull([FromBody] ModelRequest body)
     {
@@ -291,17 +308,37 @@ public sealed class MemoryRecallController : ControllerBase
     /// populated, so the ordinary back-fill (which touches only rows with no ref) would embed nothing —
     /// and after any model change.</summary>
     [HttpPost("api/manage/memory/local/reindex")]
-    public async Task<IActionResult> Reindex(CancellationToken ct)
+    public IActionResult Reindex()
     {
         if (!_config.Current.Memory.SemanticEnabled)
             return StatusCode(409, new { error = "本地模型检索尚未启用。" });
-        var embedded = await _facts.ReindexSemanticAsync(ct);
-        if (embedded == 0)
-            return StatusCode(409, new
+        if (!_reindex.TryStart())
+            return StatusCode(409, new { error = "已经有一次重建在进行中。" });
+
+        // DETACHED, and deliberately not tied to the request's CancellationToken: the work outlives the
+        // POST, so binding it to the request would cancel the rebuild the moment the browser stopped
+        // waiting — which is precisely what happens on an operation this long. Progress is read back from
+        // /api/manage/memory instead.
+        _ = Task.Run(async () =>
+        {
+            try
             {
-                error = "没有建立任何索引 —— 通常是服务尚未重启(嵌入器只在启动时装载),或 Ollama 未运行。",
-            });
-        return Ok(new { ok = true, embedded });
+                var embedded = await _facts.ReindexSemanticAsync(
+                    CancellationToken.None,
+                    new Progress<(int Done, int Total)>(p => _reindex.Report(p.Done, p.Total)));
+                _reindex.Finish(embedded, embedded == 0
+                    ? "没有建立任何索引 —— 通常是服务尚未重启(嵌入器只在启动时装载),或 Ollama 未运行。"
+                    : null);
+            }
+            catch (Exception ex)
+            {
+                // ReindexSemanticAsync degrades rather than throwing, so reaching here means something
+                // outside it did — still recorded, because a run that vanished is worse than one that failed.
+                _log.LogWarning(ex, "reindex failed");
+                _reindex.Finish(0, ex.Message);
+            }
+        });
+        return Accepted(new { ok = true, started = true });
     }
 
     public sealed record ModelRequest(string Model);

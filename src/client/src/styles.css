@@ -3252,3 +3252,5 @@ kbd, .topbar-kbd {
   border: 1px solid var(--border-soft); background: transparent; color: inherit; max-width: 100%;
 }
 .mem-judge .set-hint { flex: 1 1 100%; }
+.mem-reindex { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.mem-reindex .res-prog { width: 100%; }

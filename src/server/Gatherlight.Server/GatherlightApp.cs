@@ -376,6 +376,9 @@ public static class GatherlightApp
             // recall behaves as it did before it existed. Loopback-only by default — a remote embedder would
             // send every household fact off this machine on every write.
             .AddSingleton<IOllamaRuntime, OllamaRuntime>()
+            // One reindex at a time, and its progress. A singleton because the run outlives the request
+            // that started it — see IReindexStatus for why that had to change.
+            .AddSingleton<Platform.Agent.Llm.Services.IReindexStatus, Platform.Agent.Llm.Services.ReindexStatus>()
             // One live agent run at a time across chat AND background jobs (single-writer data tree)
             .AddSingleton<IAgentGate, AgentGate>()
             .AddSingleton<IPromptHarness, PromptHarness>()

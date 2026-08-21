@@ -72,8 +72,12 @@ public interface IFactIndex
     /// exactly like a household that has no facts.</para>
     /// <para><b>This REBUILDS</b> — an entry is embedded as it is written and there is no re-embed door,
     /// so decay positions and links reset with it. Returns how many facts were indexed; 0 when semantic
-    /// recall is not configured.</para></summary>
-    Task<int> ReindexSemanticAsync(CancellationToken ct = default);
+    /// recall is not configured.</para>
+    /// <para><paramref name="progress"/> reports (done, total) as each fact lands. It exists because this
+    /// is MINUTES of work on a real corpus — annotation is a model call per fact — and an operation that
+    /// long with no signal is indistinguishable from one that hung.</para></summary>
+    Task<int> ReindexSemanticAsync(CancellationToken ct = default,
+        IProgress<(int Done, int Total)>? progress = null);
 }
 
 public sealed class FactIndex : IFactIndex
@@ -232,7 +236,9 @@ public sealed class FactIndex : IFactIndex
         }
     }
 
-    public async Task<int> RebuildAsync(CancellationToken ct = default)
+    public Task<int> RebuildAsync(CancellationToken ct = default) => RebuildAsync(ct, null);
+
+    private async Task<int> RebuildAsync(CancellationToken ct, IProgress<(int Done, int Total)>? progress)
     {
         if (_engine is null) return 0;
         try
@@ -261,7 +267,8 @@ public sealed class FactIndex : IFactIndex
             _log?.LogInformation(
                 "fact index: rebuilding {Count} facts ({Concurrency} at a time; annotation may add a model call each)",
                 facts.Count, IndexConcurrency);
-            var indexed = await IndexEachAsync(facts.Select(f => f.Row), ct);
+            progress?.Report((0, facts.Count));
+            var indexed = await IndexEachAsync(facts.Select(f => f.Row), ct, facts.Count, progress);
             _log?.LogInformation("fact index: rebuilt — {Indexed}/{Total} facts indexed", indexed, facts.Count);
             return indexed;
         }
@@ -272,7 +279,8 @@ public sealed class FactIndex : IFactIndex
         }
     }
 
-    public async Task<int> ReindexSemanticAsync(CancellationToken ct = default)
+    public async Task<int> ReindexSemanticAsync(CancellationToken ct = default,
+        IProgress<(int Done, int Total)>? progress = null)
     {
         if (_semantic is null) return 0;
         // The vectors a recall reads belong to the GRAPH's entries, written as each one was remembered —
@@ -284,7 +292,7 @@ public sealed class FactIndex : IFactIndex
         // was built without an embedder, so its entries have none) and CHANGING it. Clearing the old
         // vectors is RebuildAsync's job, not this method's: every caller of it needs the same thing.
         _log?.LogInformation("fact index: re-embedding by rebuilding the index — decay positions and links reset");
-        return await RebuildAsync(ct);
+        return await RebuildAsync(ct, progress);
     }
 
     /// <summary>Drop the graph member's vector collections, so a rebuild does not write NEW vectors into a
@@ -325,9 +333,11 @@ public sealed class FactIndex : IFactIndex
     /// buys little and coins more near-duplicate subjects (they steer linking only, never recall).</summary>
     private const int IndexConcurrency = 4;
 
-    private async Task<int> IndexEachAsync(IEnumerable<KnowledgeRow> facts, CancellationToken ct)
+    private async Task<int> IndexEachAsync(IEnumerable<KnowledgeRow> facts, CancellationToken ct,
+        int total = 0, IProgress<(int Done, int Total)>? progress = null)
     {
         var indexed = 0;
+        var seen = 0;
         using var slots = new SemaphoreSlim(IndexConcurrency, IndexConcurrency);
         var tasks = facts.Select(async fact =>
         {
@@ -340,6 +350,9 @@ public sealed class FactIndex : IFactIndex
                 // never pointing at a node that no longer exists.
                 await _store.SetGraphRefAsync(fact.Id, reference);
                 if (reference is not null) Interlocked.Increment(ref indexed);
+                // Counts every fact VISITED, not every one indexed: a fact the engine refused still moved
+                // the work forward, and a bar that stalls on it would report a hang that is not happening.
+                if (progress is not null) progress.Report((Interlocked.Increment(ref seen), total));
             }
             finally
             {

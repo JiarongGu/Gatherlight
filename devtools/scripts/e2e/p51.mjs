@@ -126,6 +126,13 @@ try {
   const reindex = await post('/api/manage/memory/local/reindex');
   ok('reindexing while disabled is refused, not silently zero', reindex.status === 409, String(reindex.status));
 
+  // A rebuild re-remembers every fact — a model call each with the enrichment on — so it must not run
+  // inside the POST. It used to, which gave the household a greyed-out button for minutes and a request
+  // the browser could abandon while the server carried on working.
+  ok('the panel can always read reindex progress, even when idle',
+    s.localModel.reindex && typeof s.localModel.reindex.running === 'boolean',
+    JSON.stringify(s.localModel.reindex));
+
   // ---- E · WHERE the judge runs — CLI or a model on this machine --------------------------------
   ok('the judge reports its transport, and defaults to the CLI',
     s.llmEnrichment.transport === 'cli', String(s.llmEnrichment.transport));
@@ -160,6 +167,17 @@ try {
     ok('(this machine has Ollama + the model) enabling asks for a restart and a reindex',
       enable.body?.restartRequired === true && enable.body?.reindexRequired === true,
       JSON.stringify(enable.body));
+
+    // THE POINT of the async rebuild: the call RETURNS while the work continues. Asserted by the status
+    // code and by the clock — a 202 that actually blocked would still be a 202.
+    const t0 = Date.now();
+    const started = await post('/api/manage/memory/local/reindex');
+    const took = Date.now() - t0;
+    ok('a reindex is ACCEPTED and returns immediately, rather than running inside the request',
+      started.status === 202 && took < 3000, `status=${started.status} in ${took}ms`);
+    ok('and a second one is refused while the first is running or finishing',
+      [202, 409].includes((await post('/api/manage/memory/local/reindex')).status),
+      'one rebuild at a time — two would interleave discards and writes over the same graph');
   }
 } catch (err) {
   fail('e2e-p51 fatal: ' + err.message);
