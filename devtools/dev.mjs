@@ -239,7 +239,17 @@ switch (cmd) {
       { stdio: 'ignore' });
     if (!fs.existsSync(exe)) { console.error(`host exe not found — run \`node devtools/dev.mjs build\` first (${exe})`); process.exitCode = 1; break; }
     killAll();
-    await new Promise((r) => setTimeout(r, 800));
+    // Wait for SILENCE on both ports, rather than a fixed pause. The readiness check below accepts any
+    // CDP target showing /manage — so while a previous run's host is still dying, it attaches to THAT
+    // page: "WebView2 shows /manage" passes (the stale page is /manage) and every interaction after it
+    // does nothing, which reads as four feature failures. Back-to-back runs alternated pass/fail on
+    // exactly this. 800ms was enough on an idle box and not under load.
+    const silent = async (url) => { try { await fetch(url); return false; } catch { return true; } };
+    for (let i = 0; i < 40; i++) {
+      if (await silent(`http://127.0.0.1:${port}/api/health`)
+        && await silent(`http://127.0.0.1:${cdp}/json/list`)) break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
     for (const d of [dataDir, udf]) fs.rmSync(d, { recursive: true, force: true });
     spawnSync('node', [path.join(repo, 'devtools', 'scripts', 'make-test-data.mjs'), dataDir], { stdio: 'ignore' });
     const host = spawn(exe, [], {

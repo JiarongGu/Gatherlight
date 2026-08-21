@@ -20,7 +20,8 @@ public sealed record EmbeddingModelOption(
     int Dimensions,
     bool Multilingual,
     string Note,
-    EmbeddingMeasurement? Measured = null);
+    EmbeddingMeasurement? Measured = null,
+    string? Vintage = null);
 
 /// <summary>The recommendation, and — more importantly — WHY, in a sentence the household reads.</summary>
 public sealed record EmbeddingRecommendation(string Id, string Reason, string? Caution);
@@ -37,6 +38,13 @@ public sealed record EmbeddingRecommendation(string Id, string Reason, string? C
 /// worded nothing like it — over a fictional 20-fact zh/en corpus with 10 paraphrase queries, embedded
 /// through the same OpenAI-compatible endpoint and symmetric prompting the app uses (2026-08-21, RTX 4080
 /// Laptop). A benchmark that embeds differently from the product measures a product we do not ship.</para>
+///
+/// <para><b>Age is a strong NEGATIVE filter, and not a rule.</b> Vintages are read from ollama.com's own
+/// "updated N ago" (2026-08-21). Every model that scores badly here is two years old — and the same family
+/// makes the point twice over: `nomic-embed-text` (2024) manages 4/10 where `nomic-embed-text-v2-moe`
+/// (2025) manages 9/10. But `bge-m3` is equally old and ties the best, so "newer is better" earns a model
+/// the benefit of the doubt rather than a place. Use it to decide what is worth TRYING — especially for the
+/// models nobody here has measured — and let the measurement decide what to keep.</para>
 ///
 /// <para><b>What the measurement overturned:</b> `nomic-embed-text` — the most-pulled embedding model on
 /// Ollama, and the previous default for machines without a GPU — scored <b>4/10</b>, and every miss was a
@@ -56,18 +64,31 @@ public static class EmbeddingCatalog
     {
         new EmbeddingModelOption(Recommended, "EmbeddingGemma 300M(推荐 · 多语言)", 622_000_000, 768, true,
             "实测中文与中英混排检索最好,体积只有 BGE-M3 的一半,速度也更快。",
-            new EmbeddingMeasurement(9, 10, 269, 10)),
+            new EmbeddingMeasurement(9, 10, 269, 10), "2025-09"),
         new EmbeddingModelOption(Multilingual, "BGE-M3(多语言)", 1_200_000_000, 1024, true,
             "检索质量与 EmbeddingGemma 相当,向量更宽(1024);体积 1.2 GB,占用更多磁盘与显存。",
-            new EmbeddingMeasurement(9, 10, 341, 10)),
+            new EmbeddingMeasurement(9, 10, 341, 10), "2024-08"),
+        new EmbeddingModelOption("nomic-embed-text-v2-moe", "Nomic Embed v2 MoE(多语言)", 960_000_000, 768, true,
+            "与 EmbeddingGemma 并列最好;体积大 50%,速度略慢。注意它和上一代 nomic-embed-text 是两回事。",
+            new EmbeddingMeasurement(9, 10, 317, 10), "2025-12"),
+        new EmbeddingModelOption("snowflake-arctic-embed2", "Snowflake Arctic Embed 2(多语言)", 1_160_000_000, 1024, true,
+            "同样并列最好,1024 维;四个并列里体积最大、速度最慢的一个。",
+            new EmbeddingMeasurement(9, 10, 419, 10), "2025-08"),
+        new EmbeddingModelOption("granite-embedding:278m", "Granite Embedding 278M(多语言 · 最快)", 560_000_000, 768, true,
+            "每次查询最快(0.23 秒)、体积也小;前三名命中同样是 10/10,但排在首位的次数少一些。",
+            new EmbeddingMeasurement(7, 10, 229, 10), "2025-08"),
+        new EmbeddingModelOption("paraphrase-multilingual", "Paraphrase Multilingual(多语言)", 560_000_000, 768, true,
+            "前三名总能命中,但排在首位的次数明显少于上面几个 —— 检索只取前几条时会更容易挑错。",
+            new EmbeddingMeasurement(6, 10, 271, 10), "2024-08"),
         new EmbeddingModelOption("qwen3-embedding:0.6b", "Qwen3 Embedding 0.6B(多语言 · 较慢)", 640_000_000, 1024, true,
-            "检索质量同样很好,但每次查询约 1.6 秒 —— 是上面两个的五倍以上,而检索在每次回忆的必经路径上。",
-            new EmbeddingMeasurement(8, 10, 1574, 10)),
+            "检索质量同样很好,但每次查询约 1.6 秒 —— 是最快那个的七倍,而检索在每次回忆的必经路径上。",
+            new EmbeddingMeasurement(8, 10, 1574, 10), "2025-09"),
         new EmbeddingModelOption(Balanced, "Nomic Embed Text(英文 · 不建议中文)", 274_000_000, 768, false,
             "体积最小、速度最快,但实测中文检索 10 题只答对 4 题 —— 除非你的资料几乎全是英文,否则不要选它。",
-            new EmbeddingMeasurement(4, 4, 67, 10)),
-        new EmbeddingModelOption(Tiny, "All-MiniLM(极小 · 英文)", 46_000_000, 384, false,
-            "几十 MB,几乎不占资源;英文可用,中文很弱。适合极老的机器先试用。"),
+            new EmbeddingMeasurement(4, 4, 67, 10), "2024-08"),
+        new EmbeddingModelOption(Tiny, "All-MiniLM(极小 · 不建议中文)", 46_000_000, 384, false,
+            "只有 46 MB、最省资源,但实测中文检索 10 题只进前三 5 题 —— 与 Nomic 一样,只适合几乎全英文的资料。",
+            new EmbeddingMeasurement(4, 5, 46, 10), "2024-08"),
     };
 
     public static EmbeddingModelOption? Find(string? id) =>
@@ -102,8 +123,10 @@ public static class EmbeddingCatalog
                 "资料以英文为主时它同样够用,且不必为将来出现的中文内容再换一次模型(换模型必须重建索引)。",
                 null);
 
+        // FOUR models tie at 9/10 on this fixture, so the recommendation turns on size and speed — and says
+        // so. Claiming it is "the most accurate" would be asserting a difference the measurement cannot see.
         return new EmbeddingRecommendation(Recommended,
-            "实测在中文与中英混排上检索最准(10 题命中 9 题),体积 622 MB,每次查询约 0.27 秒。",
+            "实测中文检索并列最好(10 题首位命中 9 题),而在并列的几个里体积最小、速度最快 —— 622 MB,每次查询约 0.27 秒。",
             gpuLikely
                 ? "首次需要为已有事实建立一次索引。"
                 : "未检测到 GPU 运行时 —— 仍然可用(检索只是一次前向计算),但首次建立索引会慢一些。");

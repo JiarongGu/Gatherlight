@@ -143,6 +143,7 @@ public sealed class MemoryRecallController : ControllerBase
                         top1 = o.Measured.RecallTop1, top3 = o.Measured.RecallTop3,
                         queries = o.Measured.Queries, msPerQuery = o.Measured.MsPerQuery,
                     },
+                    vintage = o.Vintage,
                     id = o.Id, name = o.Name, approxBytes = o.ApproxBytes, dimensions = o.Dimensions,
                     multilingual = o.Multilingual, note = o.Note, present = s.Has(o.Id),
                 }),
@@ -233,6 +234,37 @@ public sealed class MemoryRecallController : ControllerBase
             // as 0% — a bar pinned at zero looks stuck, which is the impression this whole change removes.
             percent = r.Total > 0 ? (int)Math.Round(100.0 * r.Done / r.Total) : (int?)null,
         };
+    }
+
+    /// <summary>Delete a local model, freeing its disk.
+    /// <para>Refused for a model this install is CONFIGURED to use — the embedder or the local judge —
+    /// even when that configuration is not running yet. Deleting the embedder would leave semantic recall
+    /// pointing at something absent, and because recall is fail-open the household would see searches that
+    /// quietly find less rather than an error naming what they removed.</para></summary>
+    [HttpPost("api/manage/memory/local/remove")]
+    public async Task<IActionResult> Remove([FromBody] ModelRequest body)
+    {
+        var model = body?.Model?.Trim();
+        if (!EmbeddingCatalog.IsWellFormedId(model))
+            return BadRequest(new { error = $"模型名称格式不正确:{body?.Model}" });
+
+        var mem = _config.Current.Memory;
+        if (mem.SemanticEnabled && mem.EmbeddingModel is { } emb && OllamaState.Matches(model!, emb))
+            return StatusCode(409, new { error = $"{model} 正在用于语义检索 —— 请先切换到别的模型或停用,再删除。" });
+        if (string.Equals(mem.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase)
+            && mem.JudgeModel is { } judge && OllamaState.Matches(model!, judge))
+            return StatusCode(409, new { error = $"{model} 正在用于记忆判断 —— 请先切回 Claude CLI 或换个模型,再删除。" });
+
+        try
+        {
+            await _ollama.RemoveModelAsync(model!);
+            return Ok(new { ok = true, removed = model });
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("removing {Model} failed: {Msg}", model, ex.Message);
+            return StatusCode(502, new { error = ex.Message });
+        }
     }
 
     [HttpPost("api/manage/memory/local/pull")]

@@ -76,8 +76,17 @@ try {
 
   // 3. a tab switch works over CDP (click 校准·Cortex, confirm the view changed)
   await c.evalJs("[...document.querySelectorAll('.mng-tab')].find(t=>/Cortex/.test(t.textContent))?.click()");
-  await new Promise((r) => setTimeout(r, 400));
-  ok('tab switch (Cortex) works', (await c.evalJs("!!document.querySelector('.cx, .cx-lead, .cx-models')")) === true);
+  // Polled, not a fixed pause. A 400ms sleep passed on an idle box and produced a FALSE RED under load —
+  // this suite ran right after a model benchmark — taking the three assertions below down with it, since
+  // they all look inside a view that had not mounted yet. Same fix as the title assertion above: ask the
+  // question the check actually means, and give it time to become true.
+  let cortexUp = false;
+  for (let i = 0; i < 20; i++) {
+    cortexUp = (await c.evalJs("!!document.querySelector('.cx, .cx-lead, .cx-models')")) === true;
+    if (cortexUp) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  ok('tab switch (Cortex) works', cortexUp);
 
   // 3b. Memory recall — the three switches, which live INSIDE Cortex (we are already on that tab).
   // Checked in the DESKTOP CLIENT rather than a browser, and the enrichment switch is the one worth

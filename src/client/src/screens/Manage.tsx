@@ -1152,6 +1152,9 @@ const memBytes = (n: number) =>
 interface MemoryOption {
   id: string; name: string; approxBytes: number; dimensions: number;
   multilingual: boolean; note: string; present: boolean;
+  // Approximate release, from ollama.com's own "updated N ago". A column because age turned out to be a
+  // strong NEGATIVE filter here: every model that scores badly is two years old.
+  vintage: string | null;
   // Null on a model nobody measured — rendered as "未实测" rather than left blank, because an empty cell
   // in a comparison table reads as a zero.
   measured: { top1: number; top3: number; queries: number; msPerQuery: number } | null;
@@ -1380,7 +1383,7 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
             <table className="mem-tbl">
               <thead>
                 <tr>
-                  <th>模型</th><th>检索质量</th><th>每次查询</th><th>体积</th><th>维度</th><th></th>
+                  <th>模型</th><th>检索质量</th><th>每次查询</th><th>体积</th><th>维度</th><th>发布</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -1404,6 +1407,9 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
                     <td>{m.measured ? `${m.measured.msPerQuery} ms` : <span className="mem-m-sub">—</span>}</td>
                     <td>{mb(m.approxBytes)}</td>
                     <td>{m.dimensions}</td>
+                    <td className={m.vintage && m.vintage < '2025' ? 'mem-old' : ''}>
+                      {m.vintage ?? <span className="mem-m-sub">—</span>}
+                    </td>
                     <td className="mem-act">
                       {!m.present ? (
                         <button className="cx-btn" disabled={busy === `pull:${m.id}`}
@@ -1413,10 +1419,17 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
                       ) : lm.model === m.id && lm.enabled ? (
                         <span className="res-running">使用中</span>
                       ) : (
-                        <button className="cx-btn primary" disabled={busy === `use:${m.id}`}
-                          onClick={() => post('/api/manage/memory/local/enable', { model: m.id }, `use:${m.id}`)}>
-                          使用
-                        </button>
+                        <div className="mem-act-pair">
+                          <button className="cx-btn primary" disabled={busy === `use:${m.id}`}
+                            onClick={() => post('/api/manage/memory/local/enable', { model: m.id }, `use:${m.id}`)}>
+                            使用
+                          </button>
+                          {/* Downloaded but unused = disk doing nothing. The server refuses to delete one
+                              that is configured, so this never has to guess. */}
+                          <button className="cx-btn" disabled={busy === `rm:${m.id}`}
+                            onClick={() => post('/api/manage/memory/local/remove', { model: m.id }, `rm:${m.id}`)}
+                            title={`删除 ${m.id},释放 ${mb(m.approxBytes)}`}>删除</button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -1426,8 +1439,12 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
           </div>
           <div className="set-hint">
             质量为实测:{lm.measuredOn}。样本不大 —— 它足以分辨「能用」与「不能用」,不足以在前几名之间排座次;
-            速度与体积则按你自己的机器换算。
+            速度与体积则按你自己的机器换算。发布时间取自 Ollama 官方页面:表里所有表现差的都是两年前的模型
+            (同一家的 nomic 新版 9/10、旧版 4/10),但 BGE-M3 同样是两年前的却仍并列最好 —— 所以「越新越好」
+            用来决定值不值得一试,真正拍板的还是实测。
           </div>
+
+          <LocalDisk models={o.models} inUse={[lm.model, s.llmEnrichment.localModel]} busy={busy} post={post} />
 
           {/* THE LIST IS NOT THE LIMIT. A catalog baked into a release cannot contain a model published
               after it — which is exactly how this panel shipped without the two best models available at
@@ -1436,6 +1453,45 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
         </>
       )}
     </>
+  );
+}
+
+/** Everything Ollama holds, with what it costs in disk — including models this panel's shortlist has
+ *  never heard of. Without this, "free up space" means leaving the app for a terminal, and a household
+ *  that tried several models has no way to see what the trying cost them. */
+function LocalDisk(
+  { models, inUse, busy, post }:
+  { models: { name: string; sizeBytes: number }[]; inUse: (string | null)[];
+    busy: string | null; post: (u: string, b: unknown, k: string) => void },
+) {
+  const [open, setOpen] = useState(false);
+  const total = models.reduce((n, m) => n + m.sizeBytes, 0);
+  const used = (n: string) => inUse.some((u) => !!u && (u === n || u.split(':')[0] === n.split(':')[0]));
+  if (models.length === 0) return null;
+  return (
+    <div className="mem-disk">
+      <button className="cx-btn" onClick={() => setOpen(!open)}>
+        {open ? '收起' : '本机模型占用'} · {models.length} 个 · {memBytes(total)}
+      </button>
+      {open && (
+        <div className="mem-disk-list">
+          {models.map((m) => (
+            <div className="mem-disk-row" key={m.name}>
+              <span className="mem-disk-name">{m.name}</span>
+              <span className="mem-disk-size">{memBytes(m.sizeBytes)}</span>
+              {used(m.name)
+                ? <span className="res-running">使用中</span>
+                : (
+                  <button className="cx-btn" disabled={busy === `rm:${m.name}`}
+                    onClick={() => post('/api/manage/memory/local/remove', { model: m.name }, `rm:${m.name}`)}>
+                    删除
+                  </button>
+                )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

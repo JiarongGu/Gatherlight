@@ -3254,3 +3254,10 @@ kbd, .topbar-kbd {
 .mem-judge .set-hint { flex: 1 1 100%; }
 .mem-reindex { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
 .mem-reindex .res-prog { width: 100%; }
+.mem-act-pair { display: inline-flex; gap: 6px; }
+.mem-disk { margin-top: 14px; }
+.mem-disk-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.mem-disk-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; font-size: 12px; }
+.mem-disk-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-disk-size { color: var(--muted); }
+.mem-tbl td.mem-old { color: var(--muted); }

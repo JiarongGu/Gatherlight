@@ -62,6 +62,13 @@ public interface IOllamaRuntime
     /// recall silently empty.</para></summary>
     Task<EmbedProbe?> ProbeEmbeddingAsync(string model, CancellationToken ct = default);
 
+    /// <summary>Delete a model from this machine, freeing its disk. Throws with Ollama's own reason —
+    /// like the pull, this is an explicit household action, and a delete that silently did nothing would
+    /// leave them staring at disk that never came back.
+    /// <para>Whether the model is IN USE is not decided here: this runtime knows what Ollama holds, not
+    /// what the app is configured to use. The caller owns that check.</para></summary>
+    Task RemoveModelAsync(string model, CancellationToken ct = default);
+
     void Invalidate();
 }
 
@@ -295,6 +302,26 @@ public sealed class OllamaRuntime : IOllamaRuntime
         }
         _log.LogWarning("ollama serve was started but nothing is answering on {Url}", baseUrl);
         return false;
+    }
+
+    public async Task RemoveModelAsync(string model, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(model)) throw new ArgumentException("model is required", nameof(model));
+        using var req = new HttpRequestMessage(HttpMethod.Delete, $"{BaseUrl}/api/delete")
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(new { model }), Utf8NoBom, "application/json"),
+        };
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromMinutes(2));
+        using var resp = await Http.SendAsync(req, cts.Token);
+        if (!resp.IsSuccessStatusCode)
+            throw new InvalidOperationException(
+                $"Ollama 拒绝删除 {model}({(int)resp.StatusCode}):{await resp.Content.ReadAsStringAsync(cts.Token)}");
+        // The cached probe still lists it, and the panel would show a model that is gone until the cache
+        // expired — on a screen whose whole job right now is telling the household what they have.
+        Invalidate();
+        _log.LogInformation("removed local model {Model}", model);
     }
 
     public async Task<EmbedProbe?> ProbeEmbeddingAsync(string model, CancellationToken ct = default)

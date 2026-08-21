@@ -129,6 +129,19 @@ try {
   // A rebuild re-remembers every fact — a model call each with the enrichment on — so it must not run
   // inside the POST. It used to, which gave the household a greyed-out button for minutes and a request
   // the browser could abandon while the server carried on working.
+  // Deleting a model frees real disk, so the shape checks live here while the DESTRUCTIVE positive
+  // control does not: this suite runs against whatever Ollama the developer has, and a test that removed
+  // one of their models to prove a button works would be doing more harm than the assertion is worth.
+  // That half was verified by hand (2026-08-21: guards 409/409, malformed 400, an unused model really
+  // removed, 10 installed → 9).
+  const rmBad = await post('/api/manage/memory/local/remove', { model: '--rf' });
+  ok('deleting refuses a flag-shaped id before it reaches Ollama', rmBad.status === 400, String(rmBad.status));
+  // Well-formed and absent must NOT read as success — that is the shape that would let a delete button
+  // silently do nothing while reporting that space was freed.
+  const rmGhost = await post('/api/manage/memory/local/remove', { model: 'not-installed-anywhere:1b' });
+  ok('deleting something that is not installed does not report success',
+    rmGhost.status !== 200, String(rmGhost.status));
+
   ok('the panel can always read reindex progress, even when idle',
     s.localModel.reindex && typeof s.localModel.reindex.running === 'boolean',
     JSON.stringify(s.localModel.reindex));
