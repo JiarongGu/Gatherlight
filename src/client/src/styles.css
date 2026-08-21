@@ -951,6 +951,16 @@ h1, h2, h3, .u-display { font-family: var(--font-display); letter-spacing: -0.01
 .g-hint { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
 .g-hint code { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; }
 .g-item { margin-bottom: 22px; scroll-margin-top: 16px; }
+/* Tier divider (原子 / 分子) — the gallery grew a second tier once molecules landed on it. */
+.g-tier {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+  margin: 34px 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
 .g-name {
   font-size: 12px;
   font-weight: 600;
@@ -959,6 +969,8 @@ h1, h2, h3, .u-display { font-family: var(--font-display); letter-spacing: -0.01
   margin: 0 0 8px;
 }
 .g-panes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* Full-width components stack instead of sharing the row — see Gallery's Item(). */
+.g-pane.g-stack { flex-direction: column; align-items: stretch; }
 .g-pane {
   background: var(--bg);
   color: var(--text);

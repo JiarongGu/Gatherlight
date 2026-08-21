@@ -14,7 +14,7 @@ const MODES: { key: Mode; icon: string; title: string; desc: string }[] = [
   { key: 'wan', icon: '🔒', title: '公网 · WAN', desc: '对外开放,必须设置访问令牌。用于远程访问。' },
 ];
 
-export default function SetupWizard({
+export function SetupWizard({
   onDone, onRestart, toast,
 }: {
   onDone: () => void;

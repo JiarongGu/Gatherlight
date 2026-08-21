@@ -20,6 +20,10 @@ export { LogsPanel } from './LogsPanel';
 export { SettingsPanel } from './SettingsPanel';
 export { JobsPanel } from './JobsPanel';
 export { McpPanel } from './McpPanel';
+// The first-run wizard: a modal Manage raises when settings.json reports setupCompleted=false. It sat
+// in screens/ and was never in that barrel — Manage imported it by path — which was the file system
+// admitting it is not a screen while the folder still claimed it was.
+export { SetupWizard } from './SetupWizard';
 // Mounted by CortexPanel / ResourcesPanel rather than by a tab of their own.
 export { MemoryRecallPanel } from './MemoryRecallPanel';
 export { LocalModelsPanel, type BuiltInModelRow } from './LocalModelsPanel';

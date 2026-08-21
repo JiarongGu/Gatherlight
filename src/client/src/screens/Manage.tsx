@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import SetupWizard from './SetupWizard';
 import { formatCount } from '@/lib/format';
 import { MigrationOverlay } from '@/ui/organisms/MigrationOverlay';
 // The console's eight sections. This screen is the SHELL — health poll, tabs, toast, confirm, the
 // host bridge and the overview — and mounts one section per tab. It used to hold all of them inline,
 // at 1957 lines; see ui/organisms/console/index.ts for the boundary.
 import {
-  CortexPanel, EvalPanel, JobsPanel, LogsPanel, McpPanel, ResourcesPanel, SettingsPanel, UpdateCard,
+  CortexPanel, EvalPanel, JobsPanel, LogsPanel, McpPanel, ResourcesPanel, SettingsPanel, SetupWizard,
+  UpdateCard,
 } from '@/ui/organisms/console';
 // The desktop host's native actions (restart / open data folder / open planner / exit / file dialogs)
 // go through the one seam in lib/host.ts — see its header for why this is not three call sites any
