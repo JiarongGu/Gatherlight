@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { PanelButton } from '@/ui/atoms';
 import { Segmented } from './Segmented';
 
 const memBytes = (n: number) =>
@@ -117,13 +118,13 @@ export function BackendPicker(
           apply, the affordance goes away and a quiet label takes its place. */}
       {source.bindable && unchanged && <span className="mem-src-cur">使用中</span>}
       {source.bindable && !unchanged && (
-        <button className="cx-btn primary"
+        <PanelButton variant="primary"
           // A NEW address is bindable before its model list exists — that request is what fetches the list.
           // Requiring a model first would make the field impossible to submit.
           disabled={busy !== null || (source.needsEndpoint ? !url : (!model || !source.available))}
           onClick={() => bind(source.id, model, source.needsEndpoint ? url : undefined)}>
           {busy?.startsWith('bind:') ? '保存中…' : urlChanged && !model ? '连接' : '使用'}
-        </button>
+        </PanelButton>
       )}
       {!source.bindable && <span className="mem-src-na">这一层用不了</span>}
 

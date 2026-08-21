@@ -6,6 +6,7 @@ export { ResourceRow } from './ResourceRow';
 export type { ResourceRowProps } from './ResourceRow';
 export { PullProgress, ModelPullField } from './ModelPull';
 export type { ModelPullState } from './ModelPull';
+export { Field, CheckField } from './Field';
 export { Segmented, type SegmentedOption } from './Segmented';
 export { BackendPicker } from './BackendPicker';
 export type { BackendView, BackendModel } from './BackendPicker';

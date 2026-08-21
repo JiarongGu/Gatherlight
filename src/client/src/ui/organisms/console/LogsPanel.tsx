@@ -5,6 +5,8 @@
 // See ./index.ts for why they share a folder.
 
 import { useEffect, useRef, useState } from 'react';
+import { CheckField } from '@/ui/molecules';
+import { PanelButton } from '@/ui/atoms';
 import { hostPost, inHost } from '@/lib/host';
 
 // ---- Logs view (tail the app's daily file logs under {data}/state/logs) ----
@@ -51,9 +53,9 @@ export function LogsPanel() {
           {data.files.length === 0 && <option value="">(暂无日志)</option>}
           {data.files.map((f) => <option key={f} value={f}>{f}</option>)}
         </select>
-        <button className="cx-btn" onClick={() => load()}>刷新</button>
-        <label className="set-check"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> 自动刷新(3s)</label>
-        {inHost && <button className="cx-btn" onClick={() => hostPost('openLogs')}>打开日志文件夹</button>}
+        <PanelButton onClick={() => load()}>刷新</PanelButton>
+        <CheckField checked={auto} onChange={(v) => setAuto(v)}>自动刷新(3s)</CheckField>
+        {inHost && <PanelButton onClick={() => hostPost('openLogs')}>打开日志文件夹</PanelButton>}
         <span className="logs-path" title={data.dir}>{data.dir}</span>
       </div>
       {data.files.length === 0 ? (

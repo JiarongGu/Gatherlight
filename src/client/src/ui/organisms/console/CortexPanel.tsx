@@ -5,6 +5,7 @@
 // See ./index.ts for why they share a folder.
 
 import { useEffect, useState } from 'react';
+import { PanelButton, PanelBadge } from '@/ui/atoms';
 import { Segmented } from '@/ui/molecules';
 import { MemoryRecallPanel } from './MemoryRecallPanel';
 
@@ -130,8 +131,8 @@ function KbUpgradesCard({ toast }: { toast: (t: string, k?: 'ok' | 'err') => voi
             ))}
           </div>
           <div className="kbup-btns">
-            <button className="cx-btn primary" onClick={approve} disabled={busy}>应用升级</button>
-            <button className="cx-btn ghost" onClick={reject} disabled={busy}>保留我的版本</button>
+            <PanelButton variant="primary" onClick={approve} disabled={busy}>应用升级</PanelButton>
+            <PanelButton variant="ghost" onClick={reject} disabled={busy}>保留我的版本</PanelButton>
           </div>
         </>
       ) : (
@@ -154,11 +155,11 @@ function KbUpgradesCard({ toast }: { toast: (t: string, k?: 'ok' | 'err') => voi
             </div>
           )}
           <div className="kbup-btns">
-            <button className="cx-btn primary" onClick={run} disabled={busy || running}>
+            <PanelButton variant="primary" onClick={run} disabled={busy || running}>
               {running
                 ? `合并中 ${prog?.current ?? 0}/${prog?.total ?? 0}…（AI）`
                 : busy ? '启动中…' : '运行合并(AI)'}
-            </button>
+            </PanelButton>
           </div>
         </>
       )}
@@ -273,7 +274,7 @@ export function CortexPanel({ toast, onRestart }: { toast: (t: string, k?: 'ok' 
           <div className={`cx-model${m.overridden ? ' on' : ''}`} key={m.consumer}>
             <div className="cx-model-head">
               <span className="cx-model-name">{m.label}</span>
-              {m.overridden && <span className="cx-badge">已自定义</span>}
+              {m.overridden && <PanelBadge kind="note">已自定义</PanelBadge>}
             </div>
             <div className="cx-model-desc">{m.description}</div>
             <Segmented
@@ -306,7 +307,7 @@ export function CortexPanel({ toast, onRestart }: { toast: (t: string, k?: 'ok' 
                   <span className="cx-prompt-main">
                     <span className="cx-prompt-label">
                       {p.label}
-                      {p.overridden && <span className="cx-badge">已自定义</span>}
+                      {p.overridden && <PanelBadge kind="note">已自定义</PanelBadge>}
                     </span>
                     <span className="cx-prompt-desc">{p.description}</span>
                   </span>
@@ -330,17 +331,17 @@ export function CortexPanel({ toast, onRestart }: { toast: (t: string, k?: 'ok' 
                         必须保留占位符:{p.placeholders.length ? p.placeholders.map((ph) => `{${ph}}`).join(' ') : '(无)'}
                       </span>
                       <div className="cx-editor-btns">
-                        <button className="cx-btn ghost" onClick={() => setOpen(null)} disabled={busy}>
+                        <PanelButton variant="ghost" onClick={() => setOpen(null)} disabled={busy}>
                           收起
-                        </button>
+                        </PanelButton>
                         {p.overridden && (
-                          <button className="cx-btn ghost" onClick={() => resetPrompt(p)} disabled={busy}>
+                          <PanelButton variant="ghost" onClick={() => resetPrompt(p)} disabled={busy}>
                             重置为默认
-                          </button>
+                          </PanelButton>
                         )}
-                        <button className="cx-btn primary" onClick={() => savePrompt(p)} disabled={busy || draft === p.effective}>
+                        <PanelButton variant="primary" onClick={() => savePrompt(p)} disabled={busy || draft === p.effective}>
                           保存
-                        </button>
+                        </PanelButton>
                       </div>
                     </div>
                   </div>

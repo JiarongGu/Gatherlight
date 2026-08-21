@@ -5,6 +5,8 @@
 // See ./index.ts for why they share a folder.
 
 import { useCallback, useEffect, useState } from 'react';
+import { CheckField } from '@/ui/molecules';
+import { PanelButton } from '@/ui/atoms';
 
 interface McpServer {
   id: string;
@@ -133,13 +135,12 @@ export function McpPanel({ toast, confirm }: {
                   {s.hasSecrets && <span style={{ fontSize: 12, opacity: 0.7 }}>🔑 已存凭据</span>}
                   <span style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
                     {s.needsLogin && (
-                      <button className="cx-btn primary" onClick={() => startLogin(s)}>登录</button>
+                      <PanelButton variant="primary" onClick={() => startLogin(s)}>登录</PanelButton>
                     )}
-                    <label className="set-check" style={{ margin: 0 }}>
-                      <input type="checkbox" checked={s.enabled} onChange={(e) => setEnabled(s, e.target.checked)} />
+                    <CheckField className="tight" checked={s.enabled} onChange={(v) => setEnabled(s, v)}>
                       {s.enabled ? '启用' : '停用'}
-                    </label>
-                    <button className="cx-btn" onClick={() => del(s)}>移除</button>
+                    </CheckField>
+                    <PanelButton onClick={() => del(s)}>移除</PanelButton>
                   </span>
                 </div>
                 <code style={{ display: 'block', marginTop: 6, fontSize: 12, wordBreak: 'break-all', opacity: 0.85 }}>{launch}</code>
@@ -190,7 +191,7 @@ export function McpPanel({ toast, confirm }: {
               </>
             )}
             <div style={{ marginTop: 16 }}>
-              <button className="cx-btn" onClick={() => setLogin(null)}>{login.loggedIn ? '完成' : '关闭'}</button>
+              <PanelButton onClick={() => setLogin(null)}>{login.loggedIn ? '完成' : '关闭'}</PanelButton>
             </div>
           </div>
         </div>

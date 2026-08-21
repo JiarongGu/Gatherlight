@@ -5,7 +5,8 @@
 // See ./index.ts for why they share a folder.
 
 import { useEffect, useState } from 'react';
-import { Segmented } from '@/ui/molecules';
+import { PanelButton } from '@/ui/atoms';
+import { Segmented, Field, CheckField } from '@/ui/molecules';
 
 // ---- Automation view (background jobs: schedule / manage / run history) ----
 interface Job {
@@ -171,45 +172,44 @@ export function JobsPanel({ toast, confirm }: {
       </div>
 
       <div className="jobs-toolbar">
-        <label className="set-check jobs-kill">
-          <input type="checkbox" checked={!!settings?.enabled} onChange={toggleKill} />
+        <CheckField className="jobs-kill" checked={!!settings?.enabled} onChange={toggleKill}>
           {settings?.enabled ? '调度已启用' : '调度已暂停(全局开关)'}
-        </label>
-        <button className="cx-btn primary" onClick={() => setShowForm((s) => !s)}>{showForm ? '取消' : '＋ 新建任务'}</button>
+        </CheckField>
+        <PanelButton variant="primary" onClick={() => setShowForm((s) => !s)}>{showForm ? '取消' : '＋ 新建任务'}</PanelButton>
       </div>
 
       {showForm && (
         <div className="jobs-form">
           <div className="set-grid">
-            <label className="set-field"><span>名称</span><input value={fName} onChange={(e) => setFName(e.target.value)} placeholder="如:月度预算复盘" /></label>
-            <label className="set-field"><span>类型</span>
+            <Field label="名称"><input value={fName} onChange={(e) => setFName(e.target.value)} placeholder="如:月度预算复盘" /></Field>
+            <Field label="类型">
               <select value={fKind} onChange={(e) => setFKind(e.target.value)}>
                 {(meta?.kinds ?? ['report', 'agent', 'tool', 'notify']).map((k) => <option key={k} value={k}>{KIND_LABEL[k] ?? k}</option>)}
               </select>
-            </label>
+            </Field>
           </div>
           <div className="jobs-kindhint">{KIND_HINT[fKind]}</div>
 
           {(fKind === 'agent' || fKind === 'report') && (
-            <label className="set-field"><span>指令 · Instructions</span>
+            <Field label="指令 · Instructions">
               <textarea value={fInstructions} rows={3} onChange={(e) => setFInstructions(e.target.value)} placeholder="交给 AI 的任务描述(遵循知识库规则)" />
-            </label>
+            </Field>
           )}
           {fKind === 'tool' && (
-            <label className="set-field"><span>工具</span>
+            <Field label="工具">
               <select value={fTool} onChange={(e) => setFTool(e.target.value)}>
                 {(meta?.tools ?? []).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
               </select>
-            </label>
+            </Field>
           )}
           {fKind === 'notify' && (
             <div className="set-grid">
-              <label className="set-field"><span>通知标题</span><input value={fNotifyTitle} onChange={(e) => setFNotifyTitle(e.target.value)} /></label>
-              <label className="set-field"><span>通知内容</span><input value={fNotifyBody} onChange={(e) => setFNotifyBody(e.target.value)} /></label>
+              <Field label="通知标题"><input value={fNotifyTitle} onChange={(e) => setFNotifyTitle(e.target.value)} /></Field>
+              <Field label="通知内容"><input value={fNotifyBody} onChange={(e) => setFNotifyBody(e.target.value)} /></Field>
             </div>
           )}
           {fKind === 'agent' && (
-            <label className="set-check"><input type="checkbox" checked={fAutoCommit} onChange={(e) => setFAutoCommit(e.target.checked)} /> 自动提交改动(不勾选 = 暂存待你审阅,更安全)</label>
+            <CheckField checked={fAutoCommit} onChange={(v) => setFAutoCommit(v)}>自动提交改动(不勾选 = 暂存待你审阅,更安全)</CheckField>
           )}
 
           <Segmented
@@ -223,18 +223,18 @@ export function JobsPanel({ toast, confirm }: {
           />
           {fSchedule === 'cron' ? (
             <div className="set-grid">
-              <label className="set-field"><span>cron 表达式</span>
+              <Field label="cron 表达式">
                 <input value={fCron} onChange={(e) => setFCron(e.target.value)} placeholder="0 9 * * 1" />
                 <span className="jobs-presets">{CRON_PRESETS.map((p) => <button type="button" key={p.cron} onClick={() => setFCron(p.cron)}>{p.label}</button>)}</span>
-              </label>
-              <label className="set-field"><span>时区</span><input value={fTimezone} onChange={(e) => setFTimezone(e.target.value)} placeholder="Asia/Shanghai" /></label>
+              </Field>
+              <Field label="时区"><input value={fTimezone} onChange={(e) => setFTimezone(e.target.value)} placeholder="Asia/Shanghai" /></Field>
             </div>
           ) : (
-            <label className="set-field"><span>执行时间 (ISO)</span><input value={fRunAt} onChange={(e) => setFRunAt(e.target.value)} placeholder="2026-09-01T09:00:00Z" /></label>
+            <Field label="执行时间 (ISO)"><input value={fRunAt} onChange={(e) => setFRunAt(e.target.value)} placeholder="2026-09-01T09:00:00Z" /></Field>
           )}
 
           <div className="set-actions">
-            <button className="cx-btn primary" onClick={submit} disabled={fBusy || !fName}>{fBusy ? '创建中…' : '创建任务'}</button>
+            <PanelButton variant="primary" onClick={submit} disabled={fBusy || !fName}>{fBusy ? '创建中…' : '创建任务'}</PanelButton>
           </div>
         </div>
       )}
@@ -257,11 +257,13 @@ export function JobsPanel({ toast, confirm }: {
                   </div>
                 </div>
                 <div className="jobs-row-actions">
-                  <label className="set-check" title={job.enabled ? '已启用' : '已停用'}>
-                    <input type="checkbox" checked={job.enabled} onChange={(e) => setEnabled(job, e.target.checked)} />
-                  </label>
-                  <button className="cx-btn compact" onClick={() => runNow(job)}>运行</button>
-                  <button className="cx-btn compact ghost" onClick={() => del(job)}>删除</button>
+                  <CheckField
+                    checked={job.enabled}
+                    title={job.enabled ? '已启用' : '已停用'}
+                    onChange={(v) => setEnabled(job, v)}
+                  />
+                  <PanelButton compact onClick={() => runNow(job)}>运行</PanelButton>
+                  <PanelButton variant="ghost" compact onClick={() => del(job)}>删除</PanelButton>
                 </div>
               </div>
               {openId === job.id && (
@@ -273,8 +275,8 @@ export function JobsPanel({ toast, confirm }: {
                       <span className="jobs-run-when">{fmtWhen(r.startedAt)}</span>
                       {r.status === 'staged' && (
                         <span className="jobs-run-btns">
-                          <button className="cx-btn compact primary" onClick={() => approve(r)}>批准提交</button>
-                          <button className="cx-btn compact ghost" onClick={() => reject(r)}>拒绝</button>
+                          <PanelButton variant="primary" compact onClick={() => approve(r)}>批准提交</PanelButton>
+                          <PanelButton variant="ghost" compact onClick={() => reject(r)}>拒绝</PanelButton>
                         </span>
                       )}
                     </div>

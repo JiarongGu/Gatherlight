@@ -5,8 +5,9 @@
 // See ./index.ts for why they share a folder.
 
 import { useEffect, useState } from 'react';
+import { PanelButton } from '@/ui/atoms';
 import { inHost } from '@/lib/host';
-import { Segmented } from '@/ui/molecules';
+import { Segmented, Field, CheckField } from '@/ui/molecules';
 
 // ---- Settings view (edit state/settings.json — port / remote access / TLS / update source) ----
 interface SettingsData {
@@ -109,38 +110,38 @@ export function SettingsPanel({ toast, onRestart }: { toast: (t: string, k?: 'ok
       <div className="set-grid">
         <div className="set-group">
           <div className="set-group-h">基本 · General</div>
-          <label className="set-field"><span>实例名称 · Server name</span>
+          <Field label="实例名称 · Server name">
             <input value={serverName} onChange={(e) => setServerName(e.target.value)} />
-          </label>
-          <label className="set-field"><span>端口 · Port {envWarn('port') && <em>(env)</em>}</span>
+          </Field>
+          <Field label={<>端口 · Port {envWarn('port') && <em>(env)</em>}</>}>
             <input value={port} inputMode="numeric" onChange={(e) => setPort(e.target.value.replace(/[^0-9]/g, ''))} />
-          </label>
-          <label className="set-field"><span>日志级别 · Log level {envWarn('logLevel') && <em>(env)</em>}</span>
+          </Field>
+          <Field label={<>日志级别 · Log level {envWarn('logLevel') && <em>(env)</em>}</>}>
             <select value={logLevel} onChange={(e) => setLogLevel(e.target.value)}>
               {['Trace', 'Debug', 'Information', 'Warning', 'Error', 'Critical'].map((l) => <option key={l} value={l}>{l}</option>)}
             </select>
-          </label>
+          </Field>
           {inHost && (
-            <label className="set-field"><span>关闭窗口时 · On window close</span>
+            <Field label="关闭窗口时 · On window close">
               <select value={closeAction} onChange={(e) => setCloseAction(e.target.value)}>
                 <option value="ask">每次询问 · Ask each time</option>
                 <option value="tray">最小化到托盘 · Minimize to tray</option>
                 <option value="exit">退出程序 · Exit</option>
               </select>
-            </label>
+            </Field>
           )}
         </div>
 
         <div className="set-group">
           <div className="set-group-h">更新源 · Updates</div>
-          <label className="set-field"><span>GitHub 仓库 {envWarn('selfUpdate.githubRepo') && <em>(env)</em>}</span>
+          <Field label={<>GitHub 仓库 {envWarn('selfUpdate.githubRepo') && <em>(env)</em>}</>}>
             <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/name(留空 = 关闭)" />
-          </label>
+          </Field>
           <div className="set-group-h" style={{ marginTop: 14 }}>HTTPS / TLS</div>
-          <label className="set-check"><input type="checkbox" checked={tlsEnabled} onChange={(e) => setTlsEnabled(e.target.checked)} /> 启用 HTTPS(默认自签,浏览器会提示)</label>
-          <label className="set-field"><span>证书 · Cert (PFX)</span>
+          <CheckField checked={tlsEnabled} onChange={(v) => setTlsEnabled(v)}>启用 HTTPS(默认自签,浏览器会提示)</CheckField>
+          <Field label="证书 · Cert (PFX)">
             <input value={certPath} onChange={(e) => setCertPath(e.target.value)} placeholder="留空 = 自签" />
-          </label>
+          </Field>
         </div>
 
         <div className="set-group set-span">
@@ -166,25 +167,25 @@ export function SettingsPanel({ toast, onRestart }: { toast: (t: string, k?: 'ok
             <div className="set-access-side">
               {mode !== 'local' && (
                 <>
-                  <label className="set-field"><span>访问令牌 · Token {mode === 'wan' && <b style={{ color: 'var(--danger)' }}>*</b>} {envWarn('accessToken') && <em>(env)</em>}</span>
+                  <Field label={<>访问令牌 · Token {mode === 'wan' && <b style={{ color: 'var(--danger)' }}>*</b>} {envWarn('accessToken') && <em>(env)</em>}</>}>
                     <input type="password" autoComplete="off" value={token}
                       placeholder={data.hasAccessToken ? '已设置(留空不改)' : mode === 'wan' ? '必填' : '可选(留空 = 无令牌)'}
                       onChange={(e) => { setToken(e.target.value); setClearToken(false); }} />
-                  </label>
+                  </Field>
                   {data.hasAccessToken && (
-                    <label className="set-check"><input type="checkbox" checked={clearToken} onChange={(e) => { setClearToken(e.target.checked); if (e.target.checked) setToken(''); }} /> 清除已设置的令牌</label>
+                    <CheckField checked={clearToken} onChange={(v) => { setClearToken(v); if (v) setToken(''); }}>清除已设置的令牌</CheckField>
                   )}
                 </>
               )}
-              <label className="set-check"><input type="checkbox" checked={trustLoopback} onChange={(e) => setTrustLoopback(e.target.checked)} /> 信任本机请求(同机反代时关闭)</label>
+              <CheckField checked={trustLoopback} onChange={(v) => setTrustLoopback(v)}>信任本机请求(同机反代时关闭)</CheckField>
             </div>
           </div>
         </div>
       </div>
 
       <div className="set-actions">
-        <button className="cx-btn primary" onClick={save} disabled={busy}>{busy ? '保存中…' : '保存设置'}</button>
-        {saved && inHost && <button className="cx-btn" onClick={onRestart}>立即重启以生效</button>}
+        <PanelButton variant="primary" onClick={save} disabled={busy}>{busy ? '保存中…' : '保存设置'}</PanelButton>
+        {saved && inHost && <PanelButton onClick={onRestart}>立即重启以生效</PanelButton>}
         {saved && <span className="set-saved">✓ 已保存,重启后生效</span>}
       </div>
     </div>

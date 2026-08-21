@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { PanelButton, PanelBadge } from '@/ui/atoms';
 import { ResourceRow, PullProgress, ModelPullField, type ModelPullState } from '@/ui/molecules';
 
 /**
@@ -132,10 +133,10 @@ export function LocalModelsPanel(
               name={r.name}
               badges={r.installed && (
                 <>
-                  <span className="res-badge">已安装</span>
+                  <PanelBadge kind="state">已安装</PanelBadge>
                   {/* What it can DO, the same word the Ollama disk list uses — so one glance down the
                       section tells you which layer each model can serve, whoever provides it. */}
-                  <span className="res-badge">嵌入</span>
+                  <PanelBadge kind="state">嵌入</PanelBadge>
                 </>
               )}
               installed={r.installed}
@@ -147,9 +148,9 @@ export function LocalModelsPanel(
               action={r.state === 'running' ? (
                 <span className="res-running">下载中…</span>
               ) : (
-                <button className={`cx-btn${r.installed ? '' : ' primary'}`} onClick={() => provision(r.id)}>
+                <PanelButton variant={r.installed ? 'default' : 'primary'} onClick={() => provision(r.id)}>
                   {r.installed ? '重新下载' : '下载'}
-                </button>
+                </PanelButton>
               )}
             />
           ))}
@@ -170,9 +171,9 @@ export function LocalModelsPanel(
           name="Ollama 运行时"
           badges={
             <>
-              {rt.installed && <span className="res-badge">已安装</span>}
-              {rt.serving && <span className="res-badge">运行中</span>}
-              {rt.gpuLikely && <span className="res-badge">GPU 可用</span>}
+              {rt.installed && <PanelBadge kind="state">已安装</PanelBadge>}
+              {rt.serving && <PanelBadge kind="state">运行中</PanelBadge>}
+              {rt.gpuLikely && <PanelBadge kind="state">GPU 可用</PanelBadge>}
             </>
           }
           installed={rt.installed}
@@ -186,8 +187,8 @@ export function LocalModelsPanel(
           }
           problem={rt.problem}
           action={rt.installed && !rt.serving && (
-            <button className="cx-btn primary" disabled={busy === 'start'}
-              onClick={() => post('/api/manage/models/start', undefined, 'start')}>启动</button>
+            <PanelButton variant="primary" disabled={busy === 'start'}
+              onClick={() => post('/api/manage/models/start', undefined, 'start')}>启动</PanelButton>
           )}
         />
 
@@ -196,9 +197,9 @@ export function LocalModelsPanel(
           see what the trying cost them. */}
       {inv.models.length > 0 && (
         <div className="mem-disk">
-          <button className="cx-btn" onClick={() => setOpen(!open)}>
+          <PanelButton onClick={() => setOpen(!open)}>
             {open ? '收起' : '已下载的模型'} · {inv.models.length} 个 · {mb(totalBytes)}
-          </button>
+          </PanelButton>
           {open && (
             <div className="mem-disk-list">
               {inv.models.map((m) => (
@@ -207,17 +208,17 @@ export function LocalModelsPanel(
                       their own columns would reflow the list depending on which models are installed. */}
                   <span className="mem-disk-id">
                     <span className="mem-disk-name">{m.name}</span>
-                    {m.capabilities?.includes('embedding') && <span className="res-badge">嵌入</span>}
-                    {m.capabilities?.includes('completion') && <span className="res-badge">对话</span>}
+                    {m.capabilities?.includes('embedding') && <PanelBadge kind="state">嵌入</PanelBadge>}
+                    {m.capabilities?.includes('completion') && <PanelBadge kind="state">对话</PanelBadge>}
                   </span>
                   <span className="mem-disk-size">{mb(m.sizeBytes)}</span>
                   {m.inUse
                     ? <span className="res-running">{LAYER_NAMES[m.inUse] ?? m.inUse}使用中</span>
                     : (
-                      <button className="cx-btn" disabled={busy === `rm:${m.id}`}
+                      <PanelButton disabled={busy === `rm:${m.id}`}
                         onClick={() => post('/api/manage/models/remove', { model: m.id }, `rm:${m.id}`)}>
                         删除
-                      </button>
+                      </PanelButton>
                     )}
                 </div>
               ))}
@@ -247,7 +248,7 @@ export function LocalModelsPanel(
                   <tr key={m.id}>
                     <td>
                       <div className="mem-m-name"><b>{m.name}</b>
-                        {m.id === inv.recommendation.id && <span className="res-badge">推荐</span>}
+                        {m.id === inv.recommendation.id && <PanelBadge kind="state">推荐</PanelBadge>}
                       </div>
                       <div className="mem-m-note">{m.note}</div>
                       {/* Progress goes in the NAME cell, where there is room for a bar and a status
@@ -274,11 +275,11 @@ export function LocalModelsPanel(
                       ) : (
                         // Primary on the RECOMMENDED row only. Every row carrying a filled amber button
                         // made equal shouts out of a table whose whole job is helping you pick one.
-                        <button className={`cx-btn${m.id === inv.recommendation.id ? ' primary' : ''}`}
+                        <PanelButton variant={m.id === inv.recommendation.id ? 'primary' : 'default'}
                           disabled={busy === `pull:${m.id}`}
                           onClick={() => post('/api/manage/models/pull', { model: m.id }, `pull:${m.id}`)}>
                           下载
-                        </button>
+                        </PanelButton>
                       )}
                     </td>
                   </tr>

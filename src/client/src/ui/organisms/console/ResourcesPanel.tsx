@@ -5,6 +5,7 @@
 // See ./index.ts for why they share a folder.
 
 import { useEffect, useState } from 'react';
+import { PanelButton, PanelBadge } from '@/ui/atoms';
 import { ResourceRow } from '@/ui/molecules';
 import { inHost } from '@/lib/host';
 import { LocalModelsPanel } from './LocalModelsPanel';
@@ -92,7 +93,7 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
           <ResourceRow
             key={r.id}
             name={r.name}
-            badges={r.installed && <span className="res-badge">已安装</span>}
+            badges={r.installed && <PanelBadge kind="state">已安装</PanelBadge>}
             installed={r.installed}
             failed={r.state === 'error'}
             lines={
@@ -103,7 +104,7 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
                 {r.version && (
                   <div className="res-need">
                     当前版本 {r.version}
-                    {hasUpdate(r) && <span className="res-badge">可更新 → {r.available}</span>}
+                    {hasUpdate(r) && <PanelBadge kind="state">可更新 → {r.available}</PanelBadge>}
                   </div>
                 )}
               </>
@@ -114,9 +115,9 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
             action={r.state === 'running' ? (
               <span className="res-running">下载中…</span>
             ) : (
-              <button className={`cx-btn${r.installed && !hasUpdate(r) ? '' : ' primary'}`} onClick={() => provision(r.id)}>
+              <PanelButton variant={r.installed && !hasUpdate(r) ? 'default' : 'primary'} onClick={() => provision(r.id)}>
                 {hasUpdate(r) ? '更新' : r.installed ? '重新下载' : '下载'}
-              </button>
+              </PanelButton>
             )}
           />
         ))}
@@ -128,7 +129,7 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
       <LocalModelsPanel toast={toast} builtIn={modelRows} provision={provision} />
       {inHost && (
         <div className="set-actions">
-          <button className="cx-btn" onClick={onRestart}>重启服务</button>
+          <PanelButton onClick={onRestart}>重启服务</PanelButton>
           <span className="set-saved">部分资源(如 Git)需重启后生效</span>
         </div>
       )}

@@ -11,10 +11,13 @@ import {
   DayChip,
   DiffBlock,
   Highlight,
-  Stepper
+  Stepper,
+  PanelBadge,
+  PanelButton
 } from '@/ui/atoms';
 import {
-  Carousel, Collapsible, ModelPullField, PullProgress, ResourceRow, Segmented, SnippetText,
+  Carousel, CheckField, Collapsible, Field, ModelPullField, PullProgress, ResourceRow, Segmented,
+  SnippetText,
 } from '@/ui/molecules';
 import { RobotOutlined, DeleteOutlined } from '@ant-design/icons';
 
@@ -117,7 +120,34 @@ export function Gallery() {
         />
       </Item>
 
+      {/* The console's own primitives. It does not use the antd surface above — different look,
+          different components — so both live on this page and neither is checked by the other. */}
+      <Item name="PanelButton">
+        <PanelButton variant="primary">主要</PanelButton>
+        <PanelButton>默认</PanelButton>
+        <PanelButton variant="ghost">幽灵</PanelButton>
+        <PanelButton compact>紧凑</PanelButton>
+        <PanelButton variant="primary" compact>紧凑主要</PanelButton>
+        <PanelButton disabled>禁用</PanelButton>
+      </Item>
+      <Item name="PanelBadge">
+        <PanelBadge kind="state">已安装</PanelBadge>
+        <PanelBadge kind="state">运行中</PanelBadge>
+        <PanelBadge kind="note">已自定义</PanelBadge>
+        <PanelBadge kind="note">LLM</PanelBadge>
+      </Item>
+
       <h2 className="g-tier">分子 · Molecules</h2>
+
+      <Item name="Field" stack>
+        <Field label="实例名称 · Server name"><input defaultValue="Gatherlight" /></Field>
+        <Field label={<>端口 · Port <em>(env)</em></>}><input defaultValue="5317" /></Field>
+      </Item>
+      <Item name="CheckField" stack>
+        <CheckField checked onChange={() => {}}>已勾选的一句说明</CheckField>
+        <CheckField checked={false} onChange={() => {}}>未勾选的一句说明</CheckField>
+        <CheckField checked title="没有文字,含义在 title 里" onChange={() => {}} />
+      </Item>
 
       {/* The `na` option is the one to look at: dimmed and dashed, and still PRESSABLE, because
           pressing it is how a household reads why the option is unavailable. If it ever reads as the
@@ -139,18 +169,18 @@ export function Gallery() {
       <Item name="ResourceRow" stack>
         <ResourceRow
           name={<>Git 版本管理<code> (2.55.0.2)</code></>}
-          badges={<span className="res-badge">已安装</span>}
+          badges={<PanelBadge kind="state">已安装</PanelBadge>}
           installed
           approxBytes={39_000_000}
           lines="数据仓库的引擎(改动审计 + 历史记录)"
-          action={<button className="cx-btn">重新下载</button>}
+          action={<PanelButton>重新下载</PanelButton>}
         />
         <ResourceRow
           name="Ollama 本地模型运行时"
           failed
           problem="未在运行 —— 启动它,或改用其他后端。"
           approxBytes={1_500_000_000}
-          action={<button className="cx-btn primary">启动</button>}
+          action={<PanelButton variant="primary">启动</PanelButton>}
         />
         <ResourceRow
           name="嵌入模型 · EmbeddingGemma-300M"

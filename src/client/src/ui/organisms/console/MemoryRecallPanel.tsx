@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { PanelButton, PanelBadge } from '@/ui/atoms';
 import { BackendPicker, type BackendView } from '@/ui/molecules';
 import { inHost } from '@/lib/host';
 
@@ -128,7 +129,7 @@ export function MemoryRecallPanel(
       <div className="mem-fine">{s.weighting.note}</div>
       {pending && (
         <div className="set-actions">
-          {inHost && <button className="cx-btn primary" onClick={onRestart}>重启服务以生效</button>}
+          {inHost && <PanelButton variant="primary" onClick={onRestart}>重启服务以生效</PanelButton>}
           <span className="set-saved">设置已保存,重启后生效</span>
         </div>
       )}
@@ -137,7 +138,7 @@ export function MemoryRecallPanel(
         {/* 1 — the floor */}
         <div className="mem-layer on">
           <div className="mem-layer-main">
-            <div className="mem-layer-name">{formula.name}<span className="res-badge">始终启用</span></div>
+            <div className="mem-layer-name">{formula.name}<PanelBadge kind="state">始终启用</PanelBadge></div>
             <div className="mem-layer-desc">{formula.what}</div>
           </div>
         </div>
@@ -147,11 +148,11 @@ export function MemoryRecallPanel(
           <div className="mem-layer-main">
             <div className="mem-layer-name">
               {judge.name}
-              {judge.on && <span className="res-badge">运行中</span>}
+              {judge.on && <PanelBadge kind="state">运行中</PanelBadge>}
               {/* The RUNNING backend, not the saved one. Shown only while the layer is on, because a
                   backend named for work that is not happening is a false label. */}
-              {judge.on && <span className="res-badge">{backendLabel(judge, judge.activeSource, judge.activeModel)}</span>}
-              <span className="res-badge">即时生效</span>
+              {judge.on && <PanelBadge kind="state">{backendLabel(judge, judge.activeSource, judge.activeModel)}</PanelBadge>}
+              <PanelBadge kind="state">即时生效</PanelBadge>
             </div>
             <div className="mem-layer-desc">{judge.what}</div>
             <div className="mem-layer-desc"><b>费用</b> {judge.cost}</div>
@@ -161,13 +162,13 @@ export function MemoryRecallPanel(
             )}
           </div>
           <div className="mem-layer-side">
-            <button
-              className={`cx-btn${judge.on ? '' : ' primary'}`}
+            <PanelButton
+              variant={judge.on ? 'default' : 'primary'}
               disabled={busy === 'enrich'}
               onClick={() => post('/api/manage/memory/enrichment', { enabled: !judge.on }, 'enrich')}
             >
               {judge.on ? '关闭' : '启用'}
-            </button>
+            </PanelButton>
           </div>
         </div>
 
@@ -179,10 +180,10 @@ export function MemoryRecallPanel(
           <div className="mem-layer-main">
             <div className="mem-layer-name">
               {semantic.name}
-              {semantic.activeSource && <span className="res-badge">运行中</span>}
+              {semantic.activeSource && <PanelBadge kind="state">运行中</PanelBadge>}
               {semantic.activeSource && semantic.activeModel &&
-                <span className="res-badge">{backendLabel(semantic, semantic.activeSource, semantic.activeModel)}</span>}
-              {semantic.on && !semantic.activeSource && <span className="res-badge">待重启</span>}
+                <PanelBadge kind="state">{backendLabel(semantic, semantic.activeSource, semantic.activeModel)}</PanelBadge>}
+              {semantic.on && !semantic.activeSource && <PanelBadge kind="state">待重启</PanelBadge>}
             </div>
             <div className="mem-layer-desc">{semantic.what}</div>
             <div className="mem-layer-desc"><b>费用</b> {semantic.cost}</div>
@@ -224,12 +225,12 @@ export function MemoryRecallPanel(
           <div className="mem-layer-side">
             {semantic.on && (
               <>
-                <button className="cx-btn" disabled={busy === 'reindex' || semantic.reindex?.running}
+                <PanelButton disabled={busy === 'reindex' || semantic.reindex?.running}
                   onClick={() => post('/api/manage/memory/layer/semantic/reindex', undefined, 'reindex')}>
                   {semantic.reindex?.running ? '重建中…' : '重建索引'}
-                </button>
-                <button className="cx-btn" disabled={busy === 'off'}
-                  onClick={() => post('/api/manage/memory/layer/semantic/off', undefined, 'off')}>停用</button>
+                </PanelButton>
+                <PanelButton disabled={busy === 'off'}
+                  onClick={() => post('/api/manage/memory/layer/semantic/off', undefined, 'off')}>停用</PanelButton>
               </>
             )}
           </div>

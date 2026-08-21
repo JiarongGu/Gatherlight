@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { PanelButton } from '@/ui/atoms';
+import { Field } from './Field';
 
 /** A model download the server has in flight, or one that finished in the last few minutes. */
 export interface ModelPullState {
@@ -60,17 +62,16 @@ export function ModelPullField(
   const pull = id ? pullOf(id) : null;
   return (
     <div className="mem-other">
-      <label className="set-field">
-        <span>{label}</span>
+      <Field label={label}>
         <input value={id} onChange={(e) => setId(e.target.value.trim())} placeholder={placeholder} />
-      </label>
+      </Field>
       <div className="mem-other-act">
         {pull?.running
           ? <span className="res-running">下载中…</span>
           : (
-            <button className="cx-btn" disabled={!id || busy === 'pull:other'} onClick={() => onPull(id)}>
+            <PanelButton disabled={!id || busy === 'pull:other'} onClick={() => onPull(id)}>
               下载
-            </button>
+            </PanelButton>
           )}
       </div>
       <PullProgress pull={pull} />
