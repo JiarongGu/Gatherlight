@@ -3347,6 +3347,12 @@ kbd, .topbar-kbd {
 .mem-m-sub { font-family: var(--font-mono); font-size: 10px; color: var(--muted); margin-top: 3px; }
 .mem-act-pair { display: inline-flex; gap: 6px; }
 
+/* 本机模型 inside 资源 · Resources. Reuses the mem-* vocabulary wholesale rather than growing a second
+   one: the comparison table, the disk list and the progress bar MOVED here from 记忆检索, and giving the
+   same components new class names at their new address would be two idioms for one thing. */
+.res-models { margin-top: 26px; }
+.res-models .res-item { margin-bottom: 4px; }
+
 /* What Ollama holds, and what it costs in disk. */
 .mem-disk { margin-top: 18px; }
 .mem-disk-list {

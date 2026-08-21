@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MemoryRecallSection } from './MemoryRecall';
+import { ModelsSection } from './Models';
 import SetupWizard from './SetupWizard';
 import { MigrationOverlay } from '@/ui/organisms/MigrationOverlay';
 
@@ -1245,6 +1246,11 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
           </div>
         ))}
       </div>
+      {/* Models are provisioned artifacts too, so they live beside chromium and git — one panel for
+          everything downloaded into the data folder, including the runtime that hosts them. Which model
+          each recall layer USES stays in 校准 · Cortex → 记忆检索, because that is a recall decision and
+          not a provisioning one. */}
+      <ModelsSection toast={toast} />
       {inHost && (
         <div className="set-actions">
           <button className="cx-btn" onClick={onRestart}>重启服务</button>
