@@ -37,6 +37,25 @@ public interface IMemorySource
     /// dead control this design replaces.</summary>
     Task<IReadOnlyList<ModelOption>> ModelsAsync(MemorySourceContext ctx, CancellationToken ct = default);
 
+    /// <summary>The endpoint this backend talks to, resolved from config and guarded by whatever rule owns
+    /// that address. Null when it has none (the CLI is a process, not a URL) or when the configured one was
+    /// refused.
+    ///
+    /// <para>On the SOURCE rather than on the caller because only the source knows which config field is
+    /// its own — and putting it here means there is exactly one place that answers "where does this backend
+    /// talk", which is what stops an install embedding against one host while reporting another.</para></summary>
+    string? Endpoint(Kernel.Services.MemoryConfig config);
+
+    /// <summary>Does choosing this backend require the household to supply an address? True only for a
+    /// service we do not manage. Declared rather than inferred from a null <see cref="Endpoint"/>, because
+    /// the CLI also has no endpoint and asking it for one would be nonsense.</summary>
+    bool NeedsEndpoint { get; }
+
+    /// <summary>Is this backend completely enough configured to be WIRED? False means a half-configured
+    /// binding, and the caller falls back rather than registering a provider against a missing address —
+    /// the same "half-configured stays off" rule 语义 has always had for a model.</summary>
+    bool IsConfigured(Kernel.Services.MemoryConfig config);
+
     /// <summary>Register whatever this source needs at startup — a provider, a named client, an embedder, a
     /// vector store. A no-op for a backend that is already registered by default.</summary>
     void Register(LyntaiBuilder b, MemoryWiringContext ctx);

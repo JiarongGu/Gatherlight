@@ -33,6 +33,10 @@ interface SourceView {
   available: boolean; reason: string | null;
   // A model 资源 could fetch, when the fix IS a download.
   suggest: string | null;
+  // Does the household have to supply an address (a service we do not manage), and what did they supply?
+  // The RAW value comes back even when it was refused, so the box can show the typo the reason complains
+  // about instead of silently emptying itself.
+  needsEndpoint: boolean; endpoint: string | null;
   models: SourceModel[];
 }
 
@@ -112,8 +116,8 @@ export function MemoryRecallSection(
   const owed = (l: LayerView) => l.source !== l.activeSource || l.model !== l.activeModel;
   const pending = owed(judge) || owed(semantic);
 
-  const bind = (layer: string) => (source: string, model: string) =>
-    post(`/api/manage/memory/layer/${layer}`, { source, model }, `bind:${layer}`);
+  const bind = (layer: string) => (source: string, model: string, endpoint?: string) =>
+    post(`/api/manage/memory/layer/${layer}`, { source, model, endpoint }, `bind:${layer}`);
 
   return (
     <>
@@ -268,13 +272,16 @@ function backendLabel(layer: LayerView, sourceId: string | null, model: string |
 function SourcePicker(
   { layer, busy, bind, modelsAt }:
   { layer: LayerView; busy: string | null;
-    bind: (source: string, model: string) => void; modelsAt: string },
+    bind: (source: string, model: string, endpoint?: string) => void; modelsAt: string },
 ) {
   // DERIVED from the latest props, with an explicit pick layered on top — never seeded into state. A
   // useState initialiser runs once and this component is not remounted when the panel reloads, so a
   // household who started Ollama and watched their models appear would otherwise be left holding ''.
   const [pickedSource, setPickedSource] = useState<string | null>(null);
   const [pickedModel, setPickedModel] = useState<string | null>(null);
+  // Same derived-with-override rule: the saved address arrives with the data, so seeding a useState
+  // initialiser from it would capture whatever the first render had (nothing).
+  const [typedUrl, setTypedUrl] = useState<string | null>(null);
 
   // Prefer the bound backend, then the first BINDABLE one — never simply sources[0], which could be a
   // declined entry and would open the layer on a backend it can never use.
@@ -289,7 +296,11 @@ function SourcePicker(
   // First of: what they chose, what is saved, the first option — that still EXISTS. A pick or a saved
   // model since deleted must not survive as a value the <select> cannot show.
   const model = [pickedModel, layer.model, names[0]].find((n) => !!n && names.includes(n)) ?? '';
-  const unchanged = source.id === layer.source && model === layer.model;
+  const url = typedUrl ?? source.endpoint ?? '';
+  const urlChanged = source.needsEndpoint && url !== (source.endpoint ?? '');
+  // "Already in use" has to account for the address too: retyping a URL is a change even when the backend
+  // and model are the same, and a 使用 button that read 使用中 would refuse to apply it.
+  const unchanged = source.id === layer.source && model === layer.model && !urlChanged;
   const fetchable = source.models.filter((m) => !m.installed).length;
 
   return (
@@ -308,6 +319,13 @@ function SourcePicker(
           </button>
         ))}
       </div>
+      {/* The address, for a service we do not manage. Sits BEFORE the model list because the list comes
+          FROM that address — an empty model picker above an empty URL box would read as broken rather than
+          as unconfigured. */}
+      {source.bindable && source.needsEndpoint && (
+        <input className="mem-src-url" value={url} placeholder="http://127.0.0.1:8080"
+          onChange={(e) => setTypedUrl(e.target.value)} />
+      )}
       {source.bindable && usable.length > 0 && (
         <select className="mem-src-sel" value={model} onChange={(e) => setPickedModel(e.target.value)}>
           {usable.map((m) => (
@@ -319,9 +337,12 @@ function SourcePicker(
       )}
       {source.bindable && (
         <button className="cx-btn primary"
-          disabled={busy !== null || !model || !source.available || unchanged}
-          onClick={() => bind(source.id, model)}>
-          {busy?.startsWith('bind:') ? '保存中…' : unchanged ? '使用中' : '使用'}
+          // A NEW address is bindable before its model list exists — that request is what fetches the list.
+          // Requiring a model first would make the field impossible to submit.
+          disabled={busy !== null || unchanged
+            || (source.needsEndpoint ? !url : (!model || !source.available))}
+          onClick={() => bind(source.id, model, source.needsEndpoint ? url : undefined)}>
+          {busy?.startsWith('bind:') ? '保存中…' : unchanged ? '使用中' : urlChanged && !model ? '连接' : '使用'}
         </button>
       )}
       {!source.bindable && <span className="mem-src-na">这一层用不了</span>}

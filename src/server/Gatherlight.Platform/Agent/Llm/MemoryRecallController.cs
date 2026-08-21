@@ -111,7 +111,7 @@ public sealed class MemoryRecallController : ControllerBase
                         : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。",
                     source = boundJudge.Id, model = MemorySources.ResolveJudgeModel(mem),
                     activeSource = _judgeWiring.Transport, activeModel = _judgeWiring.Model,
-                    sources = await SourceViews(MemorySources.Judge, MemorySources.JudgeDeclined, ctx),
+                    sources = await SourceViews(MemorySources.Judge, MemorySources.JudgeDeclined, ctx, MemoryLayers.Judge),
                 },
                 new
                 {
@@ -125,7 +125,7 @@ public sealed class MemoryRecallController : ControllerBase
                     // when an embedder was registered.
                     activeSource = _semantic is not null ? boundSemantic?.Id : null,
                     activeModel = _semantic is not null ? mem.EmbeddingModel : null,
-                    sources = await SourceViews(MemorySources.Semantic, MemorySources.SemanticDeclined, ctx),
+                    sources = await SourceViews(MemorySources.Semantic, MemorySources.SemanticDeclined, ctx, MemoryLayers.Semantic),
                     // Turning this on re-embeds by REBUILDING, so say so where the household decides: the
                     // ranking the index has accumulated is reset, and on a large corpus it is not quick.
                     note = "开启或更换模型后需要重建索引:会重新计算全部向量,并重置已积累的排序权重(事实本身不受影响)。",
@@ -173,7 +173,8 @@ public sealed class MemoryRecallController : ControllerBase
     /// layer-specific members (RejectAsync, ProveAsync) are not needed to DESCRIBE a source — only to bind
     /// one — which is why the split sits where it does.</para></summary>
     private static async Task<object[]> SourceViews(
-        IEnumerable<IMemorySource> sources, IEnumerable<DeclinedBackend> declined, MemorySourceContext ctx)
+        IEnumerable<IMemorySource> sources, IEnumerable<DeclinedBackend> declined, MemorySourceContext ctx,
+        string layer)
     {
         var views = new List<object>();
         foreach (var s in sources)
@@ -183,6 +184,11 @@ public sealed class MemoryRecallController : ControllerBase
             {
                 id = s.Id, name = s.Name, description = s.Description, bindable = true,
                 available = status.Available, reason = status.Reason, suggest = status.Suggest,
+                // Does the household have to supply an address, and what did they supply? The RAW value,
+                // not the resolved one: a refused URL must come back so the box shows what was typed
+                // beside the sentence explaining why it was refused.
+                needsEndpoint = s.NeedsEndpoint,
+                endpoint = s.NeedsEndpoint ? RawEndpoint(ctx.Config, layer) : null,
                 models = (await s.ModelsAsync(ctx)).Select(m => new
                 {
                     id = m.Id, name = m.Name, installed = m.Installed, sizeBytes = m.SizeBytes,
@@ -201,11 +207,21 @@ public sealed class MemoryRecallController : ControllerBase
             {
                 id = d.Id, name = d.Name, description = d.Reason, bindable = false,
                 available = false, reason = d.Reason, suggest = (string?)null,
+                needsEndpoint = false, endpoint = (string?)null,
                 models = Enumerable.Empty<object>(),
             });
         }
         return views.ToArray();
     }
+
+    /// <summary>What the household actually typed for this layer's address, unresolved. Shown back to them
+    /// even when it was REFUSED — a box that silently empties itself gives no way to see the typo the
+    /// sentence beside it is complaining about.
+    /// <para>Keyed on the LAYER, not on the source's type: <c>OpenAiCompatibleSource</c> implements both
+    /// layer interfaces, so a type test would answer the same for both of its instances — which is exactly
+    /// the class this has to get right.</para></summary>
+    private static string? RawEndpoint(MemoryConfig config, string layer) =>
+        layer == MemoryLayers.Semantic ? config.SemanticEndpoint : config.JudgeEndpoint;
 
     /// <summary>Turn 判断 on or off. Off keeps the deterministic floor intact — it removes an enrichment,
     /// not the feature.</summary>
@@ -234,7 +250,30 @@ public sealed class MemoryRecallController : ControllerBase
         {
             var source = MemorySources.FindJudge(body?.Source);
             if (source is null) return BadRequest(new { error = $"未知的后端:{body?.Source}" });
-            if (string.IsNullOrWhiteSpace(model)) return BadRequest(new { error = "model is required" });
+
+            // The ADDRESS is saved before the backend is asked anything, because a source reads its endpoint
+            // from config — probing first would test the PREVIOUS binding's address.
+            if (body?.Endpoint is not null)
+                _config.Update(c => c.Memory.JudgeEndpoint = Blank(body.Endpoint));
+            if (!source.IsConfigured(_config.Current.Memory))
+                return StatusCode(409, new
+                {
+                    error = (await source.StatusAsync(Context())).Reason ?? "这个后端还缺少必要的设置。",
+                });
+            ctx = Context();
+
+            // AN ADDRESS WITHOUT A MODEL is a legitimate first step, not a malformed request: for a service
+            // we do not manage, the model list comes FROM the address, so there is nothing to pick until it
+            // is saved. Demanding both at once would make the field impossible to submit.
+            if (string.IsNullOrWhiteSpace(model))
+            {
+                if (!source.NeedsEndpoint) return BadRequest(new { error = "model is required" });
+                return Ok(new
+                {
+                    ok = true, layer, source = source.Id, model = (string?)null, restartRequired = false,
+                    note = "地址已保存 —— 现在可以选一个模型了。",
+                });
+            }
             if (!EmbeddingCatalog.IsWellFormedId(model))
                 return BadRequest(new { error = $"模型名称格式不正确:{model}" });
 
@@ -267,7 +306,27 @@ public sealed class MemoryRecallController : ControllerBase
         {
             var source = MemorySources.FindSemantic(body?.Source);
             if (source is null) return BadRequest(new { error = $"未知的后端:{body?.Source}" });
-            if (string.IsNullOrWhiteSpace(model)) return BadRequest(new { error = "model is required" });
+
+            if (body?.Endpoint is not null)
+                _config.Update(c => c.Memory.SemanticEndpoint = Blank(body.Endpoint));
+            if (!source.IsConfigured(_config.Current.Memory))
+                return StatusCode(409, new
+                {
+                    error = (await source.StatusAsync(Context())).Reason ?? "这个后端还缺少必要的设置。",
+                });
+            ctx = Context();
+
+            // Same first step as 判断: for a service we do not manage, the model list comes FROM the
+            // address, so saving the address alone has to be allowed.
+            if (string.IsNullOrWhiteSpace(model))
+            {
+                if (!source.NeedsEndpoint) return BadRequest(new { error = "model is required" });
+                return Ok(new
+                {
+                    ok = true, layer, source = source.Id, model = (string?)null, restartRequired = false,
+                    note = "地址已保存 —— 现在可以选一个模型了。",
+                });
+            }
             if (!EmbeddingCatalog.IsWellFormedId(model))
                 return BadRequest(new { error = $"模型名称格式不正确:{model}" });
 
@@ -371,6 +430,13 @@ public sealed class MemoryRecallController : ControllerBase
         };
     }
 
-    public sealed record BindRequest(string? Source, string? Model);
+    /// <summary>An empty box means "clear it", not "leave it" — otherwise a household could never unset a
+    /// wrong address, only overwrite it.</summary>
+    private static string? Blank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    /// <summary><paramref name="Endpoint"/> is null for a backend that needs no address (the CLI, Ollama),
+    /// and is the base URL for a household-supplied OpenAI-compatible service. Sent per LAYER because the
+    /// judge and the embedder may legitimately be different servers.</summary>
+    public sealed record BindRequest(string? Source, string? Model, string? Endpoint = null);
     public sealed record EnabledRequest(bool Enabled);
 }

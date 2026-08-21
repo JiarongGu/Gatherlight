@@ -201,6 +201,18 @@ public sealed class MemoryConfig
     /// <see cref="EmbeddingModel"/> still present means the layer is OFF but its choice is remembered, so
     /// turning it back on costs neither the download nor the reindex again.</summary>
     public string? SemanticSource { get; set; }
+
+    /// <summary>Base URL of the OpenAI-compatible service serving 判断, when that is its backend —
+    /// llama.cpp's <c>llama-server</c>, LM Studio, vLLM, Jan.
+    /// <para>Per layer, not shared, because the two can legitimately be different servers. Loopback-checked
+    /// on read (<c>OpenAiCompatibleSource.ResolveLocal</c>): a remote address would send household facts off
+    /// this machine, and this value arrives from a text box.</para></summary>
+    public string? JudgeEndpoint { get; set; }
+
+    /// <summary>Base URL of the OpenAI-compatible service serving 语义, when that is its backend. Same
+    /// loopback rule as <see cref="JudgeEndpoint"/>, and it matters more here: an embedder sees every fact
+    /// on every write.</summary>
+    public string? SemanticEndpoint { get; set; }
 }
 
 public sealed class ServerConfigService

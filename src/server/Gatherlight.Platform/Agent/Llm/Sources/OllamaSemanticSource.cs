@@ -19,6 +19,15 @@ public sealed class OllamaSemanticSource : IMemorySemanticSource
     public string Description =>
         "用这台机器上的嵌入模型为事实生成向量:占用磁盘与算力,不消耗 token,资料不离开这台电脑。";
 
+    public bool NeedsEndpoint => false;
+
+    /// <summary>The same daemon the judge's local arm uses, through the same loopback guard — one Ollama,
+    /// two layers, different models on it.</summary>
+    public string? Endpoint(Kernel.Services.MemoryConfig config) =>
+        OllamaRuntime.ResolveBaseUrl(config.OllamaUrl);
+
+    public bool IsConfigured(Kernel.Services.MemoryConfig config) => true;
+
     /// <summary>The embedder plus the vector store the GRAPH member picks up — that is where meaning-based
     /// recall actually happens, via <c>SemanticSeedK</c>. <c>AddSemanticMemory</c> is here for its
     /// registration alone: <c>ISemanticMemory</c> resolves only when an embedder did, so its presence is
@@ -28,7 +37,7 @@ public sealed class OllamaSemanticSource : IMemorySemanticSource
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx) =>
         b.AddOpenAiCompatibleEmbedder("ollama", o =>
          {
-             o.BaseUrl = ctx.OllamaUrl;
+             o.BaseUrl = ctx.Endpoint;
              o.Model = ctx.Model;
          })
          .UseSqliteVectorStore()

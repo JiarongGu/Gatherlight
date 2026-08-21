@@ -25,8 +25,15 @@ public static class MemoryBackends
     public const string ClaudeCli = "claude-cli";
 
     /// <summary>An Ollama on this machine, whether the household's own or the copy the app provisioned.
-    /// One daemon on one port serves both layers; only the model differs.</summary>
+    /// One daemon on one port serves both layers; only the model differs. It gets its own backend not
+    /// because it is special as a runtime — it speaks the same API as the one below — but because the app
+    /// MANAGES it: listing, pulling and deleting models is what 资源's buttons rest on.</summary>
     public const string Ollama = "ollama";
+
+    /// <summary>Any other local runtime speaking the OpenAI-compatible API — llama.cpp's llama-server,
+    /// LM Studio, vLLM, Jan, LocalAI. The household supplies the address and brings their own models; we
+    /// cannot download or delete anything there, and the picker says so.</summary>
+    public const string OpenAiCompatible = "openai-compat";
 
     /// <summary>A model runtime shipped INSIDE the install (<c>res/</c>) rather than found on the machine —
     /// nothing to install, nothing to keep running. Nothing implements it yet; it is listed anyway, with
@@ -91,7 +98,9 @@ public sealed record MemorySourceContext(
 /// <summary>What a source needs to REGISTER itself at startup. No DI and no container — only the two facts
 /// a backend registration turns on.</summary>
 /// <param name="Model">The model this layer is bound to.</param>
-/// <param name="OllamaUrl">Already resolved through <see cref="OllamaRuntime.ResolveBaseUrl"/>, so a source
-/// never re-derives it: two answers for one endpoint is how an install ends up embedding against one host
-/// and reporting another.</param>
-public sealed record MemoryWiringContext(string Model, string OllamaUrl);
+/// <param name="Endpoint">Where this backend talks, already resolved and loopback-checked by the source
+/// that owns that address (<c>IMemorySource.Endpoint</c>) — <see cref="OllamaRuntime.ResolveBaseUrl"/> for
+/// the Ollama arm, <c>OpenAiCompatibleSource.ResolveLocal</c> for a household-supplied one. ONE place
+/// answers "where does this backend talk", which is what stops an install embedding against one host while
+/// reporting another. Empty for a backend that is a process rather than a URL.</param>
+public sealed record MemoryWiringContext(string Model, string Endpoint);

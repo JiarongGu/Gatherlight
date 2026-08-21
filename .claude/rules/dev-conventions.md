@@ -437,7 +437,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   and firing by name with `SemanticSeedK` put back to 0.
 - **VOCABULARY, because this area had none and the gap cost a whole design conversation.** Three words, and
   they are not interchangeable. A **LAYER** is a job (公式 · 判断 · 语义). A **BACKEND** is *where the model
-  comes from* — `claude-cli` · `ollama` · `builtin` (`MemoryBackends`). A **MODEL** is what a backend serves.
+  comes from* — `claude-cli` · `ollama` · `openai-compat` · `builtin` (`MemoryBackends`). A **MODEL** is
+  what a backend serves. **Every layer lists every backend**, and one it cannot use carries its reason
+  instead of being omitted — omitting it answers "why isn't this an option?" only in the source tree.
+  `openai-compat` is ONE class for the whole OpenAI-compatible family (llama-server · LM Studio · vLLM ·
+  Jan · LocalAI), not one per product, for the same reason `EmbeddingCatalog` is not a gate: a list of
+  products goes stale the moment somebody ships a new runtime. Ollama keeps its own backend because the app
+  MANAGES it (list/pull/delete) — a distinction the panel states rather than papering over. And a
+  household-typed address is loopback-only (`GATHERLIGHT_LLM_ALLOW_REMOTE=1` to override), because every
+  fact written goes to it.
   The docs previously described this one axis three ways — "the local model", "the judge's *transport*", "the
   embedder" — and named it never, so every discussion of it had to invent a term. **The trap in that
   invention:** 嵌入 already means *embedding* here (`EmbeddingCatalog`, 嵌入模型, the 嵌入 badge), so

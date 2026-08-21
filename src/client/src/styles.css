@@ -3293,6 +3293,14 @@ kbd, .topbar-kbd {
 /* Stands where 使用 would be, so the row does not reflow between a bindable backend and a declined one. */
 .mem-src-na { font-size: 11.5px; color: var(--muted); font-style: italic; }
 
+/* The address of a service we do not manage. Mono because it is a URL you type and compare, and sized to
+   fit a loopback address plus a port without wrapping the row. */
+.mem-src-url {
+  font-family: var(--font-mono); font-size: 11px; padding: 5px 9px; width: 21ch;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text-2);
+}
+
 /* Long-operation progress — reuses the Resources bar, the app's one progress idiom. `.mem-reindex` is the
    rebuild under the 本地模型 layer; `.mem-prog` is the same block inside a table row, where a download
    reports itself. One rule, because they are one idiom appearing twice. */

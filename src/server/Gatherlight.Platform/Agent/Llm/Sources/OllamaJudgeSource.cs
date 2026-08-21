@@ -32,12 +32,24 @@ public sealed class OllamaJudgeSource : IMemoryJudgeSource
 
     public IReadOnlyList<string> CandidateProviderIds => new[] { ProviderId };
 
+    /// <summary>Managed by us, so the address is ours to know, not the household's to type.</summary>
+    public bool NeedsEndpoint => false;
+
+    /// <summary>One daemon on one port, resolved through the guard that refuses a non-loopback URL: an
+    /// embedder or a judge reachable off this machine would send household material there on every call.</summary>
+    public string? Endpoint(Kernel.Services.MemoryConfig config) =>
+        OllamaRuntime.ResolveBaseUrl(config.OllamaUrl);
+
+    /// <summary>Always wireable: the URL falls back to the loopback default, so there is no half-configured
+    /// state here. Whether anything is LISTENING is <see cref="StatusAsync"/>'s question.</summary>
+    public bool IsConfigured(Kernel.Services.MemoryConfig config) => true;
+
     /// <summary>A provider plus a named client pooled over it alone. <c>claude-cli</c> stays first in the
     /// global candidate list, so this is a FALLBACK rather than a re-route — see
     /// <see cref="IMemoryJudgeSource.CandidateProviderIds"/> for the upstream narrowing bug that makes the
     /// global entry necessary at all.</summary>
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx) =>
-        b.AddOllamaProvider(baseUrl: ctx.OllamaUrl, id: ProviderId)
+        b.AddOllamaProvider(baseUrl: ctx.Endpoint, id: ProviderId)
          .AddLlmClient(ClientId, c => c.UseProviders(ProviderId));
 
     public async Task<SourceStatus> StatusAsync(MemorySourceContext ctx, CancellationToken ct = default)

@@ -16,12 +16,15 @@
 
 ## Backlog
 
+- [ ] **内置 · Built-in model runner for 语义** — the third backend the panel already lists as "not shipped
+  yet". Runtime chosen and reasoned in `docs/builtin-model-runner.md`: **ONNX Runtime +
+  `Microsoft.ML.Tokenizers`**, in-process, CPU, model as a sha256-pinned `ResourceSpec`. Lands as
+  `BuiltInSemanticSource : IMemorySemanticSource` + one line in `MemorySources.Semantic` + removing its
+  `SemanticDeclined` entry — no controller or client change. It closes the one recall layer that still needs
+  a setup step outside the app. A 判断 counterpart is deferred (that needs GGUF/LLamaSharp, and 判断 already
+  has two working backends).
+
 ### Product (deferred, not urgent)
-- [ ] **Phase B embeddings:** ONNX embedding model as a provisioned resource (into Gatherlight.Resources
-  or its own package) + EmbeddingService + vector tables + hybrid search over the FTS index.
-  **Its landing place is already built**: add an `EmbeddedSemanticSource : IMemorySemanticSource` and one
-  line in `MemorySources.Semantic`, and it appears as a third arm in 语义's toggle with no controller or
-  client change. A `Judge` counterpart is the same shape. See `Agent/Llm/Sources`.
 - [ ] **Measure the three layers on THIS household's corpus.** 语义 sits under 高级 on Lyntai's
   measurement (0% of misses are retrieval failures), which is someone else's corpus — the panel says so,
   and will keep saying so until there is a local number. Needs a recall bench over our own facts scoring

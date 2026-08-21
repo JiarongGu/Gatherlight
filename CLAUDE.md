@@ -37,9 +37,14 @@ complementary layers: the always-on 公式 FORMULA floor (graph decay + rank fus
 判断 JUDGE that annotates every write and reorders every recall, and 语义 SEMANTIC vectors from a
 local model. Each layer is a ROW with a backend and a model, and **a backend serves a layer by
 EXISTING** — one interface per layer (`Agent/Llm/Sources`), a static catalog of implementations
-(`MemorySources`), and nothing that filters. 语义 offers no Claude arm because no
-`ClaudeCliSemanticSource` exists (no embeddings endpoint), not because a predicate excludes it; the day
-a backend can do both it implements both interfaces and appears in both toggles. The catalog is static
+(`MemorySources`), and nothing that filters. Backends are `claude-cli` · `ollama` ·
+`openai-compat` (any local OpenAI-compatible service — llama-server, LM Studio, vLLM, Jan; the household
+supplies a loopback URL, which is enforced) · `builtin` (not shipped yet, see
+`docs/builtin-model-runner.md`). **Every layer lists all of them**, and one it cannot use is shown with
+its reason rather than omitted: 语义 offers no Claude arm because no `ClaudeCliSemanticSource` exists (no
+embeddings endpoint), not because a predicate excludes it. `OpenAiCompatibleSource` implements BOTH layer
+interfaces — the case that design exists for — as two instances, one per layer, since the judge and the
+embedder may be different servers. The catalog is static
 rather than a DI collection because startup wires from it *while the container is being built*, and the
 console renders from the same list afterwards — one list, no second registry to drift. Adding a backend
 (the deferred ONNX embedder) is one class plus one line.

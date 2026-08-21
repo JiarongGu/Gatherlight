@@ -30,11 +30,16 @@ public static class MemorySources
     {
         new ClaudeCliJudgeSource(),
         new OllamaJudgeSource(),
+        // ONE class in BOTH lists — the first backend to implement both layer interfaces, which is the
+        // case this design was built for. Two instances, because the two layers may point at different
+        // servers and each instance reads its own layer's address.
+        new OpenAiCompatibleSource(MemoryLayers.Judge),
     };
 
     public static readonly IReadOnlyList<IMemorySemanticSource> Semantic = new IMemorySemanticSource[]
     {
         new OllamaSemanticSource(),
+        new OpenAiCompatibleSource(MemoryLayers.Semantic),
     };
 
     /// <summary>Backends 判断 cannot run on, with the reason. Listed on the layer anyway — see
@@ -92,7 +97,12 @@ public static class MemorySources
 
         // Falls back to the first source rather than throwing: a settings.json naming a backend this build
         // does not have (a downgrade, a hand edit) must come up on the default, not refuse to start.
-        return FindJudge(id) ?? Judge[0];
+        var source = FindJudge(id) ?? Judge[0];
+
+        // …and the same fallback for a backend whose OWN configuration is incomplete — a typed endpoint
+        // that is absent or refused. Asked of the source rather than switched on its id, so a future
+        // backend with its own prerequisites needs no edit here.
+        return source.IsConfigured(c) ? source : (FindJudge(DefaultJudgeSource) ?? Judge[0]);
     }
 
     /// <summary>The model 判断 is bound to. The CLI arm has a default; the local arm cannot have one,
@@ -130,7 +140,12 @@ public static class MemorySources
     public static IMemorySemanticSource? ResolveSemantic(MemoryConfig c)
     {
         if (string.IsNullOrWhiteSpace(c.EmbeddingModel)) return null;
-        if (!string.IsNullOrWhiteSpace(c.SemanticSource)) return FindSemantic(c.SemanticSource);
-        return c.SemanticEnabled ? FindSemantic("ollama") : null;
+        var source = !string.IsNullOrWhiteSpace(c.SemanticSource)
+            ? FindSemantic(c.SemanticSource)
+            : c.SemanticEnabled ? FindSemantic(MemoryBackends.Ollama) : null;
+
+        // Incomplete = OFF, not "wire it and hope". Unlike 判断 there is nothing to fall back TO here: a
+        // second-best embedder would write vectors of a different width, which is worse than no layer.
+        return source is not null && source.IsConfigured(c) ? source : null;
     }
 }

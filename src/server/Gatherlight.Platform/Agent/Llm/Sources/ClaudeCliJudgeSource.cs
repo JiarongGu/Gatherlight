@@ -22,6 +22,15 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
 
     public IReadOnlyList<string> CandidateProviderIds => Array.Empty<string>();
 
+    /// <summary>Not a URL: the CLI is a process this install spawns.</summary>
+    public bool NeedsEndpoint => false;
+
+    public string? Endpoint(Kernel.Services.MemoryConfig config) => null;
+
+    /// <summary>Always ready to be WIRED. Whether it can actually answer is <see cref="StatusAsync"/>'s
+    /// question — a signed-out CLI is a real problem, but not one that should stop the app coming up.</summary>
+    public bool IsConfigured(Kernel.Services.MemoryConfig config) => true;
+
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx) { }
 
     /// <summary>INSTALLED IS NOT USABLE. A downloaded CLI is not a signed-in one, and <c>claude auth login</c>

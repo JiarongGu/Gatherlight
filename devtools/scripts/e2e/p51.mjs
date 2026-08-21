@@ -193,7 +193,7 @@ try {
   // ---- E · a backend serves a layer by EXISTING --------------------------------------------------
   const judgeSources = (judge.sources ?? []).map((x) => x.id);
   const semanticSources = (semantic.sources ?? []).map((x) => x.id);
-  const BACKENDS = ['claude-cli', 'ollama', 'builtin'];
+  const BACKENDS = ['claude-cli', 'ollama', 'openai-compat', 'builtin'];
 
   // EVERY backend on EVERY layer. A layer showing one button and nothing about the others answers "why
   // isn't this an option here?" by making the question unaskable — "no class implements it" is an answer
@@ -218,6 +218,56 @@ try {
     JSON.stringify({ judge: bindable(judge, 'builtin'), semantic: bindable(semantic, 'builtin') }));
   ok('Ollama is bindable on both — one daemon, a different model on each layer',
     bindable(judge, 'ollama') === true && bindable(semantic, 'ollama') === true);
+
+  // ONE CLASS implementing BOTH layer interfaces — the case the per-layer design exists for, and until
+  // this backend there was no instance of it. Ollama does not count: it is two classes.
+  ok('a generic OpenAI-compatible endpoint is bindable on BOTH layers, from one class',
+    bindable(judge, 'openai-compat') === true && bindable(semantic, 'openai-compat') === true,
+    JSON.stringify({ judge: bindable(judge, 'openai-compat'), semantic: bindable(semantic, 'openai-compat') }));
+  // It is the only backend that needs an ADDRESS, because it is the only one we do not manage. Declared
+  // rather than inferred, so the client does not have to know which ids are special.
+  const needsUrl = (l, id) => (l.sources ?? []).find((x) => x.id === id)?.needsEndpoint;
+  ok('and it is the only backend that asks for an address — the managed ones know their own',
+    needsUrl(judge, 'openai-compat') === true && needsUrl(semantic, 'openai-compat') === true
+      && needsUrl(judge, 'claude-cli') === false && needsUrl(judge, 'ollama') === false,
+    JSON.stringify((judge.sources ?? []).map((x) => [x.id, x.needsEndpoint])));
+  ok('with no address set it is unavailable and SAYS what to type',
+    (judge.sources ?? []).find((x) => x.id === 'openai-compat')?.available === false
+      && /127\.0\.0\.1/.test(String((judge.sources ?? []).find((x) => x.id === 'openai-compat')?.reason ?? '')),
+    (judge.sources ?? []).find((x) => x.id === 'openai-compat')?.reason);
+
+  // LOOPBACK IS ENFORCED, not advised. This address arrives from a text box and every fact written goes to
+  // it, so a remote host must be refused rather than warned about. Asserted through the API, because the
+  // client's own validation is not the boundary.
+  const remote = await post('/api/manage/memory/layer/judge',
+    { source: 'openai-compat', model: '', endpoint: 'http://192.168.1.50:8080' });
+  ok('a NON-LOOPBACK endpoint is refused — facts would be sent off this machine',
+    remote.status === 409, `${remote.status} ${JSON.stringify(remote.body?.error ?? '').slice(0, 80)}`);
+  const junk = await post('/api/manage/memory/layer/judge',
+    { source: 'openai-compat', model: '', endpoint: 'not-a-url' });
+  ok('and so is something that is not a URL at all', junk.status === 409, String(junk.status));
+
+  // The POSITIVE control: a loopback address IS accepted, and accepted WITHOUT a model — the model list
+  // comes from the address, so demanding both at once would make the field impossible to submit. Nothing
+  // is listening on this port in the fixture, which is the point: saving the address and REACHING it are
+  // two different steps and only the first one happens here.
+  const localAddr = await post('/api/manage/memory/layer/judge',
+    { source: 'openai-compat', model: '', endpoint: 'http://127.0.0.1:8099' });
+  ok('a loopback address is accepted on its own, before any model is chosen',
+    localAddr.status === 200 && localAddr.body?.restartRequired === false,
+    `${localAddr.status} ${JSON.stringify(localAddr.body)}`);
+  const withAddr = layerOf(await getJson('/api/manage/memory'), 'judge');
+  const compat = (withAddr.sources ?? []).find((x) => x.id === 'openai-compat');
+  ok('and it is echoed back, so the box shows what was typed',
+    compat?.endpoint === 'http://127.0.0.1:8099', compat?.endpoint);
+  ok('while nothing is listening there, it reports unreachable rather than pretending',
+    compat?.available === false && /8099/.test(String(compat?.reason ?? '')), compat?.reason);
+  // A half-configured binding must not become the RUNNING backend: saving an address is not choosing a
+  // judge, and the layer has to stay on the one that works.
+  ok('saving an address does not silently rebind the layer',
+    withAddr.source === 'claude-cli', withAddr.source);
+  // Clear it, so later cases and the next run start from nothing.
+  await post('/api/manage/memory/layer/judge', { source: 'openai-compat', model: '', endpoint: '' });
 
   // A backend that cannot be used must SAY so. This is the assertion that would fail if someone "tidied
   // up" by dropping the declined entries instead of explaining them.

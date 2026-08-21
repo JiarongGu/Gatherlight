@@ -345,11 +345,14 @@ public static class GatherlightApp
                 // exists — the behaviour that matters here, since the silent alternative is falling back to
                 // the household's paid default on every write and every recall, i.e. exactly the outcome
                 // naming a client was meant to prevent.
-                judgeSource.Register(b, new Platform.Agent.Llm.Sources.MemoryWiringContext(judgeModel, ollamaUrl));
+                // Each source resolves its OWN endpoint, so this call site does not know (and must not
+                // decide) whether a backend is a daemon on a port, a household-typed URL, or a process.
+                judgeSource.Register(b, new Platform.Agent.Llm.Sources.MemoryWiringContext(
+                    judgeModel, judgeSource.Endpoint(memoryConfig) ?? ""));
 
                 if (semanticOn)
-                    semanticSource!.Register(b,
-                        new Platform.Agent.Llm.Sources.MemoryWiringContext(embeddingModel!, ollamaUrl));
+                    semanticSource!.Register(b, new Platform.Agent.Llm.Sources.MemoryWiringContext(
+                        embeddingModel!, semanticSource.Endpoint(memoryConfig) ?? ""));
             })
             // Lyntai's cortex (IPromptRegistry / IModelRoutingStore) reads/writes the app's OWN app_config
             // table — single source of truth for cortex.prompt.* / llm.model.*, no lyntai_kv duplicate. Plain
