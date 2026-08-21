@@ -3211,61 +3211,148 @@ kbd, .topbar-kbd {
   word-break: break-word;
 }
 
-/* 记忆检索 · Memory recall — the panel is a COMPARISON, not a list of paragraphs. Five models across
-   quality/size/speed cannot be judged by reading five prose blocks in sequence; a table lets the eye do
-   the comparing, which is the whole reason this section was rebuilt. */
-.mem-sum { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 12px; }
+/* ============================================================================
+   记忆检索 · Memory recall
+   ----------------------------------------------------------------------------
+   This section lives INSIDE 校准 · Cortex, so it speaks Cortex's language rather
+   than inventing one. The console already has a settled vocabulary and the first
+   version of this panel ignored it: it was assembled from Resources' cards, whose
+   "installed" state is celadon, which put two different meanings of "active" on
+   one tab. The idioms it now follows:
+
+     · card         surface + border + radius-lg + shadow-sm      (.cx-model)
+     · ACTIVE       a 3px amber gradient down the left edge       (.cx-model.on)
+     · name         display serif, 15/600                         (.cx-model-name)
+     · description  11.5px, muted, 1.55                           (.cx-model-desc)
+     · data label   mono, 10px, letterspaced caps                 (.cx-group-h)
+
+   Celadon survives in exactly one place, the state pills, where it means "running
+   right now" rather than "you have customised this" — the same distinction
+   Resources draws with it.
+   ========================================================================== */
+
+/* State at a glance, before any control. */
+.mem-sum { display: flex; flex-wrap: wrap; gap: 7px; margin: 2px 0 12px; }
 .mem-pill {
-  font-size: 12px; padding: 3px 10px; border-radius: 999px;
-  border: 1px solid var(--border-soft); color: var(--muted); white-space: nowrap;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
+  padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+  border: 1px solid var(--border); color: var(--muted);
 }
-.mem-pill.on { color: var(--accent-2); border-color: var(--accent-2); background: var(--accent-2-soft); }
-.mem-rec { margin: 16px 0 10px; font-size: 13px; line-height: 1.65; }
+.mem-pill.on {
+  color: var(--accent-2); background: var(--accent-2-soft);
+  border-color: color-mix(in srgb, var(--accent-2) 40%, var(--border));
+}
 
-.mem-tbl-wrap { overflow-x: auto; }          /* the panel is narrow in the desktop host; never push the page */
-.mem-tbl { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+/* The three switches — the same card 模型路由 uses, including its amber active edge. */
+.mem-layers { display: flex; flex-direction: column; gap: 10px; }
+.mem-layer {
+  position: relative; overflow: hidden;
+  display: flex; align-items: flex-start; gap: 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 15px 17px; box-shadow: var(--shadow-sm);
+}
+.mem-layer.on::before {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
+  background: linear-gradient(var(--accent), transparent);
+}
+.mem-layer.err { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.mem-layer-main { flex: 1; min-width: 0; }
+.mem-layer-side { display: flex; flex-direction: column; gap: 7px; align-items: stretch; }
+.mem-layer-name {
+  font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.mem-layer-desc { font-size: 11.5px; color: var(--muted); margin-top: 5px; line-height: 1.55; }
+.mem-layer-desc b { color: var(--text-2); font-weight: 500; }
+
+/* WHERE the judge runs — a segmented control, as the access-mode picker is. */
+.mem-judge { margin-top: 11px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.mem-judge .cx-seg { flex: 0 0 auto; }
+.mem-judge-sel {
+  font-family: var(--font-mono); font-size: 11px; padding: 5px 9px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text-2); max-width: 100%;
+}
+.mem-judge .mem-fine { flex: 1 1 100%; }
+
+/* Rebuild progress — reuses the Resources bar, the app's one progress idiom. */
+.mem-reindex { margin-top: 9px; display: flex; flex-direction: column; gap: 4px; }
+.mem-reindex .res-prog { width: 100%; margin: 4px 0 2px; }
+
+/* Small print: measurement caveats, coverage, notes. Deliberately quiet. */
+.mem-fine { font-size: 11px; color: var(--muted); line-height: 1.6; }
+.mem-fine.warn { color: var(--warn); }
+.mem-fine.danger { color: var(--danger); }
+
+/* ---- the model manager, behind a disclosure ---- */
+.mem-mgr { margin-top: 14px; }
+.mem-mgr-h {
+  width: 100%; text-align: left; display: flex; align-items: center; gap: 9px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--muted); background: none; border: 0; border-top: 1px solid var(--border-soft);
+  padding: 13px 0 0; cursor: pointer; transition: color 0.15s;
+}
+.mem-mgr-h:hover, .mem-mgr-h.on { color: var(--accent); }
+.mem-mgr-body { margin-top: 14px; }
+.mem-rec {
+  font-size: 12.5px; line-height: 1.65; color: var(--text-2);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  padding: 2px 0 2px 13px; margin-bottom: 16px;
+}
+.mem-rec b { color: var(--text); font-family: var(--font-mono); font-size: 12px; }
+
+/* The comparison. Figures are MONO so columns align optically — this is a data
+   table, and the console already uses mono wherever numbers must be compared. */
+.mem-tbl-wrap { overflow-x: auto; }
+.mem-tbl { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 620px; }
 .mem-tbl th {
-  text-align: left; font-weight: 500; font-size: 11px; letter-spacing: .06em;
-  color: var(--muted); padding: 0 10px 7px 0; border-bottom: 1px solid var(--border-soft);
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
+  font-weight: 400; text-align: left; color: var(--muted);
+  padding: 0 12px 8px 0; border-bottom: 1px solid var(--border);
 }
-.mem-tbl td { padding: 11px 10px 11px 0; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
-.mem-tbl tr.on td { background: var(--accent-2-soft); }
-/* A measurement that says "do not pick this" has to LOOK different from one that says "fine" — the
-   number alone is easy to skim past when every row is styled identically. */
+.mem-tbl td {
+  padding: 12px 12px 12px 0; border-bottom: 1px solid var(--border-soft); vertical-align: top;
+}
+.mem-tbl tbody tr:last-child td { border-bottom: 0; }
+.mem-tbl .num { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); }
+.mem-tbl .num b { color: var(--text); font-weight: 600; }
+/* The row in use carries the same amber left edge the cards do. */
+.mem-tbl tr.on td:first-child { box-shadow: inset 2px 0 0 var(--accent); padding-left: 11px; }
+/* A measurement that says "do not pick this" has to LOOK different — the number
+   alone is easy to skim past when every row is styled identically. */
 .mem-tbl td.bad b { color: var(--danger); }
+.mem-tbl td.mem-old { color: var(--muted); }
 .mem-tbl td.mem-act { text-align: right; padding-right: 0; white-space: nowrap; }
-.mem-m-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 3px; }
-.mem-m-note { font-size: 12px; color: var(--muted); line-height: 1.55; max-width: 42ch; }
-.mem-m-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.mem-m-name { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 4px; }
+.mem-m-name b { font-family: var(--font-display); font-size: 13.5px; font-weight: 600; color: var(--text); }
+.mem-m-note { font-size: 11.5px; color: var(--muted); line-height: 1.55; max-width: 44ch; }
+.mem-m-sub { font-family: var(--font-mono); font-size: 10px; color: var(--muted); margin-top: 3px; }
+.mem-act-pair { display: inline-flex; gap: 6px; }
 
-.mem-other {
-  margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-soft);
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px; align-items: end;
+/* What Ollama holds, and what it costs in disk. */
+.mem-disk { margin-top: 18px; }
+.mem-disk-list {
+  margin-top: 10px; display: flex; flex-direction: column;
+  border: 1px solid var(--border-soft); border-radius: var(--radius); overflow: hidden;
 }
-.mem-other .set-hint { grid-column: 1 / -1; }
-/* .set-field carries margin-bottom:12px, which makes the grid ROW taller than the input inside it — so
-   `align-items:end` aligned the buttons to the row's bottom edge, 12px below the input they belong to.
-   Zeroed here rather than globally: that margin is doing real work in the Settings forms this class was
-   written for. */
+.mem-disk-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: center;
+  padding: 9px 13px; font-size: 12px; border-bottom: 1px solid var(--border-soft);
+}
+.mem-disk-row:last-child { border-bottom: 0; }
+.mem-disk-row:nth-child(odd) { background: color-mix(in srgb, var(--surface) 55%, transparent); }
+.mem-disk-name { font-family: var(--font-mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-disk-size { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+
+/* Any model at all, for the ones nobody has measured yet. */
+.mem-other {
+  margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 14px; align-items: end;
+}
+.mem-other .mem-fine { grid-column: 1 / -1; }
+/* .set-field carries margin-bottom:12px, which makes the grid ROW taller than the input inside it, so
+   `align-items:end` aligned the buttons to the row bottom, 12px below the input they belong to. Zeroed
+   here rather than globally: that margin is doing real work in the Settings forms it was written for. */
 .mem-other .set-field { margin-bottom: 0; }
 .mem-other-act { display: flex; gap: 8px; }
 @media (max-width: 760px) { .mem-other { grid-template-columns: 1fr; } }
-.mem-judge { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-.mem-judge .cx-seg { flex: 0 0 auto; }
-.mem-judge-sel {
-  font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px;
-  border: 1px solid var(--border-soft); background: transparent; color: inherit; max-width: 100%;
-}
-.mem-judge .set-hint { flex: 1 1 100%; }
-.mem-reindex { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
-.mem-reindex .res-prog { width: 100%; }
-.mem-act-pair { display: inline-flex; gap: 6px; }
-.mem-disk { margin-top: 14px; }
-.mem-disk-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
-.mem-disk-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; font-size: 12px; }
-.mem-disk-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mem-disk-size { color: var(--muted); }
-.mem-tbl td.mem-old { color: var(--muted); }
-.mem-mgr { margin-top: 18px; }
-.mem-mgr-h { width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; }
-.mem-mgr-body { margin-top: 12px; padding-left: 2px; }

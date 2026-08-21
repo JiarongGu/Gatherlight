@@ -1265,31 +1265,31 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
         </div>
       )}
 
-      <div className="res-list">
+      <div className="mem-layers">
         {/* 1 — the floor */}
-        <div className="res-item ok">
-          <div className="res-main">
-            <div className="res-name">公式 · Formula<span className="res-badge">始终启用</span></div>
-            <div className="res-need">{s.formula.what}</div>
+        <div className="mem-layer on">
+          <div className="mem-layer-main">
+            <div className="mem-layer-name">公式 · Formula<span className="res-badge">始终启用</span></div>
+            <div className="mem-layer-desc">{s.formula.what}</div>
           </div>
         </div>
 
         {/* 2 — claude CLI enrichment */}
-        <div className={`res-item${s.llmEnrichment.enabled ? ' ok' : ''}`}>
-          <div className="res-main">
-            <div className="res-name">
+        <div className={`mem-layer${s.llmEnrichment.enabled ? ' on' : ''}`}>
+          <div className="mem-layer-main">
+            <div className="mem-layer-name">
               Claude CLI 增强
               {s.llmEnrichment.enabled && <span className="res-badge">运行中</span>}
               <span className="res-badge">即时生效</span>
             </div>
-            <div className="res-need">{s.llmEnrichment.what}</div>
-            <div className="res-need">费用:{s.llmEnrichment.cost}</div>
-            <div className="res-need">{s.llmEnrichment.model}</div>
+            <div className="mem-layer-desc">{s.llmEnrichment.what}</div>
+            <div className="mem-layer-desc"><b>费用</b> {s.llmEnrichment.cost}</div>
+            <div className="mem-layer-desc">{s.llmEnrichment.model}</div>
             {s.llmEnrichment.enabled && (
               <JudgeTransportPicker en={s.llmEnrichment} busy={busy} post={post} />
             )}
           </div>
-          <div className="res-side">
+          <div className="mem-layer-side">
             <button
               className={`cx-btn${s.llmEnrichment.enabled ? '' : ' primary'}`}
               disabled={busy === 'enrich'}
@@ -1301,24 +1301,24 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
         </div>
 
         {/* 3 — local model */}
-        <div className={`res-item${lm.active ? ' ok' : ''}${o.problem && lm.enabled ? ' err' : ''}`}>
-          <div className="res-main">
-            <div className="res-name">
+        <div className={`mem-layer${lm.active ? ' on' : ''}${o.problem && lm.enabled ? ' err' : ''}`}>
+          <div className="mem-layer-main">
+            <div className="mem-layer-name">
               本地模型 · Local model
               {lm.active && <span className="res-badge">运行中</span>}
               {o.gpuLikely && <span className="res-badge">GPU 可用</span>}
             </div>
-            <div className="res-need">{lm.what}</div>
-            <div className="res-need">费用:{lm.cost}</div>
-            <div className="res-need">
+            <div className="mem-layer-desc">{lm.what}</div>
+            <div className="mem-layer-desc"><b>费用</b> {lm.cost}</div>
+            <div className="mem-layer-desc">
               Ollama:{o.installed ? (o.serving ? `运行中 ${o.version ?? ''}` : '已安装,未运行') : '未安装'}
               {o.installed && ` · ${o.baseUrl}`}
             </div>
             {o.problem && <div className="res-msg danger">{o.problem}</div>}
             {!o.installed && (
-              <div className="res-need">在「资源 · Resources」面板下载 Ollama 运行时,或自行安装后重启应用。</div>
+              <div className="mem-fine warn">在「资源 · Resources」面板下载 Ollama 运行时,或自行安装后重启应用。</div>
             )}
-            {lm.note && <div className="res-msg">说明:{lm.note}</div>}
+            {lm.note && <div className="mem-fine">说明:{lm.note}</div>}
             {/* The rebuild, while it runs and after it ends. It used to be a greyed-out button and
                 nothing else, for minutes — indistinguishable from a hang. */}
             {lm.reindex.running && (
@@ -1326,7 +1326,7 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
                 <div className="res-prog">
                   <span className="res-bar" style={{ width: `${lm.reindex.percent ?? 8}%` }} />
                 </div>
-                <div className="res-need">
+                <div className="mem-fine">
                   {lm.reindex.total > 0
                     ? `重建索引中:${lm.reindex.done}/${lm.reindex.total} 条事实`
                     : '重建索引中:正在统计事实…'}
@@ -1338,19 +1338,19 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
                 rebuild is an event that changes it. Shown only when it is NOT complete — "25/25" every
                 day is noise, whereas a shortfall is the one thing worth acting on. */}
             {!lm.reindex.running && lm.coverage.total > 0 && lm.coverage.indexed < lm.coverage.total && (
-              <div className="res-msg">
+              <div className="mem-fine warn">
                 索引覆盖 {lm.coverage.indexed}/{lm.coverage.total} 条事实 —— 其余仍可用关键词找到,
                 重启后会自动补齐,也可以现在「重建索引」。
               </div>
             )}
             {!lm.reindex.running && lm.reindex.error && (
-              <div className="res-msg danger">上次重建:{lm.reindex.error}</div>
+              <div className="mem-fine danger">上次重建:{lm.reindex.error}</div>
             )}
             {!lm.reindex.running && lm.reindex.embedded ? (
-              <div className="res-msg">上次重建完成:{lm.reindex.embedded} 条事实已重新索引。</div>
+              <div className="mem-fine">上次重建完成:{lm.reindex.embedded} 条事实已重新索引。</div>
             ) : null}
           </div>
-          <div className="res-side">
+          <div className="mem-layer-side">
             {o.installed && !o.serving && (
               <button className="cx-btn primary" disabled={busy === 'start'}
                 onClick={() => post('/api/manage/memory/local/start', undefined, 'start')}>启动</button>
@@ -1387,7 +1387,7 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
         <ModelManager defaultOpen={lm.enabled && !lm.model} count={lm.options.length} current={lm.model}>
           <div className="mem-rec">
             <b>推荐 {lm.recommendation.id}</b> —— {lm.recommendation.reason}
-            {lm.recommendation.caution && <div className="set-hint">注意:{lm.recommendation.caution}</div>}
+            {lm.recommendation.caution && <div className="mem-fine">注意:{lm.recommendation.caution}</div>}
           </div>
           <div className="mem-tbl-wrap">
             <table className="mem-tbl">
@@ -1401,7 +1401,7 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
                   <tr key={m.id} className={lm.model === m.id ? 'on' : ''}>
                     <td>
                       <div className="mem-m-name">
-                        {m.name}
+                        <b>{m.name}</b>
                         {m.id === lm.recommendation.id && <span className="res-badge">推荐</span>}
                         {lm.model === m.id && <span className="res-badge">使用中</span>}
                       </div>
@@ -1409,15 +1409,15 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
                     </td>
                     {/* The measurement, as a number with its denominator. "9/10" invites the right
                         question (out of how many? — the footnote answers) where "很好" does not. */}
-                    <td className={m.measured && m.measured.top3 * 2 <= m.measured.queries ? 'bad' : ''}>
+                    <td className={`num${m.measured && m.measured.top3 * 2 <= m.measured.queries ? ' bad' : ''}`}>
                       {m.measured
                         ? <><b>{m.measured.top3}/{m.measured.queries}</b><div className="mem-m-sub">首位 {m.measured.top1}</div></>
                         : <span className="mem-m-sub">未实测</span>}
                     </td>
-                    <td>{m.measured ? `${m.measured.msPerQuery} ms` : <span className="mem-m-sub">—</span>}</td>
-                    <td>{mb(m.approxBytes)}</td>
-                    <td>{m.dimensions}</td>
-                    <td className={m.vintage && m.vintage < '2025' ? 'mem-old' : ''}>
+                    <td className="num">{m.measured ? `${m.measured.msPerQuery} ms` : <span className="mem-m-sub">—</span>}</td>
+                    <td className="num">{mb(m.approxBytes)}</td>
+                    <td className="num">{m.dimensions}</td>
+                    <td className={`num${m.vintage && m.vintage < '2025' ? ' mem-old' : ''}`}>
                       {m.vintage ?? <span className="mem-m-sub">—</span>}
                     </td>
                     <td className="mem-act">
@@ -1430,7 +1430,11 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
                         <span className="res-running">使用中</span>
                       ) : (
                         <div className="mem-act-pair">
-                          <button className="cx-btn primary" disabled={busy === `use:${m.id}`}
+                          {/* Primary on the RECOMMENDED row only. Every row carrying a filled amber
+                              button made eight equal shouts out of a table whose whole job is to help
+                              you pick one — emphasis that is everywhere is emphasis nowhere. */}
+                          <button className={`cx-btn${m.id === lm.recommendation.id ? ' primary' : ''}`}
+                            disabled={busy === `use:${m.id}`}
                             onClick={() => post('/api/manage/memory/local/enable', { model: m.id }, `use:${m.id}`)}>
                             使用
                           </button>
@@ -1447,7 +1451,7 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
               </tbody>
             </table>
           </div>
-          <div className="set-hint">
+          <div className="mem-fine">
             质量为实测:{lm.measuredOn}。样本不大 —— 它足以分辨「能用」与「不能用」,不足以在前几名之间排座次;
             速度与体积则按你自己的机器换算。发布时间取自 Ollama 官方页面:表里所有表现差的都是两年前的模型
             (同一家的 nomic 新版 9/10、旧版 4/10),但 BGE-M3 同样是两年前的却仍并列最好 —— 所以「越新越好」
@@ -1548,7 +1552,7 @@ function JudgeTransportPicker(
           ))}
         </select>
       ) : null}
-      <div className="set-hint">{en.localNote}</div>
+      <div className="mem-fine">{en.localNote}</div>
     </div>
   );
 }
@@ -1575,7 +1579,7 @@ function OtherModelField(
         <button className="cx-btn primary" disabled={!id || busy === 'use:other'}
           onClick={() => post('/api/manage/memory/local/enable', { model: id }, 'use:other')}>使用</button>
       </div>
-      <div className="set-hint">
+      <div className="mem-fine">
         {id && !have && '这台机器还没有它 —— 先「下载」,再「使用」。'}
         {id && have && '已在本机,可直接「使用」。'}
         {!id && '启用前会先让它真的算一次向量:算不出来就不会保存,免得检索静悄悄地空掉。'}

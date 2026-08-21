@@ -93,13 +93,13 @@ try {
   // driving through the real UI: it is an app_config value read per call, so it must flip with NO
   // restart — and "no restart" is a claim only a live UI can falsify.
   await new Promise((r) => setTimeout(r, 900));
-  const cards = await c.evalJs("[...document.querySelectorAll('.res-item .res-name')].map(n=>n.textContent).join('|')");
+  const cards = await c.evalJs("[...document.querySelectorAll('.mem-layer .mem-layer-name')].map(n=>n.textContent).join('|')");
   ok('Cortex renders the three memory-recall switches',
     /Formula/.test(cards) && /Claude CLI/.test(cards) && /Local model/.test(cards), cards);
   ok('and marks the formula floor as always on', /始终启用/.test(cards), cards);
 
   // The button label IS the state, so flipping it and re-reading is a real round-trip through the API.
-  const enrichBtn = "[...document.querySelectorAll('.res-item')].find(i=>/Claude CLI/.test(i.textContent))?.querySelector('.cx-btn')";
+  const enrichBtn = "[...document.querySelectorAll('.mem-layer')].find(i=>/Claude CLI/.test(i.textContent))?.querySelector('.cx-btn')";
   const before = await c.evalJs(`${enrichBtn}?.textContent || ''`);
   await c.evalJs(`${enrichBtn}?.click()`);
   await new Promise((r) => setTimeout(r, 900));
