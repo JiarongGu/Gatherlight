@@ -15,7 +15,7 @@ export { PlanActionsMenu, type ActionTarget } from './PlanActionsMenu';
 export { TripMap } from './TripMap';
 export { CityMap } from './CityMap';
 export { MigrationOverlay } from './MigrationOverlay';
-// Sections of the management console, not routed screens — they used to live in screens/ purely because
-// that is where they were first written. A screen is a surface you navigate TO; these render inside one.
-export { MemoryRecallPanel } from './MemoryRecallPanel';
-export { LocalModelsPanel, type BuiltInModelRow } from './LocalModelsPanel';
+// The management console's sections live in ./console — a folder rather than nine more entries here,
+// because they change together and this list is otherwise the planner's. Import them from
+// '@/ui/organisms/console'; they are deliberately NOT re-exported through this barrel, so a planner
+// surface reaching for a console panel has to say so.
