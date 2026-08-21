@@ -132,6 +132,14 @@ try {
   ok('THE POINT: facts of different kinds share one scope, so an unscoped recall has somewhere to look',
     scopes.length === 1, `scopes=${JSON.stringify(scopes)} (3 kinds were written)`);
 
+  // --- 5c. coverage is reported as STATE ----------------------------------------------------------
+  // What the console shows instead of a history of rebuilds: how much of what the household knows is
+  // actually searchable. A rebuild interrupted by a restart shows here as a shortfall and is repaired by
+  // the next startup back-fill, so nothing needs to remember that a run once existed.
+  const cov = (await c.getJson('/api/manage/memory'))?.localModel?.coverage;
+  ok('the console can report index coverage, and it is complete after normal writes',
+    cov && cov.total >= 3 && cov.indexed === cov.total, JSON.stringify(cov));
+
   // --- 6. a backup import rebuilds the index ------------------------------------------------------
   const zip = await fetch(`${base}/api/backup/export`);
   ok('backup exports', zip.status === 200, `status ${zip.status}`);

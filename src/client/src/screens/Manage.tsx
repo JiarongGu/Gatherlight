@@ -1186,6 +1186,8 @@ interface MemoryState {
       running: boolean; done: number; total: number;
       embedded: number | null; error: string | null; percent: number | null;
     };
+    // STATE, not history: how much of what the household knows is actually searchable.
+    coverage: { indexed: number; total: number };
   };
 }
 
@@ -1327,6 +1329,15 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
                     : '重建索引中:正在统计事实…'}
                   {s.llmEnrichment.enabled && ' · 开启了增强,每条事实会多一次模型调用,请耐心等待'}
                 </div>
+              </div>
+            )}
+            {/* Coverage sits above the rebuild's own messages because it is the standing answer; the
+                rebuild is an event that changes it. Shown only when it is NOT complete — "25/25" every
+                day is noise, whereas a shortfall is the one thing worth acting on. */}
+            {!lm.reindex.running && lm.coverage.total > 0 && lm.coverage.indexed < lm.coverage.total && (
+              <div className="res-msg">
+                索引覆盖 {lm.coverage.indexed}/{lm.coverage.total} 条事实 —— 其余仍可用关键词找到,
+                重启后会自动补齐,也可以现在「重建索引」。
               </div>
             )}
             {!lm.reindex.running && lm.reindex.error && (

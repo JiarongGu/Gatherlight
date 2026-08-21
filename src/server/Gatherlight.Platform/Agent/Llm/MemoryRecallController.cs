@@ -40,9 +40,11 @@ public sealed class MemoryRecallController : ControllerBase
     private readonly Lyntai.Memory.ISemanticMemory? _semantic;
     private readonly IAppConfigService _appConfig;
     private readonly IReindexStatus _reindex;
+    private readonly Storage.Knowledge.Services.IKnowledgeStore _knowledge;
 
     public MemoryRecallController(IOllamaRuntime ollama, ServerConfigService config,
         Storage.Knowledge.Services.IFactIndex facts, IAppConfigService appConfig,
+        Storage.Knowledge.Services.IKnowledgeStore knowledge,
         IReindexStatus reindex, ILogger<MemoryRecallController> log,
         Lyntai.Memory.ISemanticMemory? semantic = null)
     {
@@ -50,6 +52,7 @@ public sealed class MemoryRecallController : ControllerBase
         _config = config;
         _facts = facts;
         _appConfig = appConfig;
+        _knowledge = knowledge;
         _reindex = reindex;
         _log = log;
         _semantic = semantic;
@@ -63,6 +66,7 @@ public sealed class MemoryRecallController : ControllerBase
         var rec = EmbeddingCatalog.Recommend(s.GpuLikely);
         var judgeLocal = string.Equals(mem.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(mem.JudgeModel);
+        var (indexed, totalFacts) = await _knowledge.CoverageAsync();
 
         return Ok(new
         {
@@ -114,6 +118,12 @@ public sealed class MemoryRecallController : ControllerBase
                 // The reindex a household may be watching. Reported inside localModel because that is the
                 // control that starts it, so the bar renders where the button is.
                 reindex = ReindexView(),
+                // COVERAGE, not a history of rebuilds. It answers the question a household actually has —
+                // is what I know searchable right now — and it is self-correcting: an interrupted rebuild
+                // shows as < 100% and the next startup back-fill repairs it (measured 2026-08-21: 2/6 →
+                // 6/6 across a restart). A durable record of runs would answer a question nobody asked and
+                // could outlive the in-process work it described.
+                coverage = new { indexed, total = totalFacts },
                 ollama = new
                 {
                     baseUrl = s.BaseUrl, installed = s.Installed, serving = s.Serving, version = s.Version,

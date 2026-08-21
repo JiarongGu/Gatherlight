@@ -86,6 +86,15 @@ public interface IKnowledgeStore
     /// <summary>Every fact with its index address, for rebuilding the derived index from the record of
     /// truth (all of them) or back-filling it (the ones whose ref is still null).</summary>
     Task<List<(KnowledgeRow Row, string? GraphRef)>> AllAsync();
+
+    /// <summary>How many facts are indexed, out of how many exist. Two COUNTs rather than
+    /// <see cref="AllAsync"/>, because the console asks this on every panel load and does not need the
+    /// rows.
+    /// <para>This is the honest answer to "is my memory searchable", and it is STATE rather than history:
+    /// a rebuild that was interrupted (a restart mid-run, an update) shows up here as coverage below 100%
+    /// and is repaired by the next startup back-fill, so nothing has to remember that a run once
+    /// existed.</para></summary>
+    Task<(int Indexed, int Total)> CoverageAsync();
 }
 
 public sealed class KnowledgeStore : IKnowledgeStore
@@ -205,6 +214,15 @@ public sealed class KnowledgeStore : IKnowledgeStore
     {
         using var conn = _db.Open();
         return await conn.ExecuteAsync("UPDATE knowledge SET graph_ref = NULL WHERE graph_ref IS NOT NULL");
+    }
+
+    public async Task<(int Indexed, int Total)> CoverageAsync()
+    {
+        using var conn = _db.Open();
+        var row = await conn.QuerySingleAsync<(int Indexed, int Total)>(
+            "SELECT COUNT(CASE WHEN graph_ref IS NOT NULL AND graph_ref <> '' THEN 1 END) AS Indexed, " +
+            "COUNT(*) AS Total FROM knowledge");
+        return row;
     }
 
     public async Task<List<(KnowledgeRow Row, string? GraphRef)>> AllAsync()
