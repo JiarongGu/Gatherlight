@@ -328,6 +328,27 @@ try {
   ok('and so is binding anything to the runtime that is not shipped yet',
     bindEmbedded.status === 400, String(bindEmbedded.status));
 
+  // THE BENCHMARK DOOR. `dev.mjs embed-bench` scores every Ollama-hosted embedder through
+  // /v1/embeddings; the in-process 内置 backend has no such endpoint, so it was the one arm nobody could
+  // measure — and its "same score as Ollama" turned out to be an 8-query artifact. This endpoint is how it
+  // gets measured, so its guards are worth asserting even though the fixture cannot hold the 222 MB model.
+  const embedEmpty = await post('/api/manage/models/embed', { texts: [] });
+  ok('the embed door refuses an empty batch', embedEmpty.status === 400, String(embedEmpty.status));
+  const embedFlood = await post('/api/manage/models/embed',
+    { texts: Array.from({ length: 65 }, (_, i) => `t${i}`) });
+  ok('and refuses more than the cap — it is a measurement door, not an embedding service',
+    embedFlood.status === 400, String(embedFlood.status));
+  const embedNoModel = await post('/api/manage/models/embed', { texts: ['probe'] });
+  // 409 NAMING THE RESOURCE, not a bare 404: the fix is a download, and the caller (the bench) prints
+  // "内置 model not downloaded" instead of a status code because this body says which resource.
+  ok('and, with no model on disk, says so as a 409 that NAMES the resource to download',
+    embedNoModel.status === 409 && embedNoModel.body?.resource === 'embed-model',
+    `${embedNoModel.status} ${JSON.stringify(embedNoModel.body)}`);
+  // No positive control here, and that is a stated gap rather than an oversight: a 200 needs the 222 MB
+  // model, which no fixture should download. It is covered instead by the run that produced the numbers
+  // now in BuiltInSemanticSource — 8/10 top-1, 10/10 top-3, 28 ms/query — which is only obtainable
+  // THROUGH this endpoint.
+
   // CAPABILITY, over every model this machine actually holds. Ollama's own answer decides; the shortlist
   // is only the fallback for a daemon too old to report one.
   const inv = await getJson('/api/manage/models');

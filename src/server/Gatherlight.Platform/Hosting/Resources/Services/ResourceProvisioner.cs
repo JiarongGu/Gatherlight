@@ -259,7 +259,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             // Says what it REPLACES, because that is the decision the household is making: this is the
             // alternative to installing Ollama at all for 语义, and it is the smaller of the two — 222 MB
             // here against Ollama's runtime plus a 622 MB model.
-            NeededFor: "「记忆检索 · 语义」的内置后端 —— 不必安装 Ollama;实测检索质量与本机 Ollama 同分,"
+            NeededFor: "「记忆检索 · 语义」的内置后端 —— 不必安装 Ollama;实测检索质量与本机 Ollama 接近,"
                 + "而且在应用内直接运行(更快、不需要常驻服务)",
             Kind: ResourceKind.Files, InstallDir: "embed-model",
             // The .onnx is the marker rather than the weights: it is the file ONNX Runtime is handed, and

@@ -8,7 +8,12 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// <param name="MsPerQuery">Warm per-query embed latency on the reference machine.</param>
 /// <param name="Queries">Sample size. Small, and stated so, because a 10-query fixture can separate a
 /// broken model from a working one but cannot rank two working ones.</param>
-public sealed record EmbeddingMeasurement(int RecallTop1, int RecallTop3, int MsPerQuery, int Queries);
+/// <param name="MeasuredOn">When this ROW was taken. Per-row rather than one date on the class, because the
+/// rows stopped being one run: the 2026-08-22 pass re-measured every model installed here and could not
+/// re-measure one that is not, and a single class-level date would then be wrong for exactly the row a
+/// reader is most likely to question. It also makes a stale row visible instead of inferable.</param>
+public sealed record EmbeddingMeasurement(
+    int RecallTop1, int RecallTop3, int MsPerQuery, int Queries, string? MeasuredOn = null);
 
 /// <summary>An embedding model the household may choose. <paramref name="Dimensions"/> is here because it
 /// is the reason a model change is not free: stored vectors keep their old width, and Lyntai's semantic
@@ -36,8 +41,20 @@ public sealed record EmbeddingRecommendation(string Id, string Reason, string? C
 ///
 /// <para><b>The numbers are from this app's own job</b> — find the fact whose MEANING answers a question
 /// worded nothing like it — over a fictional 20-fact zh/en corpus with 10 paraphrase queries, embedded
-/// through the same OpenAI-compatible endpoint and symmetric prompting the app uses (2026-08-21, RTX 4080
-/// Laptop). A benchmark that embeds differently from the product measures a product we do not ship.</para>
+/// through the same OpenAI-compatible endpoint and symmetric prompting the app uses. A benchmark that embeds
+/// differently from the product measures a product we do not ship. Each row carries the date it was taken;
+/// re-run <c>dev.mjs embed-bench</c> and update from what it prints.</para>
+///
+/// <para><b>THE LATENCY COLUMN WAS WRONG UNTIL 2026-08-22, and how it was wrong is worth keeping.</b> The
+/// first pass recorded 229–1574 ms/query. A re-run on the same machine measured 32–99 ms — three to
+/// thirty times lower, stable across three consecutive passes. The retrieval columns reproduced EXACTLY
+/// (9/10 for the top four, 7/10 for granite, 4/10 for the two English-first models), which is what makes
+/// the latency figures the ones to distrust: the same instrument agreed with itself on everything except
+/// timing. The likely cause is per-call model loads in the first pass — the bench warms the model with the
+/// corpus embed and times queries after, so a figure that large means the model was being re-loaded between
+/// them. It mattered because it reached the product as advice: `qwen3-embedding:0.6b` was NAMED 较慢 and its
+/// note said "about 1.6 s per query, seven times the fastest", steering households away from a model that
+/// measures 50 ms here. A number nobody re-runs becomes an opinion with a decimal point in it.</para>
 ///
 /// <para><b>Age is a strong NEGATIVE filter, and not a rule.</b> Vintages are read from ollama.com's own
 /// "updated N ago" (2026-08-21). Every model that scores badly here is two years old — and the same family
@@ -63,32 +80,32 @@ public static class EmbeddingCatalog
     public static readonly IReadOnlyList<EmbeddingModelOption> Options = new[]
     {
         new EmbeddingModelOption(Recommended, "EmbeddingGemma 300M(推荐 · 多语言)", 622_000_000, 768, true,
-            "实测中文与中英混排检索最好,体积只有 BGE-M3 的一半,速度也更快。",
-            new EmbeddingMeasurement(9, 10, 269, 10), "2025-09"),
+            "实测中文与中英混排检索最好,体积只有 BGE-M3 的一半。",
+            new EmbeddingMeasurement(9, 10, 69, 10, "2026-08-22"), "2025-09"),
         new EmbeddingModelOption(Multilingual, "BGE-M3(多语言)", 1_200_000_000, 1024, true,
             "检索质量与 EmbeddingGemma 相当,向量更宽(1024);体积 1.2 GB,占用更多磁盘与显存。",
-            new EmbeddingMeasurement(9, 10, 341, 10), "2024-08"),
+            new EmbeddingMeasurement(9, 10, 78, 10, "2026-08-22"), "2024-08"),
         new EmbeddingModelOption("nomic-embed-text-v2-moe", "Nomic Embed v2 MoE(多语言)", 960_000_000, 768, true,
-            "与 EmbeddingGemma 并列最好;体积大 50%,速度略慢。注意它和上一代 nomic-embed-text 是两回事。",
-            new EmbeddingMeasurement(9, 10, 317, 10), "2025-12"),
+            "与 EmbeddingGemma 并列最好;体积大 50%。注意它和上一代 nomic-embed-text 是两回事。",
+            new EmbeddingMeasurement(9, 10, 97, 10, "2026-08-22"), "2025-12"),
         new EmbeddingModelOption("snowflake-arctic-embed2", "Snowflake Arctic Embed 2(多语言)", 1_160_000_000, 1024, true,
-            "同样并列最好,1024 维;四个并列里体积最大、速度最慢的一个。",
-            new EmbeddingMeasurement(9, 10, 419, 10), "2025-08"),
-        new EmbeddingModelOption("granite-embedding:278m", "Granite Embedding 278M(多语言 · 最快)", 560_000_000, 768, true,
-            "每次查询最快(0.23 秒)、体积也小;前三名命中同样是 10/10,但排在首位的次数少一些。",
-            new EmbeddingMeasurement(7, 10, 229, 10), "2025-08"),
+            "同样并列最好,1024 维;四个并列里体积最大的一个。",
+            new EmbeddingMeasurement(9, 10, 99, 10, "2026-08-22"), "2025-08"),
+        new EmbeddingModelOption("qwen3-embedding:0.6b", "Qwen3 Embedding 0.6B(多语言)", 640_000_000, 1024, true,
+            "首位命中略少于上面四个,前三名同样全中;1024 维,速度不慢。",
+            new EmbeddingMeasurement(8, 10, 50, 10, "2026-08-22"), "2025-09"),
+        new EmbeddingModelOption("granite-embedding:278m", "Granite Embedding 278M(多语言 · 体积小)", 560_000_000, 768, true,
+            "体积小;前三名命中同样是 10/10,但排在首位的次数少一些。",
+            new EmbeddingMeasurement(7, 10, 81, 10, "2026-08-22"), "2025-08"),
         new EmbeddingModelOption("paraphrase-multilingual", "Paraphrase Multilingual(多语言)", 560_000_000, 768, true,
             "前三名总能命中,但排在首位的次数明显少于上面几个 —— 检索只取前几条时会更容易挑错。",
-            new EmbeddingMeasurement(6, 10, 271, 10), "2024-08"),
-        new EmbeddingModelOption("qwen3-embedding:0.6b", "Qwen3 Embedding 0.6B(多语言 · 较慢)", 640_000_000, 1024, true,
-            "检索质量同样很好,但每次查询约 1.6 秒 —— 是最快那个的七倍,而检索在每次回忆的必经路径上。",
-            new EmbeddingMeasurement(8, 10, 1574, 10), "2025-09"),
+            new EmbeddingMeasurement(6, 10, 271, 10, "2026-08-21"), "2024-08"),
         new EmbeddingModelOption(Balanced, "Nomic Embed Text(英文 · 不建议中文)", 274_000_000, 768, false,
             "体积最小、速度最快,但实测中文检索 10 题只答对 4 题 —— 除非你的资料几乎全是英文,否则不要选它。",
-            new EmbeddingMeasurement(4, 4, 67, 10), "2024-08"),
+            new EmbeddingMeasurement(4, 4, 32, 10, "2026-08-22"), "2024-08"),
         new EmbeddingModelOption(Tiny, "All-MiniLM(极小 · 不建议中文)", 46_000_000, 384, false,
             "只有 46 MB、最省资源,但实测中文检索 10 题只进前三 5 题 —— 与 Nomic 一样,只适合几乎全英文的资料。",
-            new EmbeddingMeasurement(4, 5, 46, 10), "2024-08"),
+            new EmbeddingMeasurement(4, 5, 32, 10, "2026-08-22"), "2024-08"),
     };
 
     public static EmbeddingModelOption? Find(string? id) =>
@@ -126,7 +143,7 @@ public static class EmbeddingCatalog
         // FOUR models tie at 9/10 on this fixture, so the recommendation turns on size and speed — and says
         // so. Claiming it is "the most accurate" would be asserting a difference the measurement cannot see.
         return new EmbeddingRecommendation(Recommended,
-            "实测中文检索并列最好(10 题首位命中 9 题),而在并列的几个里体积最小、速度最快 —— 622 MB,每次查询约 0.27 秒。",
+            "实测中文检索并列最好(10 题首位命中 9 题),而在并列的几个里体积最小、速度也最快 —— 622 MB,每次查询约 0.07 秒。",
             gpuLikely
                 ? "首次需要为已有事实建立一次索引。"
                 : "未检测到 GPU 运行时 —— 仍然可用(检索只是一次前向计算),但首次建立索引会慢一些。");

@@ -16,11 +16,6 @@
 
 ## Backlog
 
-- [ ] **Re-measure the embedding shortlist including 内置** — `dev.mjs embed-bench` scores embedders through
-  an OpenAI-compatible endpoint, so it cannot yet score the in-process 内置 backend. Until it can,
-  `EmbeddingCatalog`'s numbers describe the Ollama arm only, and 内置's "same score" rests on one 8-query
-  fixture (`docs/builtin-model-runner.md`) — enough to separate working from broken, not enough to rank two
-  working embedders. Teach embed-bench the built-in path and re-run.
 - [ ] **内置 for 判断** — an in-process CHAT model, which is a much bigger thing than an embedder (GGUF via
   LLamaSharp; see `docs/builtin-model-runner.md` for why not ONNX Runtime GenAI). Deferred, not blocked:
   判断 already has two working backends, so this buys convenience rather than capability.

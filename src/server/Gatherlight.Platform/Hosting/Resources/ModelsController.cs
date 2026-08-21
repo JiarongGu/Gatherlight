@@ -46,6 +46,29 @@ public sealed class ModelsController : ControllerBase
     /// household reads before committing to a download, not one anything computes with.</summary>
     private const long SuggestedJudgeBytes = 3_300_000_000L;
 
+    /// <summary>The fixture and WHEN, for the footnote under the comparison table.
+    ///
+    /// <para>Derived from the rows rather than written here, because a literal was a second writer of one
+    /// fact and it lost: the date sat at "2026-08-21" through a re-measurement that changed every latency
+    /// figure in the table it was labelling. A range appears when the rows are genuinely not one run — which
+    /// is the honest answer, and the reason <see cref="EmbeddingMeasurement.MeasuredOn"/> is per-row.</para></summary>
+    private static string MeasuredOnLabel()
+    {
+        var dates = EmbeddingCatalog.Options
+            .Select(o => o.Measured?.MeasuredOn)
+            .Where(d => !string.IsNullOrWhiteSpace(d))
+            .Distinct()
+            .OrderBy(d => d, StringComparer.Ordinal)
+            .ToList();
+        var when = dates.Count switch
+        {
+            0 => "未测",
+            1 => dates[0]!,
+            _ => $"{dates[0]}–{dates[^1]}",
+        };
+        return $"20 条中英混排事实 · 10 个改写提问 · {when}";
+    }
+
     [HttpGet("api/manage/models")]
     public async Task<IActionResult> Get([FromQuery] bool refresh = false)
     {
@@ -81,7 +104,7 @@ public sealed class ModelsController : ControllerBase
             recommendation = new { id = rec.Id, reason = rec.Reason, caution = rec.Caution },
             // The sample size travels with the numbers. "9/10" invites the right question where "很好"
             // does not, and a measurement with no denominator is an opinion wearing a number.
-            measuredOn = "20 条中英混排事实 · 10 个改写提问 · 2026-08-21",
+            measuredOn = MeasuredOnLabel(),
             // Downloads in flight (and the last few that finished). Read from memory rather than from the
             // probe, so a progress bar stays live while the 20s probe cache does its job.
             pulls = _pulls.Current.Select(p => new
@@ -239,4 +262,98 @@ public sealed class ModelsController : ControllerBase
     }
 
     public sealed record ModelRequest(string Model);
+
+    /// <summary>Text to embed with the BUILT-IN model. Capped because this is a measurement door, not a
+    /// general-purpose embedding service — an uncapped one is a CPU-bound endpoint behind the access
+    /// gate.</summary>
+    public sealed record EmbedRequest(string[] Texts);
+
+    private const int MaxEmbedTexts = 64;
+    private const int MaxEmbedChars = 4000;
+
+    /// <summary>The one loaded session the benchmark door reuses. Static because a controller is per-request
+    /// and the whole point is that the model is NOT reloaded per request — see <see cref="Embed"/> for the
+    /// measurement that made this load-bearing. Keyed by directory so a re-provisioned model is picked up
+    /// rather than served stale from a path that no longer holds those bytes.</summary>
+    private static readonly object BenchGate = new();
+    private static string? _benchDir;
+    private static OnnxEmbedder? _benchEmbedder;
+
+    private static OnnxEmbedder BenchEmbedder(string dir)
+    {
+        lock (BenchGate)
+        {
+            if (_benchEmbedder is not null && _benchDir == dir) return _benchEmbedder;
+            _benchEmbedder?.Dispose();
+            _benchDir = dir;
+            return _benchEmbedder = new OnnxEmbedder(dir);
+        }
+    }
+
+    /// <summary>Embed text with the 内置 model, in this process.
+    ///
+    /// <para><b>This exists so the built-in backend can be BENCHMARKED like the others.</b>
+    /// <c>dev.mjs embed-bench</c> scores embedders by calling an OpenAI-compatible <c>/v1/embeddings</c>,
+    /// which every Ollama-hosted model answers and an in-process ONNX session cannot. So the arm with no
+    /// setup cost was also the arm with no way to measure it: its "same score as Ollama" rested on an 8-query
+    /// probe written while choosing the runtime, which — as <c>docs/builtin-model-runner.md</c> says of
+    /// itself — separates working from broken and cannot rank two working embedders. A recommendation the
+    /// household cannot interrogate is the thing <see cref="EmbeddingCatalog"/> exists to prevent.</para>
+    ///
+    /// <para><b>It embeds through the product's own <see cref="OnnxEmbedder"/></b>, so the numbers describe
+    /// what actually runs — same variant, same tokenizer, same symmetric prompting. A benchmark that
+    /// embedded differently would measure a product we do not ship, which is why the bench refuses to reach
+    /// Ollama's native <c>/api/embed</c> either.</para>
+    ///
+    /// <para><b>The session is CACHED across calls, and that is a correctness requirement, not a speed
+    /// optimisation.</b> The first version built a fresh <see cref="OnnxEmbedder"/> per request — reasoning
+    /// that the registered singleton only exists when 语义 is actually BOUND to 内置, and the bench must be
+    /// able to score a backend the household has not chosen yet. True, but it made the endpoint measure
+    /// something the product never does: the bench embeds one query per call, so every per-query figure
+    /// carried a full model load, and 内置 reported <b>1011 ms/query</b> against Ollama's 89. The product
+    /// loads the model once and holds it. Measured warm, the real figure is an order of magnitude lower —
+    /// so the first number would have argued against shipping the backend on the strength of an artifact of
+    /// this method.
+    /// <para>The memory is not a new worst case: a household bound to 内置 already holds exactly this
+    /// session for the life of the process, which is why the model is loaded lazily and never per call.</para></summary>
+    [HttpPost("api/manage/models/embed")]
+    public async Task<IActionResult> Embed([FromBody] EmbedRequest body, CancellationToken ct)
+    {
+        var texts = body?.Texts;
+        if (texts is null || texts.Length == 0)
+            return BadRequest(new { error = "没有要嵌入的文本。" });
+        if (texts.Length > MaxEmbedTexts)
+            return BadRequest(new { error = $"一次最多 {MaxEmbedTexts} 段文本(收到 {texts.Length})。" });
+        if (texts.Any(t => (t?.Length ?? 0) > MaxEmbedChars))
+            return BadRequest(new { error = $"单段文本最长 {MaxEmbedChars} 字。" });
+
+        var dir = Services.ResourceProvisioner.ProvisionedEmbedModel(_platform.ResourcesPath);
+        if (!OnnxEmbedder.IsPresent(dir))
+            return StatusCode(409, new
+            {
+                error = "内置嵌入模型还没有下载 —— 在「资源 · Resources」面板下载「内置嵌入模型」后再试。",
+                resource = BuiltInSemanticSource.ResourceId,
+            });
+
+        try
+        {
+            var embedder = BenchEmbedder(dir);
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            var vectors = await embedder.EmbedAsync(texts.Select(t => t ?? string.Empty).ToList(), ct);
+            var ms = (int)started.ElapsedMilliseconds;
+            return Ok(new
+            {
+                model = BuiltInSemanticSource.ModelId,
+                dims = vectors.Count > 0 ? vectors[0].Length : 0,
+                msTotal = ms,
+                msPerText = texts.Length > 0 ? ms / texts.Length : 0,
+                vectors,
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("built-in embed failed: {Msg}", ex.Message);
+            return StatusCode(502, new { error = ex.Message });
+        }
+    }
 }

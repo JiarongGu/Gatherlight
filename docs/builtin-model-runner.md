@@ -71,6 +71,30 @@ that is what was scored — both embedders, one fixture, same machine:
 | 内置 · ONNX q4, document prompt | 7/8 | 8/8 | — |
 | 本机 · Ollama `embeddinggemma:300m` | 8/8 | 8/8 | 10 677 ms |
 
+**SUPERSEDED 2026-08-22 — and both of the headline numbers above were wrong.** Once the backend was wired,
+`dev.mjs embed-bench` scored it on the same 10-query fixture `EmbeddingCatalog` uses, through the app's own
+`OnnxEmbedder` (`POST /api/manage/models/embed`, which exists for exactly this):
+
+| embedder | runs | top-1 | top-3 | ms/query |
+|---|---|---|---|---|
+| 本机 · Ollama `embeddinggemma:300m` | ollama | **9/10** | 10/10 | 69 |
+| **内置 · ONNX q4** | in-process | **8/10** | 10/10 | **28** |
+
+Two corrections, both in the direction of the thing we had already chosen — which is the direction to be
+most suspicious of:
+
+* **The tie was an artifact of the fixture.** 8/8 against 8/8 says only that neither embedder failed. Ten
+  queries separate them: 内置 places the right fact first once less often. Same weights, different
+  quantisation, so a small difference is the expected shape of this trade — but "实测同分" shipped in the
+  panel, the resource row and the release notes as a measured fact, and it was not one.
+* **"~21× faster" compared a warm ONNX session against a COLD Ollama.** The 10 677 ms above is dominated by
+  Ollama loading the model. Warm against warm it is 28 ms vs 69 ms — 内置 is still faster, because it skips
+  an HTTP hop, but the honest figure is **2.5×**, not 21×.
+
+Latency across these two rows is not like-for-like in any case (an ORT **CPU** session in-process against a
+**GPU** server one hop away); it is what the household experiences from each, which is the comparison that
+matters, but it is not a comparison of the two models.
+
 Three decisions fall out, none of them guesses any more:
 
 1. **q4, not fp32 or int8.** It ties Ollama on this fixture at **197 MB** against fp32's 1.23 GB. Total
@@ -82,10 +106,12 @@ Three decisions fall out, none of them guesses any more:
    queries, `title: none | text: ` for documents), so the obvious move is to apply them — and it measured
    WORSE (7/8). Symmetric is also what this app already does, so the built-in path matches the product
    rather than diverging from it. Do not "fix" this without re-running the fixture.
-3. **The recorded 9/10 does NOT transfer verbatim.** `EmbeddingCatalog`'s numbers were measured through
-   Ollama's quantisation; this is a different one. Both score the same here, but this fixture is 8 queries —
-   enough to separate working from broken, not enough to rank two working embedders, exactly the caveat the
-   catalog already states about its own 10. Re-measure with `dev.mjs embed-bench` once the backend is wired.
+3. **The recorded 9/10 does NOT transfer verbatim — confirmed, and it is 8/10.** `EmbeddingCatalog`'s
+   numbers were measured through Ollama's quantisation; this is a different one, and the caveat about an
+   8-query fixture applied to this page's own table. Re-measured on the catalog's 10-query fixture once the
+   backend was wired (see the superseded block above), 内置 scores 8/10 top-1 / 10/10 top-3 where the Ollama
+   arm scores 9/10 / 10/10. That number now lives on the `ModelOption` the 内置 picker returns, so the panel
+   states it instead of implying a tie.
 
 **Cheap and repeatable:** the probe is ~150 lines and the oracle (an Ollama holding the same model) is
 already on the development machine. Re-run it before changing the variant, the tokenizer or the prompting.
