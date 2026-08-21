@@ -91,10 +91,40 @@ hard-coded kind sections cannot express. `OllamaModel.CanComplete` / `CanEmbed` 
   local had the router asking Ollama for `haiku` — fail-open on both policies, so zero calls and no error.
   The cortex row is gone; binding the layer writes source and model together.
 
+## 3c. FIRST LOCAL MEASUREMENT (2026-08-22) — direction confirmed, magnitude not
+
+`dev.mjs recall-bench` now asks §1's question of the corpus the advice is about. It samples the household's
+own facts, has a model write one paraphrase question per fact (self-labelling: the fact's id is the answer),
+and scores `recall_facts` with 判断 off and on. It prints numbers and ids only — never a fact, never a
+question — and caches the generated set in the DATA folder, because that set is household content.
+
+On this development machine — **16 facts, 12 probes, limit 3, 语义 off**:
+
+| configuration | top-1 | miss rate | MRR | ms/query |
+|---|---|---|---|---|
+| 公式 only | 5/12 | 0.500 | 0.458 | **37** |
+| 公式 + 判断 | 6/12 | 0.417 | 0.528 | **8 905** |
+
+- **The direction holds:** 判断 improved every column. So the shape of Lyntai's claim survives contact with
+  a different corpus.
+- **The magnitude does not transfer:** −0.083 here against their −0.35. The panel's wording is therefore
+  still correct to attribute the number rather than claim it.
+- **A cost nobody had measured: 240× the latency.** 8.9 s per recall against 37 ms. Lyntai measured 3.0 s
+  for a Haiku judge; the gap is a CLI process spawn per call. Every `recall_facts` the agent makes pays it.
+  That is a real argument for the local-model arm that has nothing to do with tokens.
+- **It is NOT a conclusion, and the tool says so itself.** 12 probes moves the rate by 0.08 per query. The
+  first version of this bench nearly reported something worse than a borrowed number: at `limit 8` on a
+  16-fact corpus, random ranking "finds" the answer 50% of the time, so 0.667 → 0.500 was measuring page
+  size, not recall. It now prints the chance baseline above its own verdict.
+
+Re-run it when the knowledge base reaches a few hundred facts; that is when the magnitude becomes worth
+quoting, and when 语义 is worth A/B-ing across a restart.
+
 ## 3b. What is still open
 
-- **A local measurement.** §1's ordering is borrowed. `dev.mjs embed-bench` scores embedders on a
-  fictional corpus; nothing scores 公式 / +判断 / +语义 on the household's own facts. Backlog item.
+- **A local measurement AT SCALE.** §3c has the direction on 16 facts. The magnitude needs a corpus big
+  enough that a page is a small fraction of it — and 语义's own contribution needs two runs, since it is a
+  startup registration.
 - **The other cortex consumers.** `extract` and `scorer` are one-shot `ILlmClient` consumers, so they
   *could* take a local backend the way 判断 does — the mechanism is proven. `chat` cannot: it runs the agent
   path (`IAgentSession`) and never routes. Not attempted; recorded so the asymmetry is a known one.

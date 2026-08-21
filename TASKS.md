@@ -26,11 +26,15 @@
   判断 already has two working backends, so this buys convenience rather than capability.
 
 ### Product (deferred, not urgent)
-- [ ] **Measure the three layers on THIS household's corpus.** 语义 sits under 高级 on Lyntai's
-  measurement (0% of misses are retrieval failures), which is someone else's corpus — the panel says so,
-  and will keep saying so until there is a local number. Needs a recall bench over our own facts scoring
-  公式 / +判断 / +语义 / all three; `dev.mjs embed-bench` measures embedders on a fictional corpus and is
-  not that. Only then is the ordering ours rather than borrowed.
+- [ ] **Re-run `dev.mjs recall-bench` once the knowledge base is a few hundred facts.** The bench exists and
+  the first run is recorded in `docs/memory-recall-resharpen.md` §3c: 判断 improved every column on our own
+  corpus (direction confirmed) but by −0.083 against Lyntai's −0.35, on 16 facts and 12 probes — which the
+  tool itself refuses to call a conclusion. At a few hundred facts the magnitude becomes quotable, and the
+  panel's attributed wording can finally be replaced with our own number. 语义 needs two runs (it is a
+  startup registration, so it cannot be A/B'd in one).
+  **Also found there and worth acting on independently: 判断 costs 8.9 s per recall via the CLI against
+  37 ms for the floor** — 240×, from a process spawn per call. That is an argument for the local-model arm
+  that has nothing to do with tokens, and nothing had measured it before.
 - [ ] **Measure the decay constants against real use.** The graph index now ranks `recall_facts`, but
   Lyntai ships several of its constants explicitly unmeasured (half-life, reinforce factor, and the
   three governing connectedness, which have to be measured *together* since edge decay erodes the
