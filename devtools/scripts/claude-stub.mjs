@@ -19,6 +19,20 @@ const args = process.argv.slice(2);
 // runs never do. This is the robust signal — the disallowed-tools list is now a single comma-joined arg.
 const readOnly = !(args.includes('--permission-mode') && args.includes('acceptEdits'));
 
+// The app now ASKS the CLI what it is before trusting a failure (ClaudeCliRuntime.ProbeAsync): a binary
+// that is absent, one that is signed out, and one that ran and genuinely failed are three different
+// problems with three different fixes, and only the CLI can tell them apart. Answer as a signed-in CLI
+// and return immediately — this must come BEFORE the stdin drain below, because `auth status` is not an
+// agent run and nothing is piped to it. Without this every suite boots with a spurious "not logged in"
+// warning and the diagnosis rewrites every failed-turn message the suites assert on.
+if (args[0] === 'auth' && args[1] === 'status') {
+  process.stdout.write(JSON.stringify({
+    loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty',
+    email: 'e2e@example.invalid', subscriptionType: 'max',
+  }));
+  process.exit(0);
+}
+
 const chunks = [];
 for await (const c of process.stdin) chunks.push(c);
 const prompt = Buffer.concat(chunks).toString('utf8');

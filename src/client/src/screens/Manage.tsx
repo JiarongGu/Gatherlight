@@ -1148,7 +1148,18 @@ interface ResourceStatus {
   state: string;
   percent: number;
   message: string | null;
+  // Only the claude CLI tracks a version: git and node are pinned to a version WE chose, so "newer exists"
+  // is a fact about our source, not the household's install. `detail` carries the CLI's login state —
+  // the difference between installed and usable, which no other resource has.
+  version: string | null;
+  available: string | null;
+  detail: string | null;
 }
+
+// An update exists only when BOTH versions are known and they differ. Unknown-vs-known is NOT an update:
+// a household running a machine-wide CLI has no version marker of ours, and nagging them to "update"
+// something we never installed would be a button that quietly replaces their own install.
+const hasUpdate = (r: ResourceStatus) => !!r.version && !!r.available && r.version !== r.available;
 
 function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void; inHost: boolean }) {
   const [items, setItems] = useState<ResourceStatus[] | null>(null);
@@ -1186,7 +1197,7 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
   return (
     <div className="mng-view set">
       <div className="set-lead">
-        大型资源(Chromium、Git 等)按需下载到数据文件夹,不打包进安装包 —— 保持安装包小巧。下载一次即长期保留(应用更新不会清除)。
+        大型资源(Chromium、Git、Claude CLI 等)按需下载到数据文件夹,不打包进安装包 —— 保持安装包小巧。下载一次即长期保留(应用更新不会清除)。
       </div>
       <div className="res-list">
         {items.map((r) => (
@@ -1197,6 +1208,13 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
                 {r.installed && <span className="res-badge">已安装</span>}
               </div>
               <div className="res-need">{r.neededFor}</div>
+              {r.detail && <div className="res-need">{r.detail}</div>}
+              {r.version && (
+                <div className="res-need">
+                  当前版本 {r.version}
+                  {hasUpdate(r) && <span className="res-badge">可更新 → {r.available}</span>}
+                </div>
+              )}
               {r.state === 'running' && (
                 <>
                   <div className="res-prog"><span className="res-bar" style={{ width: `${r.percent}%` }} /></div>
@@ -1210,8 +1228,8 @@ function ResourcesView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'o
               {r.state === 'running' ? (
                 <span className="res-running">下载中…</span>
               ) : (
-                <button className={`cx-btn${r.installed ? '' : ' primary'}`} onClick={() => provision(r.id)}>
-                  {r.installed ? '重新下载' : '下载'}
+                <button className={`cx-btn${r.installed && !hasUpdate(r) ? '' : ' primary'}`} onClick={() => provision(r.id)}>
+                  {hasUpdate(r) ? '更新' : r.installed ? '重新下载' : '下载'}
                 </button>
               )}
             </div>

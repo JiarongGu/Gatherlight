@@ -225,6 +225,60 @@ if (!offline) {
   console.log(`  (portable git is win-x64 only; ${rid} needs git on PATH)`);
 }
 
+// 3.65 claude CLI: download-at-setup by default (the server provisions it into
+// {data}/state/resources/claude — ClaudeCliRuntime resolves that first). --offline bundles it into
+// libs/claude/, which matters more here than for any other resource: chromium and git have graceful
+// degradations, but an air-gapped install with no CLI has no product at all — chat is the product.
+step(3.65, offline ? 'bundling Claude CLI…' : 'claude CLI → download-at-setup (lean bundle)');
+// The base URL is read from ResourceProvisioner, never restated — same rule as the git constants above.
+// Version and checksum are then read from the VENDOR (latest → manifest.json), exactly as a lean install
+// does at provision time, so the bundled CLI and the downloaded one are the same build by construction.
+const CLAUDE_BASE = csConst('ClaudeBaseUrl');
+let claudeBundled = false;
+if (!offline) {
+  console.log('  (skipped — a lean install downloads it from the 资源 panel; ~265 MB)');
+} else if (rid !== 'win-x64') {
+  console.log(`  (the portable Claude CLI is win32-x64 here; ${rid} needs the CLI on PATH)`);
+} else if (args.includes('--skip-claude')) {
+  console.log('  (skipped — --skip-claude)');
+} else {
+  const cacheDir = path.join(repo, 'devtools', '_cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  try {
+    if (!CLAUDE_BASE) throw new Error('ClaudeBaseUrl not found in ResourceProvisioner.cs');
+    const sh = (url) => {
+      const r = spawnSync('curl', ['-fsSL', url], { encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`fetch failed: ${url}`);
+      return (r.stdout || '').trim();
+    };
+    const ver = sh(`${CLAUDE_BASE}/latest`);
+    // Validate BEFORE concatenating into a download URL — an HTML error page served from /latest would
+    // otherwise become part of the path we fetch an executable from.
+    if (!/^\d+\.\d+\.\d+[\w.\-+]*$/.test(ver)) throw new Error(`/latest did not return a version: ${ver.slice(0, 40)}`);
+    const checksum = (JSON.parse(sh(`${CLAUDE_BASE}/${ver}/manifest.json`)).platforms || {})['win32-x64']?.checksum;
+    if (!checksum) throw new Error('no win32-x64 checksum in the release manifest');
+
+    const bin = path.join(cacheDir, `claude-${ver}-win32-x64.exe`);
+    if (!fs.existsSync(bin)) {
+      console.log(`  downloading Claude CLI ${ver} (~265 MB)…`);
+      const dl = spawnSync('curl', ['-fsSL', '-o', bin, `${CLAUDE_BASE}/${ver}/win32-x64/claude.exe`], { stdio: 'inherit' });
+      if (dl.status !== 0 || !fs.existsSync(bin)) throw new Error('download failed');
+    }
+    // A cached binary in devtools/_cache is not trusted just because it is local — this is an executable
+    // we ship to households, so verify against the vendor's manifest every build.
+    const sha = crypto.createHash('sha256').update(fs.readFileSync(bin)).digest('hex');
+    if (sha !== checksum) throw new Error(`sha256 mismatch (expected ${checksum.slice(0, 12)}…, got ${sha.slice(0, 12)}…)`);
+
+    const claudeDir = path.join(libs, 'claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.copyFileSync(bin, path.join(claudeDir, 'claude.exe'));
+    claudeBundled = true;
+    console.log(`  \x1b[32m✔\x1b[0m libs/claude/  (Claude CLI ${ver}, ~265 MB) — still needs one "claude auth login" on the host`);
+  } catch (e) {
+    console.log(`  \x1b[33m⚠ Claude CLI not bundled (${e.message}) — the host will need the CLI on PATH.\x1b[0m`);
+  }
+}
+
 // 3.7 Playwright chromium: download-at-setup by default (the 资源 panel runs the bundled driver's
 // playwright.ps1 install into {data}/state/resources/browsers — PlaywrightHost resolves that first).
 // --offline bundles it into libs/browsers for air-gapped installs. Needs the bundled driver (3 above).
@@ -323,7 +377,10 @@ fs.writeFileSync(path.join(bundle, 'README.txt'), [
   '  · git —— ' + (gitBundled
     ? '已内置于 libs\\git(数据仓库引擎,无需另装) / bundled in libs\\git (the data-repo engine; no install needed)'
     : '无需安装:系统没有 git 时,首次启动会自动下载便携版(约 37MB,存入 data\\) / no install needed — downloaded automatically on first run (~37 MB, into data\\) when the machine has none'),
-  '  · 已登录的 claude CLI —— 仅 AI 规划需要,浏览/导入无需 / an authenticated claude CLI — only for AI planning (browsing/import work without it)',
+  '  · Claude CLI —— ' + (claudeBundled
+    ? '已内置于 libs\\claude,首次使用前在本机运行一次 `claude auth login` 登录 / bundled in libs\\claude — run `claude auth login` once on this machine before first use'
+    : '无需自行安装:在控制台「资源 · Resources」一键下载(约 265MB),下载后在本机运行一次 `claude auth login` 登录 / no manual install needed — download it from the 资源 · Resources panel (~265 MB), then run `claude auth login` once on this machine'),
+  '    (仅 AI 规划需要,浏览/导入无需 / only for AI planning — browsing and import work without it)',
   '  · chromium(仅网页抓取工具)—— ' + (chromiumBundled
     ? '已内置于 libs\\browsers,无需安装 / bundled in libs\\browsers (no install needed)'
     : '首次在控制台「资源 · Resources」一键下载 / download once from the 资源 · Resources panel'),
@@ -369,8 +426,9 @@ if (doZip) {
 // summary
 const exeMb = (fs.statSync(path.join(libs, 'Gatherlight.Host.exe')).size / 1048576).toFixed(0);
 console.log(`\n\x1b[32m✔ bundle\x1b[0m  publish/Gatherlight/  (host ${exeMb} MB, ${files.length} manifest files, framework-dependent — runtime auto-installed on first run, sha256 manifest)`);
-console.log(`  layout:   ${launcherBuilt ? 'Gatherlight.exe · ' : ''}Gatherlight.cmd · libs/${gitBundled ? ' +git' : ''}${chromiumBundled ? ' +chromium' : ''}${playwrightBundled ? ' +driver' : ''} · res/ · data/`);
+console.log(`  layout:   ${launcherBuilt ? 'Gatherlight.exe · ' : ''}Gatherlight.cmd · libs/${gitBundled ? ' +git' : ''}${claudeBundled ? ' +claude' : ''}${chromiumBundled ? ' +chromium' : ''}${playwrightBundled ? ' +driver' : ''} · res/ · data/`);
 console.log(`  git:      ${gitBundled ? 'bundled (libs/git) — no host git install needed' : 'not bundled — auto-downloaded on first boot (GitRuntimeStep) when the host has none'}`);
+console.log(`  claude:   ${claudeBundled ? 'bundled (libs/claude) — still needs one "claude auth login" on the host' : 'not bundled — installed from the 资源 panel (~265 MB), then one "claude auth login"'}`);
 console.log(`  scrapers: ${playwrightBundled && chromiumBundled ? 'bundled driver + chromium — work out of the box' : playwrightBundled ? 'driver bundled; chromium via playwright.ps1 install' : 'dev-only (no driver bundled)'}`);
 if (doZip) console.log(zipped ? `  package:  publish/${path.basename(zip)}  (${(fs.statSync(zip).size / 1048576).toFixed(0)} MB)` : '  ⚠ zip failed');
 else console.log('  package:  (folder only — pass --zip for the release .zip)');

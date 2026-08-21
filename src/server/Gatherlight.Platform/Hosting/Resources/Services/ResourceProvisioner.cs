@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Gatherlight.Server.Platform.Kernel.Services;
 
 namespace Gatherlight.Server.Platform.Hosting.Resources.Services;
@@ -13,6 +14,10 @@ public enum ResourceKind
     /// <summary>The Gatherlight.Resources NuGet package (itself a zip) holding the FULL win-x64 runtime
     /// — Playwright driver + git + chromium — downloaded once and unpacked into their install dirs.</summary>
     Bundle,
+    /// <summary>The claude CLI, from Anthropic's own release channel: a single self-contained binary, with
+    /// the version and its sha256 read LIVE from the vendor's manifest rather than pinned in our source.
+    /// That inversion is the point — see <see cref="ResourceProvisioner.ClaudeBaseUrl"/>.</summary>
+    ClaudeCli,
 }
 
 /// <summary>
@@ -35,10 +40,14 @@ public sealed record ResourceSpec(
     // files sit under a content path. Null = the archive root itself (with single-wrapper flattening).
     string? ArchiveRoot = null);
 
-/// <summary>Live provisioning state for one resource (for the setup UI to poll).</summary>
+/// <summary>Live provisioning state for one resource (for the setup UI to poll). <paramref name="Version"/>
+/// / <paramref name="Available"/> are populated only for a resource whose version we actually track (the
+/// claude CLI); when they differ, an update exists. <paramref name="Detail"/> is a resource-specific status
+/// line — for the CLI it carries the login state, which is the difference between installed and usable.</summary>
 public sealed record ResourceStatus(
     string Id, string Name, string NeededFor, long ApproxBytes,
-    bool Installed, string State, int Percent, string? Message);
+    bool Installed, string State, int Percent, string? Message,
+    string? Version = null, string? Available = null, string? Detail = null);
 
 public interface IResourceProvisioner
 {
@@ -51,6 +60,12 @@ public interface IResourceProvisioner
     /// pointing at a panel, so a fresh install needs no click. Throws when it did not end up installed;
     /// <paramref name="onProgress"/> receives (percent, message) for the startup overlay.</summary>
     Task EnsureAsync(string id, Action<int, string?>? onProgress = null, CancellationToken ct = default);
+
+    /// <summary>Ask the vendor what the newest claude CLI is (a few bytes) and remember it, so
+    /// <see cref="Status"/> can say an update exists. Deliberately a CHECK, not a download: a household
+    /// that boots should never be surprised by ~265 MB it did not ask for. Never throws — an install with
+    /// no network simply keeps reporting the version it has.</summary>
+    Task CheckUpdatesAsync(CancellationToken ct = default);
 }
 
 public sealed class ResourceProvisioner : IResourceProvisioner
@@ -121,6 +136,31 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     public const string NodeVersion = "v24.19.0";
     private const string NodeSha256 = "57f71ab3652e797d84acddc79c81cc9ff1c6ddb2a1974cdb83f00fee9bff4c73";
 
+    // The claude CLI — the engine the whole product runs on, and until now the one runtime dependency we
+    // merely ASSUMED. A fresh install spawned the PATH `claude` that was not there and died at spawn in
+    // 17ms with a raw Win32 error; the household saw "计划阶段未能完成(CLI 报告错误)".
+    //
+    // Integrity model, and why there is NO sha256 constant here: Anthropic publishes a version pointer and
+    // a per-version manifest carrying each platform's checksum, both over TLS from the same origin as the
+    // binary. So the checksum is still what guarantees the bytes of an executable we are about to run — it
+    // is just READ rather than restated. Pinning a constant would buy nothing (the same origin serves all
+    // three) and would cost the thing the household actually needs: a CLI that can be updated without a
+    // release of ours. A stale CLI eventually stops working against the API, so "never update" is not a
+    // safe default the way it is for git.
+    //
+    // This mirrors the shipped bootstrap (`claude.ai/install.ps1`) exactly: /latest → /<v>/manifest.json →
+    // /<v>/<platform>/claude.exe. Verified live against 2.1.237.
+    public const string ClaudeBaseUrl = "https://downloads.claude.ai/claude-code-releases";
+    private static string ClaudeSource => Override("GATHERLIGHT_CLAUDE_URL") ?? ClaudeBaseUrl;
+
+    /// <summary>The vendor's platform key for this machine. Windows-only, like the portable git: the
+    /// bundle ships win-x64 and the launcher is MSVC. An unsupported OS fails closed with a sentence that
+    /// says to install the CLI by hand, rather than downloading a binary that cannot run.</summary>
+    private static string? ClaudePlatform =>
+        !OperatingSystem.IsWindows() ? null
+        : System.Runtime.InteropServices.RuntimeInformation.OSArchitecture
+            == System.Runtime.InteropServices.Architecture.Arm64 ? "win32-arm64" : "win32-x64";
+
     public static readonly IReadOnlyList<ResourceSpec> Catalog = new[]
     {
         new ResourceSpec(
@@ -143,12 +183,44 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             ApproxBytes: 32_000_000,
             Url: $"https://nodejs.org/dist/{NodeVersion}/node-{NodeVersion}-win-x64.zip",
             Sha256: NodeSha256),
+        new ResourceSpec(
+            Id: "claude", Name: "Claude CLI(智能体引擎)",
+            NeededFor: "计划与执行对话的引擎 —— 没有它,聊天无法进行;下载后还需登录一次",
+            Kind: ResourceKind.ClaudeCli, InstallDir: "claude", ReadyMarker: "claude.exe",
+            ApproxBytes: 266_000_000,
+            Url: ClaudeBaseUrl),
     };
 
     /// <summary>Where a provisioned node lands. Read by the sandbox probe and the Node leaf tools, so
     /// the path exists in exactly one place.</summary>
     public static string ProvisionedNode(string resourcesPath) =>
         Path.Combine(resourcesPath, "node", "node.exe");
+
+    /// <summary>Where a provisioned claude CLI lands. Read by <c>ClaudeCliRuntime</c> (the resolver + probe)
+    /// and written here, so the path exists in exactly one place — same contract as
+    /// <see cref="ProvisionedNode"/>.</summary>
+    public static string ProvisionedClaude(string resourcesPath) =>
+        Path.Combine(resourcesPath, "claude", "claude.exe");
+
+    /// <summary>The version we installed, recorded beside the binary. A file read beats spawning a 265 MB
+    /// process every time the panel polls, and it states what we actually put there rather than what the
+    /// binary claims.</summary>
+    public static string ClaudeVersionMarker(string resourcesPath) =>
+        Path.Combine(resourcesPath, "claude", "version.txt");
+
+    /// <summary>The installed claude version, or null when it was never provisioned here (a machine-wide
+    /// install has no marker of ours — and that is a legitimate, fully working configuration).</summary>
+    public static string? InstalledClaudeVersion(string resourcesPath)
+    {
+        try
+        {
+            var marker = ClaudeVersionMarker(resourcesPath);
+            if (!File.Exists(marker)) return null;
+            var v = File.ReadAllText(marker).Trim();
+            return v.Length is > 0 and < 40 ? v : null;
+        }
+        catch (IOException) { return null; }
+    }
 
     private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
@@ -185,8 +257,53 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         var p = _prog.GetValueOrDefault(s.Id);
         var installed = IsInstalled(s);
         var state = p?.State ?? (installed ? "ready" : "idle");
-        return new ResourceStatus(s.Id, s.Name, s.NeededFor, s.ApproxBytes, installed, state, p?.Percent ?? 0, p?.Message);
+        // Version tracking is claude-only on purpose: git and node are sha256-pinned to a version WE chose,
+        // so "an update exists" is a fact about our source, not about the household's install. The CLI is
+        // the opposite — the vendor moves it, and an install that never follows eventually stops working.
+        string? version = null, available = null;
+        if (s.Kind == ResourceKind.ClaudeCli)
+        {
+            version = InstalledClaudeVersion(_data.ResourcesPath);
+            available = _latestClaude;
+        }
+        return new ResourceStatus(s.Id, s.Name, s.NeededFor, s.ApproxBytes, installed, state,
+            p?.Percent ?? 0, p?.Message, version, available);
     }).ToList();
+
+    // The newest CLI the vendor is serving, as of the last check. Null until something checks — a field,
+    // not a fetch inside Status(), because the panel polls Status() every 1.2s while a download runs and
+    // that must not become 1.2s of outbound requests.
+    private volatile string? _latestClaude;
+
+    public async Task CheckUpdatesAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var latest = await FetchLatestClaudeAsync(ct);
+            if (latest is null) return;
+            _latestClaude = latest;
+            var installed = InstalledClaudeVersion(_data.ResourcesPath);
+            if (installed is not null && installed != latest)
+                _log.LogInformation("A newer claude CLI is available: {Installed} → {Latest}", installed, latest);
+        }
+        catch (Exception ex)
+        {
+            // No network, a proxy, an offline household: none of that is a failure of the app. Keep the
+            // version we have and say nothing on screen.
+            _log.LogDebug("claude update check skipped: {Msg}", ex.Message);
+        }
+    }
+
+    /// <summary>The vendor's current version pointer. Validated against a strict version shape BEFORE it is
+    /// ever concatenated into the manifest or binary URL — the shipped bootstrap does the same, because an
+    /// HTML error page served from that path would otherwise become part of a download URL.</summary>
+    private static async Task<string?> FetchLatestClaudeAsync(CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(20));
+        var text = (await Http.GetStringAsync($"{ClaudeSource}/latest", cts.Token)).Trim();
+        return System.Text.RegularExpressions.Regex.IsMatch(text, @"^\d+\.\d+\.\d+[\w.\-+]*$") ? text : null;
+    }
 
     public bool Start(string id)
     {
@@ -244,8 +361,12 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         try
         {
             Directory.CreateDirectory(_data.ResourcesPath);
-            if (spec.Kind == ResourceKind.Bundle) await ProvisionBundleAsync(spec, p);
-            else await ProvisionZipAsync(spec, p);
+            switch (spec.Kind)
+            {
+                case ResourceKind.Bundle: await ProvisionBundleAsync(spec, p); break;
+                case ResourceKind.ClaudeCli: await ProvisionClaudeAsync(spec, p); break;
+                default: await ProvisionZipAsync(spec, p); break;
+            }
             Set(p, "ready", 100, "已就绪");
             _log.LogInformation("Resource provisioned: {Id}", spec.Id);
         }
@@ -348,6 +469,87 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         {
             try { if (File.Exists(zip)) File.Delete(zip); } catch { /* best-effort */ }
             try { if (Directory.Exists(extract)) Directory.Delete(extract, true); } catch { /* best-effort */ }
+        }
+    }
+
+    // ---- The claude CLI: /latest → /<version>/manifest.json → /<version>/<platform>/claude.exe ----
+    // A single self-contained binary, so there is nothing to extract — but there IS something to verify,
+    // and the checksum comes from the vendor's manifest for the exact version we are about to fetch.
+    private async Task ProvisionClaudeAsync(ResourceSpec spec, Prog p)
+    {
+        var platform = ClaudePlatform
+            ?? throw new InvalidOperationException(
+                "自动下载的 Claude CLI 仅支持 Windows —— 请自行安装 Claude CLI 后重启应用。");
+
+        Set(p, "running", 0, "查询最新版本…");
+        var version = await FetchLatestClaudeAsync(default)
+            ?? throw new InvalidOperationException("无法确定 Claude CLI 的最新版本(返回内容不是版本号)。");
+
+        Set(p, "running", 2, $"读取校验信息({version})…");
+        var checksum = await FetchClaudeChecksumAsync(version, platform)
+            ?? throw new InvalidOperationException($"发布清单中没有 {platform} 平台的校验和。");
+
+        var staging = Path.Combine(_data.ResourcesPath, ".staging");
+        Directory.CreateDirectory(staging);
+        var staged = Path.Combine(staging, $"claude-{version}-{platform}.exe");
+        try
+        {
+            Set(p, "running", 3, "下载 Claude CLI…(约 265MB,首次可能需要几分钟)");
+            await DownloadAsync($"{ClaudeSource}/{version}/{platform}/claude.exe", staged,
+                pct => Set(p, "running", 3 + (int)(pct * 0.90), "下载 Claude CLI…"));
+
+            Set(p, "running", 94, "校验中…");
+            var actual = await Sha256Async(staged);
+            if (!string.Equals(actual, checksum, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"sha256 不匹配(期望 {checksum[..8]}…)");
+
+            Set(p, "running", 97, "安装中…");
+            var dest = ProvisionedClaude(_data.ResourcesPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            ReplaceBinary(staged, dest);
+            // The marker is written LAST, and only after the binary is in place: a marker naming a version
+            // that is not on disk would make the panel report an install that cannot run.
+            await File.WriteAllTextAsync(ClaudeVersionMarker(_data.ResourcesPath), version);
+            _latestClaude = version;
+            _log.LogInformation("Provisioned claude CLI {Version} ({Platform}) → {Path}", version, platform, dest);
+        }
+        finally
+        {
+            try { if (File.Exists(staged)) File.Delete(staged); } catch { /* best-effort */ }
+        }
+    }
+
+    private static async Task<string?> FetchClaudeChecksumAsync(string version, string platform)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var s = await Http.GetStreamAsync($"{ClaudeSource}/{version}/manifest.json", cts.Token);
+        using var doc = await JsonDocument.ParseAsync(s, cancellationToken: cts.Token);
+        return doc.RootElement.TryGetProperty("platforms", out var plats)
+               && plats.TryGetProperty(platform, out var entry)
+               && entry.TryGetProperty("checksum", out var sum)
+            ? sum.GetString()
+            : null;
+    }
+
+    /// <summary>Move the verified binary into place, tolerating a copy that is CURRENTLY RUNNING. Windows
+    /// refuses to overwrite a loaded image, and an update is exactly when one may be mid-chat — so fall
+    /// back to renaming the old file aside (which Windows does allow) and let the next sweep delete it.
+    /// Failing the whole install because a turn was in flight would make updates unreliable by design.</summary>
+    private static void ReplaceBinary(string staged, string dest)
+    {
+        // Sweep any earlier displaced copy first — this is the only thing that ever deletes them.
+        foreach (var stale in Directory.EnumerateFiles(Path.GetDirectoryName(dest)!, "claude.exe.old-*"))
+            try { File.Delete(stale); } catch { /* still running or locked; next time */ }
+
+        try
+        {
+            File.Move(staged, dest, overwrite: true);
+        }
+        catch (IOException)
+        {
+            var aside = $"{dest}.old-{Guid.NewGuid():N}";
+            File.Move(dest, aside);                  // permitted even while the image is loaded
+            File.Move(staged, dest);
         }
     }
 

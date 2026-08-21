@@ -64,7 +64,9 @@ Anything that replaces a record subtree — notably backup import — must re-is
   `devtools/scripts/check-sensitive.mjs` (private tokens in gitignored
   `local/sensitive-patterns.txt`). History was reset on 2026-07-13 to remove exactly such leaks.
 - **User data lives ONLY in `local/`** (own private git repo). Never move it back into this repo.
-- **LLM via the authenticated `claude` CLI only — never an API key.**
+- **LLM via the authenticated `claude` CLI only — never an API key.** The CLI is a *provisioned resource*
+  (资源 panel → `{data}/state/resources/claude`), not a machine dependency we assume; `ClaudeCliRuntime`
+  resolves + probes it, and the one thing the app cannot do for the household is the browser login.
 - **Backend = three projects** (`Gatherlight.Platform` → `Gatherlight.Planner` → `Gatherlight.Server`
   → `Gatherlight.Host`; namespaces unchanged, `Platform/<Group>/<Name>` / `Product/Planner/<Name>`;
   controller → service → repository; Dapper + hand-written SQL, snake_case columns, FluentMigrator

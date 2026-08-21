@@ -64,6 +64,9 @@ public sealed class ChatSessionService : IChatGateHost
     private readonly IUiTreeValidator _uiValidator;
     private readonly IPageReviewService _pageReview;
     private readonly Platform.Hosting.Security.Services.IInternalMcpEndpoint _internalMcp;
+    // Only for DIAGNOSIS: when a run fails, ask what the CLI actually is rather than guessing from a
+    // localized OS error string. Nothing here spawns the agent — that stays with IAgentRunner.
+    private readonly Llm.Services.IClaudeCliRuntime _claude;
     private readonly ChatGateService _gates;
     private readonly ILogger<ChatSessionService> _log;
 
@@ -81,8 +84,9 @@ public sealed class ChatSessionService : IChatGateHost
         ICapabilityDenialLog denials, Platform.Site.Services.ISiteManifestStore manifestStore,
         ISessionCapabilityAllowance sessionAllowance, IUiTreeValidator uiValidator,
         IPageReviewService pageReview, Platform.Hosting.Security.Services.IInternalMcpEndpoint internalMcp,
-        ChatGateService gates, ILogger<ChatSessionService> log)
+        ChatGateService gates, Llm.Services.IClaudeCliRuntime claude, ILogger<ChatSessionService> log)
     {
+        _claude = claude;
         _uiValidator = uiValidator;
         _pageReview = pageReview;
         _internalMcp = internalMcp;
@@ -253,15 +257,29 @@ public sealed class ChatSessionService : IChatGateHost
 
     /// <summary>Turn an empty-output run into a DIAGNOSABLE failure. The SPECIFICS (exit code, error
     /// subtype, stderr tail, is_error) go to the file log — that's where we debug from. The user-facing
-    /// message stays deliberately GENERAL (daily use): no guessing at causes on screen.</summary>
+    /// message stays GENERAL for anything we can only speculate about: no guessing at causes on screen.
+    ///
+    /// <para>The exception is the runtime itself, and the distinction is guessing vs KNOWING. A CLI that is
+    /// absent or signed out is not an inference from an error string — it is a fact we can go and check,
+    /// so we do (<see cref="IClaudeCliRuntime.ProbeAsync"/>) and say exactly that. This matters because the
+    /// generic sentence told a household with no CLI to "请重试" — a retry that could not ever succeed, on
+    /// the one failure with a concrete fix. Note we deliberately do NOT pattern-match the Win32 message in
+    /// <c>res.Diagnostic</c>: it is localized ("系统找不到指定的文件" here, English elsewhere), so matching it
+    /// would work on the developer's machine and quietly stop working on the household's.</para></summary>
     // A plan run failed to produce an APPROVABLE plan — either it emitted nothing, or it reported an
     // error (turn limit / execution error) which can still leave partial text that must NOT be presented
     // as a real plan for the human to approve.
-    private string DiagnoseFailedRun(ChatSession s, AgentSessionResult res, string zhPhase)
+    private async Task<string> DiagnoseFailedRun(ChatSession s, AgentSessionResult res, string zhPhase)
     {
         _log.LogWarning(
             "No usable plan ({Phase}) session={Session} isError={Err} subtype={Sub} chars={Chars} diag={Diag}",
             zhPhase, s.Id, res.IsError, res.Subtype ?? "(none)", res.FinalText.Trim().Length, res.Diagnostic ?? "(none)");
+
+        // Cheap in the common case: the probe is cached, and a healthy install answers from memory.
+        var cli = await _claude.ProbeAsync();
+        if (!cli.Ready && cli.Problem is { Length: > 0 } problem)
+            return $"{zhPhase}未能完成 —— {problem}";
+
         var why = res.Subtype switch
         {
             "error_max_turns" => "(达到回合上限)",
@@ -525,7 +543,7 @@ public sealed class ChatSessionService : IChatGateHost
             // plan to approve, only a fragment.
             if (res.IsError || s.PlanText.Length == 0)
             {
-                Fail(s, DiagnoseFailedRun(s, res, "计划阶段"));
+                Fail(s, await DiagnoseFailedRun(s, res, "计划阶段"));
                 return;
             }
             SetPhase(s, ChatPhase.AwaitingPlanApproval, new { plan = s.PlanText });
@@ -641,7 +659,7 @@ public sealed class ChatSessionService : IChatGateHost
             var text = res.FinalText.Trim();
             if (res.IsError || text.Length == 0)
             {
-                Fail(s, DiagnoseFailedRun(s, res, "修订计划"));
+                Fail(s, await DiagnoseFailedRun(s, res, "修订计划"));
                 return;
             }
             s.PlanText = text;

@@ -203,6 +203,10 @@ public static class GatherlightApp
             .AddSingleton<Lyntai.Storage.IKeyValueStore, Platform.Ops.Cortex.Services.AppConfigKeyValueStore>()
             // App-side adapter over Lyntai's IAgentSession — the two-gate / jobs / playground run through this.
             .AddSingleton<IAgentRunner, AgentRunner>()
+            // Resolves + inspects the claude CLI itself (present? runnable? signed in?). The CLI used to be
+            // an ASSUMED machine dependency: absent on a fresh install, it died at spawn and surfaced as a
+            // generic "CLI 报告错误". This is what makes it a provisioned resource with a diagnosable state.
+            .AddSingleton<IClaudeCliRuntime, ClaudeCliRuntime>()
             // One live agent run at a time across chat AND background jobs (single-writer data tree)
             .AddSingleton<IAgentGate, AgentGate>()
             .AddSingleton<IPromptHarness, PromptHarness>()
@@ -395,6 +399,11 @@ public static class GatherlightApp
             .AddSingleton<Platform.Hosting.Migration.Services.StartupMigrationRunner>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DbMigrateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealLocksStep>()
+            // Early, so every later step that might reach for the agent already spawns the right binary.
+            // Unlike GitRuntimeStep this is NOT essential and downloads nothing: git is boot-essential so
+            // it is fetched inline, whereas gating the boot on a ~265 MB CLI download would put the 资源
+            // panel that installs it behind the very failure it fixes. It applies, probes, and warns.
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.ClaudeRuntimeStep>()
             // Immediately BEFORE DataRepoInitStep, which cannot run without a git CLI: on a machine that
             // has none (a fresh install — the lean bundle ships no git by design) this downloads the
             // portable one instead of failing. It used to fail, and being essential it closed the gate

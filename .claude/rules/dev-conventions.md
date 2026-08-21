@@ -223,7 +223,27 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - Cheap utility calls (extract, validation) run with a **neutral cwd** so the data folder's
   CLAUDE.md/knowledge base isn't loaded per call; the interactive chat runs cwd = data root
   **by design** (the planner gate is the product).
-- Tests stub the CLI via `GATHERLIGHT_CLAUDE_CMD` (see devtools/scripts/claude-stub.mjs).
+- **The CLI is a PROVISIONED resource, not an assumption** (`Agent/Llm/Services/ClaudeCliRuntime`).
+  `Locate()` resolves an explicit override → the copy provisioned into `{data}/state/resources/claude`
+  → a bundled `libs/claude` → PATH, and **re-resolves per call** until it finds a real file: DI builds
+  the singleton long before the panel install that changes the answer, and resolving once in a
+  constructor is the exact trap that left a freshly downloaded git invisible to a retry. The seam into
+  Lyntai is the **`CLAUDE_CMD` env var**, deliberately not `AddClaudeCliAgentSession(command)` — that
+  argument is captured once at DI registration, while `ClaudeAgentSession` calls
+  `ClaudeCommand.Resolve` *inside the run*, so only the env var can carry a CLI installed after startup.
+  `Apply()` therefore runs on every probe, not just at boot, and never overrules an existing override.
+- **Installed is not usable: probe, don't pattern-match.** A downloaded CLI is not a signed-in one, so
+  `claude auth status --json` is the probe (`{loggedIn,email,subscriptionType}`, exit 1 when signed
+  out) and it distinguishes *missing* from *signed out* from *a real failure* — three problems with
+  three different fixes. `DiagnoseFailedRun` calls it instead of matching the spawn error, because that
+  Win32 text is **localized** ("系统找不到指定的文件" here, English elsewhere): matching it would work on
+  the developer's machine and silently stop working on the household's. `claude auth login` is
+  browser-interactive with no headless flag — the app detects the state exactly and cannot complete it,
+  so the message names the command rather than pretending to fix it.
+- Tests stub the CLI via `GATHERLIGHT_CLAUDE_CMD` (see devtools/scripts/claude-stub.mjs). **The stub must
+  answer `auth status --json`** — it short-circuits before the stdin drain. Without that the probe reads
+  its stream-json as garbage, every suite boots with a spurious "not logged in" warning, and the
+  diagnosis rewrites the failed-turn messages other suites assert on.
 
 ## Security / remote access (`Platform/Hosting/Security`)
 
@@ -387,11 +407,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   so `pdf_inspect`/`pdf_fill`/`pdf_merge`/`fill_itinerary` threw `工具目录不存在:` in every installed copy
   and only worked from the source repo. Coverage: `e2e-p10` runs the tools in BOTH shapes.
 - **Large resources are download-at-setup, not bundled** (default lean bundle ~200 MB vs ~350 MB):
-  chromium + git are provisioned by `Platform/Hosting/Resources` (`ResourceProvisioner` →
-  `/api/manage/resources`, the 资源 · Resources console panel) into `{data}/state/resources/…`
+  chromium + git + the **claude CLI** are provisioned by `Platform/Hosting/Resources`
+  (`ResourceProvisioner` → `/api/manage/resources`, the 资源 · Resources console panel) into
+  `{data}/state/resources/…`
   (in the data folder → survives updates, fetched once). Runtime resolvers prefer that copy
-  (`PlaywrightHost` browsers path, `GitCliService.GitExe` data-aware). `build-production.mjs
-  --offline` bundles them for air-gapped installs. The Playwright **driver** (`libs/.playwright`,
+  (`PlaywrightHost` browsers path, `GitCliService.GitExe` and `ClaudeCliRuntime.Locate` data-aware).
+  `build-production.mjs --offline` bundles them for air-gapped installs. The Playwright **driver** (`libs/.playwright`,
   the chromium-install bootstrap) is still bundled.
 - **A resource the app cannot BOOT without is provisioned automatically, never reported.** git is that
   one — the data repo is the audit trail the diff gate rests on — and being download-at-setup like
@@ -411,6 +432,28 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   why `e2e-p49`'s case C makes git appear **mid-life** (confirmed to hang the gate against the pre-fix
   binary). A household that already has git downloads nothing — `p49` asserts that too, because a
   surprise 37 MB is its own defect.
+- **A resource the app cannot WORK without but CAN boot without is OFFERED, never forced.** The claude
+  CLI is that one, and it is the mirror image of the git rule above — same root failure, opposite remedy.
+  It was the last runtime dependency we merely assumed: a fresh install spawned the PATH `claude` that
+  wasn't there, died at spawn in 17ms, and told the household "计划阶段未能完成(CLI 报告错误),请重试" —
+  naming neither cause nor fix, on a retry that could never succeed. It is a catalog entry now, but
+  `ClaudeRuntimeStep` is deliberately **not** `Essential`: git is boot-essential so it downloads inline,
+  whereas gating the boot on a ~265 MB CLI would put the 资源 panel that installs it *behind* the very
+  failure — the trap git fell into. So the step applies, probes, warns, and lets the app come up.
+  Three differences from the sha256-pinned entries, each load-bearing:
+  (1) **the version and checksum are read LIVE** from the vendor (`/latest` → `/<v>/manifest.json` →
+  `/<v>/<platform>/claude.exe` — the contract the shipped `claude.ai/install.ps1` uses), because the
+  checksum is still what guarantees the bytes of an executable we are about to run, it is just *read*
+  rather than restated; a pinned CLI could not be updated without a release of ours, and a stale one
+  eventually stops working against the API, so "never update" is not the safe default it is for git.
+  (2) **installed ≠ usable** in a second way — a downloaded binary is not a signed-in one; the panel row
+  carries the login state, and `claude auth login` is browser-interactive with no headless flag, so the
+  app detects it exactly and cannot complete it. (3) **the version is only tracked for what WE
+  installed**: a household on a machine-wide CLI has no marker of ours and must never be offered an
+  "update" that would silently replace their own install. `ReplaceBinary` tolerates a running image
+  (Windows refuses to overwrite a loaded exe, and an update is exactly when one may be mid-chat) by
+  renaming the old copy aside. Proof lives in `e2e-p50`, whose tampered-download denial is paired with
+  the same bytes installing under the right checksum, and whose case A asserts the app boots ANYWAY.
 - **Auto-update is two-phase**: the server (`Platform/Hosting/Update`) checks the configured
   GitHub release + downloads/sha256-verifies into `{install}/.update/staged`; the C++ launcher
   overlays it on the next restart (a running exe can't replace itself) and is itself excluded
