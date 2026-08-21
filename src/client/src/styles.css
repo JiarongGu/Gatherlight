@@ -3243,6 +3243,11 @@ kbd, .topbar-kbd {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px; align-items: end;
 }
 .mem-other .set-hint { grid-column: 1 / -1; }
+/* .set-field carries margin-bottom:12px, which makes the grid ROW taller than the input inside it — so
+   `align-items:end` aligned the buttons to the row's bottom edge, 12px below the input they belong to.
+   Zeroed here rather than globally: that margin is doing real work in the Settings forms this class was
+   written for. */
+.mem-other .set-field { margin-bottom: 0; }
 .mem-other-act { display: flex; gap: 8px; }
 @media (max-width: 760px) { .mem-other { grid-template-columns: 1fr; } }
 .mem-judge { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
@@ -3261,3 +3266,6 @@ kbd, .topbar-kbd {
 .mem-disk-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mem-disk-size { color: var(--muted); }
 .mem-tbl td.mem-old { color: var(--muted); }
+.mem-mgr { margin-top: 18px; }
+.mem-mgr-h { width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; }
+.mem-mgr-body { margin-top: 12px; padding-left: 2px; }

@@ -1373,8 +1373,18 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
           table; the previous layout stacked them as prose blocks, so choosing meant reading five
           paragraphs and holding the numbers in your head. Everything that decides the choice is now a
           column, and the recommendation names its evidence instead of asserting itself. */}
+      {/* PROGRESSIVE DISCLOSURE, not a sub-tab. The bulk of this section is a comparison table, and a
+          comparison is a SETUP-TIME artifact: you read it once, choose, and never look at it again — yet
+          it was rendering at full size even with 本地语义 switched off, which is what made the section feel
+          oversized. A sub-tab would have treated the symptom and cost more: a second level of navigation
+          on a rarely-visited screen, and — worse — it would put the 本地语义 switch and the table that
+          satisfies it in different places, so turning the feature on would mean going somewhere else to
+          finish. Collapsed, they stay one click apart.
+
+          Open by default only when you are MID-SETUP (the feature is on but no model is chosen), because
+          that is the one state where the table is the thing you came for. */}
       {o.serving && (
-        <>
+        <ModelManager defaultOpen={lm.enabled && !lm.model} count={lm.options.length} current={lm.model}>
           <div className="mem-rec">
             <b>推荐 {lm.recommendation.id}</b> —— {lm.recommendation.reason}
             {lm.recommendation.caution && <div className="set-hint">注意:{lm.recommendation.caution}</div>}
@@ -1450,9 +1460,27 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
               after it — which is exactly how this panel shipped without the two best models available at
               the time. Anything Ollama can pull is usable here the day it exists. */}
           <OtherModelField busy={busy} post={post} installed={o.models.map((x) => x.name)} />
-        </>
+        </ModelManager>
       )}
     </>
+  );
+}
+
+/** The model comparison + disk + free-form field, behind one disclosure. Summarised when closed, so the
+ *  section still ANSWERS "which model am I using and how many are there" without unfolding. */
+function ModelManager(
+  { defaultOpen, count, current, children }:
+  { defaultOpen: boolean; count: number; current: string | null; children: React.ReactNode },
+) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="mem-mgr">
+      <button className={`cx-btn mem-mgr-h${open ? ' on' : ''}`} onClick={() => setOpen(!open)}>
+        <span className="cx-caret">{open ? '▾' : '▸'}</span>
+        选择嵌入模型 · {count} 个已实测{current ? ` · 当前 ${current}` : ' · 尚未选择'}
+      </button>
+      {open && <div className="mem-mgr-body">{children}</div>}
+    </div>
   );
 }
 

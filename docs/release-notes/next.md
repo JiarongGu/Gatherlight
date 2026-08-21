@@ -26,6 +26,25 @@ to settle a close call.
 this version no longer has to wait for the next one. Before saving, the app makes the model compute one
 vector: if it cannot, the setting is refused rather than leaving your search quietly finding nothing.
 
+The table also shows when each model was released, because that turned out to predict quality here: every
+model that scores badly is two years old, and the same maker's newer version scores 9/10 where its older one
+scores 4/10. It is not a rule — BGE-M3 is just as old and still ties for best — so treat it as a reason to
+*try* something newer, especially for a model nobody has measured.
+
+### Managing what is on your computer
+
+Models are large, and until now the panel could only add them. It can now show and remove them:
+
+- **本机模型占用** lists everything Ollama holds on this computer with its size, including models this app
+  never suggested, so you can see what trying things has cost you in disk.
+- **删除** removes one. A model the app is set up to use — the search model or the local judge — is refused
+  rather than deleted, because losing the search model would show up as searches quietly finding less
+  instead of an error telling you what happened.
+
+The model list itself is folded away behind **选择嵌入模型** now: it is something you read once when
+choosing, and it was taking up most of the panel even with the feature switched off. It opens by itself when
+you have turned the local model on but not yet picked one.
+
 ### The assistant can judge its own memory on your computer
 
 The part of memory search that labels each note as it is saved, and decides which results actually answered
