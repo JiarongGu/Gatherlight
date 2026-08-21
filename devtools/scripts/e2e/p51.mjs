@@ -193,18 +193,62 @@ try {
   // ---- E · a backend serves a layer by EXISTING --------------------------------------------------
   const judgeSources = (judge.sources ?? []).map((x) => x.id);
   const semanticSources = (semantic.sources ?? []).map((x) => x.id);
-  ok('判断 offers both backends', judgeSources.join() === 'claude-cli,ollama', JSON.stringify(judgeSources));
-  // THE load-bearing assertion of this design. Claude is absent from 语义 because no class implements that
-  // layer's interface — not because a predicate dropped it. If a ClaudeCliSemanticSource is ever added
-  // (Anthropic shipping an embeddings endpoint), this SHOULD fail and be updated deliberately.
-  ok('语义 offers only backends that can actually embed — Claude has no embeddings endpoint',
-    semanticSources.length > 0 && !semanticSources.includes('claude-cli'), JSON.stringify(semanticSources));
-  ok('every source says whether it is usable here, and why not when it is not',
+  const BACKENDS = ['claude-cli', 'ollama', 'builtin'];
+
+  // EVERY backend on EVERY layer. A layer showing one button and nothing about the others answers "why
+  // isn't this an option here?" by making the question unaskable — "no class implements it" is an answer
+  // only the source tree gives. This is the same rule the available-but-blocked case already followed
+  // (three causes, three sentences), applied one level further out.
+  ok('判断 lists all three backends', BACKENDS.every((b) => judgeSources.includes(b)),
+    JSON.stringify(judgeSources));
+  ok('语义 lists all three backends too — including the ones it cannot use',
+    BACKENDS.every((b) => semanticSources.includes(b)), JSON.stringify(semanticSources));
+
+  // …and `bindable` is what separates "cannot, ever" from "cannot yet". THE load-bearing pair of this
+  // design: Claude is unbindable under 语义 because no class implements that layer's interface (no
+  // embeddings endpoint), and it is bindable under 判断. If Anthropic ships embeddings and a
+  // ClaudeCliSemanticSource is added, the first of these SHOULD fail and be updated deliberately.
+  const bindable = (l, id) => (l.sources ?? []).find((x) => x.id === id)?.bindable;
+  ok('Claude cannot be BOUND to 语义 — it has no embeddings endpoint',
+    bindable(semantic, 'claude-cli') === false, String(bindable(semantic, 'claude-cli')));
+  ok('…but it can be bound to 判断, which is the same backend doing what it can do',
+    bindable(judge, 'claude-cli') === true, String(bindable(judge, 'claude-cli')));
+  ok('the bundled runtime is listed on both layers and bindable on neither, because it does not exist yet',
+    bindable(judge, 'builtin') === false && bindable(semantic, 'builtin') === false,
+    JSON.stringify({ judge: bindable(judge, 'builtin'), semantic: bindable(semantic, 'builtin') }));
+  ok('Ollama is bindable on both — one daemon, a different model on each layer',
+    bindable(judge, 'ollama') === true && bindable(semantic, 'ollama') === true);
+
+  // A backend that cannot be used must SAY so. This is the assertion that would fail if someone "tidied
+  // up" by dropping the declined entries instead of explaining them.
+  ok('every backend a layer cannot use carries a reason, not just a disabled button',
+    [...judge.sources, ...semantic.sources]
+      .filter((x) => !x.bindable)
+      .every((x) => typeof x.reason === 'string' && x.reason.length > 10),
+    JSON.stringify([...judge.sources, ...semantic.sources]
+      .filter((x) => !x.bindable).map((x) => [x.id, x.reason?.slice(0, 40)])));
+  // And Claude's refusal under 语义 must not read as "Claude is useless for meaning" — via 判断 it is the
+  // strongest measured arm, and the sentence has to say so or it teaches the household the wrong thing.
+  ok('and Claude\'s refusal under 语义 still points at 判断, rather than reading as a dead end',
+    /判断/.test(String((semantic.sources ?? []).find((x) => x.id === 'claude-cli')?.reason ?? '')),
+    (semantic.sources ?? []).find((x) => x.id === 'claude-cli')?.reason);
+  ok('every backend says whether it is usable here, and why not when it is not',
     [...judge.sources, ...semantic.sources].every(
       (x) => typeof x.available === 'boolean' && (x.available || (typeof x.reason === 'string' && x.reason.length > 0))),
     JSON.stringify([...judge.sources, ...semantic.sources].map((x) => [x.id, x.available, x.reason])));
   ok('and each carries what choosing it costs, rather than just a name',
     [...judge.sources, ...semantic.sources].every((x) => String(x.description ?? '').length > 10));
+
+  // Unbindable is enforced at the ENDPOINT too, not only greyed out in the client: the button is one
+  // writer of this decision and the API is another, and only one of them is a security-relevant boundary.
+  const bindDeclined = await post('/api/manage/memory/layer/semantic',
+    { source: 'claude-cli', model: 'haiku' });
+  ok('binding 语义 to Claude is refused by the API, not merely disabled in the UI',
+    bindDeclined.status === 400, String(bindDeclined.status));
+  const bindEmbedded = await post('/api/manage/memory/layer/judge',
+    { source: 'builtin', model: 'haiku' });
+  ok('and so is binding anything to the runtime that is not shipped yet',
+    bindEmbedded.status === 400, String(bindEmbedded.status));
 
   // CAPABILITY, over every model this machine actually holds. Ollama's own answer decides; the shortlist
   // is only the fallback for a daemon too old to report one.

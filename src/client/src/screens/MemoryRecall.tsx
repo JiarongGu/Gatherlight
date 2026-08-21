@@ -24,7 +24,11 @@ interface SourceModel {
 
 interface SourceView {
   id: string; name: string; description: string;
-  // Whether it can serve THIS layer on THIS machine right now. An unavailable source is still shown, with
+  // Whether this layer can be bound to it AT ALL. False = there is no implementation behind it (Claude has
+  // no embeddings endpoint; the bundled runtime is not shipped yet), so the button exists only to carry the
+  // reason. Distinct from `available`, which is "could be bound once its prerequisite is met".
+  bindable: boolean;
+  // Whether it can serve THIS layer on THIS machine right now. An unavailable backend is still shown, with
   // its reason: hiding it answers "why can't I pick this?" by making the question unaskable.
   available: boolean; reason: string | null;
   // A model 资源 could fetch, when the fix IS a download.
@@ -130,6 +134,10 @@ export function MemoryRecallSection(
         三层互补,不是三选一:<b>公式</b>永远在跑;<b>判断</b>调整已检索结果的顺序;<b>语义</b>改变「能不能被检索到」。
         模型的下载与删除在「{s.modelsAt}」面板;这里只决定每一层用哪个。
       </div>
+      {/* A RECOMMENDATION of where to start, not a reason to bury a layer. It was briefly used to fold 语义
+          under 高级; that put someone else's measurement in charge of this panel's shape, which is more
+          than a borrowed number should decide. The note stays — attributed — and both layers stay equal. */}
+      <div className="mem-fine">{s.weighting.note}</div>
       {pending && (
         <div className="set-actions">
           {inHost && <button className="cx-btn primary" onClick={onRestart}>重启服务以生效</button>}
@@ -171,73 +179,70 @@ export function MemoryRecallSection(
             </button>
           </div>
         </div>
-      </div>
 
-      {/* 3 — semantic, under 高级. NOT hidden: one click away, with its state already reported in the pill
-          row above. The ordering is a measurement, and the measurement is SOMEONE ELSE'S — so the sentence
-          says whose, and keeps saying it until somebody measures this household's own material. */}
-      <Advanced defaultOpen={semantic.on} note={s.weighting.note}>
-        <div className="mem-layers">
-          <div className={`mem-layer${semantic.activeSource ? ' on' : ''}`}>
-            <div className="mem-layer-main">
-              <div className="mem-layer-name">
-                {semantic.name}
-                {semantic.activeSource && <span className="res-badge">运行中</span>}
-                {semantic.activeSource && semantic.activeModel &&
-                  <span className="res-badge">{backendLabel(semantic, semantic.activeSource, semantic.activeModel)}</span>}
-                {semantic.on && !semantic.activeSource && <span className="res-badge">待重启</span>}
+        {/* 3 — semantic, a co-equal third card. It was briefly folded under a 高级 divider on Lyntai's
+            measurement; that let a borrowed number decide this panel's shape, which is more than a
+            measurement taken on somebody else's corpus should get to do. The recommendation is a line
+            above; the layer is a card like the others. */}
+        <div className={`mem-layer${semantic.activeSource ? ' on' : ''}`}>
+          <div className="mem-layer-main">
+            <div className="mem-layer-name">
+              {semantic.name}
+              {semantic.activeSource && <span className="res-badge">运行中</span>}
+              {semantic.activeSource && semantic.activeModel &&
+                <span className="res-badge">{backendLabel(semantic, semantic.activeSource, semantic.activeModel)}</span>}
+              {semantic.on && !semantic.activeSource && <span className="res-badge">待重启</span>}
+            </div>
+            <div className="mem-layer-desc">{semantic.what}</div>
+            <div className="mem-layer-desc"><b>费用</b> {semantic.cost}</div>
+            <SourcePicker layer={semantic} busy={busy} bind={bind('semantic')} modelsAt={s.modelsAt} />
+            {semantic.note && <div className="mem-fine">说明:{semantic.note}</div>}
+
+            {/* The rebuild, while it runs and after it ends. It used to be a greyed-out button and
+                nothing else, for minutes — indistinguishable from a hang. */}
+            {semantic.reindex?.running && (
+              <div className="mem-reindex">
+                <div className="res-prog">
+                  <span className="res-bar" style={{ width: `${semantic.reindex.percent ?? 8}%` }} />
+                </div>
+                <div className="mem-fine">
+                  {semantic.reindex.total > 0
+                    ? `重建索引中:${semantic.reindex.done}/${semantic.reindex.total} 条事实`
+                    : '重建索引中:正在统计事实…'}
+                  {judge.on && ' · 开启了判断,每条事实会多一次模型调用,请耐心等待'}
+                </div>
               </div>
-              <div className="mem-layer-desc">{semantic.what}</div>
-              <div className="mem-layer-desc"><b>费用</b> {semantic.cost}</div>
-              <SourcePicker layer={semantic} busy={busy} bind={bind('semantic')} modelsAt={s.modelsAt} />
-              {semantic.note && <div className="mem-fine">说明:{semantic.note}</div>}
-
-              {/* The rebuild, while it runs and after it ends. It used to be a greyed-out button and
-                  nothing else, for minutes — indistinguishable from a hang. */}
-              {semantic.reindex?.running && (
-                <div className="mem-reindex">
-                  <div className="res-prog">
-                    <span className="res-bar" style={{ width: `${semantic.reindex.percent ?? 8}%` }} />
-                  </div>
-                  <div className="mem-fine">
-                    {semantic.reindex.total > 0
-                      ? `重建索引中:${semantic.reindex.done}/${semantic.reindex.total} 条事实`
-                      : '重建索引中:正在统计事实…'}
-                    {judge.on && ' · 开启了判断,每条事实会多一次模型调用,请耐心等待'}
-                  </div>
-                </div>
-              )}
-              {/* Coverage is the standing answer; the rebuild is an event that changes it. Shown only when
-                  it is NOT complete — "25/25" every day is noise, a shortfall is worth acting on. */}
-              {!semantic.reindex?.running && semantic.coverage && semantic.coverage.total > 0
-                && semantic.coverage.indexed < semantic.coverage.total && (
-                <div className="mem-fine warn">
-                  索引覆盖 {semantic.coverage.indexed}/{semantic.coverage.total} 条事实 —— 其余仍可用关键词找到,
-                  重启后会自动补齐,也可以现在「重建索引」。
-                </div>
-              )}
-              {!semantic.reindex?.running && semantic.reindex?.error && (
-                <div className="mem-fine danger">上次重建:{semantic.reindex.error}</div>
-              )}
-              {!semantic.reindex?.running && semantic.reindex?.embedded ? (
-                <div className="mem-fine">上次重建完成:{semantic.reindex.embedded} 条事实已重新索引。</div>
-              ) : null}
-            </div>
-            <div className="mem-layer-side">
-              {semantic.on && (
-                <>
-                  <button className="cx-btn" disabled={busy === 'reindex' || semantic.reindex?.running}
-                    onClick={() => post('/api/manage/memory/layer/semantic/reindex', undefined, 'reindex')}>
-                    {semantic.reindex?.running ? '重建中…' : '重建索引'}
-                  </button>
-                  <button className="cx-btn" disabled={busy === 'off'}
-                    onClick={() => post('/api/manage/memory/layer/semantic/off', undefined, 'off')}>停用</button>
-                </>
-              )}
-            </div>
+            )}
+            {/* Coverage is the standing answer; the rebuild is an event that changes it. Shown only when
+                it is NOT complete — "25/25" every day is noise, a shortfall is worth acting on. */}
+            {!semantic.reindex?.running && semantic.coverage && semantic.coverage.total > 0
+              && semantic.coverage.indexed < semantic.coverage.total && (
+              <div className="mem-fine warn">
+                索引覆盖 {semantic.coverage.indexed}/{semantic.coverage.total} 条事实 —— 其余仍可用关键词找到,
+                重启后会自动补齐,也可以现在「重建索引」。
+              </div>
+            )}
+            {!semantic.reindex?.running && semantic.reindex?.error && (
+              <div className="mem-fine danger">上次重建:{semantic.reindex.error}</div>
+            )}
+            {!semantic.reindex?.running && semantic.reindex?.embedded ? (
+              <div className="mem-fine">上次重建完成:{semantic.reindex.embedded} 条事实已重新索引。</div>
+            ) : null}
+          </div>
+          <div className="mem-layer-side">
+            {semantic.on && (
+              <>
+                <button className="cx-btn" disabled={busy === 'reindex' || semantic.reindex?.running}
+                  onClick={() => post('/api/manage/memory/layer/semantic/reindex', undefined, 'reindex')}>
+                  {semantic.reindex?.running ? '重建中…' : '重建索引'}
+                </button>
+                <button className="cx-btn" disabled={busy === 'off'}
+                  onClick={() => post('/api/manage/memory/layer/semantic/off', undefined, 'off')}>停用</button>
+              </>
+            )}
           </div>
         </div>
-      </Advanced>
+      </div>
     </>
   );
 }
@@ -271,7 +276,10 @@ function SourcePicker(
   const [pickedSource, setPickedSource] = useState<string | null>(null);
   const [pickedModel, setPickedModel] = useState<string | null>(null);
 
-  const source = layer.sources.find((x) => x.id === (pickedSource ?? layer.source)) ?? layer.sources[0];
+  // Prefer the bound backend, then the first BINDABLE one — never simply sources[0], which could be a
+  // declined entry and would open the layer on a backend it can never use.
+  const source = layer.sources.find((x) => x.id === (pickedSource ?? layer.source))
+    ?? layer.sources.find((x) => x.bindable) ?? layer.sources[0];
   if (!source) return null;
 
   // Only what is ON THIS MACHINE can be bound. The rest of the list is what 资源 could fetch, and offering
@@ -287,15 +295,20 @@ function SourcePicker(
   return (
     <div className="mem-src">
       <span className="mem-src-lbl">运行于</span>
+      {/* EVERY backend, including the ones this layer cannot use. Selecting a declined one shows its
+          reason instead of a model list — the button exists so "why isn't Claude an option here?" has an
+          answer on the screen rather than only in the source tree. It stays clickable for exactly that
+          reason; what it cannot do is bind, and 使用 is what enforces that. */}
       <div className="cx-seg">
         {layer.sources.map((x) => (
-          <button key={x.id} className={`cx-seg-b${source.id === x.id ? ' on' : ''}`}
+          <button key={x.id}
+            className={`cx-seg-b${source.id === x.id ? ' on' : ''}${x.bindable ? '' : ' na'}`}
             disabled={busy !== null} onClick={() => { setPickedSource(x.id); setPickedModel(null); }}>
             {x.name}
           </button>
         ))}
       </div>
-      {usable.length > 0 && (
+      {source.bindable && usable.length > 0 && (
         <select className="mem-src-sel" value={model} onChange={(e) => setPickedModel(e.target.value)}>
           {usable.map((m) => (
             <option key={m.id} value={m.id}>
@@ -304,14 +317,17 @@ function SourcePicker(
           ))}
         </select>
       )}
-      <button className="cx-btn primary"
-        disabled={busy !== null || !model || !source.available || unchanged}
-        onClick={() => bind(source.id, model)}>
-        {busy?.startsWith('bind:') ? '保存中…' : unchanged ? '使用中' : '使用'}
-      </button>
+      {source.bindable && (
+        <button className="cx-btn primary"
+          disabled={busy !== null || !model || !source.available || unchanged}
+          onClick={() => bind(source.id, model)}>
+          {busy?.startsWith('bind:') ? '保存中…' : unchanged ? '使用中' : '使用'}
+        </button>
+      )}
+      {!source.bindable && <span className="mem-src-na">这一层用不了</span>}
 
-      <div className="mem-fine">{source.description}</div>
-      {/* WHY it is unavailable — outside the <select>, which is the whole point. The previous version put
+      {source.bindable && <div className="mem-fine">{source.description}</div>}
+      {/* WHY it cannot be used — outside the <select>, which is the whole point. An earlier version put
           this sentence in an <option>, so it could only render when there was something to select: the one
           case it existed to explain was the one case it could never appear in. */}
       {!source.available && source.reason && <div className="mem-fine warn">{source.reason}</div>}
@@ -322,42 +338,13 @@ function SourcePicker(
           需要的模型可在「{modelsAt}」面板一键下载:<b className="mem-mono">{source.suggest}</b>
         </div>
       )}
-      {source.available && usable.length === 0 && (
+      {source.bindable && source.available && usable.length === 0 && (
         <div className="mem-fine warn">这个后端还没有可用的模型 —— 请先在「{modelsAt}」面板下载。</div>
       )}
-      {fetchable > 0 && (
+      {source.bindable && fetchable > 0 && (
         <div className="mem-fine">还有 {fetchable} 个可以下载的模型,在「{modelsAt}」面板。</div>
       )}
     </div>
   );
 }
 
-/** 高级 · Advanced — 语义 lives here rather than as a co-equal third card.
- *
- *  One click, not hidden, and its state is already in the pill row above. The reason is a measurement and
- *  the measurement is Lyntai's, on Lyntai's corpus — so the note that justifies the demotion is the note
- *  that names whose numbers they are. */
-function Advanced(
-  { defaultOpen, note, children }:
-  { defaultOpen: boolean; note: string; children: React.ReactNode },
-) {
-  // Derived-with-override, the same pattern SourcePicker uses and for the same reason: `defaultOpen`
-  // arrives with the data, so a plain useState initialiser would capture `false` from the first render.
-  const [picked, setPicked] = useState<boolean | null>(null);
-  const open = picked ?? defaultOpen;
-  return (
-    <div className="mem-adv">
-      <button className={`mem-adv-h${open ? ' on' : ''}`} onClick={() => setPicked(!open)}>
-        <span className="cx-caret">{open ? '▾' : '▸'}</span>
-        <span className="mem-adv-label">高级 · Advanced</span>
-        <span className="mem-adv-meta">语义检索(本机嵌入模型)</span>
-      </button>
-      {open && (
-        <div className="mem-adv-body">
-          <div className="mem-fine">{note}</div>
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}

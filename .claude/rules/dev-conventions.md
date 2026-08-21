@@ -435,12 +435,39 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   is built — so a regression that re-buys the embedding and reads none of it now announces itself instead of
   showing up as "recall feels no different". Verified both ways on 2026-08-21: silent on the current wiring,
   and firing by name with `SemanticSeedK` put back to 0.
-- **The memory judge's BACKEND is a choice, and a named client cannot route on candidates it does not own.**
-  Annotation (every write) + verification (every recall) is the app's most frequent model call, so it may run
-  on a local Ollama model instead of the CLI — `memory.judgeTransport`/`judgeModel` in `settings.json`,
-  because naming it registers a provider and a named `ILlmClient` while the container is built. The policies'
-  own `Model` stays **null** so the router resolves per consumer and cortex's live `llm.model.memory` keeps
-  working; only `DefaultModelByConsumer["memory"]` changes. **The trap:** `LlmRouterFactory.For()` narrows a
+- **VOCABULARY, because this area had none and the gap cost a whole design conversation.** Three words, and
+  they are not interchangeable. A **LAYER** is a job (公式 · 判断 · 语义). A **BACKEND** is *where the model
+  comes from* — `claude-cli` · `ollama` · `builtin` (`MemoryBackends`). A **MODEL** is what a backend serves.
+  The docs previously described this one axis three ways — "the local model", "the judge's *transport*", "the
+  embedder" — and named it never, so every discussion of it had to invent a term. **The trap in that
+  invention:** 嵌入 already means *embedding* here (`EmbeddingCatalog`, 嵌入模型, the 嵌入 badge), so
+  "embedded"/"嵌入式" for a bundled runtime collides with it head-on and a sentence like "cli/local for the
+  judge and embedded for 语义" parses correctly under BOTH readings. Hence **`builtin` · 内置**, which cannot
+  be confused with 嵌入. Say backend, not transport; say built-in, not embedded.
+- **A recall layer's BACKEND is a SOURCE, and a source serves a layer by existing.** One interface per layer
+  (`Agent/Llm/Sources`: `IMemoryJudgeSource`, `IMemorySemanticSource`, sharing `IMemorySource`), one class per
+  backend, a **static catalog** (`MemorySources`) — never a predicate over capability strings. That earlier
+  predicate was wrong in both directions at once: a machine whose models were all catalogued embedders got a
+  dead switch with no explanation, and the first UNCATALOGUED embedder passed straight through the check
+  written to stop it, into a fail-open policy. 语义 offers no Claude arm because no `ClaudeCliSemanticSource`
+  exists (no embeddings endpoint) — an absent class, not an exclusion — and a backend that could do both would
+  implement both interfaces and appear in both toggles with no other edit. **Static rather than a DI
+  collection** because `GatherlightApp` wires from it *inside* `AddLyntai(b => …)`, while the container is
+  being built: a DI collection would need a second registration-time list, and two lists for one set is the
+  drift `check-ui-registry` exists to catch. Sources take runtime deps as a per-call `MemorySourceContext`.
+  Bindings live in `settings.json` (`memory.judgeSource`/`judgeModel`/`semanticSource`/`embeddingModel`) —
+  consumed at DI registration, before the DB opens — while 判断's on/off stays live in `app_config`, and the
+  console reports the two as different kinds of change. **`memory.judgeTransport` is legacy**, resolved on
+  read (`cli`→`claude-cli`, `local`→`ollama`) and never written again; its `judgeModel` belonged to the LOCAL
+  arm alone and was deliberately REMEMBERED across a switch back to the CLI, so reading it unconditionally
+  hands an Ollama model id to Claude — a badge reading `Claude CLI · gemma3:4b`, caught only against a real
+  data folder and now pinned by `p51`'s case I on a pre-seeded legacy config.
+- **ONE control writes the judge's model.** `DefaultModelByConsumer["memory"]` and cortex's live
+  `llm.model.memory` were two writers and cortex won, so a household who set 记忆判断 to `haiku` and later
+  moved the judge local had the router asking Ollama for `haiku` — fail-open both sides, hence zero calls and
+  no error. `POST /api/manage/memory/layer/judge` writes source and model together; the cortex row is gone.
+  The policies' own `Model` stays **null** so the router still resolves per consumer.
+  **The trap:** `LlmRouterFactory.For()` narrows a
   named client's provider POOL but reuses the same options, so a client pooled over `ollama-chat` still
   resolved candidates from `UseDefaultCandidates("claude-cli")` — a provider absent from its own pool. Every
   call logged `router: skipping claude-cli — no provider with this id registered` and failed, and since both

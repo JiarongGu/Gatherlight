@@ -111,7 +111,7 @@ public sealed class MemoryRecallController : ControllerBase
                         : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。",
                     source = boundJudge.Id, model = MemorySources.ResolveJudgeModel(mem),
                     activeSource = _judgeWiring.Transport, activeModel = _judgeWiring.Model,
-                    sources = await SourceViews(MemorySources.Judge, ctx),
+                    sources = await SourceViews(MemorySources.Judge, MemorySources.JudgeDeclined, ctx),
                 },
                 new
                 {
@@ -125,7 +125,7 @@ public sealed class MemoryRecallController : ControllerBase
                     // when an embedder was registered.
                     activeSource = _semantic is not null ? boundSemantic?.Id : null,
                     activeModel = _semantic is not null ? mem.EmbeddingModel : null,
-                    sources = await SourceViews(MemorySources.Semantic, ctx),
+                    sources = await SourceViews(MemorySources.Semantic, MemorySources.SemanticDeclined, ctx),
                     // Turning this on re-embeds by REBUILDING, so say so where the household decides: the
                     // ranking the index has accumulated is reset, and on a large corpus it is not quick.
                     note = "开启或更换模型后需要重建索引:会重新计算全部向量,并重置已积累的排序权重(事实本身不受影响)。",
@@ -156,17 +156,24 @@ public sealed class MemoryRecallController : ControllerBase
         });
     }
 
-    /// <summary>Every source for a layer, whether or not it can serve right now.
+    /// <summary>EVERY backend for a layer — the ones it can be bound to, and the ones it cannot.
     ///
-    /// <para><b>An unavailable source is still LISTED, with its reason.</b> Dropping it answers "why can't
-    /// I pick this?" by making the question unaskable — which is the dead-control failure this surface
-    /// exists to end: the previous panel disabled 本机模型 with no explanation while listing, three inches
-    /// below, the very models the household was wondering about.</para>
+    /// <para><b>An option the layer cannot use is still LISTED, with its reason.</b> Dropping it answers
+    /// "why can't I pick this?" by making the question unaskable, and "no class implements it" is an answer
+    /// only the source tree gives. So 语义 shows Claude and says it has no embeddings endpoint; both layers
+    /// show 嵌入式 and say it is not shipped yet. That is the same rule the AVAILABLE-but-blocked case
+    /// already followed (three causes, three sentences) applied one level out.</para>
+    ///
+    /// <para><c>bindable</c> is the distinction the client needs and the type system already makes: a
+    /// declined backend has no <see cref="IMemorySource"/> behind it, so there is nothing to bind and the
+    /// button must not be pressable. An AVAILABLE-false source, by contrast, could be bound the moment its
+    /// prerequisite is met.</para>
     ///
     /// <para>Takes the shared base rather than each layer's interface, so one helper serves both lists. The
     /// layer-specific members (RejectAsync, ProveAsync) are not needed to DESCRIBE a source — only to bind
     /// one — which is why the split sits where it does.</para></summary>
-    private static async Task<object[]> SourceViews(IEnumerable<IMemorySource> sources, MemorySourceContext ctx)
+    private static async Task<object[]> SourceViews(
+        IEnumerable<IMemorySource> sources, IEnumerable<DeclinedBackend> declined, MemorySourceContext ctx)
     {
         var views = new List<object>();
         foreach (var s in sources)
@@ -174,7 +181,7 @@ public sealed class MemoryRecallController : ControllerBase
             var status = await s.StatusAsync(ctx);
             views.Add(new
             {
-                id = s.Id, name = s.Name, description = s.Description,
+                id = s.Id, name = s.Name, description = s.Description, bindable = true,
                 available = status.Available, reason = status.Reason, suggest = status.Suggest,
                 models = (await s.ModelsAsync(ctx)).Select(m => new
                 {
@@ -186,6 +193,15 @@ public sealed class MemoryRecallController : ControllerBase
                         queries = m.Measured.Queries, msPerQuery = m.Measured.MsPerQuery,
                     },
                 }),
+            });
+        }
+        foreach (var d in declined)
+        {
+            views.Add(new
+            {
+                id = d.Id, name = d.Name, description = d.Reason, bindable = false,
+                available = false, reason = d.Reason, suggest = (string?)null,
+                models = Enumerable.Empty<object>(),
             });
         }
         return views.ToArray();

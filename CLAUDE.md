@@ -33,13 +33,23 @@ and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,C
 `Platform/Hosting/{Update,Security}`, `Platform/Storage/Memory`.
 
 **Memory recall is a set-up surface, not a fixed behaviour** (校准 · Cortex → 记忆检索). Three
-independent, complementary switches: the always-on FORMULA floor (graph decay + rank fusion + FTS
-trigram), a JUDGE that annotates every write and reorders every recall, and LOCAL SEMANTIC vectors
-from an Ollama on the household's own machine. The judge runs on the authenticated CLI or on a local
-model (`memory.judgeTransport`); the embedding model is chosen from a MEASURED shortlist
-(`EmbeddingCatalog`, re-measurable with `dev.mjs embed-bench`) or by naming any Ollama model, and the
-console downloads, selects and deletes them. Rebuilding the index runs detached with progress, and the
-panel reports index COVERAGE rather than a history of runs.
+complementary layers: the always-on 公式 FORMULA floor (graph decay + rank fusion + FTS trigram), a
+判断 JUDGE that annotates every write and reorders every recall, and 语义 SEMANTIC vectors from a
+local model. Each layer is a ROW with a backend and a model, and **a backend serves a layer by
+EXISTING** — one interface per layer (`Agent/Llm/Sources`), a static catalog of implementations
+(`MemorySources`), and nothing that filters. 语义 offers no Claude arm because no
+`ClaudeCliSemanticSource` exists (no embeddings endpoint), not because a predicate excludes it; the day
+a backend can do both it implements both interfaces and appears in both toggles. The catalog is static
+rather than a DI collection because startup wires from it *while the container is being built*, and the
+console renders from the same list afterwards — one list, no second registry to drift. Adding a backend
+(the deferred ONNX embedder) is one class plus one line.
+**Models are provisioning artifacts, so 资源 owns them** — `/api/manage/models` lists, pulls and deletes
+them beside chromium, git and the Ollama runtime, with the measured shortlist (`EmbeddingCatalog`,
+re-measurable with `dev.mjs embed-bench`) as decision support for downloading. 记忆检索 keeps only the
+recall decision: which model each layer uses. Rebuilding the index runs detached with progress, and the
+panel reports index COVERAGE rather than a history of runs. 语义 sits under a 高级 divider on Lyntai's
+measurement that 0% of recall misses are retrieval failures — **attributed as Lyntai's, on Lyntai's
+corpus**, until somebody measures this household's own.
 
 On top of THAT, the **platform/container track** (S1–S6, `docs/ROADMAP.md`) turned the app into a
 host for one agent-driven site: `site.json` declares the site and drives the scope guard; capabilities

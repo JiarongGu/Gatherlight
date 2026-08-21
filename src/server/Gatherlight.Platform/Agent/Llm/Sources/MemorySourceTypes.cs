@@ -12,6 +12,42 @@ public static class MemoryLayers
     public const string Semantic = "semantic";
 }
 
+/// <summary>Every backend a recall layer could conceivably run on — WHERE the model comes from, which is
+/// the distinction the household actually makes.
+///
+/// <para><b>All three are listed on every layer</b>, whether or not that layer can use them. A layer
+/// showing one button and no explanation for the absent ones is the dead-control failure this surface
+/// exists to end, one level up: "there is no class implementing it" is an answer only the source tree
+/// gives.</para></summary>
+public static class MemoryBackends
+{
+    /// <summary>The authenticated Claude CLI — a provisioned resource, run as a process.</summary>
+    public const string ClaudeCli = "claude-cli";
+
+    /// <summary>An Ollama on this machine, whether the household's own or the copy the app provisioned.
+    /// One daemon on one port serves both layers; only the model differs.</summary>
+    public const string Ollama = "ollama";
+
+    /// <summary>A model runtime shipped INSIDE the install (<c>res/</c>) rather than found on the machine —
+    /// nothing to install, nothing to keep running. Nothing implements it yet; it is listed anyway, with
+    /// that as its reason, so the option is visible before it is available.</summary>
+    public const string BuiltIn = "builtin";
+}
+
+/// <summary>A backend a layer CANNOT run on, and why — stated rather than derived.
+///
+/// <para><b>Why this exists at all.</b> Leaving an impossible backend out of the list is the failure this
+/// surface exists to end, one level up: a household looking at 语义 with a single button cannot discover
+/// why Claude is not an option, and "there is no class for it" is an answer only the source tree gives.
+/// The reasons are VENDOR facts — Anthropic ships no embeddings endpoint; Ollama refuses a chat model an
+/// embedding call and an embedding model a chat call (verified 2026-08-21, both directions) — so they are
+/// written down here, not computed from a capability table that would drift from them.</para>
+///
+/// <para>A declined backend is never bindable: it has no source, so there is nothing to bind. That is why
+/// this is a separate list rather than a flag on <see cref="SourceStatus"/> — a shape that cannot be
+/// selected should not be reachable through the type that selects things.</para></summary>
+public sealed record DeclinedBackend(string Id, string Name, string Reason);
+
 /// <summary>Whether a source can serve its layer on THIS machine right now, and the one sentence the
 /// household reads when it cannot.
 ///

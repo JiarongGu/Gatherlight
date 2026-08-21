@@ -16,16 +16,17 @@
 
 ## Backlog
 
-- [ ] **Resharpen 记忆检索 · Memory recall** — move local models out of the recall panel into 资源
-  (they are provisioning artifacts; the chat/embedding split is Ollama's, not ours), split
-  `/api/manage/memory/local/{pull,remove}` out to `/api/manage/models`, and filter each layer's picker by
-  capability instead of by curated kind lists. Then revisit how the three layers are weighted: Lyntai
-  measured 0% of misses as retrieval failures, so 判断 repairs recall far more than 语义 does. Brief,
-  open questions and what the 2026-08-21 session already fixed: `docs/memory-recall-resharpen.md`.
-
 ### Product (deferred, not urgent)
 - [ ] **Phase B embeddings:** ONNX embedding model as a provisioned resource (into Gatherlight.Resources
   or its own package) + EmbeddingService + vector tables + hybrid search over the FTS index.
+  **Its landing place is already built**: add an `EmbeddedSemanticSource : IMemorySemanticSource` and one
+  line in `MemorySources.Semantic`, and it appears as a third arm in 语义's toggle with no controller or
+  client change. A `Judge` counterpart is the same shape. See `Agent/Llm/Sources`.
+- [ ] **Measure the three layers on THIS household's corpus.** 语义 sits under 高级 on Lyntai's
+  measurement (0% of misses are retrieval failures), which is someone else's corpus — the panel says so,
+  and will keep saying so until there is a local number. Needs a recall bench over our own facts scoring
+  公式 / +判断 / +语义 / all three; `dev.mjs embed-bench` measures embedders on a fictional corpus and is
+  not that. Only then is the ordering ours rather than borrowed.
 - [ ] **Measure the decay constants against real use.** The graph index now ranks `recall_facts`, but
   Lyntai ships several of its constants explicitly unmeasured (half-life, reinforce factor, and the
   three governing connectedness, which have to be measured *together* since edge decay erodes the

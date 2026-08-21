@@ -12,13 +12,17 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Sources;
 /// drift <c>check-ui-registry</c> exists to catch elsewhere. Sources take their runtime dependencies as a
 /// per-call <see cref="MemorySourceContext"/> instead: one parameter, one list.</para>
 ///
-/// <para><b>Adding a backend is one class plus one line here.</b> An embedded ONNX embedder appears in
-/// 语义's toggle the moment <c>new EmbeddedSemanticSource()</c> joins <see cref="Semantic"/> — no controller
-/// change, no client change, no capability table to keep in step.</para>
+/// <para><b>Adding a backend is one class plus one line here.</b> A built-in runtime appears in 语义's
+/// toggle the moment a <c>BuiltInSemanticSource</c> joins <see cref="Semantic"/> — and drops out of
+/// <see cref="SemanticDeclined"/> at the same time. No controller change, no client change, no capability
+/// table to keep in step.</para>
 ///
-/// <para><b>Two lists, not one filtered list.</b> That is what keeps the CLI out of 语义: there is nothing
-/// to filter, because a source that cannot embed is not in the semantic list and cannot be added to it
-/// without implementing <see cref="IMemorySemanticSource"/>.</para>
+/// <para><b>Bindable and declined are two lists, not one list with a flag.</b> What a layer CAN be bound to
+/// is decided by which classes implement its interface — there is nothing to filter, and no predicate to
+/// get wrong. What it cannot be bound to is stated in prose beside it, because those reasons are VENDOR
+/// facts (no embeddings endpoint; not shipped yet) rather than anything the type system knows. Both are
+/// shown: a layer that silently omits an impossible option answers "why isn't this here?" only in the
+/// source tree.</para>
 /// </summary>
 public static class MemorySources
 {
@@ -32,6 +36,29 @@ public static class MemorySources
     {
         new OllamaSemanticSource(),
     };
+
+    /// <summary>Backends 判断 cannot run on, with the reason. Listed on the layer anyway — see
+    /// <see cref="DeclinedBackend"/> for why an impossible option is shown rather than omitted.</summary>
+    public static readonly IReadOnlyList<DeclinedBackend> JudgeDeclined = new[]
+    {
+        new DeclinedBackend(MemoryBackends.BuiltIn, "内置(随应用附带)", BuiltInNotYet),
+    };
+
+    /// <summary>Backends 语义 cannot run on, with the reason.</summary>
+    public static readonly IReadOnlyList<DeclinedBackend> SemanticDeclined = new[]
+    {
+        new DeclinedBackend(MemoryBackends.ClaudeCli, "Claude CLI",
+            "Claude 不提供嵌入接口 —— 它生成文字,不生成向量,所以这一层没有它。"
+            + "但这不代表 Claude 帮不上按语义找东西:Lyntai 实测里,把「答对了却排在后面」捞上来的"
+            + "主要是「判断」那一层(漏检 0.54 → 0.19)—— 想让改写过的问法也能问到,先开「判断」更划算。"),
+        new DeclinedBackend(MemoryBackends.BuiltIn, "内置(随应用附带)", BuiltInNotYet),
+    };
+
+    /// <summary>One sentence, shared: the two layers decline it for the same reason, and saying it twice in
+    /// two wordings would let them drift into looking like two different limitations.</summary>
+    private const string BuiltInNotYet =
+        "还没有随应用附带的模型运行时 —— 现在本机模型都跑在 Ollama 上,要单独装。"
+        + "这一项做好之后会自动出现在这里,不需要改任何设置。";
 
     public const string DefaultJudgeSource = "claude-cli";
 

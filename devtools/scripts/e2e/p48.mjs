@@ -136,7 +136,9 @@ try {
   // What the console shows instead of a history of rebuilds: how much of what the household knows is
   // actually searchable. A rebuild interrupted by a restart shows here as a shortfall and is repaired by
   // the next startup back-fill, so nothing needs to remember that a run once existed.
-  const cov = (await c.getJson('/api/manage/memory'))?.localModel?.coverage;
+  // Read off the SEMANTIC layer's row: 记忆检索 is layers[] now, each with its own backend and model.
+  const cov = ((await c.getJson('/api/manage/memory'))?.layers ?? [])
+    .find((l) => l.id === 'semantic')?.coverage;
   ok('the console can report index coverage, and it is complete after normal writes',
     cov && cov.total >= 3 && cov.indexed === cov.total, JSON.stringify(cov));
 
