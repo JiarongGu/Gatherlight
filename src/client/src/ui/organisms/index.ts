@@ -8,8 +8,11 @@ export { Home } from '@/screens';
 export { TopBar } from './TopBar';
 export { NotificationBell } from './NotificationBell';
 export { CommandPalette } from './CommandPalette';
-export { ChatPanel } from './ChatPanel';
-export { ChatHistory } from './ChatHistory';
+// The chat area lives in ./chat — ChatPanel had grown to 1517 lines holding its state machine, its
+// gate cards and its transcript rows all at once, and its siblings (history, rating, review) were
+// already separate files sitting loose in this list.
+export { ChatPanel } from './chat/ChatPanel';
+export { ChatHistory } from './chat/ChatHistory';
 export { TripAssets } from './TripAssets';
 export { PlanActionsMenu, type ActionTarget } from './PlanActionsMenu';
 export { TripMap } from './TripMap';
