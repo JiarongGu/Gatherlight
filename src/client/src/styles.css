@@ -3245,3 +3245,10 @@ kbd, .topbar-kbd {
 .mem-other .set-hint { grid-column: 1 / -1; }
 .mem-other-act { display: flex; gap: 8px; }
 @media (max-width: 760px) { .mem-other { grid-template-columns: 1fr; } }
+.mem-judge { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.mem-judge .cx-seg { flex: 0 0 auto; }
+.mem-judge-sel {
+  font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid var(--border-soft); background: transparent; color: inherit; max-width: 100%;
+}
+.mem-judge .set-hint { flex: 1 1 100%; }

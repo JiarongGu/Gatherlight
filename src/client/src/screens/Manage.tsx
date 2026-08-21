@@ -1145,6 +1145,10 @@ function CortexView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' 
 // RETRIEVABLE. Every switch is a startup registration, so `enabled` (saved) and `active` (running) are
 // reported separately — between saving and restarting they disagree, and showing only the saved value
 // would claim a feature that is not running.
+// Module scope: the section's own `mb` is a local, and the pickers below are separate components.
+const memBytes = (n: number) =>
+  n >= 1_000_000_000 ? `${(n / 1_000_000_000).toFixed(1)} GB` : `${Math.round(n / 1_000_000)} MB`;
+
 interface MemoryOption {
   id: string; name: string; approxBytes: number; dimensions: number;
   multilingual: boolean; note: string; present: boolean;
@@ -1156,7 +1160,13 @@ interface MemoryState {
   formula: { alwaysOn: boolean; what: string };
   // `live` = takes effect immediately (an app_config value read per call). The local model below is a
   // startup registration instead, which is why only IT reports enabled-vs-active.
-  llmEnrichment: { enabled: boolean; live: boolean; what: string; cost: string; model: string };
+  llmEnrichment: {
+    enabled: boolean; live: boolean; what: string; cost: string; model: string;
+    // WHERE it runs, as opposed to WHETHER. Unlike `enabled` this is a startup registration, so the two
+    // are shown as different kinds of change rather than two switches that look alike.
+    transport: 'cli' | 'local'; localModel: string | null; localNote: string;
+    localCandidates: { name: string; sizeBytes: number }[];
+  };
   localModel: {
     enabled: boolean; active: boolean; model: string | null; what: string; cost: string;
     note: string | null;
@@ -1254,6 +1264,9 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
             <div className="res-need">{s.llmEnrichment.what}</div>
             <div className="res-need">费用:{s.llmEnrichment.cost}</div>
             <div className="res-need">{s.llmEnrichment.model}</div>
+            {s.llmEnrichment.enabled && (
+              <JudgeTransportPicker en={s.llmEnrichment} busy={busy} post={post} />
+            )}
           </div>
           <div className="res-side">
             <button
@@ -1373,6 +1386,36 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
         </>
       )}
     </>
+  );
+}
+
+/** WHERE the judge runs. Two backends, same feature — so a segmented control, the same idiom the
+ *  Local/LAN/WAN access picker uses, rather than a third toggle that would read as a third feature. */
+function JudgeTransportPicker(
+  { en, busy, post }:
+  { en: MemoryState['llmEnrichment']; busy: string | null; post: (u: string, b: unknown, k: string) => void },
+) {
+  const [model, setModel] = useState(en.localModel ?? en.localCandidates[0]?.name ?? '');
+  const canLocal = en.localCandidates.length > 0;
+  return (
+    <div className="mem-judge">
+      <div className="cx-seg">
+        <button className={`cx-seg-b${en.transport === 'cli' ? ' on' : ''}`} disabled={busy === 'judge'}
+          onClick={() => post('/api/manage/memory/judge', { transport: 'cli' }, 'judge')}>Claude CLI</button>
+        <button className={`cx-seg-b${en.transport === 'local' ? ' on' : ''}`}
+          disabled={busy === 'judge' || !canLocal || !model}
+          onClick={() => post('/api/manage/memory/judge', { transport: 'local', model }, 'judge')}>本机模型</button>
+      </div>
+      {en.transport === 'local' || canLocal ? (
+        <select className="mem-judge-sel" value={model} onChange={(e) => setModel(e.target.value)}>
+          {!canLocal && <option value="">没有可用的对话模型</option>}
+          {en.localCandidates.map((m) => (
+            <option key={m.name} value={m.name}>{m.name} · {memBytes(m.sizeBytes)}</option>
+          ))}
+        </select>
+      ) : null}
+      <div className="set-hint">{en.localNote}</div>
+    </div>
   );
 }
 

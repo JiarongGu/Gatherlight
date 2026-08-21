@@ -59,6 +59,8 @@ public sealed class MemoryRecallController : ControllerBase
         var mem = _config.Current.Memory;
         var s = await _ollama.ProbeAsync(refresh);
         var rec = EmbeddingCatalog.Recommend(s.GpuLikely);
+        var judgeLocal = string.Equals(mem.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(mem.JudgeModel);
 
         return Ok(new
         {
@@ -74,8 +76,23 @@ public sealed class MemoryRecallController : ControllerBase
                 enabled = MemoryEnrichment.IsOn(_appConfig),
                 live = true,
                 what = "写入事实时标注主题,检索时判断哪些结果真正回答了问题(明显提升召回质量)。",
-                cost = "每次记录事实与每次检索各消耗一次 haiku 调用(使用已登录的 Claude CLI,不需额外配置)。",
-                model = "使用的模型在「大脑 · Cortex」面板调整(记忆增强 · Memory)。",
+                cost = judgeLocal
+                    ? "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
+                    : "每次记录事实与每次检索各消耗一次 Claude CLI 调用(使用已登录的账号)。",
+                model = "使用的模型在本页「记忆增强 · Memory」一行调整。",
+                // WHERE it runs, separately from WHETHER it runs. The transport is a startup registration
+                // (a provider + a named client), so unlike the on/off switch it needs a restart — and the
+                // console says which of the two kinds of change the household just made.
+                transport = judgeLocal ? "local" : "cli",
+                localModel = mem.JudgeModel,
+                // Chat-capable models on this machine. Deliberately not filtered to a shortlist: which local
+                // models exist is the household's business, and an embedding-only model is refused when
+                // chosen rather than hidden here, where hiding it would look like it does not exist.
+                localCandidates = s.Models
+                    .Where(m => !EmbeddingCatalog.Options.Any(o => OllamaState.Matches(m.Name, o.Id)))
+                    .Select(m => new { name = m.Name, sizeBytes = m.SizeBytes }),
+                localNote = "本机判断在 Lyntai 的实测中,漏检与误收都优于 ground-truth 参考,且不消耗额度;"
+                    + "换成本机模型需要重启服务。避免选「会思考」的模型 —— 检索在每次回忆的必经路径上。",
             },
             localModel = new
             {
@@ -139,6 +156,57 @@ public sealed class MemoryRecallController : ControllerBase
             ? Ok(new { ok = true })
             : StatusCode(409, new { error = (await _ollama.ProbeAsync(refresh: true)).Problem ?? "无法启动 Ollama。" });
     }
+
+    /// <summary>Move the memory judge between the authenticated Claude CLI and a model on this machine.
+    /// <para>A restart is owed either way — the transport is a provider + named-client registration, built
+    /// while the container is. The on/off switch beside it stays live, and the console distinguishes the
+    /// two rather than making every change look like it needs a restart.</para></summary>
+    [HttpPost("api/manage/memory/judge")]
+    public async Task<IActionResult> SetJudge([FromBody] JudgeRequest body)
+    {
+        var transport = body?.Transport?.Trim().ToLowerInvariant();
+        if (transport is not ("cli" or "local"))
+            return BadRequest(new { error = "transport 必须是 cli 或 local。" });
+
+        if (transport == "cli")
+        {
+            // The model is REMEMBERED rather than cleared: going back to the CLI should not throw away a
+            // choice that cost a download, in case it goes back the other way.
+            _config.Update(c => c.Memory.JudgeTransport = "cli");
+            return Ok(new { ok = true, transport, restartRequired = true });
+        }
+
+        var model = body?.Model?.Trim();
+        if (!EmbeddingCatalog.IsWellFormedId(model))
+            return BadRequest(new { error = $"模型名称格式不正确:{body?.Model}" });
+
+        var state = await _ollama.ProbeAsync(refresh: true);
+        if (!state.Serving) return StatusCode(409, new { error = state.Problem ?? "Ollama 未运行。" });
+        if (!state.Has(model!))
+            return StatusCode(409, new { error = $"模型 {model} 尚未下载 —— 请先下载再启用。" });
+
+        // An EMBEDDING model named here would be installed, well-formed, and unable to answer a judgement —
+        // and both memory policies are fail-open, so the failure would surface as recall that quietly never
+        // improves. Refuse it by name rather than let it be chosen.
+        if (EmbeddingCatalog.Find(model) is not null)
+            return StatusCode(409, new
+            {
+                error = $"{model} 是嵌入模型,不能用来判断检索结果 —— 请选一个对话模型(例如 gemma3:4b)。",
+            });
+
+        _config.Update(c =>
+        {
+            c.Memory.JudgeTransport = "local";
+            c.Memory.JudgeModel = model;
+        });
+        return Ok(new
+        {
+            ok = true, transport, model, restartRequired = true,
+            note = "设置已保存。重启服务后,标注与核对将由本机模型完成,不再消耗账号额度。",
+        });
+    }
+
+    public sealed record JudgeRequest(string? Transport, string? Model);
 
     [HttpPost("api/manage/memory/local/pull")]
     public async Task<IActionResult> Pull([FromBody] ModelRequest body)

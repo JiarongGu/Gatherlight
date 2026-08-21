@@ -176,6 +176,19 @@ public sealed class MemoryConfig
     /// would send every household fact off this machine on every write. <c>GATHERLIGHT_OLLAMA_URL</c>
     /// overrides, and a non-loopback value is ignored unless <c>GATHERLIGHT_OLLAMA_ALLOW_REMOTE=1</c>.</summary>
     public string? OllamaUrl { get; set; }
+
+    /// <summary>Which backend judges recalls and annotates writes: <c>cli</c> (the authenticated claude
+    /// CLI, the default) or <c>local</c> (a model on this machine, via Ollama).
+    /// <para>Here rather than in <c>app_config</c> for the same reason the embedder is: naming the backend
+    /// registers a provider and a named <c>ILlmClient</c>, which happens while the container is being
+    /// built. The MODEL stays live in cortex (<c>llm.model.memory</c>) — only the transport needs a
+    /// restart, and the console says so instead of pretending otherwise.</para></summary>
+    public string? JudgeTransport { get; set; }
+
+    /// <summary>The local judge model when <see cref="JudgeTransport"/> is <c>local</c> — e.g.
+    /// <c>gemma3:4b</c>. It becomes the "memory" consumer's DEFAULT model rather than a fixed one, so
+    /// cortex's live override still works exactly as it does for the CLI judge.</summary>
+    public string? JudgeModel { get; set; }
 }
 
 public sealed class ServerConfigService

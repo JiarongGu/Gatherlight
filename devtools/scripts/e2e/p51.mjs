@@ -126,6 +126,28 @@ try {
   const reindex = await post('/api/manage/memory/local/reindex');
   ok('reindexing while disabled is refused, not silently zero', reindex.status === 409, String(reindex.status));
 
+  // ---- E · WHERE the judge runs — CLI or a model on this machine --------------------------------
+  ok('the judge reports its transport, and defaults to the CLI',
+    s.llmEnrichment.transport === 'cli', String(s.llmEnrichment.transport));
+  const badTransport = await post('/api/manage/memory/judge', { transport: 'somewhere-else' });
+  ok('an unknown transport is refused', badTransport.status === 400, String(badTransport.status));
+  // THE refusal worth having. An embedding model is installed and well-formed and can never answer a
+  // judgement — and both memory policies are fail-open, so choosing one would surface as recall that
+  // quietly never improves rather than as an error.
+  const embedAsJudge = await post('/api/manage/memory/judge',
+    { transport: 'local', model: s.localModel.options[0].id });
+  ok('an EMBEDDING model is refused as a judge, by name',
+    embedAsJudge.status === 409 || embedAsJudge.status === 400, String(embedAsJudge.status));
+  const judgeMissing = await post('/api/manage/memory/judge', { transport: 'local', model: 'no-such-judge:9b' });
+  ok('a judge model that is not installed says so, rather than being saved',
+    judgeMissing.status === 409, String(judgeMissing.status));
+  // Positive control: going BACK to the CLI must always be accepted — a household that switched away
+  // needs the door to swing both ways, and this asserts the endpoint works at all rather than only
+  // refusing things.
+  const toCli = await post('/api/manage/memory/judge', { transport: 'cli' });
+  ok('returning the judge to the CLI is accepted, and asks for a restart',
+    toCli.status === 200 && toCli.body?.restartRequired === true, JSON.stringify(toCli.body));
+
   const known = s.localModel.options[0].id;
   const enable = await post('/api/manage/memory/local/enable', { model: known });
   ok('enabling a KNOWN model still refuses when its prerequisites are missing',

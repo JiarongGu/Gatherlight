@@ -35,6 +35,12 @@ public static class GatherlightApp
     /// fact sits outside the top few never enters the ranking at all.</para></summary>
     private const int SemanticSeedK = 24;
 
+    /// <summary>The Ollama chat backend's id, and the named client that routes ONLY over it. Separate from
+    /// the embedder's registration: judging locally and embedding locally are independent choices, and a
+    /// household may take either without the other.</summary>
+    private const string OllamaProviderId = "ollama-chat";
+    private const string MemoryJudgeClient = "memory-judge";
+
     public static WebApplication Build(
         GatherlightServerOptions? options = null, string[]? args = null, ServerConfigService? config = null)
     {
@@ -98,6 +104,20 @@ public static class GatherlightApp
         var semanticOn = memoryConfig.SemanticEnabled && !string.IsNullOrWhiteSpace(embeddingModel);
         var ollamaUrl = Platform.Agent.Llm.Services.OllamaRuntime.ResolveBaseUrl(memoryConfig.OllamaUrl);
 
+        // WHICH BACKEND JUDGES A RECALL. The claude CLI stays the default; a household may move the judge
+        // to a model on their own machine instead. This is a transport choice, not a quality shortcut:
+        // Lyntai measured a local gemma3:4b beating its ground-truth reference on both miss-rate and junk
+        // admitted, so the local arm is not the cheap-and-worse option it sounds like.
+        //
+        // Why it is worth offering at all: annotation runs on EVERY fact write and verification on EVERY
+        // recall, so this seam is the app's most frequent model call by a wide margin. Moving it local
+        // takes it off the household's account quota entirely, removes a network round-trip from the
+        // latency path of every recall, and lets memory keep working with no connection — none of which
+        // the CLI arm can offer at any model size.
+        var judgeModel = memoryConfig.JudgeModel;
+        var judgeLocal = string.Equals(memoryConfig.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(judgeModel);
+
         builder.Services
             .AddSingleton(options)
             // The config resolved above (one instance, one settings.json reader).
@@ -148,11 +168,25 @@ public static class GatherlightApp
                     o.DefaultModelByConsumer["scorer"] = "haiku"; // cheap-judge default; llm.model.scorer overrides live
                     // The memory judges (annotation per write, verification per recall) bill to
                     // Lyntai's own "memory" consumer tag; llm.model.memory overrides live.
-                    o.DefaultModelByConsumer["memory"] = "haiku";
+                    //
+                    // The local judge changes this DEFAULT rather than pinning the policy's own Model:
+                    // pinning would capture the model at registration and silently kill the live cortex
+                    // override that the CLI judge has always had. Same mechanism, different default.
+                    o.DefaultModelByConsumer["memory"] = judgeLocal ? judgeModel! : "haiku";
                 })
                 // Live per-consumer model routing (the scorers' judge model) read from app_config each call.
                 .AddLiveModelRouting()
-                .UseDefaultCandidates("claude-cli")
+                // The local judge's backend has to appear here even though only the memory client uses it.
+                // A named client (AddLlmClient) narrows the PROVIDER POOL but inherits these candidates, so
+                // a client pooled over "ollama-chat" alone with candidates naming only "claude-cli" matches
+                // nothing and every call fails — silently, because both memory policies are fail-open. It
+                // showed up as ZERO router calls and `router: skipping claude-cli — no provider with this id
+                // registered`. Filed upstream; the order below is the containment.
+                //
+                // claude-cli stays FIRST, so this is a fallback rather than a re-route: the default client
+                // reaches Ollama only when the CLI fails. That touches the one-shot ILlmClient consumers
+                // (the scorers) and not the agent path, which runs through IAgentSession and never routes.
+                .UseDefaultCandidates(judgeLocal ? ["claude-cli", OllamaProviderId] : ["claude-cli"])
                 // Lyntai owns scoring + conversation persistence: its SQLite storage lands lyntai_score_result,
                 // lyntai_thread/lyntai_message (+ other lyntai_* tables) in the same gatherlight.db. Kept EAGER
                 // (default SchemaMigration.OnStartup → migrates synchronously here, during DI) so the lyntai_*
@@ -236,18 +270,23 @@ public static class GatherlightApp
                 // TryAddSingleton precisely so a consumer's own policy wins, which their remarks call the
                 // BYO seam. Off returns the library's own no-opinion values, a state the engine already
                 // treats as "no policy registered" — so the switch is safe to flip at runtime.
+                // ClientName is the seam Lyntai documents for exactly this — a name selects BACKENDS, never
+                // permissions — and it is null for the CLI arm, which then uses the default client. Model
+                // stays null in both arms so the router resolves it per consumer and cortex keeps its live
+                // override; see DefaultModelByConsumer above.
+                var judgeClient = judgeLocal ? MemoryJudgeClient : null;
                 b.Services.AddSingleton<Lyntai.Memory.Annotation.IMemoryAnnotationPolicy>(sp =>
                     new Platform.Agent.Llm.Services.SwitchableAnnotationPolicy(
                         new Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy(
                             sp.GetRequiredService<Lyntai.Llm.ILlmClientFactory>(),
-                            new Lyntai.Memory.Annotation.LlmAnnotationOptions(),
+                            new Lyntai.Memory.Annotation.LlmAnnotationOptions { ClientName = judgeClient },
                             sp.GetService<ILogger<Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy>>()),
                         sp.GetRequiredService<IAppConfigService>()));
                 b.Services.AddSingleton<Lyntai.Memory.Verification.IMemoryVerificationPolicy>(sp =>
                     new Platform.Agent.Llm.Services.SwitchableVerificationPolicy(
                         new Lyntai.Memory.Verification.LlmMemoryVerificationPolicy(
                             sp.GetRequiredService<Lyntai.Llm.ILlmClientFactory>(),
-                            new Lyntai.Memory.Verification.LlmVerificationOptions(),
+                            new Lyntai.Memory.Verification.LlmVerificationOptions { ClientName = judgeClient },
                             sp.GetService<ILogger<Lyntai.Memory.Verification.LlmMemoryVerificationPolicy>>()),
                         sp.GetRequiredService<IAppConfigService>()));
                 // Still called: their TryAdd now stands down, but calling them keeps any future
@@ -290,6 +329,20 @@ public static class GatherlightApp
                 //   · AFTER UseSqliteStorage. UseSqliteVectorStore checks for the Governance feature at
                 //     WIRING time (it owns the lyntai_vector table), so ordering here is load-bearing,
                 //     not cosmetic — which is the whole reason the fluent chain became a block.
+                // The local judge's backend + the named client that reaches ONLY it. Registered separately
+                // from the embedder below because the two are independent: a household may judge locally
+                // without semantic recall, or the reverse.
+                //
+                // UseProviders fails loudly when the id is unregistered rather than narrowing to whatever
+                // exists — which is the behaviour that matters here, since the silent alternative is
+                // falling back to the household's paid default for every write and every recall, i.e.
+                // exactly the outcome naming a client was meant to prevent.
+                if (judgeLocal)
+                {
+                    b.AddOllamaProvider(baseUrl: ollamaUrl, id: OllamaProviderId)
+                     .AddLlmClient(MemoryJudgeClient, c => c.UseProviders(OllamaProviderId));
+                }
+
                 if (semanticOn)
                 {
                     b.AddOpenAiCompatibleEmbedder("ollama", o =>
