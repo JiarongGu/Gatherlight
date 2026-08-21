@@ -84,10 +84,14 @@ public sealed class MemoryRecallController : ControllerBase
                 model = mem.EmbeddingModel,
                 what = "用本地模型为事实生成向量,按语义检索 —— 问法与原文用词完全不同也能找到。",
                 cost = "占用磁盘与本机算力,不消耗 token;资料不离开这台电脑。",
-                // Measured, not assumed (2026-08-21). Filed upstream as Lyntai TASKS Part 90; when
-                // null-scope recall lands this note goes away and nothing here changes.
-                limitation = _semantic is null ? null
-                    : "当前仅对指定了「类别」的检索生效;未指定类别时按图谱与关键词检索(上游能力待补)。",
+                // The limitation reported here until 2026-08-21 ("only kind-filtered recalls benefit") is
+                // gone: it was this app's own doing, not an upstream gap — see FactIndex.AllFacts. Re-measured
+                // after the fix, unscoped recall improved on 3/3 probe queries.
+                //
+                // Turning this on re-embeds by REBUILDING, so say so where the household decides: the
+                // ranking the index has accumulated is reset, and on a large corpus it is not quick.
+                note = _semantic is null ? null
+                    : "开启或更换模型后需要重建索引:会重新计算全部向量,并重置已积累的排序权重(事实本身不受影响)。",
                 ollama = new
                 {
                     baseUrl = s.BaseUrl, installed = s.Installed, serving = s.Serving, version = s.Version,

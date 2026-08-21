@@ -10,8 +10,11 @@
 //      "the household knows nothing", which is a lie told on their own data
 //   6. a backup import REBUILDS the index — every graph_ref in the archive addresses a node this
 //      install never had, so without the rebuild recall silently falls through to FTS forever
+//   7. an UPGRADE that moves the scope rebuilds too, including for a household with no layout marker
+//      at all — the marker postdates the layout it names, so "no marker" IS the upgrade case
 import fs from 'node:fs';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
   dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd,
 } from './_e2e-common.mjs';
@@ -24,9 +27,11 @@ makeTestData(restoreDir);
 
 const PORT = 5498;
 const RESTORE_PORT = 5499;
+const UPGRADE_PORT = 5497;
 
 let server = null;
 let restoreServer = null;
+let upgraded = null;
 
 const remember = (c, kind, topic, content, confidence = 0.8) =>
   c.call('remember_fact', { kind, topic, content, source: `https://example.test/${encodeURIComponent(topic)}`, confidence });
@@ -113,6 +118,20 @@ try {
   ok('a fact is still found when the graph does not rank it', (viaFts.result?.facts ?? []).length > 0,
     JSON.stringify(viaFts.result).slice(0, 200));
 
+  // --- 5b. every fact shares ONE scope -----------------------------------------------------------
+  // Asserted against the store, because no API response can show it and the cost of getting it wrong is
+  // invisible. A vector collection is keyed {member}|{task}|{scope}, so putting each fact's KIND in the
+  // scope — which reads like the obvious home for it — splits the embeddings per kind, and a recall
+  // naming no kind then searches "facts/graph|facts|", which is empty. That is the default recall_facts
+  // call, so meaning-based recall silently answered only the rare scoped ask while every check here
+  // stayed green (this suite runs without an embedder and cannot see vectors at all). Kind filtering
+  // never depended on scope: ByGraphRefsAsync applies it in SQL when it resolves refs to rows.
+  const scopes = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'))
+    .prepare("SELECT DISTINCT scope FROM lyntai_memory_node WHERE engine = 'facts/graph'").all()
+    .map((r) => r.scope);
+  ok('THE POINT: facts of different kinds share one scope, so an unscoped recall has somewhere to look',
+    scopes.length === 1, `scopes=${JSON.stringify(scopes)} (3 kinds were written)`);
+
   // --- 6. a backup import rebuilds the index ------------------------------------------------------
   const zip = await fetch(`${base}/api/backup/export`);
   ok('backup exports', zip.status === 200, `status ${zip.status}`);
@@ -141,11 +160,48 @@ try {
     const e = await rc.call('expand_fact', { ref: importedFacts[0]?.ref });
     return e.result?.ok === true;
   })(), 'expand after restore');
+
+  // --- 7. an UPGRADE re-reaches entries left at the old address -----------------------------------
+  // The graph is addressed BY scope, so a release that moves the scope strands every existing entry:
+  // nothing is corrupt, the entries are simply unreachable, and recall answers from the FTS floor with
+  // no sign anything changed. FactIndexStep carries a layout marker and pays a one-off RebuildAsync.
+  //
+  // The trap this case exists for: a MISSING marker is not a fresh install. The marker did not exist
+  // before the layout it describes, so every upgrading household arrives with no marker AND with facts
+  // indexed at the old address — reading null as "fresh" skips the rebuild for exactly the population
+  // that needs it. Simulated the only honest way: put the entries back at an old address and take the
+  // marker away, which is the state such a household actually boots in.
+  server.stop();
+  server = null;
+  const db = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'));
+  db.prepare("UPDATE lyntai_memory_node SET scope = 'price' WHERE engine = 'facts/graph'").run();
+  db.prepare("DELETE FROM app_config WHERE key = 'facts.index.layout'").run();
+  const stranded = db.prepare(
+    "SELECT COUNT(*) n FROM lyntai_memory_node WHERE engine = 'facts/graph' AND scope = 'price'").get().n;
+  db.close();
+  ok('(fixture) entries were moved to an old-layout address', stranded >= 3, `moved ${stranded}`);
+
+  // A DIFFERENT port. Restarting on the one just released races the dying listener under load, and the
+  // request lands on the instance on its way out — which reads as a feature failure, not a port reuse.
+  upgraded = startServer({ dataDir, port: UPGRADE_PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+  const upgradedBase = `http://127.0.0.1:${UPGRADE_PORT}`;
+  await waitHealthy(upgradedBase);
+  const uc = makeClient(upgradedBase);
+
+  const afterUpgrade = await uc.call('recall_facts', { query: 'harbour teahouse', limit: 5 });
+  ok('THE POINT: an upgrade with no marker still rebuilds, so the graph ranks again',
+    afterUpgrade.result?.ranked === 'graph', `ranked=${afterUpgrade.result?.ranked}`);
+  const afterScopes = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'))
+    .prepare("SELECT DISTINCT scope FROM lyntai_memory_node WHERE engine = 'facts/graph'").all()
+    .map((r) => r.scope);
+  ok('and the entries moved to the current layout', afterScopes.length === 1 && afterScopes[0] !== 'price',
+    `scopes=${JSON.stringify(afterScopes)}`);
 } catch (err) {
   fail('e2e-p48 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {
   try { server?.stop(); } catch {}
   try { restoreServer?.stop(); } catch {}
+  try { upgraded?.stop(); } catch {}
 }
 
 done();

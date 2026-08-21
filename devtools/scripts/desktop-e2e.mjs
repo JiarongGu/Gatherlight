@@ -46,7 +46,17 @@ await c.ready;
 
 try {
   // 1. the WebView2 is actually showing /manage
-  ok('WebView2 shows /manage', /Gatherlight|拾光/.test((await c.evalJs('document.title')) || ''), page.url);
+  // Polled, for the same reason the health panel below is: the target exists as soon as the WebView
+  // navigates, but the document's title is set by the app once it has parsed and run. Reading it on the
+  // first frame made this assert on TIMING rather than on what it means — it failed once with the URL
+  // already `/manage`, which is the tell that the page was there and simply not titled yet.
+  let title = '';
+  for (let i = 0; i < 20; i++) {
+    title = (await c.evalJs('document.title')) || '';
+    if (/Gatherlight|拾光/.test(title)) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  ok('WebView2 shows /manage', /Gatherlight|拾光/.test(title), `${page.url} — title=${title || '(empty)'}`);
   // Poll: the console mounts as soon as the migration gate lifts, but its first health poll lands a
   // moment later. Asserting on the first frame made this pass or fail on timing rather than on health.
   let healthText = '';

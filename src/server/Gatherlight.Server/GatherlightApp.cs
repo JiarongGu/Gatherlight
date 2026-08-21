@@ -15,6 +15,7 @@ using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 using Gatherlight.Server.Platform.Capabilities.Tools.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Services.Tools;
 using Lyntai; // the shared LLM library (AddClaudeCliProvider / UseDefaultCandidates on the builder)
+using Lyntai.Memory; // GraphMemoryOptions — the fact index's semantic seeding
 
 namespace Gatherlight.Server;
 
@@ -25,6 +26,15 @@ namespace Gatherlight.Server;
 /// </summary>
 public static class GatherlightApp
 {
+    /// <summary>How many semantically-similar entries a fact recall considers on top of its lexical
+    /// matches, when the household has turned the local embedding model on. Zero — Lyntai's default —
+    /// means an embedder is paid for on every write and consulted on no recall.
+    /// <para>Sized against the over-ask in <c>FactIndex.RankAsync</c> rather than against the page the
+    /// agent asked for: seeds are CANDIDATES, ranked afterwards by the same decay/degree policy as the
+    /// lexical ones, so a seed that means nothing here simply loses. Too small and a paraphrase whose
+    /// fact sits outside the top few never enters the ranking at all.</para></summary>
+    private const int SemanticSeedK = 24;
+
     public static WebApplication Build(
         GatherlightServerOptions? options = null, string[]? args = null, ServerConfigService? config = null)
     {
@@ -173,16 +183,22 @@ public static class GatherlightApp
                 // never decays, and that is not this: the household's policies and preferences live in
                 // curated markdown the CLI loads directly, so grading facts authoritative here would
                 // exempt them from the decay that is the only reason to index them.
-                // The semantic member is added only when the household turned it on. Note what it does
-                // and does NOT change: RECALL becomes a fusion of graph + meaning under the engine's
-                // ranking policy, but WRITES still go to the graph alone — a composite routes a write to
-                // the first member that supports the grade. FactIndex therefore embeds explicitly, and
-                // adding UseSemantic() without that would leave the vector store permanently empty.
-                .AddMemoryEngine("facts", e =>
-                {
-                    e.UseGraph();
-                    if (semanticOn) e.UseSemantic();
-                });
+                // MEANING-BASED RECALL IS A GRAPH OPTION, NOT A SECOND MEMBER. With an embedder and a
+                // vector store registered (further down), the graph member already embeds every write —
+                // it uses that for novelty judgement and for linking entries whose text never overlaps.
+                // SemanticSeedK is what also lets a RECALL consider those neighbours, and it ships at 0:
+                // "considers none, which is what every version before this did". So the embedding was
+                // being paid for and then ignored at the only moment the household would notice.
+                //
+                // A `UseSemantic()` member instead of this looks equivalent and is not, in two ways that
+                // both fail silently. A composite routes a write to the FIRST member supporting the grade,
+                // so the member's own store stays empty unless something fills it — and once filled, its
+                // hits carry `facts/semantic#<contentHash>` references, while every knowledge row stores
+                // the graph's `facts/graph#<id>`. Resolution is an exact ref match, so those hits are
+                // dropped on the way out: a second embedding per fact, bought and discarded. Measured
+                // 2026-08-21 — 12 vectors for 6 facts, and paraphrase queries answering nothing.
+                .AddMemoryEngine("facts", e => e.UseGraph(
+                    semanticOn ? new GraphMemoryOptions { SemanticSeedK = SemanticSeedK } : null));
 
                 // Recall quality is THREE independent switches, not one setting, because they cost
                 // different things and improve different things:
@@ -284,6 +300,11 @@ public static class GatherlightApp
                          // make a misconfigured remote endpoint look authenticated.
                      })
                      .UseSqliteVectorStore()
+                     // The embedder + vector store above are what the GRAPH member picks up; that is where
+                     // meaning-based recall actually happens (SemanticSeedK, at the top of this class).
+                     // AddSemanticMemory stays for its registration alone: ISemanticMemory resolves only
+                     // when an embedder did, so its presence is the app's "semantic recall is available"
+                     // signal — read by FactIndex and by the 记忆检索 panel, written to by neither.
                      .AddSemanticMemory();
                 }
             })
@@ -364,7 +385,11 @@ public static class GatherlightApp
                     sp.GetService<ILogger<Platform.Storage.Knowledge.Services.FactIndex>>(),
                     // Null unless semantic recall was wired above — which is what keeps the whole feature
                     // absent, rather than half-present, on an install that never set it up.
-                    sp.GetService<Lyntai.Memory.ISemanticMemory>()))
+                    sp.GetService<Lyntai.Memory.ISemanticMemory>(),
+                    // Passed EXPLICITLY, like every argument here: this is a hand-written factory, so an
+                    // optional constructor parameter added later is not injected — it silently takes its
+                    // default. That is how the vector cleanup came to compile, register and do nothing.
+                    sp.GetService<Lyntai.Memory.IVectorStore>()))
             .AddSingleton<Platform.Storage.Knowledge.Services.IProcessLog, Platform.Storage.Knowledge.Services.ProcessLog>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RememberFactTool>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RecallFactsTool>()

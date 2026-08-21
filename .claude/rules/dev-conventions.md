@@ -355,7 +355,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   under any sane threshold, so a count-only check passed while maintenance had never run.
 - **The fact index is DERIVED, and rebuilding it is destructive.** `knowledge` is the record of truth —
   it is what the backup carries and what the index rebuilds FROM; Lyntai's graph memory engine
-  (`Storage/Knowledge/FactIndex`, engine `facts`, scope = the fact's `kind`) only ranks it, adding
+  (`Storage/Knowledge/FactIndex`, engine `facts`, **one scope for every fact** — see the next bullet) only ranks it, adding
   decay-by-what-has-happened, reinforcement on recall, and model-free linking of facts recalled
   together. Deliberately the **associative** tier: Lyntai can hold authoritative material that never
   decays, and that is the curated markdown the CLI loads directly, so grading facts authoritative here
@@ -390,15 +390,45 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   found nothing useful and teaches the engine exactly the wrong thing. The LOCAL MODEL is the honest
   exception and stays in `settings.json`: the embedder, vector store and engine member are consumed at DI
   REGISTRATION time, before the container — and therefore the DB — exists, the same reason `security.*`
-  lives there. Two traps found by reading Lyntai rather than guessing: a composite ROUTES a write to the
-  first member supporting the grade, so `UseGraph().UseSemantic()` alone leaves the vector store
-  permanently empty (FactIndex embeds explicitly, fail-open, because Lyntai's semantic write deliberately
-  throws and an uncaught one would break `remember_fact` for a recall nicety); and semantic recall needs a
-  CONCRETE scope, so it currently helps only kind-filtered recalls — filed upstream as Lyntai TASKS Part
-  90, and the status endpoint SAYS so rather than overstating the feature. **A consumer routed in
+  lives there. **A consumer routed in
   `DefaultModelByConsumer` must also be listed in cortex's `ModelCatalog`** or its model is routable in
   principle and unreachable in practice: `memory` was exactly that, with a comment promising a live
   override the product gave no way to set. Proof lives in `e2e-p51`.
+- **Meaning-based fact recall is a GRAPH OPTION and ONE SCOPE — not a second engine member.** Both halves
+  were got wrong first, both failed silently, and neither was visible from any API response, so the
+  reasoning is on the record. (1) With an embedder + vector store registered, `UseGraph()` already embeds
+  every write — for novelty judgement and for linking entries whose text never overlaps — but
+  `GraphMemoryOptions.SemanticSeedK` **ships at 0**, "considers none, which is what every version before
+  this did". So the embedding was bought on every write and consulted on no recall. Adding a
+  `UseSemantic()` member instead looks equivalent and is not: a composite ROUTES a write to the first
+  member supporting the grade, so that member's store stays empty unless something fills it — and once
+  filled, its hits carry `facts/semantic#<contentHash>` while every `knowledge` row stores the graph's
+  `facts/graph#<id>`, and resolution is an exact ref match in `ByGraphRefsAsync`. A second embedding per
+  fact, bought and then discarded on the way out. (2) Scope is keyed into the vector collection name
+  (`{member}|{task}|{scope}`), so putting the fact's `kind` there — which reads like its natural home —
+  splits the vectors per kind, and a recall naming NO kind searches `facts/graph|facts|`, which is empty.
+  That is the default `recall_facts` call. Kind never did the filtering anyway: `ByGraphRefsAsync` applies
+  it in SQL when resolving refs to rows, which is why `RankAsync` over-asks harder when a kind is given
+  (the narrowing now happens after the ranking, not before it). Measured 2026-08-21 on a fixture of 8
+  facts: before, 12 vectors for 6 facts and paraphrase queries answering **nothing**; after (1), scoped
+  3/3 improved and unscoped 0/3; after (2), unscoped 3/3 and one embedding per fact. **Do not adopt 3.0.1's
+  `FanOutWrites()` here** — fan-out propagates a member's write failure, so a stopped Ollama would fail
+  `RememberAsync`, `IndexAsync` would null the row's `graph_ref`, and every new fact would silently lose
+  GRAPH recall too. **3.0.2 fixes (2) upstream — the graph's semantic half now spans scopes on a null-scope
+  recall — and one scope stays anyway**: spanning rests on the OPTIONAL `IListableVectorStore`, so a store
+  without it yields nothing on the DEFAULT recall, silently, which is the failure class this bullet exists
+  to record; and it searches one collection per kind for the same vectors. Note also what one scope did NOT
+  buy: cross-kind LINKING already worked, because the graph's lexical recall spans scopes when the query
+  names none. Because scope addresses the graph, moving it strands existing entries at the old
+  address — reachable only by a rebuild — so `FactIndexStep` carries a **layout marker** (`facts.index.layout`)
+  and pays a one-off `RebuildAsync` on upgrade, writing the marker LAST so a crash mid-rebuild retries
+  instead of settling into the silent FTS fallback. Proof lives in `e2e-p48`, which asserts the ONE SCOPE
+  against the store (no API response shows it, and the suite runs without an embedder so it cannot see
+  vectors at all) and was confirmed to FAIL against kind-as-scope. **Lyntai 3.0.2 added a wiring finding for
+  (1)** — an embedder + vector store with `SemanticSeedK` at 0 is logged at Warning when the engine factory
+  is built — so a regression that re-buys the embedding and reads none of it now announces itself instead of
+  showing up as "recall feels no different". Verified both ways on 2026-08-21: silent on the current wiring,
+  and firing by name with `SemanticSeedK` put back to 0.
 - **Data where it churns, code where it doesn't** — `fill_itinerary`'s form map. A form's *shape*
   (field names, `{n}` row templates, `maxRows`, font sizes, flatten) lives in `.claude/forms/*.json`,
   seeded by the template and editable by the agent through the normal diff gate; the PDF machinery

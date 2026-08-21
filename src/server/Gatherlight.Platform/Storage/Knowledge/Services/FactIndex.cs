@@ -63,15 +63,16 @@ public interface IFactIndex
     /// ranking this exists to build.</para></summary>
     Task<int> RebuildAsync(CancellationToken ct = default);
 
-    /// <summary>Re-embed every fact for SEMANTIC recall, leaving the graph untouched. Two occasions need
-    /// it and neither is served by the other two methods: turning semantic recall on (the graph is already
-    /// populated, so <see cref="SyncAsync"/> — which back-fills only rows with an empty ref — would embed
-    /// nothing), and CHANGING the embedding model.
+    /// <summary>Re-embed every fact for SEMANTIC recall. Two occasions need it and neither is served by
+    /// <see cref="SyncAsync"/>, which back-fills only rows with an empty ref and so would embed nothing:
+    /// turning semantic recall on over an already-populated graph, and CHANGING the embedding model.
     /// <para>The model change is the sharp one: vectors keep the width of the model that wrote them, and
-    /// Lyntai's semantic recall is fail-open on a dimension mismatch — it returns NOTHING rather than
+    /// Lyntai's semantic search is fail-open on a dimension mismatch — it returns NOTHING rather than
     /// throwing. So a switched model without this leaves recall silently, permanently empty, looking
     /// exactly like a household that has no facts.</para>
-    /// <para>Returns how many were embedded; 0 when semantic recall is not configured.</para></summary>
+    /// <para><b>This REBUILDS</b> — an entry is embedded as it is written and there is no re-embed door,
+    /// so decay positions and links reset with it. Returns how many facts were indexed; 0 when semantic
+    /// recall is not configured.</para></summary>
     Task<int> ReindexSemanticAsync(CancellationToken ct = default);
 }
 
@@ -82,30 +83,62 @@ public sealed class FactIndex : IFactIndex
     private const string GraphMember = EngineName + "/graph";
 
     /// <summary>Lyntai scopes memory by (task, scope). The task is this consumer — the household's
-    /// granular facts — and the scope is the fact's own <c>kind</c>, so a kind-filtered recall is a
-    /// scoped recall rather than a filter applied after ranking.</summary>
+    /// granular facts.</summary>
     private const string TaskKey = "facts";
+
+    /// <summary>ONE scope for every fact, rather than the fact's own <c>kind</c>.
+    ///
+    /// <para>Scope looks like the natural home for <c>kind</c> and costs the feature its main path. A
+    /// vector collection is keyed <c>{member}|{task}|{scope}</c>, so kind-as-scope splits the embeddings
+    /// into one collection per kind — and a recall that names no kind searches <c>…|facts|</c>, which is
+    /// empty. That is the DEFAULT <c>recall_facts</c> call: the agent rarely knows the kind, so semantic
+    /// recall was answering only the rare scoped ask. Measured 2026-08-21: scoped 3/3 queries improved,
+    /// unscoped 0/3.</para>
+    ///
+    /// <para>Nothing is lost, because kind was never doing the filtering — <c>ByGraphRefsAsync</c> takes
+    /// the kind and applies it in SQL when resolving refs back to rows. So a kind-filtered recall ranks
+    /// over every fact and then narrows, which is why <see cref="RankAsync"/> over-asks harder when a kind
+    /// is given. (Cross-kind LINKING is not among the gains — it already worked, because the graph's
+    /// lexical recall spans scopes when the query names none, which is how <c>e2e-p48</c> has always
+    /// linked its three differently-kinded facts.)</para>
+    ///
+    /// <para><b>Lyntai 3.0.2 makes kind-as-scope workable again and this deliberately stays.</b> That
+    /// release teaches the graph's SEMANTIC half to span scopes on a null-scope recall, as its lexical
+    /// half already did — so the split-collection problem above would be fixed at the source. Two reasons
+    /// to keep one scope anyway. Spanning is built on <c>IListableVectorStore</c>, an OPTIONAL capability:
+    /// a store that lacks it yields nothing there, silently, on the DEFAULT recall — the exact failure
+    /// class this whole area kept producing. And spanning searches one collection per kind where this
+    /// searches one, for the same vectors. The upside it would buy is a narrower search on the kind-filtered
+    /// path, which is the rare one.</para></summary>
+    private const string AllFacts = "all";
 
     private readonly IMemoryEngine? _engine;
     private readonly IMemoryGraphStore? _graph;
     private readonly IKnowledgeStore _store;
     private readonly ILogger<FactIndex>? _log;
 
-    /// <summary>Present only when the household turned semantic recall on and an embedder is configured.
-    /// WRITTEN TO DIRECTLY, deliberately, rather than through the engine: a composite engine routes a
-    /// write to the FIRST member that supports the grade, so with graph + semantic members every write
-    /// would land in the graph alone and the vector store would stay permanently empty — wired, compiling,
-    /// and doing nothing. Recall still goes through the engine, where the ranking policy fuses both.</summary>
+    /// <summary>Registered only when the household turned semantic recall on AND an embedder resolved, so
+    /// its presence is exactly "meaning-based recall is available" — which is all this field is read for.
+    /// <para>NOT written to. The vectors that answer a recall are the GRAPH member's own: it embeds every
+    /// write already, and <c>GraphMemoryOptions.SemanticSeedK</c> is what lets a recall consider those
+    /// neighbours. Writing here as well would embed each fact a second time into a collection whose hits
+    /// carry a <c>facts/semantic#…</c> reference that no <c>knowledge</c> row stores — dropped on the way
+    /// out by the ref match in <c>ByGraphRefsAsync</c>.</para></summary>
     private readonly ISemanticMemory? _semantic;
+
+    /// <summary>The store the graph member embeds into. Read only to CLEAR it — see
+    /// <see cref="DropGraphVectorsAsync"/>; the writing and searching are the engine's own.</summary>
+    private readonly IVectorStore? _vectors;
 
     public FactIndex(IMemoryEngineFactory? engines, IKnowledgeStore store,
         IMemoryGraphStore? graph = null, ILogger<FactIndex>? log = null,
-        ISemanticMemory? semantic = null)
+        ISemanticMemory? semantic = null, IVectorStore? vectors = null)
     {
         _store = store;
         _graph = graph;
         _log = log;
         _semantic = semantic;
+        _vectors = vectors;
         if (engines is not null && engines.TryGet(EngineName, out var engine)) _engine = engine;
     }
 
@@ -121,9 +154,10 @@ public sealed class FactIndex : IFactIndex
             // eighty characters. Grade stays associative (Inherit → the graph's role): the curated
             // markdown is this product's authoritative tier, and marking facts authoritative would
             // exempt them from the decay that is the whole reason for indexing them.
+            // One write, one embedding: the graph member embeds its own entry when an embedder is wired.
+            // The fact's kind rides on the knowledge row, which is what the recall filters on.
             var reference = await _engine.RememberAsync(
-                new MemoryWrite(TaskKey, kind, content, Headline: topic), ct);
-            await EmbedAsync(kind, content, ct);
+                new MemoryWrite(TaskKey, AllFacts, content, Headline: topic), ct);
             return Encode(reference);
         }
         catch (Exception ex)
@@ -139,12 +173,15 @@ public sealed class FactIndex : IFactIndex
         if (_engine is null) return FactRanking.Empty;
         try
         {
-            // Over-ask. The graph dedups by CONTENT HASH, so editing a fact leaves its previous node
-            // behind with no row pointing at it; those resolve to nothing and would otherwise shrink
-            // the page the agent asked for. Orphans are cleared by RebuildAsync, not by recall.
-            var want = Math.Min(limit * 3, 100);
+            // Over-ask, for two reasons that compound. The graph dedups by CONTENT HASH, so editing a
+            // fact leaves its previous node behind with no row pointing at it; those resolve to nothing
+            // and would otherwise shrink the page the agent asked for (orphans are cleared by
+            // RebuildAsync, not by recall). And a KIND narrows the ranked list afterwards rather than
+            // before it — see AllFacts — so a kind holding a tenth of the corpus needs a far wider
+            // ranking to return a full page of its own.
+            var want = kind is null ? Math.Min(limit * 3, 100) : 100;
             var recall = await _engine.RecallAsync(
-                new MemoryQuery(TaskKey, Scope: kind, Query: query, Limit: want), ct);
+                new MemoryQuery(TaskKey, Scope: AllFacts, Query: query, Limit: want), ct);
             return new FactRanking(
                 [.. recall.Items.Select(i => new FactHit(Encode(i.Reference), i.Retrievability, i.Degree))],
                 recall.Answered);
@@ -206,6 +243,13 @@ public sealed class FactIndex : IFactIndex
             // is NOT wired to IRecordIndex, whose step runs at every startup: the discard would erase
             // the decay positions, reinforcement and links that are the whole point.
             if (_graph is not null) await _graph.ForgetAsync(GraphMember, TaskKey, scope: null, ct);
+            // The vectors go with them. Forgetting a NODE does not reach its embedding — that lives in the
+            // vector store keyed by node id, and a rebuilt node takes a fresh id — so every caller of this
+            // method would otherwise leave the old ones behind. All three want them gone: an import
+            // replaced the facts, a layout change moved them to a new collection, and a MODEL change made
+            // the stored widths unusable. That last one is the dangerous case, since mixed widths in one
+            // collection break every search against it, fail-open and therefore silently.
+            await DropGraphVectorsAsync(ct);
             // Detach every row NOW, not one-by-one as each re-index lands: annotation makes this
             // loop minutes long on a real corpus, and an abort mid-way (client gone, an update
             // restart) would otherwise strand refs pointing at the discarded graph — which
@@ -228,68 +272,50 @@ public sealed class FactIndex : IFactIndex
         }
     }
 
-    /// <summary>Embed one fact for semantic recall, matching the (task, scope) the engine's semantic member
-    /// recalls by — otherwise the vectors would be written where nothing ever looks.
-    /// <para><b>Fail-open, and that asymmetry is the point.</b> Lyntai's semantic RECALL swallows failures
-    /// (returning nothing), but its WRITE deliberately throws — losing a write silently is worse than a
-    /// throw a caller can see. That is right for a consumer whose only memory is semantic; it is wrong
-    /// here, where the graph is the record and this is an optional ranking aid. Left uncaught, a stopped
-    /// Ollama would make <c>remember_fact</c> — a feature that works today — start failing outright, in
-    /// exchange for a recall nicety. So the embedding is best-effort and the fact is still indexed.</para></summary>
-    private async Task EmbedAsync(string kind, string content, CancellationToken ct)
+    public async Task<int> ReindexSemanticAsync(CancellationToken ct = default)
     {
-        if (_semantic is null) return;
+        if (_semantic is null) return 0;
+        // The vectors a recall reads belong to the GRAPH's entries, written as each one was remembered —
+        // so re-embedding means re-remembering, which is exactly RebuildAsync. There is no cheaper door:
+        // the engine embeds on write and offers no "re-embed what you already hold".
+        //
+        // That makes this destructive of decay positions and links, which SyncAsync never is. Both
+        // occasions that need it have already lost the vectors anyway — turning the model ON (the graph
+        // was built without an embedder, so its entries have none) and CHANGING it. Clearing the old
+        // vectors is RebuildAsync's job, not this method's: every caller of it needs the same thing.
+        _log?.LogInformation("fact index: re-embedding by rebuilding the index — decay positions and links reset");
+        return await RebuildAsync(ct);
+    }
+
+    /// <summary>Drop the graph member's vector collections, so a rebuild does not write NEW vectors into a
+    /// collection still holding the OLD model's.
+    /// <para>This is the model-change case, and it is the sharp one: a vector keeps the width of the model
+    /// that wrote it, so mixing widths in one collection corrupts every search against it — and Lyntai's
+    /// search is fail-open, returning nothing rather than throwing, which reads exactly like a household
+    /// that has no facts. Forgetting the graph's NODES does not reach the vectors: they are the vector
+    /// store's rows, keyed by node id, and a rebuilt node takes a fresh id — so the old rows would simply
+    /// stay, unreferenced and still matched against.</para>
+    /// <para>Located by PREFIX rather than by rebuilding the collection name: the name is Lyntai's to
+    /// compose (<c>{engine}|{task}|{scope}</c> today), and the one part of it this app can rely on is that
+    /// it starts with the engine's own name. Best-effort — a failure here costs recall quality on the next
+    /// search, never the rebuild.</para></summary>
+    private async Task DropGraphVectorsAsync(CancellationToken ct)
+    {
+        if (_vectors is not IListableVectorStore listable) return;
         try
         {
-            await _semantic.RememberAsync(TaskKey, kind, content, ct);
+            var collections = await listable.ListCollectionsAsync(GraphMember, ct);
+            foreach (var collection in collections) await listable.RemoveCollectionAsync(collection, ct);
+            if (collections.Count > 0)
+                _log?.LogInformation("fact index: dropped {Count} stale vector collection(s) before re-embedding",
+                    collections.Count);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            _log?.LogWarning(ex,
-                "fact index: could not embed {Kind}; it stays findable by graph + FTS recall", kind);
+            _log?.LogWarning(ex, "fact index: could not drop the old vectors; a model CHANGE may leave " +
+                "mixed-width vectors that match nothing");
         }
-    }
-
-    public async Task<int> ReindexSemanticAsync(CancellationToken ct = default)
-    {
-        if (_semantic is null) return 0;
-        var facts = await _store.AllAsync();
-        if (facts.Count == 0) return 0;
-
-        // Forget per SCOPE, because that is the unit a vector collection is keyed by — there is no
-        // "forget every scope" call, and leaving stale vectors behind after a MODEL change is precisely
-        // what makes recall return nothing: old-width vectors that no query can ever match.
-        foreach (var scope in facts.Select(f => f.Row.Kind).Distinct(StringComparer.Ordinal))
-        {
-            try { await _semantic.ForgetAsync(TaskKey, scope, ct); }
-            catch (Exception ex) { _log?.LogWarning(ex, "fact index: could not clear semantic scope {Scope}", scope); }
-        }
-
-        _log?.LogInformation("fact index: embedding {Count} facts for semantic recall ({Concurrency} at a time)",
-            facts.Count, IndexConcurrency);
-        var embedded = 0;
-        using var slots = new SemaphoreSlim(IndexConcurrency, IndexConcurrency);
-        await Task.WhenAll(facts.Select(async fact =>
-        {
-            await slots.WaitAsync(ct);
-            try
-            {
-                ct.ThrowIfCancellationRequested();
-                // Deliberately NOT EmbedAsync: this is the explicit, household-initiated operation, so a
-                // failure has to be countable rather than swallowed — the panel reports how many landed.
-                await _semantic.RememberAsync(TaskKey, fact.Row.Kind, fact.Row.Content, ct);
-                Interlocked.Increment(ref embedded);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                _log?.LogWarning(ex, "fact index: embedding failed for {Kind}/{Topic}", fact.Row.Kind, fact.Row.Topic);
-            }
-            finally { slots.Release(); }
-        }));
-        _log?.LogInformation("fact index: semantic reindex done — {Embedded}/{Total}", embedded, facts.Count);
-        return embedded;
     }
 
     /// <summary>How many facts index concurrently in a backfill/rebuild. Each index write can carry a

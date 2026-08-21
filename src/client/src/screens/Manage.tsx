@@ -1156,7 +1156,7 @@ interface MemoryState {
   llmEnrichment: { enabled: boolean; live: boolean; what: string; cost: string; model: string };
   localModel: {
     enabled: boolean; active: boolean; model: string | null; what: string; cost: string;
-    limitation: string | null;
+    note: string | null;
     ollama: {
       baseUrl: string; installed: boolean; serving: boolean; version: string | null;
       executable: string | null; gpuLikely: boolean; problem: string | null;
@@ -1266,7 +1266,7 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
             {!o.installed && (
               <div className="res-need">在「资源 · Resources」面板下载 Ollama 运行时,或自行安装后重启应用。</div>
             )}
-            {lm.limitation && <div className="res-msg">说明:{lm.limitation}</div>}
+            {lm.note && <div className="res-msg">说明:{lm.note}</div>}
           </div>
           <div className="res-side">
             {o.installed && !o.serving && (
