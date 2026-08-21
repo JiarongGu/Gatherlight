@@ -78,6 +78,17 @@ public static class GatherlightApp
         builder.Logging.AddFilter<Platform.Kernel.Logging.FileLoggerProvider>("Microsoft", fwLevel);
         builder.Logging.AddFilter<Platform.Kernel.Logging.FileLoggerProvider>("System", fwLevel);
 
+        // Optional semantic recall, decided ONCE here. The embedder, the vector store and the engine's
+        // semantic member are all DI registrations, so this is a startup decision by construction — the
+        // console says a change needs a restart rather than pretending it takes effect live. Both halves
+        // are required together: enabled with no model has nothing to embed with, so a half-configured
+        // install stays off rather than failing at the first fact write.
+        var memoryConfig = config.Current.Memory;
+        var embeddingModel = memoryConfig.EmbeddingModel;
+        var semanticOn = memoryConfig.SemanticEnabled && !string.IsNullOrWhiteSpace(embeddingModel);
+        var llmEnrichmentOn = memoryConfig.LlmEnrichmentEnabled;
+        var ollamaUrl = Platform.Agent.Llm.Services.OllamaRuntime.ResolveBaseUrl(memoryConfig.OllamaUrl);
+
         builder.Services
             .AddSingleton(options)
             // The config resolved above (one instance, one settings.json reader).
@@ -109,7 +120,9 @@ public static class GatherlightApp
             // front door + ClaudeCli provider (neutral cwd, verdict/router); the interactive two-gate, jobs,
             // and playground drive the CLI's own agent loop through its IAgentSession (via AgentRunner below).
             // AddLyntai returns IServiceCollection, so it chains; SQLite storage backs scoring persistence.
-            .AddLyntai(b => b
+            .AddLyntai(b =>
+            {
+                b
                 .AddClaudeCliProvider()
                 // The interactive two-gate + jobs + playground drive the CLI's own agent loop through
                 // Lyntai's IAgentSession (registered here). Long agentic runs need a budget bigger than the
@@ -161,7 +174,27 @@ public static class GatherlightApp
                 // never decays, and that is not this: the household's policies and preferences live in
                 // curated markdown the CLI loads directly, so grading facts authoritative here would
                 // exempt them from the decay that is the only reason to index them.
-                .AddMemoryEngine("facts", e => e.UseGraph())
+                // The semantic member is added only when the household turned it on. Note what it does
+                // and does NOT change: RECALL becomes a fusion of graph + meaning under the engine's
+                // ranking policy, but WRITES still go to the graph alone — a composite routes a write to
+                // the first member that supports the grade. FactIndex therefore embeds explicitly, and
+                // adding UseSemantic() without that would leave the vector store permanently empty.
+                .AddMemoryEngine("facts", e =>
+                {
+                    e.UseGraph();
+                    if (semanticOn) e.UseSemantic();
+                });
+
+                // Recall quality is THREE independent switches, not one setting, because they cost
+                // different things and improve different things:
+                //   · FORMULA — graph decay + rank fusion + FTS trigram. Always on, costs nothing, needs
+                //     no setup. The floor the other two build on, and what remains when both are off.
+                //   · CLAUDE CLI (below) — tokens per write and per recall.
+                //   · LOCAL MODEL (further down) — disk and local compute, no tokens.
+                // Keeping them independent is deliberate: verification reorders what was retrieved while
+                // embeddings change what is retrievable at all, so they are complements, and a household
+                // must be able to drop the token cost without losing local semantics.
+                //
                 // The model-backed memory steps (both fail-open — a judge failure leaves behaviour
                 // exactly as it was, which is also what keeps the stubbed-CLI e2e honest):
                 // annotation labels each fact write with what it is ABOUT so entries about the same
@@ -173,8 +206,14 @@ public static class GatherlightApp
                 // candidate ranked below the cut), and a haiku judge roughly halves it. A verdict
                 // only ever reorders (VerificationFilters stays false); Model stays null so the
                 // "memory" consumer routing above decides, live-overridable.
-                .AddMemoryAnnotation()
-                .AddMemoryVerification()
+                ;
+                // Both are OPT-OUTABLE now, and until this switch existed they were not. They were adopted
+                // wholesale with Lyntai 3.0 and have been spending a haiku call on every remember_fact and
+                // every recall since — measured in the router log, never chosen by the household paying
+                // for it. Default stays ON so an upgrade does not silently degrade recall; the difference
+                // is that declining it is now a setting rather than a code edit.
+                if (llmEnrichmentOn) b.AddMemoryAnnotation().AddMemoryVerification();
+                b
                 // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
                 // collection so its IScoringService iterates + persists them (LLM judges route through
                 // llm.model.scorer, skip via Applies()).
@@ -196,7 +235,34 @@ public static class GatherlightApp
                 .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeReadFileTool(
                     sp.GetRequiredService<Platform.Kernel.Services.ISiteContext>()))
                 .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeListFilesTool(
-                    sp.GetRequiredService<Platform.Kernel.Services.ISiteContext>())))
+                    sp.GetRequiredService<Platform.Kernel.Services.ISiteContext>()));
+
+                // ---- Optional: meaning-based recall, embedded by a LOCAL Ollama --------------------
+                // Registered only when the household set it up, which is why this is a block rather than
+                // one more link in the chain. Three things had to be true for it to be worth wiring at
+                // all, and each is enforced somewhere rather than assumed:
+                //   · LOCAL. Embedding a fact means handing the household's private material to whatever
+                //     embeds it; a cloud endpoint would ship their plans to a third party on every write.
+                //     OllamaRuntime.ResolveBaseUrl refuses a non-loopback URL without an explicit opt-in,
+                //     and is used HERE too so the URL we embed against is the one the panel reports.
+                //   · OPTIONAL. Off by default. With it off — or with Ollama absent — recall behaves
+                //     exactly as it did before this existed.
+                //   · AFTER UseSqliteStorage. UseSqliteVectorStore checks for the Governance feature at
+                //     WIRING time (it owns the lyntai_vector table), so ordering here is load-bearing,
+                //     not cosmetic — which is the whole reason the fluent chain became a block.
+                if (semanticOn)
+                {
+                    b.AddOpenAiCompatibleEmbedder("ollama", o =>
+                     {
+                         o.BaseUrl = ollamaUrl;
+                         o.Model = embeddingModel;
+                         // Keyless: a local Ollama takes no bearer token, and inventing one would only
+                         // make a misconfigured remote endpoint look authenticated.
+                     })
+                     .UseSqliteVectorStore()
+                     .AddSemanticMemory();
+                }
+            })
             // Lyntai's cortex (IPromptRegistry / IModelRoutingStore) reads/writes the app's OWN app_config
             // table — single source of truth for cortex.prompt.* / llm.model.*, no lyntai_kv duplicate. Plain
             // AddSingleton after AddLyntai wins over its TryAdd SqliteKeyValueStore.
@@ -207,6 +273,11 @@ public static class GatherlightApp
             // an ASSUMED machine dependency: absent on a fresh install, it died at spawn and surfaced as a
             // generic "CLI 报告错误". This is what makes it a provisioned resource with a diagnosable state.
             .AddSingleton<IClaudeCliRuntime, ClaudeCliRuntime>()
+            // The LOCAL embedder behind optional semantic recall. Never used for planning (that stays the
+            // authenticated claude CLI) and never required: with no Ollama the feature is simply absent and
+            // recall behaves as it did before it existed. Loopback-only by default — a remote embedder would
+            // send every household fact off this machine on every write.
+            .AddSingleton<IOllamaRuntime, OllamaRuntime>()
             // One live agent run at a time across chat AND background jobs (single-writer data tree)
             .AddSingleton<IAgentGate, AgentGate>()
             .AddSingleton<IPromptHarness, PromptHarness>()
@@ -266,7 +337,10 @@ public static class GatherlightApp
                     sp.GetService<Lyntai.Memory.IMemoryEngineFactory>(),
                     sp.GetRequiredService<Platform.Storage.Knowledge.Services.IKnowledgeStore>(),
                     sp.GetService<Lyntai.Memory.IMemoryGraphStore>(),
-                    sp.GetService<ILogger<Platform.Storage.Knowledge.Services.FactIndex>>()))
+                    sp.GetService<ILogger<Platform.Storage.Knowledge.Services.FactIndex>>(),
+                    // Null unless semantic recall was wired above — which is what keeps the whole feature
+                    // absent, rather than half-present, on an install that never set it up.
+                    sp.GetService<Lyntai.Memory.ISemanticMemory>()))
             .AddSingleton<Platform.Storage.Knowledge.Services.IProcessLog, Platform.Storage.Knowledge.Services.ProcessLog>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RememberFactTool>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RecallFactsTool>()

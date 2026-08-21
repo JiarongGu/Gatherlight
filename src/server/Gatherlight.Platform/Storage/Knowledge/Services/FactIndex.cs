@@ -62,6 +62,17 @@ public interface IFactIndex
     /// import); at startup use <see cref="SyncAsync"/>, or every restart would erase the accumulated
     /// ranking this exists to build.</para></summary>
     Task<int> RebuildAsync(CancellationToken ct = default);
+
+    /// <summary>Re-embed every fact for SEMANTIC recall, leaving the graph untouched. Two occasions need
+    /// it and neither is served by the other two methods: turning semantic recall on (the graph is already
+    /// populated, so <see cref="SyncAsync"/> — which back-fills only rows with an empty ref — would embed
+    /// nothing), and CHANGING the embedding model.
+    /// <para>The model change is the sharp one: vectors keep the width of the model that wrote them, and
+    /// Lyntai's semantic recall is fail-open on a dimension mismatch — it returns NOTHING rather than
+    /// throwing. So a switched model without this leaves recall silently, permanently empty, looking
+    /// exactly like a household that has no facts.</para>
+    /// <para>Returns how many were embedded; 0 when semantic recall is not configured.</para></summary>
+    Task<int> ReindexSemanticAsync(CancellationToken ct = default);
 }
 
 public sealed class FactIndex : IFactIndex
@@ -80,12 +91,21 @@ public sealed class FactIndex : IFactIndex
     private readonly IKnowledgeStore _store;
     private readonly ILogger<FactIndex>? _log;
 
+    /// <summary>Present only when the household turned semantic recall on and an embedder is configured.
+    /// WRITTEN TO DIRECTLY, deliberately, rather than through the engine: a composite engine routes a
+    /// write to the FIRST member that supports the grade, so with graph + semantic members every write
+    /// would land in the graph alone and the vector store would stay permanently empty — wired, compiling,
+    /// and doing nothing. Recall still goes through the engine, where the ranking policy fuses both.</summary>
+    private readonly ISemanticMemory? _semantic;
+
     public FactIndex(IMemoryEngineFactory? engines, IKnowledgeStore store,
-        IMemoryGraphStore? graph = null, ILogger<FactIndex>? log = null)
+        IMemoryGraphStore? graph = null, ILogger<FactIndex>? log = null,
+        ISemanticMemory? semantic = null)
     {
         _store = store;
         _graph = graph;
         _log = log;
+        _semantic = semantic;
         if (engines is not null && engines.TryGet(EngineName, out var engine)) _engine = engine;
     }
 
@@ -103,6 +123,7 @@ public sealed class FactIndex : IFactIndex
             // exempt them from the decay that is the whole reason for indexing them.
             var reference = await _engine.RememberAsync(
                 new MemoryWrite(TaskKey, kind, content, Headline: topic), ct);
+            await EmbedAsync(kind, content, ct);
             return Encode(reference);
         }
         catch (Exception ex)
@@ -205,6 +226,70 @@ public sealed class FactIndex : IFactIndex
             _log?.LogWarning(ex, "fact index: rebuild failed; recall stays on FTS");
             return 0;
         }
+    }
+
+    /// <summary>Embed one fact for semantic recall, matching the (task, scope) the engine's semantic member
+    /// recalls by — otherwise the vectors would be written where nothing ever looks.
+    /// <para><b>Fail-open, and that asymmetry is the point.</b> Lyntai's semantic RECALL swallows failures
+    /// (returning nothing), but its WRITE deliberately throws — losing a write silently is worse than a
+    /// throw a caller can see. That is right for a consumer whose only memory is semantic; it is wrong
+    /// here, where the graph is the record and this is an optional ranking aid. Left uncaught, a stopped
+    /// Ollama would make <c>remember_fact</c> — a feature that works today — start failing outright, in
+    /// exchange for a recall nicety. So the embedding is best-effort and the fact is still indexed.</para></summary>
+    private async Task EmbedAsync(string kind, string content, CancellationToken ct)
+    {
+        if (_semantic is null) return;
+        try
+        {
+            await _semantic.RememberAsync(TaskKey, kind, content, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex,
+                "fact index: could not embed {Kind}; it stays findable by graph + FTS recall", kind);
+        }
+    }
+
+    public async Task<int> ReindexSemanticAsync(CancellationToken ct = default)
+    {
+        if (_semantic is null) return 0;
+        var facts = await _store.AllAsync();
+        if (facts.Count == 0) return 0;
+
+        // Forget per SCOPE, because that is the unit a vector collection is keyed by — there is no
+        // "forget every scope" call, and leaving stale vectors behind after a MODEL change is precisely
+        // what makes recall return nothing: old-width vectors that no query can ever match.
+        foreach (var scope in facts.Select(f => f.Row.Kind).Distinct(StringComparer.Ordinal))
+        {
+            try { await _semantic.ForgetAsync(TaskKey, scope, ct); }
+            catch (Exception ex) { _log?.LogWarning(ex, "fact index: could not clear semantic scope {Scope}", scope); }
+        }
+
+        _log?.LogInformation("fact index: embedding {Count} facts for semantic recall ({Concurrency} at a time)",
+            facts.Count, IndexConcurrency);
+        var embedded = 0;
+        using var slots = new SemaphoreSlim(IndexConcurrency, IndexConcurrency);
+        await Task.WhenAll(facts.Select(async fact =>
+        {
+            await slots.WaitAsync(ct);
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                // Deliberately NOT EmbedAsync: this is the explicit, household-initiated operation, so a
+                // failure has to be countable rather than swallowed — the panel reports how many landed.
+                await _semantic.RememberAsync(TaskKey, fact.Row.Kind, fact.Row.Content, ct);
+                Interlocked.Increment(ref embedded);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _log?.LogWarning(ex, "fact index: embedding failed for {Kind}/{Topic}", fact.Row.Kind, fact.Row.Topic);
+            }
+            finally { slots.Release(); }
+        }));
+        _log?.LogInformation("fact index: semantic reindex done — {Embedded}/{Total}", embedded, facts.Count);
+        return embedded;
     }
 
     /// <summary>How many facts index concurrently in a backfill/rebuild. Each index write can carry a

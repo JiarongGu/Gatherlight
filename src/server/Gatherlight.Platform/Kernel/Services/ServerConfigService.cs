@@ -34,6 +34,9 @@ public sealed class ServerConfig
     /// <summary>Background-job scheduler (repeat/one-off agent tasks, tool calls, notifications).</summary>
     public JobsConfig Jobs { get; set; } = new();
 
+    /// <summary>Optional meaning-based recall over the household's facts. Off until they set it up.</summary>
+    public MemoryConfig Memory { get; set; } = new();
+
     /// <summary>Whether the first-run setup wizard has been completed. False on a truly fresh install
     /// (no settings.json yet) so the console shows the wizard once; the wizard sets it true. A
     /// pre-wizard settings.json (field absent) is migrated to true on load — existing users are already
@@ -140,6 +143,49 @@ public sealed class TlsConfig
 /// Loads/saves <see cref="ServerConfig"/>. Constructed before <see cref="PlatformContext"/> is usable,
 /// so it derives the settings path from the options directly.
 /// </summary>
+/// <summary>
+/// Semantic (meaning-based) recall over the household's facts, embedded by a LOCAL Ollama.
+///
+/// <para><b>Off by default, and only ever turned on by the household.</b> It costs real disk (a runtime
+/// plus a model) and buys a ranking improvement, not a capability — so it is a setup flow, not a default.
+/// With it off, or with Ollama absent, fact recall behaves exactly as it did before the feature existed.</para>
+///
+/// <para><b>Applied at startup.</b> The embedder, the vector store and the engine's semantic member are DI
+/// registrations, so a change here takes effect on restart — the console says so rather than pretending
+/// otherwise. That is the same contract <see cref="SecurityConfig"/> has.</para>
+/// </summary>
+public sealed class MemoryConfig
+{
+    /// <summary>Whether the claude CLI enriches memory: a subject label on every fact WRITE (annotation)
+    /// and a judgement of which candidates actually answered a RECALL (verification).
+    ///
+    /// <para><b>Default true, because that is what already ships</b> — the Lyntai 3.0 adoption turned both
+    /// on, and flipping the default would silently degrade recall for every existing household on upgrade.
+    /// But it is a SWITCH now rather than a fact of the build, because it spends tokens on every fact write
+    /// and every recall, and until this existed there was no way to decline that short of editing code.
+    /// The household paying for it should be able to see it and turn it off.</para>
+    ///
+    /// <para>Off leaves the deterministic floor intact: graph decay, rank fusion and FTS trigram recall all
+    /// still work. It removes an enrichment, not the feature.</para></summary>
+    public bool LlmEnrichmentEnabled { get; set; } = true;
+
+    /// <summary>Whether to embed facts and fuse semantic hits into recall. Requires
+    /// <see cref="EmbeddingModel"/>; without one there is nothing to embed with, so both are checked
+    /// together and a half-configured install simply stays off.</summary>
+    public bool SemanticEnabled { get; set; }
+
+    /// <summary>The Ollama embedding model, e.g. <c>bge-m3</c> or <c>nomic-embed-text</c>.
+    /// <para>CHANGING THIS REQUIRES A REINDEX. Vectors keep the width of the model that wrote them and
+    /// Lyntai's recall is fail-open on a dimension mismatch — it returns nothing rather than throwing — so
+    /// a switched model without <c>ReindexSemanticAsync</c> leaves recall silently empty.</para></summary>
+    public string? EmbeddingModel { get; set; }
+
+    /// <summary>Where Ollama listens. Loopback by default and effectively required: a remote embedder
+    /// would send every household fact off this machine on every write. <c>GATHERLIGHT_OLLAMA_URL</c>
+    /// overrides, and a non-loopback value is ignored unless <c>GATHERLIGHT_OLLAMA_ALLOW_REMOTE=1</c>.</summary>
+    public string? OllamaUrl { get; set; }
+}
+
 public sealed class ServerConfigService
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
