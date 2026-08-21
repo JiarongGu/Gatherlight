@@ -51,7 +51,9 @@ public sealed class CortexConfigService : ICortexConfigService
             "一次性文件提取工具(中性 cwd,廉价调用)。默认 sonnet。", "sonnet"),
         ("scorer", "自动评分 · Scorer",
             "自动评分的 LLM 评判(切题 / 事实可靠等维度,中性 cwd,廉价调用)。默认 haiku。", "haiku"),
-        ("memory", "记忆增强 · Memory",
+        // Labelled 判断 to match the layer it belongs to in 记忆检索. The consumer ID stays "memory" — it is
+        // the routing key in DefaultModelByConsumer, not a display string.
+        ("memory", "记忆判断 · Memory",
             "记录事实时标注主题、检索时判断哪些结果真正回答了问题(每次写入与检索各一次调用)。" +
             "可在本页「记忆检索」中整体关闭。默认 haiku。", "haiku"),
     };

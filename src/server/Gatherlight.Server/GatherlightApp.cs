@@ -120,6 +120,11 @@ public static class GatherlightApp
 
         builder.Services
             .AddSingleton(options)
+            // WHAT WE ACTUALLY WIRED, captured here because this is the only place that knows. The console
+            // reports it beside the saved setting so its backend badge names the model doing the work
+            // rather than the one chosen a moment ago and not yet restarted into.
+            .AddSingleton(new Platform.Agent.Llm.Services.MemoryJudgeWiring(
+                judgeLocal ? "local" : "cli", judgeLocal ? judgeModel : null))
             // The config resolved above (one instance, one settings.json reader).
             .AddSingleton(config)
             .AddSingleton<Platform.Site.Services.ISiteManifestStore, Platform.Site.Services.SiteManifestStore>()
@@ -379,6 +384,9 @@ public static class GatherlightApp
             // One reindex at a time, and its progress. A singleton because the run outlives the request
             // that started it — see IReindexStatus for why that had to change.
             .AddSingleton<Platform.Agent.Llm.Services.IReindexStatus, Platform.Agent.Llm.Services.ReindexStatus>()
+            // Model downloads in flight. A singleton for the same reason: a multi-gigabyte pull outlives the
+            // POST that started it, and the panel goes and looks rather than holding the request open.
+            .AddSingleton<Platform.Agent.Llm.Services.IModelPullStatus, Platform.Agent.Llm.Services.ModelPullStatus>()
             // One live agent run at a time across chat AND background jobs (single-writer data tree)
             .AddSingleton<IAgentGate, AgentGate>()
             .AddSingleton<IPromptHarness, PromptHarness>()

@@ -16,6 +16,13 @@
 
 ## Backlog
 
+- [ ] **Resharpen 记忆检索 · Memory recall** — move local models out of the recall panel into 资源
+  (they are provisioning artifacts; the chat/embedding split is Ollama's, not ours), split
+  `/api/manage/memory/local/{pull,remove}` out to `/api/manage/models`, and filter each layer's picker by
+  capability instead of by curated kind lists. Then revisit how the three layers are weighted: Lyntai
+  measured 0% of misses as retrieval failures, so 判断 repairs recall far more than 语义 does. Brief,
+  open questions and what the 2026-08-21 session already fixed: `docs/memory-recall-resharpen.md`.
+
 ### Product (deferred, not urgent)
 - [ ] **Phase B embeddings:** ONNX embedding model as a provisioned resource (into Gatherlight.Resources
   or its own package) + EmbeddingService + vector tables + hybrid search over the FTS index.

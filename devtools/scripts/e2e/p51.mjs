@@ -168,6 +168,150 @@ try {
   ok('returning the judge to the CLI is accepted, and asks for a restart',
     toCli.status === 200 && toCli.body?.restartRequired === true, JSON.stringify(toCli.body));
 
+  // ---- F · the judge picker is driven by OLLAMA's capabilities, not by our shortlist ---------------
+  // The filter used to be "not in EmbeddingCatalog", which is wrong in both directions and failed
+  // silently both ways: a household whose local models were all catalogued embedders got an EMPTY
+  // candidate list and a 本机模型 button that was disabled with no explanation anywhere on the panel —
+  // while the same panel listed those models under 本机模型占用 — and the first embedder we had not
+  // catalogued sailed past the refusal above into a fail-open policy, where the only symptom is recall
+  // that quietly never improves.
+  const held = s.localModel.ollama.models ?? [];
+  const named = held.filter((m) => Array.isArray(m.capabilities) && m.capabilities.length > 0);
+  if (named.length === 0) {
+    // Say what was NOT covered rather than passing quietly: a suite that skips its own subject and
+    // prints nothing reads afterwards as a suite that checked.
+    ok('(no Ollama, or one too old to report capabilities) capability filtering not exercised here',
+      true, `${held.length} models held, ${named.length} reporting capabilities`);
+  } else {
+    const cand = new Set((s.llmEnrichment.localCandidates ?? []).map((c) => c.name));
+    const wrong = named.filter((m) => m.capabilities.includes('completion') !== cand.has(m.name));
+    ok('every judge candidate is one Ollama calls completion-capable, and every other model is excluded',
+      wrong.length === 0,
+      wrong.map((m) => `${m.name} [${m.capabilities}] candidate=${cand.has(m.name)}`).join(' · ') || 'exact');
+
+    // The refusal, against EVERY embedding-only model this machine actually holds — including any the
+    // catalog has never heard of, which is the case the old check could not see.
+    const embedders = named.filter((m) => !m.capabilities.includes('completion'));
+    const catalogued = new Set((s.localModel.options ?? []).map((o) => o.id));
+    const uncatalogued = embedders.filter(
+      (m) => !catalogued.has(m.name) && !catalogued.has(m.name.split(':')[0]));
+    for (const m of embedders) {
+      const r = await post('/api/manage/memory/judge', { transport: 'local', model: m.name });
+      ok(`an embedding-only model is refused as a judge: ${m.name}`, r.status === 409, String(r.status));
+    }
+    ok(`(${uncatalogued.length} of ${embedders.length} embedders are OUTSIDE the catalog — the ones the`
+      + ' old shortlist check could not have refused)', true,
+      uncatalogued.map((m) => m.name).join(', ') || 'none on this machine');
+
+    // POSITIVE CONTROL. Every assertion above is a denial, and a denial-only test passes just as well
+    // against a picker that refuses everything — which is the defect being fixed here, not a fix for it.
+    const chat = named.find((m) => m.capabilities.includes('completion'));
+    if (chat) {
+      const acc = await post('/api/manage/memory/judge', { transport: 'local', model: chat.name });
+      ok(`a completion-capable model IS accepted as a judge: ${chat.name}`,
+        acc.status === 200, `${acc.status} ${JSON.stringify(acc.body)}`);
+
+      // SAVED vs RUNNING. The transport is a startup registration, so between saving and restarting the
+      // two disagree — and the layer's header now NAMES its backend. A badge rendered from the saved
+      // value would announce a model that is not doing the work, which is the same false label the
+      // rename removed from the title.
+      const mid = await getJson('/api/manage/memory');
+      ok('the panel reports the SAVED transport and the RUNNING one separately',
+        mid.llmEnrichment.transport === 'local' && mid.llmEnrichment.transportActive === 'cli',
+        JSON.stringify({ saved: mid.llmEnrichment.transport, active: mid.llmEnrichment.transportActive,
+          savedModel: mid.llmEnrichment.localModel, activeModel: mid.llmEnrichment.activeModel }));
+
+      await post('/api/manage/memory/judge', { transport: 'cli' });   // leave it as we found it
+    } else {
+      ok('(this machine holds no chat model) the accept path is not exercised here', true,
+        'the refusals above cannot distinguish "correctly strict" from "always refuses"');
+    }
+  }
+
+  // A disabled control must SAY why. The panel's one sentence for this used to live inside the <select>,
+  // which only renders when there is something to select — so the single case it explained was the single
+  // case it could never appear in.
+  const blocked = s.llmEnrichment.localBlocked;
+  ok('the switch carries a reason exactly when it has no candidates',
+    ((s.llmEnrichment.localCandidates ?? []).length === 0) === (typeof blocked === 'string' && blocked.length > 0),
+    `candidates=${(s.llmEnrichment.localCandidates ?? []).length} blocked=${JSON.stringify(blocked)}`);
+
+  // THE LOCAL JUDGE AND THE LOCAL EMBEDDER ARE ONE PROVIDER — same Ollama, same URL, same /api/pull; only
+  // the model differs. So when the fix is "you need a chat model", the panel must offer the download it
+  // already offers for embedding models rather than printing a terminal command. Asserted as a NAME the
+  // client can POST, not as prose, because prose is exactly what the old version had.
+  const suggest = s.llmEnrichment.localSuggest;
+  const onlyEmbedders = (s.llmEnrichment.localCandidates ?? []).length === 0
+    && s.localModel.ollama.serving;
+  ok('when the fix is a download, the panel names a model it can pull — not a shell command',
+    onlyEmbedders ? (typeof suggest === 'string' && suggest.length > 0) : suggest === null,
+    `serving=${s.localModel.ollama.serving} candidates=${(s.llmEnrichment.localCandidates ?? []).length} suggest=${JSON.stringify(suggest)}`);
+  // The button must POST a name the pull endpoint accepts — one that 400s would be a button that cannot
+  // work, i.e. worse than the terminal command it replaced. Checked by SHAPE rather than by pulling: this
+  // suite runs on a developer's machine and the suggestion is a multi-gigabyte chat model, so proving the
+  // button works by downloading it would cost far more than the assertion is worth (the same line this
+  // suite already draws around the destructive delete). The endpoint's own gate is EmbeddingCatalog
+  // .IsWellFormedId, whose contract is mirrored here.
+  ok('and the suggested name is one the pull endpoint would accept (shape, not a live download)',
+    suggest === null || /^[A-Za-z0-9][A-Za-z0-9._\-]*(:[A-Za-z0-9._-]+)?$/.test(suggest),
+    JSON.stringify(suggest));
+  // Which of the two branches actually ran depends on what this machine holds, so say so — an assertion
+  // that passed on the null branch has not seen the suggestion, and a run that prints only ✓ would read
+  // as though it had.
+  ok(suggest === null
+    ? '(this machine has a chat model) the SUGGESTION branch was not exercised — only the "stay quiet" half'
+    : `(this machine has only embedders) the suggestion branch ran: ${suggest}`,
+    true, `serving=${s.localModel.ollama.serving}`);
+
+  // ---- G · a download is started and REPORTED, not awaited inside the POST -------------------------
+  // A model is hundreds of megabytes to gigabytes and the pull budget is two hours. Awaiting it in the
+  // request gave a button reading 下载中… with no bar and no bytes — indistinguishable from a hang — over
+  // a request the browser may abandon while Ollama carries on downloading.
+  //
+  // Driven with a model that does NOT exist, deliberately: this suite runs on a developer's machine and a
+  // test that proves the download works by downloading a gigabyte is doing more harm than the assertion is
+  // worth. A pull that fails fast exercises the whole seam — 202, live state, recorded outcome — and the
+  // outcome is the half that would otherwise vanish.
+  const ghost = 'gatherlight-no-such-model:1b';
+  const t1 = Date.now();
+  const pull = await post('/api/manage/memory/local/pull', { model: ghost });
+  const pullTook = Date.now() - t1;
+  ok('a pull is ACCEPTED and returns immediately, rather than running inside the request',
+    pull.status === 202 && pullTook < 3000, `status=${pull.status} in ${pullTook}ms`);
+  // Asking twice is not an error: the household asked for a download and one is running. A 409 here would
+  // put an error toast over a working progress bar.
+  ok('and asking again while it runs is still success, not a conflict',
+    [202].includes((await post('/api/manage/memory/local/pull', { model: ghost })).status));
+
+  let pulls = (await getJson('/api/manage/memory')).localModel.pulls ?? [];
+  ok('the panel can read downloads back as STATE — this is what the progress bar renders from',
+    Array.isArray(pulls) && pulls.some((p) => p.model === ghost),
+    JSON.stringify(pulls));
+  await until(async () => {
+    pulls = (await getJson('/api/manage/memory')).localModel.pulls ?? [];
+    return !pulls.some((p) => p.model === ghost && p.running);
+  });
+  const ended = pulls.find((p) => p.model === ghost);
+  // A failed download that simply disappeared would read as one that never started — the same class of
+  // silence as the greyed-out button this whole section replaces.
+  ok('a download that failed says so instead of vanishing',
+    !!ended && ended.running === false && !!ended.error, JSON.stringify(ended));
+
+  // ---- H · enabling refuses a non-embedder without waiting out a cold model load ------------------
+  const chatModel = named.find((m) => !m.capabilities.includes('embedding'));
+  if (chatModel) {
+    const t2 = Date.now();
+    const r = await post('/api/manage/memory/local/enable', { model: chatModel.name });
+    const took2 = Date.now() - t2;
+    // The embed PROBE is still the load-bearing check and still runs for everything else; this only
+    // spares the household a minute of a dead button for an answer Ollama already gave.
+    ok(`enabling a chat model is refused, and quickly: ${chatModel.name}`,
+      r.status === 409 && took2 < 20000, `${r.status} in ${took2}ms`);
+  } else {
+    ok('(this machine holds no chat model) the fast embed refusal is not exercised here', true,
+      `${named.length} models reporting capabilities`);
+  }
+
   const known = s.localModel.options[0].id;
   const enable = await post('/api/manage/memory/local/enable', { model: known });
   ok('enabling a KNOWN model still refuses when its prerequisites are missing',

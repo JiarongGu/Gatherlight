@@ -207,7 +207,11 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             Sha256: NodeSha256),
         new ResourceSpec(
             Id: "ollama", Name: $"Ollama 本地模型运行时({OllamaVersion})",
-            NeededFor: "「本地模型」语义检索的运行时 —— 仅在启用该项时需要;已自行安装 Ollama 则无需下载",
+            // Names BOTH consumers: one Ollama serves the 语义 embedder and the 判断 local judge — same
+            // daemon, same URL, different models on it. Saying "语义检索的运行时" made the judge's local
+            // arm look like a separate thing, which is the confusion the 记忆检索 panel just had to fix.
+            NeededFor: "「记忆检索」里本机模型的运行时:语义检索的嵌入模型、判断的本机对话模型都跑在它上面"
+                + " —— 仅在启用时需要;已自行安装 Ollama 则无需下载",
             Kind: ResourceKind.Zip, InstallDir: "ollama", ReadyMarker: "ollama.exe",
             // The official package, GPU runtimes included. A CPU-only subset was considered and rejected:
             // it would install a SECOND, weaker Ollama beside a household's real one, and optimising the

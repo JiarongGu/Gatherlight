@@ -3268,6 +3268,11 @@ kbd, .topbar-kbd {
 /* WHERE the judge runs — a segmented control, as the access-mode picker is. */
 .mem-judge { margin-top: 11px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .mem-judge .cx-seg { flex: 0 0 auto; }
+/* Quiet: it names the control beside it, it is not a heading. */
+.mem-judge-lbl { flex: none; font-size: 11.5px; color: var(--muted); }
+/* The fix-it button for "no chat model on this machine", on its own row under the reason. */
+.mem-judge-fix { flex: 1 1 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.mem-judge-fix .mem-prog { width: 100%; max-width: 44ch; margin-top: 4px; }
 .mem-judge-sel {
   font-family: var(--font-mono); font-size: 11px; padding: 5px 9px;
   border-radius: var(--radius-sm); border: 1px solid var(--border);
@@ -3275,9 +3280,14 @@ kbd, .topbar-kbd {
 }
 .mem-judge .mem-fine { flex: 1 1 100%; }
 
-/* Rebuild progress — reuses the Resources bar, the app's one progress idiom. */
-.mem-reindex { margin-top: 9px; display: flex; flex-direction: column; gap: 4px; }
-.mem-reindex .res-prog { width: 100%; margin: 4px 0 2px; }
+/* Long-operation progress — reuses the Resources bar, the app's one progress idiom. `.mem-reindex` is the
+   rebuild under the 本地模型 layer; `.mem-prog` is the same block inside a table row, where a download
+   reports itself. One rule, because they are one idiom appearing twice. */
+.mem-reindex, .mem-prog { margin-top: 9px; display: flex; flex-direction: column; gap: 4px; }
+.mem-reindex .res-prog, .mem-prog .res-prog { width: 100%; margin: 4px 0 2px; }
+/* The name column is the only one wide enough for a bar, and it is the one that wraps. Held to the note's
+   width so a long Ollama status line ("pulling 8c625c95…") cannot stretch the table. */
+.mem-tbl .mem-prog { max-width: 44ch; }
 
 /* Small print: measurement caveats, coverage, notes. Deliberately quiet. */
 .mem-fine { font-size: 11px; color: var(--muted); line-height: 1.6; }
@@ -3349,6 +3359,8 @@ kbd, .topbar-kbd {
 }
 .mem-disk-row:last-child { border-bottom: 0; }
 .mem-disk-row:nth-child(odd) { background: color-mix(in srgb, var(--surface) 55%, transparent); }
+.mem-disk-id { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.mem-disk-id .res-badge { flex: none; }
 .mem-disk-name { font-family: var(--font-mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mem-disk-size { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
 

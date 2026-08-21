@@ -5,8 +5,26 @@ using Gatherlight.Server.Platform.Kernel.Services;
 
 namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 
-/// <summary>One model the local Ollama holds.</summary>
-public sealed record OllamaModel(string Name, long SizeBytes);
+/// <summary>One model the local Ollama holds, with what Ollama itself says it can do.
+///
+/// <para><see cref="Capabilities"/> is Ollama's own answer — <c>["embedding"]</c>, <c>["completion","tools"]</c>
+/// — and it is NULL on a daemon too old to report the field. That distinction is load-bearing, which is why
+/// the two questions below return <c>bool?</c>: a caller that read "did not say" as "cannot" would empty the
+/// judge picker on every older Ollama, which is the same dead switch this pair exists to fix.</para></summary>
+public sealed record OllamaModel(string Name, long SizeBytes, IReadOnlyList<string>? Capabilities = null)
+{
+    /// <summary>Can it answer a chat/judgement request? Null when Ollama did not say.</summary>
+    public bool? CanComplete => Says("completion");
+
+    /// <summary>Can it produce a vector? Null when Ollama did not say. A cheap NO before
+    /// <see cref="IOllamaRuntime.ProbeEmbeddingAsync"/>, which is the load-bearing check but costs a cold
+    /// model load — up to minutes — to reach the same answer.</summary>
+    public bool? CanEmbed => Says("embedding");
+
+    private bool? Says(string capability) => Capabilities is null || Capabilities.Count == 0
+        ? null
+        : Capabilities.Any(c => c.Equals(capability, StringComparison.OrdinalIgnoreCase));
+}
 
 /// <summary>What Ollama is on THIS machine right now — observed, never assumed. <see cref="Problem"/> is
 /// null when semantic recall could run, and is the one sentence the household reads when it could not.</summary>
@@ -21,6 +39,11 @@ public sealed record OllamaState(
     string? Problem)
 {
     public bool Has(string model) => Models.Any(m => Matches(m.Name, model));
+
+    /// <summary>The held model matching <paramref name="model"/>, or null. Callers needing more than "is it
+    /// here" — whether it can judge, whether it can embed — come through here rather than re-deriving the
+    /// <see cref="Matches"/> tag rules against <see cref="Models"/>.</summary>
+    public OllamaModel? Find(string model) => Models.FirstOrDefault(m => Matches(m.Name, model));
 
     /// <summary>Ollama reports `nomic-embed-text:latest` for a model pulled as `nomic-embed-text`, so a
     /// plain equality check would report a freshly pulled model as missing and offer to pull it again.</summary>
@@ -49,9 +72,12 @@ public interface IOllamaRuntime
     /// nothing already is. Returns false when we could not (nothing installed, or it would not come up).</summary>
     Task<bool> EnsureServingAsync(CancellationToken ct = default);
 
-    /// <summary>Pull a model, reporting percent + a human line. Throws with Ollama's own reason on failure —
-    /// the caller is an explicit household action (a button), so a silent no-op would be worse.</summary>
-    Task PullModelAsync(string model, Action<int, string?>? onProgress = null, CancellationToken ct = default);
+    /// <summary>Pull a model, reporting percent + Ollama's own status line. Throws with Ollama's own reason
+    /// on failure — the caller is an explicit household action (a button), so a silent no-op would be worse.
+    /// <para>The percent is <b>nullable</b> and is null while Ollama is resolving manifests and has no total
+    /// to divide by. That is not the same as zero: a bar pinned at 0% reads as stuck, which is the exact
+    /// impression a progress report exists to remove.</para></summary>
+    Task PullModelAsync(string model, Action<int?, string?>? onProgress = null, CancellationToken ct = default);
 
     /// <summary>Embed one short string and report what came back. This is how a model NOBODY CATALOGUED can
     /// still be adopted safely: the catalog is a shortlist, so the two things the app must know about a
@@ -239,7 +265,8 @@ public sealed class OllamaRuntime : IOllamaRuntime
             return arr.EnumerateArray()
                 .Select(m => new OllamaModel(
                     m.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
-                    m.TryGetProperty("size", out var sz) && sz.TryGetInt64(out var v) ? v : 0))
+                    m.TryGetProperty("size", out var sz) && sz.TryGetInt64(out var v) ? v : 0,
+                    CapabilitiesOf(m)))
                 .Where(m => m.Name.Length > 0)
                 .ToList();
         }
@@ -248,6 +275,16 @@ public sealed class OllamaRuntime : IOllamaRuntime
             return null;   // not serving — a fact about the machine, not an error to surface
         }
     }
+
+    /// <summary>What Ollama says one model can do, or null when it did not say.
+    /// <para>Returning null rather than an empty list is the point: <c>capabilities</c> is absent on daemons
+    /// older than the field, and a capability FILTER that could not tell "did not say" from "said nothing"
+    /// would reject every model on those machines — silently, on a control whose failure mode is already a
+    /// disabled button with no explanation.</para></summary>
+    private static IReadOnlyList<string>? CapabilitiesOf(JsonElement model) =>
+        model.TryGetProperty("capabilities", out var c) && c.ValueKind == JsonValueKind.Array
+            ? c.EnumerateArray().Select(x => x.GetString() ?? "").Where(s => s.Length > 0).ToArray()
+            : null;
 
     private async Task<string?> VersionAsync(string baseUrl, CancellationToken ct)
     {
@@ -360,7 +397,7 @@ public sealed class OllamaRuntime : IOllamaRuntime
         }
     }
 
-    public async Task PullModelAsync(string model, Action<int, string?>? onProgress = null,
+    public async Task PullModelAsync(string model, Action<int?, string?>? onProgress = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(model)) throw new ArgumentException("model is required", nameof(model));
@@ -378,7 +415,15 @@ public sealed class OllamaRuntime : IOllamaRuntime
         using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
         resp.EnsureSuccessStatusCode();
 
-        // NDJSON: {"status":"pulling …","total":N,"completed":M} … then {"status":"success"}
+        // NDJSON: {"status":"pulling …","digest":"sha256:…","total":N,"completed":M} … then {"status":"success"}
+        //
+        // Ollama reports progress PER LAYER, so forwarding a line's own total/completed gives a bar that
+        // fills, snaps back to zero and fills again — which reads as the download having restarted. Summing
+        // the layers by digest gives one number over the whole pull: bytes done over bytes known. The
+        // denominator grows as new layers are announced, so it can dip slightly early on; for an embedding
+        // model (one large blob plus a few kilobytes of config) that is invisible, and it beats a bar that
+        // resets on every layer.
+        var layers = new Dictionary<string, (long Total, long Done)>(StringComparer.Ordinal);
         await using var stream = await resp.Content.ReadAsStreamAsync(cts.Token);
         using var reader = new StreamReader(stream, Utf8NoBom);
         string? line;
@@ -394,11 +439,23 @@ public sealed class OllamaRuntime : IOllamaRuntime
                     throw new InvalidOperationException($"Ollama 拒绝下载:{err.GetString()}");
                 var status = root.TryGetProperty("status", out var st) ? st.GetString() : null;
                 if (status is not null && status.Contains("success", StringComparison.OrdinalIgnoreCase)) ok = true;
-                if (root.TryGetProperty("total", out var t) && root.TryGetProperty("completed", out var c)
-                    && t.TryGetInt64(out var total) && c.TryGetInt64(out var done) && total > 0)
-                    onProgress?.Invoke((int)(done * 100 / total), status);
+                if (root.TryGetProperty("total", out var t) && t.TryGetInt64(out var total) && total > 0)
+                {
+                    var done = root.TryGetProperty("completed", out var c) && c.TryGetInt64(out var d) ? d : 0;
+                    // Keyed by digest, falling back to the status line: a layer with neither would otherwise
+                    // overwrite the previous one's total and make the sum jump around.
+                    var key = root.TryGetProperty("digest", out var dg) ? dg.GetString() ?? status ?? "" : status ?? "";
+                    layers[key] = (total, done);
+                    var sum = layers.Values.Aggregate((Total: 0L, Done: 0L),
+                        (a, l) => (a.Total + l.Total, a.Done + l.Done));
+                    onProgress?.Invoke(sum.Total > 0 ? (int)(sum.Done * 100 / sum.Total) : null, status);
+                }
                 else
-                    onProgress?.Invoke(0, status);
+                {
+                    // Manifest resolution, digest verification, "success" — real steps with no denominator.
+                    // Null keeps whatever the bar had reached rather than blanking it back to nothing.
+                    onProgress?.Invoke(null, status);
+                }
             }
             catch (JsonException) { /* a partial line mid-stream is not a failure */ }
         }
