@@ -56,6 +56,13 @@ public static class MemorySources
         var id = !string.IsNullOrWhiteSpace(c.JudgeSource) ? c.JudgeSource
             : string.Equals(c.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase) ? "ollama"
             : DefaultJudgeSource;
+
+        // A non-default source with NO model is half-configured, and the half that is missing is the one
+        // with no sensible default: a machine-specific model is not something a release can guess. Falling
+        // back to the CLI keeps the layer working instead of wiring a provider against whatever the model
+        // default happens to be — which is how "haiku" would reach an Ollama that has never heard of it.
+        if (id != DefaultJudgeSource && string.IsNullOrWhiteSpace(c.JudgeModel)) id = DefaultJudgeSource;
+
         // Falls back to the first source rather than throwing: a settings.json naming a backend this build
         // does not have (a downgrade, a hand edit) must come up on the default, not refuse to start.
         return FindJudge(id) ?? Judge[0];

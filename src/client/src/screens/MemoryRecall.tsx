@@ -43,10 +43,13 @@ interface MemoryState {
     enabled: boolean; live: boolean; what: string; cost: string; model: string;
     // WHERE it runs, as opposed to WHETHER. Unlike `enabled` this is a startup registration, so the two
     // are shown as different kinds of change rather than two switches that look alike.
-    transport: 'cli' | 'local'; localModel: string | null; localNote: string;
+    // A SOURCE id (`claude-cli` · `ollama`), the same vocabulary `transportActive` speaks. They were once
+    // two different vocabularies for one comparison, which can never come out equal — and reads on screen
+    // as a restart that is permanently owed.
+    transport: string; localModel: string | null; localNote: string;
     // What is RUNNING, as opposed to what is saved. The header names its backend, so it has to name the
     // one doing the work — between saving and restarting those are different answers.
-    transportActive: 'cli' | 'local'; activeModel: string | null;
+    transportActive: string; activeModel: string | null;
     localCandidates: { name: string; sizeBytes: number }[];
     // Why there are no candidates, when there are none. The server names WHICH of the three causes it is
     // (no Ollama · not running · only embedders) because they have three different fixes.
@@ -141,11 +144,11 @@ export function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: s
   // restart is offered for the transport and the semantic layer only, never for the switch.
   const en = s.llmEnrichment;
   const judgePending = en.transport !== en.transportActive
-    || (en.transport === 'local' && en.localModel !== en.activeModel);
+    || (en.transport !== 'claude-cli' && en.localModel !== en.activeModel);
   const pending = lm.enabled !== lm.active || judgePending;
   // The backend RUNNING the judge, named. `本机` rather than `本地`: 本地 belongs to the semantic layer's
   // own vocabulary, and the two used to sit one card apart meaning different things.
-  const judgeBackend = en.transportActive === 'local' ? `本机 ${en.activeModel}` : 'Claude CLI';
+  const judgeBackend = en.transportActive === 'claude-cli' ? 'Claude CLI' : `本机 ${en.activeModel}`;
 
   return (
     <>
@@ -526,9 +529,9 @@ function JudgeTransportPicker(
           it is — the same work, on a backend you choose. */}
       <span className="mem-judge-lbl">运行于</span>
       <div className="cx-seg">
-        <button className={`cx-seg-b${en.transport === 'cli' ? ' on' : ''}`} disabled={busy === 'judge'}
+        <button className={`cx-seg-b${en.transport === 'claude-cli' ? ' on' : ''}`} disabled={busy === 'judge'}
           onClick={() => post('/api/manage/memory/judge', { transport: 'cli' }, 'judge')}>Claude CLI</button>
-        <button className={`cx-seg-b${en.transport === 'local' ? ' on' : ''}`}
+        <button className={`cx-seg-b${en.transport !== 'claude-cli' ? ' on' : ''}`}
           disabled={busy === 'judge' || !canLocal || !model}
           onClick={() => post('/api/manage/memory/judge', { transport: 'local', model }, 'judge')}>
           {busy === 'judge' ? '切换中…' : '本机模型'}

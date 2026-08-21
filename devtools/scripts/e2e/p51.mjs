@@ -147,8 +147,10 @@ try {
     JSON.stringify(s.localModel.reindex));
 
   // ---- E · WHERE the judge runs — CLI or a model on this machine --------------------------------
-  ok('the judge reports its transport, and defaults to the CLI',
-    s.llmEnrichment.transport === 'cli', String(s.llmEnrichment.transport));
+  // Reported as a SOURCE id, the same vocabulary the running-backend field speaks. Two vocabularies for
+  // one comparison can never come out equal, which reads on screen as a restart permanently owed.
+  ok('the judge reports its backend, and defaults to the CLI',
+    s.llmEnrichment.transport === 'claude-cli', String(s.llmEnrichment.transport));
   const badTransport = await post('/api/manage/memory/judge', { transport: 'somewhere-else' });
   ok('an unknown transport is refused', badTransport.status === 400, String(badTransport.status));
   // THE refusal worth having. An embedding model is installed and well-formed and can never answer a
@@ -216,8 +218,8 @@ try {
       // value would announce a model that is not doing the work, which is the same false label the
       // rename removed from the title.
       const mid = await getJson('/api/manage/memory');
-      ok('the panel reports the SAVED transport and the RUNNING one separately',
-        mid.llmEnrichment.transport === 'local' && mid.llmEnrichment.transportActive === 'cli',
+      ok('the panel reports the SAVED backend and the RUNNING one separately',
+        mid.llmEnrichment.transport === 'ollama' && mid.llmEnrichment.transportActive === 'claude-cli',
         JSON.stringify({ saved: mid.llmEnrichment.transport, active: mid.llmEnrichment.transportActive,
           savedModel: mid.llmEnrichment.localModel, activeModel: mid.llmEnrichment.activeModel }));
 

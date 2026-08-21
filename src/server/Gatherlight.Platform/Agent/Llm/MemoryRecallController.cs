@@ -116,8 +116,11 @@ public sealed class MemoryRecallController : ControllerBase
         var mem = _config.Current.Memory;
         var s = await _ollama.ProbeAsync(refresh);
         var rec = EmbeddingCatalog.Recommend(s.GpuLikely);
-        var judgeLocal = string.Equals(mem.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(mem.JudgeModel);
+        // The SAVED backend, named in the same vocabulary MemoryJudgeWiring reports the RUNNING one in.
+        // Two vocabularies for one comparison is a saved-vs-running check that can never come out equal —
+        // which reads on screen as a restart that is permanently owed.
+        var judgeSource = Sources.MemorySources.ResolveJudge(mem);
+        var judgeLocal = judgeSource.Id != Sources.MemorySources.DefaultJudgeSource;
         var (indexed, totalFacts) = await _knowledge.CoverageAsync();
 
         return Ok(new
@@ -141,7 +144,7 @@ public sealed class MemoryRecallController : ControllerBase
                 // WHERE it runs, separately from WHETHER it runs. The transport is a startup registration
                 // (a provider + a named client), so unlike the on/off switch it needs a restart — and the
                 // console says which of the two kinds of change the household just made.
-                transport = judgeLocal ? "local" : "cli",
+                transport = judgeSource.Id,
                 localModel = mem.JudgeModel,
                 // …and what is ACTUALLY running, which is not the same thing until the restart happens.
                 // The layer's header now names its backend, so it has to name the one doing the work.

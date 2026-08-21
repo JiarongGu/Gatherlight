@@ -46,8 +46,10 @@ public static class MemoryEnrichment
 /// the panel now NAMES the backend on the layer's header: a badge reading the saved setting would announce
 /// a model that is not doing the work, which is the class of defect — a label asserting something the code
 /// is not doing — that the surrounding rename is fixing.</para></summary>
-/// <param name="Transport"><c>cli</c> or <c>local</c>.</param>
-/// <param name="Model">The local model in effect, or null on the CLI arm.</param>
+/// <param name="Transport">The bound source's id — <c>claude-cli</c> or <c>ollama</c>. Deliberately the
+/// same vocabulary the SAVED setting is reported in: two vocabularies for one comparison can never come
+/// out equal, which reads on screen as a restart that is permanently owed.</param>
+/// <param name="Model">The model in effect on it.</param>
 public sealed record MemoryJudgeWiring(string Transport, string? Model);
 
 /// <summary>Runs the real annotator only while the switch is on. Registered BEFORE
