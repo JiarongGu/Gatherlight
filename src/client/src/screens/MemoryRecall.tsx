@@ -274,7 +274,7 @@ export function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: s
           <div className="mem-layer-side">
             {o.installed && !o.serving && (
               <button className="cx-btn primary" disabled={busy === 'start'}
-                onClick={() => post('/api/manage/memory/local/start', undefined, 'start')}>启动</button>
+                onClick={() => post('/api/manage/models/start', undefined, 'start')}>启动</button>
             )}
             {lm.enabled && (
               <>
@@ -351,7 +351,7 @@ export function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: s
                         <span className="res-running">下载中…</span>
                       ) : !m.present ? (
                         <button className="cx-btn" disabled={busy === `pull:${m.id}`}
-                          onClick={() => post('/api/manage/memory/local/pull', { model: m.id }, `pull:${m.id}`)}>
+                          onClick={() => post('/api/manage/models/pull', { model: m.id }, `pull:${m.id}`)}>
                           下载
                         </button>
                       ) : lm.model === m.id && lm.enabled ? (
@@ -369,7 +369,7 @@ export function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: s
                           {/* Downloaded but unused = disk doing nothing. The server refuses to delete one
                               that is configured, so this never has to guess. */}
                           <button className="cx-btn" disabled={busy === `rm:${m.id}`}
-                            onClick={() => post('/api/manage/memory/local/remove', { model: m.id }, `rm:${m.id}`)}
+                            onClick={() => post('/api/manage/models/remove', { model: m.id }, `rm:${m.id}`)}
                             title={`删除 ${m.id},释放 ${mb(m.approxBytes)}`}>删除</button>
                         </div>
                       )}
@@ -492,7 +492,7 @@ function LocalDisk(
                 ? <span className="res-running">使用中</span>
                 : (
                   <button className="cx-btn" disabled={busy === `rm:${m.name}`}
-                    onClick={() => post('/api/manage/memory/local/remove', { model: m.name }, `rm:${m.name}`)}>
+                    onClick={() => post('/api/manage/models/remove', { model: m.name }, `rm:${m.name}`)}>
                     删除
                   </button>
                 )}
@@ -557,7 +557,7 @@ function JudgeTransportPicker(
             <span className="res-running">下载中…</span>
           ) : (
             <button className="cx-btn primary" disabled={busy === 'pull:judge'}
-              onClick={() => post('/api/manage/memory/local/pull', { model: en.localSuggest }, 'pull:judge')}>
+              onClick={() => post('/api/manage/models/pull', { model: en.localSuggest }, 'pull:judge')}>
               下载 {en.localSuggest}
             </button>
           )}
@@ -590,7 +590,7 @@ function OtherModelField(
           <span className="res-running">下载中…</span>
         ) : (
           <button className="cx-btn" disabled={!id || busy === 'pull:other'}
-            onClick={() => post('/api/manage/memory/local/pull', { model: id }, 'pull:other')}>下载</button>
+            onClick={() => post('/api/manage/models/pull', { model: id }, 'pull:other')}>下载</button>
         )}
         <button className="cx-btn primary" disabled={!id || busy === 'use:other'}
           onClick={() => post('/api/manage/memory/local/enable', { model: id }, 'use:other')}>

@@ -115,7 +115,7 @@ try {
     ['a path traversal', '../../etc/passwd'],
     ['an id with whitespace', 'nomic embed text'],
   ]) {
-    const r = await post('/api/manage/memory/local/pull', { model: bad });
+    const r = await post('/api/manage/models/pull', { model: bad });
     ok(`pull refuses ${label} before it reaches the registry`, r.status === 400, `${bad} → ${r.status}`);
   }
   // A WELL-FORMED id that this machine does not have is a different answer: not "unknown", but "not
@@ -134,11 +134,11 @@ try {
   // one of their models to prove a button works would be doing more harm than the assertion is worth.
   // That half was verified by hand (2026-08-21: guards 409/409, malformed 400, an unused model really
   // removed, 10 installed → 9).
-  const rmBad = await post('/api/manage/memory/local/remove', { model: '--rf' });
+  const rmBad = await post('/api/manage/models/remove', { model: '--rf' });
   ok('deleting refuses a flag-shaped id before it reaches Ollama', rmBad.status === 400, String(rmBad.status));
   // Well-formed and absent must NOT read as success — that is the shape that would let a delete button
   // silently do nothing while reporting that space was freed.
-  const rmGhost = await post('/api/manage/memory/local/remove', { model: 'not-installed-anywhere:1b' });
+  const rmGhost = await post('/api/manage/models/remove', { model: 'not-installed-anywhere:1b' });
   ok('deleting something that is not installed does not report success',
     rmGhost.status !== 200, String(rmGhost.status));
 
@@ -265,6 +265,50 @@ try {
     : `(this machine has only embedders) the suggestion branch ran: ${suggest}`,
     true, `serving=${s.localModel.ollama.serving}`);
 
+  // ---- F2 · models are a RESOURCE, not a recall setting --------------------------------------------
+  // A model is a file with a size, a capability and a delete button; it carries no opinion about recall.
+  // The chat/embedding split is Ollama's, enforced upstream — not a product rule we chose. So downloading
+  // one belongs beside chromium and git, and 记忆检索 keeps only the part that IS a recall decision.
+  const inv = await getJson('/api/manage/models');
+  ok('the model inventory answers, and reports the runtime that hosts them',
+    Array.isArray(inv.models) && !!inv.runtime && typeof inv.runtime.serving === 'boolean',
+    JSON.stringify(inv.runtime));
+  ok('every installed model names its runtime and carries what Ollama says it can do',
+    (inv.models ?? []).every((x) => x.runtime === 'ollama' && 'capabilities' in x),
+    JSON.stringify((inv.models ?? [])[0] ?? null));
+  ok('downloads in flight are readable here — this is what the progress bar renders from',
+    Array.isArray(inv.pulls));
+  // The offers list is not just the embedding catalog: the local judge and the local embedder are ONE
+  // provider, so when the missing piece is a CHAT model this panel must be able to fetch that too.
+  ok('what can be downloaded includes both capabilities, not embedders alone',
+    (inv.offers ?? []).some((o) => o.capability === 'embedding')
+      && ((inv.offers ?? []).some((o) => o.capability === 'completion')
+        || (inv.models ?? []).some((m) => (m.capabilities ?? []).includes('completion'))),
+    JSON.stringify((inv.offers ?? []).map((o) => [o.id, o.capability])));
+  ok('and the comparison it offers carries its sample size, not just a verdict',
+    typeof inv.measuredOn === 'string' && /\d/.test(inv.measuredOn), inv.measuredOn);
+
+  // A MOVE, not an alias. An endpoint answering at both addresses is two surfaces to keep in step, and
+  // the one nobody remembers is the one that rots.
+  //
+  // The CONTROL first: this app answers an unrouted POST with 405, not 404 — the request falls through to
+  // the static/SPA handler, which allows only GET. Without establishing that here, the three assertions
+  // below would be asserting a number nobody could interpret, and a future 404 would look like a
+  // regression when it is the same answer.
+  const unrouted = await post('/api/manage/memory/definitely-not-a-route', {});
+  const goneStatus = unrouted.status;
+  ok('(control) an unrouted POST answers 405 here, so that is what "gone" looks like',
+    goneStatus === 405 || goneStatus === 404, String(goneStatus));
+  for (const [label, path] of [
+    ['pull', '/api/manage/memory/local/pull'],
+    ['remove', '/api/manage/memory/local/remove'],
+    ['start', '/api/manage/memory/local/start'],
+  ]) {
+    const gone = await post(path, { model: 'bge-m3' });
+    ok(`the old ${label} path is gone, not quietly aliased`, gone.status === goneStatus,
+      `${path} → ${gone.status} (unrouted answers ${goneStatus})`);
+  }
+
   // ---- G · a download is started and REPORTED, not awaited inside the POST -------------------------
   // A model is hundreds of megabytes to gigabytes and the pull budget is two hours. Awaiting it in the
   // request gave a button reading 下载中… with no bar and no bytes — indistinguishable from a hang — over
@@ -276,21 +320,21 @@ try {
   // outcome is the half that would otherwise vanish.
   const ghost = 'gatherlight-no-such-model:1b';
   const t1 = Date.now();
-  const pull = await post('/api/manage/memory/local/pull', { model: ghost });
+  const pull = await post('/api/manage/models/pull', { model: ghost });
   const pullTook = Date.now() - t1;
   ok('a pull is ACCEPTED and returns immediately, rather than running inside the request',
     pull.status === 202 && pullTook < 3000, `status=${pull.status} in ${pullTook}ms`);
   // Asking twice is not an error: the household asked for a download and one is running. A 409 here would
   // put an error toast over a working progress bar.
   ok('and asking again while it runs is still success, not a conflict',
-    [202].includes((await post('/api/manage/memory/local/pull', { model: ghost })).status));
+    [202].includes((await post('/api/manage/models/pull', { model: ghost })).status));
 
-  let pulls = (await getJson('/api/manage/memory')).localModel.pulls ?? [];
+  let pulls = (await getJson('/api/manage/models')).pulls ?? [];
   ok('the panel can read downloads back as STATE — this is what the progress bar renders from',
     Array.isArray(pulls) && pulls.some((p) => p.model === ghost),
     JSON.stringify(pulls));
   await until(async () => {
-    pulls = (await getJson('/api/manage/memory')).localModel.pulls ?? [];
+    pulls = (await getJson('/api/manage/models')).pulls ?? [];
     return !pulls.some((p) => p.model === ghost && p.running);
   });
   const ended = pulls.find((p) => p.model === ghost);

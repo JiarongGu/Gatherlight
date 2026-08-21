@@ -263,16 +263,6 @@ public sealed class MemoryRecallController : ControllerBase
         return Ok(new { ok = true, enabled = body.Enabled, restartRequired = false });
     }
 
-    /// <summary>Start Ollama ONLY when nothing is answering — a household's own instance is left alone.</summary>
-    [HttpPost("api/manage/memory/local/start")]
-    public async Task<IActionResult> Start()
-    {
-        var ok = await _ollama.EnsureServingAsync();
-        return ok
-            ? Ok(new { ok = true })
-            : StatusCode(409, new { error = (await _ollama.ProbeAsync(refresh: true)).Problem ?? "无法启动 Ollama。" });
-    }
-
     /// <summary>Move the memory judge between the authenticated Claude CLI and a model on this machine.
     /// <para>A restart is owed either way — the transport is a provider + named-client registration, built
     /// while the container is. The on/off switch beside it stays live, and the console distinguishes the
@@ -340,81 +330,6 @@ public sealed class MemoryRecallController : ControllerBase
             // as 0% — a bar pinned at zero looks stuck, which is the impression this whole change removes.
             percent = r.Total > 0 ? (int)Math.Round(100.0 * r.Done / r.Total) : (int?)null,
         };
-    }
-
-    /// <summary>Delete a local model, freeing its disk.
-    /// <para>Refused for a model this install is CONFIGURED to use — the embedder or the local judge —
-    /// even when that configuration is not running yet. Deleting the embedder would leave semantic recall
-    /// pointing at something absent, and because recall is fail-open the household would see searches that
-    /// quietly find less rather than an error naming what they removed.</para></summary>
-    [HttpPost("api/manage/memory/local/remove")]
-    public async Task<IActionResult> Remove([FromBody] ModelRequest body)
-    {
-        var model = body?.Model?.Trim();
-        if (!EmbeddingCatalog.IsWellFormedId(model))
-            return BadRequest(new { error = $"模型名称格式不正确:{body?.Model}" });
-
-        var mem = _config.Current.Memory;
-        if (mem.SemanticEnabled && mem.EmbeddingModel is { } emb && OllamaState.Matches(model!, emb))
-            return StatusCode(409, new { error = $"{model} 正在用于语义检索 —— 请先切换到别的模型或停用,再删除。" });
-        if (string.Equals(mem.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase)
-            && mem.JudgeModel is { } judge && OllamaState.Matches(model!, judge))
-            return StatusCode(409, new { error = $"{model} 正在用于记忆判断 —— 请先切回 Claude CLI 或换个模型,再删除。" });
-
-        try
-        {
-            await _ollama.RemoveModelAsync(model!);
-            return Ok(new { ok = true, removed = model });
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning("removing {Model} failed: {Msg}", model, ex.Message);
-            return StatusCode(502, new { error = ex.Message });
-        }
-    }
-
-    /// <summary>Start downloading a model, and RETURN — progress is read back from
-    /// <c>GET /api/manage/memory</c>.
-    /// <para>Detached for the reason the reindex is: a model is hundreds of megabytes to gigabytes over
-    /// whatever line the household has, so running it inside the POST gave a button reading 下载中… with no
-    /// bar and no bytes for minutes, indistinguishable from a hang — over a request the browser may abandon
-    /// while Ollama carries on downloading, which is how a completed pull got reported as a failure.</para></summary>
-    [HttpPost("api/manage/memory/local/pull")]
-    public IActionResult Pull([FromBody] ModelRequest body)
-    {
-        if (string.IsNullOrWhiteSpace(body?.Model)) return BadRequest(new { error = "model is required" });
-        // Shape, not membership. The catalog is a measured shortlist, not the set of models that work: a
-        // list baked into a release cannot contain a model published after it, and this one shipped without
-        // the two strongest options that already existed. See EmbeddingCatalog.IsWellFormedId for what the
-        // gate still checks and why that is the right line.
-        if (!EmbeddingCatalog.IsWellFormedId(body.Model))
-            return BadRequest(new { error = $"模型名称格式不正确:{body.Model}" });
-
-        var model = body.Model.Trim();
-        // Already downloading is SUCCESS, not a conflict: the household asked for a download and one is
-        // running. A 409 here would drop an error toast over a working progress bar.
-        if (!_pulls.TryStart(model))
-            return Accepted(new { ok = true, started = false, model, note = "这个模型已经在下载中。" });
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                // Deliberately NOT the request's CancellationToken: the work outlives the POST, so binding
-                // it would abort the download the moment the browser stopped waiting.
-                await _ollama.PullModelAsync(model,
-                    (percent, status) => _pulls.Report(model, percent, status),
-                    CancellationToken.None);
-                _pulls.Finish(model, null);
-                _log.LogInformation("pulled local model {Model}", model);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning("Embedding model pull failed for {Model}: {Msg}", model, ex.Message);
-                _pulls.Finish(model, ex.Message);
-            }
-        });
-        return Accepted(new { ok = true, started = true, model, note = "开始下载 —— 进度显示在模型列表里。" });
     }
 
     /// <summary>Turn local-model recall on with a chosen model. Refuses when the model is not on the
