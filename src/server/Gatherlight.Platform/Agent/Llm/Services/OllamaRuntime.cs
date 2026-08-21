@@ -53,8 +53,20 @@ public interface IOllamaRuntime
     /// the caller is an explicit household action (a button), so a silent no-op would be worse.</summary>
     Task PullModelAsync(string model, Action<int, string?>? onProgress = null, CancellationToken ct = default);
 
+    /// <summary>Embed one short string and report what came back. This is how a model NOBODY CATALOGUED can
+    /// still be adopted safely: the catalog is a shortlist, so the two things the app must know about a
+    /// chosen model — that it embeds at all, and how wide its vectors are — are asked of the model itself
+    /// rather than looked up. Width matters because it decides whether a switch invalidates stored vectors.
+    /// <para>Returns null when the model cannot embed (a chat model named by mistake, a bad id, Ollama
+    /// down) — which is the answer the caller needs BEFORE saving a setting that would otherwise leave
+    /// recall silently empty.</para></summary>
+    Task<EmbedProbe?> ProbeEmbeddingAsync(string model, CancellationToken ct = default);
+
     void Invalidate();
 }
+
+/// <summary>What one real embed call reported: vector width and how long it took, warm-ish.</summary>
+public sealed record EmbedProbe(int Dimensions, int Milliseconds);
 
 /// <summary>
 /// The local Ollama used ONLY to embed facts for semantic recall — never for planning, which stays the
@@ -283,6 +295,42 @@ public sealed class OllamaRuntime : IOllamaRuntime
         }
         _log.LogWarning("ollama serve was started but nothing is answering on {Url}", baseUrl);
         return false;
+    }
+
+    public async Task<EmbedProbe?> ProbeEmbeddingAsync(string model, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        try
+        {
+            // The OpenAI-COMPATIBLE route, deliberately: it is the one AddOpenAiCompatibleEmbedder uses, so
+            // a model that answers here is a model the app can actually embed with. Ollama's native
+            // /api/embed can accept a model this path rejects, which would make the probe a false yes.
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/v1/embeddings")
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(new { model, input = "记忆检索的探测文本 · embedding probe" }),
+                    Utf8NoBom, "application/json"),
+            };
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromMinutes(3));   // a cold model loads from disk on the first call
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            using var resp = await Http.SendAsync(req, cts.Token);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _log.LogInformation("embedding probe: {Model} answered {Status}", model, (int)resp.StatusCode);
+                return null;
+            }
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cts.Token));
+            if (!doc.RootElement.TryGetProperty("data", out var data) || data.GetArrayLength() == 0) return null;
+            if (!data[0].TryGetProperty("embedding", out var vec) || vec.ValueKind != JsonValueKind.Array) return null;
+            var dims = vec.GetArrayLength();
+            return dims > 0 ? new EmbedProbe(dims, (int)started.ElapsedMilliseconds) : null;
+        }
+        catch (Exception ex)
+        {
+            _log.LogInformation("embedding probe failed for {Model}: {Msg}", model, ex.Message);
+            return null;
+        }
     }
 
     public async Task PullModelAsync(string model, Action<int, string?>? onProgress = null,

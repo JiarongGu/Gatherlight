@@ -1148,6 +1148,9 @@ function CortexView({ toast, onRestart, inHost }: { toast: (t: string, k?: 'ok' 
 interface MemoryOption {
   id: string; name: string; approxBytes: number; dimensions: number;
   multilingual: boolean; note: string; present: boolean;
+  // Null on a model nobody measured — rendered as "未实测" rather than left blank, because an empty cell
+  // in a comparison table reads as a zero.
+  measured: { top1: number; top3: number; queries: number; msPerQuery: number } | null;
 }
 interface MemoryState {
   formula: { alwaysOn: boolean; what: string };
@@ -1164,6 +1167,9 @@ interface MemoryState {
     };
     options: MemoryOption[];
     recommendation: { id: string; reason: string; caution: string | null };
+    current: string | null;
+    currentCatalogued: boolean;
+    measuredOn: string;
   };
 }
 
@@ -1206,8 +1212,20 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
   return (
     <>
       <div className="mng-title">记忆检索 · Memory recall</div>
+
+      {/* WHAT IS ON, in one line, before any of the controls. The previous layout opened with three
+          equal-weight prose blocks, so answering "what is running right now" meant reading all of them. */}
+      <div className="mem-sum">
+        <span className={`mem-pill on`}>公式</span>
+        <span className={`mem-pill${s.llmEnrichment.enabled ? ' on' : ''}`}>
+          Claude 判断{s.llmEnrichment.enabled ? '' : '(关)'}
+        </span>
+        <span className={`mem-pill${lm.active ? ' on' : ''}`}>
+          本地语义{lm.active ? `(${lm.model})` : lm.enabled ? '(待重启)' : '(关)'}
+        </span>
+      </div>
       <div className="set-lead">
-        检索质量由三项独立开关决定 —— 它们互补而不是互相替代:核对只调整已检索结果的排序,向量则改变「能不能被检索到」。
+        三项互补,不是三选一:<b>公式</b>永远在跑;<b>Claude 判断</b>只调整已检索结果的顺序;<b>本地语义</b>改变「能不能被检索到」。
       </div>
       {pending && (
         <div className="set-actions">
@@ -1285,48 +1303,107 @@ function MemoryRecallSection({ toast, onRestart, inHost }: { toast: (t: string, 
         </div>
       </div>
 
-      {/* model picker — the household chooses; we advise, and say WHY */}
+      {/* MODEL CHOICE AS A COMPARISON, NOT A READING TASK. Five models across quality / size / speed is a
+          table; the previous layout stacked them as prose blocks, so choosing meant reading five
+          paragraphs and holding the numbers in your head. Everything that decides the choice is now a
+          column, and the recommendation names its evidence instead of asserting itself. */}
       {o.serving && (
         <>
-          <div className="set-lead">
-            推荐:<b>{lm.recommendation.id}</b> —— {lm.recommendation.reason}
-            {lm.recommendation.caution && <><br /><span className="set-saved">注意:{lm.recommendation.caution}</span></>}
+          <div className="mem-rec">
+            <b>推荐 {lm.recommendation.id}</b> —— {lm.recommendation.reason}
+            {lm.recommendation.caution && <div className="set-hint">注意:{lm.recommendation.caution}</div>}
           </div>
-          <div className="res-list">
-            {lm.options.map((m) => (
-              <div className={`res-item${lm.model === m.id ? ' ok' : ''}`} key={m.id}>
-                <div className="res-main">
-                  <div className="res-name">
-                    {m.name}
-                    {m.id === lm.recommendation.id && <span className="res-badge">推荐</span>}
-                    {m.present && <span className="res-badge">已下载</span>}
-                    {lm.model === m.id && <span className="res-badge">使用中</span>}
-                  </div>
-                  <div className="res-need">{m.note}</div>
-                  <div className="res-need">向量维度 {m.dimensions}{m.multilingual ? ' · 多语言' : ''}</div>
-                </div>
-                <div className="res-side">
-                  <div className="res-size">≈ {mb(m.approxBytes)}</div>
-                  {!m.present ? (
-                    <button className="cx-btn" disabled={busy === `pull:${m.id}`}
-                      onClick={() => post('/api/manage/memory/local/pull', { model: m.id }, `pull:${m.id}`)}>
-                      {busy === `pull:${m.id}` ? '下载中…' : '下载'}
-                    </button>
-                  ) : lm.model === m.id && lm.enabled ? (
-                    <span className="res-running">使用中</span>
-                  ) : (
-                    <button className="cx-btn primary" disabled={busy === `use:${m.id}`}
-                      onClick={() => post('/api/manage/memory/local/enable', { model: m.id }, `use:${m.id}`)}>
-                      使用
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
+          <div className="mem-tbl-wrap">
+            <table className="mem-tbl">
+              <thead>
+                <tr>
+                  <th>模型</th><th>检索质量</th><th>每次查询</th><th>体积</th><th>维度</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {lm.options.map((m) => (
+                  <tr key={m.id} className={lm.model === m.id ? 'on' : ''}>
+                    <td>
+                      <div className="mem-m-name">
+                        {m.name}
+                        {m.id === lm.recommendation.id && <span className="res-badge">推荐</span>}
+                        {lm.model === m.id && <span className="res-badge">使用中</span>}
+                      </div>
+                      <div className="mem-m-note">{m.note}</div>
+                    </td>
+                    {/* The measurement, as a number with its denominator. "9/10" invites the right
+                        question (out of how many? — the footnote answers) where "很好" does not. */}
+                    <td className={m.measured && m.measured.top3 * 2 <= m.measured.queries ? 'bad' : ''}>
+                      {m.measured
+                        ? <><b>{m.measured.top3}/{m.measured.queries}</b><div className="mem-m-sub">首位 {m.measured.top1}</div></>
+                        : <span className="mem-m-sub">未实测</span>}
+                    </td>
+                    <td>{m.measured ? `${m.measured.msPerQuery} ms` : <span className="mem-m-sub">—</span>}</td>
+                    <td>{mb(m.approxBytes)}</td>
+                    <td>{m.dimensions}</td>
+                    <td className="mem-act">
+                      {!m.present ? (
+                        <button className="cx-btn" disabled={busy === `pull:${m.id}`}
+                          onClick={() => post('/api/manage/memory/local/pull', { model: m.id }, `pull:${m.id}`)}>
+                          {busy === `pull:${m.id}` ? '下载中…' : '下载'}
+                        </button>
+                      ) : lm.model === m.id && lm.enabled ? (
+                        <span className="res-running">使用中</span>
+                      ) : (
+                        <button className="cx-btn primary" disabled={busy === `use:${m.id}`}
+                          onClick={() => post('/api/manage/memory/local/enable', { model: m.id }, `use:${m.id}`)}>
+                          使用
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
+          <div className="set-hint">
+            质量为实测:{lm.measuredOn}。样本不大 —— 它足以分辨「能用」与「不能用」,不足以在前几名之间排座次;
+            速度与体积则按你自己的机器换算。
+          </div>
+
+          {/* THE LIST IS NOT THE LIMIT. A catalog baked into a release cannot contain a model published
+              after it — which is exactly how this panel shipped without the two best models available at
+              the time. Anything Ollama can pull is usable here the day it exists. */}
+          <OtherModelField busy={busy} post={post} installed={o.models.map((x) => x.name)} />
         </>
       )}
     </>
+  );
+}
+
+/** Use a model the shortlist does not know about — pulled first if this machine does not have it. */
+function OtherModelField(
+  { busy, post, installed }:
+  { busy: string | null; post: (u: string, b: unknown, k: string) => void; installed: string[] },
+) {
+  const [id, setId] = useState('');
+  const have = installed.some((n) => n === id || n.split(':')[0] === id.split(':')[0]);
+  return (
+    <div className="mem-other">
+      <label className="set-field">
+        <span>其他模型 · 直接填写 Ollama 模型名</span>
+        <input value={id} onChange={(e) => setId(e.target.value.trim())}
+          placeholder="例如 nomic-embed-text-v2-moe 或 snowflake-arctic-embed2" />
+      </label>
+      <div className="mem-other-act">
+        <button className="cx-btn" disabled={!id || busy === 'pull:other'}
+          onClick={() => post('/api/manage/memory/local/pull', { model: id }, 'pull:other')}>
+          {busy === 'pull:other' ? '下载中…' : '下载'}
+        </button>
+        <button className="cx-btn primary" disabled={!id || busy === 'use:other'}
+          onClick={() => post('/api/manage/memory/local/enable', { model: id }, 'use:other')}>使用</button>
+      </div>
+      <div className="set-hint">
+        {id && !have && '这台机器还没有它 —— 先「下载」,再「使用」。'}
+        {id && have && '已在本机,可直接「使用」。'}
+        {!id && '启用前会先让它真的算一次向量:算不出来就不会保存,免得检索静悄悄地空掉。'}
+      </div>
+    </div>
   );
 }
 

@@ -98,8 +98,19 @@ public sealed class MemoryRecallController : ControllerBase
                     executable = s.Executable, gpuLikely = s.GpuLikely, problem = s.Problem,
                     models = s.Models.Select(m => new { name = m.Name, sizeBytes = m.SizeBytes }),
                 },
+                // The shortlist is not the limit — the UI lets the household name any model, so it also
+                // reports whether the one in use is on this list (`catalogued`) rather than implying the
+                // list is exhaustive.
+                current = mem.EmbeddingModel,
+                currentCatalogued = EmbeddingCatalog.Find(mem.EmbeddingModel) is not null,
+                measuredOn = "20 条中英混排事实 · 10 个改写提问 · 2026-08-21",
                 options = EmbeddingCatalog.Options.Select(o => new
                 {
+                    measured = o.Measured is null ? null : new
+                    {
+                        top1 = o.Measured.RecallTop1, top3 = o.Measured.RecallTop3,
+                        queries = o.Measured.Queries, msPerQuery = o.Measured.MsPerQuery,
+                    },
                     id = o.Id, name = o.Name, approxBytes = o.ApproxBytes, dimensions = o.Dimensions,
                     multilingual = o.Multilingual, note = o.Note, present = s.Has(o.Id),
                 }),
@@ -133,10 +144,12 @@ public sealed class MemoryRecallController : ControllerBase
     public async Task<IActionResult> Pull([FromBody] ModelRequest body)
     {
         if (string.IsNullOrWhiteSpace(body?.Model)) return BadRequest(new { error = "model is required" });
-        // Only catalogued models: the id becomes an argument to a local process that fetches from a remote
-        // registry, so an arbitrary caller-supplied name is a request to pull whatever that registry serves.
-        if (EmbeddingCatalog.Find(body.Model) is null)
-            return BadRequest(new { error = $"未知的嵌入模型:{body.Model}" });
+        // Shape, not membership. The catalog is a measured shortlist, not the set of models that work: a
+        // list baked into a release cannot contain a model published after it, and this one shipped without
+        // the two strongest options that already existed. See EmbeddingCatalog.IsWellFormedId for what the
+        // gate still checks and why that is the right line.
+        if (!EmbeddingCatalog.IsWellFormedId(body.Model))
+            return BadRequest(new { error = $"模型名称格式不正确:{body.Model}" });
         try
         {
             await _ollama.PullModelAsync(body.Model);
@@ -155,27 +168,44 @@ public sealed class MemoryRecallController : ControllerBase
     [HttpPost("api/manage/memory/local/enable")]
     public async Task<IActionResult> EnableLocal([FromBody] ModelRequest body)
     {
-        var option = EmbeddingCatalog.Find(body?.Model);
-        if (option is null) return BadRequest(new { error = $"未知的嵌入模型:{body?.Model}" });
+        var model = body?.Model?.Trim();
+        if (!EmbeddingCatalog.IsWellFormedId(model))
+            return BadRequest(new { error = $"模型名称格式不正确:{body?.Model}" });
 
         var state = await _ollama.ProbeAsync(refresh: true);
         if (!state.Serving) return StatusCode(409, new { error = state.Problem ?? "Ollama 未运行。" });
-        if (!state.Has(option.Id))
-            return StatusCode(409, new { error = $"模型 {option.Id} 尚未下载 —— 请先下载再启用。" });
+        if (!state.Has(model!))
+            return StatusCode(409, new { error = $"模型 {model} 尚未下载 —— 请先下载再启用。" });
+
+        // PROVE it embeds before saving. Being installed is not being usable: a chat model named here by
+        // mistake is on the machine and will never produce a vector, and the failure would surface only as
+        // recall that finds nothing — indistinguishable from a household with no facts. This also gets the
+        // vector WIDTH from the model itself, which is what a catalog lookup used to supply and cannot for a
+        // model nobody catalogued.
+        var probe = await _ollama.ProbeEmbeddingAsync(model!);
+        if (probe is null)
+            return StatusCode(409, new
+            {
+                error = $"{model} 没有返回向量 —— 它可能不是嵌入模型。请换一个,或先在「资源」面板确认 Ollama 正常。",
+            });
 
         var previous = _config.Current.Memory.EmbeddingModel;
         _config.Update(c =>
         {
             c.Memory.SemanticEnabled = true;
-            c.Memory.EmbeddingModel = option.Id;
+            c.Memory.EmbeddingModel = model;
         });
         // A CHANGED model invalidates every stored vector — they keep the old width, and recall then
         // matches nothing rather than erroring — so the reindex is not optional, and saying so here is what
         // stops a household from sitting on silently empty recall.
-        var modelChanged = previous is not null && !OllamaState.Matches(previous, option.Id);
+        var modelChanged = previous is not null && !OllamaState.Matches(previous, model!);
         return Ok(new
         {
-            ok = true, model = option.Id, restartRequired = true, reindexRequired = true, modelChanged,
+            ok = true, model, restartRequired = true, reindexRequired = true, modelChanged,
+            dimensions = probe.Dimensions, probeMs = probe.Milliseconds,
+            // Named for a model outside the shortlist too — a household that typed one gets the same
+            // width/latency facts as a catalogued pick, rather than a blank where the numbers would be.
+            catalogued = EmbeddingCatalog.Find(model) is not null,
             note = "设置已保存。重启服务后生效,然后请重新建立一次语义索引。",
         });
     }

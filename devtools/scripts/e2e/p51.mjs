@@ -106,10 +106,23 @@ try {
   // ---- D · the local model refuses rather than pretending ----------------------------------------
   // These hold whether or not this machine has Ollama, which is the point: a refusal that only appears
   // on a developer's box is not a guarantee.
-  const bogus = await post('/api/manage/memory/local/enable', { model: 'definitely-not-a-model' });
-  ok('an unknown embedding model is refused', bogus.status === 400, String(bogus.status));
-  const pull = await post('/api/manage/memory/local/pull', { model: 'definitely-not-a-model' });
-  ok('and cannot be pulled either — the id reaches a registry', pull.status === 400, String(pull.status));
+  // The gate is on SHAPE, not on catalog membership. Membership was the old rule and it blocked every
+  // model published after a release — including, as shipped, the two best ones that already existed. What
+  // must still hold is that something which is not a model NAME never reaches the registry or a process
+  // argument, so that is what these assert.
+  for (const [label, bad] of [
+    ['a flag-shaped id', '--config'],
+    ['a path traversal', '../../etc/passwd'],
+    ['an id with whitespace', 'nomic embed text'],
+  ]) {
+    const r = await post('/api/manage/memory/local/pull', { model: bad });
+    ok(`pull refuses ${label} before it reaches the registry`, r.status === 400, `${bad} → ${r.status}`);
+  }
+  // A WELL-FORMED id that this machine does not have is a different answer: not "unknown", but "not
+  // downloaded". Conflating the two is what made a newer model look like a typo.
+  const notHere = await post('/api/manage/memory/local/enable', { model: 'some-future-embedder:1b' });
+  ok('enabling a well-formed model that is not installed says so (409, not 400)',
+    notHere.status === 409, String(notHere.status));
   const reindex = await post('/api/manage/memory/local/reindex');
   ok('reindexing while disabled is refused, not silently zero', reindex.status === 409, String(reindex.status));
 

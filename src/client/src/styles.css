@@ -3210,3 +3210,38 @@ kbd, .topbar-kbd {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* 记忆检索 · Memory recall — the panel is a COMPARISON, not a list of paragraphs. Five models across
+   quality/size/speed cannot be judged by reading five prose blocks in sequence; a table lets the eye do
+   the comparing, which is the whole reason this section was rebuilt. */
+.mem-sum { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 12px; }
+.mem-pill {
+  font-size: 12px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border-soft); color: var(--muted); white-space: nowrap;
+}
+.mem-pill.on { color: var(--accent-2); border-color: var(--accent-2); background: var(--accent-2-soft); }
+.mem-rec { margin: 16px 0 10px; font-size: 13px; line-height: 1.65; }
+
+.mem-tbl-wrap { overflow-x: auto; }          /* the panel is narrow in the desktop host; never push the page */
+.mem-tbl { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+.mem-tbl th {
+  text-align: left; font-weight: 500; font-size: 11px; letter-spacing: .06em;
+  color: var(--muted); padding: 0 10px 7px 0; border-bottom: 1px solid var(--border-soft);
+}
+.mem-tbl td { padding: 11px 10px 11px 0; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+.mem-tbl tr.on td { background: var(--accent-2-soft); }
+/* A measurement that says "do not pick this" has to LOOK different from one that says "fine" — the
+   number alone is easy to skim past when every row is styled identically. */
+.mem-tbl td.bad b { color: var(--danger); }
+.mem-tbl td.mem-act { text-align: right; padding-right: 0; white-space: nowrap; }
+.mem-m-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 3px; }
+.mem-m-note { font-size: 12px; color: var(--muted); line-height: 1.55; max-width: 42ch; }
+.mem-m-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+.mem-other {
+  margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-soft);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px; align-items: end;
+}
+.mem-other .set-hint { grid-column: 1 / -1; }
+.mem-other-act { display: flex; gap: 8px; }
+@media (max-width: 760px) { .mem-other { grid-template-columns: 1fr; } }
