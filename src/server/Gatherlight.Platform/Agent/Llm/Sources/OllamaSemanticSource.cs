@@ -23,10 +23,10 @@ public sealed class OllamaSemanticSource : IMemorySemanticSource
 
     /// <summary>The same daemon the judge's local arm uses, through the same loopback guard — one Ollama,
     /// two layers, different models on it.</summary>
-    public string? Endpoint(Kernel.Services.MemoryConfig config) =>
-        OllamaRuntime.ResolveBaseUrl(config.OllamaUrl);
+    public string? Endpoint(MemorySourceSettings s) =>
+        OllamaRuntime.ResolveBaseUrl(s.Config.OllamaUrl);
 
-    public bool IsConfigured(Kernel.Services.MemoryConfig config) => true;
+    public bool IsConfigured(MemorySourceSettings s) => true;
 
     /// <summary>The embedder plus the vector store the GRAPH member picks up — that is where meaning-based
     /// recall actually happens, via <c>SemanticSeedK</c>. <c>AddSemanticMemory</c> is here for its

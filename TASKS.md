@@ -16,13 +16,14 @@
 
 ## Backlog
 
-- [ ] **内置 · Built-in model runner for 语义** — the third backend the panel already lists as "not shipped
-  yet". Runtime chosen and reasoned in `docs/builtin-model-runner.md`: **ONNX Runtime +
-  `Microsoft.ML.Tokenizers`**, in-process, CPU, model as a sha256-pinned `ResourceSpec`. Lands as
-  `BuiltInSemanticSource : IMemorySemanticSource` + one line in `MemorySources.Semantic` + removing its
-  `SemanticDeclined` entry — no controller or client change. It closes the one recall layer that still needs
-  a setup step outside the app. A 判断 counterpart is deferred (that needs GGUF/LLamaSharp, and 判断 already
-  has two working backends).
+- [ ] **Re-measure the embedding shortlist including 内置** — `dev.mjs embed-bench` scores embedders through
+  an OpenAI-compatible endpoint, so it cannot yet score the in-process 内置 backend. Until it can,
+  `EmbeddingCatalog`'s numbers describe the Ollama arm only, and 内置's "same score" rests on one 8-query
+  fixture (`docs/builtin-model-runner.md`) — enough to separate working from broken, not enough to rank two
+  working embedders. Teach embed-bench the built-in path and re-run.
+- [ ] **内置 for 判断** — an in-process CHAT model, which is a much bigger thing than an embedder (GGUF via
+  LLamaSharp; see `docs/builtin-model-runner.md` for why not ONNX Runtime GenAI). Deferred, not blocked:
+  判断 already has two working backends, so this buys convenience rather than capability.
 
 ### Product (deferred, not urgent)
 - [ ] **Measure the three layers on THIS household's corpus.** 语义 sits under 高级 on Lyntai's

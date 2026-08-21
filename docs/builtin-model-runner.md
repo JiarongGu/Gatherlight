@@ -46,6 +46,50 @@ means 4-bit GGUF. Model availability in GGUF dwarfs ONNX, and the ONNX path woul
 pinning generative models ourselves for no gain the household can feel — 判断 on the CLI costs tokens but
 is instant, and 判断 on Ollama already works. **Deferred, not rejected**: if it lands, LLamaSharp.
 
+## MEASURED 2026-08-22, before writing any of it
+
+A scratch probe (`devtools/_onnx-probe`, gitignored) against
+[`onnx-community/embeddinggemma-300m-ONNX`](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX)
+pinned at commit `5090578d9565bb06545b4552f76e6bc2c93e4a66`. Four things were unknown and every one of them
+fails SILENTLY — a wrong tokenizer, variant, prompt or pooling gives worse recall, never an error — so they
+were measured rather than assumed.
+
+**The graph settles pooling for us.** Inputs are `input_ids` + `attention_mask` (int64); outputs are
+`last_hidden_state [b,s,768]` **and `sentence_embedding [b,768]`**. The export carries the
+sentence-transformers pooling head, so the single most likely way to produce a plausible-but-wrong vector
+is not ours to get wrong. `hidden_size: 768` also matches `EmbeddingCatalog`'s recorded 768 for this model.
+
+**Cosine against Ollama is the WRONG instrument, and finding that out mattered.** No prompt variant matched
+(0.67–0.84) and *which* variant came closest flipped between texts — the signature of two different
+quantisations of the same weights, not of a prompt mismatch. Vector compatibility is irrelevant anyway: a
+backend change already forces a reindex, which the binding endpoint reports. What matters is retrieval, so
+that is what was scored — both embedders, one fixture, same machine:
+
+| embedder | top-1 | top-3 | 16 embeds |
+|---|---|---|---|
+| **内置 · ONNX q4, raw (symmetric)** | **8/8** | 8/8 | **512 ms** |
+| 内置 · ONNX q4, document prompt | 7/8 | 8/8 | — |
+| 本机 · Ollama `embeddinggemma:300m` | 8/8 | 8/8 | 10 677 ms |
+
+Three decisions fall out, none of them guesses any more:
+
+1. **q4, not fp32 or int8.** It ties Ollama on this fixture at **197 MB** against fp32's 1.23 GB. Total
+   payload with the SentencePiece tokenizer (4.7 MB — not the 20 MB `tokenizer.json`, which
+   `Microsoft.ML.Tokenizers` cannot load anyway) is **~222 MB**, versus 622 MB for the Ollama model *plus*
+   the Ollama runtime download. 内置 is the SMALLER path, which is the opposite of what "bundle a runtime"
+   sounds like.
+2. **Raw/symmetric prompting.** embeddinggemma is asymmetric by design (`task: search result | query: ` for
+   queries, `title: none | text: ` for documents), so the obvious move is to apply them — and it measured
+   WORSE (7/8). Symmetric is also what this app already does, so the built-in path matches the product
+   rather than diverging from it. Do not "fix" this without re-running the fixture.
+3. **The recorded 9/10 does NOT transfer verbatim.** `EmbeddingCatalog`'s numbers were measured through
+   Ollama's quantisation; this is a different one. Both score the same here, but this fixture is 8 queries —
+   enough to separate working from broken, not enough to rank two working embedders, exactly the caveat the
+   catalog already states about its own 10. Re-measure with `dev.mjs embed-bench` once the backend is wired.
+
+**Cheap and repeatable:** the probe is ~150 lines and the oracle (an Ollama holding the same model) is
+already on the development machine. Re-run it before changing the variant, the tokenizer or the prompting.
+
 ## What it costs us
 
 Three things, all of which the panel must state rather than discover at runtime:

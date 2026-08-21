@@ -44,7 +44,7 @@ public interface IMemorySource
     /// <para>On the SOURCE rather than on the caller because only the source knows which config field is
     /// its own — and putting it here means there is exactly one place that answers "where does this backend
     /// talk", which is what stops an install embedding against one host while reporting another.</para></summary>
-    string? Endpoint(Kernel.Services.MemoryConfig config);
+    string? Endpoint(MemorySourceSettings s);
 
     /// <summary>Does choosing this backend require the household to supply an address? True only for a
     /// service we do not manage. Declared rather than inferred from a null <see cref="Endpoint"/>, because
@@ -54,7 +54,7 @@ public interface IMemorySource
     /// <summary>Is this backend completely enough configured to be WIRED? False means a half-configured
     /// binding, and the caller falls back rather than registering a provider against a missing address —
     /// the same "half-configured stays off" rule 语义 has always had for a model.</summary>
-    bool IsConfigured(Kernel.Services.MemoryConfig config);
+    bool IsConfigured(MemorySourceSettings s);
 
     /// <summary>Register whatever this source needs at startup — a provider, a named client, an embedder, a
     /// vector store. A no-op for a backend that is already registered by default.</summary>

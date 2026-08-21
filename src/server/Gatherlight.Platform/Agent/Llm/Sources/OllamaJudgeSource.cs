@@ -37,12 +37,12 @@ public sealed class OllamaJudgeSource : IMemoryJudgeSource
 
     /// <summary>One daemon on one port, resolved through the guard that refuses a non-loopback URL: an
     /// embedder or a judge reachable off this machine would send household material there on every call.</summary>
-    public string? Endpoint(Kernel.Services.MemoryConfig config) =>
-        OllamaRuntime.ResolveBaseUrl(config.OllamaUrl);
+    public string? Endpoint(MemorySourceSettings s) =>
+        OllamaRuntime.ResolveBaseUrl(s.Config.OllamaUrl);
 
     /// <summary>Always wireable: the URL falls back to the loopback default, so there is no half-configured
     /// state here. Whether anything is LISTENING is <see cref="StatusAsync"/>'s question.</summary>
-    public bool IsConfigured(Kernel.Services.MemoryConfig config) => true;
+    public bool IsConfigured(MemorySourceSettings s) => true;
 
     /// <summary>A provider plus a named client pooled over it alone. <c>claude-cli</c> stays first in the
     /// global candidate list, so this is a FALLBACK rather than a re-route — see

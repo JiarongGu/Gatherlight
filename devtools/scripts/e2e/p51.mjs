@@ -213,9 +213,31 @@ try {
     bindable(semantic, 'claude-cli') === false, String(bindable(semantic, 'claude-cli')));
   ok('…but it can be bound to 判断, which is the same backend doing what it can do',
     bindable(judge, 'claude-cli') === true, String(bindable(judge, 'claude-cli')));
-  ok('the bundled runtime is listed on both layers and bindable on neither, because it does not exist yet',
-    bindable(judge, 'builtin') === false && bindable(semantic, 'builtin') === false,
+  // THE BUILT-IN RUNTIME SHIPPED FOR 语义 — this assertion used to say "bindable on neither", and flipping
+  // it was the plan: docs/builtin-model-runner.md predicted this exact line would have to change, so that
+  // nobody could add the source without noticing the suite's claim about it had changed.
+  //
+  // It stays DECLINED for 判断, which would need an in-process CHAT model — a much larger thing than an
+  // embedder, and 判断 already has two working backends.
+  ok('the built-in runtime is bindable on 语义 now, and still declined on 判断',
+    bindable(semantic, 'builtin') === true && bindable(judge, 'builtin') === false,
     JSON.stringify({ judge: bindable(judge, 'builtin'), semantic: bindable(semantic, 'builtin') }));
+  // …and BINDABLE is not AVAILABLE. The fixture has not downloaded 222 MB of weights, so it must report
+  // itself unusable AND name the download — the distinction between "no implementation" and "not set up
+  // yet" is the whole reason those are two fields.
+  const builtIn = (semantic.sources ?? []).find((x) => x.id === 'builtin');
+  ok('with the model not downloaded it is unavailable, and says where to get it',
+    builtIn?.available === false && /资源|下载/.test(String(builtIn?.reason ?? '')), builtIn?.reason);
+  ok('and it offers no model until the weights are there, rather than one that cannot load',
+    (builtIn?.models ?? []).length === 0, JSON.stringify(builtIn?.models));
+  ok('it needs no address either — it runs in this process', builtIn?.needsEndpoint === false);
+  // Binding it without the model must be refused, not accepted-and-broken: a registered embedder with no
+  // weights throws on the first fact written, which is the "installed is not usable" failure this codebase
+  // keeps paying for.
+  const bindNoModel = await post('/api/manage/memory/layer/semantic',
+    { source: 'builtin', model: 'embeddinggemma-300m-onnx' });
+  ok('binding the built-in backend before its model is downloaded is refused',
+    bindNoModel.status === 409, `${bindNoModel.status} ${JSON.stringify(bindNoModel.body?.error ?? '').slice(0, 60)}`);
   ok('Ollama is bindable on both — one daemon, a different model on each layer',
     bindable(judge, 'ollama') === true && bindable(semantic, 'ollama') === true);
 

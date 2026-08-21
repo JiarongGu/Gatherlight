@@ -25,11 +25,11 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
     /// <summary>Not a URL: the CLI is a process this install spawns.</summary>
     public bool NeedsEndpoint => false;
 
-    public string? Endpoint(Kernel.Services.MemoryConfig config) => null;
+    public string? Endpoint(MemorySourceSettings s) => null;
 
     /// <summary>Always ready to be WIRED. Whether it can actually answer is <see cref="StatusAsync"/>'s
     /// question — a signed-out CLI is a real problem, but not one that should stop the app coming up.</summary>
-    public bool IsConfigured(Kernel.Services.MemoryConfig config) => true;
+    public bool IsConfigured(MemorySourceSettings s) => true;
 
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx) { }
 

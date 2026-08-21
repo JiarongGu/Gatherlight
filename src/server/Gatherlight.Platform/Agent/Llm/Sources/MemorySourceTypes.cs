@@ -85,6 +85,18 @@ public sealed record ModelOption(
     EmbeddingMeasurement? Measured = null,
     string? Vintage = null);
 
+/// <summary>The facts a source needs to answer the two STARTUP questions — where it talks, and whether it
+/// is configured enough to be wired.
+///
+/// <para>Separate from <see cref="MemorySourceContext"/> because those questions are asked from inside
+/// <c>AddLyntai(b =&gt; …)</c>, while the container is being built: there is no <c>IOllamaRuntime</c> to
+/// hand over yet. Passing a context with nulls in it would compile and then quietly depend on nobody
+/// calling the wrong member; two types make the difference structural.</para>
+///
+/// <para><see cref="ResourcesPath"/> is here because a backend's readiness is not always a config value —
+/// the built-in embedder's is "are 197 MB of weights on disk", which is a filesystem fact.</para></summary>
+public sealed record MemorySourceSettings(MemoryConfig Config, string ResourcesPath);
+
 /// <summary>What a source needs to ANSWER questions at runtime.
 ///
 /// <para>Passed per call rather than injected, so a source can be a stateless instance in a static
@@ -93,7 +105,10 @@ public sealed record ModelOption(
 public sealed record MemorySourceContext(
     IOllamaRuntime Ollama,
     IClaudeCliRuntime Claude,
-    MemoryConfig Config);
+    MemorySourceSettings Settings)
+{
+    public MemoryConfig Config => Settings.Config;
+}
 
 /// <summary>What a source needs to REGISTER itself at startup. No DI and no container — only the two facts
 /// a backend registration turns on.</summary>
@@ -103,4 +118,7 @@ public sealed record MemorySourceContext(
 /// the Ollama arm, <c>OpenAiCompatibleSource.ResolveLocal</c> for a household-supplied one. ONE place
 /// answers "where does this backend talk", which is what stops an install embedding against one host while
 /// reporting another. Empty for a backend that is a process rather than a URL.</param>
-public sealed record MemoryWiringContext(string Model, string Endpoint);
+/// <param name="Settings">The same startup facts <see cref="IMemorySource.IsConfigured"/> was asked about,
+/// carried through so a backend that needs more than a URL — the built-in embedder needs the resources
+/// path — does not force a new parameter onto every source that does not.</param>
+public sealed record MemoryWiringContext(string Model, string Endpoint, MemorySourceSettings Settings);

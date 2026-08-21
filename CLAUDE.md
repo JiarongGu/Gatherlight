@@ -39,8 +39,11 @@ local model. Each layer is a ROW with a backend and a model, and **a backend ser
 EXISTING** — one interface per layer (`Agent/Llm/Sources`), a static catalog of implementations
 (`MemorySources`), and nothing that filters. Backends are `claude-cli` · `ollama` ·
 `openai-compat` (any local OpenAI-compatible service — llama-server, LM Studio, vLLM, Jan; the household
-supplies a loopback URL, which is enforced) · `builtin` (not shipped yet, see
-`docs/builtin-model-runner.md`). **Every layer lists all of them**, and one it cannot use is shown with
+supplies a loopback URL, which is enforced) · `builtin` (**语义 only**: EmbeddingGemma-300M as ONNX run
+in-process by ONNX Runtime, model provisioned as a sha256-pinned `Files` resource — the one backend with no
+prerequisite outside the app, and the smaller path at 222 MB against Ollama's 622 MB *plus* its runtime.
+Every choice in it was measured first, `docs/builtin-model-runner.md`; 判断 has no built-in arm because that
+needs an in-process chat model). **Every layer lists all of them**, and one it cannot use is shown with
 its reason rather than omitted: 语义 offers no Claude arm because no `ClaudeCliSemanticSource` exists (no
 embeddings endpoint), not because a predicate excludes it. `OpenAiCompatibleSource` implements BOTH layer
 interfaces — the case that design exists for — as two instances, one per layer, since the judge and the

@@ -48,6 +48,7 @@ public sealed class MemoryRecallController : ControllerBase
     private readonly Lyntai.Memory.ISemanticMemory? _semantic;
     private readonly IAppConfigService _appConfig;
     private readonly IReindexStatus _reindex;
+    private readonly IPlatformContext _platform;
     // What the judge is RUNNING on, as opposed to what is saved — see MemoryJudgeWiring.
     private readonly MemoryJudgeWiring _judgeWiring;
     private readonly Storage.Knowledge.Services.IKnowledgeStore _knowledge;
@@ -55,7 +56,7 @@ public sealed class MemoryRecallController : ControllerBase
     public MemoryRecallController(IOllamaRuntime ollama, IClaudeCliRuntime claude, ServerConfigService config,
         Storage.Knowledge.Services.IFactIndex facts, IAppConfigService appConfig,
         Storage.Knowledge.Services.IKnowledgeStore knowledge,
-        IReindexStatus reindex, MemoryJudgeWiring judgeWiring,
+        IReindexStatus reindex, MemoryJudgeWiring judgeWiring, IPlatformContext platform,
         ILogger<MemoryRecallController> log,
         Lyntai.Memory.ISemanticMemory? semantic = null)
     {
@@ -67,11 +68,16 @@ public sealed class MemoryRecallController : ControllerBase
         _appConfig = appConfig;
         _knowledge = knowledge;
         _reindex = reindex;
+        _platform = platform;
         _log = log;
         _semantic = semantic;
     }
 
-    private MemorySourceContext Context() => new(_ollama, _claude, _config.Current.Memory);
+    /// <summary>The startup-time facts (config + where resources live) a source needs for the two
+    /// questions it can answer without a container. Built here so both are read at the same instant.</summary>
+    private MemorySourceSettings Settings() => new(_config.Current.Memory, _platform.ResourcesPath);
+
+    private MemorySourceContext Context() => new(_ollama, _claude, Settings());
 
     [HttpGet("api/manage/memory")]
     public async Task<IActionResult> Get([FromQuery] bool refresh = false)
@@ -80,8 +86,8 @@ public sealed class MemoryRecallController : ControllerBase
 
         var mem = _config.Current.Memory;
         var ctx = Context();
-        var boundJudge = MemorySources.ResolveJudge(mem);
-        var boundSemantic = MemorySources.ResolveSemantic(mem);
+        var boundJudge = MemorySources.ResolveJudge(Settings());
+        var boundSemantic = MemorySources.ResolveSemantic(Settings());
         var (indexed, totalFacts) = await _knowledge.CoverageAsync();
 
         return Ok(new
@@ -109,7 +115,7 @@ public sealed class MemoryRecallController : ControllerBase
                     cost = boundJudge.Id == MemorySources.DefaultJudgeSource
                         ? "每次记录事实与每次检索各消耗一次 Claude CLI 调用(使用已登录的账号)。"
                         : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。",
-                    source = boundJudge.Id, model = MemorySources.ResolveJudgeModel(mem),
+                    source = boundJudge.Id, model = MemorySources.ResolveJudgeModel(Settings()),
                     activeSource = _judgeWiring.Transport, activeModel = _judgeWiring.Model,
                     sources = await SourceViews(MemorySources.Judge, MemorySources.JudgeDeclined, ctx, MemoryLayers.Judge),
                 },
@@ -255,7 +261,7 @@ public sealed class MemoryRecallController : ControllerBase
             // from config — probing first would test the PREVIOUS binding's address.
             if (body?.Endpoint is not null)
                 _config.Update(c => c.Memory.JudgeEndpoint = Blank(body.Endpoint));
-            if (!source.IsConfigured(_config.Current.Memory))
+            if (!source.IsConfigured(Settings()))
                 return StatusCode(409, new
                 {
                     error = (await source.StatusAsync(Context())).Reason ?? "这个后端还缺少必要的设置。",
@@ -309,7 +315,7 @@ public sealed class MemoryRecallController : ControllerBase
 
             if (body?.Endpoint is not null)
                 _config.Update(c => c.Memory.SemanticEndpoint = Blank(body.Endpoint));
-            if (!source.IsConfigured(_config.Current.Memory))
+            if (!source.IsConfigured(Settings()))
                 return StatusCode(409, new
                 {
                     error = (await source.StatusAsync(Context())).Reason ?? "这个后端还缺少必要的设置。",
@@ -388,7 +394,7 @@ public sealed class MemoryRecallController : ControllerBase
     [HttpPost("api/manage/memory/layer/semantic/reindex")]
     public IActionResult Reindex()
     {
-        if (MemorySources.ResolveSemantic(_config.Current.Memory) is null)
+        if (MemorySources.ResolveSemantic(Settings()) is null)
             return StatusCode(409, new { error = "「语义」这一层尚未启用。" });
         if (!_reindex.TryStart())
             return StatusCode(409, new { error = "已经有一次重建在进行中。" });

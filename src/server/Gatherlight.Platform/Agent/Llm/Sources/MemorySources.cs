@@ -40,6 +40,10 @@ public static class MemorySources
     {
         new OllamaSemanticSource(),
         new OpenAiCompatibleSource(MemoryLayers.Semantic),
+        // 内置 — the one backend with NO prerequisite outside the app. Its arrival is what turned a
+        // declined entry into a bindable one, which is exactly the "one class plus one line" this catalog
+        // was shaped for.
+        new BuiltInSemanticSource(),
     };
 
     /// <summary>Backends 判断 cannot run on, with the reason. Listed on the layer anyway — see
@@ -49,14 +53,15 @@ public static class MemorySources
         new DeclinedBackend(MemoryBackends.BuiltIn, "内置(随应用附带)", BuiltInNotYet),
     };
 
-    /// <summary>Backends 语义 cannot run on, with the reason.</summary>
+    /// <summary>Backends 语义 cannot run on, with the reason. <b>The built-in runtime is NO LONGER here</b> —
+    /// it shipped for this layer, so it moved from this list into <see cref="Semantic"/>. It stays declined
+    /// for 判断, which would need an in-process CHAT model (a much larger thing than an embedder).</summary>
     public static readonly IReadOnlyList<DeclinedBackend> SemanticDeclined = new[]
     {
         new DeclinedBackend(MemoryBackends.ClaudeCli, "Claude CLI",
             "Claude 不提供嵌入接口 —— 它生成文字,不生成向量,所以这一层没有它。"
             + "但这不代表 Claude 帮不上按语义找东西:Lyntai 实测里,把「答对了却排在后面」捞上来的"
             + "主要是「判断」那一层(漏检 0.54 → 0.19)—— 想让改写过的问法也能问到,先开「判断」更划算。"),
-        new DeclinedBackend(MemoryBackends.BuiltIn, "内置(随应用附带)", BuiltInNotYet),
     };
 
     /// <summary>One sentence, shared: the two layers decline it for the same reason, and saying it twice in
@@ -83,17 +88,17 @@ public static class MemorySources
     /// untouched and the first write through the console replaces it. A migration would have to run before
     /// the DB opens — which is exactly where this value is consumed — and would gain nothing over these
     /// three lines.</para></summary>
-    public static IMemoryJudgeSource ResolveJudge(MemoryConfig c)
+    public static IMemoryJudgeSource ResolveJudge(MemorySourceSettings s)
     {
-        var id = !string.IsNullOrWhiteSpace(c.JudgeSource) ? c.JudgeSource
-            : string.Equals(c.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase) ? "ollama"
+        var id = !string.IsNullOrWhiteSpace(s.Config.JudgeSource) ? s.Config.JudgeSource
+            : string.Equals(s.Config.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase) ? "ollama"
             : DefaultJudgeSource;
 
         // A non-default source with NO model is half-configured, and the half that is missing is the one
         // with no sensible default: a machine-specific model is not something a release can guess. Falling
         // back to the CLI keeps the layer working instead of wiring a provider against whatever the model
         // default happens to be — which is how "haiku" would reach an Ollama that has never heard of it.
-        if (id != DefaultJudgeSource && string.IsNullOrWhiteSpace(c.JudgeModel)) id = DefaultJudgeSource;
+        if (id != DefaultJudgeSource && string.IsNullOrWhiteSpace(s.Config.JudgeModel)) id = DefaultJudgeSource;
 
         // Falls back to the first source rather than throwing: a settings.json naming a backend this build
         // does not have (a downgrade, a hand edit) must come up on the default, not refuse to start.
@@ -102,7 +107,7 @@ public static class MemorySources
         // …and the same fallback for a backend whose OWN configuration is incomplete — a typed endpoint
         // that is absent or refused. Asked of the source rather than switched on its id, so a future
         // backend with its own prerequisites needs no edit here.
-        return source.IsConfigured(c) ? source : (FindJudge(DefaultJudgeSource) ?? Judge[0]);
+        return source.IsConfigured(s) ? source : (FindJudge(DefaultJudgeSource) ?? Judge[0]);
     }
 
     /// <summary>The model 判断 is bound to. The CLI arm has a default; the local arm cannot have one,
@@ -120,12 +125,12 @@ public static class MemorySources
     /// <para>A settings.json carrying <see cref="MemoryConfig.JudgeSource"/> was written by the binding
     /// endpoint, which always writes source and model TOGETHER, so that pair is trustworthy. Only the
     /// legacy shape needs the guard.</para></summary>
-    public static string? ResolveJudgeModel(MemoryConfig c)
+    public static string? ResolveJudgeModel(MemorySourceSettings s)
     {
-        var source = ResolveJudge(c);
-        var paired = !string.IsNullOrWhiteSpace(c.JudgeSource)
-            || string.Equals(c.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase);
-        var model = paired ? c.JudgeModel : null;
+        var source = ResolveJudge(s);
+        var paired = !string.IsNullOrWhiteSpace(s.Config.JudgeSource)
+            || string.Equals(s.Config.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase);
+        var model = paired ? s.Config.JudgeModel : null;
 
         return source.Id == DefaultJudgeSource
             ? (string.IsNullOrWhiteSpace(model) ? DefaultJudgeModel : model)
@@ -137,15 +142,15 @@ public static class MemorySources
     /// <para>A model with no source is a REMEMBERED choice, not an active one: turning the layer off leaves
     /// the model and its vectors alone, so switching it back on does not cost the download and the reindex
     /// a second time.</para></summary>
-    public static IMemorySemanticSource? ResolveSemantic(MemoryConfig c)
+    public static IMemorySemanticSource? ResolveSemantic(MemorySourceSettings s)
     {
-        if (string.IsNullOrWhiteSpace(c.EmbeddingModel)) return null;
-        var source = !string.IsNullOrWhiteSpace(c.SemanticSource)
-            ? FindSemantic(c.SemanticSource)
-            : c.SemanticEnabled ? FindSemantic(MemoryBackends.Ollama) : null;
+        if (string.IsNullOrWhiteSpace(s.Config.EmbeddingModel)) return null;
+        var source = !string.IsNullOrWhiteSpace(s.Config.SemanticSource)
+            ? FindSemantic(s.Config.SemanticSource)
+            : s.Config.SemanticEnabled ? FindSemantic(MemoryBackends.Ollama) : null;
 
         // Incomplete = OFF, not "wire it and hope". Unlike 判断 there is nothing to fall back TO here: a
         // second-best embedder would write vectors of a different width, which is worse than no layer.
-        return source is not null && source.IsConfigured(c) ? source : null;
+        return source is not null && source.IsConfigured(s) ? source : null;
     }
 }

@@ -66,14 +66,14 @@ public sealed class OpenAiCompatibleSource : IMemoryJudgeSource, IMemorySemantic
 
     /// <summary>The address THIS LAYER is configured to use, already loopback-checked. Null when unset or
     /// refused. The layer discriminator is the whole reason this class is instantiated twice.</summary>
-    public string? Endpoint(Kernel.Services.MemoryConfig config) => ResolveLocal(
-        _layer == MemoryLayers.Semantic ? config.SemanticEndpoint : config.JudgeEndpoint);
+    public string? Endpoint(MemorySourceSettings s) => ResolveLocal(
+        _layer == MemoryLayers.Semantic ? s.Config.SemanticEndpoint : s.Config.JudgeEndpoint);
 
     /// <summary>Unlike the other backends this one CAN be half-configured — its address comes from a text
     /// box and may be absent or refused — so a binding without a usable address must not be wired.</summary>
-    public bool IsConfigured(Kernel.Services.MemoryConfig config) => Endpoint(config) is not null;
+    public bool IsConfigured(MemorySourceSettings s) => Endpoint(s) is not null;
 
-    private string? Url(MemorySourceContext ctx) => Endpoint(ctx.Config);
+    private string? Url(MemorySourceContext ctx) => Endpoint(ctx.Settings);
 
     /// <summary>A base URL we are willing to send household facts to: absolute, http(s), and LOOPBACK
     /// unless an operator explicitly opted out. Null for anything else — a refusal, not a fallback, because

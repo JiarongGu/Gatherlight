@@ -25,16 +25,22 @@ public sealed class ModelsController : ControllerBase
     private readonly IOllamaRuntime _ollama;
     private readonly ServerConfigService _config;
     private readonly IModelPullStatus _pulls;
+    private readonly IPlatformContext _platform;
     private readonly ILogger<ModelsController> _log;
 
     public ModelsController(IOllamaRuntime ollama, ServerConfigService config,
-        IModelPullStatus pulls, ILogger<ModelsController> log)
+        IModelPullStatus pulls, IPlatformContext platform, ILogger<ModelsController> log)
     {
         _ollama = ollama;
         _config = config;
         _pulls = pulls;
+        _platform = platform;
         _log = log;
     }
+
+    /// <summary>The startup-time facts a source needs to answer where it talks and whether it is ready.
+    /// Built here rather than passed around because both this controller's questions want the same pair.</summary>
+    private MemorySourceSettings Settings() => new(_config.Current.Memory, _platform.ResourcesPath);
 
     /// <summary>Approximate size of the suggested chat model, for the row that offers it. A figure the
     /// household reads before committing to a download, not one anything computes with.</summary>
@@ -44,7 +50,7 @@ public sealed class ModelsController : ControllerBase
     public async Task<IActionResult> Get([FromQuery] bool refresh = false)
     {
         var s = await _ollama.ProbeAsync(refresh);
-        var mem = _config.Current.Memory;
+        var mem = Settings();
         var judgeModel = MemorySources.ResolveJudgeModel(mem);
         var rec = EmbeddingCatalog.Recommend(s.GpuLikely);
 
@@ -123,9 +129,9 @@ public sealed class ModelsController : ControllerBase
     /// <para>Deliberately the only question this controller asks about recall. It has to be asked: recall is
     /// fail-open, so deleting a bound model gives searches that quietly find less rather than an error
     /// naming what was removed.</para></summary>
-    private static string? InUse(string name, MemoryConfig mem, string? judgeModel)
+    private static string? InUse(string name, MemorySourceSettings mem, string? judgeModel)
     {
-        if (MemorySources.ResolveSemantic(mem) is not null && mem.EmbeddingModel is { } emb
+        if (MemorySources.ResolveSemantic(mem) is not null && mem.Config.EmbeddingModel is { } emb
             && OllamaState.Matches(name, emb)) return MemoryLayers.Semantic;
 
         if (MemorySources.ResolveJudge(mem).Id != MemorySources.DefaultJudgeSource
@@ -205,7 +211,7 @@ public sealed class ModelsController : ControllerBase
         if (!EmbeddingCatalog.IsWellFormedId(model))
             return BadRequest(new { error = $"模型名称格式不正确:{body?.Model}" });
 
-        var mem = _config.Current.Memory;
+        var mem = Settings();
         switch (InUse(model!, mem, MemorySources.ResolveJudgeModel(mem)))
         {
             case MemoryLayers.Semantic:

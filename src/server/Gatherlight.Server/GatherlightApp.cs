@@ -101,15 +101,20 @@ public static class GatherlightApp
         // the app's most frequent model call by a wide margin — the reason moving it off the account quota
         // is worth offering at all.
         var memoryConfig = config.Current.Memory;
-        var ollamaUrl = Platform.Agent.Llm.Services.OllamaRuntime.ResolveBaseUrl(memoryConfig.OllamaUrl);
+        // The startup-time facts a source can be asked about before the container exists: its config, and
+        // where provisioned resources live (the built-in embedder's readiness is "are the weights on disk",
+        // which is not a config value). Derived the same way IPlatformContext derives it, because this runs
+        // before IPlatformContext can be resolved.
+        var memorySettings = new Platform.Agent.Llm.Sources.MemorySourceSettings(
+            memoryConfig, Path.Combine(Path.GetFullPath(options.DataPath), "state", "resources"));
 
-        var judgeSource = Platform.Agent.Llm.Sources.MemorySources.ResolveJudge(memoryConfig);
-        var judgeModel = Platform.Agent.Llm.Sources.MemorySources.ResolveJudgeModel(memoryConfig)
+        var judgeSource = Platform.Agent.Llm.Sources.MemorySources.ResolveJudge(memorySettings);
+        var judgeModel = Platform.Agent.Llm.Sources.MemorySources.ResolveJudgeModel(memorySettings)
             ?? Platform.Agent.Llm.Sources.MemorySources.DefaultJudgeModel;
 
         // A bound source with no model has nothing to embed WITH, so a half-configured install stays off
         // rather than failing at the first fact write.
-        var semanticSource = Platform.Agent.Llm.Sources.MemorySources.ResolveSemantic(memoryConfig);
+        var semanticSource = Platform.Agent.Llm.Sources.MemorySources.ResolveSemantic(memorySettings);
         var embeddingModel = memoryConfig.EmbeddingModel;
         var semanticOn = semanticSource is not null && !string.IsNullOrWhiteSpace(embeddingModel);
 
@@ -348,11 +353,11 @@ public static class GatherlightApp
                 // Each source resolves its OWN endpoint, so this call site does not know (and must not
                 // decide) whether a backend is a daemon on a port, a household-typed URL, or a process.
                 judgeSource.Register(b, new Platform.Agent.Llm.Sources.MemoryWiringContext(
-                    judgeModel, judgeSource.Endpoint(memoryConfig) ?? ""));
+                    judgeModel, judgeSource.Endpoint(memorySettings) ?? "", memorySettings));
 
                 if (semanticOn)
                     semanticSource!.Register(b, new Platform.Agent.Llm.Sources.MemoryWiringContext(
-                        embeddingModel!, semanticSource.Endpoint(memoryConfig) ?? ""));
+                        embeddingModel!, semanticSource.Endpoint(memorySettings) ?? "", memorySettings));
             })
             // Lyntai's cortex (IPromptRegistry / IModelRoutingStore) reads/writes the app's OWN app_config
             // table — single source of truth for cortex.prompt.* / llm.model.*, no lyntai_kv duplicate. Plain

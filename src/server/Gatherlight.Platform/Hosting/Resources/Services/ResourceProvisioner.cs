@@ -18,7 +18,22 @@ public enum ResourceKind
     /// the version and its sha256 read LIVE from the vendor's manifest rather than pinned in our source.
     /// That inversion is the point — see <see cref="ResourceProvisioner.ClaudeBaseUrl"/>.</summary>
     ClaudeCli,
+    /// <summary>A set of LOOSE files, each with its own url + sha256, landing at declared paths inside the
+    /// install dir. For an artifact published as individual files rather than an archive — a model on
+    /// HuggingFace, say.
+    /// <para>Per-file DESTINATIONS are the load-bearing part, not a convenience: an ONNX model with
+    /// external weights only loads when the <c>.onnx_data</c> sits exactly beside its <c>.onnx</c>, and
+    /// "download these three URLs somewhere" cannot promise that.</para></summary>
+    Files,
 }
+
+/// <summary>One file of a <see cref="ResourceKind.Files"/> resource.</summary>
+/// <param name="RelativePath">Where it lands inside the install dir, forward slashes.</param>
+/// <param name="Url">Immutable, ideally content-addressed — a HuggingFace <c>/resolve/&lt;commit-sha&gt;/</c>
+/// URL rather than <c>/resolve/main/</c>, so the bytes cannot change under the pin.</param>
+/// <param name="Sha256">Verified before anything is installed. Unlike the NuGet bundle (immutable by
+/// published version) these are plain files on a CDN, so the checksum IS the integrity guarantee.</param>
+public sealed record ResourceFile(string RelativePath, string Url, string Sha256);
 
 /// <summary>
 /// A large resource (or a bundle of them) that ships download-at-setup instead of inside the app
@@ -38,7 +53,9 @@ public sealed record ResourceSpec(
     string? Sha256 = null,
     // The subpath inside the extracted archive that IS the payload root — for a package archive whose
     // files sit under a content path. Null = the archive root itself (with single-wrapper flattening).
-    string? ArchiveRoot = null);
+    string? ArchiveRoot = null,
+    // For ResourceKind.Files: what to fetch and where each piece lands.
+    IReadOnlyList<ResourceFile>? Files = null);
 
 /// <summary>Live provisioning state for one resource (for the setup UI to poll). <paramref name="Version"/>
 /// / <paramref name="Available"/> are populated only for a resource whose version we actually track (the
@@ -183,6 +200,18 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         ?? $"https://github.com/ollama/ollama/releases/download/v{OllamaVersion}/"
            + (OllamaArm64 ? "ollama-windows-arm64.zip" : "ollama-windows-amd64.zip");
 
+    /// <summary>The 内置 embedder's model, pinned by COMMIT rather than by <c>main</c> — a branch ref would
+    /// let the bytes change under a checksum that then stops matching, which reads as a corrupt download.
+    /// <para>EmbeddingGemma 300M, q4, as exported by the onnx-community mirror. The variant, the tokenizer
+    /// file and the absence of a task prompt were all MEASURED before being chosen (8/8 top-1, tying the
+    /// Ollama arm on the same fixture) — see <c>docs/builtin-model-runner.md</c> before changing any of
+    /// them, because each one fails silently rather than loudly.</para></summary>
+    private const string EmbedModelCommit = "5090578d9565bb06545b4552f76e6bc2c93e4a66";
+
+    private static string EmbedModelUrl(string path) =>
+        Override("GATHERLIGHT_EMBED_MODEL_BASE_URL") is { } b ? $"{b.TrimEnd('/')}/{path}"
+        : $"https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/{EmbedModelCommit}/{path}";
+
     public static readonly IReadOnlyList<ResourceSpec> Catalog = new[]
     {
         new ResourceSpec(
@@ -225,6 +254,33 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             Kind: ResourceKind.ClaudeCli, InstallDir: "claude", ReadyMarker: "claude.exe",
             ApproxBytes: 266_000_000,
             Url: ClaudeBaseUrl),
+        new ResourceSpec(
+            Id: "embed-model", Name: "内置嵌入模型(EmbeddingGemma 300M)",
+            // Says what it REPLACES, because that is the decision the household is making: this is the
+            // alternative to installing Ollama at all for 语义, and it is the smaller of the two — 222 MB
+            // here against Ollama's runtime plus a 622 MB model.
+            NeededFor: "「记忆检索 · 语义」的内置后端 —— 不必安装 Ollama;实测检索质量与本机 Ollama 同分,"
+                + "而且在应用内直接运行(更快、不需要常驻服务)",
+            Kind: ResourceKind.Files, InstallDir: "embed-model",
+            // The .onnx is the marker rather than the weights: it is the file ONNX Runtime is handed, and
+            // ProvisionFilesAsync only moves the directory in once EVERY checksum passed, so the marker
+            // existing really does mean the set is complete.
+            ReadyMarker: Agent.Llm.Services.OnnxEmbedder.ModelFile,
+            ApproxBytes: 222_000_000,
+            Files: new[]
+            {
+                new ResourceFile("onnx/model_q4.onnx", EmbedModelUrl("onnx/model_q4.onnx"),
+                    "ad1dfee81a70f7944b9b9d1cc6e48075b832881cf33fab2f2b248be78f3f0043"),
+                // EXTERNAL WEIGHTS. It must sit beside the .onnx above — the graph references it by
+                // relative name — which is the reason this resource kind declares destinations at all.
+                new ResourceFile("onnx/model_q4.onnx_data", EmbedModelUrl("onnx/model_q4.onnx_data"),
+                    "599962c3143b040de2dd05e5975be3e9091dd067cacc6a8f7186e3203bab9e02"),
+                // The SentencePiece vocabulary (4.7 MB), NOT the 20 MB tokenizer.json: Microsoft.ML
+                // .Tokenizers cannot read HuggingFace's fast-tokenizer JSON, and this is the same
+                // vocabulary at a quarter of the size.
+                new ResourceFile(Agent.Llm.Services.OnnxEmbedder.TokenizerFile, EmbedModelUrl("tokenizer.model"),
+                    "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c"),
+            }),
     };
 
     /// <summary>Where a provisioned node lands. Read by the sandbox probe and the Node leaf tools, so
@@ -243,6 +299,11 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// binary claims.</summary>
     public static string ClaudeVersionMarker(string resourcesPath) =>
         Path.Combine(resourcesPath, "claude", "version.txt");
+
+    /// <summary>Where the 内置 embedder's model lands. Read by <c>BuiltInSemanticSource</c> and written
+    /// here, so the path exists in exactly one place — same contract as <see cref="ProvisionedNode"/>.</summary>
+    public static string ProvisionedEmbedModel(string resourcesPath) =>
+        Path.Combine(resourcesPath, "embed-model");
 
     /// <summary>The installed claude version, or null when it was never provisioned here (a machine-wide
     /// install has no marker of ours — and that is a legitimate, fully working configuration).</summary>
@@ -401,6 +462,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             {
                 case ResourceKind.Bundle: await ProvisionBundleAsync(spec, p); break;
                 case ResourceKind.ClaudeCli: await ProvisionClaudeAsync(spec, p); break;
+                case ResourceKind.Files: await ProvisionFilesAsync(spec, p); break;
                 default: await ProvisionZipAsync(spec, p); break;
             }
             Set(p, "ready", 100, "已就绪");
@@ -505,6 +567,60 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         {
             try { if (File.Exists(zip)) File.Delete(zip); } catch { /* best-effort */ }
             try { if (Directory.Exists(extract)) Directory.Delete(extract, true); } catch { /* best-effort */ }
+        }
+    }
+
+    // ---- Loose files: N urls, each verified, all staged, then moved in as one directory ----
+    // ALL-OR-NOTHING is the point. A model with external weights is useless with one of its two halves, so
+    // a half-finished download must not become the install: everything lands in .staging, every checksum is
+    // checked, and only then does the directory move into place. The alternative — writing each file to its
+    // final home as it arrives — produces an install that LOOKS present (the ready marker exists) and
+    // throws on the first embed, which is exactly the "installed is not usable" failure this codebase keeps
+    // paying for elsewhere.
+    private async Task ProvisionFilesAsync(ResourceSpec spec, Prog p)
+    {
+        var files = spec.Files;
+        if (files is null || files.Count == 0) throw new InvalidOperationException("no files declared");
+
+        var staging = Path.Combine(_data.ResourcesPath, ".staging");
+        Directory.CreateDirectory(staging);
+        var stage = Path.Combine(staging, spec.Id);
+        try
+        {
+            if (Directory.Exists(stage)) Directory.Delete(stage, true);
+            Directory.CreateDirectory(stage);
+
+            // One progress bar over the whole set, weighted by declared size, rather than a bar that snaps
+            // back to zero on every file — the same reason the Ollama pull sums its layers by digest.
+            var share = 92.0 / files.Count;
+            for (var i = 0; i < files.Count; i++)
+            {
+                var f = files[i];
+                var dest = Path.Combine(stage, f.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+
+                var basePct = i * share;
+                Set(p, "running", (int)basePct, $"下载中… ({i + 1}/{files.Count})");
+                await DownloadAsync(f.Url, dest,
+                    pct => Set(p, "running", (int)(basePct + pct * share / 100.0),
+                        $"下载中… ({i + 1}/{files.Count})"),
+                    CapFor(spec));
+
+                var actual = await Sha256Async(dest);
+                if (!string.Equals(actual, f.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"{f.RelativePath} 的 sha256 不匹配(期望 {f.Sha256[..8]}…)");
+            }
+
+            Set(p, "running", 97, "安装中…");
+            var installed = InstallPath(spec);
+            if (Directory.Exists(installed)) Directory.Delete(installed, true);
+            Directory.CreateDirectory(Path.GetDirectoryName(installed)!);
+            Directory.Move(stage, installed);
+        }
+        finally
+        {
+            try { if (Directory.Exists(stage)) Directory.Delete(stage, true); } catch { /* best-effort */ }
         }
     }
 
