@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import { inHost } from '@/lib/host';
+import { Segmented } from '@/ui/molecules';
 
 // ---- Settings view (edit state/settings.json — port / remote access / TLS / update source) ----
 interface SettingsData {
@@ -146,11 +147,16 @@ export function SettingsPanel({ toast, onRestart }: { toast: (t: string, k?: 'ok
           <div className="set-group-h">访问范围 · Access {envWarn('bindAddress') && <em>(env)</em>}</div>
           <div className="set-access">
             <div className="set-access-main">
-              <div className="cx-seg set-access-seg">
-                <button className={`cx-seg-b${mode === 'local' ? ' on' : ''}`} onClick={() => setMode('local')}>本机 · Local</button>
-                <button className={`cx-seg-b${mode === 'lan' ? ' on' : ''}`} onClick={() => setMode('lan')}>局域网 · LAN</button>
-                <button className={`cx-seg-b${mode === 'wan' ? ' on' : ''}`} onClick={() => setMode('wan')}>公网 · WAN</button>
-              </div>
+              <Segmented
+                className="set-access-seg"
+                value={mode}
+                onSelect={setMode}
+                options={[
+                  { value: 'local', label: '本机 · Local' },
+                  { value: 'lan', label: '局域网 · LAN' },
+                  { value: 'wan', label: '公网 · WAN' },
+                ]}
+              />
               <div className={`set-hint${mode === 'wan' && !data.hasAccessToken && !token ? ' danger' : ''}`}>
                 {mode === 'local' && '仅本机可访问(127.0.0.1)—— 最安全,无需令牌。'}
                 {mode === 'lan' && '本机 + 局域网设备可访问(0.0.0.0 含 127.0.0.1),无需令牌 —— 仅在可信内网使用,任何能连上的设备都可进入。'}

@@ -5,6 +5,7 @@
 // See ./index.ts for why they share a folder.
 
 import { useEffect, useState } from 'react';
+import { Segmented } from '@/ui/molecules';
 
 // ---- Automation view (background jobs: schedule / manage / run history) ----
 interface Job {
@@ -211,10 +212,15 @@ export function JobsPanel({ toast, confirm }: {
             <label className="set-check"><input type="checkbox" checked={fAutoCommit} onChange={(e) => setFAutoCommit(e.target.checked)} /> 自动提交改动(不勾选 = 暂存待你审阅,更安全)</label>
           )}
 
-          <div className="cx-seg jobs-seg">
-            <button className={`cx-seg-b${fSchedule === 'cron' ? ' on' : ''}`} onClick={() => setFSchedule('cron')}>周期 · Cron</button>
-            <button className={`cx-seg-b${fSchedule === 'once' ? ' on' : ''}`} onClick={() => setFSchedule('once')}>一次 · Once</button>
-          </div>
+          <Segmented
+            className="jobs-seg"
+            value={fSchedule}
+            onSelect={setFSchedule}
+            options={[
+              { value: 'cron', label: '周期 · Cron' },
+              { value: 'once', label: '一次 · Once' },
+            ]}
+          />
           {fSchedule === 'cron' ? (
             <div className="set-grid">
               <label className="set-field"><span>cron 表达式</span>

@@ -6,6 +6,7 @@ export { ResourceRow } from './ResourceRow';
 export type { ResourceRowProps } from './ResourceRow';
 export { PullProgress, ModelPullField } from './ModelPull';
 export type { ModelPullState } from './ModelPull';
+export { Segmented, type SegmentedOption } from './Segmented';
 export { BackendPicker } from './BackendPicker';
 export type { BackendView, BackendModel } from './BackendPicker';
 // MapCanvas pulls in the leaflet stack — import it lazily from './MapCanvas' directly

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Segmented } from './Segmented';
 
 const memBytes = (n: number) =>
   n >= 1_000_000_000 ? `${(n / 1_000_000_000).toFixed(1)} GB` : `${Math.round(n / 1_000_000)} MB`;
@@ -86,15 +87,14 @@ export function BackendPicker(
   return (
     <div className="mem-src">
       <span className="mem-src-lbl">运行于</span>
-      <div className="cx-seg">
-        {sources.map((x) => (
-          <button key={x.id}
-            className={`cx-seg-b${source.id === x.id ? ' on' : ''}${x.bindable ? '' : ' na'}`}
-            disabled={busy !== null} onClick={() => { setPickedSource(x.id); setPickedModel(null); }}>
-            {x.name}
-          </button>
-        ))}
-      </div>
+      {/* `available` rather than `disabled` on an unbindable backend: pressing it is how you read the
+          reason it cannot be used. See Segmented's own comment — this is the case it exists for. */}
+      <Segmented
+        value={source.id}
+        disabled={busy !== null}
+        onSelect={(id) => { setPickedSource(id); setPickedModel(null); }}
+        options={sources.map((x) => ({ value: x.id, label: x.name, available: x.bindable }))}
+      />
       {/* The address, for a service we do not manage. Sits BEFORE the model list because the list comes
           FROM that address — an empty model picker above an empty URL box would read as broken rather than
           as unconfigured. */}

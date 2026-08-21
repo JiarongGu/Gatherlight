@@ -5,6 +5,7 @@
 // See ./index.ts for why they share a folder.
 
 import { useEffect, useState } from 'react';
+import { Segmented } from '@/ui/molecules';
 import { MemoryRecallPanel } from './MemoryRecallPanel';
 
 // ---- Cortex tuning view (prompt-template + model-routing overrides) ----
@@ -275,21 +276,15 @@ export function CortexPanel({ toast, onRestart }: { toast: (t: string, k?: 'ok' 
               {m.overridden && <span className="cx-badge">已自定义</span>}
             </div>
             <div className="cx-model-desc">{m.description}</div>
-            <div className="cx-seg">
-              {m.suggestions.map((s) => {
-                const active = (m.override ?? '') === s;
-                return (
-                  <button
-                    key={s || 'default'}
-                    className={`cx-seg-b${active ? ' on' : ''}`}
-                    onClick={() => setModel(m, s)}
-                    title={s ? s : `使用默认(${modelLabel(m.default)})`}
-                  >
-                    {s ? s : '默认'}
-                  </button>
-                );
-              })}
-            </div>
+            <Segmented
+              value={m.override ?? ''}
+              onSelect={(v) => setModel(m, v)}
+              options={m.suggestions.map((s) => ({
+                value: s,
+                label: s ? s : '默认',
+                title: s ? s : `使用默认(${modelLabel(m.default)})`,
+              }))}
+            />
             <div className="cx-model-eff">
               生效:<b>{modelLabel(m.effective)}</b>
               {m.default !== null && <span className="cx-dim"> · 默认 {modelLabel(m.default)}</span>}
