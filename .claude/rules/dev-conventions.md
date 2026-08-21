@@ -429,6 +429,33 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   is built — so a regression that re-buys the embedding and reads none of it now announces itself instead of
   showing up as "recall feels no different". Verified both ways on 2026-08-21: silent on the current wiring,
   and firing by name with `SemanticSeedK` put back to 0.
+- **The memory judge's BACKEND is a choice, and a named client cannot route on candidates it does not own.**
+  Annotation (every write) + verification (every recall) is the app's most frequent model call, so it may run
+  on a local Ollama model instead of the CLI — `memory.judgeTransport`/`judgeModel` in `settings.json`,
+  because naming it registers a provider and a named `ILlmClient` while the container is built. The policies'
+  own `Model` stays **null** so the router resolves per consumer and cortex's live `llm.model.memory` keeps
+  working; only `DefaultModelByConsumer["memory"]` changes. **The trap:** `LlmRouterFactory.For()` narrows a
+  named client's provider POOL but reuses the same options, so a client pooled over `ollama-chat` still
+  resolved candidates from `UseDefaultCandidates("claude-cli")` — a provider absent from its own pool. Every
+  call logged `router: skipping claude-cli — no provider with this id registered` and failed, and since both
+  policies are fail-open the symptom was **zero model calls and no error**. Contained by appending the
+  backend to the GLOBAL candidate list with `claude-cli` still first (a fallback, not a re-route, reaching
+  only the one-shot `ILlmClient` consumers — never the agent path, which uses `IAgentSession` and does not
+  route). Filed upstream. **Verify this class by ROUTING, not registration**: the broken version registered
+  cleanly; the probe that caught it drives a real write + recall and reads which backend answered. An
+  EMBEDDING model is refused as a judge by name — installed, well-formed, and unable to answer a judgement,
+  which fail-open would turn into recall that quietly never improves.
+- **A rebuild runs detached, and the console reports COVERAGE rather than a run history.** `ReindexSemanticAsync`
+  re-remembers every fact (a model call each with enrichment on), so running it inside the POST gave a
+  greyed-out button for minutes — indistinguishable from a hang, over a request the browser may abandon while
+  the server carries on. It returns 202 and reports progress through `GET /api/manage/memory`; the status is
+  deliberately **not** bound to the request's `CancellationToken` (that would cancel the work when the browser
+  stopped waiting) and deliberately **not** persisted: the run is an in-process `Task`, so a stored `running`
+  would outlive the work it describes — the same lie `SelfHealStateStep` refuses. Durability is unnecessary
+  because an interrupted rebuild already heals: `RebuildAsync` clears every `graph_ref` up front, which is
+  exactly what the startup back-fill repairs (measured 2026-08-21: 2/6 → 6/6 across a restart). So the panel
+  answers "is what I know searchable NOW" with `coverage {indexed,total}`, shown only when short — state is
+  self-correcting where an event log is not.
 - **Data where it churns, code where it doesn't** — `fill_itinerary`'s form map. A form's *shape*
   (field names, `{n}` row templates, `maxRows`, font sizes, flatten) lives in `.claude/forms/*.json`,
   seeded by the template and editable by the agent through the normal diff gate; the PDF machinery
