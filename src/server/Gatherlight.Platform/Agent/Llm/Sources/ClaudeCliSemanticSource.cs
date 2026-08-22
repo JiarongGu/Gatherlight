@@ -172,7 +172,17 @@ public sealed class ClaudeCliSemanticSource : IMemorySemanticSource
             var prompt =
                 "下面是一条家庭记录。请用不同的说法把同一件事再说几遍,用于全文检索的同义扩展。\n"
                 + $"要求:{Phrasings} 行以内,每行一种说法,只输出这些行,不要编号、不要解释、不要引号。\n"
-                + "用词要换(同义词、口语说法、另一种语言的常见叫法),但不要添加原文没有的信息。\n\n"
+                // AT LEAST ONE LINE IN ANOTHER LANGUAGE, required rather than offered.
+                //
+                // This listed 另一种语言的常见叫法 as one of three options, so the model took the easiest
+                // and produced same-language synonyms only — measured on a real fact: FOUR phrasings and
+                // not one latin character among them. That is exactly why this layer contributed nothing
+                // on cross-language, third-language and code-switched probes while 判断 recovered +2 in
+                // each. A paraphrase that stays in the fact's own language adds surface the lexical floor
+                // could already reach; the household writes in one language and asks in another.
+                + "最重要的一条:**至少要有一行用另一种语言写**(中文的事实就写一行英文,英文的事实就"
+                + "写一行中文)—— 换一种语言提问正是这一层最主要的用途。其余各行换用词(同义词、口语"
+                + "说法),但都不要添加原文没有的信息。\n\n"
                 + fact;
             var reply = await llm.CompleteAsync(new Lyntai.Llm.LlmRequest
             {

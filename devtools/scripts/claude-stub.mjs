@@ -228,8 +228,13 @@ if (prompt.includes('zzjudge') && prompt.includes(NOTES_HEAD)) {
 // could assert they were STORED and never that they could be FOUND.
 if (prompt.includes('同义扩展')) {
   const fact = prompt.split('\n\n').pop();
+  // One line in ANOTHER LANGUAGE, because that is what the real prompt now REQUIRES — and requiring it
+  // is the fix that made this layer do anything at all. It listed 另一种语言的常见叫法 as one of three
+  // options, so the model always took the easy one: measured on a real fact, four phrasings and not one
+  // latin character. The layer was reachable and useless, which is why every multilingual probe showed
+  // no benefit from it while 判断 recovered +2 in each.
   const lines = fact.includes('鱼味')
-    ? ['猫咪的口味偏好 zzfishpref', '这只猫爱吃海鲜口味']
+    ? ['猫咪的口味偏好 zzfishpref', '这只猫爱吃海鲜口味', 'the cat only eats zzseafood tins']
     : fact.includes('玄关')
       ? ['猫粮的存放位置 zzstorage', '干粮收在门口的柜子']
       : ['换一种说法'];

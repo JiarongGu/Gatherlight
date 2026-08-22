@@ -257,6 +257,16 @@ try {
   // mean the phrasings are being matched loosely enough to be worthless.
   ok('and the other fact, with its own phrasings, is not dragged along',
     !phraseTopics.includes('猫粮'), JSON.stringify(phraseTopics));
+  // A DIFFERENT LANGUAGE REACHES THE FACT. This is the layer's actual purpose and it was not being
+  // served: the rephrase prompt offered 另一种语言的常见叫法 as one of three options, the model always
+  // chose same-language synonyms, and a household writing in Chinese and asking in English got nothing
+  // from a feature costing a model call per fact. The prompt now REQUIRES a line in another language;
+  // this asserts the retrieval half, which is the half that can silently rot.
+  const viaEnglish = await c.call('recall_facts', { query: 'zzseafood tins', limit: 5 });
+  ok('THE POINT: an English query reaches a fact whose text is entirely Chinese',
+    (viaEnglish.result?.facts ?? []).some((f) => f.topic === '猫粮偏好'),
+    JSON.stringify((viaEnglish.result?.facts ?? []).map((f) => f.topic)));
+
   // …AND IT SURVIVES THE GRAPH ANSWERING SOMETHING ELSE. This is the assertion that matters most for
   // this layer, and it FAILED when written: `harbour` matches three unrelated facts lexically, the graph
   // therefore resolved a full answer, and FTS — the only index that holds `aka` — used to run solely when

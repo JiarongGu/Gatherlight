@@ -468,6 +468,19 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   vectors) and now names the JOB instead. `p51` binds each arm and asserts the claim tracks it — including
   that a local arm still SAYS the data stays put, because deleting the promise everywhere would understate
   what running the model yourself actually buys.
+- **THE REPHRASE PROMPT OFFERED CROSS-LANGUAGE AS AN OPTION, so the model never took it** — and that,
+  not the plumbing, is why this layer measured as useless. It said 用词要换(同义词、口语说法、另一种语言的
+  常见叫法), three choices, and a model asked for "a different wording" reaches for a synonym every time.
+  **Measured on one real fact: four phrasings, not one latin character among them.** A paraphrase that
+  stays in the fact's own language adds surface the lexical floor could already reach — which is exactly
+  the shape of a feature that runs, costs a model call per fact, and changes nothing.
+  The prompt now REQUIRES a line in another language. Same fact, re-written: 1 of 4 phrasings came back in
+  English, and an English question then retrieved a fact whose text is entirely Chinese (`ranked: fts` —
+  the phrasing in `aka` is what matched). **The mechanism was never in doubt and did not need a corpus to
+  prove**: one fact, one query naming a wording that appears only in its phrasings, is the whole test.
+  Reaching for a 16-fact benchmark first is what made this look unanswerable for three sessions.
+  `e2e-p48` guards the retrieval half — the half that can rot silently — and was confirmed to FAIL when the
+  stub's cross-language phrasing is removed.
 - **语义's PHRASINGS ARE UNREACHABLE AS WIRED, and forcing them costs more than it buys** (isolated
   2026-08-23). Turning the binding off does not stop phrasings being searched — they are a `knowledge`
   column the FTS table indexes unconditionally — so the only true A/B is *phrasings written* vs *cleared*,
