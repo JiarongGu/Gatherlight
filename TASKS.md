@@ -19,8 +19,9 @@
 - [ ] **Move the self-managed runtime from Ollama to `llama-server`.** Decided and measured 2026-08-22 —
   `docs/self-managed-llm-runtime.md` has the numbers, the eliminated alternatives and the four things that
   only running it revealed. Ollama stays as a *household* backend (detected, never managed); what changes is
-  what the app installs. Not a swap, in this order: (1) a `llama-cpp` resource — the 34.9 MB
-  `win-vulkan-x64` archive, sha256-pinned like git and node; (2) a runtime service that owns a router
+  what the app installs. Not a swap, in this order: ~~(1) a `llama-cpp` resource~~ **DONE** — 34.9 MB
+  `win-vulkan-x64`, sha256-pinned (arm64 falls back to the 12 MB CPU build; there is no vulkan-arm64
+  asset), listed above Ollama, provisioned + probed end to end, asserted in `p49`; (2) a runtime service that owns a router
   process, since `-ngl` is part of the launch contract (absent it runs on CPU at 30× the latency, silently)
   and models load LAZILY (a cold judge call measured 17.3 s), so both models must be warmed at startup;
   (3) models as sha256-pinned GGUF downloads — Ollama's own blobs do NOT load in llama.cpp
@@ -33,11 +34,6 @@
   cannot. What it still uniquely has is *no separate process at all* and the smallest total payload
   (222 MB). Keep it as the zero-process option, or drop it once llama-server lands — a product call, and
   the argument for keeping it got weaker rather than stronger.
-- [ ] **Surface runtime PROVENANCE in the recall picker.** `RuntimeOrigin` (bundled / app / household) is
-  defined in `MemorySourceTypes.cs`; the four sources and the picker still need to report it. The panel
-  calling the app-provisioned runtime 本机 · Ollama — "your Ollama" — is what let both a household and this
-  project conclude 语义 needed a manual install, which is how the built-in arm came to ship a false
-  justification. Independent of which runtime we provision.
 - [ ] **内置 for 判断** — an in-process CHAT model, which is a much bigger thing than an embedder (GGUF via
   LLamaSharp; see `docs/builtin-model-runner.md` for why not ONNX Runtime GenAI). Deferred, not blocked:
   判断 already has two working backends, so this buys convenience rather than capability.

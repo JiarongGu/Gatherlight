@@ -200,6 +200,39 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         ?? $"https://github.com/ollama/ollama/releases/download/v{OllamaVersion}/"
            + (OllamaArm64 ? "ollama-windows-arm64.zip" : "ollama-windows-amd64.zip");
 
+    /// <summary>llama.cpp's <c>llama-server</c> — the runtime this app PROVISIONS for local models, chosen
+    /// over Ollama on 2026-08-22 after measuring both. Decision, alternatives and numbers:
+    /// <c>docs/self-managed-llm-runtime.md</c>.
+    ///
+    /// <para><b>Vulkan on x64, and that is the whole reason the download is 34 MB.</b> llama.cpp publishes
+    /// one archive per GPU backend, which looks like it makes US responsible for detecting the household's
+    /// hardware — except Vulkan is vendor-neutral. Measured on the development machine, this one artifact
+    /// enumerates <c>Vulkan0: NVIDIA GeForce RTX 4080 Laptop</c> AND <c>Vulkan1: Intel Arc</c>, and the CPU
+    /// backend rides along (16 <c>ggml-cpu-*.dll</c> micro-arch variants) for a machine with no usable
+    /// driver. CUDA would be 147 MB plus a 391 MB cudart for one vendor; not worth the branching.</para>
+    ///
+    /// <para><b>arm64 gets the CPU build</b> — there is no <c>win-vulkan-arm64</c> asset. It is 12 MB and
+    /// slower, which is the honest state of Windows-on-ARM here rather than something to paper over.</para>
+    ///
+    /// <para><b>Version and BOTH checksums move together.</b> Unlike the claude CLI (which reads its version
+    /// live because a stale one stops talking to the API), a pinned llama-server keeps working: it speaks to
+    /// model files on disk, not to a service that can deprecate it.</para></summary>
+    public const string LlamaCppVersion = "b10549";
+    private const string LlamaCppSha256X64 = "8e7b0e6382a5bcbf57c79cf54b61483e9f7b26561d4413f28095cdaee256207b";
+    private const string LlamaCppSha256Arm64 = "88453b6c9ca186885ac22b3505f5591381068d830ebc622a499af73a3607d8c2";
+    private static string LlamaCppSha256 => OllamaArm64 ? LlamaCppSha256Arm64 : LlamaCppSha256X64;
+    private static string LlamaCppAsset => OllamaArm64
+        ? $"llama-{LlamaCppVersion}-bin-win-cpu-arm64.zip"
+        : $"llama-{LlamaCppVersion}-bin-win-vulkan-x64.zip";
+    private static string LlamaCppUrl =>
+        Override("GATHERLIGHT_LLAMACPP_ZIP_URL")
+        ?? $"https://github.com/ggml-org/llama.cpp/releases/download/{LlamaCppVersion}/{LlamaCppAsset}";
+
+    /// <summary>Where <c>llama-server.exe</c> lands once provisioned. Public so the runtime service that
+    /// launches it and the source that reports its provenance ask the same question of one answer.</summary>
+    public static string ProvisionedLlamaServer(string resourcesPath) =>
+        Path.Combine(resourcesPath, "llama-cpp", "llama-server.exe");
+
     /// <summary>The 内置 embedder's model, pinned by COMMIT rather than by <c>main</c> — a branch ref would
     /// let the bytes change under a checksum that then stops matching, which reads as a corrupt download.
     /// <para>EmbeddingGemma 300M, q4, as exported by the onnx-community mirror. The variant, the tokenizer
@@ -234,6 +267,17 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             ApproxBytes: 32_000_000,
             Url: $"https://nodejs.org/dist/{NodeVersion}/node-{NodeVersion}-win-x64.zip",
             Sha256: NodeSha256),
+        // Listed BEFORE Ollama on purpose: this is the runtime the app installs, and Ollama is now the one
+        // we merely connect to if a household already runs it. The panel's order is the product's answer to
+        // "which of these is ours".
+        new ResourceSpec(
+            Id: "llama-cpp", Name: $"本机模型运行时 · llama.cpp({LlamaCppVersion})",
+            NeededFor: "「记忆检索」里本机模型的运行时:语义的嵌入模型与判断的本机对话模型都跑在它上面"
+                + " —— 自带 Vulkan,NVIDIA / AMD / Intel 通用;仅在启用本机模型时需要",
+            Kind: ResourceKind.Zip, InstallDir: "llama-cpp", ReadyMarker: "llama-server.exe",
+            ApproxBytes: OllamaArm64 ? 12_339_627 : 34_936_498,
+            Url: LlamaCppUrl,
+            Sha256: LlamaCppSha256),
         new ResourceSpec(
             Id: "ollama", Name: $"Ollama 本地模型运行时({OllamaVersion})",
             // Names BOTH consumers: one Ollama serves the 语义 embedder and the 判断 local judge — same

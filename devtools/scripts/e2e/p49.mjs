@@ -175,6 +175,25 @@ try {
       ok('reported installed, and saying what it is for',
         gitRow?.installed === true && /数据仓库/.test(String(gitRow?.neededFor ?? '')),
         JSON.stringify(gitRow));
+
+      // THE RUNTIME THIS APP PROVISIONS FOR LOCAL MODELS. Asserted here rather than downloaded: p49's own
+      // case D exists because a surprise 37 MB is its own defect, and that applies to a suite too. What
+      // matters is that the entry is declared, pinned and cheap — the download itself was verified by hand
+      // (35 MB zip → 98 MB extracted → `--list-devices` enumerating two GPUs).
+      const llama = rows.find((r) => r.id === 'llama-cpp');
+      ok('the catalog carries the llama.cpp runtime entry', !!llama,
+        JSON.stringify(rows.map((r) => r.id)));
+      // Size is the whole argument for choosing it over Ollama — 42× smaller — so a bound is asserted
+      // rather than the exact byte count, which moves with every upstream build.
+      ok('and it is the SMALL one: under 60 MB, where Ollama is over a gigabyte',
+        (llama?.approxBytes ?? 0) > 5_000_000 && (llama?.approxBytes ?? 0) < 60_000_000,
+        String(llama?.approxBytes));
+      // Order is the product's answer to "which of these is ours" — the runtime we install above the one
+      // we merely connect to. It reversed the day llama.cpp was picked, so a silent re-sort would undo it.
+      const ids = rows.map((r) => r.id);
+      ok('and it is listed BEFORE Ollama — the one we install, then the one we detect',
+        ids.indexOf('llama-cpp') >= 0 && ids.indexOf('llama-cpp') < ids.indexOf('ollama'),
+        ids.join(','));
     }
     srv.stop(); srv = undefined;
   }
