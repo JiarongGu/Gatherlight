@@ -385,12 +385,32 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing", which is a lie told on their own data. `recall_facts` therefore reports `ranked:
   graph|fts`, because a graph answer and a fallback answer are otherwise indistinguishable. Proof lives
   in `e2e-p48`, whose restore assertion was confirmed to FAIL with the rebuild removed.
+- **WHERE THE RECALL LAYERS ACTUALLY STAND (2026-08-23) — read this before the bullets below.** Those
+  bullets are a RECORD OF FAILURES, written as each was found, and several correct an earlier one. That is
+  deliberate and worth keeping, but it means reading them in order reconstructs a day of argument rather
+  than the answer. The answer:
+
+  | | what it does | evidence |
+  |---|---|---|
+  | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on |
+  | **判断** | annotates writes with subject handles; judges which candidates answered | **helps multilingual recall: +2 facts in each of cross-, third- and code-switched probes, 0 same-language.** Within-run paired, so trustworthy. Costs 9–17 s per recall |
+  | **语义 (Claude CLI)** | stores other wordings, ≥1 in another language | **capability proven directly** — an English question retrieves a Chinese-only fact. **Aggregate effect NOT measured** and this tool cannot measure it |
+
+  Three rules that produced most of the corrections below, in the order they cost the most time:
+  **(1)** When a measurement says "no effect", check the instrument can EXPRESS the effect. The bench asked
+  in the fact's own language for three sessions, which is the one case the floor already handles.
+  **(2)** Only the WITHIN-RUN paired comparison is trustworthy here — recall reinforces, so a run mutates
+  what it measures. Anything compared across runs is unattributable, and two adjacent runs agreeing shows
+  convergence, not stability.
+  **(3)** A capability question needs one fact, not a corpus. "Does a stored phrasing retrieve its fact?"
+  is settled by writing one fact and querying a wording that appears only in its phrasings. Reaching for a
+  16-fact benchmark to answer it is what made this look unanswerable.
 - **THE BENCH ASKED IN THE FACT'S OWN LANGUAGE, so it could not see what these layers are for**
   (found 2026-08-23, by the owner, after three sessions of me reporting "no measurable benefit").
   `recall-bench` now generates FOUR question sets per fact (`QUESTION_SETS`): same, cross, a third language,
   and code-switched. Its generator used to be told *"use the same language as the fact"* — so every probe
   shared a script with the text it was hunting, and the 公式 floor could always reach it lexically.
-  Meanwhile `ClaudeCliSemanticSource`'s prompt explicitly asks for 另一种语言的常见叫法. **The instrument
+  Meanwhile `ClaudeCliSemanticSource`'s prompt asked for 另一种语言的常见叫法 — as one option among three, which the model never took; see the REPHRASE PROMPT bullet. So at the time of this table the phrasings were same-language anyway, and this measurement is about 判断. **The instrument
   measured everything except the case the feature exists for, and the null result was then read as "the
   feature does nothing".** In a bilingual household a fact written in Chinese and asked in English shares
   NO tokens with the stored text — no trigram, no bm25, nothing for the graph's lexical half — which is
@@ -580,10 +600,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - **Recall quality is THREE INDEPENDENT SWITCHES, and where each one's config lives is decided by WHEN it
   is read.** *Formula* (graph decay + rank fusion + FTS trigram) is the floor: always on, no setup, no
   cost. *Claude CLI* adds annotation per write and verification per recall — and costs a model call for
-  each, measured at 4 for 3 writes + 1 recall. *Local model* adds real semantic vectors from a LOCAL
-  Ollama: disk and local compute, no tokens, and nothing leaves the machine. They are independent rather
-  than tiered because they are complements — verification ACTS ON what was retrieved, embeddings change
-  what is RETRIEVABLE — so a household must be able to drop the token cost without losing local semantics.
+  each, measured at 4 for 3 writes + 1 recall. *Local model* adds real semantic vectors from a runtime this app
+  PROVISIONS — llama.cpp's `llama-server`, or the in-process ONNX embedder (`builtin`). It said
+  "a LOCAL Ollama" until 2026-08-23, months after Ollama stopped being a backend at all: disk and
+  local compute, no tokens, and nothing leaves the machine. They are independent rather
+  than tiered because they are complements — verification acts on what was retrieved (and reaches the ordering
+  indirectly, by narrowing what gets reinforced — see the 判断 bullet), while the semantic layer
+  changes what is RETRIEVABLE AT ALL — so a household must be able to drop the token cost without losing local semantics.
   The enrichment was adopted wholesale with Lyntai 3.0 and spent that per-operation cost for months with
   no way to decline it; the default stays ON (turning it off by default would silently degrade recall on
   upgrade) but declining is now a setting. **It is an `app_config` value read per call, not a
@@ -700,18 +723,25 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   and then to us, and a false claim ("语义 is the only layer you cannot switch on without installing a
   separate program") shipped in the panel, the resource row and the release notes on the strength of it. **Every layer lists every backend**, and one it cannot use carries its reason
   instead of being omitted — omitting it answers "why isn't this an option?" only in the source tree.
-  `openai-compat` is ONE class for the whole OpenAI-compatible family (llama-server · LM Studio · vLLM ·
-  Jan · LocalAI), not one per product, for the same reason `EmbeddingCatalog` is not a gate: a list of
-  products goes stale the moment somebody ships a new runtime. Ollama keeps its own backend because the app can
-  *enumerate* it — a model list comes back from the daemon, where `openai-compat` only knows what an address
-  reports. It does NOT manage it: as of 2026-08-22 the runtime the app provisions is llama.cpp (next
-  bullet). **It is not a backend at all any more** — see the RETIRED ids in the vocabulary bullet: first we
-  stopped installing it, then stopped managing its models, and finally stopped connecting to it, because each
-  step left the app depending on a runtime it would not own. The intermediate state is the instructive one:
-  记忆检索 offered a daemon's models while nothing anywhere could add or remove one, which is a shape with no
-  consistent version. `p49` asserts the absent spec against the present `llama-cpp` one, and `p51` asserts
-  that binding a retired id is REFUSED (400) rather than silently redirected — the fallback would have moved
-  判断 onto account quota nobody chose and switched 语义 off, both invisibly.
+  **`ollama` and `openai-compat` are RETIRED ids — past tense throughout.** This passage used to argue in
+  the present tense that "Ollama keeps its own backend because the app can enumerate it", then that it does
+  not manage it, then that it is not a backend at all — three positions in four lines, written as the
+  decision moved and never reconciled. What holds now: `MemoryBackends.IsRetired` covers both, binding
+  either returns 400, and the layer names what to pick instead.
+  Why each went. **Ollama** was retired in steps, and the middle step is the instructive one: we stopped
+  installing it, then stopped managing its models, and finally stopped connecting to it — leaving, in
+  between, a 记忆检索 that offered a daemon's models while nothing anywhere could add or remove one. Half
+  -managing someone else's runtime has no consistent version. **`openai-compat`** was the one path never
+  tested end to end: every case in `p51` was a denial or an address round-trip against a port with nothing
+  listening, and nothing ever listed models from a live endpoint, embedded through it, or answered a
+  judgement through it.
+  Worth keeping from the old text, because it is a design rule rather than a status: `openai-compat` was
+  ONE class for the whole OpenAI-compatible family (llama-server · LM Studio · vLLM · Jan · LocalAI), not
+  one per product, for the same reason `EmbeddingCatalog` is not a gate — a list of products goes stale the
+  moment somebody ships a new runtime.
+  `p49` asserts the absent spec against the present `llama-cpp` one, and `p51` asserts that binding a
+  retired id is REFUSED (400) rather than silently redirected — the fallback would have moved 判断 onto
+  account quota nobody chose and switched 语义 off, both invisibly.
   The docs previously described this one axis three ways — "the local model", "the judge's *transport*", "the
   embedder" — and named it never, so every discussion of it had to invent a term. **The trap in that
   invention:** 嵌入 already means *embedding* here (`EmbeddingCatalog`, 嵌入模型, the 嵌入 badge), so
