@@ -323,6 +323,33 @@ try {
     `scopes=${JSON.stringify(afterScopes)}`);
 
 
+  // ---- A VERDICT REACHES THE ORDERING ----------------------------------------------------------
+  //
+  // The panel tells the household that facts the judge marks as answering rank higher. A clause with no
+  // enforcement behind it is a defect, so this holds Lyntai to it — and it is a CANARY rather than a test
+  // of our code: if a release stops the verdict reaching the ordering, that sentence silently becomes a
+  // false promise and nothing else would notice.
+  //
+  // ONE CALL, with the baseline taken from inside it. The stub records the numbered notes it was shown,
+  // which is the engine's ranking BEFORE the verdict is applied, then endorses the LAST of them. Four
+  // earlier fixtures were vacuous because they tried to establish a baseline with a SECOND recall — and
+  // recall reinforces what it returns, so the control call moves the very ranking it was meant to measure.
+  try { fs.unlinkSync(path.join(process.cwd(), 'devtools', '_stub-verdict.txt')); } catch {}
+  const verdictPage = (await uc.call('recall_facts', { query: 'harbour teahouse zzjudge', limit: 6 }))
+    .result?.facts ?? [];
+  const shown = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), 'devtools', '_stub-verdict.txt'), 'utf8') || '[]');
+
+  ok('(fixture) the judge saw several candidates and endorsed the last of them',
+    shown.length >= 2 && verdictPage.length >= 2, JSON.stringify({ shown, page: verdictPage.map((f) => f.topic) }));
+
+  ok('THE POINT: the endorsed candidate was NOT top of the pre-verdict ranking',
+    shown[shown.length - 1] !== shown[0], JSON.stringify(shown));
+
+  ok('...and it comes back at the top of the page',
+    verdictPage[0]?.topic === shown[shown.length - 1],
+    JSON.stringify({ endorsed: shown[shown.length - 1], page: verdictPage.map((f) => f.topic) }));
+
   // ---- SUBJECT HANDLES ARE SEARCHABLE ----------------------------------------------------------
   //
   // With 判断 on, every write is annotated and its subjects — stable handles naming what the fact is

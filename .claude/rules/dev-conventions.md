@@ -386,7 +386,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   together — running one arm to completion and then the other compares a cold graph to a warmed one. The
   result held under the clean design, which is what makes it a finding rather than an artefact.
   **Both results stand together**, and that is the whole lesson: the judge CAN move a
-  result, and on this corpus it moved none, because it endorsed what already ranked top. "Did not change
+  result, and on this corpus it moved none, because it endorsed what already ranked top. **That last
+  clause is measured, not assumed** — `recall-bench` reports a `judged` column precisely because "the
+  judge never produced a parseable verdict" and "the judge agreed with the ranking" yield the IDENTICAL
+  table and call for opposite responses. It reads **13/16** with 判断 on and 0/16 with it off, so the
+  verdicts were real and the agreement is the explanation. Anything comparing two recall configurations
+  has to report how often the thing under test actually ran. "Did not change
   the answer here" is a measurement; "cannot change the answer" was an inference, and it was false.
   A workaround was built on that inference — an `AsyncLocal` verdict capture plus an app-side promotion —
   and REVERTED once four successive fixtures all passed with it disabled. Four vacuous tests in a row is

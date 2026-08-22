@@ -225,11 +225,11 @@ const rows = ARMS.map((arm) => {
 // nobody should run twice.
 await post('/api/manage/memory/enrichment', { enabled: was });
 
-console.log('| configuration | top-1 | found | miss | miss rate | MRR | ms/query |');
-console.log('|---|---|---|---|---|---|---|');
+console.log('| configuration | top-1 | found | miss | miss rate | MRR | judged | ms/query |');
+console.log('|---|---|---|---|---|---|---|---|');
 for (const r of rows) {
   console.log(`| ${r.label} | ${r.top1}/${probes.length} | ${r.found}/${probes.length} | ${r.miss}`
-    + ` | ${r.missRate.toFixed(3)} | ${r.mrr.toFixed(3)} | ${r.msPerQuery} |`);
+    + ` | ${r.missRate.toFixed(3)} | ${r.mrr.toFixed(3)} | ${r.judged}/${probes.length} | ${r.msPerQuery} |`);
 }
 
 // THE CHANCE BASELINE, printed before any interpretation — because without it these numbers mislead in a
@@ -264,6 +264,11 @@ if (tooSmall) {
   }
   console.log('  MRR is the least corpus-sensitive column here, and even it needs more queries than this.');
 }
+// `judged` is now a COLUMN, not just a zero-check, and the reason is this session's central mistake.
+// Seeing no difference between the arms, it is tempting to conclude the judge cannot change a result —
+// but "the judge never produced a parseable verdict" and "the judge endorsed what already ranked top"
+// produce the identical table and call for opposite responses. Only this count tells them apart, so it
+// belongs beside the numbers rather than in a footnote that fires at zero.
 if (withJudge.judged === 0) {
   console.log('NOTE: no recall reported a judgement — 判断 may not actually be reaching a model.'
     + ' Check the router lines in the log before believing the row above.');

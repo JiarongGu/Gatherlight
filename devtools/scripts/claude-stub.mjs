@@ -37,6 +37,8 @@ const chunks = [];
 for await (const c of process.stdin) chunks.push(c);
 const prompt = Buffer.concat(chunks).toString('utf8');
 
+const NEWLINE = String.fromCharCode(10);
+const NOTES_HEAD = 'Notes:' + NEWLINE;
 const emit = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
 const sessionId = `stub-${Date.now().toString(36)}`;
 
@@ -192,6 +194,26 @@ if (prompt.includes('{"subjects"')) {
   if (fact.includes('伴侣')) handles.push('pairbond');
   if (fact.includes('旅行证件')) handles.push('paperwork');
   const verdict = JSON.stringify({ subjects: handles });
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
+  done(verdict);
+  process.exit(0);
+}
+
+// Memory VERIFICATION (Lyntai's LlmMemoryVerificationPolicy). It sends a question plus a numbered list of
+// one-line notes, and wants {"relevant":[1,4]} — 1-based indices into that list.
+//
+// GATED ON A MARKER IN THE QUERY. Every other suite depends on this call being unparseable: p48 pins that
+// a failed judge leaves `answered` ABSENT rather than false, which is the asymmetric fail-open, and
+// answering every verification here would silently delete that coverage.
+//
+// It endorses the LAST note and records the whole list. That list is the engine's ranking BEFORE the
+// verdict is applied, which makes it the in-call baseline — the control that took four vacuous fixtures
+// to find. Endorsing the last note therefore endorses a candidate that demonstrably was not on top.
+if (prompt.includes('zzjudge') && prompt.includes(NOTES_HEAD)) {
+  const notes = (prompt.split(NOTES_HEAD).pop() || '').split(NEWLINE).filter((l) => /^\d+\.\s/.test(l));
+  const texts = notes.map((l) => l.replace(/^\d+\.\s*/, ''));
+  fs.writeFileSync(path.join(import.meta.dirname, '..', '_stub-verdict.txt'), JSON.stringify(texts));
+  const verdict = JSON.stringify({ relevant: notes.length > 0 ? [notes.length] : [] });
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
   done(verdict);
   process.exit(0);
