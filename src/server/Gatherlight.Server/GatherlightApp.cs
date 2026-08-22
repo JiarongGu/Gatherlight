@@ -264,13 +264,15 @@ public static class GatherlightApp
                 // model judge which recalled candidates actually ANSWERED the query — on Lyntai's
                 // measured corpus the model-free ranking IS the miss rate (every missed answer was a
                 // candidate ranked below the cut), and a haiku judge roughly halves it. A verdict
-                // does NOT reorder and does NOT filter (VerificationFilters stays false) — measured
-                // 2026-08-22, and this comment claimed the opposite until then. With that flag off a
-                // verdict does exactly two things: it sets `answered`, and it narrows which nodes get
-                // REINFORCED on recall. So its effect on ranking is CUMULATIVE — it shapes what wins
-                // next time — and a single-shot benchmark structurally cannot see it. On this
-                // household's 16-fact corpus one recall was byte-identical with the judge on and off
-                // (MRR 0.646 both ways) at 78 ms against 8,936; Model stays null so the
+                // does not FILTER and does not re-sort (VerificationFilters stays false): it sets
+                // `answered` and narrows which nodes get REINFORCED. That narrowing DOES reach the
+                // ordering — endorsing a fact the engine ranked third brings it to the top of the same
+                // page, measured against a no-verdict baseline. This comment first said a verdict "only
+                // ever reorders"; the correction over-swung and said it never touches the ranking at all.
+                // Neither was right. Separately, on this household's 16 facts recall came out
+                // byte-identical with the judge on and off (MRR 0.646 both ways) at 78 ms against
+                // 8,936 — it endorsed what already ranked top, so nothing moved. It CAN move a result;
+                // here it did not; Model stays null so the
                 // "memory" consumer routing above decides, live-overridable.
                 ;
                 // Both are OPT-OUTABLE now, and until this they were not: adopted wholesale with Lyntai

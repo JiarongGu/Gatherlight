@@ -131,17 +131,21 @@ public sealed class MemoryRecallController : ControllerBase
                     // LIVE: an app_config value read per call. The BINDING below is a startup registration,
                     // so the two kinds of change are reported differently rather than looking alike.
                     on = MemoryEnrichment.IsOn(_appConfig), live = true,
-                    // WHAT IT DOES, not what we hoped it does. This said "明显提升召回质量" — a promise of a
-                    // clear quality gain — until 2026-08-22, when recall-bench measured one recall on this
-                    // household's own facts with the judge on and off and got byte-identical results
-                    // (top-1 10/16, MRR 0.646 both ways) at 78 ms against 8,936. That is not a defect in
-                    // the judge: with VerificationFilters off it never reorders a recall by design. It sets
-                    // the "did anything actually answer this" signal, and it decides which facts count as
-                    // USED — which shapes what ranks well later. So the honest sentence describes a
-                    // cumulative effect and an immediate cost, and lets the household weigh them.
-                    what = "写入事实时标注主题(让讲同一件事的记录彼此关联);检索时判断哪些结果真正回答了问题。"
-                        + "这个判断不会改变本次检索的排序,而是决定哪些事实算「被用到了」,从而影响以后的排名 —— "
-                        + "所以它的好处是累积的,要用一段时间才看得出来,而每次检索的等待是当场就有的。",
+                    // WHAT IT DOES — and this sentence has now been wrong twice, in opposite directions.
+                    // It promised 明显提升召回质量, a clear quality gain, which recall-bench refuted: paired
+                    // and counterbalanced on this household's own facts, top-1 10/16 and MRR 0.646 with the
+                    // judge on AND off, at 78 ms against 8,936. It was then rewritten to say the judgement
+                    // does not change this recall's ordering at all — which is ALSO false, proved in p48 by
+                    // driving a verdict through the stub: endorsing a fact ranked third brought it to the
+                    // top of the page. The verdict reaches the ordering through reinforcement, not through
+                    // a re-sort, but it reaches it.
+                    // Both measurements stand together: the judge CAN move a result, and on this corpus it
+                    // moved nothing, because it endorsed what already ranked top. So the honest sentence
+                    // describes what it does and declines to promise an improvement nobody has measured.
+                    what = "写入事实时标注主题(让讲同一件事的记录彼此关联);检索时判断哪些结果真正回答了问题,"
+                        + "被判断为「答到了」的事实会排得更靠前,也更容易被后续检索记住。"
+                        + "在本机现有的事实上实测过:排序结果与关闭时相同 —— 因为它认可的正是原本就排在前面的那几条。"
+                        + "每次检索都要等它一次,这一点是当场就有的。",
                     // COST IS TWO THINGS, and only one of them was stated. The token cost was here from the
                     // start; the LATENCY was measured later (docs/memory-recall-resharpen.md §3c, on this
                     // household's own facts) at 8.9 s per recall against 37 ms for the 公式 floor — 240×,

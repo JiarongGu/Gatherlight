@@ -370,11 +370,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing", which is a lie told on their own data. `recall_facts` therefore reports `ranked:
   graph|fts`, because a graph answer and a fallback answer are otherwise indistinguishable. Proof lives
   in `e2e-p48`, whose restore assertion was confirmed to FAIL with the rebuild removed.
-- **判断 DOES NOT REORDER A RECALL, and five places said it did** (measured 2026-08-22, `dev.mjs
+- **判断 DOES reorder a recall — I claimed the opposite and was wrong** (measured 2026-08-22, `dev.mjs
   recall-bench` on this household's own 16 facts). With `VerificationFilters` off — which is how we register
   it, deliberately, so a mistaken verdict costs a little learning rather than a lost answer — a verdict does
-  exactly two things: it sets `answered`, and it narrows which nodes are REINFORCED on recall. It never
-  touches the ranking it was shown. So the numbers came out byte-identical with the judge on and off (top-1
+  not FILTER and does not re-sort. It sets `answered` and narrows which nodes are REINFORCED. **That
+  narrowing reaches the ordering anyway**, which the first version of this bullet denied: proved in a
+  fixture by endorsing a fact the engine had ranked third and watching it come back at the top of the page,
+  against a measured no-verdict baseline. Reinforcing only the endorsed facts raises their standing inside
+  the same call. So the numbers came out byte-identical with the judge on and off (top-1
   10/16, found 11/16, MRR 0.646 both ways, `--limit=3`) at **78 ms against 8,936 ms** per query — 114×, and
   essentially all of it a CLI spawn. **The identical MRR is the tell**: "did not help" would have moved the
   third decimal, while "did not run at all on the ordering" is what an exact tie across 16 queries means.
@@ -382,9 +385,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   alternating which goes first, because recall REINFORCES what it returns and LINKS what it returns
   together — running one arm to completion and then the other compares a cold graph to a warmed one. The
   result held under the clean design, which is what makes it a finding rather than an artefact.
-  This is not a defect in the judge and the fix was not to `VerificationFilters` — its benefit is
-  CUMULATIVE (better reinforcement targeting shapes what ranks well next time), which a single-shot
-  benchmark structurally cannot see. The fix was to stop claiming otherwise: the panel promised 明显提升召回
+  **Both results stand together**, and that is the whole lesson: the judge CAN move a
+  result, and on this corpus it moved none, because it endorsed what already ranked top. "Did not change
+  the answer here" is a measurement; "cannot change the answer" was an inference, and it was false.
+  A workaround was built on that inference — an `AsyncLocal` verdict capture plus an app-side promotion —
+  and REVERTED once four successive fixtures all passed with it disabled. Four vacuous tests in a row is
+  not bad luck; it is the code under test doing nothing, and the honest reading was that the engine already
+  did the job. The fix was to stop claiming otherwise: the panel promised 明显提升召回
   质量 to a household who could not have observed it, and the honest sentence names a cumulative gain against
   an immediate wait. **Anything measured here belongs in the panel**, because the household is the one paying
   the 10 s.
