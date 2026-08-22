@@ -378,8 +378,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   fixture by endorsing a fact the engine had ranked third and watching it come back at the top of the page,
   against a measured no-verdict baseline. Reinforcing only the endorsed facts raises their standing inside
   the same call. So the numbers came out byte-identical with the judge on and off (top-1
-  10/16, found 11/16, MRR 0.646 both ways, `--limit=3`) at **78 ms against 8,936 ms** per query — 114×, and
-  essentially all of it a CLI spawn. **The identical MRR is the tell**: "did not help" would have moved the
+  10/16, found 11/16, MRR 0.646 both ways, `--limit=3`) at **68–90 ms against 8,936–16,914 ms** per query
+  across five paired runs — essentially all of it a CLI spawn, and NOT stable: the panel quoted "约 9 秒"
+  for months, which is the fastest of the five and about half the typical wait. Quote a range for anything
+  whose cost is a process spawn; a single number is one machine on one afternoon. **The identical MRR is the tell**: "did not help" would have moved the
   third decimal, while "did not run at all on the ordering" is what an exact tie across 16 queries means.
   The bench is **paired and counterbalanced** for this: each query is asked under both arms back to back,
   alternating which goes first, because recall REINFORCES what it returns and LINKS what it returns
@@ -452,11 +454,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   topic, so the graph found it lexically and the phrasing was never needed. To ask the question at all, the
   lexical term has to match an UNRELATED fact. Topping up also made the two paths OVERLAP, so
   `RecallAsync` takes an `exclude` set: "give me more, but not these" is the top-up's real contract, and it
-  stops a fact found both ways counting twice in `knowledge.hits`. **That counter turns out to have no
+  stops a fact found both ways counting twice in `knowledge.hits`. **That counter turned out to have no
   reader at all** — incremented on every recall, mapped onto `KnowledgeRow`, and used by neither the ranking
-  (confidence then bm25), nor `MemoryTools.Row`, nor the client. So the double-count was a latent wrong
-  number rather than a visible one. Left as a recorded question rather than silently resolved: "read it or
-  stop writing it" is a product decision, and dropping a column the backup carries is not a refactor.
+  (confidence then bm25), nor `MemoryTools.Row`, nor the client, which is why the double-count was a latent
+  wrong number rather than a visible one. **Resolved by giving it a reader** (`used` on each recalled row)
+  rather than by dropping a column the backup carries: it earns its place on rows matched by TEXT or by
+  SUBJECT, which carry no retrievability and so had no usage signal at all. "Read it or stop writing it" —
+  and reading it was the smaller change.
 - **A WORKAROUND FOR A LYNTAI GAP IS RECORDED ON BOTH SIDES, or it becomes a duplicate feature.** We are
   review-only on Lyntai, so our fixes for its gaps live here and the request lives in its `TASKS.md`. Each
   half has to name the other: the code says *this exists because the library does not do it, and here is

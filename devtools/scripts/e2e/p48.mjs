@@ -87,6 +87,13 @@ try {
     facts.map((f) => f.retrievability).join(','));
   // The record of truth still owns provenance — the whole reason recall hydrates from `knowledge`
   // instead of answering out of the index.
+  // The usage counter has a READER now. It was incremented on every recall and consumed by nothing —
+  // not the ranking, not this projection, not the client — which is the "bought and never consulted"
+  // shape one level down from the embedding at SemanticSeedK 0. It earns its place on rows matched by
+  // TEXT or SUBJECT, which carry no retrievability and would otherwise have no usage signal at all.
+  ok('a hit reports how much use the fact actually gets',
+    facts.every((f) => typeof f.used === 'number'),
+    JSON.stringify(facts.map((f) => f.used)));
   ok('a hit still carries its source and confidence from the record of truth',
     facts.every((f) => typeof f.source === 'string' && f.source.length > 0 && typeof f.confidence === 'number'),
     JSON.stringify(facts[0]));

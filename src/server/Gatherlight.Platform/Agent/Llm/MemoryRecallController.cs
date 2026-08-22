@@ -147,8 +147,14 @@ public sealed class MemoryRecallController : ControllerBase
                         + "在本机现有的事实上实测过:排序结果与关闭时相同 —— 因为它认可的正是原本就排在前面的那几条。"
                         + "每次检索都要等它一次,这一点是当场就有的。",
                     // COST IS TWO THINGS, and only one of them was stated. The token cost was here from the
-                    // start; the LATENCY was measured later (docs/memory-recall-resharpen.md §3c, on this
-                    // household's own facts) at 8.9 s per recall against 37 ms for the 公式 floor — 240×,
+                    // start; the LATENCY was measured later, on this household's own facts.
+                    //
+                    // QUOTED AS A RANGE because it is not stable: five paired runs gave 8.9, 14.9, 15.1,
+                    // 16.5 and 16.9 s against a 公式 floor of 68–90 ms. This line said "约 9 秒" — the
+                    // fastest reading of the five, and roughly half the typical wait. A household deciding
+                    // whether to leave 判断 on was being quoted the best case as if it were the case; the
+                    // spread is a CLI process spawn competing with whatever else the machine is doing, so
+                    // a single number here can only ever be one machine on one afternoon.
                     // essentially all of it a CLI process spawn per call. A household deciding whether to
                     // leave 判断 on is entitled to that before they notice recall feeling slow, and it is
                     // OUR number, so unlike the weighting note below it needs no attribution.
@@ -156,10 +162,11 @@ public sealed class MemoryRecallController : ControllerBase
                     // nobody has measured it here and a plausible figure is the thing this panel refuses.
                     cost = boundJudge.Id == MemorySources.DefaultJudgeSource
                         ? "每次记录事实与每次检索各消耗一次 Claude CLI 调用(使用已登录的账号)。"
-                          + "实测每次检索约 9 秒 —— 每次调用都要启动一次 CLI 进程;只用「公式」时是 0.04 秒。"
+                          + "实测每次检索 9–17 秒(五次测量,多数在 15 秒上下)—— 每次调用都要启动一次 CLI 进程;"
+                          + "只用「公式」时是 0.07–0.09 秒。"
                           + "换成本机模型可以省掉这次进程启动。"
                         : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
-                          + "没有 CLI 那条的进程启动开销(那条实测每次检索约 9 秒)。",
+                          + "没有 CLI 那条的进程启动开销(那条实测每次检索 9–17 秒)。",
                     source = boundJudge.Id, model = MemorySources.ResolveJudgeModel(Settings()),
                     activeSource = _judgeWiring.Transport, activeModel = _judgeWiring.Model,
                     groups = judgeGroups,

@@ -15,7 +15,7 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
 
     public string Description =>
         "适合:不想在这台机器上跑模型 —— 没有独立显卡、不想再下载几百 MB,而账号本来就有。" +
-        "每次记录事实、每次检索各消耗一次调用,实测每次检索约 9 秒(本机模型没有这次进程启动)。" +
+        "每次记录事实、每次检索各消耗一次调用,实测每次检索 9–17 秒(本机模型没有这次进程启动)。" +
         "Lyntai 在自己的语料上实测这是漏检最低的一档(0.54 → 0.19)。";
 
     /// <summary>Null = the default client. The CLI provider is already registered.</summary>

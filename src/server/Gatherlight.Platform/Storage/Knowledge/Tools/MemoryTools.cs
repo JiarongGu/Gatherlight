@@ -179,6 +179,13 @@ public sealed class RecallFactsTool : IGatherlightTool
         ["content"] = r.Content,
         ["source"] = r.Source,
         ["confidence"] = Math.Round(r.Confidence, 3),
+        // READ IT OR STOP WRITING IT. `hits` is incremented on every recall and was consumed by nothing —
+        // not the ranking (confidence then bm25), not this projection, not the client. A counter with no
+        // reader is the same "bought and never consulted" shape as the embedding at SemanticSeedK 0, just
+        // cheaper. Emitting it is the smaller of the two honest fixes, and it earns its place: a row
+        // matched by TEXT or by SUBJECT carries no retrievability, so this is the only signal it has for
+        // how much use a fact actually gets.
+        ["used"] = r.Hits,
         ["updatedAt"] = r.UpdatedAt,
     };
 }
