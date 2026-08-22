@@ -159,30 +159,6 @@ public sealed class RecallFactsTool : IGatherlightTool
             }
         }
 
-        // A PHRASING HIT IS STRONG ENOUGH TO TAKE A SLOT; a generic keyword hit is not.
-        //
-        // The top-up above only fills slots the graph left empty — and measured on this household's own
-        // facts, the graph fills the page at every limit, so stored phrasings were never once consulted.
-        // The layer was reachable in principle and inert in practice.
-        //
-        // Letting GENERIC FTS displace the graph's weakest row was tried and rejected on the numbers:
-        // cross-language +1 and code-switched +1, but same-language −1 and MRR down, because a generic hit
-        // means only "some column shares a word". This is the narrower, stronger signal — the fact's own
-        // text does NOT match the query, and a wording the household paid to have written for exactly this
-        // gap DOES. One row at most, taking the place of the graph's LAST (least-certain) row, and only
-        // when the page is already full — so nothing is lost that the caller was not about to drop anyway.
-        if (arr.Count >= limit)
-        {
-            foreach (var row in await _store.ByPhrasingAsync(query, kind, 1, seenIds))
-            {
-                arr.RemoveAt(arr.Count - 1);
-                var o = Row(row);
-                o["matched"] = "phrasing";
-                arr.Add(o);
-                seenIds.Add(row.Id);
-            }
-        }
-
         // `ranked` is not decoration: without it a graph result and a fallback result are
         // indistinguishable, and the first question about a surprising recall is which one ran.
         var result = new JsonObject { ["facts"] = arr, ["ranked"] = ranked };

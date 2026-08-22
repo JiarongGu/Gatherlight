@@ -468,6 +468,20 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   vectors) and now names the JOB instead. `p51` binds each arm and asserts the claim tracks it — including
   that a local arm still SAYS the data stays put, because deleting the promise everywhere would understate
   what running the model yourself actually buys.
+- **CROSS-RUN COMPARISON ON THIS CORPUS IS NOT TRUSTWORTHY, and that invalidates the 语义 aggregate
+  numbers — including the ones I reported.** Recall REINFORCES, so every `recall-bench` run mutates the
+  graph it measures. Two ADJACENT runs came out byte-identical, which looks like stability and is not: it
+  shows the state had converged by then, not that it never moved across the ten runs before. So the
+  "phrasings present vs cleared" comparison — taken many runs apart — cannot attribute its 1-fact
+  differences to phrasings, and the tempting mechanisms do not survive checking: bm25 column weights on
+  `aka` changed NOTHING because `judged/graph` shows almost every query is GRAPH-ranked, and the graph
+  does not use bm25 at all. **The only trustworthy comparison this tool makes is the within-run paired
+  one** (the two 判断 arms), and phrasings cannot be toggled per call — they are durable rows. Measuring
+  this layer's aggregate effect properly needs a fixture whose graph state is reset between arms, which
+  `recall-bench` deliberately does not do (it runs against the household's real memory).
+  What survived: the DIRECT proof, which needed no corpus at all — one fact, one query naming a wording
+  that appears only in its phrasings. Two mechanisms built on the unreliable numbers (a phrasing-only
+  promotion that displaced the graph's weakest row, and bm25 weights) were both REVERTED as unmeasured.
 - **THE REPHRASE PROMPT OFFERED CROSS-LANGUAGE AS AN OPTION, so the model never took it** — and that,
   not the plumbing, is why this layer measured as useless. It said 用词要换(同义词、口语说法、另一种语言的
   常见叫法), three choices, and a model asked for "a different wording" reaches for a synonym every time.

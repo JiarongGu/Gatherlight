@@ -80,22 +80,6 @@ public interface IKnowledgeStore
     /// silently deleting a column the backup carries is not a refactor.</para></param>
     Task<List<KnowledgeRow>> RecallAsync(string query, string? kind, int limit,
         IReadOnlyCollection<long>? exclude = null);
-    /// <summary>Facts matched ONLY on their stored phrasings (<c>knowledge.aka</c>), never on their own
-    /// text.
-    ///
-    /// <para>A separate lookup because it is a separate KIND of evidence. Generic FTS matches topic,
-    /// content, source and aka together, so a hit says only "some column shares a word" — which is a weak
-    /// signal, and promoting on it made same-language recall WORSE when measured. A hit restricted to
-    /// <c>aka</c> means the household's own anticipated wording matched: the fact's text does NOT contain
-    /// the query's words, and something written specifically to bridge that gap does. That is the case the
-    /// 语义 layer is paid for, and it is strong enough to act on.</para>
-    ///
-    /// <para>FTS5 column filter (<c>aka : (…)</c>). Does NOT bump <c>hits</c>: this runs alongside a page
-    /// the caller may already have filled, and counting a probe as a use would inflate the counter that
-    /// exists to say how often a fact actually gets used.</para></summary>
-    Task<List<KnowledgeRow>> ByPhrasingAsync(string query, string? kind, int limit,
-        IReadOnlyCollection<long>? exclude = null);
-
     /// <summary>EMA reinforcement: confirmations pull confidence toward 1, refutations toward 0.</summary>
     Task ReinforceAsync(long id, bool positive);
 
@@ -269,28 +253,6 @@ public sealed class KnowledgeStore : IKnowledgeStore
                 $"UPDATE knowledge SET hits = hits + 1 WHERE id IN ({string.Join(',', ordered.Select(o => o.Item1.Id))})");
         }
         return ordered;
-    }
-
-    public async Task<List<KnowledgeRow>> ByPhrasingAsync(
-        string query, string? kind, int limit, IReadOnlyCollection<long>? exclude = null)
-    {
-        var match = FtsQuery.Build(query);
-        if (match is null) return [];
-        using var conn = _db.Open();
-        var take = limit + (exclude?.Count ?? 0);
-        var raw = await conn.QueryAsync(
-            "SELECT k.id, k.kind, k.topic, k.content, k.source, k.confidence, k.hits, k.created_at, k.updated_at " +
-            "FROM knowledge_fts JOIN knowledge k ON k.id = knowledge_fts.rowid " +
-            "WHERE knowledge_fts MATCH @match AND (@kind IS NULL OR k.kind = @kind) " +
-            "ORDER BY bm25(knowledge_fts) LIMIT @take",
-            // The column filter is what makes this mean "a PHRASING matched" rather than "something did".
-            new { match = $"aka : ({match})", kind, take });
-        return raw
-            .Select(Map)
-            .Select(x => x.Row)
-            .Where(r => exclude is null || !exclude.Contains(r.Id))
-            .Take(limit)
-            .ToList();
     }
 
     public async Task<int> ClearGraphRefsAsync()
