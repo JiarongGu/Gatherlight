@@ -107,9 +107,16 @@ these rows compare directly with the ones already there.
 | llama.cpp **without `-ngl`** (CPU) | embeddinggemma-300M-Q8_0 | 9/10 | 10/10 | 222 |
 
 `llama-server` matches Ollama's retrieval on a smaller quant, and beats it on latency by 3× even with
-the router's proxy hop in the path. It also beats the in-process ONNX arm on BOTH axes — 9/10 against
-8/10, 23 ms against 28 ms — which is the first evidence that the built-in arm is dominated rather than
-merely redundant.
+the router's proxy hop in the path. It also beats the in-process ONNX arm on both of the columns above —
+9/10 against 8/10, 23 ms against 28 ms.
+
+**That is NOT the same as dominating it, and this paragraph said so for a while.** The columns above are
+retrieval and latency; the one that decides between these two is FOOTPRINT, and there the comparison runs
+the other way: 内置 is 222 MB total with no process at all, against a 35 MB runtime **plus** a 334 MB model
+**plus** a child process per model — 369 MB and a daemon. So the built-in arm is the smaller, quieter path
+paying one top-1 hit in ten for it, which is a trade a low-spec household might well want. Comparing
+runtime-to-runtime and calling it dominated was an error, and it had already reached `TASKS.md` as an
+argument for deleting the arm before it was caught.
 
 ### 判断, on a real chat model
 
@@ -159,6 +166,25 @@ is 23 ms. That is the third time in two days that a cold-versus-warm confusion p
 plausible-and-wrong figure in this area (the others: the `/embed` endpoint's per-call model load, and
 "21× faster" comparing warm ONNX against cold Ollama). When a latency surprises you here, check what was
 loaded before believing it.
+
+## A trap for anyone debugging this: Ollama's worker is ALSO called `llama-server.exe`
+
+Ollama runs llama.cpp internally, so a machine with both has two unrelated processes of that name:
+
+```
+%LOCALAPPDATA%\Programs\Ollama\lib\ollama\llama-server.exe   <- Ollama's own worker
+{data}\state\resources\llama-cpp\llama-server.exe            <- ours
+```
+
+**So never match this process by name.** Found the hard way during development: repeated
+`Get-Process llama-server | Stop-Process -Force` cleanups were silently terminating Ollama's model
+workers, forcing it to reload them — for a whole session, while looking like tidy-up. The product itself
+does not have this bug and must not acquire it: `LlamaServerRuntime` keeps the `Process` handle it started
+and kills THAT (`Dispose`), and nothing in the codebase calls `GetProcessesByName`. If a diagnostic ever
+needs to find our router, match the executable PATH or the port — never the image name.
+
+Telling them apart at a glance: ours listens on a port derived from the data folder (11435 + hash, 64
+wide) and is launched with `--models-dir`; Ollama's is launched with `--model <blob>` on a port it chose.
 
 ## What it costs — state these before starting
 
