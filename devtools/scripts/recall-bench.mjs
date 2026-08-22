@@ -190,7 +190,7 @@ const ARMS = [
   { key: 'off', label: '公式 only (判断 off)', enabled: false },
   { key: 'on', label: '公式 + 判断', enabled: true },
 ];
-const acc = Object.fromEntries(ARMS.map((a) => [a.key, { top1: 0, found: 0, rr: 0, ms: 0, judged: 0 }]));
+const acc = Object.fromEntries(ARMS.map((a) => [a.key, { top1: 0, found: 0, rr: 0, ms: 0, judged: 0, graph: 0 }]));
 
 for (const [i, p] of probes.entries()) {
   const order = i % 2 === 0 ? ARMS : [...ARMS].reverse();
@@ -205,6 +205,12 @@ for (const [i, p] of probes.entries()) {
     a.ms += ms;
     if (pos === 0) a.top1++;
     if (pos >= 0) { a.found++; a.rr += 1 / (pos + 1); }
+    // `answered` rides ONLY on a graph result — MemoryTools suppresses it on the FTS fallback, because
+    // there the judged candidates are not the facts being shown. So the denominator for "did the judge
+    // run" is the graph-ranked queries, NOT every query: counting against all of them silently reports a
+    // query the graph never answered as a query the judge failed on. Those call for opposite responses,
+    // which is the same conflation this column was added to END.
+    if (res.ranked === 'graph') a.graph++;
     if (res.answered !== undefined && res.answered !== null) a.judged++;
   }
 }
@@ -218,6 +224,7 @@ const rows = ARMS.map((arm) => {
     missRate: (n - a.found) / n,
     mrr: a.rr / n,
     judged: a.judged,
+    graph: a.graph,
     msPerQuery: Math.round(a.ms / n),
   };
 });
@@ -225,11 +232,11 @@ const rows = ARMS.map((arm) => {
 // nobody should run twice.
 await post('/api/manage/memory/enrichment', { enabled: was });
 
-console.log('| configuration | top-1 | found | miss | miss rate | MRR | judged | ms/query |');
+console.log('| configuration | top-1 | found | miss | miss rate | MRR | judged/graph | ms/query |');
 console.log('|---|---|---|---|---|---|---|---|');
 for (const r of rows) {
   console.log(`| ${r.label} | ${r.top1}/${probes.length} | ${r.found}/${probes.length} | ${r.miss}`
-    + ` | ${r.missRate.toFixed(3)} | ${r.mrr.toFixed(3)} | ${r.judged}/${probes.length} | ${r.msPerQuery} |`);
+    + ` | ${r.missRate.toFixed(3)} | ${r.mrr.toFixed(3)} | ${r.judged}/${r.graph} | ${r.msPerQuery} |`);
 }
 
 // THE CHANCE BASELINE, printed before any interpretation — because without it these numbers mislead in a

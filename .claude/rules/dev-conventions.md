@@ -389,9 +389,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   result, and on this corpus it moved none, because it endorsed what already ranked top. **That last
   clause is measured, not assumed** — `recall-bench` reports a `judged` column precisely because "the
   judge never produced a parseable verdict" and "the judge agreed with the ranking" yield the IDENTICAL
-  table and call for opposite responses. It reads **13/16** with 判断 on and 0/16 with it off, so the
+  table and call for opposite responses. It reads **13/13** with 判断 on and 0/13 with it off, so the
   verdicts were real and the agreement is the explanation. Anything comparing two recall configurations
-  has to report how often the thing under test actually ran. "Did not change
+  has to report how often the thing under test actually ran.
+  **The DENOMINATOR is the graph-ranked queries, and getting that wrong invented a defect.** The column
+  first counted against all 16 and read 13/16 — which looks like a judge failing 19% of the time, and sent
+  me into the logs hunting one that was not there. `answered` rides only on a graph result (`MemoryTools`
+  suppresses it on the FTS fallback, where the judged candidates are not the facts being shown), so the
+  three had no verdict to report rather than a verdict that failed. Those call for opposite responses —
+  the exact conflation this column exists to end, reproduced one level down in its own arithmetic. "Did not change
   the answer here" is a measurement; "cannot change the answer" was an inference, and it was false.
   A workaround was built on that inference — an `AsyncLocal` verdict capture plus an app-side promotion —
   and REVERTED once four successive fixtures all passed with it disabled. Four vacuous tests in a row is
