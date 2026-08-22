@@ -55,8 +55,16 @@ public sealed class ClaudeCliSemanticSource : IMemorySemanticSource
         + "之后换个问法也能命中。花费在写入那一次调用上;检索时不额外调用,也不变慢。"
         + "适合:这台机器跑不了或不想跑模型 —— 没有独立显卡、显卡要留给别的事,或者不想下载几百 MB;"
         + "也适合已经在用 Claude 做「判断」、不想再多一个常驻服务的情况。"
+        // NAMES the better option instead of gesturing at it. "不适合:能跑本机模型的时候" left the household
+        // to work out what that meant — and the one that needs no separate program was filed under a heading
+        // called「llama.cpp」and labelled 内置, a word this picker was simultaneously using for "switch the
+        // layer off". Someone on the Claude CLI reading that could reasonably conclude real vectors required
+        // installing and running another program. They do not: 内置 is 222 MB of weights and runs in this
+        // process. Saying so is the difference between an option that exists and one that can be found.
         + "不适合:能跑本机模型的时候。向量对「没人预料过的问法」更强,而这一条只覆盖改写时想到的说法 —— "
-        + "同一个问题,向量可能命中而它可能漏。事实很多时,写入的调用次数也是要算的一笔。";
+        + "同一个问题,向量可能命中而它可能漏。事实很多时,写入的调用次数也是要算的一笔。"
+        + "想要真正的向量、又不想另外装或启动一个程序:选「本机模型 · 内置」—— 222 MB 权重,直接跑在本应用进程里,"
+        + "「判断」仍然可以留在 Claude。";
 
     public bool NeedsEndpoint => false;
     public string? Endpoint(MemorySourceSettings s) => null;

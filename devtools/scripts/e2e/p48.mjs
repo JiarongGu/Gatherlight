@@ -191,6 +191,36 @@ try {
   }
   akaDb.close();
 
+  // BACKFILL: binding the arm must reach facts that ALREADY EXISTED.
+  //
+  // The harbour facts were written at the top of this suite, before 语义 was bound to anything, so they
+  // carry no phrasings. Rebuilding is the only control the product offers for that — and for this arm it
+  // used to be a silent no-op: ReindexSemanticAsync guarded on `_semantic`, which is non-null only when an
+  // EMBEDDER was registered, and the CLI arm registers nothing by design. So the endpoint accepted, the
+  // detached run "finished", and an existing knowledge base could never gain phrasings. The layer applied
+  // to future writes only, which is not what binding it says.
+  const akaOfTopic = (t) => {
+    const db = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'));
+    try {
+      return db.prepare("SELECT COALESCE(aka,'') AS aka FROM knowledge WHERE topic = ?").get(t)?.aka ?? '';
+    } finally { db.close(); }
+  };
+  ok('(fixture) a fact written BEFORE the binding has no phrasings',
+    akaOfTopic('harbour teahouse listing') === '', JSON.stringify(akaOfTopic('harbour teahouse listing')));
+
+  const reindex = await fetch(`${base}/api/manage/memory/layer/semantic/reindex`, { method: 'POST' });
+  ok('a rebuild is accepted for the rephrasing arm', reindex.status === 202 || reindex.status === 200,
+    String(reindex.status));
+
+  let backfilled = '';
+  for (let i = 0; i < 60; i++) {
+    backfilled = akaOfTopic('harbour teahouse listing');
+    if (backfilled.length > 0) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  ok('THE POINT: rebuilding reaches the facts that predate the binding',
+    backfilled.length > 0, JSON.stringify(backfilled));
+
   // STORED IS NOT FOUND. Everything above proves phrasings were WRITTEN; none of it proves they can be
   // reached, which is the only thing this layer is for. `zzfishpref` appears in no fact's text — only in
   // the phrasings — so a hit can have come from nowhere else.

@@ -68,7 +68,12 @@ public interface IFactIndex
     /// ranking this exists to build.</para></summary>
     Task<int> RebuildAsync(CancellationToken ct = default);
 
-    /// <summary>Re-embed every fact for SEMANTIC recall. Two occasions need it and neither is served by
+    /// <summary>Re-derive every fact's SEMANTIC material. "Embed" for an embedder arm, "rephrase" for the
+    /// Claude CLI one — both re-remember the fact, which is why one method serves both. Guarding this on
+    /// "is an embedder registered" made it a silent no-op for the CLI arm, whose whole effect is at write
+    /// time: binding it then reached future writes only, and an existing knowledge base could never gain
+    /// phrasings from the one control offered for exactly that.
+    /// <para>Two occasions need it and neither is served by
     /// <see cref="SyncAsync"/>, which back-fills only rows with an empty ref and so would embed nothing:
     /// turning semantic recall on over an already-populated graph, and CHANGING the embedding model.
     /// <para>The model change is the sharp one: vectors keep the width of the model that wrote them, and
@@ -76,8 +81,8 @@ public interface IFactIndex
     /// throwing. So a switched model without this leaves recall silently, permanently empty, looking
     /// exactly like a household that has no facts.</para>
     /// <para><b>This REBUILDS</b> — an entry is embedded as it is written and there is no re-embed door,
-    /// so decay positions and links reset with it. Returns how many facts were indexed; 0 when semantic
-    /// recall is not configured.</para>
+    /// so decay positions and links reset with it. Returns how many facts were indexed; 0 when NEITHER a
+    /// semantic backend nor the rephrasing arm is bound — there is nothing to re-derive.</para>
     /// <para><paramref name="progress"/> reports (done, total) as each fact lands. It exists because this
     /// is MINUTES of work on a real corpus — annotation is a model call per fact — and an operation that
     /// long with no signal is indistinguishable from one that hung.</para></summary>
@@ -454,7 +459,22 @@ public sealed class FactIndex : IFactIndex
     public async Task<int> ReindexSemanticAsync(CancellationToken ct = default,
         IProgress<(int Done, int Total)>? progress = null)
     {
-        if (_semantic is null) return 0;
+        // TWO ARMS NEED THIS, and guarding on `_semantic` alone silently served only one of them.
+        //
+        // `_semantic` is non-null exactly when an EMBEDDER was registered at startup. The Claude CLI arm
+        // registers nothing by design — its work is at write time — so for a household bound to it this
+        // method returned 0 and did nothing at all. The effect was that binding that arm applied only to
+        // facts written AFTERWARDS: an existing knowledge base could never gain phrasings, the one control
+        // offered for that reported success having done nothing, and the layer looked like it had no
+        // effect. Same shape as everything else in this area — a capability that appears available and
+        // quietly is not.
+        //
+        // Both arms re-derive the same way (re-remember every fact), so the question is not "is there an
+        // embedder" but "is anything bound that a rewrite would re-derive".
+        var rephrasing = _llm is not null
+            && string.Equals(_config?.Current.Memory.SemanticSource,
+                Agent.Llm.Sources.MemoryBackends.ClaudeCli, StringComparison.OrdinalIgnoreCase);
+        if (_semantic is null && !rephrasing) return 0;
         // The vectors a recall reads belong to the GRAPH's entries, written as each one was remembered —
         // so re-embedding means re-remembering, which is exactly RebuildAsync. There is no cheaper door:
         // the engine embeds on write and offers no "re-embed what you already hold".

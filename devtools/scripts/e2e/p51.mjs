@@ -116,7 +116,7 @@ try {
     // An empty group is omitted rather than rendered blank — EXCEPT `none`, whose emptiness IS its
     // meaning: it offers no backend because choosing it is choosing not to have one. Every other heading
     // with nothing under it is a defect.
-    ok(`and no ${name} group is empty except 内置`,
+    ok(`and no ${name} group is empty except the no-model one`,
       gs.every((g) => (g.sources ?? []).length > 0 || g.id === 'none'),
       JSON.stringify(gs.map((g) => [g.id, (g.sources ?? []).length])));
   }
@@ -132,10 +132,29 @@ try {
     ok('判断 can use the managed heading THROUGH llama.cpp even though ONNX cannot judge',
       g(judge, 'managed').includes('llama-cpp') && g(judge, 'managed').includes('builtin'),
       JSON.stringify(g(judge, 'managed')));
-    // And 内置 is the empty one, on both layers: no backend, because choosing it is choosing no model.
-    ok('内置 offers no backend at all — on both layers',
+    // And the no-model group is the empty one, on both layers: no backend, because choosing it is
+    // choosing no model.
+    ok('the no-model group offers no backend at all — on both layers',
       g(judge, 'none').length === 0 && g(semantic, 'none').length === 0,
       JSON.stringify({ judge: g(judge, 'none'), semantic: g(semantic, 'none') }));
+
+    // ONE WORD, ONE MEANING. 内置 is the id and the 资源 label of the ONNX embedder that runs INSIDE this
+    // process. It was ALSO the picker's name for the no-model group, so the same word meant "a real model,
+    // hosted by us" in one panel and "switch this layer off" in another. That lands hardest on exactly the
+    // household this matters most to: someone on the Claude CLI, for whom the in-process embedder is the
+    // only way to get real vectors without running a separate program, being told 内置 means turning the
+    // layer off.
+    const nameOf = (l, id) => (l.groups ?? []).find((x) => x.id === id)?.name ?? '';
+    ok('the no-model group is NOT called 内置 — that word belongs to the in-process backend',
+      !nameOf(semantic, 'none').includes('内置') && !nameOf(judge, 'none').includes('内置'),
+      JSON.stringify({ judge: nameOf(judge, 'none'), semantic: nameOf(semantic, 'none') }));
+
+    // And the download group is not named after ONE of its two runtimes. llama.cpp is a resident service;
+    // the other member is ONNX in our own process and uses no part of it. Naming the heading "llama.cpp"
+    // told a household they had to download and run llama.cpp to get the thing that needs neither.
+    ok('the managed group is named for what it COSTS, not after one of its runtimes',
+      nameOf(semantic, 'managed').length > 0 && !nameOf(semantic, 'managed').includes('llama'),
+      JSON.stringify(nameOf(semantic, 'managed')));
   }
 
   // ---- B · the switch is LIVE, both ways, in one lifetime ---------------------------------------
@@ -795,7 +814,7 @@ try {
   // removal pass every check while a capability quietly vanished.
   const machine = (judge.groups ?? []).find((g) => g.id === 'machine');
   const byoc = (machine?.sources ?? []).find((x) => x.id === 'openai-compat');
-  // 内置 is a group in the picker with zero backends: it exists so that turning a layer off is an answer
+  // The no-model group has zero backends: it exists so that turning a layer off is an answer
   // to "where does its model come from" rather than a separate button somewhere else, which is what made
   // having a model look mandatory.
   const none = (judge.groups ?? []).find((g) => g.id === 'none');

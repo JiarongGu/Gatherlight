@@ -531,7 +531,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   quota and switching 语义 off. A **GROUP** is one of the three answers the picker offers — `cli` ·
   `managed` · `none` — keyed on what it COSTS, and `none` deliberately holds no backends: choosing it
   turns the layer off, which is a real answer to "where does the model come from" and used to be a
-  separate button. A **MODEL** is
+  separate button. **Their display names are 本机模型 and 不用模型, and both were wrong before 2026-08-22
+  in ways that cost a household a real option.** `managed` was called **llama.cpp** — after ONE of its two
+  runtimes; the other is an ONNX session in our own process using no part of llama.cpp. `none` was called
+  **内置**, which is simultaneously the id and 资源 label of that in-process embedder. So the picker told a
+  Claude-CLI household that real vectors meant downloading and running another program (wrong: 内置 is
+  222 MB of weights in this process), while the word for that very thing meant "switch the layer off" one
+  panel over. A group is named for what it COSTS, never after a member; and one word gets one meaning.
+  `p51` pins both. A **MODEL** is
   what a backend serves. An **ORIGIN** is *whose runtime it is* — `bundled` (in our process) · `app` (we
   downloaded and start it) · `household` (they run it, we only connect) — `RuntimeOrigin`, resolved PER
   INSTALL because for `claude-cli` the app provisions a copy AND a household may have their own, so only
@@ -631,6 +638,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   cleanly; the probe that caught it drives a real write + recall and reads which backend answered. An
   EMBEDDING model is refused as a judge by name — installed, well-formed, and unable to answer a judgement,
   which fail-open would turn into recall that quietly never improves.
+- **A REBUILD SERVES BOTH 语义 ARMS, and guarding it on `_semantic` served only one.** `_semantic` is
+  non-null exactly when an EMBEDDER was registered at startup; the Claude CLI rephrasing arm registers
+  nothing by design, so for a household bound to it `ReindexSemanticAsync` returned 0 and did nothing —
+  while the endpoint still accepted and the detached run still "finished". The effect: binding that arm
+  reached FUTURE writes only, an existing knowledge base could never gain phrasings, and the single control
+  offered for exactly that reported success having done nothing. Both arms re-derive the same way (re-remember
+  every fact, which runs `ExpandAkaAsync`), so the question is not "is there an embedder" but "is anything
+  bound that a rewrite would re-derive". Proof lives in `e2e-p48`, which writes facts BEFORE binding the arm
+  and was confirmed to FAIL against the old guard — the phrasings stay empty. Note this also makes the
+  advice "bind it, then rebuild" true; it was not, and the panel gave no sign.
 - **A rebuild runs detached, and the console reports COVERAGE rather than a run history.** `ReindexSemanticAsync`
   re-remembers every fact (a model call each with enrichment on), so running it inside the POST gave a
   greyed-out button for minutes — indistinguishable from a hang, over a request the browser may abandon while

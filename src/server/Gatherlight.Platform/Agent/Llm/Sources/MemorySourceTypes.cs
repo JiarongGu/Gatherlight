@@ -171,19 +171,23 @@ public static class MemoryGroups
     /// host in-process. Both are ours to install, start and delete; both cost disk.</summary>
     public const string Managed = "managed";
 
-    /// <summary>NO MODEL. Choosing it turns the layer off and leaves 公式 doing the work — which is the only
-    /// thing here that genuinely needs nothing installed, and therefore the only thing entitled to be
-    /// called 内置.
+    /// <summary>NO MODEL. Choosing it turns the layer off and leaves 公式 doing the work.
     ///
     /// <para><b>Why this is a group and not just an absence.</b> "Off" was previously reachable only by a
     /// separate 停用 button, so the picker implied a model was mandatory and the way out lived elsewhere. It
     /// is a real answer to "where does this layer's model come from" — nowhere — so it belongs in the same
     /// row as the other answers, and it holds no backends because there is nothing to configure.</para>
     ///
-    /// <para><b>And the name was a false claim before this.</b> 内置 used to label the llama.cpp group, whose
-    /// own description said the app DOWNLOADS the runtime and the models: 35 MB plus 222 MB–2.5 GB. Nothing
-    /// about that is built in. The word moved to the option that costs nothing, and the group that downloads
-    /// is now named after what it downloads.</para></summary>
+    /// <para><b>The name has now been wrong TWICE, in opposite directions, and both are worth keeping.</b>
+    /// First 内置 labelled the download group, whose own description said the app fetches a runtime and
+    /// models — 35 MB plus 222 MB–2.5 GB, nothing built-in about it. Moving the word here fixed that and
+    /// created a second collision immediately: <c>builtin</c> · 内置 is the id and the 资源 label of the
+    /// ONNX embedder that runs INSIDE this process, so one word then meant "a real model, hosted by us"
+    /// in one panel and "no model at all" in another. For a household on the Claude CLI that is the worst
+    /// possible confusion, because the in-process embedder is exactly the option that gives them real
+    /// vectors without a separate program — and the picker was telling them 内置 meant switching the layer
+    /// off. So this group is 不用模型, which is what it is, and 内置 belongs to the thing that is built in.
+    /// The rule the first fix stated still holds; it was applied to one name and not the other.</para></summary>
     public const string None = "none";
 
     /// <summary>Fixed display order, cheapest-first in what the household must already have: an account they
@@ -202,8 +206,16 @@ public static class MemoryGroups
     public static string Name(string group) => group switch
     {
         Cli => "Claude CLI",
-        Managed => "llama.cpp",
-        None => "内置",
+        // NOT "llama.cpp". The group holds TWO runtimes and llama.cpp is only one of them — the other is an
+        // ONNX session inside our own process, which uses no part of llama.cpp. Naming a group after one
+        // member made the in-process embedder read as "you must download and run llama.cpp", which is the
+        // opposite of what it is, and hid the ONE option that gives a Claude-CLI household real vectors
+        // without a separate program. A group is keyed on what it COSTS; both members cost the same thing,
+        // so the name says that instead of naming a runtime.
+        Managed => "本机模型",
+        // NOT 内置 either — see the note on `None`. 内置 is the in-process ONNX backend's name in 资源, and
+        // reusing it here for "no model at all" gave one word two opposite meanings across two panels.
+        None => "不用模型",
         _ => group,
     };
 
@@ -213,8 +225,9 @@ public static class MemoryGroups
     {
         Cli => "用已登录的 Claude 账号:不在这台机器上跑模型,不用下载任何东西 —— "
              + "代价是消耗账号额度,每次调用都要启动一次 CLI。",
-        Managed => "由应用下载、启动和管理的模型:llama.cpp 跑一个常驻服务,或直接在应用进程内跑 ONNX。"
-             + "模型在「资源 · Resources」面板下载,都实测排过名 —— 占磁盘,但不消耗账号额度,也不用填地址。",
+        Managed => "由应用下载、启动和管理的模型,两种跑法:llama.cpp 起一个常驻服务,或者「内置」—— "
+             + "直接在应用进程内跑 ONNX,不额外启动任何程序。模型在「资源 · Resources」面板下载,都实测排过名 —— "
+             + "占磁盘,但不消耗账号额度,也不用填地址。",
         None => "不用模型:这一层关掉,检索只靠「公式」(图衰减 + 排名融合 + 三元组全文检索)。"
              + "不下载任何东西、不消耗额度、不占显存 —— 也就没有这一层带来的提升。",
         _ => "",
