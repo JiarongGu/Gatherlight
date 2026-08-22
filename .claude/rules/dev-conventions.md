@@ -345,7 +345,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   came back looking intact with the household's own pages gone, and `SiteManifestStep` writes a fresh
   default, so the app came up working and merely forgot what it was allowed to do. When a new record
   directory is added to the site, add it here — and assert it in `p47` by NAME, never by the
-  template-seeded file that would come back anyway.
+  template-seeded file that would come back anyway. **`uploads/` was in the list and asserted by nothing**
+  until 2026-08-23: dropping it from `Folders` left every check green while every file the household had
+  attached stopped travelling. The rule already existed and `ui/` and `site.json` were added under it after
+  they were lost — the directory ALREADY in the list was never retro-fitted, which is how a rule written
+  after an incident covers the next case and not the previous one. Confirmed by dropping it: `p47` fails.
 - **The backup carries `.git`, so LOOSE OBJECTS are a backup-size problem.** Git writes every new
   object loose — one zlib file each — and only packs when told; a loose object is already-compressed
   data a zip cannot squeeze. A restore writes a whole tree that way, so the objects ride into the NEXT
