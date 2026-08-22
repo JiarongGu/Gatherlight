@@ -27,6 +27,7 @@
 //   H  语义 refuses a non-embedder without waiting out a cold model load
 import fs from 'node:fs';
 import path from 'node:path';
+import http from 'node:http';
 import { dataDirFor, makeReporter, startServer, until, makeClient, claudeStubCmd } from './_e2e-common.mjs';
 
 const { ok, fail, done } = makeReporter('p51');
@@ -936,6 +937,36 @@ try {
     ok('and the running backend agrees, so no restart is falsely owed',
       old.activeSource === 'claude-cli' && old.activeModel === 'haiku',
       JSON.stringify({ active: old.activeSource, activeModel: old.activeModel }));
+  // ---- AN ALREADY-SERVING ROUTER IS ADOPTED, NOT DUPLICATED ----------------------------------
+  //
+  // A forced kill orphans a router; the next start must ADOPT it rather than spawn a second one on the
+  // same port (measured by hand as two processes across a restart, not four). It also covers a household
+  // running their own llama-server on that port — same rule, same reason.
+  //
+  // Recorded as needing a real binary, which it does not: EnsureServingAsync probes `Serving` BEFORE it
+  // checks the executable exists, so with NOTHING installed a start still succeeds when the port already
+  // answers. That ordering IS the adoption, and it is the whole thing worth pinning — swap those two
+  // lines and every start on a machine with an orphan spawns a duplicate.
+  {
+    const u = new URL(String(llamaCold.baseUrl));
+    let asked = 0;
+    const fake = http.createServer((req, res) => {
+      asked++;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'zzalready-running' }] }));
+    });
+    await new Promise((r) => fake.listen(Number(u.port), '127.0.0.1', r));
+    try {
+      const started = await post('/api/manage/models/llama/start');
+      ok('THE POINT: a port that already answers is adopted, with no binary installed at all',
+        started.status === 200, `${started.status} ${JSON.stringify(started.body)}`);
+      ok('…and it really probed the running router rather than assuming',
+        asked > 0, `GET /v1/models seen ${asked} time(s)`);
+    } finally {
+      await new Promise((r) => fake.close(r));
+    }
+  }
+
   // ---- THE LLAMA LAUNCH CONTRACT IS WRITTEN DOWN, NOT ASSUMED --------------------------------
   //
   // `--n-gpu-layers` is the one setting whose absence is invisible: llama-server silently runs on the

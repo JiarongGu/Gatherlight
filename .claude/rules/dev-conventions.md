@@ -658,7 +658,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   household's own llama-server is already reachable as `openai-compat` with an address they typed, and
   collapsing the two is precisely the ambiguity that hid the Ollama provisioning for months. `Dispose` kills
   the tree on graceful shutdown; a forced kill orphans a router, which the next start ADOPTS rather than
-  duplicates (measured — two processes across a restart, not four).
+  duplicates (measured — two processes across a restart, not four). **The adoption is `EnsureServingAsync`
+  probing `Serving` BEFORE it checks the executable exists**, and `p51` pins that ordering: with nothing
+  installed at all, a start against a port that already answers succeeds. Swap those two lines and every
+  start on a machine with an orphan spawns a duplicate — confirmed, the test fails with the
+  not-downloaded refusal. It needs no real binary, which is why the gap was worth re-examining rather
+  than recording.
 - **A recall layer's BACKEND is a SOURCE, and a source serves a layer by existing.** One interface per layer
   (`Agent/Llm/Sources`: `IMemoryJudgeSource`, `IMemorySemanticSource`, sharing `IMemorySource`), one class per
   backend, a **static catalog** (`MemorySources`) — never a predicate over capability strings. That earlier
