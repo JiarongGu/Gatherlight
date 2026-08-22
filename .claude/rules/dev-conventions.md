@@ -406,6 +406,24 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   质量 to a household who could not have observed it, and the honest sentence names a cumulative gain against
   an immediate wait. **Anything measured here belongs in the panel**, because the household is the one paying
   the 10 s.
+- **语义 · Claude CLI MEASURED, and it changed nothing on this corpus** (2026-08-23, `dev.mjs recall-bench`
+  against the household's own 16 facts, phrasings back-filled onto 13 of them). At `--limit=3`: identical to
+  the no-phrasing run on every column. At `--limit=8`: found 12/16 and MRR 0.654, against 13/16 and 0.664
+  measured before any phrasings existed — no gain, possibly a point of noise the other way. **Two structural
+  reasons, and both matter more than the number.** (1) FTS only TOPS UP: when the graph resolves a full page
+  the top-up never runs, so at a page of 3 with 3 graph hits a phrasing cannot reach the household at all.
+  That is the deliberate "never displace a ranked hit" trade, and its cost is that this arm is inert exactly
+  when the graph is confident and wrong. (2) 16 facts cannot support the found/miss columns — the tool says
+  so itself rather than printing a number to be quoted. What this does NOT license is removing the arm: it
+  is unmeasurable here, not measured useless, and the machine that needs it (no GPU to spare, declining a
+  222 MB download) is not this one. It also cost **~46 s per fact** to back-fill, which is the number a
+  household weighing it should see.
+- **Switching 语义 off does NOT clear what it wrote.** Phrasings live in `knowledge.aka`, which the FTS
+  table indexes unconditionally — so 15 facts were still matching on their stored phrasings after the layer
+  was turned off, and nothing in the product says so or offers to clear them. Turning a layer off stops it
+  producing; it does not retract what it produced. Recorded rather than fixed: the honest options are a
+  cleanup on `/off` or a sentence on the card, and which one is right depends on whether phrasings are
+  understood as the layer's output or as part of the fact.
 - **FTS TOPS THE PAGE UP; it is not only a fallback for an empty one** — and until 2026-08-22 it was, which
   quietly cost the 语义 CLI arm most of its value. Phrasings live in `knowledge.aka`, which is in the FTS
   table and in NO graph node (the graph indexes a fact's CONTENT, which never contained them), while

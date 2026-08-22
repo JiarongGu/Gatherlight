@@ -568,7 +568,15 @@ public sealed class MemoryRecallController : ControllerBase
                 modelChanged, dimensions = probe.Dimensions, proved = probe.What ?? "dimensions",
                 probeMs = probe.Milliseconds,
                 catalogued = EmbeddingCatalog.Find(model) is not null,
-                note = "设置已保存。重启服务后生效,然后请重新建立一次语义索引。",
+                // The note is DERIVED from the same flag the caller is handed, not a fixed sentence
+                // beside it. It read "重启服务后生效" unconditionally while `restartRequired` said false
+                // for the CLI arm — the response contradicting itself in the one field a household
+                // actually reads. That arm registers nothing and is read per write, so telling someone to
+                // restart is both wrong and a reason to distrust the rest of the message.
+                note = source.TakesEffectOnRestart
+                    ? "设置已保存。重启服务后生效,然后请重新建立一次语义索引。"
+                    : "设置已保存,立即生效。现有的事实还没有改写说法 —— 请重新建立一次语义索引,"
+                        + "只补写检索用的说法,不会动图谱已经学到的东西。",
             });
         }
 
