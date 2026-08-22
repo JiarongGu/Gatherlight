@@ -24,6 +24,11 @@ already means *embedding* in this panel and the collision cost a whole design co
 语义 is the layer with **one** backend. 判断 already has two, so a third buys it far less. And the gap 语义
 has is exactly the one 内置 closes: today it needs the household to install Ollama and pull a model before
 the layer can be switched on at all — the only recall layer with a setup prerequisite outside the app.
+**That last clause was wrong** and is corrected in `self-managed-llm-runtime.md`: 资源 had been
+provisioning and starting Ollama since the day before this was written, so the prerequisite was a
+PROCESS, not an install. The reasoning below still holds — 语义 was the layer with one backend, and
+in-process is still the only option with no daemon — but it was argued from a premise that did not
+survive checking.
 
 ### Why ONNX Runtime over the alternatives
 

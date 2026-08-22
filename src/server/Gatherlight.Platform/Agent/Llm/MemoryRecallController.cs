@@ -189,6 +189,11 @@ public sealed class MemoryRecallController : ControllerBase
     /// <para>Takes the shared base rather than each layer's interface, so one helper serves both lists. The
     /// layer-specific members (RejectAsync, ProveAsync) are not needed to DESCRIBE a source — only to bind
     /// one — which is why the split sits where it does.</para></summary>
+    /// <summary>Project a <see cref="RuntimeOrigin"/> for the wire. A named projection rather than an
+    /// inline anonymous object because a DECLINED backend needs one too — it has no source to ask, so the
+    /// two call sites must agree on the shape, and an anonymous type in each would not make them.</summary>
+    private static object Origin(RuntimeOrigin o) => new { kind = o.Kind, text = o.Text };
+
     private static async Task<object[]> SourceViews(
         IEnumerable<IMemorySource> sources, IEnumerable<DeclinedBackend> declined, MemorySourceContext ctx,
         string layer)
@@ -209,6 +214,11 @@ public sealed class MemoryRecallController : ControllerBase
                 // beside the sentence explaining why it was refused.
                 needsEndpoint = s.NeedsEndpoint,
                 endpoint = s.NeedsEndpoint ? RawEndpoint(ctx.Config, layer) : null,
+                // WHOSE runtime this is. Sent for every backend because the answer is the household's
+                // question — "do I have to install something?" — and the panel used to answer it only by
+                // accident, in a failure message. `kind` for styling, `text` for reading; the source writes
+                // the sentence because only it knows whether "the app installs this" describes or promises.
+                origin = Origin(s.Origin(ctx)),
                 models = (await s.ModelsAsync(ctx)).Select(m => new
                 {
                     id = m.Id, name = m.Name, installed = m.Installed, sizeBytes = m.SizeBytes,
@@ -228,6 +238,11 @@ public sealed class MemoryRecallController : ControllerBase
                 id = d.Id, name = d.Name, description = d.Reason, bindable = false,
                 available = false, reason = d.Reason, suggest = (string?)null,
                 needsEndpoint = false, endpoint = (string?)null,
+                // NULL, not a guess. A declined backend has no source to ask, and there is no runtime
+                // behind it to have an origin — inventing one ("应用可以下载并运行") would promise something
+                // that cannot happen, which is the shape of claim this panel exists to refuse. The client
+                // renders nothing rather than a placeholder.
+                origin = (object?)null,
                 models = Enumerable.Empty<object>(),
             }));
         }

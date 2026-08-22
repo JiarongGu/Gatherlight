@@ -48,6 +48,13 @@ public sealed class OllamaJudgeSource : IMemoryJudgeSource
     /// global candidate list, so this is a FALLBACK rather than a re-route — see
     /// <see cref="IMemoryJudgeSource.CandidateProviderIds"/> for the upstream narrowing bug that makes the
     /// global entry necessary at all.</summary>
+    /// <summary>Provisioned or the household's own — decided per install, because both are normal. 资源 has
+    /// installed and started Ollama since 2026-08-21, and the picker calling it 本机 · Ollama without saying
+    /// so is what let a provisioned runtime read as a manual prerequisite.</summary>
+    public RuntimeOrigin Origin(MemorySourceContext ctx) =>
+        RuntimeOriginFrom.Locate(ctx.Ollama.Locate(),
+            Services.OllamaRuntime.ProvisionedExe(ctx.Settings.ResourcesPath), "Ollama");
+
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx) =>
         b.AddOllamaProvider(baseUrl: ctx.Endpoint, id: ProviderId)
          .AddLlmClient(ClientId, c => c.UseProviders(ProviderId));

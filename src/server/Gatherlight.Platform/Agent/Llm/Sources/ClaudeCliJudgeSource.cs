@@ -31,6 +31,14 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
     /// question — a signed-out CLI is a real problem, but not one that should stop the app coming up.</summary>
     public bool IsConfigured(MemorySourceSettings s) => true;
 
+    /// <summary>Provisioned or the household's own. 资源 fetches the CLI too — with the live vendor version
+    /// and checksum — so this arm is app-managed on an install that took that offer, and the household's on
+    /// a machine that already had one. Installed is still not signed in; that is StatusAsync's job.</summary>
+    public RuntimeOrigin Origin(MemorySourceContext ctx) =>
+        RuntimeOriginFrom.Locate(ctx.Claude.Locate(),
+            Hosting.Resources.Services.ResourceProvisioner.ProvisionedClaude(ctx.Settings.ResourcesPath),
+            "Claude CLI");
+
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx) { }
 
     /// <summary>INSTALLED IS NOT USABLE. A downloaded CLI is not a signed-in one, and <c>claude auth login</c>

@@ -26,6 +26,10 @@ export interface BackendView {
    *  The RAW value comes back even when it was refused, so the box can show the typo the reason complains
    *  about instead of silently emptying itself. */
   needsEndpoint: boolean; endpoint: string | null;
+  /** WHOSE runtime this is on THIS install. Null on a declined backend — there is no runtime behind it, so
+   *  the server sends nothing rather than a plausible label, and this renders nothing rather than a
+   *  placeholder. `kind` styles it, `text` is the sentence the household reads. */
+  origin: { kind: 'bundled' | 'app' | 'household'; text: string } | null;
   models: BackendModel[];
 }
 
@@ -128,6 +132,12 @@ export function BackendPicker(
       )}
       {!source.bindable && <span className="mem-src-na">这一层用不了</span>}
 
+      {/* WHOSE runtime, above the description. This is the question a household actually has — "do I have
+          to install something?" — and the panel used to answer it only by accident, in a failure message:
+          the provisioned Ollama was labelled 本机 · Ollama, which reads as theirs. */}
+      {source.origin && (
+        <div className={`mem-origin ${source.origin.kind}`}>{source.origin.text}</div>
+      )}
       {source.bindable && <div className="mem-fine">{source.description}</div>}
       {/* WHY it cannot be used — outside the <select>, which is the whole point. An earlier version put
           this sentence in an <option>, so it could only render when there was something to select: the one

@@ -9,9 +9,19 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Sources;
 /// 语义 on a model that ships with the app — EmbeddingGemma 300M as ONNX, run in-process. Nothing to
 /// install, no daemon, no port, no address to type.
 ///
-/// <para><b>This is the backend that removes 语义's setup prerequisite.</b> Until it existed, 语义 was the
-/// only recall layer a household could not switch on without first installing a separate program and
-/// pulling a model into it — the CLI arm needs a login, but the app at least offers to fetch the CLI.</para>
+/// <para><b>It removes 语义's need for a separate PROCESS — not, as originally written here, its need for a
+/// manual install.</b> The claim used to be that 语义 was "the only recall layer a household could not
+/// switch on without first installing a separate program", and that was false when written: 资源 had been
+/// downloading and starting Ollama since 2026-08-21. The panel called that arm 本机 · Ollama — "your
+/// Ollama" — and surfaced the app-managed half only in a failure message, which is how both a household
+/// and this project could read a provisioned runtime as a manual prerequisite. What this backend actually
+/// removes is the daemon: no second process, no port, nothing to start or keep alive.</para>
+///
+/// <para><b>And it is measured as DOMINATED on quality, which the panel must not hide.</b> `llama-server`
+/// scores 9/10 top-1 against this arm's 8/10 on the same fixture, at 23 ms/query against 28, while also
+/// serving 判断 — see <c>docs/self-managed-llm-runtime.md</c>. What is left uniquely here is the absence of
+/// a process and the smallest total payload. That is a real advantage and a narrower one than the sentence
+/// this replaced.</para>
 ///
 /// <para><b>And it is the SMALLER path, which is the opposite of how "bundle a model runtime" sounds.</b>
 /// 222 MB of model against Ollama's 622 MB model plus its own runtime download. The variant, tokenizer and
@@ -75,6 +85,12 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
     /// <para>Resolved from DI rather than constructed here so its <c>ILogger</c> is real and the session is
     /// disposed with the container — the model is 197 MB of mapped weights, which is not something to leak
     /// across a restart-in-place.</para></summary>
+    /// <summary>Bundled: the ONNX session runs inside this process. The one backend with no second
+    /// process anywhere — which, now that llama-server beats it on quality, is most of what it still
+    /// uniquely offers.</summary>
+    public RuntimeOrigin Origin(MemorySourceContext ctx) =>
+        new(MemoryRuntimeOrigins.Bundled, "在应用内直接运行 —— 没有第二个进程,也没有端口");
+
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx)
     {
         var dir = ModelDir(ctx.Settings);

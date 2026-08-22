@@ -16,6 +16,28 @@
 
 ## Backlog
 
+- [ ] **Move the self-managed runtime from Ollama to `llama-server`.** Decided and measured 2026-08-22 —
+  `docs/self-managed-llm-runtime.md` has the numbers, the eliminated alternatives and the four things that
+  only running it revealed. Ollama stays as a *household* backend (detected, never managed); what changes is
+  what the app installs. Not a swap, in this order: (1) a `llama-cpp` resource — the 34.9 MB
+  `win-vulkan-x64` archive, sha256-pinned like git and node; (2) a runtime service that owns a router
+  process, since `-ngl` is part of the launch contract (absent it runs on CPU at 30× the latency, silently)
+  and models load LAZILY (a cold judge call measured 17.3 s), so both models must be warmed at startup;
+  (3) models as sha256-pinned GGUF downloads — Ollama's own blobs do NOT load in llama.cpp
+  (`expected 316 tensors, got 314`), so nothing already downloaded can be reused; (4) `EmbeddingCatalog`,
+  `/api/manage/models` and `OllamaState` are all Ollama-tag shaped and need a GGUF-repo equivalent;
+  (5) re-measure the shortlist through it — Q8_0 already scored the same 9/10 as Ollama's f16, but per
+  model that has to be checked, not assumed.
+- [ ] **Decide the 内置 ONNX arm's fate now that it is measured as dominated.** `llama-server` beat it on
+  BOTH axes (9/10 vs 8/10 top-1, 23 ms vs 28 ms per query) while also serving 判断, which the ONNX arm
+  cannot. What it still uniquely has is *no separate process at all* and the smallest total payload
+  (222 MB). Keep it as the zero-process option, or drop it once llama-server lands — a product call, and
+  the argument for keeping it got weaker rather than stronger.
+- [ ] **Surface runtime PROVENANCE in the recall picker.** `RuntimeOrigin` (bundled / app / household) is
+  defined in `MemorySourceTypes.cs`; the four sources and the picker still need to report it. The panel
+  calling the app-provisioned runtime 本机 · Ollama — "your Ollama" — is what let both a household and this
+  project conclude 语义 needed a manual install, which is how the built-in arm came to ship a false
+  justification. Independent of which runtime we provision.
 - [ ] **内置 for 判断** — an in-process CHAT model, which is a much bigger thing than an embedder (GGUF via
   LLamaSharp; see `docs/builtin-model-runner.md` for why not ONNX Runtime GenAI). Deferred, not blocked:
   判断 already has two working backends, so this buys convenience rather than capability.

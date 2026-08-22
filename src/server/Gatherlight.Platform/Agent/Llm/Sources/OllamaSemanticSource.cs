@@ -34,6 +34,13 @@ public sealed class OllamaSemanticSource : IMemorySemanticSource
     /// the app's "semantic recall is available" signal.
     /// <para>Keyless on purpose: a local Ollama takes no bearer token, and inventing one would only make a
     /// misconfigured remote endpoint look authenticated.</para></summary>
+    /// <summary>Provisioned or the household's own — decided per install, because both are normal. 资源 has
+    /// installed and started Ollama since 2026-08-21, and the picker calling it 本机 · Ollama without saying
+    /// so is what let a provisioned runtime read as a manual prerequisite.</summary>
+    public RuntimeOrigin Origin(MemorySourceContext ctx) =>
+        RuntimeOriginFrom.Locate(ctx.Ollama.Locate(),
+            Services.OllamaRuntime.ProvisionedExe(ctx.Settings.ResourcesPath), "Ollama");
+
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx) =>
         b.AddOpenAiCompatibleEmbedder("ollama", o =>
          {

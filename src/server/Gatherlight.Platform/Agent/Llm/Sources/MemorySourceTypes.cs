@@ -91,6 +91,43 @@ public sealed record SourceStatus(bool Available, string? Reason = null, string?
     public static readonly SourceStatus Ready = new(true);
 }
 
+/// <summary>WHO PROVIDES THE RUNTIME behind a backend, for this install.
+///
+/// <para>This axis existed in the product and was invisible in the panel, and the gap cost a whole design
+/// conversation. 资源 has downloaded and started Ollama since 2026-08-21 — sha256-pinned zip, started when
+/// the port is silent, models pulled through <c>/api/manage/models</c> — so "the app manages Ollama for
+/// you" was already true. The picker said only <b>本机 · Ollama</b>, which reads as *your* Ollama, and the
+/// app-managed half surfaced nowhere except a failure message. A household could therefore conclude that
+/// 语义 required them to go install a daemon, and so, separately, could we: the justification originally
+/// written for the built-in arm claimed 语义 was "the only layer you cannot switch on without first
+/// installing a separate program", which was simply not true.</para>
+///
+/// <para><b>Three kinds, not two, because the third is genuinely different.</b> A bundled runtime has no
+/// process and no port at all; a provisioned one is a program the app downloaded and starts; a household
+/// one is a program we found and talk to but never manage. The difference matters to a household deciding
+/// what they are signing up for, and — for <c>ollama</c> and <c>claude-cli</c> — it is not a property of
+/// the backend but of THIS install, which is why it is resolved per call rather than declared as a
+/// constant.</para></summary>
+/// <param name="Kind">One of <see cref="MemoryRuntimeOrigins"/>.</param>
+/// <param name="Text">The short label the picker shows. Written by the source, because only it knows
+/// whether "the app installs this" is a promise or a description.</param>
+public sealed record RuntimeOrigin(string Kind, string Text);
+
+/// <summary>The three answers to "whose runtime is this". Strings rather than an enum for the same reason
+/// <see cref="MemoryBackends"/> uses strings: they cross the wire to the console verbatim.</summary>
+public static class MemoryRuntimeOrigins
+{
+    /// <summary>Runs inside this process — no separate program, no port, nothing to start.</summary>
+    public const string Bundled = "bundled";
+
+    /// <summary>A separate program the app downloaded into the data folder and starts itself.</summary>
+    public const string App = "app";
+
+    /// <summary>A program the household installed and runs; the app connects to it and never manages
+    /// it.</summary>
+    public const string Household = "household";
+}
+
 /// <summary>One model a source offers for its layer.
 ///
 /// <para><see cref="Installed"/> false means it is offerable but must be fetched first — 资源 owns that.
@@ -142,3 +179,33 @@ public sealed record MemorySourceContext(
 /// carried through so a backend that needs more than a URL — the built-in embedder needs the resources
 /// path — does not force a new parameter onto every source that does not.</param>
 public sealed record MemoryWiringContext(string Model, string Endpoint, MemorySourceSettings Settings);
+
+/// <summary>Deciding <see cref="RuntimeOrigin"/> for the two backends the app can either provision OR find.
+///
+/// <para>The test is a PATH COMPARISON, not a flag: both <c>IOllamaRuntime.Locate()</c> and
+/// <c>IClaudeCliRuntime.Locate()</c> prefer the provisioned copy and fall through to PATH, and neither
+/// reports which branch won. Comparing what they returned against where we install is therefore the only
+/// honest way to answer — and it stays correct if the preference order ever changes, which a duplicated
+/// copy of that order would not.</para></summary>
+internal static class RuntimeOriginFrom
+{
+    /// <param name="located">What the runtime's own resolver returned, or null when it found nothing.</param>
+    /// <param name="provisionedPath">Where this app installs its copy.</param>
+    /// <param name="whatWeInstall">Named in the label, because "应用安装并运行" on a row the household has
+    /// not installed anything for would be a promise, not a description.</param>
+    public static RuntimeOrigin Locate(string? located, string provisionedPath, string whatWeInstall)
+    {
+        // Nothing found: the honest answer is what WOULD happen, phrased as an offer rather than a state.
+        if (string.IsNullOrWhiteSpace(located))
+            return new RuntimeOrigin(MemoryRuntimeOrigins.App, $"应用可以下载并运行({whatWeInstall})");
+
+        var same = string.Equals(
+            System.IO.Path.GetFullPath(located).TrimEnd(System.IO.Path.DirectorySeparatorChar),
+            System.IO.Path.GetFullPath(provisionedPath).TrimEnd(System.IO.Path.DirectorySeparatorChar),
+            StringComparison.OrdinalIgnoreCase);
+
+        return same
+            ? new RuntimeOrigin(MemoryRuntimeOrigins.App, "应用安装并运行 —— 不需要你自己装")
+            : new RuntimeOrigin(MemoryRuntimeOrigins.Household, "用你自己装的那一份 —— 应用只连接,不管理");
+    }
+}

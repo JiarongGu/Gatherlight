@@ -337,6 +337,47 @@ try {
   ok('and so is binding anything to the runtime that is not shipped yet',
     bindEmbedded.status === 400, String(bindEmbedded.status));
 
+  // WHOSE RUNTIME. The panel used to answer this only by accident, in a failure message: the Ollama the
+  // APP downloads and starts was labelled 本机 · Ollama, which reads as the household's. That let a
+  // provisioned runtime pass for a manual prerequisite — and it did, in this project's own docs.
+  const originOf = (layer, id) =>
+    (layer.sources ?? []).find((x) => x.id === id)?.origin ?? null;
+
+  // Deterministic rows first — these do not depend on what is installed on the machine running the suite.
+  ok('内置 reports itself as BUNDLED — it runs in-process, so there is no program and no port',
+    originOf(semantic, 'builtin')?.kind === 'bundled',
+    JSON.stringify(originOf(semantic, 'builtin')));
+  ok('其他本机服务 reports HOUSEHOLD — it exists for a service we do not manage',
+    originOf(semantic, 'openai-compat')?.kind === 'household',
+    JSON.stringify(originOf(semantic, 'openai-compat')));
+  // A declined backend has no runtime, so it gets NULL rather than a plausible label. Inventing
+  // "the app can download this" for something that can never run is the exact class of unenforced
+  // promise this panel exists to refuse.
+  ok('a DECLINED backend reports no origin at all, rather than a made-up one',
+    originOf(semantic, 'claude-cli') === null && originOf(judge, 'builtin') === null,
+    JSON.stringify({ sem: originOf(semantic, 'claude-cli'), judge: originOf(judge, 'builtin') }));
+  // Machine-dependent rows: assert the SHAPE, since a CI box and a developer's box legitimately differ.
+  for (const [layer, id] of [[judge, 'ollama'], [judge, 'claude-cli']]) {
+    const o = originOf(layer, id);
+    ok(`${id} reports one of app/household, never nothing`,
+      o !== null && ['app', 'household'].includes(o.kind), JSON.stringify(o));
+  }
+
+  // POSITIVE CONTROL for the branch this machine does not exercise. Both runtimes resolve the copy WE
+  // provisioned before falling through to PATH, so planting a file where the provisioner installs must
+  // flip the answer to `app`. Without this the suite only ever proves the `household` half — and a
+  // path-comparison that answered `household` unconditionally would pass everything above.
+  {
+    const planted = path.join(dir, 'state', 'resources', 'ollama', 'ollama.exe');
+    fs.mkdirSync(path.dirname(planted), { recursive: true });
+    fs.writeFileSync(planted, 'not a real binary — only its PATH is under test');
+    const after = originOf((await getJson('/api/manage/memory?refresh=true')).layers
+      .find((l) => l.id === 'judge'), 'ollama');
+    ok('planting a provisioned copy flips Ollama to APP — the app-managed branch is real',
+      after?.kind === 'app', JSON.stringify(after));
+    fs.rmSync(planted, { force: true });
+  }
+
   // THE BENCHMARK DOOR. `dev.mjs embed-bench` scores every Ollama-hosted embedder through
   // /v1/embeddings; the in-process 内置 backend has no such endpoint, so it was the one arm nobody could
   // measure — and its "same score as Ollama" turned out to be an 8-query artifact. This endpoint is how it

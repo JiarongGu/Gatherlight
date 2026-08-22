@@ -59,6 +59,16 @@ public interface IMemorySource
     /// <summary>Register whatever this source needs at startup — a provider, a named client, an embedder, a
     /// vector store. A no-op for a backend that is already registered by default.</summary>
     void Register(LyntaiBuilder b, MemoryWiringContext ctx);
+
+    /// <summary>WHOSE runtime this is on THIS install — see <see cref="RuntimeOrigin"/> for why the panel
+    /// has to say.
+    ///
+    /// <para>Takes the context because for two backends the answer is not a property of the backend: the
+    /// app provisions both Ollama and the claude CLI into the data folder, and a household may equally have
+    /// their own. Only <c>Locate()</c> knows which copy won, so only a per-call question can answer
+    /// truthfully. A constant here would have to pick one and be wrong for the other half of installs —
+    /// which is the shape of the mistake that made this member necessary.</para></summary>
+    RuntimeOrigin Origin(MemorySourceContext ctx);
 }
 
 /// <summary>

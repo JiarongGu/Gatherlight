@@ -89,6 +89,11 @@ public sealed class OpenAiCompatibleSource : IMemoryJudgeSource, IMemorySemantic
         return raw.Trim().TrimEnd('/');
     }
 
+    /// <summary>Always the household's: this backend exists precisely for a service we do not manage, which
+    /// is why it is the only one that asks for an address.</summary>
+    public RuntimeOrigin Origin(MemorySourceContext ctx) =>
+        new(MemoryRuntimeOrigins.Household, "你自己运行的服务 —— 应用只按你填的地址连接");
+
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx)
     {
         // One class, two layers, two registrations — the judge needs a provider plus a named client, the

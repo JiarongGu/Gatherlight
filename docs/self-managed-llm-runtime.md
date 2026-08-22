@@ -1,10 +1,21 @@
 # The self-managed local LLM runtime — which one, and why
 
-**Decision: `llama-server` (llama.cpp) in router mode, the `win-vulkan-x64` build.** Researched 2026-08-22.
+**Decision: `llama-server` (llama.cpp) in router mode, the `win-vulkan-x64` build.**
+Researched, measured and **accepted** 2026-08-22.
 
 We ship exactly ONE self-managed runtime. "Self-managed" means the app downloads it, starts it and owns
 its lifecycle — as opposed to connecting to whatever the household happens to have installed. Both are
 legitimate; this document picks the one we provision.
+
+It replaces **provisioned Ollama**, which held the role from 2026-08-21. Ollama does not go away: it stays
+as a *household* backend, detected and connected to but never managed, because plenty of households run
+their own and removing that would be a regression. What changes is which runtime the app installs.
+
+The decision rests on the measurements below, not on the documentation above them — llama-server matched
+Ollama's retrieval (9/10) at 3× lower embedding latency and 1/42 the download, and a warm local judge came
+in ~55× faster than the CLI judge this product ships today. The migration work it implies is tracked in
+`TASKS.md`; the four things that measurement changed about the plan are in the costs section, because they
+are what makes it more than a swap.
 
 ---
 
