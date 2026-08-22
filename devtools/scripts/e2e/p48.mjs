@@ -221,6 +221,16 @@ try {
   ok('THE POINT: rebuilding reaches the facts that predate the binding',
     backfilled.length > 0, JSON.stringify(backfilled));
 
+  // ...AND IT COSTS NOTHING TO DO SO. The rephrasing arm writes a knowledge COLUMN; nothing of it lives in
+  // the graph. Routing it through the destructive rebuild — which the first version did — discarded every
+  // decay position and link the household had accumulated in exchange for nothing, and made "bind it, then
+  // rebuild" advice with a hidden price. `linked` is the observable: the co-recall section above built
+  // those edges, and a rebuild resets them to zero.
+  const linkedAfter = (await c.call('recall_facts', { query: 'harbour teahouse', limit: 5 }))
+    .result?.facts?.filter((f) => (f.linked ?? 0) > 0).length ?? 0;
+  ok('…and the graph kept its links — the phrasing backfill is not a rebuild',
+    linkedAfter > 0, `facts still linked: ${linkedAfter}`);
+
   // STORED IS NOT FOUND. Everything above proves phrasings were WRITTEN; none of it proves they can be
   // reached, which is the only thing this layer is for. `zzfishpref` appears in no fact's text — only in
   // the phrasings — so a hit can have come from nowhere else.

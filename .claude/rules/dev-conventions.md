@@ -672,8 +672,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   while the endpoint still accepted and the detached run still "finished". The effect: binding that arm
   reached FUTURE writes only, an existing knowledge base could never gain phrasings, and the single control
   offered for exactly that reported success having done nothing. Both arms re-derive the same way (re-remember
-  every fact, which runs `ExpandAkaAsync`), so the question is not "is there an embedder" but "is anything
-  bound that a rewrite would re-derive". Proof lives in `e2e-p48`, which writes facts BEFORE binding the arm
+  every fact), so the question is not "is there an embedder" but "is anything bound that a rewrite would
+  re-derive". **They do NOT cost the same thing, and routing both through the rebuild was the next mistake.**
+  The rephrasing arm's output is a knowledge COLUMN (`aka`, picked up by the FTS trigger on UPDATE) — none
+  of it lives in the graph — so rebuilding to produce it discards every decay position and link the
+  household has accumulated in exchange for nothing. An embedder is the opposite: its vectors belong to the
+  graph's entries and are written as each is remembered, so re-embedding really is re-remembering. The CLI
+  arm gets `ExpandEachAsync` instead, which touches only the column. That is not a tidiness point: the
+  over-broad version made "bind it, then rebuild" advice with a hidden price, and made measuring the arm's
+  own benefit an operation nobody should agree to. Proof lives in `e2e-p48`, which writes facts BEFORE binding the arm
   and was confirmed to FAIL against the old guard — the phrasings stay empty. Note this also makes the
   advice "bind it, then rebuild" true; it was not, and the panel gave no sign.
 - **A rebuild runs detached, and the console reports COVERAGE rather than a run history.** `ReindexSemanticAsync`

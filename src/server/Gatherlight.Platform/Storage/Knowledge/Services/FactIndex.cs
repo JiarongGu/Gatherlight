@@ -485,6 +485,19 @@ public sealed class FactIndex : IFactIndex
             && string.Equals(_config?.Current.Memory.SemanticSource,
                 Agent.Llm.Sources.MemoryBackends.ClaudeCli, StringComparison.OrdinalIgnoreCase);
         if (_semantic is null && !rephrasing) return 0;
+
+        // …AND THE TWO ARMS DO NOT COST THE SAME THING, which the first version of this got wrong by
+        // routing both through the destructive path. The rephrasing arm's output is a knowledge COLUMN
+        // (`aka`, picked up by the FTS trigger on UPDATE). Nothing of it lives in the graph, so rebuilding
+        // the graph to produce it discards every decay position and link the household has accumulated in
+        // exchange for absolutely nothing. An embedder is the opposite: its vectors belong to the graph's
+        // entries and are written as each one is remembered, so re-embedding really is re-remembering.
+        //
+        // Being over-broad here is not a small matter — it made "bind the arm, then rebuild" advice that
+        // silently cost weeks of accumulated ranking, and made measuring the arm's benefit an operation
+        // nobody should agree to.
+        if (_semantic is null) return await ExpandEachAsync(ct, progress);
+
         // The vectors a recall reads belong to the GRAPH's entries, written as each one was remembered —
         // so re-embedding means re-remembering, which is exactly RebuildAsync. There is no cheaper door:
         // the engine embeds on write and offers no "re-embed what you already hold".
@@ -534,6 +547,34 @@ public sealed class FactIndex : IFactIndex
     /// concurrent annotations cannot reuse each other's just-coined subject labels — a wider bound
     /// buys little and coins more near-duplicate subjects (they steer linking only, never recall).</summary>
     private const int IndexConcurrency = 4;
+
+    /// <summary>Re-derive PHRASINGS for every fact, touching nothing else.
+    ///
+    /// <para>The non-destructive half of <see cref="ReindexSemanticAsync"/>, and the one that serves the
+    /// Claude CLI arm. It writes `knowledge.aka` per fact — a column, picked up by the FTS trigger — so the
+    /// graph, its decay positions and its links are all untouched. A household turning this arm on over an
+    /// existing knowledge base pays a model call per fact and loses nothing.</para>
+    ///
+    /// <para>Serialised rather than fanned out like <see cref="IndexEachAsync"/>: every call here is a CLI
+    /// spawn against the household's own account, and the point of the concurrency limit there is to bound
+    /// exactly that. Progress is reported per fact because this is minutes of work on a real corpus.</para>
+    ///
+    /// <para>Never throws — <c>ExpandAkaAsync</c> swallows its own failures, so a fact that could not be
+    /// rephrased is simply as findable as it was.</para></summary>
+    private async Task<int> ExpandEachAsync(CancellationToken ct, IProgress<(int Done, int Total)>? progress)
+    {
+        var facts = await _store.AllAsync();
+        var done = 0;
+        foreach (var (row, _) in facts)
+        {
+            ct.ThrowIfCancellationRequested();
+            await ExpandAkaAsync(row.Kind, row.Topic, row.Content, ct);
+            progress?.Report((++done, facts.Count));
+        }
+        _log?.LogInformation(
+            "fact index: re-derived phrasings for {Done} fact(s) — graph, decay and links untouched", done);
+        return done;
+    }
 
     private async Task<int> IndexEachAsync(IEnumerable<KnowledgeRow> facts, CancellationToken ct,
         int total = 0, IProgress<(int Done, int Total)>? progress = null)
