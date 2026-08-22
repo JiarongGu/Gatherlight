@@ -538,6 +538,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   collection** because `GatherlightApp` wires from it *inside* `AddLyntai(b => …)`, while the container is
   being built: a DI collection would need a second registration-time list, and two lists for one set is the
   drift `check-ui-registry` exists to catch. Sources take runtime deps as a per-call `MemorySourceContext`.
+  **A source also declares whether binding it needs a RESTART** (`TakesEffectOnRestart`): true for an arm
+  whose `Register` wires something into the container, which is built once; false for one whose effect is at
+  WRITE time and reads the saved binding per call. The panel infers "running" for 语义 from whether the
+  container holds an `ISemanticMemory`, so the CLI arm — which registers nothing — read as permanently
+  un-applied and the banner asked forever for a restart that would change nothing. That is exactly the
+  failure `MemoryRecallPanel`'s own comment records about a remembered model compared against a null running
+  one, recurring one case over. The answer lives on the SOURCE, not in an `if (id == "claude-cli")`, because
+  a per-id branch is the if/else chain this catalog exists to replace.
   Bindings live in `settings.json` (`memory.judgeSource`/`judgeModel`/`semanticSource`/`embeddingModel`) —
   consumed at DI registration, before the DB opens — while 判断's on/off stays live in `app_config`, and the
   console reports the two as different kinds of change. **`memory.judgeTransport` is legacy**, resolved on

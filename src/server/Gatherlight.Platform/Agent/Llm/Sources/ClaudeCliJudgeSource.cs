@@ -43,6 +43,10 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
             Hosting.Resources.Services.ResourceProvisioner.ProvisionedClaude(ctx.Settings.ResourcesPath),
             "Claude CLI");
 
+    /// <summary>Its provider is already registered, but the JUDGE binding is still read at
+    /// startup, so a change is owed a restart like any other.</summary>
+    public bool TakesEffectOnRestart => true;
+
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx) { }
 
     /// <summary>INSTALLED IS NOT USABLE. A downloaded CLI is not a signed-in one, and <c>claude auth login</c>

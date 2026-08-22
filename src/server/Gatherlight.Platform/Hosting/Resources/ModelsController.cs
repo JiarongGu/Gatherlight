@@ -113,9 +113,12 @@ public sealed class ModelsController : ControllerBase
         //
         // `refresh` still means refresh: an explicit re-probe is what the household asked for, and it is the
         // one path where waiting is the honest answer.
-        var probe = refresh && _llama.Cached is null
-            ? await _llama.LiveAsync()
-            : refresh ? await _llama.ProbeAsync(true) : await _llama.LiveAsync();
+        // An explicit refresh re-probes ONLY when there is already something to refresh; otherwise the
+        // cheap read plus the background probe below is both faster and the same answer. (This was a
+        // three-branch conditional saying it twice.)
+        var probe = refresh && _llama.Cached is not null
+            ? await _llama.ProbeAsync(true)
+            : await _llama.LiveAsync();
         var known = _llama.Cached;
         if (known is null) _ = _llama.ProbeAsync(ct: CancellationToken.None);
         var models = Models(mem, judgeModel);

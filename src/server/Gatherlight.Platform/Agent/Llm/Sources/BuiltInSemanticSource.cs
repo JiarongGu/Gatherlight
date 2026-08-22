@@ -108,6 +108,9 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
     public RuntimeOrigin Origin(MemorySourceContext ctx) =>
         new(MemoryRuntimeOrigins.Bundled, "在应用内直接运行 —— 没有第二个进程,也没有端口");
 
+    /// <summary>Register wires an embedder and a vector store, and the container is built once.</summary>
+    public bool TakesEffectOnRestart => true;
+
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx)
     {
         var dir = ModelDir(ctx.Settings);

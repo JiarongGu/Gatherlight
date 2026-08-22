@@ -131,7 +131,12 @@ Anything that replaces a record subtree — notably backup import — must re-is
 - **User data lives ONLY in `local/`** (own private git repo). Never move it back into this repo.
 - **LLM via the authenticated `claude` CLI only — never an API key.** The CLI is a *provisioned resource*
   (资源 panel → `{data}/state/resources/claude`), not a machine dependency we assume; `ClaudeCliRuntime`
-  resolves + probes it, and the one thing the app cannot do for the household is the browser login.
+  resolves + probes it. **The app STARTS the browser login** (资源 → the CLI's row → 登录, spawning the
+  RESOLVED binary — the old advice "run `claude auth login` in a terminal" was unactionable for a copy we
+  installed, whose directory is never on PATH) but cannot COMPLETE it: that step needs a human in a browser
+  and has no headless variant. **Whose login it uses is a choice** — the machine's (default) or the app's
+  own in `{data}/state/resources/claude/home`, via `CLAUDE_CONFIG_DIR`, because one OS user otherwise means
+  one shared session. Signing out is offered only for the app's own; the machine's is the household's.
 - **Backend = three projects** (`Gatherlight.Platform` → `Gatherlight.Planner` → `Gatherlight.Server`
   → `Gatherlight.Host`; namespaces unchanged, `Platform/<Group>/<Name>` / `Product/Planner/<Name>`;
   controller → service → repository; Dapper + hand-written SQL, snake_case columns, FluentMigrator

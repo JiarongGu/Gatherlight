@@ -87,9 +87,14 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public RuntimeOrigin Origin(MemorySourceContext ctx) =>
         new(MemoryRuntimeOrigins.App, "应用安装并运行 —— 不需要你自己装");
 
+    /// <summary>Register wires a provider or an embedder plus a vector store, and the container is built
+    /// once — so a change here is owed a restart.</summary>
+    public bool TakesEffectOnRestart => true;
+
     /// <summary>Register against our own endpoint. Identical to the generic OpenAI-compatible registration,
     /// because that is genuinely what llama-server is — the difference between the two backends is ownership
     /// and what the household has to do, not protocol.</summary>
+
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx)
     {
         if (_layer == MemoryLayers.Semantic)

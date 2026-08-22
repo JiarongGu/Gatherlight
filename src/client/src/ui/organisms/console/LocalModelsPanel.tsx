@@ -94,6 +94,18 @@ export function LocalModelsPanel(
     return () => clearInterval(t);
   }, [downloading]);
 
+  // The runtime's BUILD TAG and DEVICE LIST cost two process starts, so the server no longer waits for them
+  // — it sends null and probes in the background. This panel loads once and otherwise only polls while
+  // downloading, so without a re-ask those fields stayed blank until the household navigated away and back:
+  // an installed runtime showing no version and no GPU badge, permanently, on the first open after every
+  // restart. One retry, not a poll — the answer is cached server-side once it lands.
+  const runtimeUnknown = !!inv && inv.runtime.installed && inv.runtime.version === null;
+  useEffect(() => {
+    if (!runtimeUnknown) return;
+    const t = setTimeout(() => { load(false); }, 900);
+    return () => clearTimeout(t);
+  }, [runtimeUnknown]);
+
   const post = async (path: string, body?: unknown, label = '') => {
     setBusy(label || path);
     try {

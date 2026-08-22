@@ -1,7 +1,12 @@
 # 内置 · Built-in model runner — which runtime, and why
 
-The 记忆检索 panel lists **ONNX**, under the **内置** heading, as a backend on both recall layers and says it is not shipped
-yet. This document picks what will implement it. Written 2026-08-22.
+**Status: implemented, and the panel has since been reshaped around it.** Written 2026-08-22 to pick the
+runtime for an in-process embedder that was then unshipped; it now ships as the `builtin` backend. Two things
+this document describes have changed and are NOT corrected below, because the measurements and the reasoning
+are the record: the heading is now **llama.cpp** (which holds both `llama-cpp` and `builtin`, since we manage
+both), **内置** was reassigned to the option that needs nothing installed at all, and the free-form
+"any Ollama model" field this document contrasts against no longer exists — Ollama is not a backend. See
+`.claude/rules/dev-conventions.md` for the current vocabulary.
 
 **Terms** (see `.claude/rules/dev-conventions.md`): a **backend** is *where a model comes from* —
 `claude-cli`, `ollama`, `builtin`. `builtin` means a runtime inside the install (`res/`), with no daemon to

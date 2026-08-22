@@ -29,6 +29,7 @@ public static class ModelId
 /// different decision from a working one.</param>
 /// <param name="What">What was proven, when it is not a vector. Null = a vector width, which is the case
 /// for every embedding arm. The CLI arm proves it can REPHRASE and reports how many phrasings it produced,
-/// and the console must not print that as a dimension count — a label asserting something the code did not
-/// measure is the defect this whole area keeps correcting.</param>
+/// which is NOT a dimension count — so it travels with the number, and the bind response sends it. It was
+/// added and then not sent for one commit, while its own comment claimed the console distinguished them:
+/// a field that exists to prevent a mislabel does nothing until somebody reads it.</param>
 public sealed record EmbedProbe(int Dimensions, int Milliseconds, string? What = null);

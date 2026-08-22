@@ -60,6 +60,21 @@ public interface IMemorySource
     /// vector store. A no-op for a backend that is already registered by default.</summary>
     void Register(LyntaiBuilder b, MemoryWiringContext ctx);
 
+    /// <summary>Does binding this source need a RESTART before it does anything?
+    ///
+    /// <para>True for every arm whose <see cref="Register"/> wires something into the container — the
+    /// container is built once, so a new embedder or provider only exists after a restart, and the panel
+    /// says so. False for an arm whose effect is at WRITE time and reads the saved binding per call.</para>
+    ///
+    /// <para><b>Why the source answers and not the controller.</b> The panel decides "a restart is owed" by
+    /// comparing the SAVED backend against the RUNNING one, and it infers the running one from whether the
+    /// container holds an <c>ISemanticMemory</c>. An arm that registers nothing never produces one — so it
+    /// read as permanently un-applied, and the banner asked forever for a restart that would change
+    /// nothing. That exact failure is recorded in <c>MemoryRecallPanel</c>'s own comment about a remembered
+    /// model compared against a null running one; this is the same bug one case over, and a per-id check in
+    /// the controller would be the if/else chain the source catalog exists to avoid.</para></summary>
+    bool TakesEffectOnRestart { get; }
+
     /// <summary>WHOSE runtime this is on THIS install — see <see cref="RuntimeOrigin"/> for why the panel
     /// has to say.
     ///

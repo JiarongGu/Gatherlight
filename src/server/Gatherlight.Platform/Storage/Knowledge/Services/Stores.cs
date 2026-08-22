@@ -71,14 +71,21 @@ public interface IKnowledgeStore
     /// <summary>Record where this fact lives in the derived graph index. Null clears it.</summary>
     Task SetGraphRefAsync(long id, string? graphRef);
 
-    /// <summary>Store alternate phrasings for a fact, so a differently-worded question still matches it.
-    /// Null clears them.
+    /// <summary>Store alternate phrasings for a fact, addressed by its unique <c>(kind, topic)</c>.
+    ///
+    /// <para><b>By key, not by search.</b> The first version looked the row up with <c>RecallAsync(topic)</c>
+    /// — a full-text query ordered by confidence — to find the fact it had just written. That can return a
+    /// DIFFERENT fact: a topic under three characters produces no FTS token at all and falls back to
+    /// <c>LIKE %topic%</c>, and even a matching query returns the highest-CONFIDENCE hit rather than this
+    /// one. Phrasings on the wrong fact are worse than none: they make an unrelated fact answer a question
+    /// it has nothing to do with, and nothing would ever report it. <c>(kind, topic)</c> is what
+    /// <see cref="LearnAsync"/> upserts on, so it identifies exactly one row.</para>
     ///
     /// <para>DERIVED, like the graph ref beside it: <c>knowledge</c> stays the record of truth and these are
     /// a search aid regenerated from it, which is why they live in a column rather than a table and why
     /// losing them costs nothing but recall quality. The FTS trigger picks the new value up on UPDATE, so
     /// writing here is the whole operation.</para></summary>
-    Task SetAkaAsync(long id, string? aka);
+    Task SetAkaAsync(string kind, string topic, string? aka);
 
     /// <summary>Resolve graph references back to their rows, IN THE ORDER GIVEN — the graph did the
     /// ranking, so re-sorting here would throw it away. Each row comes back paired with the ref that
@@ -133,10 +140,12 @@ public sealed class KnowledgeStore : IKnowledgeStore
             new { kind, topic, content, source, confidence = Math.Clamp(confidence, 0, 1), now });
     }
 
-    public async Task SetAkaAsync(long id, string? aka)
+    public async Task SetAkaAsync(string kind, string topic, string? aka)
     {
         using var conn = _db.Open();
-        await conn.ExecuteAsync("UPDATE knowledge SET aka = @aka WHERE id = @id", new { id, aka });
+        await conn.ExecuteAsync(
+            "UPDATE knowledge SET aka = @aka WHERE kind = @kind AND topic = @topic",
+            new { kind, topic, aka });
     }
 
     public async Task<List<KnowledgeRow>> RecallAsync(string query, string? kind, int limit)

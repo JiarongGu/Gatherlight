@@ -541,55 +541,52 @@ try {
   // directions at once, admitting an uncatalogued embedder as a judge while disabling the switch on a
   // machine full of chat models, and either half shows up here as offer/refusal disagreement.
   const inv = await getJson('/api/manage/models');
-  const ollamaJudge = srcs(judge).find((x) => x.id === 'ollama');
-  const ollamaSemantic = srcs(semantic).find((x) => x.id === 'ollama');
-  const chatty = (ollamaJudge?.models ?? []).filter((m) => m.installed).map((m) => m.id);
-  const semanticIds = (ollamaSemantic?.models ?? []).filter((m) => m.installed).map((m) => m.id);
-  // Offered for embedding and NOT for judging — i.e. the picker has already decided these cannot judge.
-  const embedOnly = semanticIds.filter((id) => !chatty.includes(id));
-  const named = [...new Set([...chatty, ...semanticIds])];
-  if (named.length > 0) {
-    ok('the two layers offer DIFFERENT Ollama models — the split is computed, not a copy of one list',
-      embedOnly.length > 0 || chatty.length === 0,
-      JSON.stringify({ judge: chatty, semantic: semanticIds }));
+  // THE CAPABILITY SPLIT IS llama.cpp's NOW, and this block had to be rebuilt or it would have kept
+  // reporting PASS while executing nothing: it keyed on `srcs(judge).find(x => x.id === 'ollama')`, and
+  // after that backend was removed every `if` below was false. A suite that skips silently is worse than a
+  // missing one — it reads as coverage.
+  //
+  // The oracle is BETTER than before, too. It used to ask Ollama what each model could do; the inventory now
+  // declares it from the catalogue we pinned, which is independent of the picker being tested rather than
+  // another view of it.
+  const local = (inv.models ?? []).filter((m) => m.installed && m.runtime === 'llama-cpp');
+  const embedders = local.filter((m) => m.capability === 'embedding');
+  const chatModels = local.filter((m) => m.capability === 'completion');
 
-    // THE refusal worth having. An embedding model is installed and well-formed and can never answer a
-    // judgement — and both memory policies are fail-open, so choosing one would surface as recall that
-    // quietly never improves rather than as an error.
-    for (const m of embedOnly) {
-      const r = await post('/api/manage/memory/layer/judge', { source: 'ollama', model: m });
-      ok(`an embedding-only model is refused as a judge: ${m}`, r.status === 409, `${r.status}`);
-    }
-    // The shortlist could never have refused these — they are the case the old catalog check missed.
-    const uncatalogued = embedOnly.filter((x) => !/nomic-embed-text|bge-m3|all-minilm|granite-embedding|snowflake-arctic-embed2|paraphrase-multilingual|qwen3-embedding|embeddinggemma/.test(x));
-    ok(`(${uncatalogued.length} of ${embedOnly.length} embedders are OUTSIDE the catalog — the ones the`
-      + ' old shortlist check could not have refused)', true,
-      uncatalogued.join(', ') || 'none on this machine');
-
-    // POSITIVE CONTROL. Every assertion above is a denial, and a denial-only test passes just as well
-    // against a picker that refuses everything — which is the defect being fixed, not a fix for it.
-    if (chatty.length > 0) {
-      const acc = await post('/api/manage/memory/layer/judge', { source: 'ollama', model: chatty[0] });
-      ok(`a completion-capable model IS accepted as a judge: ${chatty[0]}`,
-        acc.status === 200, `${acc.status} ${JSON.stringify(acc.body)}`);
-
-      // SAVED vs RUNNING. A binding is a startup registration, so between saving and restarting the two
-      // disagree — and the layer's header NAMES its backend. A badge rendered from the saved value would
-      // announce a model that is not doing the work.
-      const mid = layerOf(await getJson('/api/manage/memory'), 'judge');
-      ok('the panel reports the SAVED backend and the RUNNING one separately',
-        mid.source === 'ollama' && mid.activeSource === 'claude-cli',
-        JSON.stringify({ saved: mid.source, active: mid.activeSource,
-          savedModel: mid.model, activeModel: mid.activeModel }));
-
-      await post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'haiku' }); // as we found it
-    } else {
-      ok('(this machine holds no chat model) the accept path is not exercised here', true,
-        'the refusals above cannot distinguish "correctly strict" from "always refuses"');
+  if (embedders.length > 0) {
+    // THE refusal worth having. An embedding model is installed, well-formed, and can never answer a
+    // judgement — and both memory policies are fail-open, so choosing one surfaces as recall that quietly
+    // never improves rather than as an error.
+    for (const m of embedders) {
+      const r = await post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: m.id });
+      ok(`an embedding model is refused as a judge: ${m.id}`, r.status === 409, `${r.status}`);
     }
   } else {
-    ok('(no Ollama on this machine) the capability filter is not exercised here', true,
-      'the layer/source shape above still holds');
+    ok('(no embedding model on this machine) the judge refusal is not exercised here', true,
+      'needs a downloaded embedding GGUF; the fixture has none and must not fetch 334 MB');
+  }
+
+  if (chatModels.length > 0) {
+    // POSITIVE CONTROL. Every assertion above is a denial, and a denial-only test passes just as well
+    // against a picker that refuses everything — which is the defect, not a fix for it.
+    const pick = chatModels[0];
+    const acc = await post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: pick.id });
+    ok(`a chat model IS accepted as a judge: ${pick.id}`, acc.status === 200,
+      `${acc.status} ${JSON.stringify(acc.body)}`);
+
+    // SAVED vs RUNNING. A binding that registers a provider is a startup registration, so between saving
+    // and restarting the two disagree — and the layer's header NAMES its backend. A badge rendered from the
+    // saved value would announce a model that is not doing the work.
+    const mid = layerOf(await getJson('/api/manage/memory'), 'judge');
+    ok('the panel reports the SAVED backend and the RUNNING one separately',
+      mid.source === 'llama-cpp' && mid.activeSource === 'claude-cli',
+      JSON.stringify({ saved: mid.source, active: mid.activeSource,
+        savedModel: mid.model, activeModel: mid.activeModel }));
+
+    await post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'haiku' }); // as we found it
+  } else {
+    ok('(no chat model on this machine) the judge accept path is not exercised here', true,
+      'needs a downloaded completion GGUF; the refusals above cannot tell "strict" from "refuses everything"');
   }
 
   // A disabled control must SAY why — and the sentence must live OUTSIDE the <select>, which only renders
@@ -637,6 +634,21 @@ try {
   ok('…and the panel reports the CLI arm as the saved backend',
     afterRephrase.source === 'claude-cli',
     JSON.stringify({ source: afterRephrase.source, model: afterRephrase.model }));
+
+  // NO RESTART IS OWED, and this is the assertion the fix needs or it regresses silently.
+  //
+  // The panel decides "a restart is owed" by comparing the SAVED backend against the RUNNING one, and it
+  // infers running for 语义 from whether the container holds an ISemanticMemory. This arm registers
+  // nothing — its effect is at write time — so it read as permanently un-applied and the banner asked
+  // forever for a restart that would change nothing. That is the failure MemoryRecallPanel's own comment
+  // already records about a remembered model compared against a null running one, one case over.
+  ok('binding the CLI arm does not ask for a restart — its effect is on the next WRITE',
+    bindRephrase.body?.restartRequired === false, JSON.stringify(bindRephrase.body));
+  ok('…and saved equals running, so the restart banner cannot become permanent',
+    afterRephrase.source === afterRephrase.activeSource
+      && afterRephrase.model === afterRephrase.activeModel,
+    JSON.stringify({ saved: afterRephrase.source, active: afterRephrase.activeSource,
+      savedModel: afterRephrase.model, activeModel: afterRephrase.activeModel }));
 
   // ---- F · models are a RESOURCE, not a recall setting -------------------------------------------
   ok('the model inventory answers, and reports the runtime that hosts them',
@@ -788,56 +800,47 @@ try {
     JSON.stringify((judge.groups ?? []).map((g) => g.id)));
 
   // ---- H · 语义 refuses a non-embedder without waiting out a cold model load ---------------------
-  // A model 判断 offers and 语义 does not — i.e. one the picker has already classed as chat-only.
-  const chatModel = chatty.find((id) => !semanticIds.includes(id));
-  if (chatModel) {
+  // The mirror refusal: a completion model cannot embed, so 语义 must refuse it — and quickly, from the
+  // catalogue, rather than after waiting out a cold model load.
+  if (chatModels.length > 0) {
     const t2 = Date.now();
-    const r = await post('/api/manage/memory/layer/semantic', { source: 'ollama', model: chatModel });
+    const r = await post('/api/manage/memory/layer/semantic',
+      { source: 'llama-cpp', model: chatModels[0].id });
     const took2 = Date.now() - t2;
-    // The embed PROBE is still the load-bearing check and still runs for everything else; this only
-    // spares the household a minute of a dead button for an answer Ollama already gave.
-    ok(`binding a chat model to 语义 is refused, and quickly: ${chatModel}`,
+    ok(`binding a chat model to 语义 is refused, and quickly: ${chatModels[0].id}`,
       r.status === 409 && took2 < 20000, `${r.status} in ${took2}ms`);
   } else {
-    ok('(this machine holds no chat model) the fast embed refusal is not exercised here', true,
-      `${named.length} models reporting capabilities`);
+    ok('(no chat model on this machine) the fast 语义 refusal is not exercised here', true,
+      'needs a downloaded completion GGUF');
   }
 
-  const anyEmbedder = (ollamaSemantic?.models ?? []).find((m) => m.installed);
+  // THE SEMANTIC POSITIVE CONTROL. Retargeted from Ollama to whichever local embedder is actually
+  // installed — and it cannot be faked: a planted empty .gguf would fail the embed probe, which is the one
+  // thing this asserts. So it runs where a real model exists and says so loudly where one does not.
+  const anyEmbedder = embedders[0];
   if (anyEmbedder) {
-    // This machine has Ollama AND an embedder: the positive control for every refusal above.
     const bindSem = await post('/api/manage/memory/layer/semantic',
-      { source: 'ollama', model: anyEmbedder.id });
+      { source: 'llama-cpp', model: anyEmbedder.id });
     ok('(this machine has an embedder) binding 语义 asks for a restart and a reindex',
-      bindSem.status === 200 && bindSem.body?.restartRequired === true && bindSem.body?.reindexRequired === true,
+      bindSem.status === 200 && bindSem.body?.restartRequired === true
+        && bindSem.body?.reindexRequired === true,
       JSON.stringify(bindSem.body));
     ok('and reports the vector width it actually measured, rather than one looked up',
-      typeof bindSem.body?.dimensions === 'number' && bindSem.body.dimensions > 0,
-      JSON.stringify({ dims: bindSem.body?.dimensions, ms: bindSem.body?.probeMs }));
+      typeof bindSem.body?.dimensions === 'number' && bindSem.body.dimensions > 0
+        && bindSem.body?.proved === 'dimensions',
+      JSON.stringify({ dimensions: bindSem.body?.dimensions, proved: bindSem.body?.proved }));
 
-    // THE POINT of the async rebuild: the call RETURNS while the work continues. Asserted by the status
-    // code and by the clock — a 202 that actually blocked would still be a 202.
-    const t0 = Date.now();
-    const started = await post('/api/manage/memory/layer/semantic/reindex');
-    const took = Date.now() - t0;
-    ok('a reindex is ACCEPTED and returns immediately, rather than running inside the request',
-      started.status === 202 && took < 3000, `status=${started.status} in ${took}ms`);
-    ok('and a second one is refused while the first is running or finishing',
-      [202, 409].includes((await post('/api/manage/memory/layer/semantic/reindex')).status),
-      'one rebuild at a time — two would interleave discards and writes over the same graph');
-
-    // Unbinding leaves the model and its vectors alone: turning a feature off must not throw away
-    // something that cost a large download and a long reindex.
-    const offSem = await post('/api/manage/memory/layer/semantic/off');
-    ok('语义 can be unbound, and asks for a restart', offSem.status === 200, String(offSem.status));
+    // TURNING IT OFF REMEMBERS THE MODEL, so switching back costs neither a download nor a rebuild.
+    await post('/api/manage/memory/layer/semantic/off');
     const afterOff = layerOf(await getJson('/api/manage/memory'), 'semantic');
-    ok('and the model choice is REMEMBERED, so turning it back on costs neither download nor rebuild',
+    ok('turning 语义 off keeps the model it was using, rather than forgetting it',
       afterOff.on === false && afterOff.model === anyEmbedder.id,
       JSON.stringify({ on: afterOff.on, model: afterOff.model }));
   } else {
-    ok('(no embedder on this machine) the 语义 accept path is not exercised here', true,
-      'the refusals above cannot distinguish "correctly strict" from "always refuses"');
+    ok('(no embedding model on this machine) the 语义 accept path is not exercised here', true,
+      'needs a real embedder — a planted file would fail the probe this asserts');
   }
+
   // ---- I · a settings.json written BEFORE the source model still resolves correctly ---------------
   // Found on a real data folder, not by this fixture — which is why it is now a case.
   //

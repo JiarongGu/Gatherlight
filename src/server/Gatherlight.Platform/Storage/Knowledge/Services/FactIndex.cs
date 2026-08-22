@@ -206,9 +206,9 @@ public sealed class FactIndex : IFactIndex
             var phrasings = await Agent.Llm.Sources.ClaudeCliSemanticSource.RephraseAsync(
                 _llm, mem.EmbeddingModel, content, ct);
             if (phrasings.Count == 0) return;
-            var row = (await _store.RecallAsync(topic, kind, 1)).FirstOrDefault();
-            if (row is null) return;
-            await _store.SetAkaAsync(row.Id, string.Join('\n', phrasings));
+            // Addressed by KEY. Searching for the fact we had just written could attach its phrasings to a
+            // different one — see IKnowledgeStore.SetAkaAsync for how.
+            await _store.SetAkaAsync(kind, topic, string.Join('\n', phrasings));
             _log?.LogInformation("fact index: stored {Count} phrasings for {Kind}/{Topic}",
                 phrasings.Count, kind, topic);
         }

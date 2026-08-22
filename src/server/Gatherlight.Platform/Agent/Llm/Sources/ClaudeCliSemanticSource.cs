@@ -63,14 +63,18 @@ public sealed class ClaudeCliSemanticSource : IMemorySemanticSource
     /// whichever Claude model the household picked, and the account is already logged in or not.</summary>
     public bool IsConfigured(MemorySourceSettings s) => true;
 
+    /// <summary>NO. This arm registers nothing, and its effect is at write time: <c>FactIndex</c> reads the
+    /// saved binding per fact, so the next fact written is already expanded. Reporting true would leave the
+    /// panel asking forever for a restart that changes nothing — see <see cref="IMemorySource"/>.</summary>
+    public bool TakesEffectOnRestart => false;
+
     /// <summary>NOTHING to register. No embedder, no vector store, no <c>AddSemanticMemory()</c> — this arm
     /// does not produce vectors, so registering the vector half would create a store nothing ever fills and
     /// leave the engine reporting a semantic member that answers nothing.
     ///
     /// <para>Its effect is at write time instead: <c>FactIndex</c> reads the saved binding and expands each
-    /// fact. That is why this is the one source whose <c>Register</c> is empty and still means something —
-    /// and why the panel must report it as a binding that takes effect on the NEXT write rather than one
-    /// that needs a restart to serve recalls.</para></summary>
+    /// fact. That is why this is the one source whose <c>Register</c> is empty and still means
+    /// something.</para></summary>
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx) { }
 
     /// <summary>Whose runtime: the household's own Claude account, through a CLI the app provisions.

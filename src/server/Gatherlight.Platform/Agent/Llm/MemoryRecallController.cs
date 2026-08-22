@@ -163,8 +163,12 @@ public sealed class MemoryRecallController : ControllerBase
                     source = boundSemantic?.Id, model = mem.EmbeddingModel,
                     // Only this layer can OBSERVE its own running state: ISemanticMemory resolves exactly
                     // when an embedder was registered.
-                    activeSource = _semantic is not null ? boundSemantic?.Id : null,
-                    activeModel = _semantic is not null ? mem.EmbeddingModel : null,
+                    // RUNNING, not saved. For an arm that registers an embedder, "running" means the
+                    // container holds one — it cannot until a restart. For an arm whose effect is at write
+                    // time, saved IS running: asking whether an ISemanticMemory exists would answer no for
+                    // ever and make the restart banner permanent.
+                    activeSource = SemanticIsRunning(boundSemantic) ? boundSemantic?.Id : null,
+                    activeModel = SemanticIsRunning(boundSemantic) ? mem.EmbeddingModel : null,
                     groups = semanticGroups,
                     // A saved backend that no longer exists is SAID, never silently
                     // swapped — see RetiredNote.
@@ -247,6 +251,14 @@ public sealed class MemoryRecallController : ControllerBase
                 ? "请改选「Claude CLI」,或在「资源」面板下载 llama.cpp 的对话模型后选「llama.cpp」。"
                 : "请改选「llama.cpp」(在「资源」面板下载嵌入模型),或选「内置」只用公式检索。");
     }
+
+    /// <summary>Is the bound 语义 arm actually doing anything right now?
+    ///
+    /// <para>Two different questions behind one word, which is why this is not just a null check on
+    /// <c>_semantic</c>: an embedder arm is running when the container holds one, and a write-time arm is
+    /// running as soon as it is saved.</para></summary>
+    private bool SemanticIsRunning(Sources.IMemorySemanticSource? bound) =>
+        bound is not null && (!bound.TakesEffectOnRestart || _semantic is not null);
 
     /// <summary>Project a <see cref="RuntimeOrigin"/> for the wire. A named projection rather than an
     /// inline anonymous object because a DECLINED backend needs one too — it has no source to ask, so the
@@ -531,8 +543,16 @@ public sealed class MemoryRecallController : ControllerBase
 
             return Ok(new
             {
-                ok = true, layer, source = source.Id, model, restartRequired = true, reindexRequired = true,
-                modelChanged, dimensions = probe.Dimensions, probeMs = probe.Milliseconds,
+                // An arm that registers nothing is live on the next WRITE, so telling the household to
+                // restart would be asking for something that changes nothing. The reindex is still offered:
+                // phrasings attach as facts are written, so what they already know needs a pass to gain them.
+                ok = true, layer, source = source.Id, model,
+                restartRequired = source.TakesEffectOnRestart, reindexRequired = true,
+                // `proved` says what the number IS: a vector width for an embedding arm, "phrasings" for
+                // the CLI one. Without it `dimensions: 4` from a rephrasing probe reads as a 4-dimensional
+                // embedding, which is the kind of confident-and-wrong label this surface keeps removing.
+                modelChanged, dimensions = probe.Dimensions, proved = probe.What ?? "dimensions",
+                probeMs = probe.Milliseconds,
                 catalogued = EmbeddingCatalog.Find(model) is not null,
                 note = "设置已保存。重启服务后生效,然后请重新建立一次语义索引。",
             });
