@@ -158,6 +158,19 @@ export function SettingsPanel({ toast, onRestart }: { toast: (t: string, k?: 'ok
                   { value: 'wan', label: '公网 · WAN' },
                 ]}
               />
+              {/* WAN + no TLS is a bearer token crossing the internet in PLAINTEXT, and it used to look
+                  exactly as calm as a safe setup: the danger styling keyed only on a missing token, and
+                  HTTPS was a 建议 in the same grey sentence. The token claim itself is enforced (the
+                  service refuses to start without one) — this is the half that was true, correctly
+                  labelled advice, and invisible. Called out separately rather than folded into the hint,
+                  because it is a DIFFERENT hole from having no token and is fixed by a different switch. */}
+              {mode === 'wan' && !tlsEnabled && (
+                <div className="set-hint danger">
+                  ⚠ 没有启用 HTTPS:访问令牌会以明文经过互联网传输,任何中间环节都能读到它 ——
+                  读到就等于拿到这台机器上全部资料的访问权。请在下方勾选「启用 HTTPS」(自签证书即可,
+                  浏览器会提示一次)。
+                </div>
+              )}
               <div className={`set-hint${mode === 'wan' && !data.hasAccessToken && !token ? ' danger' : ''}`}>
                 {mode === 'local' && '仅本机可访问(127.0.0.1)—— 最安全,无需令牌。'}
                 {mode === 'lan' && '本机 + 局域网设备可访问(0.0.0.0 含 127.0.0.1),无需令牌 —— 仅在可信内网使用,任何能连上的设备都可进入。'}

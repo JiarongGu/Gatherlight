@@ -202,9 +202,33 @@ try {
   }
 
   // Settings tab renders its config form (the surface for editing settings.json)
-  await c.evalJs("[...document.querySelectorAll('.mng-tab')].find(t=>/Settings/.test(t.textContent))?.click()");
-  await new Promise((r) => setTimeout(r, 700));
-  ok('Settings tab renders config form', (await c.evalJs("!!document.querySelector('.set-group')")) === true);
+  const setUp = await switchTab('Settings', '.set-group');
+  ok('Settings tab renders config form', setUp);
+
+  // WAN + no TLS is a bearer token crossing the internet in PLAINTEXT. The token requirement is enforced
+  // (the service refuses to start without one) but HTTPS is only advice, and the danger styling keyed
+  // solely on the token — so the unsafe half looked exactly as calm as a safe setup.
+  //
+  // SAFE TO DRIVE on the real data folder: the segmented control sets React state only, and nothing is
+  // written until 保存 is pressed, which this never does. It selects 本机 again afterwards regardless.
+  const wanWarn = async () => (await c.evalJs(
+    "[...document.querySelectorAll('.set-hint.danger')].map(n=>n.textContent).join('|')")) || '';
+  const pickMode = (label) => c.evalJs(
+    `[...document.querySelectorAll('.set-access-seg button, .set-access-seg .seg-opt')]`
+    + `.find(b=>/${label}/.test(b.textContent))?.click()`);
+  try {
+    await pickMode('WAN');
+    let warned = '';
+    for (let i = 0; i < 20; i++) {
+      warned = await wanWarn();
+      if (/HTTPS/.test(warned)) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    ok('choosing WAN without HTTPS warns that the token crosses the internet in plaintext',
+      /HTTPS/.test(warned) && /明文/.test(warned), JSON.stringify(warned.slice(0, 120)));
+  } finally {
+    await pickMode('Local');
+  }
   await c.evalJs("[...document.querySelectorAll('.mng-tab')].find(t=>/Overview/.test(t.textContent))?.click()");
   await new Promise((r) => setTimeout(r, 300));
 

@@ -273,6 +273,17 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   so a household that chose LAN mode and took the documented opt-in got a refusal quoting the setting
   they had already set — while `Gatherlight.Host` honoured it. A denial without its positive control
   is half a test.
+- **WAN WITHOUT TLS IS A TOKEN IN PLAINTEXT, and it used to look as calm as a safe setup.** The token
+  requirement is genuinely enforced — an unauthenticated non-loopback bind refuses to start — but HTTPS is
+  only ever a 建议, and the console's danger styling keyed SOLELY on a missing token. So the configuration
+  that ships a bearer credential across the internet in clear text rendered in the same grey as a correct
+  one. Both halves were true and one was invisible, which is the same defect shape as an unenforced claim
+  arriving from the other direction. The settings panel now flags WAN-with-TLS-off separately — a
+  different hole from having no token, fixed by a different switch, so not folded into the same sentence.
+  Deliberately NOT made fail-closed: refusing to start would be ours to impose on a household who may be
+  behind their own terminating proxy, and this file's own rule is that "costlier" describes an option
+  rather than removing it. Asserted in `desktop-e2e`, which can drive the segmented control safely
+  because it sets React state only — nothing is written until 保存, which the harness never presses.
 - **TLS is Kestrel-native** (`TlsCertificate.Resolve`): a self-signed cert generated + reused from
   `state/gatherlight-tls.pfx`, or a configured PFX. Config lives in `security.*` (settings.json) +
   `GATHERLIGHT_BIND`·`_ACCESS_TOKEN`·`_TRUST_LOOPBACK`·`_TLS[_CERT]` env overrides.
