@@ -406,6 +406,17 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   质量 to a household who could not have observed it, and the honest sentence names a cumulative gain against
   an immediate wait. **Anything measured here belongs in the panel**, because the household is the one paying
   the 10 s.
+- **A LAYER'S COST LINE DESCRIBES THE BOUND ARM, and 语义's did not — it promised privacy it could not
+  keep.** 判断 has always derived its cost from `boundJudge`; 语义 carried a fixed string from when the only
+  arm was an embedder: 「占用磁盘与本机算力,不消耗 token;资料不离开这台电脑」. Adding the Claude CLI arm
+  left that sentence in place, so a household who chose it was told their facts stay on their machine while
+  every fact was being sent to Claude to be rephrased, and billed. **Adding an arm to a layer means
+  re-reading everything the layer SAYS**, because the description was written when the set of arms was
+  smaller — and a fixed string cannot be wrong about a backend that did not exist when it was written. The
+  `what` was wrong the same way (「用本机模型为事实生成向量」 for an arm that is neither local nor makes
+  vectors) and now names the JOB instead. `p51` binds each arm and asserts the claim tracks it — including
+  that a local arm still SAYS the data stays put, because deleting the promise everywhere would understate
+  what running the model yourself actually buys.
 - **语义 · Claude CLI MEASURED, and it changed nothing on this corpus** (2026-08-23, `dev.mjs recall-bench`
   against the household's own 16 facts, phrasings back-filled onto 13 of them). At `--limit=3`: identical to
   the no-phrasing run on every column. At `--limit=8`: found 12/16 and MRR 0.654, against 13/16 and 0.664

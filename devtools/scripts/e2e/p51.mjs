@@ -221,6 +221,39 @@ try {
   await post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'haiku' });
 
   // ---- D · binding refuses rather than pretending ------------------------------------------------
+  // THE COST LINE MUST DESCRIBE THE BOUND ARM, and for 语义 it did not.
+  //
+  // It was a fixed string from when the only arm was an embedder: 「不消耗 token;资料不离开这台电脑」.
+  // The Claude CLI arm sends every fact to Claude to be rephrased and bills for it, so a household that
+  // chose that arm was reading a privacy promise answered for a backend they had not chosen. That is the
+  // unenforced plain-language claim this whole surface exists to prevent, in its worst form.
+  {
+    const bindSem = await post('/api/manage/memory/layer/semantic',
+      { source: 'claude-cli', model: 'haiku' });
+    ok('(fixture) 语义 binds to the Claude arm', bindSem.status === 200, String(bindSem.status));
+    const semCli = layerOf(await getJson('/api/manage/memory'), 'semantic');
+    ok('语义 on Claude does NOT claim the data stays on this machine',
+      !/不离开这台电脑/.test(semCli?.cost ?? ''), JSON.stringify(semCli?.cost));
+    ok('…and says what it actually does with the facts',
+      /发送给/.test(semCli?.cost ?? '') && /额度|token/i.test(semCli?.cost ?? ''),
+      JSON.stringify(semCli?.cost));
+    // The claim is not simply deleted — it is still TRUE for a local arm, and dropping it everywhere
+    // would understate what a household gets from running the model themselves.
+    const bindLocal = await post('/api/manage/memory/layer/semantic',
+      { source: 'builtin', model: 'embeddinggemma-300M-Q8_0' });
+    if (bindLocal.status === 200) {
+      const semLocal = layerOf(await getJson('/api/manage/memory'), 'semantic');
+      ok('…while a local arm still says the data stays put',
+        /不离开这台电脑/.test(semLocal?.cost ?? ''), JSON.stringify(semLocal?.cost));
+    } else {
+      ok('(skipped) the in-process embedder is not installed in this fixture',
+        true, `bind -> ${bindLocal.status}`);
+    }
+    // Leave the layer as this block found it — later cases assert on 语义 being UNBOUND, and a fixture
+    // that quietly changes shared state makes the next assertion fail for a reason that is not its own.
+    await post('/api/manage/memory/layer/semantic/off');
+  }
+
   const badSource = await post('/api/manage/memory/layer/judge', { source: 'nope', model: 'haiku' });
   ok('an unknown backend is refused', badSource.status === 400, String(badSource.status));
   const badLayer = await post('/api/manage/memory/layer/nope', { source: 'claude-cli', model: 'haiku' });

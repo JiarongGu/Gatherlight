@@ -172,8 +172,23 @@ public sealed class MemoryRecallController : ControllerBase
                     id = MemoryLayers.Semantic, name = "语义 · Semantic",
                     alwaysOn = false,
                     on = boundSemantic is not null, live = false,
-                    what = "用本机模型为事实生成向量,按语义检索 —— 问法与原文用词完全不同也能找到。",
-                    cost = "占用磁盘与本机算力,不消耗 token;资料不离开这台电脑。",
+                    // THE JOB, then the cost OF THE BOUND ARM — exactly as 判断 above already does. Both
+                    // of these were fixed strings written when the only arm was an embedder, and adding
+                    // the Claude CLI arm on this branch left them describing something else entirely.
+                    //
+                    // The cost line was the serious one: it promised "不消耗 token;资料不离开这台电脑"
+                    // while the CLI arm sends every fact to Claude to be rephrased and bills for it. A
+                    // household reads that sentence to decide whether their household's facts stay on
+                    // their machine, and it was answering for a backend they had not chosen. An
+                    // unenforced plain-language promise is the defect this whole surface exists to
+                    // prevent, and a privacy one is the worst instance of it.
+                    what = "换个说法也能命中 —— 问法和原文用词完全不同的时候,也能找到那条事实。",
+                    cost = boundSemantic is null
+                        ? "这一层没有启用。"
+                        : boundSemantic.Group == MemoryGroups.Cli
+                            ? "写入每条事实时多一次 Claude 调用:消耗账号额度,而且**事实内容会发送给 "
+                              + "Claude** 去改写说法。检索时不额外调用,也不会变慢。"
+                            : "占用磁盘与本机算力,不消耗 token;资料不离开这台电脑。",
                     source = boundSemantic?.Id, model = mem.EmbeddingModel,
                     // Only this layer can OBSERVE its own running state: ISemanticMemory resolves exactly
                     // when an embedder was registered.
