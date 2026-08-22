@@ -142,6 +142,58 @@ try {
   ok('the console can report index coverage, and it is complete after normal writes',
     cov && cov.total >= 3 && cov.indexed === cov.total, JSON.stringify(cov));
 
+  // --- N. PHRASINGS LAND ON THE FACT THEY CAME FROM -----------------------------------------------
+  //
+  // The 语义 CLI arm expands each fact at write time and stores the wordings in `knowledge.aka`, which the
+  // trigram index searches. The first version found the row it had just written by SEARCHING for its topic
+  // — RecallAsync(topic), full-text, ordered by CONFIDENCE — so it could attach one fact's phrasings to a
+  // different fact. Phrasings on the wrong fact are worse than none: an unrelated fact starts answering a
+  // question it has nothing to do with, and nothing reports it.
+  //
+  // This repro is built to make the old code fail deterministically rather than by luck:
+  //   · the second topic is TWO characters, so FtsQuery drops it and recall falls back to LIKE %..%
+  //   · the first topic CONTAINS the second as a substring, so that LIKE matches both rows
+  //   · the first fact has the higher confidence, and the fallback orders by confidence DESC
+  // so the old lookup would have returned fact ONE while writing fact TWO.
+  const bindRephrase = await fetch(`${base}/api/manage/memory/layer/semantic`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ source: 'claude-cli', model: 'haiku' }),
+  });
+  ok('(setup) 语义 binds to the CLI rephrasing arm', bindRephrase.status === 200, String(bindRephrase.status));
+
+  await remember(c, 'pet', '猫粮偏好', '家里的猫只吃鱼味罐头,不碰鸡肉味的。', 0.95);
+  await remember(c, 'pet', '猫粮', '猫粮放在玄关的柜子里。', 0.30);
+
+  const akaDb = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'));
+  const akaRows = akaDb.prepare(
+    "SELECT topic, COALESCE(aka,'') AS aka FROM knowledge WHERE kind = 'pet' ORDER BY topic").all();
+  const akaOf = (t) => akaRows.find((r) => r.topic === t)?.aka ?? '';
+
+  // The stub answers every prompt, so if NOTHING came back the seam is broken rather than the routing —
+  // say which, instead of reporting a routing failure for a plumbing one.
+  const anyExpanded = akaRows.some((r) => r.aka.length > 0);
+  ok('the CLI arm expands a fact on write, storing other wordings beside it',
+    anyExpanded, JSON.stringify(akaRows));
+
+  if (anyExpanded) {
+    // THE ASSERTION. Under the old lookup the second write would have overwritten the FIRST row and left
+    // its own empty — so "both rows carry their own" is exactly the discriminator.
+    // THE ASSERTION: BOTH rows carry phrasings. Under the old lookup the second write would have resolved
+    // to the FIRST row (two-character topic → no FTS token → LIKE %猫粮% matches both → ordered by
+    // confidence, and fact one is 0.95 against 0.30), overwriting that row and leaving its own empty.
+    //
+    // Deliberately NOT asserting the two differ: the claude stub answers every prompt with the same canned
+    // text, so content cannot discriminate here and an inequality check would be asserting the stub. What
+    // it CAN prove is which ROW each write reached, which is precisely what was broken.
+    ok('and each fact keeps its OWN phrasings — the second write cannot land on the first row',
+      akaOf('猫粮').length > 0 && akaOf('猫粮偏好').length > 0,
+      JSON.stringify(akaRows.map((r) => [r.topic, r.aka.length])));
+  }
+  akaDb.close();
+
+  // Put the layer back as it was, so later cases in this suite see the state they expect.
+  await fetch(`${base}/api/manage/memory/layer/semantic/off`, { method: 'POST' });
+
   // --- 6. a backup import rebuilds the index ------------------------------------------------------
   const zip = await fetch(`${base}/api/backup/export`);
   ok('backup exports', zip.status === 200, `status ${zip.status}`);
@@ -206,6 +258,7 @@ try {
     .map((r) => r.scope);
   ok('and the entries moved to the current layout', afterScopes.length === 1 && afterScopes[0] !== 'price',
     `scopes=${JSON.stringify(afterScopes)}`);
+
 } catch (err) {
   fail('e2e-p48 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {

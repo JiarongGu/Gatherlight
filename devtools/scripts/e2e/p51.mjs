@@ -630,6 +630,14 @@ try {
     { source: 'claude-cli', model: 'haiku' });
   ok('binding 语义 to the CLI arm succeeds, having actually proved it can rephrase',
     bindRephrase.status === 200, `${bindRephrase.status} ${JSON.stringify(bindRephrase.body)}`);
+  // AND THE NUMBER SAYS WHAT IT IS. This arm's probe returns a count of PHRASINGS, which shares a field
+  // with the embedding arms' vector width — `dimensions: 4` from a rephrasing probe would read as a
+  // 4-dimensional embedding. The companion assertion for the embedding case lives further down inside a
+  // branch that only runs where a real model is installed, so without this one the field had no coverage
+  // in a fixture at all — which is how it came to exist, unsent, for a whole commit.
+  ok('…and reports WHAT it proved, so a phrasing count is not read as a vector width',
+    bindRephrase.body?.proved === 'phrasings',
+    JSON.stringify({ dimensions: bindRephrase.body?.dimensions, proved: bindRephrase.body?.proved }));
   const afterRephrase = layerOf(await getJson('/api/manage/memory'), 'semantic');
   ok('…and the panel reports the CLI arm as the saved backend',
     afterRephrase.source === 'claude-cli',

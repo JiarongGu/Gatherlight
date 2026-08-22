@@ -448,7 +448,13 @@ public static class GatherlightApp
                     // Passed EXPLICITLY, like every argument here: this is a hand-written factory, so an
                     // optional constructor parameter added later is not injected — it silently takes its
                     // default. That is how the vector cleanup came to compile, register and do nothing.
-                    sp.GetService<Lyntai.Memory.IVectorStore>()))
+                    sp.GetService<Lyntai.Memory.IVectorStore>(),
+                    // …and how the 语义 CLI arm did exactly the same, one release later, despite the
+                    // warning directly above. It binds, the panel reports it bound, and every fact was
+                    // written with an empty `aka` because these two arrived as null. Caught only by an e2e
+                    // case that read the column — nothing else could have.
+                    sp.GetService<Lyntai.Llm.ILlmClient>(),
+                    sp.GetService<Platform.Kernel.Services.ServerConfigService>()))
             .AddSingleton<Platform.Storage.Knowledge.Services.IProcessLog, Platform.Storage.Knowledge.Services.ProcessLog>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RememberFactTool>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RecallFactsTool>()
