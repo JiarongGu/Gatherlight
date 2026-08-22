@@ -60,9 +60,9 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
     public string Name => "内置(随应用附带)";
 
     public string Description =>
-        "用应用自带的嵌入模型,在应用内直接运行:不用装 Ollama,没有常驻服务,也不用填地址。"
-        + "实测检索质量与本机 Ollama 接近(前三名命中相同,首位命中少一次),每次查询更快;"
-        + "模型约 222 MB,在「资源 · Resources」面板下载一次。";
+        "适合:想占地方最少、且完全不想多一个进程 —— 它在应用内直接运行,没有常驻服务,也没有端口。"
+        + "总共约 222 MB(llama.cpp 那条是运行时 35 MB + 模型 334 MB),代价是 10 题里首位命中少一次"
+        + "(8 题对 9 题,前三名命中同为 10 题)。";
 
     /// <summary>Where the provisioned model lives. Derived from the settings rather than injected, because
     /// this class is a stateless entry in a STATIC catalog — see <see cref="MemorySources"/> for why that

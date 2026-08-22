@@ -17,7 +17,8 @@ public sealed class OllamaSemanticSource : IMemorySemanticSource
     public string Name => "本机 · Ollama";
 
     public string Description =>
-        "用这台机器上的嵌入模型为事实生成向量:占用磁盘与算力,不消耗 token,资料不离开这台电脑。";
+        "适合:你本来就装了 Ollama,不想再多一个运行时。用它上面的嵌入模型为事实生成向量:" +
+        "占用磁盘与算力,不消耗 token,资料不离开这台电脑。";
 
     public bool NeedsEndpoint => false;
 

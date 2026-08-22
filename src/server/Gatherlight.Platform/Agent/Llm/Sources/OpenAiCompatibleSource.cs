@@ -53,8 +53,8 @@ public sealed class OpenAiCompatibleSource : IMemoryJudgeSource, IMemorySemantic
     public string Name => "其他本机服务";
 
     public string Description =>
-        "任何提供 OpenAI 兼容接口的本机服务:llama.cpp(llama-server)、LM Studio、vLLM、Jan、LocalAI 等。"
-        + "填一个地址,模型由那个服务自己提供 —— 这里不负责下载或删除它的模型。"
+        "适合:你已经有一个在跑的服务,或者想用应用没有收录的模型 —— LM Studio、vLLM、Jan、LocalAI、"
+        + "你自己起的 llama-server 都可以。填一个地址,模型由那个服务自己提供;这里不负责下载或删除它的模型。"
         + "地址必须是本机(127.0.0.1),否则事实会被发到别处去。";
 
     public string? ClientName => ClientId;

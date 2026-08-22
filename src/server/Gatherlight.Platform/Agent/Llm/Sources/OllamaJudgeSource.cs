@@ -25,7 +25,8 @@ public sealed class OllamaJudgeSource : IMemoryJudgeSource
     public string Name => "本机 · Ollama";
 
     public string Description =>
-        "用这台机器上的对话模型判断:不消耗账号额度,不联网,断网也能用;代价是本机算力。" +
+        "适合:你本来就装了 Ollama,不想再多一个运行时。模型由它管,应用只连上去用。" +
+        "不消耗账号额度,不联网,断网也能用;代价是本机算力。" +
         "避免选「会思考」的模型 —— 判断在每次回忆的必经路径上。";
 
     public string? ClientName => ClientId;

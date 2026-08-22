@@ -41,11 +41,15 @@
   (5) re-measure the shortlist through it — the Q8 embedder scored the same 9/10 as Ollama's f16 and the
   1B judge was timed at 150–204 ms, but 判断's QUALITY has never been measured per model on this corpus at
   all, and the catalogue says so rather than implying otherwise.
-- [ ] **Decide the 内置 ONNX arm's fate now that it is measured as dominated.** `llama-server` beat it on
-  BOTH axes (9/10 vs 8/10 top-1, 23 ms vs 28 ms per query) while also serving 判断, which the ONNX arm
-  cannot. What it still uniquely has is *no separate process at all* and the smallest total payload
-  (222 MB). Keep it as the zero-process option, or drop it once llama-server lands — a product call, and
-  the argument for keeping it got weaker rather than stronger.
+- [ ] **Give 内置 a stated ROLE, or drop it — but the "dominated" case for dropping it was wrong.**
+  I wrote that `llama-server` beats it on both axes. On retrieval and per-query latency it does (9/10 vs
+  8/10, 25 ms vs 28 ms), but I compared runtime-to-runtime and got the footprint backwards: 内置 is
+  **222 MB total with no process at all**, against llama.cpp's 35 MB runtime **plus** a 334 MB model **plus**
+  a child process per model — 369 MB and a daemon. So it is the smaller and quieter path, paying one top-1
+  hit in ten for it. That is a real trade a real household might want, which makes this a ROLE question
+  rather than a ranking one: keep it as the minimum-footprint, zero-process option (the descriptions now
+  say exactly that), or drop it to carry one backend fewer. Not a decision to take on the size column
+  alone, which is how the wrong answer got written down the first time.
 - [ ] **内置 for 判断** — an in-process CHAT model, which is a much bigger thing than an embedder (GGUF via
   LLamaSharp; see `docs/builtin-model-runner.md` for why not ONNX Runtime GenAI). Deferred, not blocked:
   判断 already has two working backends, so this buys convenience rather than capability.
