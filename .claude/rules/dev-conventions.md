@@ -955,6 +955,20 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 - `node devtools/dev.mjs <server|host|desktop-e2e|vite|build|publish|resources-pack|e2e|smoke|memory|eval|embed-bench|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs|check-host-actions>`
   — kept in step with the tool's own usage line (`dev.mjs`, bottom of the switch).
+- **A UI HARNESS MUST RETRY THE ACTION, not only poll the result.** `desktop-e2e` polled for the view
+  after clicking a tab ONCE — and a click dispatched before React has wired the handler is swallowed
+  silently, so no amount of waiting produces the view. That flapped run to run and reads as "the Cortex
+  tab is broken". Same shape twice more in the same file: the memory cards were read after a fixed 900 ms
+  (the panel fetches its own state after Cortex mounts, so the assertion reported "renders nothing" while
+  a diagnostic three lines later found all three), and the enrichment toggle was read 900 ms after
+  clicking, mid-refetch, so it reported "the switch does not flip". **A fixed sleep does not fail
+  honestly — it fails as a wrong description of the product**, which is worse than a red that says
+  "timed out". Poll the condition, and re-issue the action each round.
+- **`dev.mjs e2e all` NAMES what it did not cover.** `desktop-e2e` drives the real UI over CDP and cannot
+  join the fleet — it needs `dev.mjs host --dev` and a WebView2 window — so the fleet's summary says so
+  where "all green" is read. Being outside the fleet is exactly why it rotted once: it asserted control
+  names a rename had retired months earlier and nothing noticed, because nothing ran it. A gap nobody is
+  reminded of is a gap that comes back, and the reminder costs one line.
 - e2e suites live in `devtools/scripts/e2e/` as `pN.mjs` (discovered by `^p\d+\.mjs$`); they self-host
   the server against isolated `devtools/_e2e-*` data folders with the claude stub; every phase of work
   lands with its suite green. Shared harness: `devtools/scripts/e2e/_e2e-common.mjs` (leading `_` → not

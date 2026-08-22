@@ -472,6 +472,15 @@ switch (cmd) {
     const totalSuiteSec = results.reduce((n, r) => n + r.ms, 0) / 1000;
     console.log(`  suite time total ${totalSuiteSec.toFixed(0)}s across ${results.length}`
       + ` · median ${(results.map((r) => r.ms).sort((a, b) => a - b)[results.length >> 1] / 1000).toFixed(0)}s`);
+    // WHAT THIS RUN DID NOT COVER, said where "all green" is read. desktop-e2e drives the real UI over
+    // CDP and cannot join this fleet — it needs `dev.mjs host --dev` and a WebView2 window. Being
+    // outside the fleet is exactly why it rotted once: it asserted control names that a rename had
+    // retired months earlier, and nothing noticed because nothing ran it. A gap nobody is reminded of
+    // is a gap that comes back.
+    if (sel === 'all') {
+      console.log('  NOT in this fleet: desktop-e2e (real UI over CDP — needs `dev.mjs host --dev`).'
+        + ' Run it before a release; it has rotted unnoticed before.');
+    }
     for (const f of failed) {
       // Say WHERE it died, not just that it did. A suite that printed its PASS marker and then
       // aborted is a teardown crash; one that stopped mid-assertions is a real failure — and the
