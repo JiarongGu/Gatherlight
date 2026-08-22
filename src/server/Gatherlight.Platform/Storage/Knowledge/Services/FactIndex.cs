@@ -299,6 +299,16 @@ public sealed class FactIndex : IFactIndex
     ///
     /// <para>Degrades to nothing, never throws: this runs after a ranking that already succeeded, and
     /// failing the whole recall to protect an addition would trade a working answer for no answer.</para>
+    ///
+    /// <para><b>THIS IS A WORKAROUND FOR A LIBRARY GAP — delete it if Lyntai closes it.</b> Filed as
+    /// <c>Lyntai TASKS.md</c> <b>Part 94</b>: the engine records subjects and reads them only at write
+    /// time, so nothing but this reaches them at recall. If a release adds a subject seed to
+    /// <c>GraphMemoryOptions</c>, subject matches will arrive as ordinary ranked hits — with real
+    /// retrievability and degree, which is strictly better than what this can report — and the
+    /// <c>seen</c> dedup below will silently skip them. Nothing breaks and no row doubles; this just
+    /// becomes two redundant store queries on every recall. Recorded on BOTH sides on purpose, because a
+    /// workaround whose reason lives only in the other repository is how one feature ends up implemented
+    /// twice, each copy looking necessary to whoever reads only one of them.</para>
     /// </summary>
     private async Task AppendBySubjectAsync(string query, List<FactHit> hits, CancellationToken ct)
     {

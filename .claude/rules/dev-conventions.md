@@ -408,6 +408,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (confidence then bm25), nor `MemoryTools.Row`, nor the client. So the double-count was a latent wrong
   number rather than a visible one. Left as a recorded question rather than silently resolved: "read it or
   stop writing it" is a product decision, and dropping a column the backup carries is not a refactor.
+- **A WORKAROUND FOR A LYNTAI GAP IS RECORDED ON BOTH SIDES, or it becomes a duplicate feature.** We are
+  review-only on Lyntai, so our fixes for its gaps live here and the request lives in its `TASKS.md`. Each
+  half has to name the other: the code says *this exists because the library does not do it, and here is
+  what happens when it does*; the task says *an adopter already shipped a workaround, so landing this means
+  telling them to remove it*. Without both, a future release closes the gap silently and the app keeps
+  running its own copy — two implementations in one call path, each looking necessary to whoever reads only
+  one repository. `FactIndex.AppendBySubjectAsync` ↔ Lyntai Part 94 is the worked example, and it also shows
+  the note must state the CONSEQUENCE precisely rather than warn vaguely: there, an engine-side seed would
+  not double any row (we dedup by graph ref) and would report better numbers than we can, so the honest
+  instruction is "delete this", not "beware of conflicts".
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
