@@ -105,7 +105,19 @@ public sealed class ModelsController : ControllerBase
     {
         var mem = Settings();
         var judgeModel = MemorySources.ResolveJudgeModel(mem);
-        var probe = await _llama.ProbeAsync(refresh);
+        // CHEAP by construction. `installed` is a file check and `serving` a 120 ms loopback connect
+        // (LiveAsync); the build tag and device list come from whatever the last full probe left behind, and
+        // a background refresh fills them in if nothing has. Awaiting the full probe here cost ~1.9 s on the
+        // first open after every restart — two process starts for two strings that decorate one row — which
+        // is the same defect the 记忆检索 panel had, in the same place, for the same reason.
+        //
+        // `refresh` still means refresh: an explicit re-probe is what the household asked for, and it is the
+        // one path where waiting is the honest answer.
+        var probe = refresh && _llama.Cached is null
+            ? await _llama.LiveAsync()
+            : refresh ? await _llama.ProbeAsync(true) : await _llama.LiveAsync();
+        var known = _llama.Cached;
+        if (known is null) _ = _llama.ProbeAsync(ct: CancellationToken.None);
         var models = Models(mem, judgeModel);
 
         return Ok(new
@@ -116,9 +128,13 @@ public sealed class ModelsController : ControllerBase
             runtime = new
             {
                 id = MemoryBackends.LlamaCpp, baseUrl = probe.BaseUrl, installed = probe.Installed,
-                serving = probe.Serving, version = probe.Version, executable = probe.Executable,
+                serving = probe.Serving, version = known?.Version, executable = probe.Executable,
                 // Reported by --list-devices, not guessed — this is the panel that pays for that answer.
-                gpuLikely = probe.GpuLikely, devices = probe.Devices, problem = probe.Problem,
+                // From the last full probe when there is one — null rather than a guess when there is
+                // not, because "no GPU" and "nobody has asked yet" are different answers and the row must
+                // not print the first while meaning the second.
+                gpuLikely = known?.GpuLikely ?? false, devices = known?.Devices ?? Array.Empty<string>(),
+                problem = probe.Problem,
             },
             models,
             // Recommended from what is NOT yet installed, and null once there is nothing left to suggest.

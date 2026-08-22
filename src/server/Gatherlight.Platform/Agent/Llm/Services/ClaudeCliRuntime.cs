@@ -22,6 +22,19 @@ public sealed record ClaudeCliState(
     public bool Ready => Runnable && LoggedIn;
 }
 
+/// <summary>Whose Claude login the app's own spawns use.</summary>
+public enum ClaudeSessionMode
+{
+    /// <summary>The machine's — whatever the household is signed in as in their own terminal. The default,
+    /// and what every version before this did: nothing is set, so the CLI finds its usual config dir.</summary>
+    Machine,
+
+    /// <summary>The app's own, in <c>{data}/state/resources/claude/home</c>. Separate account, separate
+    /// quota — and it does not travel in a backup, because the export carries plans/household/.claude/ui/
+    /// uploads and .git, never <c>state/</c>, which is where an OAuth token belongs if it is anywhere.</summary>
+    App,
+}
+
 public interface IClaudeCliRuntime
 {
     /// <summary>The claude executable this install would spawn, or null when there is nothing on disk and
@@ -33,8 +46,40 @@ public interface IClaudeCliRuntime
     Task<ClaudeCliState> ProbeAsync(bool refresh = false, CancellationToken ct = default);
 
     /// <summary>Point Lyntai's per-spawn command resolution at a provisioned CLI by setting
-    /// <c>CLAUDE_CMD</c>. A pre-existing override (tests, an operator's own path) always wins.</summary>
+    /// <c>CLAUDE_CMD</c>, and its credential home at the chosen SESSION by setting
+    /// <c>CLAUDE_CONFIG_DIR</c>. A pre-existing override (tests, an operator's own path) always wins.</summary>
     void Apply();
+
+    /// <summary>Which login the app's own spawns use.
+    ///
+    /// <para><b>Why this is a choice and not a constant.</b> The CLI keeps credentials in a config
+    /// directory, so every process started as the same OS user shares one session — the app was signed in
+    /// as whoever the household signs in as in their own terminal. Fine when those are the same account,
+    /// wrong when they are not: somebody may want their personal account for their own work and a family or
+    /// team account for the planner, and had no way to say so. Verified 2026-08-22 that
+    /// <c>CLAUDE_CONFIG_DIR</c> isolates it completely — the same binary reported
+    /// <c>loggedIn:false, authMethod:none</c> against a fresh directory while the machine session stayed
+    /// signed in, and wrote its own <c>.claude.json</c> there.</para></summary>
+    ClaudeSessionMode SessionMode { get; }
+
+    /// <summary>Where the app's own credentials live, whether or not that session is the one in use.</summary>
+    string AppSessionHome { get; }
+
+    /// <summary>Choose which login the app uses. LIVE — the next spawn picks it up, because the variable is
+    /// re-applied on every probe rather than captured once at startup.</summary>
+    void SetSessionMode(ClaudeSessionMode mode);
+
+    /// <summary>The last probe, WITHOUT spawning anything — null when nothing has asked yet.
+    ///
+    /// <para>For a caller that must not block on a process start: the probe costs ~0.6–0.9 s and 资源 was
+    /// awaiting it before it could render ANY row, so one row's extra question held up a whole panel of
+    /// file checks. The caller reads this, renders, and lets a background refresh fill the gap.</para></summary>
+    ClaudeCliState? Cached { get; }
+
+    /// <summary>Sign OUT of the app's own session. Refuses when the app shares the machine's login — that
+    /// credential belongs to the household's own terminal, and signing them out of it from our panel is the
+    /// same overreach as deleting models out of a daemon we did not install.</summary>
+    Task<bool> LogoutAsync(CancellationToken ct = default);
 
     /// <summary>Drop the cached probe — called after provisioning, so the panel reflects it at once.</summary>
     void Invalidate();
@@ -98,10 +143,55 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
     private DateTimeOffset _cachedAt;
     private string? _applied;
 
-    public ClaudeCliRuntime(IPlatformContext platform, ILogger<ClaudeCliRuntime> log)
+    private readonly Kernel.Services.IAppConfigService? _appConfig;
+
+    /// <summary>The key the session choice lives under. <c>app_config</c> rather than settings.json for the
+    /// same reason 判断's on/off is: it is read PER CALL, so it takes effect on the next spawn instead of at
+    /// the next restart, and nothing here has to exist before the database opens.</summary>
+    private const string SessionKey = "claude.session";
+
+    public string AppSessionHome =>
+        System.IO.Path.Combine(_platform.ResourcesPath, "claude", "home");
+
+    public ClaudeSessionMode SessionMode =>
+        string.Equals(_appConfig?.Get(SessionKey), "app", StringComparison.OrdinalIgnoreCase)
+            ? ClaudeSessionMode.App : ClaudeSessionMode.Machine;
+
+    public ClaudeCliState? Cached { get { lock (_gate) return _cached; } }
+
+    public void SetSessionMode(ClaudeSessionMode mode)
+    {
+        if (_appConfig is null) return;
+        _appConfig.Set(SessionKey, mode == ClaudeSessionMode.App ? "app" : "machine");
+        // The stored login state belongs to the OLD session, so it is not merely stale — it is about a
+        // different account. Dropping it forces the next probe to ask the session just switched to.
+        Invalidate();
+        Apply();
+        _log.LogInformation("Agent CLI: session set to {Mode}", mode);
+    }
+
+    public async Task<bool> LogoutAsync(CancellationToken ct = default)
+    {
+        // The machine's login is the household's own. Signing them out of their terminal from our panel is
+        // the overreach this codebase already had to unlearn once, with somebody else's model daemon.
+        if (SessionMode != ClaudeSessionMode.App) return false;
+        var exe = Locate();
+        if (exe is null) return false;
+        Apply();
+        var run = await RunAsync(exe, new[] { "auth", "logout" }, ct);
+        var (ok, err) = (run.Ok, run.Stderr);
+        Invalidate();
+        if (!ok) _log.LogWarning("claude auth logout failed: {Err}", Trim(err, 200));
+        else _log.LogInformation("Agent CLI: signed out of the app's own session");
+        return ok;
+    }
+
+    public ClaudeCliRuntime(IPlatformContext platform, ILogger<ClaudeCliRuntime> log,
+        Kernel.Services.IAppConfigService? appConfig = null)
     {
         _platform = platform;
         _log = log;
+        _appConfig = appConfig;
     }
 
     private static string? ExplicitOverride()
@@ -132,6 +222,20 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
 
     public void Apply()
     {
+        // The SESSION is applied even when the COMMAND is not: a household using their own machine-wide
+        // claude may still want the app signed in as a different account, and those are separate questions.
+        // Cleared rather than left set when they share the machine's login — a stale CLAUDE_CONFIG_DIR
+        // would silently keep the app on an account they had just switched away from.
+        if (SessionMode == ClaudeSessionMode.App)
+        {
+            Directory.CreateDirectory(AppSessionHome);
+            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", AppSessionHome);
+        }
+        else
+        {
+            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", null);
+        }
+
         if (ExplicitOverride() is not null) return;          // a deliberate choice outranks ours
         var provisioned = ResourceProvisioner.ProvisionedClaude(_platform.ResourcesPath);
         if (!File.Exists(provisioned)) return;               // nothing of ours to point at; PATH stands

@@ -34,6 +34,15 @@ public interface ILlamaServerRuntime
     /// process on a memo miss. For 资源, which displays them.</summary>
     Task<LlamaServerState> ProbeAsync(bool refresh = false, CancellationToken ct = default);
 
+    /// <summary>The last FULL probe, or null when none has run — the build tag and device list without
+    /// paying for them.
+    ///
+    /// <para>For a caller that displays those but must not block on two process starts: on a cold memo the
+    /// full probe costs ~1.9 s, and 资源 was paying it on the first open after every restart (measured
+    /// 3.24 s for the whole request). The caller composes a cheap row from <see cref="LiveAsync"/> plus
+    /// whatever this already holds, and kicks a background refresh when it is empty.</para></summary>
+    LlamaServerState? Cached { get; }
+
     /// <summary>The state a BINDING decision needs: is it installed, is it answering, what models are on
     /// disk. Never spawns anything.
     ///
@@ -213,6 +222,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
     public void Invalidate() { lock (_gate) _cached = null; }
 
+    public LlamaServerState? Cached { get { lock (_gate) return _cached; } }
+
     /// <summary>Is the router answering? The CHEAP half of a probe — one HTTP GET, no child processes.
     ///
     /// <para>Split out because the startup poll used <c>ProbeAsync(refresh: true)</c> in a 40-iteration
@@ -232,11 +243,14 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// port.</para></summary>
     private async Task<bool> CanConnectAsync(CancellationToken ct)
     {
-        // 300 ms is generous for loopback by two orders of magnitude, and it is the whole cost of being
-        // wrong: a false negative just means the panel says "not started", which is a state it can
-        // already show and which starting it corrects.
+        // 120 ms. A loopback server answers in single-digit milliseconds, so this is still an order of
+        // magnitude of headroom — and it is paid on EVERY 资源 open while the router is not running, which
+        // is the common case. 300 ms was the first guess and then measured as the whole remaining cost of
+        // that panel (0.31 s), so the number is now sized to what it actually waits for rather than to
+        // being comfortably safe. The cost of being wrong is unchanged: a false negative says "not
+        // started", which the panel can already show and which starting it corrects.
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromMilliseconds(300));
+        timeout.CancelAfter(TimeSpan.FromMilliseconds(120));
         try
         {
             if (!Uri.TryCreate(BaseUrl, UriKind.Absolute, out var uri)) return false;

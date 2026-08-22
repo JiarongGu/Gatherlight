@@ -58,6 +58,17 @@ const freshDir = (suffix) => {
 
 /** A stand-in CLI: answers `auth status --json` like the real one, and fails every actual run — which is
  *  what a signed-out or broken CLI does, and what the diagnosis has to survive. */
+/** POST returning status + parsed body — these endpoints answer with a sentence, and the assertions read
+ *  it, so a helper that threw away the body would make every failure say only "409". */
+const cliPost = async (base, path, body) => {
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: body ? { 'content-type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+};
+
 const writeAuthStub = (dir, { loggedIn }) => {
   const file = path.join(dir, 'auth-stub.mjs');
   fs.writeFileSync(file, `
@@ -185,6 +196,49 @@ try {
   ok('and the row names the button rather than a terminal command',
     /登录/.test(String(rowC?.detail ?? '')) && !/auth login/.test(String(rowC?.detail ?? '')),
     String(rowC?.detail));
+  // ---- WHOSE LOGIN the app uses ------------------------------------------------------------------
+  // The CLI keeps credentials in a config directory, so every process started as the same OS user shares
+  // one session: the app was signed in as whoever the household is signed in as in their own terminal.
+  // Fine when those are the same account, wrong when they are not. CLAUDE_CONFIG_DIR isolates it —
+  // verified by hand 2026-08-22, the same binary reporting loggedIn:false against a fresh directory while
+  // the machine session stayed signed in.
+  //
+  // What the fixture CAN check is the choice itself: its default, that it round-trips, that a bad value is
+  // refused, and that logout respects whose credential it is. It cannot check the isolation, because the
+  // auth stub answers from a canned JSON regardless of which directory it is pointed at — asserting that
+  // would be asserting our own stub.
+  const sess = async () =>
+    (await (await fetch(`${srv.base}/api/manage/resources`)).json()).claudeSession;
+  const s0 = await sess();
+  ok('the app shares the machine login by DEFAULT — nothing set, nothing changed',
+    s0?.mode === 'machine', JSON.stringify(s0));
+  ok('and it reports where its own credentials would live, before they exist',
+    typeof s0?.home === 'string' && s0.home.length > 0, JSON.stringify(s0));
+
+  // LOGOUT IS REFUSED while the app shares the machine's login. That credential belongs to the household's
+  // own terminal; ending it from our panel is the overreach this codebase already unlearned once with
+  // somebody else's model daemon. The refusal is the assertion — and it names the way to get a separate one.
+  const logoutShared = await cliPost(srv.base, '/api/manage/resources/claude/logout');
+  ok('signing out is refused while the app shares the machine login',
+    logoutShared.status === 409 && /自己终端|切到/.test(String(logoutShared.body?.error ?? '')),
+    `${logoutShared.status} ${JSON.stringify(logoutShared.body?.error ?? '')}`);
+
+  const bad = await cliPost(srv.base, '/api/manage/resources/claude/session', { mode: 'sideways' });
+  ok('an unknown session mode is refused rather than defaulted', bad.status === 400, String(bad.status));
+
+  const toApp = await cliPost(srv.base, '/api/manage/resources/claude/session', { mode: 'app' });
+  ok('switching to the app\'s own session succeeds', toApp.status === 200, String(toApp.status));
+  ok('…and the panel reports the new mode without a restart',
+    (await sess())?.mode === 'app', JSON.stringify(await sess()));
+  // Now it IS ours to end, so the refusal must stop: whether the CLI succeeds is its business, but a 409
+  // here would mean the app was still calling somebody else's login its own.
+  const logoutOwn = await cliPost(srv.base, '/api/manage/resources/claude/logout');
+  ok('…and signing out is no longer refused, because that session is ours',
+    logoutOwn.status !== 409, String(logoutOwn.status));
+
+  await cliPost(srv.base, '/api/manage/resources/claude/session', { mode: 'machine' });
+  ok('switching back leaves the shared login in place', (await sess())?.mode === 'machine');
+
   const cC = makeClient(srv.base);
   const startC = await cC.post('/api/chat', { message: '给明天建一个日计划' });
   const idC = startC.body?.id ?? startC.body?.sessionId;

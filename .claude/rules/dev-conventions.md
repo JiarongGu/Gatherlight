@@ -634,6 +634,45 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   why `e2e-p49`'s case C makes git appear **mid-life** (confirmed to hang the gate against the pre-fix
   binary). A household that already has git downloads nothing — `p49` asserts that too, because a
   surprise 37 MB is its own defect.
+- **The app can hold its OWN Claude login, and a panel must not block on a process spawn.** Two things the
+  claude-CLI surface got wrong, both fixed together because both were about the same row.
+  **(1) One session for two users.** The CLI keeps credentials in a config directory, so every process
+  started as the same OS user shares a session — the app was signed in as whoever the household is signed in
+  as in their own terminal. Fine when those are the same account and wrong when they are not (a personal
+  account for their own work, a family one for the planner). `CLAUDE_CONFIG_DIR` isolates it completely
+  (verified 2026-08-22: the same binary reported `loggedIn:false, authMethod:none` against a fresh directory
+  while the machine session stayed signed in, and wrote its own `.claude.json` there). `ClaudeSessionMode`
+  is `machine` (default, unchanged behaviour) or `app` (`{data}/state/resources/claude/home`), stored in
+  `app_config` because it is read per call — so the next spawn uses it, no restart — and `Apply()` SETS the
+  variable for `app` and CLEARS it for `machine`, because a stale `CLAUDE_CONFIG_DIR` would silently keep the
+  app on an account they had switched away from. It lives under `state/`, which the backup does NOT carry
+  (`plans household .claude ui uploads .git`) — an OAuth token has no business travelling in a zip.
+  **Signing out is offered ONLY for the app's own session**, and the refusal is the point: the machine's
+  login is the household's own terminal credential, and ending it from our panel is the same overreach as a
+  delete button aimed at a daemon we did not install.
+  **(2) The login instruction could not be followed.** Five places said "run `claude auth login` in a
+  terminal", which is unactionable for a CLI installed through 资源: that copy lives in
+  `{data}/state/resources/claude/` and the directory is never added to PATH — we resolve it internally and
+  pass `CLAUDE_CMD`. `StartLogin()` spawns the RESOLVED binary, one attempt at a time, and is the one spawn
+  in this codebase that WANTS a window (every other is `CreateNoWindow`; with output redirected the CLI may
+  not treat it as a terminal). It is loopback-only — not as a permission check, the access gate already
+  decided who may call it, but because the window opens on the server's machine and "started" would be a lie
+  to a remote browser. **No e2e positive control, stated as a gap**: success opens an interactive console,
+  and the refusal half is not drivable either because `Locate()` falls through to PATH, so even a CLI-less
+  fixture resolves one on a developer machine — attempting it spawned real windows twice before the attempt
+  was removed. `p50` asserts everything that does not spawn.
+  **(3) A PANEL MUST NOT AWAIT A PROCESS.** 资源 took ~0.7 s to render anything because it awaited the CLI
+  probe, and 本机模型 took 3.24 s on the first open after every restart because it awaited llama.cpp's full
+  probe (`--version` 1811 ms + `--list-devices` 1592 ms, for two strings that decorate one row). Both now
+  read what is CACHED, kick a background refresh, and send null for the unknown field — null being
+  deliberately distinct from "absent", because "no GPU" and "nobody has asked yet" are different answers.
+  Measured after: 0.02 s and 0.25 s. **The trap in doing this**: taking the probe off the request path also
+  took `Apply()` off it, and `Apply()` is what adopts a CLI installed from that very panel by setting
+  `CLAUDE_CMD` — so a fresh install stopped being picked up until something else happened to probe. That is
+  the resolve-once trap this file already documents, re-created one layer out; `p50`'s "installed mid-life is
+  adopted with no restart" caught it. Apply is microseconds (two env reads, a `File.Exists`, a set) and now
+  runs on every request while the probe does not — the two costs are separate and only one of them is slow.
+
 - **A resource the app cannot WORK without but CAN boot without is OFFERED, never forced.** The claude
   CLI is that one, and it is the mirror image of the git rule above — same root failure, opposite remedy.
   It was the last runtime dependency we merely assumed: a fresh install spawned the PATH `claude` that

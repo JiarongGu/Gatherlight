@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import { PanelButton, PanelBadge } from '@/ui/atoms';
-import { ResourceRow } from '@/ui/molecules';
+import { ResourceRow, Segmented } from '@/ui/molecules';
 import { inHost } from '@/lib/host';
 import { LocalModelsPanel } from './LocalModelsPanel';
 
@@ -60,15 +60,52 @@ const hasUpdate = (r: ResourceStatus) => !!r.version && !!r.available && r.versi
 
 export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'ok' | 'err') => void; onRestart: () => void }) {
   const [items, setItems] = useState<ResourceStatus[] | null>(null);
+  /** Which login the app's own spawns use, and where its own credentials live. Sent with the list rather
+   *  than fetched separately, so the switch and the rows can never describe different states. */
+  const [session, setSession_] = useState<{ mode: 'machine' | 'app'; home: string } | null>(null);
   const load = async () => {
     try {
       const d = await (await fetch('/api/manage/resources')).json();
       setItems(d.resources);
+      if (d.claudeSession) setSession_(d.claudeSession);
     } catch {
       /* keep last */
     }
   };
   useEffect(() => { load(); }, []);
+
+  // The CLI's login line is filled in by a PROCESS SPAWN (~0.6–0.9 s), so the server no longer waits for
+  // it before answering: a cold cache sends `detail: null` and refreshes in the background. Null means
+  // "not known yet" — distinct from "not signed in" — so this asks again, ONCE, rather than leaving 检查中…
+  // on screen for ever. Not a poll: the answer is cached server-side once it arrives, so one retry is
+  // enough, and an idle panel must not spawn processes on a timer.
+  const claudeUnknown = items?.some((r) => r.id === 'claude' && !r.detail) ?? false;
+  useEffect(() => {
+    if (!claudeUnknown) return;
+    const t = setTimeout(() => { load(); }, 900);
+    return () => clearTimeout(t);
+  }, [claudeUnknown]);
+
+  const setSession = async (mode: 'machine' | 'app') => {
+    try {
+      const res = await fetch('/api/manage/resources/claude/session', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      const j = await res.json().catch(() => ({}));
+      toast(j.note ?? j.error ?? '已保存', res.ok ? 'ok' : 'err');
+      await load();
+    } catch { toast('请求失败', 'err'); }
+  };
+
+  const logout = async () => {
+    try {
+      const res = await fetch('/api/manage/resources/claude/logout', { method: 'POST' });
+      const j = await res.json().catch(() => ({}));
+      toast(j.note ?? j.error ?? '已退出', res.ok ? 'ok' : 'err');
+      await load();
+    } catch { toast('请求失败', 'err'); }
+  };
   // Poll while anything is downloading so the progress bar advances live. Gate on a DERIVED boolean —
   // keying on `items` would tear down + recreate the interval on every 1.2s load() (items changes each tick).
   const anyRunning = items?.some((r) => r.state === 'running') ?? false;
@@ -135,8 +172,32 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
             lines={
               <>
                 <div className="res-need">{r.neededFor}</div>
-                {/* The CLI's login state rides here — the difference between installed and usable. */}
-                {r.detail && <div className="res-need">{r.detail}</div>}
+                {/* The CLI's login state rides here — the difference between installed and usable.
+                    Null is "not asked yet", not "not signed in": the server stopped blocking the whole
+                    panel on a process spawn, so this says 检查中… and the effect above re-asks once. */}
+                {r.id === 'claude' && !r.detail
+                  ? <div className="res-need">检查中…</div>
+                  : r.detail && <div className="res-need">{r.detail}</div>}
+                {/* WHICH LOGIN the app uses. The CLI keeps credentials in a config directory, so without
+                    this the app is signed in as whoever the household is signed in as in their own
+                    terminal — fine when that is the same account, wrong when it is not. */}
+                {r.id === 'claude' && session && (
+                  <div className="res-session">
+                    <Segmented
+                      value={session.mode}
+                      onSelect={(m) => setSession(m as 'machine' | 'app')}
+                      options={[
+                        { value: 'machine', label: '共用本机登录' },
+                        { value: 'app', label: '应用自己的登录' },
+                      ]}
+                    />
+                    <span className="res-need">
+                      {session.mode === 'app'
+                        ? '应用用自己的账号,和你终端里的登录互不影响。'
+                        : '和你自己终端里的登录是同一个账号。'}
+                    </span>
+                  </div>
+                )}
                 {r.version && (
                   <div className="res-need">
                     当前版本 {r.version}
@@ -159,6 +220,12 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
                     needs, so an unsigned CLI leads with 登录 rather than with 重新下载. */}
                 {needsLogin(r) && (
                   <PanelButton variant="primary" onClick={() => login()}>登录</PanelButton>
+                )}
+                {/* Sign out is offered ONLY for the app's own session. The machine's login is the
+                    household's own terminal credential, and offering to end it from here is the same
+                    overreach as a delete button aimed at a daemon we did not install. */}
+                {r.id === 'claude' && session?.mode === 'app' && !needsLogin(r) && r.detail && (
+                  <PanelButton onClick={() => logout()}>退出登录</PanelButton>
                 )}
                 <PanelButton
                   variant={r.installed && !hasUpdate(r) || needsLogin(r) ? 'default' : 'primary'}
