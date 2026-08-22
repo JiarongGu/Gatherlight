@@ -69,22 +69,13 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         File.Exists(ResourceProvisioner.ProvisionedLlamaServer(s.ResourcesPath))
         && ModelsOnDisk(s).Count > 0;
 
-    /// <summary>The GGUFs on disk that suit THIS layer, by the id the router answers to (the filename
-    /// without its extension — the router derives it that way, so we must not invent our own).</summary>
-    private List<string> ModelsOnDisk(MemorySourceSettings s)
-    {
-        var dir = ResourceProvisioner.ProvisionedGgufDir(s.ResourcesPath);
-        if (!Directory.Exists(dir)) return new List<string>();
-        try
-        {
-            return Directory.EnumerateFiles(dir, "*.gguf")
-                .Select(f => Path.GetFileNameWithoutExtension(f)!)
-                .Where(id => ResourceProvisioner.IsEmbeddingGguf(id) == (_layer == MemoryLayers.Semantic))
-                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-        catch (IOException) { return new List<string>(); }
-    }
+    /// <summary>The GGUFs on disk that suit THIS layer. Ids come from
+    /// <see cref="ResourceProvisioner.InstalledGgufIds"/> — the router's own rule, one writer — and the kind
+    /// filter is what stops a chat model being offered to 语义 (see the class comment).</summary>
+    private List<string> ModelsOnDisk(MemorySourceSettings s) =>
+        ResourceProvisioner.InstalledGgufIds(s.ResourcesPath)
+            .Where(id => ResourceProvisioner.IsEmbeddingGguf(id) == (_layer == MemoryLayers.Semantic))
+            .ToList();
 
     /// <summary>Always <c>app</c>: this backend exists BECAUSE the app provisions it. Unlike the Ollama and
     /// CLI arms there is no per-install question to answer — a household's own llama-server is reached
@@ -134,11 +125,16 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                 "llama-cpp");
 
         if (ModelsOnDisk(s).Count == 0)
+            // NAME the resource to download, both layers. `Suggest` is what lets the panel point at a row
+            // instead of at itself, and it has to be the resource id the provisioner actually knows — a
+            // stale literal here would render a button that fetches nothing.
             return new SourceStatus(false,
                 _layer == MemoryLayers.Semantic
                     ? "运行时已就绪,但还没有嵌入模型 —— 在「资源 · Resources」面板下载一个。"
                     : "运行时已就绪,但还没有对话模型 —— 在「资源 · Resources」面板下载一个。",
-                _layer == MemoryLayers.Semantic ? "embed-gguf" : null);
+                GgufCatalog.ResourceIdFor(_layer == MemoryLayers.Semantic
+                    ? GgufCatalog.RecommendedEmbedder
+                    : GgufCatalog.RecommendedJudge));
 
         // Present and has a model: ready to BIND. Whether the process happens to be up right now is not the
         // household's problem — starting it is ours.
@@ -156,11 +152,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         Task.FromResult<IReadOnlyList<ModelOption>>(ModelsOnDisk(ctx.Settings)
             .Select(id => new ModelOption(
                 id, id, Installed: true,
-                // The measurement travels with the model it was taken on, not with the backend: this is the
-                // same GGUF the runtime doc scored, through the same fixture the catalog uses.
-                Measured: id.Equals(ResourceProvisioner.EmbedGgufModelId, StringComparison.OrdinalIgnoreCase)
-                    ? new EmbeddingMeasurement(9, 10, 25, 10, "2026-08-22")
-                    : null))
+                // The measurement travels with the MODEL, from the catalogue that pinned it — not compared
+                // against one hardcoded id here, which would silently stop reporting the moment a second
+                // measured model was added.
+                Measured: GgufCatalog.Find(id)?.Measured))
             .ToList());
 
     /// <summary>Judge side: refuse an embedder by NAME before any call. Cheap and certain — we downloaded

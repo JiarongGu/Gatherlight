@@ -132,22 +132,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
     private string ModelsDir() => ResourceProvisioner.ProvisionedGgufDir(_platform.ResourcesPath);
 
-    /// <summary>Every GGUF the router would enumerate, by the id it will answer to — the filename without
-    /// its extension. Read from disk rather than from a list of ours, so a model removed by hand does not
-    /// leave the app asking for something that is gone.</summary>
-    private IReadOnlyList<string> LocalGgufIds()
-    {
-        var dir = ModelsDir();
-        if (!Directory.Exists(dir)) return Array.Empty<string>();
-        try
-        {
-            return Directory.EnumerateFiles(dir, "*.gguf")
-                .Select(f => Path.GetFileNameWithoutExtension(f)!)
-                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-        catch (IOException) { return Array.Empty<string>(); }
-    }
+    /// <summary>Every GGUF id on disk — delegated, so the router's own id rule has one writer. See
+    /// <see cref="ResourceProvisioner.InstalledGgufIds"/>.</summary>
+    private IReadOnlyList<string> LocalGgufIds() =>
+        ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath);
 
     /// <summary>Which models are EMBEDDERS — delegated, never re-derived. See
     /// <see cref="ResourceProvisioner.IsEmbeddingGguf"/> for why this has exactly one writer.</summary>

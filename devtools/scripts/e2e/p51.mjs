@@ -354,6 +354,19 @@ try {
         { bindable: llama?.bindable, available: llama?.available }));
     ok(`and names 资源 as the fix on ${name}`, /资源/.test(String(llama?.reason ?? '')),
       String(llama?.reason));
+    // …and NAMES a row that exists. `suggest` is what lets the panel point at a download instead of at
+    // itself, so a stale literal renders a button that fetches nothing — which is what it was while 判断
+    // had no chat GGUF to suggest at all.
+    //
+    // WHICH id depends on how far along the install is, and both are right: with no runtime it must offer
+    // the runtime, and with a runtime but no model it must offer a model. A fixture has neither, so this
+    // asserts the SET rather than one literal — pinning `gguf-` here failed against the correct answer,
+    // which is the assertion being wrong rather than the code.
+    const suggestable = ['llama-cpp', ...(await getJson('/api/manage/resources')).resources
+      .map((r) => r.id).filter((i) => i.startsWith('gguf-'))];
+    ok(`and suggests a resource that actually EXISTS on ${name}`,
+      typeof llama?.suggest === 'string' && suggestable.includes(llama.suggest),
+      `${llama?.suggest} not in ${suggestable.join(',')}`);
     // Origin is a CONSTANT for this backend, unlike ollama/claude-cli where it depends on the install:
     // a household's own llama-server is reached through openai-compat, so this one is always ours.
     ok(`and reports origin=app on ${name} — never household`,

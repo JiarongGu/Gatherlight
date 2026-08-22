@@ -240,30 +240,45 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     public static string ProvisionedGgufDir(string resourcesPath) =>
         Path.Combine(resourcesPath, "gguf");
 
-    /// <summary>The first GGUF the app provisions — the embedder for 语义, pinned by COMMIT for the same
-    /// reason the ONNX model is: a branch ref lets the bytes move under a checksum, which then reads as a
-    /// corrupt download rather than as an upstream edit.
-    ///
-    /// <para><b>Q8_0, and it was measured, not assumed.</b> 9/10 top-1 and 10/10 top-3 on the same fixture
-    /// `EmbeddingCatalog` uses — identical to Ollama's f16 of the same model at half the size, and better
-    /// than the ONNX q4 arm's 8/10. See <c>docs/self-managed-llm-runtime.md</c>.</para>
-    ///
-    /// <para><b>It is a DIFFERENT file from anything Ollama holds, and that is not an oversight.</b>
-    /// Ollama's own <c>embeddinggemma:300m</c> blob is a GGUF and llama.cpp refuses it —
-    /// <c>done_getting_tensors: wrong number of tensors; expected 316, got 314</c>. So "reuse what is
-    /// already downloaded" is impossible, and every model this runtime uses is a fresh pinned
-    /// download.</para></summary>
-    private const string EmbedGgufFile = "embeddinggemma-300M-Q8_0.gguf";
-    private const string EmbedGgufCommit = "0f741b5a6585bd53aeb15cd1372c56f2a0f65e12";
-    private const string EmbedGgufSha256 = "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63";
-    private static string EmbedGgufUrl =>
-        Override("GATHERLIGHT_EMBED_GGUF_URL")
-        ?? $"https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/{EmbedGgufCommit}/{EmbedGgufFile}";
+    /// <summary>The GGUFs the app can download now live in <see cref="Agent.Llm.Services.GgufCatalog"/>,
+    /// which generates one spec per entry (see <see cref="Catalog"/>). They were hand-written constants here
+    /// while there was exactly one; the moment a second was needed, two lists for one set would have been
+    /// the drift this file keeps warning about.</summary>
 
-    /// <summary>The model id the router will answer to for the embedder — the GGUF's filename without its
-    /// extension, because that is what <c>--models-dir</c> derives an id from. Public so the recall source
-    /// and the warm-up ask for the same string.</summary>
-    public const string EmbedGgufModelId = "embeddinggemma-300M-Q8_0";
+    /// <summary>Every GGUF model id installed on this machine, derived the way llama-server's router
+    /// derives it — which is the only definition that matters, since the router is what a caller will then
+    /// ask for by name.
+    ///
+    /// <para><b>Two layouts, on purpose — and NOT as a migration path.</b> A model in its own directory
+    /// takes the DIRECTORY's name (that is what `--models-dir` reports, measured 2026-08-22); a bare `.gguf`
+    /// at the top level takes its filename. Everything the app provisions is the first form, and the flat
+    /// form never shipped — so the reason to read it is a household dropping their OWN GGUF into the folder,
+    /// which the router will happily serve and which this must therefore see too. (The router also
+    /// de-duplicates the two when they name the same model, verified 2026-08-22, so a folder holding both
+    /// reports the model once.)</para>
+    ///
+    /// <para>ONE writer, because `LlamaServerRuntime` (which generates the router's presets) and
+    /// `LlamaCppSource` (which offers models to a layer) must agree exactly. They briefly had two copies of
+    /// a flat-file scan, which would have silently stopped finding anything the moment the layout
+    /// changed.</para></summary>
+    public static IReadOnlyList<string> InstalledGgufIds(string resourcesPath)
+    {
+        var dir = ProvisionedGgufDir(resourcesPath);
+        if (!Directory.Exists(dir)) return Array.Empty<string>();
+        try
+        {
+            var flat = Directory.EnumerateFiles(dir, "*.gguf")
+                .Select(f => Path.GetFileNameWithoutExtension(f)!);
+            var nested = Directory.EnumerateDirectories(dir)
+                .Where(d => Directory.EnumerateFiles(d, "*.gguf").Any())
+                .Select(d => Path.GetFileName(d)!);
+            return flat.Concat(nested)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (IOException) { return Array.Empty<string>(); }
+    }
 
     /// <summary>Is this GGUF an EMBEDDER? Asked here because this is the only place that knows what the app
     /// provisioned, and the answer must have exactly one writer: llama-server's <c>embeddings</c> flag
@@ -277,9 +292,11 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// used deliberately and only there. Provisioning a second embedder means adding it to this list, not
     /// relying on its name.</para></summary>
     public static bool IsEmbeddingGguf(string modelId) =>
-        modelId.Equals(EmbedGgufModelId, StringComparison.OrdinalIgnoreCase)
-        // Household-supplied file: no manifest, so the name is all there is.
-        || modelId.Contains("embed", StringComparison.OrdinalIgnoreCase);
+        Agent.Llm.Services.GgufCatalog.Find(modelId) is { } known
+            // Catalogued: we downloaded it, so the capability is a fact, not an inference.
+            ? known.Capability == Agent.Llm.Services.GgufCapability.Embedding
+            // Household-supplied file: no manifest, so the name is all there is.
+            : modelId.Contains("embed", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The 内置 embedder's model, pinned by COMMIT rather than by <c>main</c> — a branch ref would
     /// let the bytes change under a checksum that then stops matching, which reads as a corrupt download.
@@ -347,16 +364,6 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             ApproxBytes: 266_000_000,
             Url: ClaudeBaseUrl),
         new ResourceSpec(
-            Id: "embed-gguf", Name: "嵌入模型 · GGUF(EmbeddingGemma 300M · Q8)",
-            NeededFor: "「记忆检索 · 语义」跑在 llama.cpp 上时用的嵌入模型 —— 实测与 Ollama 的同款同分,"
-                + "体积只有一半;和 Ollama 自己下载的那一份不通用,必须单独下载",
-            Kind: ResourceKind.Files, InstallDir: "gguf",
-            // The GGUF itself is the marker: ProvisionFilesAsync only moves the directory into place once
-            // every checksum has passed, so the file existing really does mean the download completed.
-            ReadyMarker: EmbedGgufFile,
-            ApproxBytes: 333_590_944,
-            Files: new[] { new ResourceFile(EmbedGgufFile, EmbedGgufUrl, EmbedGgufSha256) }),
-        new ResourceSpec(
             Id: "embed-model", Name: "内置嵌入模型(EmbeddingGemma 300M)",
             // Says what it REPLACES, because that is the decision the household is making: this is the
             // alternative to installing Ollama at all for 语义, and it is the smaller of the two — 222 MB
@@ -383,7 +390,31 @@ public sealed class ResourceProvisioner : IResourceProvisioner
                 new ResourceFile(Agent.Llm.Services.OnnxEmbedder.TokenizerFile, EmbedModelUrl("tokenizer.model"),
                     "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c"),
             }),
-    };
+    }
+        // ONE SPEC PER CATALOGUED GGUF, generated rather than hand-written, because the catalogue is the
+        // thing that changes and two lists for one set is the drift this codebase keeps paying for.
+        //
+        // Each model gets its OWN InstallDir, and that is a correctness requirement rather than tidiness:
+        // ProvisionFilesAsync deletes the install directory before moving the staged copy in, so two
+        // models sharing `gguf/` would erase each other. Per-model directories also make the router's id
+        // ours to choose — measured 2026-08-22, `--models-dir` RECURSES and derives the id from the
+        // DIRECTORY name when a model sits in one, so naming the directory after the model keeps the id
+        // stable whatever the upstream filename is. A pre-existing flat file resolves to the same id and
+        // is de-duplicated rather than doubled, which is what makes this safe on an install that already
+        // has one.
+        .Concat(Agent.Llm.Services.GgufCatalog.Models.Select(m => new ResourceSpec(
+            Id: Agent.Llm.Services.GgufCatalog.ResourceIdFor(m.Id),
+            Name: m.Name,
+            NeededFor: m.Note,
+            Kind: ResourceKind.Files,
+            InstallDir: Path.Combine("gguf", m.Id),
+            ReadyMarker: m.File,
+            ApproxBytes: m.ApproxBytes,
+            Files: new[]
+            {
+                new ResourceFile(m.File, Agent.Llm.Services.GgufCatalog.UrlFor(m), m.Sha256),
+            })))
+        .ToArray();
 
     /// <summary>Where a provisioned node lands. Read by the sandbox probe and the Node leaf tools, so
     /// the path exists in exactly one place.</summary>

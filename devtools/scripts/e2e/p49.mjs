@@ -194,6 +194,22 @@ try {
       ok('and it is listed BEFORE Ollama — the one we install, then the one we detect',
         ids.indexOf('llama-cpp') >= 0 && ids.indexOf('llama-cpp') < ids.indexOf('ollama'),
         ids.join(','));
+
+      // THE SHELF. Every GGUF in GgufCatalog becomes a resource, generated rather than hand-written — one
+      // list for one set. Asserted as a shape rather than by name so adding a model does not break this,
+      // except for the two the product actually recommends, which are named on purpose.
+      const ggufs = rows.filter((r) => r.id.startsWith('gguf-'));
+      ok('every catalogued GGUF is offerable as a resource', ggufs.length >= 2,
+        JSON.stringify(ggufs.map((r) => r.id)));
+      ok('and each is sha256-pinnable with a real size, not a placeholder',
+        ggufs.every((r) => r.approxBytes > 1_000_000), JSON.stringify(ggufs.map((r) => r.approxBytes)));
+      // BOTH capabilities have to be downloadable, and this is the assertion that would have caught the
+      // gap this increment closed: 判断 could be BOUND to llama.cpp while no chat model existed to bind
+      // it to, so its status pointed at a 资源 row that was not there.
+      ok('an EMBEDDING gguf is offered (语义 needs one)',
+        ids.includes('gguf-embeddinggemma-300M-Q8_0'), ids.join(','));
+      ok('and a CHAT gguf is offered too (判断 needs one, and had none)',
+        ids.some((i) => i.startsWith('gguf-gemma-3-')), ids.join(','));
     }
     srv.stop(); srv = undefined;
   }

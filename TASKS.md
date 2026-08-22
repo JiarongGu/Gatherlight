@@ -32,10 +32,15 @@
   downloaded can be reused; ~~(4) a backend a layer can BIND to~~ **DONE** — `LlamaCppSource` on both
   layers (models filtered by kind, `origin=app`, no address), `LlamaWarmStep` starting + warming only when
   bound, verified by binding 语义 to it and restarting (saved AND running, warm step green); what remains of
-  (4) is the shelf: `EmbeddingCatalog`, `/api/manage/models` and `OllamaState` are still Ollama-tag shaped,
-  so 资源 can offer GGUFs to DOWNLOAD from only a hard-coded list of one, and there is no judge chat GGUF at
-  all; (5) re-measure the shortlist through it — the Q8 embedder scored the same 9/10 as Ollama's f16, but
-  each further model has to be checked, not assumed.
+  ~~(4) the shelf~~ **DONE** — `GgufCatalog` (3 pinned models: the Q8 embedder plus gemma-3 1B and 4B for
+  判断) generates one resource spec per entry, each in its own install dir; 判断 now suggests a chat model
+  that exists. What remains here is smaller and worth naming: `/api/manage/models` still reports only
+  Ollama's inventory, so a GGUF's download progress and its delete button live in the generic 资源 list
+  rather than beside the models they belong to; and `EmbeddingCatalog.Recommend` still advises as though
+  Ollama were the only local option.
+  (5) re-measure the shortlist through it — the Q8 embedder scored the same 9/10 as Ollama's f16 and the
+  1B judge was timed at 150–204 ms, but 判断's QUALITY has never been measured per model on this corpus at
+  all, and the catalogue says so rather than implying otherwise.
 - [ ] **Decide the 内置 ONNX arm's fate now that it is measured as dominated.** `llama-server` beat it on
   BOTH axes (9/10 vs 8/10 top-1, 23 ms vs 28 ms per query) while also serving 判断, which the ONNX arm
   cannot. What it still uniquely has is *no separate process at all* and the smallest total payload
