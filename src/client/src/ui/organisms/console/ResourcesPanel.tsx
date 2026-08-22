@@ -42,7 +42,15 @@ interface ResourceStatus {
 // Listing it up beside Git and Chromium put models in two places again — the split that section exists
 // to end — and made its own lead text ("both layers take their models from here") false for the one
 // backend that needs nothing installed.
-const MODEL_RESOURCES = ['embed-model'];
+const MODEL_RESOURCES = ['embed-model', 'embed-gguf'];
+
+// PROVISIONED BUT NOT YET REACHABLE FROM ANY RECALL LAYER, so not offered. llama.cpp is the runtime the
+// app will provision (docs/self-managed-llm-runtime.md) and its embedder is downloadable, but 记忆检索
+// still binds only claude-cli / ollama / builtin — so a household who pressed 下载 here would fetch
+// 35 MB + 319 MB and observe exactly nothing change. A control that does nothing is the failure this
+// console keeps refusing; the rows come back in the same commit that lets a layer bind to them.
+// They stay in the server's catalog on purpose: provisioning, LlamaServerRuntime and p49/p51 all use it.
+const NOT_YET_REACHABLE = ['llama-cpp', 'embed-gguf'];
 
 const hasUpdate = (r: ResourceStatus) => !!r.version && !!r.available && r.version !== r.available;
 
@@ -80,8 +88,9 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
   if (!items) return <div className="eval-empty">加载中…</div>;
 
   // A MODEL goes in the models section, even though the provisioner owns it like any other resource.
-  const runtimes = items.filter((r) => !MODEL_RESOURCES.includes(r.id));
-  const modelRows = items.filter((r) => MODEL_RESOURCES.includes(r.id));
+  const offered = items.filter((r) => !NOT_YET_REACHABLE.includes(r.id));
+  const runtimes = offered.filter((r) => !MODEL_RESOURCES.includes(r.id));
+  const modelRows = offered.filter((r) => MODEL_RESOURCES.includes(r.id));
 
   return (
     <div className="mng-view set">

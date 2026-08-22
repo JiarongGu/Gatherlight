@@ -65,11 +65,12 @@ public interface ILlamaServerRuntime
 /// </list>
 ///
 /// <para><b>Embedding models need <c>embeddings = true</c> and chat models must not have it</b> — the flag
-/// restricts a child to embeddings and disables chat. So the preset is generated from what the app KNOWS
-/// it provisioned, not guessed from the file: a mislabelled embedder would serve chat requests that can
-/// never succeed, and a mislabelled chat model would refuse to talk.</para>
+/// restricts a child to embeddings and disables chat, so a mislabelled embedder would serve chat requests
+/// that can never succeed and a mislabelled chat model would refuse to talk. The answer comes from
+/// <see cref="ResourceProvisioner.IsEmbeddingGguf"/> — exact for what we provision, a stated name
+/// heuristic for a GGUF the household dropped in themselves, and ONE writer either way.</para>
 /// </summary>
-public sealed class LlamaServerRuntime : ILlamaServerRuntime
+public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 {
     /// <summary>Not llama.cpp's own 8080 — that is a common port for a household's own services, and this
     /// is a daemon we start without asking. Adjacent to Ollama's 11434 so the two read as siblings.</summary>
@@ -145,11 +146,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime
         catch (IOException) { return Array.Empty<string>(); }
     }
 
-    /// <summary>Which provisioned models are EMBEDDERS. From the app's own knowledge of what it fetched —
-    /// see the class comment for why this must not be guessed from the file.</summary>
+    /// <summary>Which models are EMBEDDERS — delegated, never re-derived. See
+    /// <see cref="ResourceProvisioner.IsEmbeddingGguf"/> for why this has exactly one writer.</summary>
     private static bool IsEmbeddingModel(string modelId) =>
-        modelId.Equals(ResourceProvisioner.EmbedGgufModelId, StringComparison.OrdinalIgnoreCase)
-        || modelId.Contains("embed", StringComparison.OrdinalIgnoreCase);
+        ResourceProvisioner.IsEmbeddingGguf(modelId);
 
     /// <summary>Write the router's preset file. Regenerated on every start rather than kept, because it is
     /// derived state: the models on disk are the truth, and a stale section naming a deleted GGUF is a
@@ -175,6 +175,34 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime
 
     public void Invalidate() { lock (_gate) _cached = null; }
 
+    /// <summary>Is the router answering? The CHEAP half of a probe — one HTTP GET, no child processes.
+    ///
+    /// <para>Split out because the startup poll used <c>ProbeAsync(refresh: true)</c> in a 40-iteration
+    /// loop, and a full probe shells out to <c>--version</c> and <c>--list-devices</c>. That was up to 80
+    /// process spawns while waiting 20 s for a server to come up — wasteful, and slow enough to make the
+    /// wait it was measuring longer than the thing it was waiting for.</para></summary>
+    private async Task<(bool Serving, IReadOnlyList<string> Models)> IsServingAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var http = _http.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(4);
+            using var res = await http.GetAsync($"{BaseUrl}/v1/models", ct);
+            if (!res.IsSuccessStatusCode) return (false, Array.Empty<string>());
+            using var doc = System.Text.Json.JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+            var models = doc.RootElement.TryGetProperty("data", out var data)
+                ? data.EnumerateArray()
+                    .Select(e => e.TryGetProperty("id", out var id) ? id.GetString() : null)
+                    .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).ToList()
+                : (IReadOnlyList<string>)Array.Empty<string>();
+            return (true, models);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (false, Array.Empty<string>());
+        }
+    }
+
     public async Task<LlamaServerState> ProbeAsync(bool refresh = false, CancellationToken ct = default)
     {
         lock (_gate)
@@ -187,24 +215,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime
         var devices = exe is null ? Array.Empty<string>() : await DevicesAsync(exe, ct);
         var version = exe is null ? null : await VersionAsync(exe, ct);
 
-        var serving = false;
-        var models = Array.Empty<string>() as IReadOnlyList<string>;
-        try
-        {
-            using var http = _http.CreateClient();
-            http.Timeout = TimeSpan.FromSeconds(4);
-            using var res = await http.GetAsync($"{BaseUrl}/v1/models", ct);
-            if (res.IsSuccessStatusCode)
-            {
-                serving = true;
-                using var doc = System.Text.Json.JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
-                if (doc.RootElement.TryGetProperty("data", out var data))
-                    models = data.EnumerateArray()
-                        .Select(e => e.TryGetProperty("id", out var id) ? id.GetString() : null)
-                        .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).ToList();
-            }
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException) { /* not serving */ }
+        var (serving, models) = await IsServingAsync(ct);
 
         var problem = exe is null
             ? "还没有下载 —— 在「资源 · Resources」面板下载「本机模型运行时 · llama.cpp」(约 35 MB)。"
@@ -285,7 +296,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime
                     _log.LogWarning("llama-server exited during startup with code {Code}", proc.ExitCode);
                     return false;
                 }
-                if ((await ProbeAsync(refresh: true, ct)).Serving) return true;
+                // The CHEAP check — see IsServingAsync. Re-probing the binary here spawned two child
+                // processes per iteration.
+                if ((await IsServingAsync(ct)).Serving) { Invalidate(); return true; }
                 await Task.Delay(500, ct);
             }
             _log.LogWarning("llama-server did not answer on {Url} within 20s", BaseUrl);
@@ -376,5 +389,39 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime
             _log.LogDebug("llama-server {Arg} failed: {Msg}", arg, ex.Message);
             return null;
         }
+    }
+
+    /// <summary>Kill the router we started — and its children, which is the part that matters.
+    ///
+    /// <para>Windows does not kill a child when its parent exits, so without this an app restart leaves a
+    /// router and one child per loaded model holding GPU memory, invisible to the household and to us. It
+    /// is the same reason the claude CLI is killed with <c>entireProcessTree: true</c>.</para>
+    ///
+    /// <para><b>Only if WE started it.</b> <c>_started</c> is null when something was already answering on
+    /// the port — a household's own llama-server, or ours surviving from a previous run — and killing a
+    /// process we did not start is not ours to do.</para>
+    ///
+    /// <para><b>A FORCED kill still orphans it, and that is a stated limit rather than a hidden one.</b>
+    /// Dispose runs on graceful shutdown; <c>Stop-Process -Force</c> or a crash skips it, and only a Windows
+    /// Job Object would cover that. What makes the gap tolerable is measured: a surviving router is ADOPTED
+    /// on the next start, not duplicated — <see cref="EnsureServingAsync"/> finds the port answering and
+    /// returns without spawning anything, verified 2026-08-22 (two processes before and after a restart, not
+    /// four). So the failure mode is an idle router holding VRAM until the app comes back or the machine
+    /// reboots, not a pile of them.</para></summary>
+    public void Dispose()
+    {
+        Process? proc;
+        lock (_gate) { proc = _started; _started = null; }
+        if (proc is null) return;
+        try
+        {
+            if (!proc.HasExited)
+            {
+                proc.Kill(entireProcessTree: true);
+                proc.WaitForExit(5000);
+            }
+        }
+        catch (Exception ex) { _log.LogDebug("stopping llama-server: {Msg}", ex.Message); }
+        finally { proc.Dispose(); }
     }
 }

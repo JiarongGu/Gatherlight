@@ -214,8 +214,9 @@ public sealed class ModelsController : ControllerBase
         var warmed = new List<string>();
         foreach (var m in state.Models)
         {
-            var isEmbed = m.Contains("embed", StringComparison.OrdinalIgnoreCase);
-            if (await _llama.WarmAsync(m, isEmbed)) warmed.Add(m);
+            // Same single writer the preset generator uses — a second copy of this test here is how the
+            // preset and the warm-up would come to disagree about what a model is.
+            if (await _llama.WarmAsync(m, Services.ResourceProvisioner.IsEmbeddingGguf(m))) warmed.Add(m);
         }
         return Ok(new { ok = true, warmed, models = state.Models, devices = state.Devices });
     }

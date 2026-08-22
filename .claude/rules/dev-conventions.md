@@ -435,15 +435,23 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   is built — so a regression that re-buys the embedding and reads none of it now announces itself instead of
   showing up as "recall feels no different". Verified both ways on 2026-08-21: silent on the current wiring,
   and firing by name with `SemanticSeedK` put back to 0.
-- **VOCABULARY, because this area had none and the gap cost a whole design conversation.** Three words, and
+- **VOCABULARY, because this area had none and the gap cost a whole design conversation.** FOUR words, and
   they are not interchangeable. A **LAYER** is a job (公式 · 判断 · 语义). A **BACKEND** is *where the model
   comes from* — `claude-cli` · `ollama` · `openai-compat` · `builtin` (`MemoryBackends`). A **MODEL** is
-  what a backend serves. **Every layer lists every backend**, and one it cannot use carries its reason
+  what a backend serves. An **ORIGIN** is *whose runtime it is* — `bundled` (in our process) · `app` (we
+  downloaded and start it) · `household` (they run it, we only connect) — `RuntimeOrigin`, resolved PER
+  INSTALL because for `ollama` and `claude-cli` the app provisions a copy AND a household may have their
+  own, so only `Locate()` knows which won. **That fourth word was missing and its absence cost the second
+  design conversation**: the picker said only 本机 · Ollama, "your Ollama", while 资源 had been downloading
+  and starting it since 2026-08-21 — so a provisioned runtime read as a manual prerequisite, to a household
+  and then to us, and a false claim ("语义 is the only layer you cannot switch on without installing a
+  separate program") shipped in the panel, the resource row and the release notes on the strength of it. **Every layer lists every backend**, and one it cannot use carries its reason
   instead of being omitted — omitting it answers "why isn't this an option?" only in the source tree.
   `openai-compat` is ONE class for the whole OpenAI-compatible family (llama-server · LM Studio · vLLM ·
   Jan · LocalAI), not one per product, for the same reason `EmbeddingCatalog` is not a gate: a list of
   products goes stale the moment somebody ships a new runtime. Ollama keeps its own backend because the app
-  MANAGES it (list/pull/delete) — a distinction the panel states rather than papering over. And a
+  can MANAGE it (list/pull/delete) — a distinction the panel states rather than papering over — though as
+  of 2026-08-22 the runtime the app PROVISIONS is llama.cpp, not Ollama (next bullet). And a
   household-typed address is loopback-only (`GATHERLIGHT_LLM_ALLOW_REMOTE=1` to override), because every
   fact written goes to it.
   The docs previously described this one axis three ways — "the local model", "the judge's *transport*", "the
@@ -452,6 +460,30 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   "embedded"/"嵌入式" for a bundled runtime collides with it head-on and a sentence like "cli/local for the
   judge and embedded for 语义" parses correctly under BOTH readings. Hence **`builtin` · 内置**, which cannot
   be confused with 嵌入. Say backend, not transport; say built-in, not embedded.
+- **The runtime the app PROVISIONS is llama.cpp's `llama-server`, not Ollama** (decided, measured and
+  accepted 2026-08-22 — `docs/self-managed-llm-runtime.md` carries the numbers, the eliminated alternatives
+  and what only running it revealed). Ollama is not gone: it stays a **household** origin, detected and
+  connected to but never installed by us, because plenty of households run their own. `llama-cpp` is 35 MB
+  against Ollama's 1460, matches its retrieval (9/10 top-1 on the `EmbeddingCatalog` fixture) and beats its
+  latency (25 ms/query through the app against 69). Three things about it are load-bearing and all three
+  fail SILENTLY, which is why they are here and not only in the doc:
+  **(1) `--n-gpu-layers` is launch CONTRACT.** Absent it, llama-server runs on the CPU and logs nothing —
+  222 ms/query against 7 ms, on the path of every recall. It goes into a generated per-model preset, which
+  is the form whose effect was verified in the child's own argv.
+  **(2) Models load LAZILY**, so starting means start-and-WARM. `--models-max` is a cap, not a preload; the
+  first request for a model spawns a child and waits (17.3 s for a 1B q4). Returning when the router answers
+  hands back a runtime that stalls on the first real recall — the very cost this runtime was chosen to remove.
+  **(3) `embeddings = true` RESTRICTS a child to embeddings**, so it goes only on embedders, and the answer
+  has exactly ONE writer (`ResourceProvisioner.IsEmbeddingGguf`) — exact for what we provision, a *stated*
+  name heuristic for a GGUF the household dropped in. It briefly had two copies of a substring test in two
+  files, which is the drift this file keeps paying for.
+  Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
+  (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
+  already there" is not on the table. And `LlamaServerRuntime` deliberately does **not** search PATH: a
+  household's own llama-server is already reachable as `openai-compat` with an address they typed, and
+  collapsing the two is precisely the ambiguity that hid the Ollama provisioning for months. `Dispose` kills
+  the tree on graceful shutdown; a forced kill orphans a router, which the next start ADOPTS rather than
+  duplicates (measured — two processes across a restart, not four).
 - **A recall layer's BACKEND is a SOURCE, and a source serves a layer by existing.** One interface per layer
   (`Agent/Llm/Sources`: `IMemoryJudgeSource`, `IMemorySemanticSource`, sharing `IMemorySource`), one class per
   backend, a **static catalog** (`MemorySources`) — never a predicate over capability strings. That earlier
@@ -652,7 +684,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 ## Dev loop
 
-- `node devtools/dev.mjs <server|host|desktop-e2e|vite|build|publish|resources-pack|e2e|smoke|memory|eval|embed-bench|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs>`
+- `node devtools/dev.mjs <server|host|desktop-e2e|vite|build|publish|resources-pack|e2e|smoke|memory|eval|embed-bench|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs|check-host-actions>`
   — kept in step with the tool's own usage line (`dev.mjs`, bottom of the switch).
 - e2e suites live in `devtools/scripts/e2e/` as `pN.mjs` (discovered by `^p\d+\.mjs$`); they self-host
   the server against isolated `devtools/_e2e-*` data folders with the claude stub; every phase of work

@@ -43,7 +43,10 @@ supplies a loopback URL, which is enforced) · `builtin` (**语义 only**: Embed
 in-process by ONNX Runtime, model provisioned as a sha256-pinned `Files` resource — the one backend with no
 prerequisite outside the app, and the smaller path at 222 MB against Ollama's 622 MB *plus* its runtime.
 Every choice in it was measured first, `docs/builtin-model-runner.md`; 判断 has no built-in arm because that
-needs an in-process chat model). **Every layer lists all of them**, and one it cannot use is shown with
+needs an in-process chat model). A fourth axis crosses these: a backend's **ORIGIN** — `bundled` · `app` ·
+`household`, i.e. *whose* runtime it is (`RuntimeOrigin`), resolved per install and now stated in the picker.
+Its absence let a provisioned Ollama read as a manual prerequisite for months. **Every layer lists all of
+them**, and one it cannot use is shown with
 its reason rather than omitted: 语义 offers no Claude arm because no `ClaudeCliSemanticSource` exists (no
 embeddings endpoint), not because a predicate excludes it. `OpenAiCompatibleSource` implements BOTH layer
 interfaces — the case that design exists for — as two instances, one per layer, since the judge and the
@@ -51,8 +54,15 @@ embedder may be different servers. The catalog is static
 rather than a DI collection because startup wires from it *while the container is being built*, and the
 console renders from the same list afterwards — one list, no second registry to drift. Adding a backend
 (the deferred ONNX embedder) is one class plus one line.
+**The runtime the app provisions is llama.cpp's `llama-server`, not Ollama** (2026-08-22, measured:
+35 MB against 1460, same 9/10 retrieval, 25 ms/query against 69 — `docs/self-managed-llm-runtime.md`).
+Ollama stays a *household* origin, connected to but never installed by us. `LlamaServerRuntime` runs it in
+router mode; `--n-gpu-layers` and warming are launch CONTRACT, not tuning, because without either it is
+silently 30× slower or stalls 17 s on the first recall. Models are not portable between the two — Ollama's
+own GGUF blobs fail to load in llama.cpp — so each is a fresh pinned download. Not yet wired into recall:
+记忆检索 still binds `claude-cli` / `ollama` / `builtin`.
 **Models are provisioning artifacts, so 资源 owns them** — `/api/manage/models` lists, pulls and deletes
-them beside chromium, git and the Ollama runtime, with the measured shortlist (`EmbeddingCatalog`,
+them beside chromium, git and the local runtimes, with the measured shortlist (`EmbeddingCatalog`,
 re-measurable with `dev.mjs embed-bench`) as decision support for downloading. 记忆检索 keeps only the
 recall decision: which model each layer uses. Rebuilding the index runs detached with progress, and the
 panel reports index COVERAGE rather than a history of runs. 语义 sits under a 高级 divider on Lyntai's

@@ -265,6 +265,22 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// and the warm-up ask for the same string.</summary>
     public const string EmbedGgufModelId = "embeddinggemma-300M-Q8_0";
 
+    /// <summary>Is this GGUF an EMBEDDER? Asked here because this is the only place that knows what the app
+    /// provisioned, and the answer must have exactly one writer: llama-server's <c>embeddings</c> flag
+    /// RESTRICTS a child to embeddings, so getting it wrong makes a judge refuse to talk or an embedder
+    /// serve chat requests that can never succeed. It was briefly answered in two places with two copies of
+    /// a substring test, which is the drift this codebase keeps paying for.
+    ///
+    /// <para><b>Exact match on what we ship; a NAME HEURISTIC for anything else, and that is stated rather
+    /// than hidden.</b> A household may drop their own GGUF into the folder — the router will serve it, and
+    /// we have no manifest for it. Guessing from the filename is then the only option available, so it is
+    /// used deliberately and only there. Provisioning a second embedder means adding it to this list, not
+    /// relying on its name.</para></summary>
+    public static bool IsEmbeddingGguf(string modelId) =>
+        modelId.Equals(EmbedGgufModelId, StringComparison.OrdinalIgnoreCase)
+        // Household-supplied file: no manifest, so the name is all there is.
+        || modelId.Contains("embed", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The 内置 embedder's model, pinned by COMMIT rather than by <c>main</c> — a branch ref would
     /// let the bytes change under a checksum that then stops matching, which reads as a corrupt download.
     /// <para>EmbeddingGemma 300M, q4, as exported by the onnx-community mirror. The variant, the tokenizer
