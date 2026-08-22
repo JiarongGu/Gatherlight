@@ -492,6 +492,25 @@ switch (cmd) {
       const where = marked ? 'finished' : `stopped after ${checks} check(s)`;
       console.log(`  ✗ ${f.suite} — ${f.signal ? `signal ${f.signal}` : `exit ${f.status}`}`
         + ` · ${where}${bad ? `, ${bad} failing` : ''}`);
+      // WHY THE SERVER NEVER CAME UP, from the fixture's OWN log. A suite whose server fails to bind
+      // reports only `fatal: timeout`, which describes the harness's patience rather than the cause —
+      // and reads exactly like a hang in the code under test. It cost a long hunt for a regression that
+      // did not exist: the real message was three lines into the fixture log, saying Windows had
+      // reserved the port (WSAEACCES, from a dynamic Hyper-V/WSL exclusion range that moves between
+      // reboots). The log is CLOBBERED by the next run of that suite, so surfacing it here is the only
+      // moment it is still true.
+      // Also when the suite DID print its marker but died on a fatal (a timeout prints one), because
+      // that is the case where the harness's own message is least informative.
+      if (!marked || f.out.includes('fatal:')) {
+        try {
+          const dir = path.join(repo, 'devtools', `_e2e-${f.suite}-data`, 'state', 'logs');
+          const newest = fs.readdirSync(dir).filter((n) => n.endsWith('.log')).sort().pop();
+          const text = fs.readFileSync(path.join(dir, newest), 'utf8');
+          const err = text.split(String.fromCharCode(10))
+            .filter((l) => l.includes('[ERROR]') || l.includes('Exception:')).pop();
+          if (err) console.log(`      fixture log: ${err.trim().slice(0, 170)}`);
+        } catch { /* no fixture log — nothing to add */ }
+      }
     }
     if (failed.length) process.exitCode = 1;
     break;

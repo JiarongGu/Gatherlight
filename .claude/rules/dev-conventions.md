@@ -1004,6 +1004,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 - `node devtools/dev.mjs <server|host|desktop-e2e|vite|build|publish|resources-pack|e2e|smoke|memory|eval|embed-bench|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs|check-host-actions>`
   — kept in step with the tool's own usage line (`dev.mjs`, bottom of the switch).
+- **`fatal: timeout` USUALLY MEANS THE SERVER NEVER BOUND, and the reason is in the fixture's own log.**
+  A suite whose Kestrel fails to start reports only that the harness ran out of patience — which reads
+  exactly like a hang in the code under test, and cost a long hunt for a regression that did not exist.
+  The real line was three deep in `devtools/_e2e-pN-data/state/logs/`: `SocketException — an attempt was
+  made to access a socket in a way forbidden by its access permissions` (WSAEACCES). **Windows
+  dynamically RESERVES tcp ranges** (Hyper-V/WSL/Docker; `netsh interface ipv4 show excludedportrange
+  protocol=tcp`), and on 2026-08-23 those ranges moved mid-session to cover 5321–5420 and 5487–5586 —
+  29 of the suites' ports. The same fleet had passed 51/51 an hour earlier on the same numbers, which is
+  the tell that it is machine state and not the tree. Renumbering the suites is churn for a transient
+  condition and the new band can be reserved next reboot; the fix is that `dev.mjs e2e` now prints the
+  fixture's last `[ERROR]` line beside a failure, because that log is CLOBBERED by the next run of the
+  suite and this is the only moment it is still true. If it recurs: check the excluded ranges first.
 - **A UI HARNESS MUST RETRY THE ACTION, not only poll the result.** `desktop-e2e` polled for the view
   after clicking a tab ONCE — and a click dispatched before React has wired the handler is swallowed
   silently, so no amount of waiting produces the view. That flapped run to run and reads as "the Cortex
