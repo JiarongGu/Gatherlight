@@ -41,6 +41,8 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
 
+const NL = String.fromCharCode(10);
+
 const arg = (name, dflt) => {
   const hit = process.argv.slice(2).find((a) => a.startsWith(`--${name}=`));
   return hit ? hit.split('=')[1] : dflt;
@@ -124,6 +126,53 @@ const resolveClaude = () => {
   return hits.find((h) => /\.(cmd|exe)$/i.test(h)) ?? hits[0] ?? 'claude';
 };
 const claude = resolveClaude();
+// CROSS-LANGUAGE, which is the case this whole layer exists for and the one the bench could not see.
+//
+// The same-language generator below is told "use the same language as the fact" — so every probe shared a
+// script with the fact it was looking for, and the lexical floor could always reach it. Meanwhile the
+// rephrasing arm is explicitly told to store 另一种语言的常见叫法. The benchmark measured everything
+// EXCEPT the thing the layer is for, and then reported no benefit, which read as "it does not work".
+//
+// A household writing facts in Chinese and asking in English (or the reverse) shares NO tokens with the
+// stored text — no trigram, no bm25, nothing for the graph's lexical half either. That is the case where
+// stored phrasings or real vectors are the only route, and it is the normal case in a bilingual house.
+// FOUR WAYS A REAL QUESTION ARRIVES, because a household is not monolingual and this bench was.
+//
+// It used to generate ONE question per fact, told to "use the same language as the fact" — so every probe
+// shared a script with the text it was hunting and the 公式 floor could always reach it lexically. That is
+// the one case where the enrichment layers cannot show a benefit, and reporting it alone read as "they do
+// nothing". Meanwhile ClaudeCliSemanticSource is explicitly told to store 另一种语言的常见叫法.
+//
+//   same   — the fact's own language. The floor's best case; kept as the control.
+//   cross  — the other of zh/en. A flip, and still the narrow reading of "multilingual".
+//   third  — a language that is NEITHER the fact's nor English (ja). A household with Japanese or Korean
+//            material is not served by a zh<->en flip, and nothing here was testing that.
+//   mixed  — CODE-SWITCHED, the way people actually type in chat: a Chinese sentence carrying English
+//            nouns. Shares SOME tokens with the fact and some with nothing, which is the messy middle the
+//            other three all miss.
+const QUESTION_SETS = [
+  { key: 'same', label: '同语言', ask: (f) => `Write it in the SAME language as the fact.` },
+  { key: 'cross', label: '跨语言', ask: (f) => hasCjk(f) ? 'Write it in English.' : 'Write it in Chinese.' },
+  { key: 'third', label: '第三语言', ask: () => 'Write it in Japanese.' },
+  { key: 'mixed', label: '混合语言',
+    ask: () => 'Write it CODE-SWITCHED the way a bilingual person types in chat: a Chinese sentence that '
+      + 'keeps the key nouns in English. Do not translate everything into one language.' },
+];
+
+const hasCjk = (fact) => /[一-鿿]/.test(`${fact.topic} ${fact.content}`);
+
+const askIn = (fact, set) => {
+  const prompt =
+    'Below is one fact from a private knowledge base. Write ONE short question that this fact answers.'
+    + NL + `Language: ${set.ask(fact)}`
+    + NL + "Rules: do NOT reuse the fact's distinctive words (paraphrase); do not transliterate; ask it "
+    + 'the way a person would; output the question ALONE with no preamble, quotes or punctuation beyond '
+    + 'the question mark.' + NL + NL + `FACT: ${fact.topic} — ${fact.content}`;
+  const r = spawnSync(claude, ['-p', prompt], { encoding: 'utf8', cwd: os.tmpdir(), maxBuffer: 1 << 20 });
+  const out = (r.stdout ?? '').trim().split(NL).filter(Boolean).pop() ?? '';
+  return out.length >= 4 && out.length <= 200 ? out : null;
+};
+
 const askForQuestion = (fact) => {
   // A NEUTRAL cwd, like every other one-shot call in this codebase: run from the data folder and the
   // planner's whole knowledge base loads per call, which is both slow and irrelevant here.
@@ -143,21 +192,28 @@ const askForQuestion = (fact) => {
 let generated = 0;
 for (const f of facts) {
   const key = String(f.id);
-  if (cache[key]?.q) continue;
-  const q = askForQuestion(f);
-  if (!q) { console.log(`  (could not generate a question for fact ${f.id} — skipping it)`); continue; }
-  cache[key] = { q };
+  const held = cache[key] ?? {};
+  // Back-compat: the old cache stored the same-language question as `q` and the first cross one as `qx`.
+  // Reused rather than regenerated — each of these is a model call against the household's own account.
+  const seeded = { same: held.q ?? held.same, cross: held.qx ?? held.cross, third: held.third, mixed: held.mixed };
+  let wrote = false;
+  for (const set of QUESTION_SETS) {
+    if (seeded[set.key]) continue;
+    const q = askIn(f, set);
+    if (q) { seeded[set.key] = q; wrote = true; }
+    process.stdout.write(`  generating questions… fact ${generated + 1}/${facts.length} (${set.key})   `);
+  }
+  cache[key] = seeded;
   generated++;
-  process.stdout.write(`\r  generating questions… ${generated}`);
+  if (wrote) fs.mkdirSync(path.dirname(CACHE), { recursive: true });
 }
-if (generated > 0) {
-  fs.mkdirSync(path.dirname(CACHE), { recursive: true });
-  fs.writeFileSync(CACHE, JSON.stringify(cache, null, 2), 'utf8');
-  process.stdout.write(`\r  generated ${generated} question(s), cached in the data folder\n`);
-}
+fs.writeFileSync(CACHE, JSON.stringify(cache, null, 2), 'utf8');
+process.stdout.write(`  questions ready for ${facts.length} fact(s), cached in the data folder      
+`);
 
-const probes = facts.filter((f) => cache[String(f.id)]?.q)
-  .map((f) => ({ id: f.id, q: cache[String(f.id)].q }));
+const probes = facts
+  .filter((f) => cache[String(f.id)]?.same)
+  .map((f) => ({ id: f.id, qs: cache[String(f.id)] }));
 if (probes.length < 4) {
   console.log('too few usable questions — is the claude CLI available and signed in?');
   process.exit(1);
@@ -190,52 +246,66 @@ const ARMS = [
   { key: 'off', label: '公式 only (判断 off)', enabled: false },
   { key: 'on', label: '公式 + 判断', enabled: true },
 ];
-const acc = Object.fromEntries(ARMS.map((a) => [a.key, { top1: 0, found: 0, rr: 0, ms: 0, judged: 0, graph: 0 }]));
+// TWO QUESTION SETS, because the layer being measured exists for the second one.
+//
+// `same` asks in the fact's own language — the lexical floor can always reach it, which is why every
+// earlier run showed 判断 and 语义 changing nothing. `cross` asks in the OTHER language, sharing no
+// tokens with the stored text: no trigram, no bm25, nothing for the graph's lexical half. That is the
+// case a bilingual household actually lives in, and the only one where stored phrasings or real vectors
+// are the route rather than a bonus.
+const SETS = QUESTION_SETS;
+const cell = () => ({ top1: 0, found: 0, rr: 0, ms: 0, judged: 0, graph: 0, n: 0 });
+const acc = {};
+for (const a of ARMS) for (const g of SETS) acc[`${a.key}|${g.key}`] = cell();
 
 for (const [i, p] of probes.entries()) {
-  const order = i % 2 === 0 ? ARMS : [...ARMS].reverse();
-  for (const arm of order) {
-    await post('/api/manage/memory/enrichment', { enabled: arm.enabled });
-    const t0 = Date.now();
-    const res = await callTool('recall_facts', { query: p.q, limit: LIMIT });
-    const ms = Date.now() - t0;
-    const ids = (res.facts ?? []).map((f) => Number(f.id));
-    const pos = ids.indexOf(Number(p.id));
-    const a = acc[arm.key];
-    a.ms += ms;
-    if (pos === 0) a.top1++;
-    if (pos >= 0) { a.found++; a.rr += 1 / (pos + 1); }
-    // `answered` rides ONLY on a graph result — MemoryTools suppresses it on the FTS fallback, because
-    // there the judged candidates are not the facts being shown. So the denominator for "did the judge
-    // run" is the graph-ranked queries, NOT every query: counting against all of them silently reports a
-    // query the graph never answered as a query the judge failed on. Those call for opposite responses,
-    // which is the same conflation this column was added to END.
-    if (res.ranked === 'graph') a.graph++;
-    if (res.answered !== undefined && res.answered !== null) a.judged++;
+  for (const set of SETS) {
+    const query = p.qs[set.key];
+    if (!query) continue;   // a fact with no cross-language question generated
+    const order = i % 2 === 0 ? ARMS : [...ARMS].reverse();
+    for (const arm of order) {
+      await post('/api/manage/memory/enrichment', { enabled: arm.enabled });
+      const t0 = Date.now();
+      const res = await callTool('recall_facts', { query, limit: LIMIT });
+      const ms = Date.now() - t0;
+      const ids = (res.facts ?? []).map((f) => Number(f.id));
+      const pos = ids.indexOf(Number(p.id));
+      const a = acc[`${arm.key}|${set.key}`];
+      a.n++;
+      a.ms += ms;
+      if (pos === 0) a.top1++;
+      if (pos >= 0) { a.found++; a.rr += 1 / (pos + 1); }
+      // `answered` rides ONLY on a graph result — MemoryTools suppresses it on the FTS fallback, where
+      // the judged candidates are not the facts being shown. So the denominator for "did the judge run"
+      // is the graph-ranked queries, never every query.
+      if (res.ranked === 'graph') a.graph++;
+      if (res.answered !== undefined && res.answered !== null) a.judged++;
+    }
   }
 }
 
 const n = probes.length;
-const rows = ARMS.map((arm) => {
-  const a = acc[arm.key];
-  return {
-    label: arm.label,
-    top1: a.top1, found: a.found, miss: n - a.found,
-    missRate: (n - a.found) / n,
-    mrr: a.rr / n,
-    judged: a.judged,
-    graph: a.graph,
-    msPerQuery: Math.round(a.ms / n),
-  };
-});
-// Leave the switch as it was found. A benchmark that silently changes a product setting is a benchmark
-// nobody should run twice.
-await post('/api/manage/memory/enrichment', { enabled: was });
-
+const rows = [];
+for (const set of SETS) {
+  for (const arm of ARMS) {
+    const a = acc[`${arm.key}|${set.key}`];
+    if (a.n === 0) continue;
+    rows.push({
+      label: `${set.label} · ${arm.label}`,
+      top1: a.top1, found: a.found, miss: a.n - a.found,
+      missRate: (a.n - a.found) / a.n,
+      mrr: a.rr / a.n,
+      judged: a.judged,
+      graph: a.graph,
+      msPerQuery: Math.round(a.ms / a.n),
+      n: a.n,
+    });
+  }
+}
 console.log('| configuration | top-1 | found | miss | miss rate | MRR | judged/graph | ms/query |');
 console.log('|---|---|---|---|---|---|---|---|');
 for (const r of rows) {
-  console.log(`| ${r.label} | ${r.top1}/${probes.length} | ${r.found}/${probes.length} | ${r.miss}`
+  console.log(`| ${r.label} | ${r.top1}/${r.n} | ${r.found}/${r.n} | ${r.miss}`
     + ` | ${r.missRate.toFixed(3)} | ${r.mrr.toFixed(3)} | ${r.judged}/${r.graph} | ${r.msPerQuery} |`);
 }
 
@@ -250,8 +320,22 @@ console.log(`\nchance baseline: found ${chanceFound.toFixed(3)} (top ${LIMIT} of
 
 const [floor, withJudge] = rows;
 const delta = floor.missRate - withJudge.missRate;
-console.log(`判断 changed the miss rate by ${delta >= 0 ? '-' : '+'}${Math.abs(delta).toFixed(3)}`
-  + ` on this corpus (Lyntai measured -0.35 on theirs: 0.54 → 0.19).`);
+// The cross-language pair, reported separately — it is the comparison that says whether the enrichment
+// layers do anything a bilingual household would notice. Averaging it into the same-language pair would
+// hide exactly the effect the run was added to look for.
+const crossPair = rows.filter((r) => r.label.startsWith('跨语言'));
+if (crossPair.length === 2) {
+  const cd = crossPair[0].missRate - crossPair[1].missRate;
+  console.log(`跨语言提问:公式 only 漏检 ${crossPair[0].missRate.toFixed(3)}`
+    + ` · 加上判断 ${crossPair[1].missRate.toFixed(3)}(变化 ${cd >= 0 ? '-' : '+'}${Math.abs(cd).toFixed(3)})`);
+}
+// SAY WHICH SET. This line reported one number as "what 判断 did", computed from the SAME-LANGUAGE pair
+// alone — and same-language is precisely the case where the lexical floor already reaches the fact, so it
+// reads 0.000 no matter how much the layer helps elsewhere. Quoted on its own it argued the enrichment
+// does nothing, which is how a measurement that could not see the effect became "there is no effect".
+console.log(`判断 在【同语言】提问上改变漏检 ${delta >= 0 ? '-' : '+'}${Math.abs(delta).toFixed(3)}`
+  + ` —— 同语言时「公式」本来就够得着,所以这一格接近 0 是预期的,不代表这一层没用。`);
+console.log(`  (Lyntai measured -0.35 on their corpus: 0.54 → 0.19.)`);
 
 // A verdict on whether the run can support a conclusion AT ALL. Printing "0.667 → 0.500" without this is
 // how a borrowed number gets replaced by a homegrown one that is worse: at least the borrowed one was

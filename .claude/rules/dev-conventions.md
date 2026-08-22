@@ -385,6 +385,40 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing", which is a lie told on their own data. `recall_facts` therefore reports `ranked:
   graph|fts`, because a graph answer and a fallback answer are otherwise indistinguishable. Proof lives
   in `e2e-p48`, whose restore assertion was confirmed to FAIL with the rebuild removed.
+- **THE BENCH ASKED IN THE FACT'S OWN LANGUAGE, so it could not see what these layers are for**
+  (found 2026-08-23, by the owner, after three sessions of me reporting "no measurable benefit").
+  `recall-bench` now generates FOUR question sets per fact (`QUESTION_SETS`): same, cross, a third language,
+  and code-switched. Its generator used to be told *"use the same language as the fact"* — so every probe
+  shared a script with the text it was hunting, and the 公式 floor could always reach it lexically.
+  Meanwhile `ClaudeCliSemanticSource`'s prompt explicitly asks for 另一种语言的常见叫法. **The instrument
+  measured everything except the case the feature exists for, and the null result was then read as "the
+  feature does nothing".** In a bilingual household a fact written in Chinese and asked in English shares
+  NO tokens with the stored text — no trigram, no bm25, nothing for the graph's lexical half — which is
+  the one situation where an enrichment layer is the route rather than a bonus.
+  Measured with a CROSS-LANGUAGE probe set added beside the same-language one (16 facts, `--limit=3`):
+
+  | set | arm | top-1 | found | miss | MRR |
+  |---|---|---|---|---|---|
+  | 同语言 | 公式 only | 10/16 | 11/16 | 0.313 | 0.646 |
+  | 同语言 | + 判断 | 10/16 | 11/16 | 0.313 | 0.646 |
+  | 跨语言 | 公式 only | 9/16 | 9/16 | 0.438 | 0.563 |
+  | 跨语言 | **+ 判断** | 10/16 | **11/16** | **0.313** | 0.656 |
+  | 第三语言 (ja) | 公式 only | 11/16 | 11/16 | 0.313 | 0.688 |
+  | 第三语言 (ja) | **+ 判断** | 12/16 | **13/16** | **0.188** | 0.781 |
+  | 混合语言 (code-switched) | 公式 only | 13/16 | 13/16 | 0.188 | 0.813 |
+  | 混合语言 (code-switched) | **+ 判断** | 15/16 | **15/16** | **0.063** | 0.938 |
+
+  **The recovery is +2 facts in EVERY non-same-language set and 0 in same-language** — miss rate down a
+  flat 0.125 across three independent probe styles, which is far more convincing than any single delta.
+  A two-way zh↔en flip was itself too narrow: a household with Japanese or Korean material is not served
+  by it, and **code-switching is how people actually type in chat** — a Chinese sentence keeping the key
+  nouns in English. That set has both the best floor (it shares some tokens) and the best result with
+  enrichment (1 miss of 16). Note the Japanese floor beats the English one, which looks wrong until you
+  remember the trigram index: a Japanese question shares KANJI with a Chinese fact, so it is partially
+  lexical where English is not. The footer
+  that reported one number as "what 判断 did" now names its set and says why the same-language cell reads
+  ~0 — quoting it alone argued the layer was useless. **When a measurement says "no effect", check the
+  instrument can express the effect** before concluding anything about the feature.
 - **判断 DOES reorder a recall — I claimed the opposite and was wrong** (measured 2026-08-22, `dev.mjs
   recall-bench` on this household's own 16 facts). With `VerificationFilters` off — which is how we register
   it, deliberately, so a mistaken verdict costs a little learning rather than a lost answer — a verdict does
