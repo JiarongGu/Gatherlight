@@ -596,7 +596,23 @@ public sealed class MemoryRecallController : ControllerBase
             return NotFound(new { error = "只有「语义」可以这样停用;「判断」请用它自己的开关。" });
 
         _config.Update(c => { c.Memory.SemanticSource = null; c.Memory.SemanticEnabled = false; });
-        return Ok(new { ok = true, layer, restartRequired = true });
+        // OFF STOPS IT PRODUCING; IT DOES NOT RETRACT WHAT IT PRODUCED — and saying so is the whole point
+        // of this note. Phrasings live in `knowledge.aka`, which the FTS table indexes unconditionally, so
+        // facts already expanded keep matching on their stored wordings after the layer is off. Found by
+        // measuring the arm and then turning it off: 15 facts were still matching, with nothing anywhere
+        // saying they would.
+        //
+        // Stated rather than "fixed" by deleting them, because the persistence has a real upside: turning
+        // the layer back on costs nothing to re-derive, and re-deriving is ~46 s per fact. An undisclosed
+        // effect is the defect here, not the effect itself. A CLEAR action is a separate decision — it
+        // turns on whether phrasings are the layer's output or part of the fact — and inventing one inside
+        // an "off" button would answer that question by accident.
+        return Ok(new
+        {
+            ok = true, layer, restartRequired = true,
+            note = "已停用:不会再为新事实生成说法。已经写入的说法仍留在检索索引里,继续参与匹配 —— "
+                + "所以之后重新启用不需要再花时间重建。",
+        });
     }
 
     /// <summary>(Re)build the vector index over every fact. Needed on first bind — the graph is already

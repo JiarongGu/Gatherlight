@@ -420,10 +420,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   household weighing it should see.
 - **Switching 语义 off does NOT clear what it wrote.** Phrasings live in `knowledge.aka`, which the FTS
   table indexes unconditionally — so 15 facts were still matching on their stored phrasings after the layer
-  was turned off, and nothing in the product says so or offers to clear them. Turning a layer off stops it
-  producing; it does not retract what it produced. Recorded rather than fixed: the honest options are a
-  cleanup on `/off` or a sentence on the card, and which one is right depends on whether phrasings are
-  understood as the layer's output or as part of the fact.
+  was turned off, and nothing in the product said so. Turning a layer off stops it producing; it does not
+  retract what it produced. **The `/off` response now says so**, and deliberately does not delete them —
+  the persistence has a real upside (re-enabling costs no re-derivation, which is ~46 s per fact), so the
+  defect was the silence, not the effect. A CLEAR action stays a separate decision, because it turns on
+  whether phrasings are the layer's output or part of the fact, and putting one inside an "off" button
+  would answer that question by accident.
 - **FTS TOPS THE PAGE UP; it is not only a fallback for an empty one** — and until 2026-08-22 it was, which
   quietly cost the 语义 CLI arm most of its value. Phrasings live in `knowledge.aka`, which is in the FTS
   table and in NO graph node (the graph indexes a fact's CONTENT, which never contained them), while
