@@ -94,12 +94,18 @@ try {
   // restart — and "no restart" is a claim only a live UI can falsify.
   await new Promise((r) => setTimeout(r, 900));
   const cards = await c.evalJs("[...document.querySelectorAll('.mem-layer .mem-layer-name')].map(n=>n.textContent).join('|')");
+  // The LAYER names, which is what these cards are titled with. This asserted /Claude CLI/ and
+  // /Local model/ — a BACKEND and a name that was retired when the layers were renamed for what they DO.
+  // It rotted silently because this harness is run by hand rather than in the fleet, which is the same
+  // reason the assertions below had to be added by hand too.
   ok('Cortex renders the three memory-recall switches',
-    /Formula/.test(cards) && /Claude CLI/.test(cards) && /Local model/.test(cards), cards);
+    /Formula/.test(cards) && /Judgement/.test(cards) && /Semantic/.test(cards), cards);
   ok('and marks the formula floor as always on', /始终启用/.test(cards), cards);
 
   // The button label IS the state, so flipping it and re-reading is a real round-trip through the API.
-  const enrichBtn = "[...document.querySelectorAll('.mem-layer')].find(i=>/Claude CLI/.test(i.textContent))?.querySelector('.cx-btn')";
+  // Located by the LAYER's name. Matching on /Claude CLI/ found it only because that layer happened to be
+  // bound to that backend — it would have picked a different card, or none, the moment the binding changed.
+  const enrichBtn = "[...document.querySelectorAll('.mem-layer')].find(i=>/Judgement/.test(i.textContent))?.querySelector('.cx-btn')";
   const before = await c.evalJs(`${enrichBtn}?.textContent || ''`);
   await c.evalJs(`${enrichBtn}?.click()`);
   await new Promise((r) => setTimeout(r, 900));
@@ -111,6 +117,65 @@ try {
   await c.evalJs(`${enrichBtn}?.click()`);
   await new Promise((r) => setTimeout(r, 900));
   ok('and toggles back', (await c.evalJs(`${enrichBtn}?.textContent || ''`)) === before, before);
+
+  // 3c. 资源 — THE FIELDS THAT ARRIVE LATE. Both panels stopped awaiting a process spawn before they
+  // answer: the CLI's login line costs ~0.6–0.9s and llama.cpp's build tag costs two process starts, so the
+  // server sends null and probes in the background while each panel re-asks ONCE. That retry is a client
+  // effect with no server-side signal — if it regresses, the row simply stays blank for ever and every API
+  // test still passes. This is the only place in the repo that can catch it, which is why it is here and
+  // not in the fleet: it needs a real rendered UI.
+  await c.evalJs("[...document.querySelectorAll('.mng-tab')].find(t=>/Resources|资源/.test(t.textContent))?.click()");
+  let resUp = false;
+  for (let i = 0; i < 20; i++) {
+    resUp = (await c.evalJs("!!document.querySelector('.res-list')")) === true;
+    if (resUp) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  ok('tab switch (Resources) works', resUp);
+
+  // The CLI's line starts as 检查中… and must become a real answer. Polled rather than slept: the retry is
+  // one 900ms timer plus a process spawn, and a fixed pause would make this flaky under load.
+  let claudeLine = '';
+  for (let i = 0; i < 24; i++) {
+    claudeLine = await c.evalJs(
+      "([...document.querySelectorAll('.res-item')].find(r=>/Claude CLI/.test(r.textContent))?.textContent || '')");
+    if (claudeLine && !/检查中/.test(claudeLine)) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  ok('the CLI row resolves its login state instead of staying on 检查中…',
+    claudeLine.length > 0 && !/检查中/.test(claudeLine)
+      && /已登录|尚未登录|未安装|无法运行/.test(claudeLine),
+    claudeLine.replace(/\s+/g, ' ').slice(0, 120));
+
+  // And llama.cpp's row must gain its build tag. Only asserted when it is INSTALLED — on a machine that
+  // never downloaded it there is nothing to fill in, and demanding a version there would be a test that
+  // fails for being on the wrong machine.
+  // Wait for the ROW before deciding whether the runtime is installed. Reading it immediately answered
+  // "not installed" on a machine that has it, and the check below then took its skip branch and reported a
+  // green PASS — a vacuous test that hid a real failure for one run.
+  const llamaRow = "([...document.querySelectorAll('.res-models .res-item')].find(r=>/llama\\.cpp/.test(r.textContent))?.textContent || '')";
+  let llamaSeen = '';
+  for (let i = 0; i < 24; i++) {
+    llamaSeen = await c.evalJs(llamaRow);
+    if (llamaSeen.length > 0) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  ok('the llama.cpp runtime row renders at all', llamaSeen.length > 0, llamaSeen.slice(0, 80));
+  const llamaInstalled = /已安装/.test(llamaSeen);
+  if (llamaInstalled) {
+    let llamaLine = '';
+    for (let i = 0; i < 24; i++) {
+      llamaLine = await c.evalJs(
+        "([...document.querySelectorAll('.res-models .res-item')].find(r=>/llama\\.cpp/.test(r.textContent))?.textContent || '')");
+      if (/\bb\d{3,}/.test(llamaLine)) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    ok('the llama.cpp row gains its build tag after the background probe lands',
+      /\bb\d{3,}/.test(llamaLine), llamaLine.replace(/\s+/g, ' ').slice(0, 120));
+  } else {
+    ok('(llama.cpp not installed here) its late-arriving build tag is not exercised', true,
+      'needs the runtime downloaded; nothing would fill in on a machine without it');
+  }
 
   // Settings tab renders its config form (the surface for editing settings.json)
   await c.evalJs("[...document.querySelectorAll('.mng-tab')].find(t=>/Settings/.test(t.textContent))?.click()");

@@ -99,12 +99,23 @@ export function LocalModelsPanel(
   // downloading, so without a re-ask those fields stayed blank until the household navigated away and back:
   // an installed runtime showing no version and no GPU badge, permanently, on the first open after every
   // restart. One retry, not a poll — the answer is cached server-side once it lands.
+  //
+  // A FEW attempts, not one. The first version asked again after a fixed 900 ms, which RACES the thing it
+  // is waiting for: on a cold process the background probe shells out to `--version` and `--list-devices`
+  // and takes ~1.9 s, so the single retry landed early, found the same null, and — because the gate boolean
+  // had not changed — never fired again. The row then stayed blank for ever, which is the exact bug this
+  // retry exists to prevent, reintroduced by the retry. Caught by desktop-e2e, which is the only thing that
+  // renders the row.
+  //
+  // Keying the effect on the ATTEMPT COUNT is what makes it re-run; the cap is what stops it becoming the
+  // poll this deliberately is not.
+  const [probeTries, setProbeTries] = useState(0);
   const runtimeUnknown = !!inv && inv.runtime.installed && inv.runtime.version === null;
   useEffect(() => {
-    if (!runtimeUnknown) return;
-    const t = setTimeout(() => { load(false); }, 900);
+    if (!runtimeUnknown || probeTries >= 5) return;
+    const t = setTimeout(() => { setProbeTries((n) => n + 1); load(false); }, 800);
     return () => clearTimeout(t);
-  }, [runtimeUnknown]);
+  }, [runtimeUnknown, probeTries]);
 
   const post = async (path: string, body?: unknown, label = '') => {
     setBusy(label || path);
@@ -165,8 +176,13 @@ export function LocalModelsPanel(
         failed={rt.installed && !!rt.problem}
         lines={
           <div className="res-need">
+            {/* The BUILD TAG shows whichever state it is in. It used to appear only while serving, so a
+                household who had downloaded the runtime could not see which build they had until they
+                started it — and 资源's job is telling you what you have. It is also the field that arrives
+                LATE (two process starts), so this is where the background probe becomes visible. */}
             {rt.installed
-              ? `${rt.serving ? `运行中 ${rt.version ?? ''}` : '已安装,未运行'} · ${rt.baseUrl} · 下面标着 llama.cpp 的模型跑在它上面`
+              ? `${rt.serving ? '运行中' : '已安装,未运行'}${rt.version ? ` ${rt.version}` : ''}`
+                + ` · ${rt.baseUrl} · 下面标着 llama.cpp 的模型跑在它上面`
               : '未安装 —— 在上面的资源列表里下载「本机模型运行时 · llama.cpp」(约 35 MB)。标着 内置 的模型不需要它。'}
           </div>
         }

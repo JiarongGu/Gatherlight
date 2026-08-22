@@ -79,12 +79,17 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
   // "not known yet" — distinct from "not signed in" — so this asks again, ONCE, rather than leaving 检查中…
   // on screen for ever. Not a poll: the answer is cached server-side once it arrives, so one retry is
   // enough, and an idle panel must not spawn processes on a timer.
+  // A FEW attempts, not one — the probe it waits for costs 0.6–0.9 s, so a single fixed retry sits right
+  // on top of its own answer and a slow machine loses the race permanently (the gate boolean never changes,
+  // so the effect never fires again). Keyed on the attempt count so it re-runs; capped so it stays a retry
+  // rather than becoming a poll that spawns a process every second on an idle screen.
+  const [loginTries, setLoginTries] = useState(0);
   const claudeUnknown = items?.some((r) => r.id === 'claude' && !r.detail) ?? false;
   useEffect(() => {
-    if (!claudeUnknown) return;
-    const t = setTimeout(() => { load(); }, 900);
+    if (!claudeUnknown || loginTries >= 5) return;
+    const t = setTimeout(() => { setLoginTries((n) => n + 1); load(); }, 800);
     return () => clearTimeout(t);
-  }, [claudeUnknown]);
+  }, [claudeUnknown, loginTries]);
 
   const setSession = async (mode: 'machine' | 'app') => {
     try {
