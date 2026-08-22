@@ -985,6 +985,22 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   clicking, mid-refetch, so it reported "the switch does not flip". **A fixed sleep does not fail
   honestly — it fails as a wrong description of the product**, which is worse than a red that says
   "timed out". Poll the condition, and re-issue the action each round.
+- **`dev.mjs check-doc-refs` — every code identifier a LIVE doc names must exist.** Docs rot silently: a
+  class is renamed, the prose pointing at it is not, and the next session follows the reference, finds
+  nothing, and re-derives what was already written down. A WRONG doc costs more than a missing one — a
+  search plus the time spent trusting it. Found by hand first (`GitCliService.GitExe`, whose member is
+  `LocateGit`; three Ollama APIs still named in a rule after the backend went), which is why it is now a
+  check rather than a habit.
+  **Scope is the design.** Only the docs a session is expected to ACT on are checked;
+  `docs/superpowers/plans|specs` are point-in-time records, and a July plan naming a since-renamed class is
+  HISTORY, not an error — rewriting it would destroy the record of what was decided. Checking them would
+  produce noise that trains everyone to ignore the check.
+  **The allowlist is keyed `doc::identifier`, not by identifier.** `ClaudeCliRunner` is legitimate in
+  `ROADMAP.md`, which records that a phase DELETED it, and would be a rotted reference anywhere presenting
+  it as current — a bare-name allowlist cannot tell those apart, and the second case is the one that
+  matters. Every entry carries a reason, so the list forces a decision rather than silencing one. Three of
+  the five current entries are not drift at all: a filename PATTERN, an MSBuild property named while
+  explaining that we do NOT use it, and a class belonging to Vidora, a sibling project.
 - **`dev.mjs e2e all` NAMES what it did not cover.** `desktop-e2e` drives the real UI over CDP and cannot
   join the fleet — it needs `dev.mjs host --dev` and a WebView2 window — so the fleet's summary says so
   where "all green" is read. Being outside the fleet is exactly why it rotted once: it asserted control

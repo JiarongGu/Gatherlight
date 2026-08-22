@@ -165,6 +165,10 @@ switch (cmd) {
     run('node', [path.join(repo, 'devtools', 'scripts', 'check-host-actions.mjs'), ...args]);
     break;
 
+  case 'check-doc-refs':
+    run('node', [path.join(repo, 'devtools', 'scripts', 'check-doc-refs.mjs'), repo, ...args]);
+    break;
+
   case 'smoke':
     run('node', [path.join(repo, 'devtools', 'scripts', 'smoke-real-claude.mjs')]);
     break;
@@ -619,6 +623,6 @@ switch (cmd) {
 // new-tool and shot were all missing), and a usage line that omits a command is how a tool goes unused.
 console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|desktop-e2e'
   + '|smoke|shot|memory|eval|embed-bench|recall-bench|test-data|new-tool|fetch-tools|install-hooks'
-  + '|check-sensitive|check-layering|check-ui-registry|check-tool-docs|check-host-actions>');
+  + '|check-sensitive|check-layering|check-ui-registry|check-tool-docs|check-host-actions|check-doc-refs>');
     process.exitCode = cmd ? 1 : 0;
 }
