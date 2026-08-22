@@ -111,26 +111,39 @@ public interface IMemoryJudgeSource : IMemorySource
     /// <para>Required because <c>LlmRouterFactory.For()</c> narrows a named client's provider POOL but
     /// reuses the same candidates: a client pooled over a provider absent from the global list matches
     /// nothing, and every call fails — silently, since the policies are fail-open. Empty for a source that
-    /// registers no provider of its own.</para></summary>
+    /// registers no provider of its own.</para>
+    /// <para><b>THIS IS A WORKAROUND FOR A LIBRARY GAP — narrow it back if Lyntai closes it.</b> Filed as
+    /// <c>Lyntai TASKS.md</c> <b>Part 93</b>. Widening the GLOBAL list to fix a client created to be NARROW
+    /// is the opposite of the intent: it means the default client may now reach a backend it was never
+    /// meant to, and only the <c>claude-cli</c>-first ordering keeps that a fallback rather than a
+    /// re-route. If a release derives a named client's candidates from its own pool, this property and the
+    /// spread at the <c>UseDefaultCandidates</c> call site both go, and the named client goes back to being
+    /// narrow. Recorded on both sides — see the rule in <c>.claude/rules/dev-conventions.md</c>.</para></summary>
     IReadOnlyList<string> CandidateProviderIds { get; }
 }
 
 /// <summary>
-/// A backend that can turn a fact into a VECTOR, so a paraphrase finds it.
+/// A backend that makes a DIFFERENTLY-WORDED question find the fact.
 ///
-/// <para>There is no <c>ClaudeCliSemanticSource</c> because THIS INTERFACE asks for a vector: <see
-/// cref="ProveAsync"/> returns a width, and every implementation registers an embedder plus a vector store.
-/// Anthropic ships no embeddings endpoint, so Claude cannot satisfy that shape.
+/// <para><b>The job, not the mechanism</b> — and this summary said the mechanism for a long time, which is
+/// how it came to exclude a whole group of households. It read "a backend that turns a fact into a VECTOR",
+/// with a paragraph explaining that there is no <c>ClaudeCliSemanticSource</c> because Anthropic ships no
+/// embeddings endpoint. The first clause was true; the conclusion was circular, because the layer was
+/// defined as embeddings BY US. Defining the interface by its PURPOSE is what let the missing arm be
+/// written, and it is the shape to keep.</para>
 ///
-/// <para><b>Do not upgrade that into "Claude cannot do meaning-based recall", which is what the earlier
-/// wording here did.</b> "An absent class, not an exclusion" is true and says nothing on its own: the class
-/// is absent because WE defined this layer as embeddings. The layer's purpose — a paraphrase finds the fact
-/// — has a non-vector route Claude can serve, namely rewriting the query into several phrasings and running
-/// the existing FTS-trigram + graph retrieval over each. That would change what is RETRIEVABLE, which is
-/// the property separating this layer from the judge, so it belongs here rather than there. It is UNBUILT,
-/// not impossible: Lyntai exposes no query-rewrite seam (its <c>ExpandAsync</c> is graph-neighbour
-/// expansion), and it would cost a model call on every recall, on top of the judge's. A real design
-/// decision — which is exactly why it must not hide behind a sentence about a missing file.</para>
+/// <para>Two routes serve it now, and implementations differ accordingly: an EMBEDDER arm registers a
+/// vector store and <see cref="ProveAsync"/> returns a width; the CLI arm registers NOTHING and instead
+/// stores other wordings of each fact at write time (<c>knowledge.aka</c>, in the trigram index), so
+/// <see cref="ProveAsync"/> reports a phrasing COUNT with <c>EmbedProbe.What</c> saying so. Do not
+/// reintroduce "every implementation registers an embedder" — it stopped being true the day this layer
+/// gained a second kind of answer.</para>
+///
+/// <para>Note the shipped design is not the one this comment used to predict. It guessed a QUERY-rewrite
+/// (rewrite the question into several phrasings, retrieve over each), which costs a model call on every
+/// recall, on top of the judge's ~9 s. Rephrasing at WRITE time costs the same call once per fact and
+/// nothing on the path the household waits on. The prediction was a reasonable design and the cheaper one
+/// won; recorded because a comment that describes an unbuilt plan reads as a description of what exists.</para>
 ///
 /// <para>It is a narrow technical
 /// fact and NOT a reason to tell a household Claude cannot help meaning-based recall: through the judge it
