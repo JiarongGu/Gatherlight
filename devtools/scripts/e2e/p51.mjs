@@ -936,6 +936,55 @@ try {
     ok('and the running backend agrees, so no restart is falsely owed',
       old.activeSource === 'claude-cli' && old.activeModel === 'haiku',
       JSON.stringify({ active: old.activeSource, activeModel: old.activeModel }));
+  // ---- THE LLAMA LAUNCH CONTRACT IS WRITTEN DOWN, NOT ASSUMED --------------------------------
+  //
+  // `--n-gpu-layers` is the one setting whose absence is invisible: llama-server silently runs on the
+  // CPU at ~30x the latency and logs nothing about it, on the path of every recall. The code says so in
+  // three places and NOTHING checked it — the only mention in this suite was a comment citing a manual
+  // measurement. That is a contract enforced by remembering, which is how the 30x comes back.
+  //
+  // Drivable without llama.cpp installed, because the preset file is written BEFORE the child is
+  // spawned: a stub binary that merely EXISTS gets past the executable check, the spawn then fails, and
+  // presets.ini is on disk either way. The same trick p50 case F uses for the provisioned CLI.
+  {
+    const res = path.join(dir, 'state', 'resources');
+    const ggufDir = path.join(res, 'gguf');
+    fs.mkdirSync(path.join(res, 'llama-cpp'), { recursive: true });
+    fs.mkdirSync(ggufDir, { recursive: true });
+    fs.writeFileSync(path.join(res, 'llama-cpp', 'llama-server.exe'), 'not a real binary');
+    // Two models, because the second half of the contract is that `embeddings = true` goes on embedders
+    // ONLY — it RESTRICTS a child to embedding, which is right for an embedder and fatal for a judge.
+    fs.writeFileSync(path.join(ggufDir, 'zztest-embed-model.gguf'), 'x');
+    fs.writeFileSync(path.join(ggufDir, 'zztest-chat-model.gguf'), 'x');
+
+    await post('/api/manage/models/llama/start');   // spawn fails; presets are written first
+
+    const presetPath = path.join(ggufDir, 'presets.ini');
+    const preset = fs.existsSync(presetPath) ? fs.readFileSync(presetPath, 'utf8') : '';
+    ok('(fixture) starting the router generated its preset file',
+      preset.includes('[zztest-embed-model]') && preset.includes('[zztest-chat-model]'),
+      JSON.stringify(preset.slice(0, 200)));
+
+    const sectionOf = (id) => {
+      const body = preset.split(`[${id}]`)[1] ?? '';
+      return body.split('[')[0];
+    };
+    ok('THE POINT: every model gets n-gpu-layers — without it recall is ~30x slower, silently',
+      /n-gpu-layers\s*=\s*\d+/.test(sectionOf('zztest-embed-model'))
+        && /n-gpu-layers\s*=\s*\d+/.test(sectionOf('zztest-chat-model')),
+      JSON.stringify({ embed: sectionOf('zztest-embed-model'), chat: sectionOf('zztest-chat-model') }));
+
+    ok('embeddings = true goes on the EMBEDDER and nowhere else',
+      /embeddings\s*=\s*true/.test(sectionOf('zztest-embed-model'))
+        && !/embeddings\s*=\s*true/.test(sectionOf('zztest-chat-model')),
+      JSON.stringify({ embed: sectionOf('zztest-embed-model'), chat: sectionOf('zztest-chat-model') }));
+
+    // Planted files removed: later runs of this fixture assert on llama.cpp being ABSENT, and a stub
+    // left behind would make those pass or fail for a reason that is not theirs.
+    fs.rmSync(path.join(res, 'llama-cpp'), { recursive: true, force: true });
+    fs.rmSync(ggufDir, { recursive: true, force: true });
+  }
+
   } finally {
     try { legacy?.stop(); } catch { /* best effort */ }
   }

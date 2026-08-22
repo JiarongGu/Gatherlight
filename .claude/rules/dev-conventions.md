@@ -638,7 +638,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   fail SILENTLY, which is why they are here and not only in the doc:
   **(1) `--n-gpu-layers` is launch CONTRACT.** Absent it, llama-server runs on the CPU and logs nothing —
   222 ms/query against 7 ms, on the path of every recall. It goes into a generated per-model preset, which
-  is the form whose effect was verified in the child's own argv.
+  is the form whose effect was verified in the child's own argv. **`p51` now asserts the generated preset
+  rather than trusting the comment** — the only mention of it in the suite used to be a comment citing a
+  manual measurement, which is a contract enforced by remembering. It is drivable with llama.cpp absent
+  because `WritePresets` runs BEFORE the spawn: a stub binary that merely exists clears the executable
+  check, the spawn then fails, and the preset is on disk regardless (the trick `p50` case F uses). Both
+  halves were confirmed to FAIL when broken — the missing flag, and `embeddings = true` written onto every
+  model instead of only embedders.
   **(2) Models load LAZILY**, so starting means start-and-WARM. `--models-max` is a cap, not a preload; the
   first request for a model spawns a child and waits (17.3 s for a 1B q4). Returning when the router answers
   hands back a runtime that stalls on the first real recall — the very cost this runtime was chosen to remove.
