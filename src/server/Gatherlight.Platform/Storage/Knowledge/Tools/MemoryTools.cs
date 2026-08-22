@@ -142,7 +142,12 @@ public sealed class RecallFactsTool : IGatherlightTool
         // is microseconds beside a recall the judge can make take seconds.
         if (arr.Count < limit)
         {
-            foreach (var row in await _store.RecallAsync(query, kind, limit))
+            // `seenIds` is passed rather than filtered on afterwards: this is a top-up, so "not these" is
+            // part of the request. It also keeps `hits` honest — RecallAsync increments every row it
+            // returns, and the two paths now overlap, so a fact found by both would count twice for one
+            // recall. Nothing reads that counter today, which makes it a latent wrong number rather than a
+            // visible one; see IKnowledgeStore.RecallAsync.
+            foreach (var row in await _store.RecallAsync(query, kind, limit, seenIds))
             {
                 if (arr.Count >= limit) break;
                 if (!seenIds.Add(row.Id)) continue;

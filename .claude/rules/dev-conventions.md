@@ -401,7 +401,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   on an empty page `ranked` already says `fts` for the whole result and marking each row states it twice.
   **The first version of that test was VACUOUS and passed** — it used a term matching the target fact's own
   topic, so the graph found it lexically and the phrasing was never needed. To ask the question at all, the
-  lexical term has to match an UNRELATED fact.
+  lexical term has to match an UNRELATED fact. Topping up also made the two paths OVERLAP, so
+  `RecallAsync` takes an `exclude` set: "give me more, but not these" is the top-up's real contract, and it
+  stops a fact found both ways counting twice in `knowledge.hits`. **That counter turns out to have no
+  reader at all** — incremented on every recall, mapped onto `KnowledgeRow`, and used by neither the ranking
+  (confidence then bm25), nor `MemoryTools.Row`, nor the client. So the double-count was a latent wrong
+  number rather than a visible one. Left as a recorded question rather than silently resolved: "read it or
+  stop writing it" is a product decision, and dropping a column the backup carries is not a refactor.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
