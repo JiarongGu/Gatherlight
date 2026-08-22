@@ -23,15 +23,17 @@ namespace Gatherlight.Server.Platform.Hosting.Resources;
 public sealed class ModelsController : ControllerBase
 {
     private readonly IOllamaRuntime _ollama;
+    private readonly ILlamaServerRuntime _llama;
     private readonly ServerConfigService _config;
     private readonly IModelPullStatus _pulls;
     private readonly IPlatformContext _platform;
     private readonly ILogger<ModelsController> _log;
 
-    public ModelsController(IOllamaRuntime ollama, ServerConfigService config,
+    public ModelsController(IOllamaRuntime ollama, ILlamaServerRuntime llama, ServerConfigService config,
         IModelPullStatus pulls, IPlatformContext platform, ILogger<ModelsController> log)
     {
         _ollama = ollama;
+        _llama = llama;
         _config = config;
         _pulls = pulls;
         _platform = platform;
@@ -172,6 +174,52 @@ public sealed class ModelsController : ControllerBase
     /// <summary>Start the runtime ONLY when nothing is answering — a household's own instance is left
     /// alone. Here rather than in 记忆检索 because starting a daemon is a provisioning act, and it was odd
     /// that the button for it lived on a panel that could not install the thing it was starting.</summary>
+    /// <summary>What the app's OWN local runtime is doing — llama.cpp, as of 2026-08-22 the runtime this
+    /// app provisions rather than merely connects to.
+    ///
+    /// <para>Reported separately from the Ollama state rather than merged into one "local models" blob,
+    /// because they are different relationships and the panel now says which is which: this one we install,
+    /// start and can restart; Ollama we detect. Collapsing them is what made a provisioned runtime read as
+    /// a manual prerequisite in the first place.</para></summary>
+    [HttpGet("api/manage/models/llama")]
+    public async Task<IActionResult> Llama([FromQuery] bool refresh = false)
+    {
+        var s = await _llama.ProbeAsync(refresh);
+        return Ok(new
+        {
+            baseUrl = s.BaseUrl, installed = s.Installed, serving = s.Serving,
+            version = s.Version, executable = s.Executable,
+            models = s.Models, devices = s.Devices,
+            // Reported, not guessed: --list-devices answers this exactly, unlike the GpuLikely heuristic
+            // the Ollama arm has to use.
+            gpu = s.GpuLikely,
+            problem = s.Problem,
+        });
+    }
+
+    /// <summary>Start the router, and WARM the models — the second half is not optional. `--models-max` is
+    /// a cap, not a preload: llama-server loads a model on its first request, measured at 17.3 s for a 1B
+    /// q4. Returning as soon as the router answers would hand the household a runtime that stalls on its
+    /// first real recall, which is the cost this runtime was chosen to remove.</summary>
+    [HttpPost("api/manage/models/llama/start")]
+    public async Task<IActionResult> LlamaStart()
+    {
+        if (!await _llama.EnsureServingAsync())
+            return StatusCode(409, new
+            {
+                error = (await _llama.ProbeAsync(refresh: true)).Problem ?? "无法启动 llama-server。",
+            });
+
+        var state = await _llama.ProbeAsync(refresh: true);
+        var warmed = new List<string>();
+        foreach (var m in state.Models)
+        {
+            var isEmbed = m.Contains("embed", StringComparison.OrdinalIgnoreCase);
+            if (await _llama.WarmAsync(m, isEmbed)) warmed.Add(m);
+        }
+        return Ok(new { ok = true, warmed, models = state.Models, devices = state.Devices });
+    }
+
     [HttpPost("api/manage/models/start")]
     public async Task<IActionResult> Start()
     {

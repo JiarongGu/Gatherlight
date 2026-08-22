@@ -21,11 +21,15 @@
   only running it revealed. Ollama stays as a *household* backend (detected, never managed); what changes is
   what the app installs. Not a swap, in this order: ~~(1) a `llama-cpp` resource~~ **DONE** — 34.9 MB
   `win-vulkan-x64`, sha256-pinned (arm64 falls back to the 12 MB CPU build; there is no vulkan-arm64
-  asset), listed above Ollama, provisioned + probed end to end, asserted in `p49`; (2) a runtime service that owns a router
-  process, since `-ngl` is part of the launch contract (absent it runs on CPU at 30× the latency, silently)
-  and models load LAZILY (a cold judge call measured 17.3 s), so both models must be warmed at startup;
-  (3) models as sha256-pinned GGUF downloads — Ollama's own blobs do NOT load in llama.cpp
-  (`expected 316 tensors, got 314`), so nothing already downloaded can be reused; (4) `EmbeddingCatalog`,
+  asset), listed above Ollama, provisioned + probed end to end, asserted in `p49`; ~~(2) a runtime service~~ **DONE** —
+  `LlamaServerRuntime` locates/probes/starts the router and WARMS its models, with `--n-gpu-layers` written
+  into a generated per-model preset (contract, not tuning) and `embeddings = true` only on embedders;
+  `GET/POST /api/manage/models/llama[/start]`; measured end to end through the app at 9/10 top-1 and
+  25 ms/query; `p51` asserts the absent path (a suite has no business downloading 370 MB);
+  ~~(3) models as pinned GGUF downloads~~ **PARTLY DONE** — `embed-gguf` (the Q8 embedder, pinned by HF
+  commit + sha256) is in; the judge's chat GGUF is not, and neither is a way to choose among several.
+  Ollama's own blobs do NOT load in llama.cpp (`expected 316 tensors, got 314`), so nothing already
+  downloaded can be reused; (4) `EmbeddingCatalog`,
   `/api/manage/models` and `OllamaState` are all Ollama-tag shaped and need a GGUF-repo equivalent;
   (5) re-measure the shortlist through it — Q8_0 already scored the same 9/10 as Ollama's f16, but per
   model that has to be checked, not assumed.

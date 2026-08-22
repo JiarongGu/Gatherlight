@@ -374,6 +374,10 @@ public static class GatherlightApp
             // recall behaves as it did before it existed. Loopback-only by default — a remote embedder would
             // send every household fact off this machine on every write.
             .AddSingleton<IOllamaRuntime, OllamaRuntime>()
+            // The runtime this app PROVISIONS for local models, as of 2026-08-22. Registered beside
+            // Ollama rather than replacing it: Ollama stays reachable as a HOUSEHOLD backend, and the
+            // difference is now visible in the picker (see RuntimeOrigin).
+            .AddSingleton<ILlamaServerRuntime, LlamaServerRuntime>()
             // One reindex at a time, and its progress. A singleton because the run outlives the request
             // that started it — see IReindexStatus for why that had to change.
             .AddSingleton<Platform.Agent.Llm.Services.IReindexStatus, Platform.Agent.Llm.Services.ReindexStatus>()

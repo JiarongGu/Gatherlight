@@ -337,6 +337,33 @@ try {
   ok('and so is binding anything to the runtime that is not shipped yet',
     bindEmbedded.status === 400, String(bindEmbedded.status));
 
+  // THE APP-MANAGED RUNTIME, before it is provisioned. A fixture has neither the 35 MB binary nor a
+  // 334 MB GGUF and should not download them — so what is asserted here is the ABSENT case, which is the
+  // one every household starts in and the one where a bad message costs the most.
+  const llamaCold = await getJson('/api/manage/models/llama');
+  ok('the llama.cpp runtime reports itself absent rather than broken',
+    llamaCold.installed === false && llamaCold.serving === false,
+    JSON.stringify({ installed: llamaCold.installed, serving: llamaCold.serving }));
+  // The fix is a download, so the sentence must name the panel that does it — the same rule the recall
+  // sources follow. A bare "not available" is what sends a household hunting.
+  ok('and says where to get it, rather than just that it is missing',
+    /资源/.test(String(llamaCold.problem ?? '')), String(llamaCold.problem));
+  ok('and reports no devices and no models, instead of guessing',
+    (llamaCold.devices ?? []).length === 0 && (llamaCold.models ?? []).length === 0,
+    JSON.stringify({ devices: llamaCold.devices, models: llamaCold.models }));
+  // Starting something that is not installed must fail with that same sentence, not a 500 and not a
+  // silent 200 that leaves the caller believing a runtime is up.
+  const llamaStart = await post('/api/manage/models/llama/start', {});
+  ok('starting an unprovisioned runtime is refused with the reason, not a 500',
+    llamaStart.status === 409 && /资源/.test(String(llamaStart.body?.error ?? '')),
+    `${llamaStart.status} ${JSON.stringify(llamaStart.body)}`);
+  // NO POSITIVE CONTROL HERE, stated rather than left as a gap: the serving path needs 35 MB + 334 MB of
+  // real downloads, which a suite has no business fetching. It was verified by hand on 2026-08-22 —
+  // provision both, POST start (15 s: router launch plus the lazy model load, which is exactly what the
+  // warm step exists to pay up front), then embed-bench through the app's own runtime: 9/10 top-1,
+  // 10/10 top-3, 25 ms/query. The 25 ms is itself the proof that the generated preset's n-gpu-layers
+  // reached the child, since a CPU child measures ~200 ms on the same fixture.
+
   // WHOSE RUNTIME. The panel used to answer this only by accident, in a failure message: the Ollama the
   // APP downloads and starts was labelled 本机 · Ollama, which reads as the household's. That let a
   // provisioned runtime pass for a manual prerequisite — and it did, in this project's own docs.

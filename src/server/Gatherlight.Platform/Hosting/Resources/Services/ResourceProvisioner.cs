@@ -233,6 +233,38 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     public static string ProvisionedLlamaServer(string resourcesPath) =>
         Path.Combine(resourcesPath, "llama-cpp", "llama-server.exe");
 
+    /// <summary>The directory llama-server's router scans (<c>--models-dir</c>). Every GGUF the app
+    /// provisions lands here, flat, because that is what the router enumerates — and the file NAME becomes
+    /// the model id a caller asks for, which is why the resource declares its destination filename rather
+    /// than inheriting whatever the URL happened to end with.</summary>
+    public static string ProvisionedGgufDir(string resourcesPath) =>
+        Path.Combine(resourcesPath, "gguf");
+
+    /// <summary>The first GGUF the app provisions — the embedder for 语义, pinned by COMMIT for the same
+    /// reason the ONNX model is: a branch ref lets the bytes move under a checksum, which then reads as a
+    /// corrupt download rather than as an upstream edit.
+    ///
+    /// <para><b>Q8_0, and it was measured, not assumed.</b> 9/10 top-1 and 10/10 top-3 on the same fixture
+    /// `EmbeddingCatalog` uses — identical to Ollama's f16 of the same model at half the size, and better
+    /// than the ONNX q4 arm's 8/10. See <c>docs/self-managed-llm-runtime.md</c>.</para>
+    ///
+    /// <para><b>It is a DIFFERENT file from anything Ollama holds, and that is not an oversight.</b>
+    /// Ollama's own <c>embeddinggemma:300m</c> blob is a GGUF and llama.cpp refuses it —
+    /// <c>done_getting_tensors: wrong number of tensors; expected 316, got 314</c>. So "reuse what is
+    /// already downloaded" is impossible, and every model this runtime uses is a fresh pinned
+    /// download.</para></summary>
+    private const string EmbedGgufFile = "embeddinggemma-300M-Q8_0.gguf";
+    private const string EmbedGgufCommit = "0f741b5a6585bd53aeb15cd1372c56f2a0f65e12";
+    private const string EmbedGgufSha256 = "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63";
+    private static string EmbedGgufUrl =>
+        Override("GATHERLIGHT_EMBED_GGUF_URL")
+        ?? $"https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/{EmbedGgufCommit}/{EmbedGgufFile}";
+
+    /// <summary>The model id the router will answer to for the embedder — the GGUF's filename without its
+    /// extension, because that is what <c>--models-dir</c> derives an id from. Public so the recall source
+    /// and the warm-up ask for the same string.</summary>
+    public const string EmbedGgufModelId = "embeddinggemma-300M-Q8_0";
+
     /// <summary>The 内置 embedder's model, pinned by COMMIT rather than by <c>main</c> — a branch ref would
     /// let the bytes change under a checksum that then stops matching, which reads as a corrupt download.
     /// <para>EmbeddingGemma 300M, q4, as exported by the onnx-community mirror. The variant, the tokenizer
@@ -298,6 +330,16 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             Kind: ResourceKind.ClaudeCli, InstallDir: "claude", ReadyMarker: "claude.exe",
             ApproxBytes: 266_000_000,
             Url: ClaudeBaseUrl),
+        new ResourceSpec(
+            Id: "embed-gguf", Name: "嵌入模型 · GGUF(EmbeddingGemma 300M · Q8)",
+            NeededFor: "「记忆检索 · 语义」跑在 llama.cpp 上时用的嵌入模型 —— 实测与 Ollama 的同款同分,"
+                + "体积只有一半;和 Ollama 自己下载的那一份不通用,必须单独下载",
+            Kind: ResourceKind.Files, InstallDir: "gguf",
+            // The GGUF itself is the marker: ProvisionFilesAsync only moves the directory into place once
+            // every checksum has passed, so the file existing really does mean the download completed.
+            ReadyMarker: EmbedGgufFile,
+            ApproxBytes: 333_590_944,
+            Files: new[] { new ResourceFile(EmbedGgufFile, EmbedGgufUrl, EmbedGgufSha256) }),
         new ResourceSpec(
             Id: "embed-model", Name: "内置嵌入模型(EmbeddingGemma 300M)",
             // Says what it REPLACES, because that is the decision the household is making: this is the
