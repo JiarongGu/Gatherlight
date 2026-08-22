@@ -92,6 +92,29 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
   if (!items) return <div className="eval-empty">加载中…</div>;
 
   // A MODEL goes in the models section, even though the provisioner owns it like any other resource.
+  // Runnable but not signed in — read from the row's own DETAIL line rather than a second fetch, so the
+  // button and the sentence beside it cannot disagree about the state. Keyed on the id because this is the
+  // only resource that HAS a login: everything else is a file that either exists or does not.
+  //
+  // NOT gated on `installed`, and that was a real bug for one commit: `installed` means OUR provisioned
+  // copy is present, so on a machine where the household's own claude is on PATH it reads false while the
+  // CLI is perfectly usable. Gating on it hid the button from exactly the households the button exists for
+  // — someone using their own CLI, signed out. The server's detail line already distinguishes "未安装或无法
+  // 运行" from "已安装,但尚未登录" for both cases, so that sentence is the authority.
+  const needsLogin = (r: ResourceStatus) =>
+    r.id === 'claude' && !!r.detail && r.detail.includes('尚未登录');
+
+  const login = async () => {
+    try {
+      const res = await fetch('/api/manage/resources/claude/login', { method: 'POST' });
+      const j = await res.json().catch(() => ({}));
+      // A refusal here is INFORMATIVE, not a failure: reaching the console from another device means the
+      // login window would open somewhere the household cannot see, and the server says so.
+      toast(j.note ?? j.error ?? (res.ok ? '已打开登录窗口' : '无法打开登录窗口'), res.ok ? 'ok' : 'err');
+      await load();
+    } catch { toast('请求失败', 'err'); }
+  };
+
   const offered = items.filter((r) => !NOT_YET_REACHABLE.includes(r.id));
   const runtimes = offered.filter((r) => r.category !== 'model');
   const modelRows = offered.filter((r) => r.category === 'model');
@@ -128,9 +151,21 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
             action={r.state === 'running' ? (
               <span className="res-running">下载中…</span>
             ) : (
-              <PanelButton variant={r.installed && !hasUpdate(r) ? 'default' : 'primary'} onClick={() => provision(r.id)}>
-                {hasUpdate(r) ? '更新' : r.installed ? '重新下载' : '下载'}
-              </PanelButton>
+              <div className="res-act-pair">
+                {/* LOGIN, only for the CLI and only while it is installed-but-not-signed-in. It is the one
+                    resource where "installed" is not "usable", and the instruction we used to give — run
+                    `claude auth login` in a terminal — could not work for a copy WE installed: that
+                    directory is never on PATH. The primary button is whichever action the row actually
+                    needs, so an unsigned CLI leads with 登录 rather than with 重新下载. */}
+                {needsLogin(r) && (
+                  <PanelButton variant="primary" onClick={() => login()}>登录</PanelButton>
+                )}
+                <PanelButton
+                  variant={r.installed && !hasUpdate(r) || needsLogin(r) ? 'default' : 'primary'}
+                  onClick={() => provision(r.id)}>
+                  {hasUpdate(r) ? '更新' : r.installed ? '重新下载' : '下载'}
+                </PanelButton>
+              </div>
             )}
           />
         ))}

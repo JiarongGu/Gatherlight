@@ -39,11 +39,46 @@ public sealed class ResourcesController : ControllerBase
         return Ok(new { resources = rows });
     }
 
+    /// <summary>The CLI's own line. When it is not signed in this NAMES THE BUTTON rather than a command:
+    /// the command was unactionable for a CLI we installed, because its directory is never on PATH.</summary>
     private static string ClaudeDetail(ClaudeCliState s) =>
         !s.Runnable ? "未安装或无法运行"
-        : !s.LoggedIn ? "已安装,但尚未登录 —— 在本机运行 `claude auth login` 后即可使用"
+        : !s.LoggedIn ? "已安装,但尚未登录 —— 点「登录」会打开浏览器完成一次登录"
         : s.Account is { Length: > 0 } ? $"已登录:{s.Account}"
         : "已登录";
+
+    /// <summary>Start the browser login for whichever CLI this install resolves to.
+    ///
+    /// <para><b>Loopback only, and that is not a permission check.</b> This opens a console window on the
+    /// machine running the server. To someone reaching the console from another device that window is
+    /// invisible and unreachable, so "started" would be a lie — the honest answer is to refuse and say
+    /// where the login has to happen. The access gate has already decided WHO may call this; the question
+    /// here is whether the answer can possibly be useful to them.</para>
+    ///
+    /// <para>Returns at once. The flow needs a human in a browser, so the panel polls
+    /// <c>GET /api/manage/resources</c> and the row's own line flips when it lands — the same mechanism the
+    /// download rows already use, rather than a second kind of progress.</para></summary>
+    [HttpPost("api/manage/resources/claude/login")]
+    public IActionResult ClaudeLogin()
+    {
+        var ip = HttpContext.Connection.RemoteIpAddress;
+        if (ip is null || !System.Net.IPAddress.IsLoopback(ip))
+            return StatusCode(409, new
+            {
+                error = "登录要在运行本服务的那台机器上完成 —— 它会打开一个浏览器窗口,"
+                    + "远程看不到也点不到。请到那台机器的管理控制台里点「登录」。",
+            });
+
+        if (!_claude.StartLogin())
+            return StatusCode(409, new
+            {
+                error = _claude.Locate() is null
+                    ? "还没有可运行的 Claude CLI —— 先在这一行点「下载」。"
+                    : "登录窗口可能已经打开了 —— 请在那个窗口里完成,然后回到这里。",
+            });
+
+        return Accepted(new { ok = true, note = "已打开登录窗口 —— 在浏览器里完成后回到这里,状态会自动刷新。" });
+    }
 
     [HttpPost("api/manage/resources/{id}/provision")]
     public IActionResult Provision(string id)

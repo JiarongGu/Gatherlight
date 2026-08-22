@@ -38,6 +38,21 @@ public interface IClaudeCliRuntime
 
     /// <summary>Drop the cached probe — called after provisioning, so the panel reflects it at once.</summary>
     void Invalidate();
+
+    /// <summary>Start <c>claude auth login</c> in a window the household can see, and return at once.
+    ///
+    /// <para><b>Why the app has to do this rather than print a command.</b> The instruction we gave was
+    /// "run `claude auth login` in a terminal", which is unactionable in exactly the case we created: a CLI
+    /// installed through 资源 lives in <c>{data}/state/resources/claude/</c> and that directory is never
+    /// added to PATH — we resolve it internally and pass <c>CLAUDE_CMD</c>. So a household who took our
+    /// download offer, typed our instruction, and got "command not found" was following advice that could
+    /// not work. This spawns the RESOLVED binary, whatever it turned out to be.</para>
+    ///
+    /// <para>It cannot COMPLETE the login: the flow opens a browser and waits for a human, and there is no
+    /// headless variant. What it removes is the household having to find a path we never told them. Returns
+    /// false when there is no binary to run, or when an attempt is already open — a second console window
+    /// for the same flow is confusing, not helpful.</para></summary>
+    bool StartLogin();
 }
 
 /// <summary>
@@ -131,6 +146,51 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         Environment.SetEnvironmentVariable("CLAUDE_CMD", provisioned);
     }
 
+    // One login attempt at a time. A second window for the same browser flow helps nobody, and the flow is
+    // long enough (a human, a browser, an account chooser) that double-clicking is the normal case.
+    private Process? _login;
+
+    public bool StartLogin()
+    {
+        lock (_gate)
+        {
+            if (_login is { HasExited: false }) return false;
+            _login = null;
+        }
+
+        var exe = Locate();
+        if (exe is null) return false;
+
+        try
+        {
+            // UseShellExecute + a visible window ON PURPOSE. `claude auth login` prints a URL and waits;
+            // with the console hidden the household would see a spinner in our panel and no way to act, and
+            // with output redirected the CLI may not treat it as a terminal at all. This is the one spawn in
+            // the codebase that WANTS a window — every other one is CreateNoWindow, and the difference is
+            // that this one's whole purpose is to be interacted with.
+            var p = Process.Start(new ProcessStartInfo(exe)
+            {
+                Arguments = "auth login",
+                UseShellExecute = true,
+                CreateNoWindow = false,
+                WorkingDirectory = System.IO.Path.GetDirectoryName(exe)!,
+            });
+            if (p is null) return false;
+            lock (_gate) { _login = p; }
+            // The probe is stale the moment the household finishes, and we cannot know when that is — so
+            // drop it now and let the panel's polling discover the new state rather than caching a "not
+            // logged in" answer across the whole flow.
+            Invalidate();
+            _log.LogInformation("started claude auth login using {Exe}", exe);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "could not start claude auth login using {Exe}", exe);
+            return false;
+        }
+    }
+
     public void Invalidate()
     {
         lock (_gate) { _cached = null; }
@@ -191,7 +251,7 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
                 // command, on which machine, is the entire remedy — so say it.
                 Problem: loggedIn
                     ? null
-                    : "Claude CLI 尚未登录 —— 请在本机命令行运行 `claude auth login` 完成一次登录后重试。");
+                    : "Claude CLI 尚未登录 —— 在「资源 · Resources」面板里点 Claude CLI 那一行的「登录」,\n                        浏览器里完成一次登录后即可。");
         }
         catch (JsonException)
         {

@@ -54,7 +54,7 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
         return !s.Runnable
             ? new SourceStatus(false, "这台机器上没有可运行的 Claude CLI —— 可在「资源 · Resources」面板安装。")
             : !s.LoggedIn
-                ? new SourceStatus(false, "Claude CLI 已安装但尚未登录 —— 在本机运行 `claude auth login` 后即可使用。")
+                ? new SourceStatus(false, "Claude CLI 已安装但尚未登录 —— 在「资源」面板点「登录」,浏览器里完成一次即可。")
                 : SourceStatus.Ready;
     }
 

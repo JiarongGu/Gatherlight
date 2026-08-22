@@ -131,6 +131,21 @@ try {
     (await (await fetch(`${srv.base}/api/health`)).json()).migrating === false);
   const rowA = await claudeRow(srv.base);
   ok('the resources catalog carries a claude entry', !!rowA, 'no claude row');
+
+  // THE LOGIN ROUTE IS NOT DRIVEN FROM HERE, and that is a decision rather than an omission.
+  //
+  // POST /api/manage/resources/claude/login spawns `auth login` on the RESOLVED binary — which is the whole
+  // point of it, because the advice it replaces ("run `claude auth login` in a terminal") is unactionable
+  // for a CLI installed through 资源: that copy lives in {data}/state/resources/claude/ and the directory is
+  // never added to PATH. But a call that succeeds opens an interactive console waiting for a human in a
+  // browser, and a suite must not open windows on the machine running it.
+  //
+  // Nor can the refusal half be driven safely: `Locate()` falls through to PATH, so on a developer machine
+  // with its own claude even this CLI-LESS fixture resolves one and the call spawns. Attempting it here did
+  // exactly that, twice, before the attempt was removed. What IS asserted instead — below and in case C —
+  // is every observable that does not spawn: the row's own line names the button, and a failed turn names
+  // where to log in rather than a command that may not resolve. The spawn itself was verified by hand
+  // (2026-08-22: resolved binary starts, probe cache dropped, the row's line flips on completion).
   ok('reported not installed, and saying what it is for',
     rowA?.installed === false && /引擎|聊天/.test(String(rowA?.neededFor ?? '')), JSON.stringify(rowA));
   ok('and the row states it is unusable rather than staying silent',
@@ -166,13 +181,21 @@ try {
   const rowC = await claudeRow(srv.base);
   ok('the panel distinguishes signed-out from missing',
     /未登录/.test(String(rowC?.detail ?? '')), String(rowC?.detail));
+  // …and the row's own line points at the button too, so the panel and the failed-turn message agree.
+  ok('and the row names the button rather than a terminal command',
+    /登录/.test(String(rowC?.detail ?? '')) && !/auth login/.test(String(rowC?.detail ?? '')),
+    String(rowC?.detail));
   const cC = makeClient(srv.base);
   const startC = await cC.post('/api/chat', { message: '给明天建一个日计划' });
   const idC = startC.body?.id ?? startC.body?.sessionId;
   if (idC) {
     const msgC = String((await cC.waitPhase(idC, 'error'))?.error ?? '');
     ok('and a failed turn tells the household to log in', /登录/.test(msgC), msgC);
-    ok('naming the actual command to run', /auth login/.test(msgC), msgC);
+    // WAS `/auth login/`. That assertion pinned advice which could not be followed for a CLI we
+    // installed — its directory is never on PATH — so the message now names the panel and the button that
+    // spawns the resolved binary. Updated deliberately: the old assertion was right about the old text.
+    ok('naming WHERE to log in, rather than a command that may not resolve',
+      /资源|登录/.test(msgC) && !/auth login/.test(msgC), msgC);
   }
   srv.stop(); srv = undefined;
 
