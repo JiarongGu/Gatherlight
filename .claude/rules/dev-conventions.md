@@ -1001,6 +1001,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   matters. Every entry carries a reason, so the list forces a decision rather than silencing one. Three of
   the five current entries are not drift at all: a filename PATTERN, an MSBuild property named while
   explaining that we do NOT use it, and a class belonging to Vidora, a sibling project.
+  **It checks three kinds of reference**: backticked SYMBOLS, markdown LINKS to local files, and
+  backticked PATHS. Paths resolve against every base the docs legitimately write relative to, plus the
+  `Platform/<Group>/<Name>` and `Product/Planner/<Name>` prefixes the layout rule itself prescribes —
+  mapping those in the checker is right, because rewriting the docs to spell out the project directory
+  would make them disagree with the convention stated three bullets above. Two allowlist kinds recur and
+  both are legitimate: files in the DATA folder (user data, not the tree) and files in a SIBLING PROJECT
+  a note compares against. 318 references across 12 live docs; confirmed non-vacuous by planting a
+  renamed class, a dead link and a dead path.
 - **`dev.mjs e2e all` NAMES what it did not cover.** `desktop-e2e` drives the real UI over CDP and cannot
   join the fleet — it needs `dev.mjs host --dev` and a WebView2 window — so the fleet's summary says so
   where "all green" is read. Being outside the fleet is exactly why it rotted once: it asserted control

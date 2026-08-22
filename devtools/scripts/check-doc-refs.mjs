@@ -48,6 +48,20 @@ const ALLOWED = new Map([
     'belongs to VIDORA, a sibling project this note compares against — not a symbol in this tree'],
 ]);
 
+// Paths a live doc may name that are not repo files. Same `doc::path` keying and the same requirement of
+// a reason. Two recurring kinds: files in the DATA folder (which is user data, not the tree) and files in
+// a SIBLING PROJECT the doc compares against.
+const ALLOWED_PATHS = new Map([
+  ['.claude/rules/dev-conventions.md::.claude/tool-spec.md', 'app-managed file in the DATA folder'],
+  ['.claude/rules/dev-conventions.md::.claude/ui-spec.md', 'app-managed file in the DATA folder'],
+  ['.claude/rules/dev-conventions.md::state/mcp.chat.json',
+    'a file startup DELETES — named to say it must not come back'],
+  ['CLAUDE.md::hooks/scope-guard.mjs', 'app-managed file in the DATA folder'],
+  ['docs/DEPLOYMENT.md::state/settings.json', 'lives in the DATA folder'],
+  ['docs/STORAGE_NOTES.md::Modules/Embedding/Services/SqliteVecLoader.cs',
+    "VIDORA's file — this doc is a sibling-project review"],
+]);
+
 const CODE_EXT = new Set(['.cs', '.mjs', '.ts', '.tsx', '.json', '.js', '.cmd', '.ps1', '.csproj', '.cpp', '.h']);
 const SKIP_DIR = new Set(['bin', 'obj', 'node_modules', '.git']);
 
@@ -92,6 +106,62 @@ for (const rel of LIVE) {
       ? id.split('.').pop() : id;
     if (!code.includes(needle)) {
       console.log(`  ✗ ${rel}: \`${id}\` is named but does not exist in the tree`);
+      failures++;
+    }
+  }
+}
+
+// ---- pass 2: markdown links to local files ----------------------------------------------------------
+// A link that 404s is the same defect as a renamed class: it sends the reader somewhere and wastes the
+// trip. Anchors and URLs are skipped; only local paths are resolved.
+for (const rel of LIVE) {
+  const file = path.join(repo, rel);
+  if (!fs.existsSync(file)) continue;
+  const text = fs.readFileSync(file, 'utf8');
+  for (const m of text.matchAll(/\[[^\]]+\]\(([^)#: ]+\.md)[^)]*\)/g)) {
+    const target = m[1];
+    const candidates = [path.join(repo, target), path.resolve(path.dirname(file), target)];
+    if (!candidates.some((c) => fs.existsSync(c))) {
+      console.log(`  ✗ ${rel}: link to ${target} goes nowhere`);
+      failures++;
+    }
+    checked++;
+  }
+}
+
+// ---- pass 3: backticked file paths ------------------------------------------------------------------
+// Resolved against every base the docs legitimately write relative to — the repo root, each server
+// project, and the client source root. Docs shorten paths for readability
+// (`Platform/Kernel/Services/IRecordIndex.cs`), and treating that as drift would flag the whole file.
+const BASES = ['', 'src/server', 'src/server/Gatherlight.Platform', 'src/server/Gatherlight.Server',
+  'src/client/src', 'docs', 'devtools'];
+// The docs write `Platform/<Group>/<Name>` and `Product/Planner/<Name>` — the shape the conventions
+// themselves prescribe, which names the NAMESPACE segment rather than the project directory. Mapping the
+// prefix here is right: rewriting the docs to say `Gatherlight.Platform/…` would make them disagree with
+// the layout rule three lines above them.
+const PREFIX_ALIASES = [
+  [/^Platform\//, 'src/server/Gatherlight.Platform/'],
+  [/^Product\/Planner\//, 'src/server/Gatherlight.Planner/PlanIndex/'],
+  [/^Product\//, 'src/server/Gatherlight.Planner/'],
+];
+const aliased = (p) => PREFIX_ALIASES
+  .filter(([rx]) => rx.test(p)).map(([rx, to]) => p.replace(rx, to));
+const PATHY = /`([A-Za-z0-9_.\/-]+\/[A-Za-z0-9_.\/-]+\.(?:cs|mjs|tsx|ts|json|ini))`/g;
+for (const rel of LIVE) {
+  const file = path.join(repo, rel);
+  if (!fs.existsSync(file)) continue;
+  const text = fs.readFileSync(file, 'utf8');
+  const seen = new Set();
+  for (const m of text.matchAll(PATHY)) {
+    const p = m[1];
+    if (seen.has(p) || p.includes('{') || p.includes('*')) continue;
+    seen.add(p);
+    checked++;
+    if (ALLOWED_PATHS.has(`${rel}::${p}`)) continue;
+    const tries = [...BASES.map((b) => path.join(repo, b, p)),
+                   ...aliased(p).map((a) => path.join(repo, a))];
+    if (!tries.some((t) => fs.existsSync(t))) {
+      console.log(`  ✗ ${rel}: path \`${p}\` does not exist under any documented base`);
       failures++;
     }
   }
