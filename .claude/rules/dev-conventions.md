@@ -375,15 +375,33 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   it, deliberately, so a mistaken verdict costs a little learning rather than a lost answer — a verdict does
   exactly two things: it sets `answered`, and it narrows which nodes are REINFORCED on recall. It never
   touches the ranking it was shown. So the numbers came out byte-identical with the judge on and off (top-1
-  10/16, found 11/16, MRR 0.646 both ways, `--limit=3`) at **79 ms against 10,598 ms** per query — 134×, and
+  10/16, found 11/16, MRR 0.646 both ways, `--limit=3`) at **78 ms against 8,936 ms** per query — 114×, and
   essentially all of it a CLI spawn. **The identical MRR is the tell**: "did not help" would have moved the
   third decimal, while "did not run at all on the ordering" is what an exact tie across 16 queries means.
+  The bench is **paired and counterbalanced** for this: each query is asked under both arms back to back,
+  alternating which goes first, because recall REINFORCES what it returns and LINKS what it returns
+  together — running one arm to completion and then the other compares a cold graph to a warmed one. The
+  result held under the clean design, which is what makes it a finding rather than an artefact.
   This is not a defect in the judge and the fix was not to `VerificationFilters` — its benefit is
   CUMULATIVE (better reinforcement targeting shapes what ranks well next time), which a single-shot
   benchmark structurally cannot see. The fix was to stop claiming otherwise: the panel promised 明显提升召回
   质量 to a household who could not have observed it, and the honest sentence names a cumulative gain against
   an immediate wait. **Anything measured here belongs in the panel**, because the household is the one paying
   the 10 s.
+- **FTS TOPS THE PAGE UP; it is not only a fallback for an empty one** — and until 2026-08-22 it was, which
+  quietly cost the 语义 CLI arm most of its value. Phrasings live in `knowledge.aka`, which is in the FTS
+  table and in NO graph node (the graph indexes a fact's CONTENT, which never contained them), while
+  `MemoryTools` ran the FTS recall only when the graph resolved nothing. So a household paying a model call
+  per fact got phrasings reachable only by a query that matched nothing else at all — a far narrower promise
+  than the layer makes. Demonstrated in `e2e-p48`: `zzfishpref harbour` resolved the three lexically-matching
+  facts and silently dropped the one whose stored phrasing was the query's only real match. Now FTS fills
+  slots the caller asked for and the graph did not use — **topping up, never merging**, so the graph's rows
+  keep their place and their order and nothing can displace a ranked hit (the property that makes the
+  subject append safe). Rows added this way carry `matched:"text"`, but only when the graph also answered:
+  on an empty page `ranked` already says `fts` for the whole result and marking each row states it twice.
+  **The first version of that test was VACUOUS and passed** — it used a term matching the target fact's own
+  topic, so the graph found it lexically and the phrasing was never needed. To ask the question at all, the
+  lexical term has to match an UNRELATED fact.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to

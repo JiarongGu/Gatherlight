@@ -197,6 +197,26 @@ if (prompt.includes('{"subjects"')) {
   process.exit(0);
 }
 
+// Memory 语义 REPHRASING (ClaudeCliSemanticSource.RephraseAsync): "other ways to say the same thing",
+// stored in knowledge.aka and indexed by the trigram FTS so a differently-worded question still matches.
+//
+// Answered with a DISTINCTIVE token that appears nowhere in the fact's own text, which is the only way to
+// test what this layer claims: a query hitting that token can only have matched a stored phrasing. Until
+// this branch existed the phrasings were whatever the generic handler happened to return, so the suite
+// could assert they were STORED and never that they could be FOUND.
+if (prompt.includes('同义扩展')) {
+  const fact = prompt.split('\n\n').pop();
+  const lines = fact.includes('鱼味')
+    ? ['猫咪的口味偏好 zzfishpref', '这只猫爱吃海鲜口味']
+    : fact.includes('玄关')
+      ? ['猫粮的存放位置 zzstorage', '干粮收在门口的柜子']
+      : ['换一种说法'];
+  const text = lines.join('\n');
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  done(text);
+  process.exit(0);
+}
+
 // --- S3a: UI block fixtures (e2e-p41) ---------------------------------------------------------
 // Read the trigger from the CURRENT request (after "THE USER'S REQUEST:"), never the whole prompt —
 // the thread-context block echoes PRIOR turns' messages and a whole-prompt scan cross-fires on a

@@ -164,40 +164,63 @@ if (probes.length < 4) {
 }
 
 // ---- 3. score one configuration ------------------------------------------------------------------------
-const score = async (label) => {
-  let top1 = 0, found = 0, rr = 0, judged = 0;
-  const t0 = Date.now();
-  for (const p of probes) {
-    const res = await callTool('recall_facts', { query: p.q, limit: LIMIT });
-    const ids = (res.facts ?? []).map((f) => Number(f.id));
-    const pos = ids.indexOf(Number(p.id));
-    if (pos === 0) top1++;
-    if (pos >= 0) { found++; rr += 1 / (pos + 1); }
-    if (res.answered !== undefined && res.answered !== null) judged++;
-  }
-  const n = probes.length;
-  const ms = Math.round((Date.now() - t0) / n);
-  return {
-    label,
-    top1, found, miss: n - found,
-    missRate: (n - found) / n,
-    mrr: rr / n,
-    judged,
-    msPerQuery: ms,
-  };
-};
-
 console.log(`\ncorpus     ${total} facts, ${probes.length} probed (longest content first)`);
 console.log(`语义       ${semanticLabel}`);
 console.log(`recall     limit ${LIMIT}\n`);
 
 const was = judge?.on ?? true;
-const rows = [];
 
-await post('/api/manage/memory/enrichment', { enabled: false });
-rows.push(await score('公式 only (判断 off)'));
-await post('/api/manage/memory/enrichment', { enabled: true });
-rows.push(await score('公式 + 判断'));
+// PAIRED AND COUNTERBALANCED, because recall MUTATES the thing being measured.
+//
+// This used to run all queries with 判断 off, then all of them with it on. That is not a comparison of two
+// configurations — it is a comparison of a cold graph against one the first block had just warmed. Every
+// `recall_facts` call reinforces the nodes it returned and links the facts it returned TOGETHER, so the
+// second block ran against a graph the first block had already reshaped. Whichever arm went second was
+// measured on different material.
+//
+// So each query is now asked under BOTH arms back to back, and which arm goes first ALTERNATES. That fixes
+// two things at once: the pair sees the graph in nearly the same state (the confound shrinks from a whole
+// block to a single intervening call), and alternating cancels the residual instead of handing it to one
+// arm. It is also a paired design, which is what you want at this sample size — the comparison is now
+// within-query, so a hard query that both arms miss no longer adds noise to the difference between them.
+//
+// Same number of recalls as before. The extra cost is two enrichment toggles per query, which are
+// app_config writes read per call — microseconds against a judge spawn measured in seconds.
+const ARMS = [
+  { key: 'off', label: '公式 only (判断 off)', enabled: false },
+  { key: 'on', label: '公式 + 判断', enabled: true },
+];
+const acc = Object.fromEntries(ARMS.map((a) => [a.key, { top1: 0, found: 0, rr: 0, ms: 0, judged: 0 }]));
+
+for (const [i, p] of probes.entries()) {
+  const order = i % 2 === 0 ? ARMS : [...ARMS].reverse();
+  for (const arm of order) {
+    await post('/api/manage/memory/enrichment', { enabled: arm.enabled });
+    const t0 = Date.now();
+    const res = await callTool('recall_facts', { query: p.q, limit: LIMIT });
+    const ms = Date.now() - t0;
+    const ids = (res.facts ?? []).map((f) => Number(f.id));
+    const pos = ids.indexOf(Number(p.id));
+    const a = acc[arm.key];
+    a.ms += ms;
+    if (pos === 0) a.top1++;
+    if (pos >= 0) { a.found++; a.rr += 1 / (pos + 1); }
+    if (res.answered !== undefined && res.answered !== null) a.judged++;
+  }
+}
+
+const n = probes.length;
+const rows = ARMS.map((arm) => {
+  const a = acc[arm.key];
+  return {
+    label: arm.label,
+    top1: a.top1, found: a.found, miss: n - a.found,
+    missRate: (n - a.found) / n,
+    mrr: a.rr / n,
+    judged: a.judged,
+    msPerQuery: Math.round(a.ms / n),
+  };
+});
 // Leave the switch as it was found. A benchmark that silently changes a product setting is a benchmark
 // nobody should run twice.
 await post('/api/manage/memory/enrichment', { enabled: was });
@@ -247,6 +270,11 @@ if (withJudge.judged === 0) {
 }
 console.log('\nCaveats worth carrying with the numbers:');
 console.log(`  · ${probes.length} queries. Enough to see a direction, not to rank two close configurations.`);
+console.log('  · the arms are PAIRED — each query is asked under both, back to back, alternating which');
+console.log('    goes first. Recall reinforces what it returns and links what it returns together, so');
+console.log('    running one arm to completion and then the other would compare a cold graph against a');
+console.log('    warmed one. The residual is the single intervening call inside each pair, which the');
+console.log('    alternation splits evenly between the arms rather than giving to one.');
 console.log('  · the questions are model-written, so they are as good at paraphrasing as the model that');
 console.log('    wrote them — a generator that echoes the fact makes recall look better than it is.');
 // Two different answers, and stating one for both was wrong. An EMBEDDER arm is consumed at DI

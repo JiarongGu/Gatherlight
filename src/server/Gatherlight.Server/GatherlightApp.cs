@@ -270,7 +270,7 @@ public static class GatherlightApp
                 // REINFORCED on recall. So its effect on ranking is CUMULATIVE — it shapes what wins
                 // next time — and a single-shot benchmark structurally cannot see it. On this
                 // household's 16-fact corpus one recall was byte-identical with the judge on and off
-                // (MRR 0.646 both ways) at 79 ms against 10,598; Model stays null so the
+                // (MRR 0.646 both ways) at 78 ms against 8,936; Model stays null so the
                 // "memory" consumer routing above decides, live-overridable.
                 ;
                 // Both are OPT-OUTABLE now, and until this they were not: adopted wholesale with Lyntai

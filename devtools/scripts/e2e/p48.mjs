@@ -191,6 +191,39 @@ try {
   }
   akaDb.close();
 
+  // STORED IS NOT FOUND. Everything above proves phrasings were WRITTEN; none of it proves they can be
+  // reached, which is the only thing this layer is for. `zzfishpref` appears in no fact's text — only in
+  // the phrasings — so a hit can have come from nowhere else.
+  //
+  // This is the seam where the arm could be silently inert: recall tries the GRAPH first, and the graph
+  // indexes the fact's content, which never contained the phrasings. `aka` lives in the FTS table, and
+  // MemoryTools falls back to FTS only when the graph resolved NOTHING. So the phrasings are consulted
+  // exactly when the graph abstains — and if the graph answers with something irrelevant instead, they
+  // are never consulted at all.
+  const viaPhrase = await c.call('recall_facts', { query: 'zzfishpref', limit: 5 });
+  const phraseTopics = (viaPhrase.result?.facts ?? []).map((f) => f.topic);
+  ok('THE POINT: a wording that exists ONLY in the stored phrasings finds the fact',
+    phraseTopics.includes('猫粮偏好'),
+    `ranked=${viaPhrase.result?.ranked} topics=${JSON.stringify(phraseTopics)}`);
+
+  // …and it finds the RIGHT one. The other fact carries its own distinct phrasing, so a hit on both would
+  // mean the phrasings are being matched loosely enough to be worthless.
+  ok('and the other fact, with its own phrasings, is not dragged along',
+    !phraseTopics.includes('猫粮'), JSON.stringify(phraseTopics));
+  // …AND IT SURVIVES THE GRAPH ANSWERING SOMETHING ELSE. This is the assertion that matters most for
+  // this layer, and it FAILED when written: `harbour` matches three unrelated facts lexically, the graph
+  // therefore resolved a full answer, and FTS — the only index that holds `aka` — used to run solely when
+  // the graph resolved NOTHING. So a household's paid-for phrasings were reachable only by a query that
+  // matched nothing else at all, which is a much narrower promise than the layer makes.
+  //
+  // The first version of this probe was vacuous and passed: it used `猫粮`, which matches 猫粮偏好's own
+  // TOPIC, so the graph found the fact lexically and the phrasing was never needed. The lexical term has
+  // to match an UNRELATED fact for the question to be asked at all.
+  const mixed = await c.call('recall_facts', { query: 'zzfishpref harbour', limit: 5 });
+  ok('a phrasing still wins when the query ALSO matches unrelated facts lexically',
+    (mixed.result?.facts ?? []).map((f) => f.topic).includes('猫粮偏好'),
+    `ranked=${mixed.result?.ranked} topics=${JSON.stringify((mixed.result?.facts ?? []).map((f) => f.topic))}`);
+
   // Put the layer back as it was, so later cases in this suite see the state they expect.
   await fetch(`${base}/api/manage/memory/layer/semantic/off`, { method: 'POST' });
 
@@ -258,6 +291,7 @@ try {
     .map((r) => r.scope);
   ok('and the entries moved to the current layout', afterScopes.length === 1 && afterScopes[0] !== 'price',
     `scopes=${JSON.stringify(afterScopes)}`);
+
 
   // ---- SUBJECT HANDLES ARE SEARCHABLE ----------------------------------------------------------
   //

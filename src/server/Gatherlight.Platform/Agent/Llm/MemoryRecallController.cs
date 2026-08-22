@@ -134,7 +134,7 @@ public sealed class MemoryRecallController : ControllerBase
                     // WHAT IT DOES, not what we hoped it does. This said "明显提升召回质量" — a promise of a
                     // clear quality gain — until 2026-08-22, when recall-bench measured one recall on this
                     // household's own facts with the judge on and off and got byte-identical results
-                    // (top-1 10/16, MRR 0.646 both ways) at 79 ms against 10,598. That is not a defect in
+                    // (top-1 10/16, MRR 0.646 both ways) at 78 ms against 8,936. That is not a defect in
                     // the judge: with VerificationFilters off it never reorders a recall by design. It sets
                     // the "did anything actually answer this" signal, and it decides which facts count as
                     // USED — which shapes what ranks well later. So the honest sentence describes a
