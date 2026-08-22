@@ -385,157 +385,53 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing", which is a lie told on their own data. `recall_facts` therefore reports `ranked:
   graph|fts`, because a graph answer and a fallback answer are otherwise indistinguishable. Proof lives
   in `e2e-p48`, whose restore assertion was confirmed to FAIL with the rebuild removed.
-- **WHERE THE RECALL LAYERS ACTUALLY STAND (2026-08-23) — read this before the bullets below.** Those
-  bullets are a RECORD OF FAILURES, written as each was found, and several correct an earlier one. That is
-  deliberate and worth keeping, but it means reading them in order reconstructs a day of argument rather
-  than the answer. The answer:
+- **WHAT THE RECALL LAYERS DO, and what is actually evidenced.**
 
-  | | what it does | evidence |
+  | | does | evidence |
   |---|---|---|
-  | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on |
-  | **判断** | annotates writes with subject handles; judges which candidates answered | **helps multilingual recall: +2 facts in each of cross-, third- and code-switched probes, 0 same-language.** Within-run paired, so trustworthy. Costs 9–17 s per recall |
-  | **语义 (Claude CLI)** | stores other wordings, ≥1 in another language | **capability proven directly** — an English question retrieves a Chinese-only fact. **Aggregate effect NOT measured** and this tool cannot measure it |
+  | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost |
+  | **判断** | subject handles on every write; judges which candidates answered | **+2 facts recovered in each of cross-language, third-language and code-switched probes; 0 same-language.** Costs **9–17 s per recall** (CLI spawn; the 公式 floor is 68–90 ms) |
+  | **语义 · Claude CLI** | stores other wordings of a fact, **≥1 in another language** | capability proven directly: an English question retrieves a Chinese-only fact. Aggregate effect NOT measured — see the rule below on why this tool cannot |
 
-  Three rules that produced most of the corrections below, in the order they cost the most time:
-  **(1)** When a measurement says "no effect", check the instrument can EXPRESS the effect. The bench asked
-  in the fact's own language for three sessions, which is the one case the floor already handles.
-  **(2)** Only the WITHIN-RUN paired comparison is trustworthy here — recall reinforces, so a run mutates
-  what it measures. Anything compared across runs is unattributable, and two adjacent runs agreeing shows
-  convergence, not stability.
-  **(3)** A capability question needs one fact, not a corpus. "Does a stored phrasing retrieve its fact?"
+  With `VerificationFilters` off (how we register it) a verdict does not filter or re-sort. It sets
+  `answered` and narrows which nodes are REINFORCED — and that narrowing reaches the ordering anyway:
+  endorsing a fact the engine ranked third brings it to the top of the same page, against a measured
+  no-verdict baseline. Its benefit is therefore real but indirect, which is why same-language probes show
+  0.000 and multilingual ones show a flat −0.125 miss rate.
+
+- **THREE RULES FOR MEASURING ANY OF THIS.** They are here because ignoring them produced three sessions
+  of wrong conclusions, and each is cheap to apply.
+  **(1) When a measurement says "no effect", check the instrument can EXPRESS the effect.** `recall-bench`
+  generated questions *in the fact's own language* — the one case the lexical floor already handles — so
+  it could never see an enrichment layer working. It now generates FOUR sets (`QUESTION_SETS`): same,
+  cross, a third language, and CODE-SWITCHED, which is how people actually type in chat. A zh↔en flip
+  alone is too narrow; a household with Japanese or Korean material is not served by it. (The Japanese
+  floor beats the English one because the index is TRIGRAM and Japanese shares kanji with Chinese.)
+  **(2) Only the WITHIN-RUN paired comparison is trustworthy.** Recall REINFORCES, so a run mutates what
+  it measures. Anything compared across runs is unattributable — and two adjacent runs agreeing shows
+  convergence, not stability. The bench is paired and counterbalanced for this reason. A layer whose state
+  is durable rows (语义's phrasings) therefore cannot be A/B'd by this tool at all; that needs a fixture
+  whose graph resets between arms, which `recall-bench` deliberately is not.
+  **(3) A capability question needs ONE FACT, not a corpus.** "Does a stored phrasing retrieve its fact?"
   is settled by writing one fact and querying a wording that appears only in its phrasings. Reaching for a
-  16-fact benchmark to answer it is what made this look unanswerable.
-- **THE BENCH ASKED IN THE FACT'S OWN LANGUAGE, so it could not see what these layers are for**
-  (found 2026-08-23, by the owner, after three sessions of me reporting "no measurable benefit").
-  `recall-bench` now generates FOUR question sets per fact (`QUESTION_SETS`): same, cross, a third language,
-  and code-switched. Its generator used to be told *"use the same language as the fact"* — so every probe
-  shared a script with the text it was hunting, and the 公式 floor could always reach it lexically.
-  Meanwhile `ClaudeCliSemanticSource`'s prompt asked for 另一种语言的常见叫法 — as one option among three, which the model never took; see the REPHRASE PROMPT bullet. So at the time of this table the phrasings were same-language anyway, and this measurement is about 判断. **The instrument
-  measured everything except the case the feature exists for, and the null result was then read as "the
-  feature does nothing".** In a bilingual household a fact written in Chinese and asked in English shares
-  NO tokens with the stored text — no trigram, no bm25, nothing for the graph's lexical half — which is
-  the one situation where an enrichment layer is the route rather than a bonus.
-  Measured with a CROSS-LANGUAGE probe set added beside the same-language one (16 facts, `--limit=3`):
+  16-fact benchmark to answer it is what made this look unanswerable for three sessions.
 
-  | set | arm | top-1 | found | miss | MRR |
-  |---|---|---|---|---|---|
-  | 同语言 | 公式 only | 10/16 | 11/16 | 0.313 | 0.646 |
-  | 同语言 | + 判断 | 10/16 | 11/16 | 0.313 | 0.646 |
-  | 跨语言 | 公式 only | 9/16 | 9/16 | 0.438 | 0.563 |
-  | 跨语言 | **+ 判断** | 10/16 | **11/16** | **0.313** | 0.656 |
-  | 第三语言 (ja) | 公式 only | 11/16 | 11/16 | 0.313 | 0.688 |
-  | 第三语言 (ja) | **+ 判断** | 12/16 | **13/16** | **0.188** | 0.781 |
-  | 混合语言 (code-switched) | 公式 only | 13/16 | 13/16 | 0.188 | 0.813 |
-  | 混合语言 (code-switched) | **+ 判断** | 15/16 | **15/16** | **0.063** | 0.938 |
+- **REQUIRE IT, DON'T OFFER IT — the rephrase prompt.** It listed 另一种语言的常见叫法 as one option among
+  three, and a model asked for "a different wording" takes the synonym every time: measured on a real
+  fact, four phrasings and not one latin character. The layer therefore added only same-language surface
+  the lexical floor already reached. The prompt now REQUIRES a line in another language, and `e2e-p48`
+  asserts the retrieval half (an English query reaching a Chinese-only fact), failing when the stub's
+  cross-language phrasing is removed. Generalises: when a prompt lists alternatives, the model picks the
+  cheapest, so anything load-bearing has to be mandatory rather than mentioned.
 
-  **The recovery is +2 facts in EVERY non-same-language set and 0 in same-language** — miss rate down a
-  flat 0.125 across three independent probe styles, which is far more convincing than any single delta.
-  A two-way zh↔en flip was itself too narrow: a household with Japanese or Korean material is not served
-  by it, and **code-switching is how people actually type in chat** — a Chinese sentence keeping the key
-  nouns in English. That set has both the best floor (it shares some tokens) and the best result with
-  enrichment (1 miss of 16). Note the Japanese floor beats the English one, which looks wrong until you
-  remember the trigram index: a Japanese question shares KANJI with a Chinese fact, so it is partially
-  lexical where English is not. The footer
-  that reported one number as "what 判断 did" now names its set and says why the same-language cell reads
-  ~0 — quoting it alone argued the layer was useless. **When a measurement says "no effect", check the
-  instrument can express the effect** before concluding anything about the feature.
-- **判断 DOES reorder a recall — I claimed the opposite and was wrong** (measured 2026-08-22, `dev.mjs
-  recall-bench` on this household's own 16 facts). With `VerificationFilters` off — which is how we register
-  it, deliberately, so a mistaken verdict costs a little learning rather than a lost answer — a verdict does
-  not FILTER and does not re-sort. It sets `answered` and narrows which nodes are REINFORCED. **That
-  narrowing reaches the ordering anyway**, which the first version of this bullet denied: proved in a
-  fixture by endorsing a fact the engine had ranked third and watching it come back at the top of the page,
-  against a measured no-verdict baseline. Reinforcing only the endorsed facts raises their standing inside
-  the same call. So the numbers came out byte-identical with the judge on and off (top-1
-  10/16, found 11/16, MRR 0.646 both ways, `--limit=3`) at **68–90 ms against 8,936–16,914 ms** per query
-  across five paired runs — essentially all of it a CLI spawn, and NOT stable: the panel quoted "约 9 秒"
-  for months, which is the fastest of the five and about half the typical wait. Quote a range for anything
-  whose cost is a process spawn; a single number is one machine on one afternoon. **The identical MRR is the tell**: "did not help" would have moved the
-  third decimal, while "did not run at all on the ordering" is what an exact tie across 16 queries means.
-  The bench is **paired and counterbalanced** for this: each query is asked under both arms back to back,
-  alternating which goes first, because recall REINFORCES what it returns and LINKS what it returns
-  together — running one arm to completion and then the other compares a cold graph to a warmed one. The
-  result held under the clean design, which is what makes it a finding rather than an artefact.
-  **Both results stand together**, and that is the whole lesson: the judge CAN move a
-  result, and on this corpus it moved none, because it endorsed what already ranked top. **That last
-  clause is measured, not assumed** — `recall-bench` reports a `judged` column precisely because "the
-  judge never produced a parseable verdict" and "the judge agreed with the ranking" yield the IDENTICAL
-  table and call for opposite responses. It reads **13/13** with 判断 on and 0/13 with it off, so the
-  verdicts were real and the agreement is the explanation. Anything comparing two recall configurations
-  has to report how often the thing under test actually ran.
-  **The DENOMINATOR is the graph-ranked queries, and getting that wrong invented a defect.** The column
-  first counted against all 16 and read 13/16 — which looks like a judge failing 19% of the time, and sent
-  me into the logs hunting one that was not there. `answered` rides only on a graph result (`MemoryTools`
-  suppresses it on the FTS fallback, where the judged candidates are not the facts being shown), so the
-  three had no verdict to report rather than a verdict that failed. Those call for opposite responses —
-  the exact conflation this column exists to end, reproduced one level down in its own arithmetic. "Did not change
-  the answer here" is a measurement; "cannot change the answer" was an inference, and it was false.
-  A workaround was built on that inference — an `AsyncLocal` verdict capture plus an app-side promotion —
-  and REVERTED once four successive fixtures all passed with it disabled. Four vacuous tests in a row is
-  not bad luck; it is the code under test doing nothing, and the honest reading was that the engine already
-  did the job. The fix was to stop claiming otherwise: the panel promised 明显提升召回
-  质量 to a household who could not have observed it, and the honest sentence names a cumulative gain against
-  an immediate wait. **Anything measured here belongs in the panel**, because the household is the one paying
-  the 10 s.
-- **A LAYER'S COST LINE DESCRIBES THE BOUND ARM, and 语义's did not — it promised privacy it could not
-  keep.** 判断 has always derived its cost from `boundJudge`; 语义 carried a fixed string from when the only
-  arm was an embedder: 「占用磁盘与本机算力,不消耗 token;资料不离开这台电脑」. Adding the Claude CLI arm
-  left that sentence in place, so a household who chose it was told their facts stay on their machine while
-  every fact was being sent to Claude to be rephrased, and billed. **Adding an arm to a layer means
-  re-reading everything the layer SAYS**, because the description was written when the set of arms was
-  smaller — and a fixed string cannot be wrong about a backend that did not exist when it was written. The
-  `what` was wrong the same way (「用本机模型为事实生成向量」 for an arm that is neither local nor makes
-  vectors) and now names the JOB instead. `p51` binds each arm and asserts the claim tracks it — including
-  that a local arm still SAYS the data stays put, because deleting the promise everywhere would understate
-  what running the model yourself actually buys.
-- **CROSS-RUN COMPARISON ON THIS CORPUS IS NOT TRUSTWORTHY, and that invalidates the 语义 aggregate
-  numbers — including the ones I reported.** Recall REINFORCES, so every `recall-bench` run mutates the
-  graph it measures. Two ADJACENT runs came out byte-identical, which looks like stability and is not: it
-  shows the state had converged by then, not that it never moved across the ten runs before. So the
-  "phrasings present vs cleared" comparison — taken many runs apart — cannot attribute its 1-fact
-  differences to phrasings, and the tempting mechanisms do not survive checking: bm25 column weights on
-  `aka` changed NOTHING because `judged/graph` shows almost every query is GRAPH-ranked, and the graph
-  does not use bm25 at all. **The only trustworthy comparison this tool makes is the within-run paired
-  one** (the two 判断 arms), and phrasings cannot be toggled per call — they are durable rows. Measuring
-  this layer's aggregate effect properly needs a fixture whose graph state is reset between arms, which
-  `recall-bench` deliberately does not do (it runs against the household's real memory).
-  What survived: the DIRECT proof, which needed no corpus at all — one fact, one query naming a wording
-  that appears only in its phrasings. Two mechanisms built on the unreliable numbers (a phrasing-only
-  promotion that displaced the graph's weakest row, and bm25 weights) were both REVERTED as unmeasured.
-- **THE REPHRASE PROMPT OFFERED CROSS-LANGUAGE AS AN OPTION, so the model never took it** — and that,
-  not the plumbing, is why this layer measured as useless. It said 用词要换(同义词、口语说法、另一种语言的
-  常见叫法), three choices, and a model asked for "a different wording" reaches for a synonym every time.
-  **Measured on one real fact: four phrasings, not one latin character among them.** A paraphrase that
-  stays in the fact's own language adds surface the lexical floor could already reach — which is exactly
-  the shape of a feature that runs, costs a model call per fact, and changes nothing.
-  The prompt now REQUIRES a line in another language. Same fact, re-written: 1 of 4 phrasings came back in
-  English, and an English question then retrieved a fact whose text is entirely Chinese (`ranked: fts` —
-  the phrasing in `aka` is what matched). **The mechanism was never in doubt and did not need a corpus to
-  prove**: one fact, one query naming a wording that appears only in its phrasings, is the whole test.
-  Reaching for a 16-fact benchmark first is what made this look unanswerable for three sessions.
-  `e2e-p48` guards the retrieval half — the half that can rot silently — and was confirmed to FAIL when the
-  stub's cross-language phrasing is removed.
-- **语义 · Claude CLI: the capability is PROVEN, the aggregate effect is NOT MEASURED — and everything
-  written here before 2026-08-23 about it "changing nothing" was measured on a broken configuration.**
-  Two bullets used to sit here reporting that phrasings were unreachable and that forcing them cost more
-  than they bought. Both are withdrawn. They were taken (a) before the rephrase prompt REQUIRED a
-  cross-language line, so the phrasings under test were same-language synonyms that added surface the
-  lexical floor already reached, and (b) across runs many apart, which the cross-run bullet above explains
-  cannot be attributed. A conclusion inherits the validity of its instrument.
-  **What IS established, and it needed no corpus:** write one fact, read back the phrasings, query a
-  wording that appears ONLY in them — the fact comes back. Done on a real Chinese fact with a real English
-  phrasing: `ranked: fts`, the `aka` match is what answered. That is the layer's whole promise, and before
-  the prompt fix it did not hold at all. `e2e-p48` guards it and fails when the stub's cross-language
-  phrasing is removed.
-  **What is NOT established:** how much it moves aggregate recall. `recall-bench` cannot say, because its
-  only trustworthy comparison is the within-run paired one and phrasings are durable rows that cannot be
-  toggled per call. Answering it needs a fixture whose graph resets between arms — which that tool
-  deliberately is not, since it runs against the household's real memory. Do not fill that gap with a
-  number from two runs.
-  Still true and worth keeping from the withdrawn text: the top-up fills only slots the graph left empty,
-  so a phrasing competes for a page the graph often fills; letting one displace the graph's weakest row was
-  tried and reverted; and the back-fill costs **~46 s per fact**, which is the figure a household weighing
-  this should see.
+- **A LAYER'S COST LINE DESCRIBES THE BOUND ARM.** 判断 has always derived its cost from `boundJudge`;
+  语义 carried a fixed string from when its only arm was an embedder — 「不消耗 token;资料不离开这台电脑」
+  — so a household who chose the Claude arm was told their facts stay on their machine while every fact
+  was being sent to Claude and billed. Adding an arm to a layer means re-reading everything the layer
+  SAYS: a fixed string cannot be wrong about a backend that did not exist when it was written, which is
+  exactly why nobody re-reads it. `p51` binds each arm and asserts the claim tracks it, including that a
+  LOCAL arm still says the data stays put.
+
 - **Switching 语义 off does NOT clear what it wrote.** Phrasings live in `knowledge.aka`, which the FTS
   table indexes unconditionally — so 15 facts were still matching on their stored phrasings after the layer
   was turned off, and nothing in the product said so. Turning a layer off stops it producing; it does not
