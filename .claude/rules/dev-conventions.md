@@ -468,6 +468,21 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   vectors) and now names the JOB instead. `p51` binds each arm and asserts the claim tracks it — including
   that a local arm still SAYS the data stays put, because deleting the promise everywhere would understate
   what running the model yourself actually buys.
+- **语义's PHRASINGS ARE UNREACHABLE AS WIRED, and forcing them costs more than it buys** (isolated
+  2026-08-23). Turning the binding off does not stop phrasings being searched — they are a `knowledge`
+  column the FTS table indexes unconditionally — so the only true A/B is *phrasings written* vs *cleared*,
+  two database states. Compared on the FLOOR row (`--arms=off`, seconds per run since nothing spawns a
+  CLI), with 13 of 16 facts back-filled, across all four question sets: **every cell identical.** Not
+  narrowed — unchanged. The cause is the top-up rule: FTS fills only slots the graph left empty, and on
+  this corpus the graph fills the page at `--limit=3` AND `--limit=8`, so a phrasing never gets a slot.
+  **Tested the obvious fix and rejected it on the numbers.** Letting one text match displace the graph's
+  weakest row gave 跨语言 +1 and 混合语言 +1 — and 同语言 **−1**, MRR down. Net +1 across 64 queries,
+  bought by breaking the one property that makes the design explainable ("cannot displace a ranked hit")
+  and by making the COMMON case worse. Reverted. So the honest statement is that this arm is unproven on
+  a corpus this size, and that sentence is now in the arm's own description rather than left for a
+  household to discover after paying ~46 s per fact. Contrast 判断, which on the same probes recovers +2
+  in every non-same-language set — the two layers are NOT in the same evidential position and the panel
+  should not imply they are.
 - **语义 · Claude CLI MEASURED, and it changed nothing on this corpus** (2026-08-23, `dev.mjs recall-bench`
   against the household's own 16 facts, phrasings back-filled onto 13 of them). At `--limit=3`: identical to
   the no-phrasing run on every column. At `--limit=8`: found 12/16 and MRR 0.654, against 13/16 and 0.664

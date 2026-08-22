@@ -64,7 +64,12 @@ public sealed class ClaudeCliSemanticSource : IMemorySemanticSource
         + "不适合:能跑本机模型的时候。向量对「没人预料过的问法」更强,而这一条只覆盖改写时想到的说法 —— "
         + "同一个问题,向量可能命中而它可能漏。事实很多时,写入的调用次数也是要算的一笔。"
         + "想要真正的向量、又不想另外装或启动一个程序:选「本机模型 · 内置」—— 222 MB 权重,直接跑在本应用进程里,"
-        + "「判断」仍然可以留在 Claude。";
+        + "「判断」仍然可以留在 Claude。"
+        // MEASURED, and it did not help — said here rather than left for the household to discover.
+        + "实测提醒:在本机现有的 16 条事实上,给 13 条补写了说法之后,四种提问方式(同语言/跨语言/第三语言/"
+        + "中英夹杂)的检索结果与补写之前完全一样。原因是全文检索只填「图谱没占满的空位」,而这份语料上图谱"
+        + "每次都把页面占满了,说法根本轮不上。语料更大、或者图谱答不上来的时候才有机会 —— 这一层目前没有在"
+        + "这台机器上被证明有用。";
 
     public bool NeedsEndpoint => false;
     public string? Endpoint(MemorySourceSettings s) => null;

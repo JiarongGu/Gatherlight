@@ -201,14 +201,16 @@ for (const f of facts) {
     if (seeded[set.key]) continue;
     const q = askIn(f, set);
     if (q) { seeded[set.key] = q; wrote = true; }
-    process.stdout.write(`  generating questions… fact ${generated + 1}/${facts.length} (${set.key})   `);
+    process.stdout.write(`
+  generating questions… fact ${generated + 1}/${facts.length} (${set.key})   `);
   }
   cache[key] = seeded;
   generated++;
   if (wrote) fs.mkdirSync(path.dirname(CACHE), { recursive: true });
 }
 fs.writeFileSync(CACHE, JSON.stringify(cache, null, 2), 'utf8');
-process.stdout.write(`  questions ready for ${facts.length} fact(s), cached in the data folder      
+process.stdout.write(`
+  questions ready for ${facts.length} fact(s), cached in the data folder      
 `);
 
 const probes = facts
@@ -242,10 +244,16 @@ const was = judge?.on ?? true;
 //
 // Same number of recalls as before. The extra cost is two enrichment toggles per query, which are
 // app_config writes read per call — microseconds against a judge spawn measured in seconds.
+// `--arms=off` runs the FLOOR only, which is what isolating 语义 needs: its phrasings live in a knowledge
+// COLUMN that the FTS table indexes unconditionally, so turning the binding off does not stop them being
+// searched. The only true A/B for that layer is phrasings-present vs phrasings-cleared — two database
+// states, compared on the same row. Holding 判断 off makes each run take seconds instead of ~11 minutes,
+// because the judge is the only thing here that spawns a CLI per query.
+const ARM_FILTER = arg('arms', 'both');
 const ARMS = [
   { key: 'off', label: '公式 only (判断 off)', enabled: false },
   { key: 'on', label: '公式 + 判断', enabled: true },
-];
+].filter((a) => ARM_FILTER === 'both' || ARM_FILTER === a.key);
 // TWO QUESTION SETS, because the layer being measured exists for the second one.
 //
 // `same` asks in the fact's own language — the lexical floor can always reach it, which is why every
@@ -318,13 +326,17 @@ const chanceTop1 = 1 / total;
 console.log(`\nchance baseline: found ${chanceFound.toFixed(3)} (top ${LIMIT} of ${total} facts)`
   + ` · top-1 ${chanceTop1.toFixed(3)}`);
 
-const [floor, withJudge] = rows;
-const delta = floor.missRate - withJudge.missRate;
+// Both delta lines below compare the two ARMS, so they mean nothing when only one arm ran (--arms=off,
+// the mode that isolates 语义). Printing them anyway would compare two SETS and label the result 判断 —
+// a number that looks like an answer to a question nobody asked.
+const bothArms = ARMS.length === 2;
+const [floor, withJudge] = bothArms ? rows : [null, null];
+const delta = bothArms ? floor.missRate - withJudge.missRate : 0;
 // The cross-language pair, reported separately — it is the comparison that says whether the enrichment
 // layers do anything a bilingual household would notice. Averaging it into the same-language pair would
 // hide exactly the effect the run was added to look for.
 const crossPair = rows.filter((r) => r.label.startsWith('跨语言'));
-if (crossPair.length === 2) {
+if (bothArms && crossPair.length === 2) {
   const cd = crossPair[0].missRate - crossPair[1].missRate;
   console.log(`跨语言提问:公式 only 漏检 ${crossPair[0].missRate.toFixed(3)}`
     + ` · 加上判断 ${crossPair[1].missRate.toFixed(3)}(变化 ${cd >= 0 ? '-' : '+'}${Math.abs(cd).toFixed(3)})`);
@@ -333,9 +345,14 @@ if (crossPair.length === 2) {
 // alone — and same-language is precisely the case where the lexical floor already reaches the fact, so it
 // reads 0.000 no matter how much the layer helps elsewhere. Quoted on its own it argued the enrichment
 // does nothing, which is how a measurement that could not see the effect became "there is no effect".
-console.log(`判断 在【同语言】提问上改变漏检 ${delta >= 0 ? '-' : '+'}${Math.abs(delta).toFixed(3)}`
-  + ` —— 同语言时「公式」本来就够得着,所以这一格接近 0 是预期的,不代表这一层没用。`);
-console.log(`  (Lyntai measured -0.35 on their corpus: 0.54 → 0.19.)`);
+if (bothArms) {
+  console.log(`判断 在【同语言】提问上改变漏检 ${delta >= 0 ? '-' : '+'}${Math.abs(delta).toFixed(3)}`
+    + ` —— 同语言时「公式」本来就够得着,所以这一格接近 0 是预期的,不代表这一层没用。`);
+  console.log(`  (Lyntai measured -0.35 on their corpus: 0.54 → 0.19.)`);
+} else {
+  console.log(`只跑了「${ARMS[0].label}」这一档(--arms=${ARM_FILTER})——`
+    + ` 上表适合和另一次同样条件的运行相比,例如改写说法写入前 / 写入后。`);
+}
 
 // A verdict on whether the run can support a conclusion AT ALL. Printing "0.667 → 0.500" without this is
 // how a borrowed number gets replaced by a homegrown one that is worse: at least the borrowed one was
@@ -360,7 +377,7 @@ if (tooSmall) {
 // but "the judge never produced a parseable verdict" and "the judge endorsed what already ranked top"
 // produce the identical table and call for opposite responses. Only this count tells them apart, so it
 // belongs beside the numbers rather than in a footnote that fires at zero.
-if (withJudge.judged === 0) {
+if (bothArms && withJudge.judged === 0) {
   console.log('NOTE: no recall reported a judgement — 判断 may not actually be reaching a model.'
     + ' Check the router lines in the log before believing the row above.');
 }
