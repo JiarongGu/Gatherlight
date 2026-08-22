@@ -46,7 +46,7 @@ household), which is what the picker shows — and the third one is *no model*:
 
 | group | backends | what it costs |
 |---|---|---|
-| **Claude CLI** | `claude-cli` | an account, nothing local. 判断 annotates + verifies; 语义 REPHRASES — Claude has no embeddings endpoint, so it stores other wordings of each fact (`knowledge.aka`, in the trigram index) and a paraphrase matches one. Quota + a CLI spawn per call |
+| **Claude CLI** | `claude-cli` | an account, nothing local. 判断 annotates + verifies; 语义 REPHRASES — Claude has no embeddings endpoint, so it stores other wordings of each fact (`knowledge.aka`, in the trigram index) and a paraphrase matches one. **At least one wording must be in ANOTHER LANGUAGE**: that was offered as one option among three until 2026-08-23 and the model never took it (four phrasings on a real fact, zero latin characters), so the layer only added same-language surface the lexical floor already reached. Proven directly — an English question retrieves a Chinese-only fact; its aggregate effect is NOT measured, see the rules. Quota + a CLI spawn per call |
 | **本机模型** | `llama-cpp` · `builtin` | disk, no quota, no address. `llama-cpp` is the runtime we download and start (both layers); `builtin` is EmbeddingGemma-300M as ONNX in our own process (语义 only, 222 MB, measured first — `docs/builtin-model-runner.md`). Models come from 资源, sha256-pinned and ranked |
 | **不用模型** | *none* | nothing. Choosing it turns the layer off and leaves 公式 doing the work |
 

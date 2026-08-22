@@ -495,33 +495,27 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Reaching for a 16-fact benchmark first is what made this look unanswerable for three sessions.
   `e2e-p48` guards the retrieval half — the half that can rot silently — and was confirmed to FAIL when the
   stub's cross-language phrasing is removed.
-- **语义's PHRASINGS ARE UNREACHABLE AS WIRED, and forcing them costs more than it buys** (isolated
-  2026-08-23). Turning the binding off does not stop phrasings being searched — they are a `knowledge`
-  column the FTS table indexes unconditionally — so the only true A/B is *phrasings written* vs *cleared*,
-  two database states. Compared on the FLOOR row (`--arms=off`, seconds per run since nothing spawns a
-  CLI), with 13 of 16 facts back-filled, across all four question sets: **every cell identical.** Not
-  narrowed — unchanged. The cause is the top-up rule: FTS fills only slots the graph left empty, and on
-  this corpus the graph fills the page at `--limit=3` AND `--limit=8`, so a phrasing never gets a slot.
-  **Tested the obvious fix and rejected it on the numbers.** Letting one text match displace the graph's
-  weakest row gave 跨语言 +1 and 混合语言 +1 — and 同语言 **−1**, MRR down. Net +1 across 64 queries,
-  bought by breaking the one property that makes the design explainable ("cannot displace a ranked hit")
-  and by making the COMMON case worse. Reverted. So the honest statement is that this arm is unproven on
-  a corpus this size, and that sentence is now in the arm's own description rather than left for a
-  household to discover after paying ~46 s per fact. Contrast 判断, which on the same probes recovers +2
-  in every non-same-language set — the two layers are NOT in the same evidential position and the panel
-  should not imply they are.
-- **语义 · Claude CLI MEASURED, and it changed nothing on this corpus** (2026-08-23, `dev.mjs recall-bench`
-  against the household's own 16 facts, phrasings back-filled onto 13 of them). At `--limit=3`: identical to
-  the no-phrasing run on every column. At `--limit=8`: found 12/16 and MRR 0.654, against 13/16 and 0.664
-  measured before any phrasings existed — no gain, possibly a point of noise the other way. **Two structural
-  reasons, and both matter more than the number.** (1) FTS only TOPS UP: when the graph resolves a full page
-  the top-up never runs, so at a page of 3 with 3 graph hits a phrasing cannot reach the household at all.
-  That is the deliberate "never displace a ranked hit" trade, and its cost is that this arm is inert exactly
-  when the graph is confident and wrong. (2) 16 facts cannot support the found/miss columns — the tool says
-  so itself rather than printing a number to be quoted. What this does NOT license is removing the arm: it
-  is unmeasurable here, not measured useless, and the machine that needs it (no GPU to spare, declining a
-  222 MB download) is not this one. It also cost **~46 s per fact** to back-fill, which is the number a
-  household weighing it should see.
+- **语义 · Claude CLI: the capability is PROVEN, the aggregate effect is NOT MEASURED — and everything
+  written here before 2026-08-23 about it "changing nothing" was measured on a broken configuration.**
+  Two bullets used to sit here reporting that phrasings were unreachable and that forcing them cost more
+  than they bought. Both are withdrawn. They were taken (a) before the rephrase prompt REQUIRED a
+  cross-language line, so the phrasings under test were same-language synonyms that added surface the
+  lexical floor already reached, and (b) across runs many apart, which the cross-run bullet above explains
+  cannot be attributed. A conclusion inherits the validity of its instrument.
+  **What IS established, and it needed no corpus:** write one fact, read back the phrasings, query a
+  wording that appears ONLY in them — the fact comes back. Done on a real Chinese fact with a real English
+  phrasing: `ranked: fts`, the `aka` match is what answered. That is the layer's whole promise, and before
+  the prompt fix it did not hold at all. `e2e-p48` guards it and fails when the stub's cross-language
+  phrasing is removed.
+  **What is NOT established:** how much it moves aggregate recall. `recall-bench` cannot say, because its
+  only trustworthy comparison is the within-run paired one and phrasings are durable rows that cannot be
+  toggled per call. Answering it needs a fixture whose graph resets between arms — which that tool
+  deliberately is not, since it runs against the household's real memory. Do not fill that gap with a
+  number from two runs.
+  Still true and worth keeping from the withdrawn text: the top-up fills only slots the graph left empty,
+  so a phrasing competes for a page the graph often fills; letting one displace the graph's weakest row was
+  tried and reverted; and the back-fill costs **~46 s per fact**, which is the figure a household weighing
+  this should see.
 - **Switching 语义 off does NOT clear what it wrote.** Phrasings live in `knowledge.aka`, which the FTS
   table indexes unconditionally — so 15 facts were still matching on their stored phrasings after the layer
   was turned off, and nothing in the product said so. Turning a layer off stops it producing; it does not

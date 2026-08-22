@@ -66,10 +66,15 @@ public sealed class ClaudeCliSemanticSource : IMemorySemanticSource
         + "想要真正的向量、又不想另外装或启动一个程序:选「本机模型 · 内置」—— 222 MB 权重,直接跑在本应用进程里,"
         + "「判断」仍然可以留在 Claude。"
         // MEASURED, and it did not help — said here rather than left for the household to discover.
-        + "实测提醒:在本机现有的 16 条事实上,给 13 条补写了说法之后,四种提问方式(同语言/跨语言/第三语言/"
-        + "中英夹杂)的检索结果与补写之前完全一样。原因是全文检索只填「图谱没占满的空位」,而这份语料上图谱"
-        + "每次都把页面占满了,说法根本轮不上。语料更大、或者图谱答不上来的时候才有机会 —— 这一层目前没有在"
-        + "这台机器上被证明有用。";
+        // WITHDRAWN and replaced. This used to report that back-filling 13 facts changed nothing across
+        // all four question sets — measured BEFORE the prompt required a cross-language line, so the
+        // phrasings under test were same-language synonyms, and measured across runs far enough apart
+        // that recall's own reinforcement makes the difference unattributable. Saying "no benefit" to a
+        // household on that basis is worse than saying nothing: it is a verdict borrowed from a broken
+        // instrument, about a feature they are being asked to pay for.
+        + "实测说明:这一层「能做到什么」是直接验证过的 —— 一条中文事实,用英文提问能命中。"
+        + "至于「整体能提升多少」,在这台机器现有的十几条事实上测不出可信的数字(检索本身会改变图谱,"
+        + "跑几次之后前后就不可比了),所以这里不给这个数,也不假装有。";
 
     public bool NeedsEndpoint => false;
     public string? Endpoint(MemorySourceSettings s) => null;
