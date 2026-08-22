@@ -606,6 +606,9 @@ public static class GatherlightApp
             // After RecordIndexStep, and NOT part of it: this one back-fills rather than rebuilds,
             // because a rebuild every boot would erase the decay + link state the index accumulates.
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.FactIndexStep>()
+            // After the fact index: warming a model matters only once recall exists to use it, and
+            // this step does nothing at all unless a layer is BOUND to llama.cpp.
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.LlamaWarmStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DataRepoMaintenanceStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealStateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.MemorySeedStep>()

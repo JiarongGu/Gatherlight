@@ -44,13 +44,12 @@ interface ResourceStatus {
 // backend that needs nothing installed.
 const MODEL_RESOURCES = ['embed-model', 'embed-gguf'];
 
-// PROVISIONED BUT NOT YET REACHABLE FROM ANY RECALL LAYER, so not offered. llama.cpp is the runtime the
-// app will provision (docs/self-managed-llm-runtime.md) and its embedder is downloadable, but 记忆检索
-// still binds only claude-cli / ollama / builtin — so a household who pressed 下载 here would fetch
-// 35 MB + 319 MB and observe exactly nothing change. A control that does nothing is the failure this
-// console keeps refusing; the rows come back in the same commit that lets a layer bind to them.
-// They stay in the server's catalog on purpose: provisioning, LlamaServerRuntime and p49/p51 all use it.
-const NOT_YET_REACHABLE = ['llama-cpp', 'embed-gguf'];
+// Both rows were hidden for one commit, while llama.cpp was provisionable but nothing could BIND to it —
+// a 下载 button that fetches 354 MB and changes nothing is the dead control this console keeps refusing.
+// 记忆检索 now offers llama.cpp on both layers, so they are offered again. Kept as an empty list rather
+// than deleted: the next provisioned-but-unreachable resource wants exactly this, and the reasoning is
+// easier to find here than in a commit message.
+const NOT_YET_REACHABLE: string[] = [];
 
 const hasUpdate = (r: ResourceStatus) => !!r.version && !!r.available && r.version !== r.available;
 

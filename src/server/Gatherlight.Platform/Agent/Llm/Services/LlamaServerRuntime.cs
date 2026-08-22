@@ -103,22 +103,25 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <summary>Env override → loopback default, with the loopback guard applied. Non-loopback is refused
     /// for the same reason as Ollama's: every fact the household writes goes to whatever does the
     /// embedding, and a remote address does that silently and forever.</summary>
-    public string BaseUrl
+    public string BaseUrl => ResolveBaseUrl(_log);
+
+    /// <summary>Env override → loopback default, guard applied. STATIC for the same reason
+    /// <see cref="OllamaRuntime.ResolveBaseUrl"/> is: the recall source resolves this endpoint at DI
+    /// registration time, before any container exists, and this service resolves it again later. Two answers
+    /// for one endpoint is how an install ends up embedding against one address and reporting another.</summary>
+    public static string ResolveBaseUrl(ILogger? log = null)
     {
-        get
+        var raw = Environment.GetEnvironmentVariable("GATHERLIGHT_LLAMACPP_URL");
+        if (string.IsNullOrWhiteSpace(raw)) return DefaultBaseUrl;
+        if (Uri.TryCreate(raw, UriKind.Absolute, out var u) && !u.IsLoopback
+            && Environment.GetEnvironmentVariable("GATHERLIGHT_LLM_ALLOW_REMOTE") != "1")
         {
-            var raw = Environment.GetEnvironmentVariable("GATHERLIGHT_LLAMACPP_URL");
-            if (string.IsNullOrWhiteSpace(raw)) return DefaultBaseUrl;
-            if (Uri.TryCreate(raw, UriKind.Absolute, out var u) && !u.IsLoopback
-                && Environment.GetEnvironmentVariable("GATHERLIGHT_LLM_ALLOW_REMOTE") != "1")
-            {
-                _log.LogWarning(
-                    "Ignoring llama-server URL {Url}: a non-loopback runtime would send household facts off "
-                    + "this machine. Set GATHERLIGHT_LLM_ALLOW_REMOTE=1 if that is truly intended.", raw);
-                return DefaultBaseUrl;
-            }
-            return raw.TrimEnd('/');
+            log?.LogWarning(
+                "Ignoring llama-server URL {Url}: a non-loopback runtime would send household facts off "
+                + "this machine. Set GATHERLIGHT_LLM_ALLOW_REMOTE=1 if that is truly intended.", raw);
+            return DefaultBaseUrl;
         }
+        return raw.TrimEnd('/');
     }
 
     public string? Locate()

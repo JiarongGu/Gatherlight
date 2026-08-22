@@ -38,6 +38,7 @@ public sealed class MemoryRecallController : ControllerBase
 {
     private readonly IOllamaRuntime _ollama;
     private readonly IClaudeCliRuntime _claude;
+    private readonly ILlamaServerRuntime _llama;
     private readonly ServerConfigService _config;
     private readonly Storage.Knowledge.Services.IFactIndex _facts;
     private readonly ILogger<MemoryRecallController> _log;
@@ -53,7 +54,8 @@ public sealed class MemoryRecallController : ControllerBase
     private readonly MemoryJudgeWiring _judgeWiring;
     private readonly Storage.Knowledge.Services.IKnowledgeStore _knowledge;
 
-    public MemoryRecallController(IOllamaRuntime ollama, IClaudeCliRuntime claude, ServerConfigService config,
+    public MemoryRecallController(IOllamaRuntime ollama, IClaudeCliRuntime claude,
+        ILlamaServerRuntime llama, ServerConfigService config,
         Storage.Knowledge.Services.IFactIndex facts, IAppConfigService appConfig,
         Storage.Knowledge.Services.IKnowledgeStore knowledge,
         IReindexStatus reindex, MemoryJudgeWiring judgeWiring, IPlatformContext platform,
@@ -63,6 +65,7 @@ public sealed class MemoryRecallController : ControllerBase
         _judgeWiring = judgeWiring;
         _ollama = ollama;
         _claude = claude;
+        _llama = llama;
         _config = config;
         _facts = facts;
         _appConfig = appConfig;
@@ -77,7 +80,7 @@ public sealed class MemoryRecallController : ControllerBase
     /// questions it can answer without a container. Built here so both are read at the same instant.</summary>
     private MemorySourceSettings Settings() => new(_config.Current.Memory, _platform.ResourcesPath);
 
-    private MemorySourceContext Context() => new(_ollama, _claude, Settings());
+    private MemorySourceContext Context() => new(_ollama, _claude, _llama, Settings());
 
     [HttpGet("api/manage/memory")]
     public async Task<IActionResult> Get([FromQuery] bool refresh = false)

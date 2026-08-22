@@ -29,10 +29,13 @@
   ~~(3) models as pinned GGUF downloads~~ **PARTLY DONE** — `embed-gguf` (the Q8 embedder, pinned by HF
   commit + sha256) is in; the judge's chat GGUF is not, and neither is a way to choose among several.
   Ollama's own blobs do NOT load in llama.cpp (`expected 316 tensors, got 314`), so nothing already
-  downloaded can be reused; (4) `EmbeddingCatalog`,
-  `/api/manage/models` and `OllamaState` are all Ollama-tag shaped and need a GGUF-repo equivalent;
-  (5) re-measure the shortlist through it — Q8_0 already scored the same 9/10 as Ollama's f16, but per
-  model that has to be checked, not assumed.
+  downloaded can be reused; ~~(4) a backend a layer can BIND to~~ **DONE** — `LlamaCppSource` on both
+  layers (models filtered by kind, `origin=app`, no address), `LlamaWarmStep` starting + warming only when
+  bound, verified by binding 语义 to it and restarting (saved AND running, warm step green); what remains of
+  (4) is the shelf: `EmbeddingCatalog`, `/api/manage/models` and `OllamaState` are still Ollama-tag shaped,
+  so 资源 can offer GGUFs to DOWNLOAD from only a hard-coded list of one, and there is no judge chat GGUF at
+  all; (5) re-measure the shortlist through it — the Q8 embedder scored the same 9/10 as Ollama's f16, but
+  each further model has to be checked, not assumed.
 - [ ] **Decide the 内置 ONNX arm's fate now that it is measured as dominated.** `llama-server` beat it on
   BOTH axes (9/10 vs 8/10 top-1, 23 ms vs 28 ms per query) while also serving 判断, which the ONNX arm
   cannot. What it still uniquely has is *no separate process at all* and the smallest total payload

@@ -202,15 +202,18 @@ try {
   // ---- E · a backend serves a layer by EXISTING --------------------------------------------------
   const judgeSources = (judge.sources ?? []).map((x) => x.id);
   const semanticSources = (semantic.sources ?? []).map((x) => x.id);
-  const BACKENDS = ['claude-cli', 'ollama', 'openai-compat', 'builtin'];
+  // The FULL list, in the order MemoryBackends fixes. `llama-cpp` joined it on 2026-08-22 and pushed
+  // `builtin` one place along — this assertion firing is how that was noticed, which is the point of
+  // pinning an order rather than a set. Update it when a backend lands, deliberately.
+  const BACKENDS = ['claude-cli', 'ollama', 'openai-compat', 'llama-cpp', 'builtin'];
 
   // EVERY backend on EVERY layer. A layer showing one button and nothing about the others answers "why
   // isn't this an option here?" by making the question unaskable — "no class implements it" is an answer
   // only the source tree gives. This is the same rule the available-but-blocked case already followed
   // (three causes, three sentences), applied one level further out.
-  ok('判断 lists all three backends', BACKENDS.every((b) => judgeSources.includes(b)),
+  ok('判断 lists every backend', BACKENDS.every((b) => judgeSources.includes(b)),
     JSON.stringify(judgeSources));
-  ok('语义 lists all three backends too — including the ones it cannot use',
+  ok('语义 lists every backend too — including the ones it cannot use',
     BACKENDS.every((b) => semanticSources.includes(b)), JSON.stringify(semanticSources));
   // SAME ORDER on every layer. Sorting by status put the same four labels in different positions on the
   // two rows, so position could never become a landmark a household learns. Usability is carried by how a
@@ -336,6 +339,35 @@ try {
     { source: 'builtin', model: 'haiku' });
   ok('and so is binding anything to the runtime that is not shipped yet',
     bindEmbedded.status === 400, String(bindEmbedded.status));
+
+  // THE APP-PROVISIONED BACKEND, on BOTH layers. It is the second class to implement both layer
+  // interfaces (after openai-compat), and the first where the app owns the runtime — so it must appear
+  // under 判断 AND 语义 from one registration, which is the property the source catalog exists to give.
+  for (const [layer, name] of [[judge, 'judge'], [semantic, 'semantic']]) {
+    const llama = (layer.sources ?? []).find((x) => x.id === 'llama-cpp');
+    ok(`llama.cpp is listed on ${name}`, !!llama,
+      JSON.stringify((layer.sources ?? []).map((x) => x.id)));
+    // BINDABLE but not AVAILABLE is the distinction that matters here: there IS an implementation (so the
+    // button is real), and the prerequisite is unmet (so it carries a reason instead of vanishing).
+    ok(`and is bindable-but-unavailable on ${name} until it is downloaded`,
+      llama?.bindable === true && llama?.available === false, JSON.stringify(
+        { bindable: llama?.bindable, available: llama?.available }));
+    ok(`and names 资源 as the fix on ${name}`, /资源/.test(String(llama?.reason ?? '')),
+      String(llama?.reason));
+    // Origin is a CONSTANT for this backend, unlike ollama/claude-cli where it depends on the install:
+    // a household's own llama-server is reached through openai-compat, so this one is always ours.
+    ok(`and reports origin=app on ${name} — never household`,
+      llama?.origin?.kind === 'app', JSON.stringify(llama?.origin));
+    // It asks for no address. That is the whole difference from openai-compat, which is the same protocol.
+    ok(`and asks for no address on ${name}`, llama?.needsEndpoint === false,
+      String(llama?.needsEndpoint));
+  }
+  // Binding it with nothing provisioned must be refused — a binding registers a provider against a port
+  // nothing will answer on, and both memory policies are fail-open, so it would surface as silence.
+  const bindLlama = await post('/api/manage/memory/layer/semantic',
+    { source: 'llama-cpp', model: 'embeddinggemma-300M-Q8_0' });
+  ok('binding 语义 to an unprovisioned llama.cpp is refused rather than saved',
+    bindLlama.status >= 400, `${bindLlama.status} ${JSON.stringify(bindLlama.body)}`);
 
   // THE APP-MANAGED RUNTIME, before it is provisioned. A fixture has neither the 35 MB binary nor a
   // 334 MB GGUF and should not download them — so what is asserted here is the ABSENT case, which is the

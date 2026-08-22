@@ -35,6 +35,12 @@ public static class MemoryBackends
     /// cannot download or delete anything there, and the picker says so.</summary>
     public const string OpenAiCompatible = "openai-compat";
 
+    /// <summary>llama.cpp's <c>llama-server</c>, PROVISIONED and run by this app — the self-managed runtime
+    /// as of 2026-08-22. It speaks the same OpenAI-compatible API as <see cref="OpenAiCompatible"/>, and gets
+    /// its own backend for the same reason Ollama does: the app MANAGES it, so it needs no address and its
+    /// model list comes from what we downloaded rather than from what a household happened to load.</summary>
+    public const string LlamaCpp = "llama-cpp";
+
     /// <summary>A model runtime shipped INSIDE the install (<c>res/</c>) rather than found on the machine —
     /// nothing to install, nothing to keep running.</summary>
     public const string BuiltIn = "builtin";
@@ -48,7 +54,12 @@ public static class MemoryBackends
     ///
     /// <para>Cheapest first, in the sense of what the household has to have: the account they already use,
     /// then a daemon, then a daemon they must configure, then a download.</para></summary>
-    private static readonly string[] Ordered = { ClaudeCli, Ollama, OpenAiCompatible, BuiltIn };
+    /// <para><c>llama-cpp</c> sits between the household's own service and the bundled model: both it and
+    /// <c>builtin</c> cost a download, and <c>builtin</c> is the smaller of the two (a model only, against a
+    /// runtime plus a model), so it stays last. This shifted <c>builtin</c> by one position, which is a cost
+    /// worth naming given the comment above — a landmark that moves once, deliberately, on the release that
+    /// adds a backend.</para>
+    private static readonly string[] Ordered = { ClaudeCli, Ollama, OpenAiCompatible, LlamaCpp, BuiltIn };
 
     public static IReadOnlyList<string> Order => Ordered;
 
@@ -162,6 +173,7 @@ public sealed record MemorySourceSettings(MemoryConfig Config, string ResourcesP
 public sealed record MemorySourceContext(
     IOllamaRuntime Ollama,
     IClaudeCliRuntime Claude,
+    ILlamaServerRuntime Llama,
     MemorySourceSettings Settings)
 {
     public MemoryConfig Config => Settings.Config;

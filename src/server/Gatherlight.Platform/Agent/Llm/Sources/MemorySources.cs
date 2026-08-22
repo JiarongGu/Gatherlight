@@ -34,12 +34,16 @@ public static class MemorySources
         // case this design was built for. Two instances, because the two layers may point at different
         // servers and each instance reads its own layer's address.
         new OpenAiCompatibleSource(MemoryLayers.Judge),
+        // The SECOND class in both lists, and the runtime the app provisions as of 2026-08-22. Same
+        // protocol as the entry above, opposite ownership — see LlamaCppSource.
+        new LlamaCppSource(MemoryLayers.Judge),
     };
 
     public static readonly IReadOnlyList<IMemorySemanticSource> Semantic = new IMemorySemanticSource[]
     {
         new OllamaSemanticSource(),
         new OpenAiCompatibleSource(MemoryLayers.Semantic),
+        new LlamaCppSource(MemoryLayers.Semantic),
         // 内置 — the one backend with NO prerequisite outside the app. Its arrival is what turned a
         // declined entry into a bindable one, which is exactly the "one class plus one line" this catalog
         // was shaped for.
