@@ -173,6 +173,30 @@ if (prompt.includes('SCORING TASK')) {
   process.exit(0);
 }
 
+// Memory ANNOTATION (Lyntai's LlmMemoryAnnotationPolicy): it asks for `{"subjects":[...]}` — stable
+// handles naming what a fact is about. Answered here so a suite can drive REAL annotated writes rather
+// than hand-inserting rows into the graph store, which would only ever prove the fixture agrees with
+// itself about the layout.
+//
+// The handles are deliberately words the fact's own text does NOT contain. That is the whole point: if a
+// handle appeared in the content, lexical recall would find the fact anyway and a passing subject test
+// would prove nothing. Anything unrecognised gets no subjects, so ordinary suites are unaffected.
+if (prompt.includes('{"subjects"')) {
+  // Only the fact being ANNOTATED, never the whole prompt. Lyntai composes this as
+  // [known subjects] + [earlier facts] + "Fact:\n<content>", so a whole-prompt scan reads the EARLIER
+  // facts' markers too and hands every handle to every write — which is precisely the cross-fire that
+  // the "read the CURRENT request" rule further down exists to prevent, one call site over. It cost a
+  // failing selectivity assertion here rather than shipping, because that assertion exists.
+  const fact = prompt.split('Fact:\n').pop();
+  const handles = [];
+  if (fact.includes('伴侣')) handles.push('pairbond');
+  if (fact.includes('旅行证件')) handles.push('paperwork');
+  const verdict = JSON.stringify({ subjects: handles });
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
+  done(verdict);
+  process.exit(0);
+}
+
 // --- S3a: UI block fixtures (e2e-p41) ---------------------------------------------------------
 // Read the trigger from the CURRENT request (after "THE USER'S REQUEST:"), never the whole prompt —
 // the thread-context block echoes PRIOR turns' messages and a whole-prompt scan cross-fires on a

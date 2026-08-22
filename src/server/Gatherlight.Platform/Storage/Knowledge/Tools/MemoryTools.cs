@@ -67,7 +67,12 @@ public sealed class RecallFactsTool : IGatherlightTool
     public string Name => "recall_facts";
 
     public string Description =>
-        "从跨会话知识库检索已存的事实(按主题/内容匹配;越常用、越近期被用到的排得越前,并会带出相关联的事实)。规划涉及曾经核验过的场所/价格/政策时先查这里,能省去重复调研。返回的 ref 可用 expand_fact 展开关联。";
+        // The last clause is not decoration. A capability the agent is never TOLD about stays unused while
+        // every check passes — the failure this very tool once had, when the fact store held 16 entries and
+        // had never been recalled because nothing mentioned it. Subject recall is new reach: the query may
+        // name what a fact is ABOUT rather than repeat its words, so saying so is what makes it reachable.
+        "从跨会话知识库检索已存的事实(按主题/内容匹配;越常用、越近期被用到的排得越前,并会带出相关联的事实)。规划涉及曾经核验过的场所/价格/政策时先查这里,能省去重复调研。返回的 ref 可用 expand_fact 展开关联。"
+        + "检索词也可以直接写这条事实『是关于什么的』,不必照搬原文用词 —— 例如问「证件」也能命中一条只写了护照到期的事实;这类命中会标 matched:\"subject\"。";
 
     public string InputSchema => ToolSchema.Of(b => b
         .Str("query", "检索词(匹配 topic 或 content)", required: true)
@@ -100,8 +105,19 @@ public sealed class RecallFactsTool : IGatherlightTool
                     var hit = byRef[graphRef];
                     var o = Row(row);
                     o["ref"] = graphRef;
-                    o["retrievability"] = Math.Round(hit.Retrievability, 3);
-                    o["linked"] = hit.Degree;
+                    if (hit.BySubject)
+                    {
+                        // NOT retrievability 0 and NOT linked 0. This fact was found because the query names
+                        // one of its subject handles, so neither number was measured — and "0.0" reads as
+                        // "fully decayed", which is a claim about the household's memory that nothing
+                        // checked. Same reason `ranked` exists: the route matters to what the answer means.
+                        o["matched"] = "subject";
+                    }
+                    else
+                    {
+                        o["retrievability"] = Math.Round(hit.Retrievability, 3);
+                        o["linked"] = hit.Degree;
+                    }
                     arr.Add(o);
                 }
             }

@@ -259,6 +259,72 @@ try {
   ok('and the entries moved to the current layout', afterScopes.length === 1 && afterScopes[0] !== 'price',
     `scopes=${JSON.stringify(afterScopes)}`);
 
+  // ---- SUBJECT HANDLES ARE SEARCHABLE ----------------------------------------------------------
+  //
+  // With 判断 on, every write is annotated and its subjects — stable handles naming what the fact is
+  // ABOUT — are recorded. They used to be read by exactly two things, both at WRITE time: linking two
+  // facts, and prompting the annotator to reuse a handle. No recall path touched them, so the household
+  // paid a model call for them and could never search them.
+  //
+  // The handles here appear in NO fact's text (the stub answers the annotation prompt with words the
+  // content does not contain). That is what makes this test mean something: lexical recall cannot
+  // produce these hits, so if the fact comes back, the subject lookup is the only thing that found it.
+  await remember(uc, 'household', 'partner celebration date', '伴侣的生日在春天,通常在家里过。');
+  await remember(uc, 'household', 'document renewal', '旅行证件下个月到期,要提前去换。');
+
+  // NON-VACUITY, and the assertion that would have caught the whole feature being inert: prove the
+  // annotation actually RAN and stored handles. Without this, every check below could pass by the
+  // fallback path returning something plausible for an unrelated reason.
+  const subjectRows = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'))
+    .prepare("SELECT subject FROM lyntai_memory_subject WHERE engine = 'facts/graph'").all()
+    .map((r) => r.subject);
+  ok('the annotation recorded subject handles for the new facts',
+    subjectRows.includes('pairbond') && subjectRows.includes('paperwork'),
+    JSON.stringify(subjectRows));
+
+  // …and NONE of them is a word the facts actually say, so a hit below cannot come from the text.
+  const partnerText = '伴侣的生日在春天,通常在家里过。';
+  ok('the handles are absent from the fact text — so lexical recall cannot produce them',
+    !partnerText.includes('pairbond') && !partnerText.includes('paperwork'), partnerText);
+
+  const bySubject = await uc.call('recall_facts', { query: 'pairbond', limit: 5 });
+  const subjHits = bySubject.result?.facts ?? [];
+  ok('THE POINT: a query naming a subject handle finds the fact whose text never says it',
+    subjHits.some((f) => f.topic === 'partner celebration date'),
+    JSON.stringify(subjHits.map((f) => f.topic)));
+
+  // The route is REPORTED, not silently blended in. A subject hit has no measured retrievability, so
+  // printing 0.0 would claim the fact is fully decayed — a statement about the household's own memory
+  // that nothing checked. Same reason `ranked` exists.
+  const partnerHit = subjHits.find((f) => f.topic === 'partner celebration date');
+  ok('…and says HOW it was found, instead of reporting a retrievability it never measured',
+    partnerHit?.matched === 'subject' && partnerHit?.retrievability === undefined,
+    JSON.stringify(partnerHit));
+
+  // SELECTIVITY. A handle is not a wildcard: the other annotated fact carries a different one and must
+  // stay out. Without this the feature could "pass" by appending every annotated fact to every recall.
+  ok('a handle pulls in ITS facts, not every annotated fact',
+    !subjHits.some((f) => f.topic === 'document renewal'),
+    JSON.stringify(subjHits.map((f) => f.topic)));
+
+  // A HANDLE MUST BE NAMED, NOT MERELY SPELLED. An ASCII handle needs a word boundary: `pairbond` sits
+  // inside `repairbonded`, and a household asking about one thing must not be handed a fact about
+  // another because its handle happens to be a substring. (CJK handles keep plain substring matching —
+  // Chinese has no spaces to anchor to, the same reason this product's FTS is trigram.)
+  const spurious = await uc.call('recall_facts', { query: 'repairbonded surfaces', limit: 5 });
+  ok('a handle spelled INSIDE a longer word does not count as naming it',
+    !(spurious.result?.facts ?? []).some((f) => f.topic === 'partner celebration date'),
+    JSON.stringify((spurious.result?.facts ?? []).map((f) => f.topic)));
+
+  // ADDITIVE, NEVER A REORDERING. The original ranked query must be untouched — subject hits are
+  // appended after the graph's own answer, so a fact the ranking already found keeps its place.
+  const stillRanked = await uc.call('recall_facts', { query: 'harbour teahouse', limit: 5 });
+  const stillTop = (stillRanked.result?.facts ?? [])[0];
+  ok('an ordinary ranked recall is unchanged — the addition cannot displace a better hit',
+    stillRanked.result?.ranked === 'graph' && stillTop?.matched === undefined
+      && typeof stillTop?.retrievability === 'number',
+    JSON.stringify({ ranked: stillRanked.result?.ranked, top: stillTop?.topic, m: stillTop?.matched }));
+
 } catch (err) {
   fail('e2e-p48 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {

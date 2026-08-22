@@ -370,6 +370,27 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing", which is a lie told on their own data. `recall_facts` therefore reports `ranked:
   graph|fts`, because a graph answer and a fallback answer are otherwise indistinguishable. Proof lives
   in `e2e-p48`, whose restore assertion was confirmed to FAIL with the rebuild removed.
+- **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
+  is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
+  recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
+  reuse a handle. **No recall path touched them**, so a household asking "配偶" got nothing from a fact whose
+  text says 太太, while a handle saying exactly that sat in the store, paid for by a model call they had
+  already made. Same shape as the embedding bought on every write with `SemanticSeedK` at 0 — a cost with no
+  matching benefit, invisible from every API response. `FactIndex.AppendBySubjectAsync` closes it: handles
+  matching the query as SUBSTRINGS (the query is a sentence and CJK has no spaces — the same reason the FTS
+  is trigram), normalized by CALLING `MemorySubject.Normalize` rather than restating it, because the store's
+  write applied it and a private `ToLower()` folds `"I"` differently under a Turkish culture. **APPENDED
+  after the graph's answer, never merged into it**: `ByGraphRefsAsync` preserves rank order exactly, so this
+  can only lengthen a short page and never displace a better hit — which is why it needs no tuning knob.
+  That is also why the handles are NOT put into the FTS text, where a generic handle would compete for bm25
+  against the fact's own words. A subject hit reports `matched:"subject"` and **omits** retrievability and
+  degree — neither was measured, and printing `0.0` claims the fact is fully decayed, a statement about the
+  household's memory that nothing checked (the `ranked` principle, one level down). Proof lives in `e2e-p48`
+  and was confirmed to FAIL with the append removed — the query returns `[]`, since no fact's text contains
+  the handle. **The stub taught the same lesson twice**: its annotation branch must read only the text after
+  the last `Fact:`, because Lyntai composes the prompt as [known subjects] + [earlier facts] + the write, so
+  a whole-prompt scan hands every handle to every write. That is the p28 cross-fire exactly, one call site
+  over, and it was caught by the selectivity assertion rather than in production.
 - **Recall quality is THREE INDEPENDENT SWITCHES, and where each one's config lives is decided by WHEN it
   is read.** *Formula* (graph decay + rank fusion + FTS trigram) is the floor: always on, no setup, no
   cost. *Claude CLI* adds annotation per write and verification per recall — and costs a model call for

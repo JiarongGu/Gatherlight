@@ -8,7 +8,12 @@ namespace Gatherlight.Server.Platform.Storage.Knowledge.Services;
 /// <param name="Retrievability">0..1, how far the entry has decayed. Reported to the agent so a faint
 /// fact is visibly faint rather than silently equal to a fresh one.</param>
 /// <param name="Degree">How many other facts this one is linked to.</param>
-public sealed record FactHit(string GraphRef, double Retrievability, int Degree);
+/// <param name="BySubject">This hit came from a SUBJECT HANDLE matching the query, not from the graph's
+/// ranking — so its <paramref name="Retrievability"/> and <paramref name="Degree"/> are unknown rather than
+/// zero, and the caller must not print them as if they were measured. Same principle as <c>ranked</c> one
+/// level down: two answers arrived by different routes, and a reader who cannot tell them apart will read
+/// "0.0" as "fully decayed" instead of "we never asked".</param>
+public sealed record FactHit(string GraphRef, double Retrievability, int Degree, bool BySubject = false);
 
 /// <summary>A fact opened up: its own text plus the headlines it is connected to.</summary>
 public sealed record FactExpansion(string GraphRef, string Headline, string? Content,
@@ -115,6 +120,21 @@ public sealed class FactIndex : IFactIndex
     /// searches one, for the same vectors. The upside it would buy is a narrower search on the kind-filtered
     /// path, which is the rare one.</para></summary>
     private const string AllFacts = "all";
+
+    /// <summary>How much of the subject vocabulary one recall reads. Bounded because it is a per-recall
+    /// read on the path the household waits on, and the handles are returned most-used first — so a cut-off
+    /// drops the rare ones, which are the least likely to be named in a query anyway.</summary>
+    private const int SubjectsScanned = 200;
+
+    /// <summary>How many matched handles one query may follow. A query naming several handles is usually a
+    /// long sentence brushing past generic ones; following all of them turns a recall into many round trips
+    /// for candidates that rank last regardless.</summary>
+    private const int SubjectsPerQuery = 4;
+
+    /// <summary>How many facts one handle may contribute. A handle used by a hundred facts says almost
+    /// nothing about which one was wanted, so it contributes a few rather than flooding the page it is only
+    /// meant to extend.</summary>
+    private const int NodesPerSubject = 5;
 
     private readonly IMemoryEngine? _engine;
     private readonly IMemoryGraphStore? _graph;
@@ -234,14 +254,118 @@ public sealed class FactIndex : IFactIndex
             var want = kind is null ? Math.Min(limit * 3, 100) : 100;
             var recall = await _engine.RecallAsync(
                 new MemoryQuery(TaskKey, Scope: AllFacts, Query: query, Limit: want), ct);
-            return new FactRanking(
-                [.. recall.Items.Select(i => new FactHit(Encode(i.Reference), i.Retrievability, i.Degree))],
-                recall.Answered);
+            var hits = new List<FactHit>(recall.Items.Count);
+            foreach (var i in recall.Items)
+                hits.Add(new FactHit(Encode(i.Reference), i.Retrievability, i.Degree));
+            await AppendBySubjectAsync(query, hits, ct);
+            return new FactRanking(hits, recall.Answered);
         }
         catch (Exception ex)
         {
             _log?.LogWarning(ex, "fact index: recall failed; falling back to FTS");
             return FactRanking.Empty;
+        }
+    }
+
+    /// <summary>Facts whose SUBJECT HANDLE the query names, appended to the ranking.
+    ///
+    /// <para><b>Why this exists: the handles were already bought.</b> With 判断 on, every write is annotated
+    /// and the annotation's subjects — deliberately stable handles a later fact about the same entity would
+    /// produce again, "配偶", "生日", "deploy-key" — are recorded by the engine. Until this, they were read
+    /// by exactly two things: linking two facts at write time, and prompting the annotator to reuse a handle.
+    /// <b>No recall path touched them.</b> So a household who asked "配偶" got nothing from a fact whose text
+    /// says 太太, while a handle saying precisely that the fact is about their spouse sat in the store,
+    /// paid for by a model call they had already made. That is the same shape as the embedding that was
+    /// bought on every write with <c>SemanticSeedK</c> at 0 and consulted on no recall — a cost with no
+    /// matching benefit, invisible from every API response.</para>
+    ///
+    /// <para><b>Additive, never a reordering.</b> Hits are APPENDED after the graph's own answer, which
+    /// <c>ByGraphRefsAsync</c> preserves exactly, so a fact the ranking already found keeps its place and
+    /// its score. The worst this can do is lengthen a short page; it cannot displace a better hit. That
+    /// property is why it needs no tuning knob and no cost/benefit judgement at recall time — and it is a
+    /// deliberate contrast with putting handles into the FTS text, where a generic handle would compete for
+    /// bm25 relevance against the fact's own words.</para>
+    ///
+    /// <para><b>Handles are matched as SUBSTRINGS of the query, normalized through Lyntai's own rule.</b>
+    /// <c>MemorySubject.Normalize</c> is CALLED rather than restated, because the store's write applied it
+    /// and a private <c>ToLower()</c> folds differently under a Turkish culture — the same handle would then
+    /// stop matching across machines. Substring rather than token equality because the query is a sentence
+    /// and CJK has no spaces to tokenize on, which is the same reason this product's FTS uses trigram.</para>
+    ///
+    /// <para>Degrades to nothing, never throws: this runs after a ranking that already succeeded, and
+    /// failing the whole recall to protect an addition would trade a working answer for no answer.</para>
+    /// </summary>
+    private async Task AppendBySubjectAsync(string query, List<FactHit> hits, CancellationToken ct)
+    {
+        if (_graph is null) return;
+        try
+        {
+            var known = await _graph.KnownSubjectsAsync(GraphMember, TaskKey, AllFacts, SubjectsScanned, ct);
+            if (known.Count == 0) return;
+
+            var haystack = MemorySubject.Normalize(query);
+            if (haystack.Length == 0) return;
+
+            var seen = new HashSet<string>(hits.Select(h => h.GraphRef), StringComparer.Ordinal);
+            var used = 0;
+            foreach (var subject in known)
+            {
+                var handle = MemorySubject.Normalize(subject);
+                // A one-character handle would match a large share of every query — in CJK especially, where
+                // it is a whole word — and turn this into noise on every recall. Two is the shortest handle
+                // that can be about something.
+                if (handle.Length < 2 || !NamesHandle(haystack, handle)) continue;
+                if (++used > SubjectsPerQuery) break;
+
+                var nodes = await _graph.NodesBySubjectAsync(
+                    GraphMember, TaskKey, AllFacts, handle, NodesPerSubject, ct);
+                foreach (var node in nodes)
+                {
+                    // Built the same way Encode builds one, from the member that RECORDED the subject —
+                    // a ref addressed to any other member resolves to no row and silently shortens the page.
+                    if (seen.Add($"{GraphMember}#{node}"))
+                        hits.Add(new FactHit($"{GraphMember}#{node}", 0, 0, BySubject: true));
+                }
+            }
+            if (used > 0)
+                _log?.LogDebug("fact index: {Used} subject handle(s) in the query added candidates", used);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "fact index: subject lookup failed; the ranking stands on its own");
+        }
+    }
+
+    /// <summary>Does this query NAME the handle — as opposed to merely containing its letters?
+    ///
+    /// <para>Two rules, because two writing systems answer "where does a word end" differently. A handle
+    /// with any non-ASCII character (CJK, the common case here) matches as a plain SUBSTRING: Chinese is
+    /// written without spaces, so there is no boundary to anchor to, and this is the same reason the
+    /// product's FTS uses the trigram tokenizer rather than <c>unicode61</c>.</para>
+    ///
+    /// <para>A purely ASCII handle instead needs a WORD BOUNDARY, because there substrings really do span
+    /// unrelated words — the handle <c>pairbond</c> sits inside <c>repairbonded</c>, and a short one like
+    /// <c>hr</c> inside <c>three</c>. Appending is bounded and cannot displace a better hit, so a false
+    /// positive here costs a slightly longer page rather than a wrong answer — but it still shows the
+    /// household a fact that has nothing to do with what they asked, and that is worth five lines to
+    /// avoid.</para></summary>
+    private static bool NamesHandle(string query, string handle)
+    {
+        var ascii = true;
+        foreach (var ch in handle) if (ch > 127) { ascii = false; break; }
+        if (!ascii) return query.Contains(handle, StringComparison.Ordinal);
+
+        var from = 0;
+        while (true)
+        {
+            var at = query.IndexOf(handle, from, StringComparison.Ordinal);
+            if (at < 0) return false;
+            // A letter or digit either side means the handle is part of a longer word, not the word itself.
+            var beforeOk = at == 0 || !char.IsLetterOrDigit(query[at - 1]);
+            var end = at + handle.Length;
+            var afterOk = end >= query.Length || !char.IsLetterOrDigit(query[end]);
+            if (beforeOk && afterOk) return true;
+            from = at + 1;
         }
     }
 
