@@ -476,8 +476,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   what a backend serves. An **ORIGIN** is *whose runtime it is* — `bundled` (in our process) · `app` (we
   downloaded and start it) · `household` (they run it, we only connect) — `RuntimeOrigin`, resolved PER
   INSTALL because for `claude-cli` the app provisions a copy AND a household may have their own, so only
-  `Locate()` knows which won — it is the last backend where that question is live, which is why `p51` can
-  no longer drive the `app` branch and says so instead of pretending. **That fourth word was missing and its absence cost the second
+  `Locate()` knows which won — it is the last backend where that question is live, which is why `p51` cannot
+  drive the `app` branch (its stub override outranks a planted file) and `p50` case F asserts it instead,
+  claudeless and against a real download. It was briefly recorded as an uncovered gap, which was one
+  assumption too many: the override does not make the branch unreachable, it just means the fixture has to
+  be one that never stubs the CLI. **That fourth word was missing and its absence cost the second
   design conversation**: the picker said only 本机 · Ollama, "your Ollama", while 资源 had been downloading
   and starting it since 2026-08-21 — so a provisioned runtime read as a manual prerequisite, to a household
   and then to us, and a false claim ("语义 is the only layer you cannot switch on without installing a
@@ -703,6 +706,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (Windows refuses to overwrite a loaded exe, and an update is exactly when one may be mid-chat) by
   renaming the old copy aside. Proof lives in `e2e-p50`, whose tampered-download denial is paired with
   the same bytes installing under the right checksum, and whose case A asserts the app boots ANYWAY.
+  **The login SPAWN is tested too, and the reason it briefly was not is worth keeping.** It was recorded as
+  untestable because succeeding opens an interactive console — true of `claude auth login`, which waits for
+  a human in a browser and never returns, and false of the thing a suite actually runs. Case G points
+  `GATHERLIGHT_CLAUDE_CMD` at a `.cmd` that appends its argv to a file and exits, then asserts `auth login`
+  reached it: the real rule is that a suite must not leave a window WAITING for somebody, not that no child
+  may ever have one. It needs its own stub rather than reusing `writeAuthStub` because `StartLogin` uses
+  ShellExecute — which takes a FILE, where every other spawn takes `node <script>` — and that difference is
+  the point of the test. Two vacuity guards ride along: the marker must also contain the probe's own `auth
+  status` (proving the file is that stub's log and not an artefact), and the remote refusal is asserted by
+  its MESSAGE, because `StartLogin`'s reentrancy guard returns the same 409 as a remote click.
 - **Auto-update is two-phase**: the server (`Platform/Hosting/Update`) checks the configured
   GitHub release + downloads/sha256-verifies into `{install}/.update/staged`; the C++ launcher
   overlays it on the next restart (a running exe can't replace itself) and is itself excluded

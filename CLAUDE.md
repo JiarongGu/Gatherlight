@@ -60,9 +60,11 @@ that genuinely costs nothing; the group that downloads is named after what it do
 
 A fourth axis crosses these: a backend's **ORIGIN** — `bundled` · `app` · `household`, i.e. *whose* runtime
 it is (`RuntimeOrigin`). `claude-cli` is the last backend where that question is live (we provision a copy
-and a household may have their own, so only `Locate()` knows which won); the rest are constants. `p51` can
-no longer drive the `app` branch and says so rather than pretending — every suite must point
-`GATHERLIGHT_CLAUDE_CMD` at the stub, which wins over a planted file by design.
+and a household may have their own, so only `Locate()` knows which won); the rest are constants. `p51` cannot
+drive the `app` branch — every suite must point `GATHERLIGHT_CLAUDE_CMD` at the stub, which wins over a
+planted file by design — so it is asserted in **`p50` case F**, which runs claudeless and downloads a real
+file to the provisioned path. It checks the origin's TEXT as well as its kind: `Locate()` finding NOTHING
+also answers `app`, phrased as an offer, so kind alone would pass for the wrong reason.
 
 **TWO BACKENDS WERE RETIRED, for different reasons, and neither is silently redirected.** `ollama`
 (2026-08-22): we half-managed it — detected, listed and depended on, but pulled and deleted from only some

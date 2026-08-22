@@ -475,7 +475,7 @@ try {
       o !== null && ['app', 'household'].includes(o.kind), JSON.stringify(o));
   }
 
-  // THE `app` ORIGIN BRANCH IS NO LONGER COVERED, and that is a stated gap rather than an oversight.
+  // THE `app` ORIGIN BRANCH IS COVERED IN p50, NOT HERE — and the reason is a property of this suite.
   //
   // It used to be exercised by planting an `ollama.exe` where the provisioner installs, which flipped that
   // backend's origin from `household` to `app`. Removing the Ollama backend removed the only case this
@@ -484,9 +484,10 @@ try {
   // per install, resolves GATHERLIGHT_CLAUDE_CMD first, which every suite must set to the stub. So a
   // planted file loses to the override by design and the assertion measured nothing.
   //
-  // What remains covered: the three constants above, and that claude-cli returns one of the two rather than
-  // null. What is not: that `Locate()` really prefers the provisioned copy over PATH. That was verified by
-  // hand on a real install (2026-08-21) and belongs in a fixture that does not stub the CLI.
+  // What remains covered HERE: the three constants above, and that claude-cli returns one of the two rather
+  // than null. The branch itself now has a home — p50 case F runs claudeless and downloads a real file to
+  // the provisioned path, so `Locate()` returns it with no override in the way, and that suite asserts
+  // origin=app. That is the "fixture that does not stub the CLI" this note used to ask for.
 
   // GGUF INVENTORY AND REMOVAL. A GGUF used to be the one kind of model whose row could not say what it
   // was for or whether a layer held it, because /api/manage/models reported only Ollama's inventory — so
