@@ -77,6 +77,78 @@ across NVIDIA, AMD and Intel. One artifact, no detection, 42× smaller than the 
 files are ordinary downloads, so they become sha256-pinned `ResourceKind.Files` entries — the pattern the
 built-in embedding model already uses. A pinned model is a better guarantee than a mutable tag.
 
+## MEASURED 2026-08-22, before committing to any of it
+
+Everything above was documentation. This section is a real `llama-server` b10549 `win-vulkan-x64`
+(34.9 MB, sha256 `8e7b0e6382a5bcbf57c79cf54b61483e9f7b26561d4413f28095cdaee256207b`) on the development
+machine, scored by `dev.mjs embed-bench` — the same 20-fact zh/en corpus, 10 paraphrase queries and
+symmetric prompting that produced every number in `EmbeddingCatalog`. The instrument did not change, so
+these rows compare directly with the ones already there.
+
+### Retrieval and latency
+
+| path | model | top-1 | top-3 | ms/query |
+|---|---|---|---|---|
+| **llama.cpp direct, Vulkan GPU** | embeddinggemma-300M-Q8_0 (334 MB) | **9/10** | 10/10 | **7** |
+| **llama.cpp via router, Vulkan GPU** | same | **9/10** | 10/10 | **23** |
+| Ollama (CUDA) | embeddinggemma:300m (622 MB) | 9/10 | 10/10 | 69 |
+| 内置 ONNX (CPU, in-process) | embeddinggemma q4 (222 MB) | 8/10 | 10/10 | 28 |
+| llama.cpp **without `-ngl`** (CPU) | embeddinggemma-300M-Q8_0 | 9/10 | 10/10 | 222 |
+
+`llama-server` matches Ollama's retrieval on a smaller quant, and beats it on latency by 3× even with
+the router's proxy hop in the path. It also beats the in-process ONNX arm on BOTH axes — 9/10 against
+8/10, 23 ms against 28 ms — which is the first evidence that the built-in arm is dominated rather than
+merely redundant.
+
+### 判断, on a real chat model
+
+`gemma-3-1b-it-Q4_K_M` (806 MB) through the router, judgement-shaped prompt, 8-token reply:
+
+| call | ms |
+|---|---|
+| first (lazy load) | **17 306** |
+| warm, 7 consecutive | 150 · 151 · 162 · 163 · 168 · 174 · 204 |
+
+Against the CLI judge's measured **8 900 ms per recall**, a warm local judge is ~55× faster. That is the
+argument for the local arm restated with a number, and it is larger than the token argument.
+
+### Seven things the measurement decided that reading could not
+
+1. **Ollama's GGUFs are NOT llama.cpp GGUFs.** Pointing `llama-server` at Ollama's own
+   `embeddinggemma:300m` blob — a real file with a `GGUF` magic — fails with
+   `done_getting_tensors: wrong number of tensors; expected 316, got 314`. So "we already have the
+   models downloaded" is false, and a migration re-downloads every model from HuggingFace. This was the
+   first thing tried and it is the single biggest hidden cost in the whole plan.
+2. **Vulkan is genuinely vendor-neutral here.** `--list-devices` enumerates `Vulkan0: NVIDIA GeForce
+   RTX 4080 Laptop GPU` and `Vulkan1: Intel(R) Arc(TM) Graphics` from the one 34.9 MB artifact. No
+   per-vendor build, no detection logic.
+3. **CPU fallback works, and now has a number** — the caveat this document raised as unverified.
+   Without GPU offload it still scores 9/10 at 222 ms/query. A GPU-less household gets correct recall,
+   slowly.
+4. **`llama-server` does NOT offload to the GPU by default, and says nothing about it.** The first run
+   here was 222 ms/query purely because `-ngl` was absent; adding `-ngl 99` made it 7 ms. A silent 30×
+   penalty with no warning in the log is exactly the class of failure this product keeps finding, and it
+   means `-ngl` is not optional configuration — it is part of the launch contract.
+5. **Router presets reach the children, verified from the child's own argv:**
+   `--embeddings --host 127.0.0.1 --port 12013 --alias embeddinggemma-300M-Q8_0 --model … --n-gpu-layers 99`.
+   Both models stay resident (3 processes: router + 2 children), and alternating chat → embed → chat
+   costs nothing after the first call of each.
+6. **The router's proxy hop costs ~16 ms/query.** Isolated by hitting the child's own ephemeral port
+   (7 ms) and the router (23 ms) with the same instrument against the same loaded child. Worth knowing,
+   not worth avoiding.
+7. **Models load LAZILY, on first request.** `--models-max` is a cap, not a preload: the router logs
+   `ensure_model: model … is not loaded, loading...` and the first judge call paid **17.3 s**. So the app
+   must warm both models at startup, or the first recall after every restart pays a multi-second stall —
+   the same shape as the CLI-spawn cost we are trying to escape, once per restart instead of per call.
+
+**A methodological note, because I nearly published a wrong number again.** The first router
+measurements were 188 and 145 ms/query, which I began to attribute to proxy overhead. They were cold —
+the child was still loading during the run, visible as a 12 s corpus embed. Warm and isolated the answer
+is 23 ms. That is the third time in two days that a cold-versus-warm confusion produced a
+plausible-and-wrong figure in this area (the others: the `/embed` endpoint's per-call model load, and
+"21× faster" comparing warm ONNX against cold Ollama). When a latency surprises you here, check what was
+loaded before believing it.
+
 ## What it costs — state these before starting
 
 1. **Router mode is ~8 months old.** Issue #20137 ("`--models-max` not enforced under concurrent requests,
@@ -86,13 +158,14 @@ built-in embedding model already uses. A pinned model is a better guarantee than
 2. **A process TREE, not a daemon.** We would own a coordinator and its children. Ollama is one process.
    `IOllamaRuntime`'s "start only when the port is silent" logic does not transfer unchanged.
 3. **The model-management layer is Ollama-tag shaped.** `EmbeddingCatalog` ids (`embeddinggemma:300m`),
-   `/api/manage/models` pull/remove, and `OllamaState` probing all assume Ollama. Migrating is real work,
-   and the measured numbers in `EmbeddingCatalog` were taken through *Ollama's* quantisation — a GGUF of
-   the same model is a different quantisation and must be re-measured (this is not hypothetical: the
-   built-in ONNX arm of the same model scored 8/10 where Ollama's scored 9/10).
-4. **Vulkan fallback is unverified.** llama.cpp builds include the CPU backend, so a machine with no
-   Vulkan driver should fall back — but this product's rule is *probe, don't pattern-match*, and that has
-   not been probed. It must be, before this ships.
+   `/api/manage/models` pull/remove, and `OllamaState` probing all assume Ollama. Migrating is real work
+   — and it is made worse by finding #1: Ollama's downloaded blobs cannot be reused, so every model is a
+   fresh download. The re-measurement worry turned out fine (Q8_0 scored 9/10, same as Ollama's f16), but
+   it had to be checked rather than assumed.
+4. **~~Vulkan fallback is unverified~~ — MEASURED, see above.** The CPU backend ships alongside Vulkan
+   (16 `ggml-cpu-*.dll` micro-arch variants in the archive) and scores 9/10 at 222 ms/query. What replaced
+   this concern is a worse one: `-ngl` is absent by default, so the CPU path is what you get unless the
+   launch line says otherwise.
 
 ## What happens to the two runtimes we already have
 
