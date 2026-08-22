@@ -17,7 +17,9 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Sources;
 /// otherwise. Instead, when a fact is written it asks for a few other ways to say the same thing and stores
 /// them beside the fact (<c>knowledge.aka</c>, indexed by the trigram FTS table). A later question phrased
 /// differently then matches a stored phrasing. That changes what is RETRIEVABLE, which is this layer's job
-/// and precisely what the judge cannot do — the judge only reorders what retrieval already found.</para>
+/// and precisely what the judge cannot do — the judge only ever acts on what retrieval already found
+/// (with <c>VerificationFilters</c> off it does not even reorder that: it marks which candidates answered
+/// and which are worth reinforcing, so its effect on ranking arrives later, not in this recall).</para>
 ///
 /// <para><b>The cost is at WRITE time, deliberately.</b> The same idea at query time — rewrite the question,
 /// then search — costs a CLI spawn on every recall, measured at ~9 s on the judge path, and on the very

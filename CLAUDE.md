@@ -34,7 +34,7 @@ and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,C
 
 **Memory recall is a set-up surface, not a fixed behaviour** (校准 · Cortex → 记忆检索). Three
 complementary layers: the always-on 公式 FORMULA floor (graph decay + rank fusion + FTS trigram), a
-判断 JUDGE that annotates every write and reorders every recall — its annotation's SUBJECT HANDLES are
+判断 JUDGE that annotates every write and judges every recall — its annotation's SUBJECT HANDLES are
 searchable too, so a query naming what a fact is *about* finds it even when the fact's own text never says
 that word — and 语义 SEMANTIC that changes what is
 RETRIEVABLE. Each layer is a ROW with a backend and a model, and **a backend serves a layer by EXISTING** —

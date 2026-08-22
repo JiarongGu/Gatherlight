@@ -250,9 +250,10 @@ public static class GatherlightApp
                 //     no setup. The floor the other two build on, and what remains when both are off.
                 //   · CLAUDE CLI (below) — tokens per write and per recall.
                 //   · LOCAL MODEL (further down) — disk and local compute, no tokens.
-                // Keeping them independent is deliberate: verification reorders what was retrieved while
-                // embeddings change what is retrievable at all, so they are complements, and a household
-                // must be able to drop the token cost without losing local semantics.
+                // Keeping them independent is deliberate: verification acts on what was retrieved (which
+                // of it answered, and therefore which of it is worth reinforcing) while embeddings change
+                // what is retrievable at all, so they are complements, and a household must be able to
+                // drop the token cost without losing local semantics.
                 //
                 // The model-backed memory steps (both fail-open — a judge failure leaves behaviour
                 // exactly as it was, which is also what keeps the stubbed-CLI e2e honest):
@@ -263,7 +264,13 @@ public static class GatherlightApp
                 // model judge which recalled candidates actually ANSWERED the query — on Lyntai's
                 // measured corpus the model-free ranking IS the miss rate (every missed answer was a
                 // candidate ranked below the cut), and a haiku judge roughly halves it. A verdict
-                // only ever reorders (VerificationFilters stays false); Model stays null so the
+                // does NOT reorder and does NOT filter (VerificationFilters stays false) — measured
+                // 2026-08-22, and this comment claimed the opposite until then. With that flag off a
+                // verdict does exactly two things: it sets `answered`, and it narrows which nodes get
+                // REINFORCED on recall. So its effect on ranking is CUMULATIVE — it shapes what wins
+                // next time — and a single-shot benchmark structurally cannot see it. On this
+                // household's 16-fact corpus one recall was byte-identical with the judge on and off
+                // (MRR 0.646 both ways) at 79 ms against 10,598; Model stays null so the
                 // "memory" consumer routing above decides, live-overridable.
                 ;
                 // Both are OPT-OUTABLE now, and until this they were not: adopted wholesale with Lyntai

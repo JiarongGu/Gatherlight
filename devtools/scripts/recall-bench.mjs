@@ -20,9 +20,16 @@
 //   · the question generation goes through the app's own configured CLI, so nothing new leaves the machine
 //     that a normal chat turn would not.
 //
-// WHAT IT CANNOT DO. 语义 is a startup registration, so this cannot A/B it in one run — it REPORTS which
-// 语义 backend was live and leaves the comparison to two runs. 判断 is an app_config switch read per call,
-// which is why that one can be measured properly here.
+// WHAT IT CANNOT DO. This cannot A/B 语义 in one run — it REPORTS which backend was live and leaves the
+// comparison to two runs. 判断 is an app_config switch read per call, which is why that one can be
+// measured properly here.
+//
+// The reason 语义 needs two runs is NOT "it is a startup registration" — that was stated for the whole
+// layer and is true of only half of it. An EMBEDDER arm is consumed at DI registration and does need a
+// restart; the Claude CLI rephrasing arm registers nothing (TakesEffectOnRestart:false) and is read per
+// write. What that arm needs instead is a REINDEX, because phrasings are written when a fact is written —
+// bind it over an existing corpus and every fact still has none, so a re-run would compare the same
+// material to itself and report, honestly and uselessly, no difference.
 //
 // Usage:
 //   node devtools/dev.mjs recall-bench                 # 20 facts, against a server on :5317
@@ -242,5 +249,13 @@ console.log('\nCaveats worth carrying with the numbers:');
 console.log(`  · ${probes.length} queries. Enough to see a direction, not to rank two close configurations.`);
 console.log('  · the questions are model-written, so they are as good at paraphrasing as the model that');
 console.log('    wrote them — a generator that echoes the fact makes recall look better than it is.');
-console.log('  · 语义 was ' + semanticLabel + ' throughout. It is a startup registration, so comparing it');
-console.log('    means running this again after binding a different backend and restarting.');
+// Two different answers, and stating one for both was wrong. An EMBEDDER arm is consumed at DI
+// registration, so binding it really does need a restart. The CLI rephrasing arm registers nothing and
+// reports TakesEffectOnRestart:false — it is read per write — so no restart is involved. What it does
+// need instead is a REINDEX, because phrasings are written when a fact is written: bind it and the
+// existing corpus still has none, so a re-run would measure the old facts and show no difference.
+console.log('  · 语义 was ' + semanticLabel + ' throughout, so these numbers say nothing about it.');
+console.log('    Comparing it means a second run, and HOW depends on which arm:');
+console.log('      · an embedder (llama.cpp / 内置): bind it, RESTART, reindex, re-run.');
+console.log('      · the Claude CLI rephrasing arm: no restart — but REINDEX before re-running, or the');
+console.log('        existing facts still carry no phrasings and the comparison measures nothing.');

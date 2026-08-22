@@ -131,7 +131,17 @@ public sealed class MemoryRecallController : ControllerBase
                     // LIVE: an app_config value read per call. The BINDING below is a startup registration,
                     // so the two kinds of change are reported differently rather than looking alike.
                     on = MemoryEnrichment.IsOn(_appConfig), live = true,
-                    what = "写入事实时标注主题,检索时判断哪些结果真正回答了问题(明显提升召回质量)。",
+                    // WHAT IT DOES, not what we hoped it does. This said "明显提升召回质量" — a promise of a
+                    // clear quality gain — until 2026-08-22, when recall-bench measured one recall on this
+                    // household's own facts with the judge on and off and got byte-identical results
+                    // (top-1 10/16, MRR 0.646 both ways) at 79 ms against 10,598. That is not a defect in
+                    // the judge: with VerificationFilters off it never reorders a recall by design. It sets
+                    // the "did anything actually answer this" signal, and it decides which facts count as
+                    // USED — which shapes what ranks well later. So the honest sentence describes a
+                    // cumulative effect and an immediate cost, and lets the household weigh them.
+                    what = "写入事实时标注主题(让讲同一件事的记录彼此关联);检索时判断哪些结果真正回答了问题。"
+                        + "这个判断不会改变本次检索的排序,而是决定哪些事实算「被用到了」,从而影响以后的排名 —— "
+                        + "所以它的好处是累积的,要用一段时间才看得出来,而每次检索的等待是当场就有的。",
                     // COST IS TWO THINGS, and only one of them was stated. The token cost was here from the
                     // start; the LATENCY was measured later (docs/memory-recall-resharpen.md §3c, on this
                     // household's own facts) at 8.9 s per recall against 37 ms for the 公式 floor — 240×,

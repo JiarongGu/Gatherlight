@@ -370,6 +370,20 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing", which is a lie told on their own data. `recall_facts` therefore reports `ranked:
   graph|fts`, because a graph answer and a fallback answer are otherwise indistinguishable. Proof lives
   in `e2e-p48`, whose restore assertion was confirmed to FAIL with the rebuild removed.
+- **判断 DOES NOT REORDER A RECALL, and five places said it did** (measured 2026-08-22, `dev.mjs
+  recall-bench` on this household's own 16 facts). With `VerificationFilters` off — which is how we register
+  it, deliberately, so a mistaken verdict costs a little learning rather than a lost answer — a verdict does
+  exactly two things: it sets `answered`, and it narrows which nodes are REINFORCED on recall. It never
+  touches the ranking it was shown. So the numbers came out byte-identical with the judge on and off (top-1
+  10/16, found 11/16, MRR 0.646 both ways, `--limit=3`) at **79 ms against 10,598 ms** per query — 134×, and
+  essentially all of it a CLI spawn. **The identical MRR is the tell**: "did not help" would have moved the
+  third decimal, while "did not run at all on the ordering" is what an exact tie across 16 queries means.
+  This is not a defect in the judge and the fix was not to `VerificationFilters` — its benefit is
+  CUMULATIVE (better reinforcement targeting shapes what ranks well next time), which a single-shot
+  benchmark structurally cannot see. The fix was to stop claiming otherwise: the panel promised 明显提升召回
+  质量 to a household who could not have observed it, and the honest sentence names a cumulative gain against
+  an immediate wait. **Anything measured here belongs in the panel**, because the household is the one paying
+  the 10 s.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
@@ -396,7 +410,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   cost. *Claude CLI* adds annotation per write and verification per recall — and costs a model call for
   each, measured at 4 for 3 writes + 1 recall. *Local model* adds real semantic vectors from a LOCAL
   Ollama: disk and local compute, no tokens, and nothing leaves the machine. They are independent rather
-  than tiered because they are complements — verification REORDERS what was retrieved, embeddings change
+  than tiered because they are complements — verification ACTS ON what was retrieved, embeddings change
   what is RETRIEVABLE — so a household must be able to drop the token cost without losing local semantics.
   The enrichment was adopted wholesale with Lyntai 3.0 and spent that per-operation cost for months with
   no way to decline it; the default stays ON (turning it off by default would silently degrade recall on
