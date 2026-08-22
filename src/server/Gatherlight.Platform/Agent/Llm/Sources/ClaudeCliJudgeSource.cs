@@ -35,6 +35,9 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
     /// <summary>Provisioned or the household's own. 资源 fetches the CLI too — with the live vendor version
     /// and checksum — so this arm is app-managed on an install that took that offer, and the household's on
     /// a machine that already had one. Installed is still not signed in; that is StatusAsync's job.</summary>
+    /// <summary>Cli — the account itself.</summary>
+    public string Group => MemoryGroups.Cli;
+
     public RuntimeOrigin Origin(MemorySourceContext ctx) =>
         RuntimeOriginFrom.Locate(ctx.Claude.Locate(),
             Hosting.Resources.Services.ResourceProvisioner.ProvisionedClaude(ctx.Settings.ResourcesPath),

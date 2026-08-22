@@ -1,17 +1,27 @@
 import { useEffect, useState } from 'react';
 import { PanelButton, PanelBadge } from '@/ui/atoms';
-import { ResourceRow, PullProgress, ModelPullField, type ModelPullState } from '@/ui/molecules';
+import { ResourceRow } from '@/ui/molecules';
 
 /**
  * 本机模型 · Local models — the provisioning half of 资源 · Resources.
  *
  * Models live here rather than in 记忆检索 because a model is a file with a size, a capability and a
- * delete button; it carries no opinion about recall. The chat/embedding split is Ollama's, enforced
- * upstream — not a product rule we chose and could relax. So downloading one is the same act as
- * downloading chromium or git, and it belongs on the same panel as the runtime that hosts it: that
- * split was visible to the household, who installed Ollama here and its models two panels away.
+ * delete button; it carries no opinion about recall. What stays in 记忆检索 is the only part that IS a
+ * recall decision — which model each layer uses.
  *
- * What stays in 记忆检索 is the only part that IS a recall decision — which model each layer uses.
+ * <b>ONE ROW SHAPE, whatever state a model is in.</b> This section used to render a model three different
+ * ways: a bordered `ResourceRow` card for the built-in one, a grid row inside a 已下载的模型 disclosure
+ * for a downloaded GGUF, and a table row for an undownloaded one. Three components, three left edges
+ * (measured: 395 · 410 · 423) and two different verbs in the action column — for one kind of object
+ * differing only by a boolean. Downloaded is a STATE of a model, not a separate species, so there is one
+ * table, `installed` is a field, and the sort puts what you have above what you could get.
+ *
+ * <b>This section shows only what Gatherlight manages.</b> It used to list the household's Ollama models
+ * with pull and delete buttons beside them, against a copy of Ollama under their own Programs directory —
+ * a program the app did not install. 资源 is the panel for what we provision; a delete button aimed at
+ * somebody else's tool is not a convenience, it is this panel claiming ownership it does not have. 本机
+ * models remain fully usable and are chosen in 记忆检索, which reads the Ollama probe directly and never
+ * went through here; they are managed with Ollama, which is what 本机 means.
  */
 
 const mb = (n: number) =>
@@ -19,48 +29,40 @@ const mb = (n: number) =>
 
 interface Measured { top1: number; top3: number; queries: number; msPerQuery: number }
 
-interface InstalledModel {
-  id: string; name: string; runtime: string; sizeBytes: number;
-  // Ollama's own answer, and NULL on a daemon too old to report the field. Tested for the WORD rather
-  // than for its absence: a guess printed as a fact is worse than a blank.
-  capabilities: string[] | null;
-  // Which layer is holding it, when one is — the reason its delete button is a label instead.
-  inUse: string | null;
-  measured: Measured | null;
-}
-
-interface OfferedModel {
+/** One model the app manages. `installed` is the only thing that differs between a row you can delete
+ *  and a row you can download — which is why there is one type here and not two. */
+interface Model {
   id: string; name: string; runtime: string; capability: string;
-  approxBytes: number; dimensions: number | null;
-  note: string; vintage: string | null; measured: Measured | null;
+  sizeBytes: number; installed: boolean;
+  /** Which layer is holding it, when one is — the reason its delete button is a label instead. */
+  inUse: string | null;
+  note: string; measured: Measured | null;
+  /** The resource to provision. Sent by the server rather than built from the id here — deriving it
+   *  client-side is what put models in the runtimes column twice already. */
+  resourceId: string;
 }
-
-// A download's shape belongs to the molecule that renders it (PullProgress) — imported as
-// ModelPullState rather than redeclared here, so the two cannot drift.
 
 interface Inventory {
+  /** OUR runtime — llama.cpp, which hosts the GGUF rows. Not Ollama; see the note at the top. */
   runtime: {
     id: string; baseUrl: string; installed: boolean; serving: boolean;
-    version: string | null; executable: string | null; gpuLikely: boolean; problem: string | null;
+    version: string | null; executable: string | null;
+    gpuLikely: boolean; devices: string[]; problem: string | null;
   };
-  models: InstalledModel[];
-  offers: OfferedModel[];
-  recommendation: { id: string; reason: string; caution: string | null };
+  models: Model[];
+  /** Null once every model has been installed — there is then nothing to advise. */
+  recommendation: { id: string; reason: string; caution: string | null } | null;
   measuredOn: string;
-  pulls: ModelPullState[];
 }
 
 const LAYER_NAMES: Record<string, string> = { judge: '判断', semantic: '语义' };
+const RUNTIME_NAMES: Record<string, string> = { 'llama-cpp': 'llama.cpp', builtin: '内置' };
 
-/** The built-in model as the resource list knows it — passed down rather than fetched, so 资源 and this
- *  section cannot disagree about whether it is installed. */
+/** A model resource as the resource list knows it — passed down rather than fetched, so 资源 and this
+ *  section cannot disagree about how far a download has got. */
 export interface BuiltInModelRow {
   id: string; name: string; neededFor: string; approxBytes: number;
   installed: boolean; state: string; percent: number; message: string | null;
-  /** Set when a RUNTIME also reports this model as inventory — see ResourceStatus.ModelId. Once such a
-   *  model is installed the table below shows it with its capability and its in-use layer, so the download
-   *  row retires rather than listing the same 334 MB twice. Null for the in-process ONNX model, which no
-   *  runtime enumerates and which therefore keeps its row for good. */
   modelId?: string | null;
 }
 
@@ -68,10 +70,8 @@ export function LocalModelsPanel(
   { toast, builtIn, provision }:
   {
     toast: (t: string, k?: 'ok' | 'err') => void;
-    // 内置 arrives from the resource list because it IS a provisioned resource — but it is a MODEL, and
-    // this is where models live. Leaving it up there made 资源 list models in two places, which is the
-    // exact split this whole section exists to end, and made this section's own lead text false: it says
-    // both recall layers take their models from here, and one of them could not.
+    /** Every model-category resource, read ONLY for live download progress: the table below is the list,
+     *  and a second list of the same models is the split this section exists to end. */
     builtIn: BuiltInModelRow[];
     provision: (id: string) => void;
   },
@@ -79,29 +79,15 @@ export function LocalModelsPanel(
   const [inv, setInv] = useState<Inventory | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  // A model resource retires from this list once it is installed AND a runtime reports it below —
-  // otherwise the same GGUF appears twice, as a download row and as an inventory row. Keyed on the
-  // server's own `modelId` link rather than on parsing ids, which is the mistake that put models in the
-  // runtimes column twice already.
-  //
-  // Declared AFTER the state it reads: a const initialiser runs immediately, so computing this above
-  // `useState` put `inv` in its temporal dead zone — a runtime ReferenceError that tsc does not flag,
-  // because the reference sits inside a closure.
-  const shownInTable = (r: BuiltInModelRow) =>
-    !!r.modelId && !!inv?.models.some((m) => m.id === r.modelId);
-  const builtInPending = builtIn.filter((r) => !r.installed || !shownInTable(r));
-
-  const [open, setOpen] = useState(false);
-
   const load = async (refresh = false) => {
     try { setInv(await (await fetch(`/api/manage/models${refresh ? '?refresh=true' : ''}`)).json()); }
     catch { /* keep last */ }
   };
   useEffect(() => { load(true); }, []);
 
-  // Poll ONLY while a download is running. Gate on a DERIVED boolean — keying the effect on `inv` would
-  // tear down and recreate the interval on every tick.
-  const downloading = inv?.pulls.some((p) => p.running) ?? false;
+  // Poll ONLY while a model is downloading. Gate on a DERIVED boolean — keying the effect on the array
+  // itself would tear down and recreate the interval on every tick.
+  const downloading = builtIn.some((r) => r.state === 'running');
   useEffect(() => {
     if (!downloading) return;
     const t = setInterval(() => { load(false); }, 1500);
@@ -125,213 +111,157 @@ export function LocalModelsPanel(
 
   if (!inv) return null;
   const rt = inv.runtime;
-  // A row's own download, matched on the id the row SENT rather than on Ollama's normalised name: a pull
-  // of `bge-m3` comes back as `bge-m3:latest`, and a row keyed on the normalised name never finds itself.
-  const pullOf = (id: string) => inv.pulls.find((p) => p.model === id) ?? null;
-  const totalBytes = inv.models.reduce((n, m) => n + m.sizeBytes, 0);
+  const held = inv.models.filter((m) => m.installed);
+  const onDisk = held.reduce((n, m) => n + m.sizeBytes, 0);
+  // A row's live download state, by resource id.
+  const resOf = (resourceId: string) => builtIn.find((r) => r.id === resourceId) ?? null;
+  // A column that reads "—" in EVERY row is noise: with only chat models left to fetch, 每次查询 and 实测
+  // were dashes across ~140px of a table whose whole job is helping you compare. Dropped when nothing
+  // fills them and back the moment something does. 检索质量 always stays and says 未实测, which is a
+  // statement about what nobody has measured rather than a missing value.
+  const anyMeasured = inv.models.some((m) => !!m.measured);
 
   return (
     <div className="res-models">
       <div className="mng-title">本机模型 · Local models</div>
       <div className="set-lead">
-        「记忆检索」的两层都从这里取模型。这里只负责下载与删除;哪一层用哪个,在
+        应用自己下载和管理的模型 —— 对应「记忆检索」里的<b>内置</b>那一组。哪一层用哪个,在
         「校准 · Cortex → 记忆检索」里选。
+        <div className="mem-fine">
+          用 Ollama 或自己跑的服务(「记忆检索」里的<b>本机</b>)?那些模型由你自己管理,不在这里列出 ——
+          直接在「记忆检索」里选就行。
+        </div>
       </div>
 
-      {/* 内置 FIRST, because it is the one that needs nothing else installed — and because a household
-          reading top-to-bottom should meet the no-setup option before the one with a daemon. It is a
-          resource row (the provisioner owns it), rendered HERE rather than in the list above: it is a
-          model, and this is where models live. */}
-      {builtInPending.length > 0 && (
-        <div className="res-group">
-          <div className="res-group-h">内置 —— 不需要另外安装任何东西</div>
-          {builtInPending.map((r) => (
-            <ResourceRow
-              key={r.id}
-              name={r.name}
-              badges={r.installed && (
-                <>
-                  <PanelBadge kind="state">已安装</PanelBadge>
-                  {/* What it can DO, the same word the Ollama disk list uses — so one glance down the
-                      section tells you which layer each model can serve, whoever provides it. */}
-                  <PanelBadge kind="state">嵌入</PanelBadge>
-                </>
-              )}
-              installed={r.installed}
-              failed={r.state === 'error'}
-              lines={<div className="res-need">{r.neededFor}</div>}
-              progress={r.state === 'running' ? { percent: r.percent, message: r.message } : null}
-              problem={r.state === 'error' ? `下载失败:${r.message}` : null}
-              approxBytes={r.approxBytes}
-              action={r.state === 'running' ? (
-                <span className="res-running">下载中…</span>
-              ) : (
-                <PanelButton variant={r.installed ? 'default' : 'primary'} onClick={() => provision(r.id)}>
-                  {r.installed ? '重新下载' : '下载'}
-                </PanelButton>
-              )}
-            />
-          ))}
-        </div>
-      )}
+      {/* The runtime, as a runtime — the same card the list above uses for git, node and the CLI, because
+          that is what it is. Only the llama.cpp rows below need it; the 内置 row runs in this process.
 
-      {/* EVERYTHING below belongs to Ollama — the runtime, what is on its disk, the comparison of what it
-          could pull, and the free-form pull field. Contained rather than merely labelled: a heading with
-          no boundary left the comparison table floating, where it read as applying to the whole section
-          including 内置 (which offers exactly one curated model and pulls nothing). */}
-      <div className="res-group">
-        <div className="res-group-h">Ollama —— 需要一个常驻服务,但模型可以随便换</div>
-
-        {/* The runtime line. It carries its own problem sentence because "no models" and "no daemon" have
-            completely different fixes, and a list that is simply empty says neither. No size: there is
-            nothing to download here — the runtime itself is a row in the list above. */}
-        <ResourceRow
-          name="Ollama 运行时"
-          badges={
-            <>
-              {rt.installed && <PanelBadge kind="state">已安装</PanelBadge>}
-              {rt.serving && <PanelBadge kind="state">运行中</PanelBadge>}
-              {rt.gpuLikely && <PanelBadge kind="state">GPU 可用</PanelBadge>}
-            </>
-          }
-          installed={rt.installed}
-          failed={!!rt.problem}
-          lines={
-            <div className="res-need">
-              {rt.installed
-                ? `${rt.serving ? `运行中 ${rt.version ?? ''}` : '已安装,未运行'} · ${rt.baseUrl}`
-                : '未安装 —— 在上面的资源列表里下载,或自行安装后重启应用。'}
-            </div>
-          }
-          problem={rt.problem}
-          action={rt.installed && !rt.serving && (
-            <PanelButton variant="primary" disabled={busy === 'start'}
-              onClick={() => post('/api/manage/models/start', undefined, 'start')}>启动</PanelButton>
-          )}
-        />
-
-      {/* ON DISK — what it costs, what it can do, and what is holding it. Without this, "free up space"
-          means leaving the app for a terminal, and a household that tried several models has no way to
-          see what the trying cost them. */}
-      {inv.models.length > 0 && (
-        <div className="mem-disk">
-          <PanelButton onClick={() => setOpen(!open)}>
-            {open ? '收起' : '已下载的模型'} · {inv.models.length} 个 · {mb(totalBytes)}
-          </PanelButton>
-          {open && (
-            <div className="mem-disk-list">
-              {inv.models.map((m) => (
-                <div className="mem-disk-row" key={m.id}>
-                  {/* Name and badges share ONE grid cell: the badges are conditional, and letting them be
-                      their own columns would reflow the list depending on which models are installed. */}
-                  <span className="mem-disk-id">
-                    <span className="mem-disk-name">{m.name}</span>
-                    {m.capabilities?.includes('embedding') && <PanelBadge kind="state">嵌入</PanelBadge>}
-                    {m.capabilities?.includes('completion') && <PanelBadge kind="state">对话</PanelBadge>}
-                    {/* WHICH runtime holds it. Two runtimes can hold the same weights under different
-                        names (embeddinggemma:300m on Ollama, embeddinggemma-300M-Q8_0 as a GGUF), so a row
-                        that does not say leaves the household unable to tell what they are deleting. */}
-                    <PanelBadge kind="note">{m.runtime === 'llama-cpp' ? 'llama.cpp' : m.runtime}</PanelBadge>
-                  </span>
-                  <span className="mem-disk-size">{mb(m.sizeBytes)}</span>
-                  {m.inUse
-                    ? <span className="res-running">{LAYER_NAMES[m.inUse] ?? m.inUse}使用中</span>
-                    : (
-                      <PanelButton disabled={busy === `rm:${m.id}`}
-                        onClick={() => post('/api/manage/models/remove',
-                          { model: m.id, runtime: m.runtime }, `rm:${m.id}`)}>
-                        删除
-                      </PanelButton>
-                    )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* MODEL CHOICE AS A COMPARISON, NOT A READING TASK. Everything that decides the choice is a
-          column, and the recommendation names its evidence instead of asserting itself. */}
-      {inv.offers.length > 0 && (
-        <>
-          <div className="mem-rec">
-            <b>推荐 {inv.recommendation.id}</b> —— {inv.recommendation.reason}
-            {inv.recommendation.caution && <div className="mem-fine">注意:{inv.recommendation.caution}</div>}
+          When it is NOT installed its own problem sentence points at the 资源 list, which is this very
+          panel, so that sentence is suppressed and replaced by one pointing UP at the row that installs
+          it. A message telling you to go where you already are is the self-referential dead end the git
+          provisioning step had to fix. */}
+      <ResourceRow
+        name="llama.cpp 运行时"
+        badges={
+          <>
+            {rt.installed && <PanelBadge kind="state">已安装</PanelBadge>}
+            {rt.serving && <PanelBadge kind="state">运行中</PanelBadge>}
+            {rt.gpuLikely && <PanelBadge kind="state">GPU 可用</PanelBadge>}
+          </>
+        }
+        installed={rt.installed}
+        failed={rt.installed && !!rt.problem}
+        lines={
+          <div className="res-need">
+            {rt.installed
+              ? `${rt.serving ? `运行中 ${rt.version ?? ''}` : '已安装,未运行'} · ${rt.baseUrl} · 下面标着 llama.cpp 的模型跑在它上面`
+              : '未安装 —— 在上面的资源列表里下载「本机模型运行时 · llama.cpp」(约 35 MB)。标着 内置 的模型不需要它。'}
           </div>
-          <div className="mem-tbl-wrap">
-            <table className="mem-tbl">
-              <thead>
-                <tr>
-                  <th>可下载的模型</th><th>用途</th><th>检索质量</th><th>每次查询</th>
-                  <th>体积</th><th>维度</th><th>发布</th><th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {inv.offers.map((m) => (
-                  <tr key={m.id}>
-                    <td>
-                      <div className="mem-m-name"><b>{m.name}</b>
-                        {m.id === inv.recommendation.id && <PanelBadge kind="state">推荐</PanelBadge>}
+        }
+        problem={rt.installed ? rt.problem : null}
+        action={rt.installed && !rt.serving && (
+          <PanelButton variant="primary" disabled={busy === 'start'}
+            onClick={() => post('/api/manage/models/llama/start', undefined, 'start')}>启动</PanelButton>
+        )}
+      />
+
+      {inv.recommendation && (
+        <div className="mem-rec">
+          <b>推荐 {inv.recommendation.id}</b> —— {inv.recommendation.reason}
+          {inv.recommendation.caution && <div className="mem-fine">注意:{inv.recommendation.caution}</div>}
+        </div>
+      )}
+
+      {/* ONE TABLE. Everything that decides the choice is a column, the recommendation names its evidence
+          instead of asserting itself, and what you already have sorts above what you could get — with the
+          same row, the same left edge and the same action column for both. */}
+      <div className="mem-tbl-wrap">
+        <table className="mem-tbl">
+          <thead>
+            <tr>
+              <th>模型</th><th>运行</th><th>用途</th><th>检索质量</th>
+              {anyMeasured && <th>每次查询</th>}
+              <th>体积</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {inv.models.map((m) => {
+              const res = resOf(m.resourceId);
+              const running = res?.state === 'running';
+              return (
+                <tr key={`${m.runtime}:${m.id}`} className={m.inUse ? 'on' : undefined}>
+                  <td>
+                    <div className="mem-m-name">
+                      <b>{m.name}</b>
+                      {m.installed && <PanelBadge kind="state">已安装</PanelBadge>}
+                      {m.id === inv.recommendation?.id && <PanelBadge kind="state">推荐</PanelBadge>}
+                    </div>
+                    {/* The id, because it is what 记忆检索 shows and what you would match against. */}
+                    <div className="mem-m-sub">{m.id}</div>
+                    {m.note && <div className="mem-m-note">{m.note}</div>}
+                    {/* Progress goes in the NAME cell, where there is room for a bar and a status line —
+                        the action cell is a narrow, right-aligned, nowrap column. */}
+                    {running && (
+                      <div className="mem-prog">
+                        <div className="res-prog"><span style={{ width: `${res!.percent}%` }} /></div>
+                        <div className="mem-m-sub">{res!.message ?? '下载中…'}</div>
                       </div>
-                      <div className="mem-m-note">{m.note}</div>
-                      {/* Progress goes in the NAME cell, where there is room for a bar and a status
-                          line — the action cell is a narrow, right-aligned, nowrap column. */}
-                      <PullProgress pull={pullOf(m.id)} />
+                    )}
+                    {res?.state === 'error' && <div className="mem-m-sub warn">下载失败:{res.message}</div>}
+                  </td>
+                  {/* WHICH of the two 内置 arms. Two runtimes can hold the same weights under different
+                      names (embeddinggemma-300m-onnx in-process, embeddinggemma-300M-Q8_0 as a GGUF), so a
+                      row that does not say leaves you unable to tell what you are deleting. */}
+                  <td className="num">{RUNTIME_NAMES[m.runtime] ?? m.runtime}</td>
+                  <td className="num">{m.capability === 'embedding' ? '嵌入 · 语义' : '对话 · 判断'}</td>
+                  {/* The measurement, as a number with its denominator. "9/10" invites the right question
+                      (out of how many? — the footnote answers) where "很好" does not. */}
+                  <td className={`num${m.measured && m.measured.top3 * 2 <= m.measured.queries ? ' bad' : ''}`}>
+                    {m.measured
+                      ? <><b>{m.measured.top3}/{m.measured.queries}</b><div className="mem-m-sub">首位 {m.measured.top1}</div></>
+                      : <span className="mem-m-sub">未实测</span>}
+                  </td>
+                  {anyMeasured && (
+                    <td className="num">
+                      {m.measured ? `${m.measured.msPerQuery} ms` : <span className="mem-m-sub">—</span>}
                     </td>
-                    <td className="num">{m.capability === 'embedding' ? '嵌入 · 语义' : '对话 · 判断'}</td>
-                    {/* The measurement, as a number with its denominator. "9/10" invites the right
-                        question (out of how many? — the footnote answers) where "很好" does not. */}
-                    <td className={`num${m.measured && m.measured.top3 * 2 <= m.measured.queries ? ' bad' : ''}`}>
-                      {m.measured
-                        ? <><b>{m.measured.top3}/{m.measured.queries}</b><div className="mem-m-sub">首位 {m.measured.top1}</div></>
-                        : <span className="mem-m-sub">未实测</span>}
-                    </td>
-                    <td className="num">{m.measured ? `${m.measured.msPerQuery} ms` : <span className="mem-m-sub">—</span>}</td>
-                    <td className="num">{mb(m.approxBytes)}</td>
-                    <td className="num">{m.dimensions || <span className="mem-m-sub">—</span>}</td>
-                    <td className={`num${m.vintage && m.vintage < '2025' ? ' mem-old' : ''}`}>
-                      {m.vintage ?? <span className="mem-m-sub">—</span>}
-                    </td>
-                    <td className="mem-act">
-                      {pullOf(m.id)?.running ? (
-                        <span className="res-running">下载中…</span>
+                  )}
+                  <td className="num">{mb(m.sizeBytes)}</td>
+                  <td className="mem-act">
+                    {running ? <span className="res-running">下载中…</span>
+                      : m.inUse ? <span className="res-running">{LAYER_NAMES[m.inUse] ?? m.inUse}使用中</span>
+                      : m.installed ? (
+                        <PanelButton disabled={busy === `rm:${m.id}`}
+                          onClick={() => post('/api/manage/models/remove',
+                            { model: m.id, runtime: m.runtime }, `rm:${m.id}`)}>
+                          删除
+                        </PanelButton>
                       ) : (
                         // Primary on the RECOMMENDED row only. Every row carrying a filled amber button
                         // made equal shouts out of a table whose whole job is helping you pick one.
-                        <PanelButton variant={m.id === inv.recommendation.id ? 'primary' : 'default'}
-                          disabled={busy === `pull:${m.id}`}
-                          onClick={() => post('/api/manage/models/pull', { model: m.id }, `pull:${m.id}`)}>
+                        <PanelButton variant={m.id === inv.recommendation?.id ? 'primary' : 'default'}
+                          onClick={() => provision(m.resourceId)}>
                           下载
                         </PanelButton>
                       )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mem-fine">
-            质量为实测:{inv.measuredOn}。样本不大 —— 它足以分辨「能用」与「不能用」,不足以在前几名之间排座次;
-            速度与体积则按你自己的机器换算。发布时间取自 Ollama 官方页面:表里所有表现差的都是两年前的模型,
-            但 BGE-M3 同样是两年前的却仍并列最好 —— 所以「越新越好」用来决定值不值得一试,真正拍板的还是实测。
-          </div>
-        </>
-      )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
 
-        {/* THE LIST IS NOT THE LIMIT. A catalog baked into a release cannot contain a model published after
-            it — which is exactly how this panel shipped without the two best models available at the time.
-            Anything Ollama can pull is usable the day it exists — which is the one thing 内置 cannot offer,
-            and the reason these two are separate groups rather than one list. */}
-        <ModelPullField
-          busy={busy}
-          pullOf={pullOf}
-          onPull={(id) => post('/api/manage/models/pull', { model: id }, 'pull:other')}
-          label="其他模型 · 直接填写 Ollama 模型名"
-          placeholder="例如 nomic-embed-text-v2-moe 或 qwen3:4b"
-          hint="下载后回到「校准 · Cortex → 记忆检索」,在对应的一层里选它 —— 嵌入模型给「语义」,对话模型给「判断」。"
-        />
+      <div className="mem-fine">
+        已装 {held.length} 个 · 占用 {mb(onDisk)}。检索质量为实测:{inv.measuredOn}。样本不大 —— 它足以分辨
+        「能用」与「不能用」,不足以在前几名之间排座次;速度与体积则按你自己的机器换算。「判断」那一层的质量还没有
+        按模型实测过,所以对话模型只列延迟与体积,不给质量分 —— 没量过就说没量过。
+      </div>
+      <div className="mem-fine">
+        这是一份<b>固定</b>的清单:这些模型由应用按仓库、提交和 sha256 下载,所以只能是我们钉过的那几个。
+        想用别的?自己跑起来,然后在「记忆检索」里用<b>本机</b>填地址连上去 —— 那正是它的用途。
       </div>
     </div>
   );
 }
-

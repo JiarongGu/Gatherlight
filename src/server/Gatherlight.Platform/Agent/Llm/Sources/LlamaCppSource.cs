@@ -40,7 +40,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public LlamaCppSource(string layer) => _layer = layer;
 
     public string Id => MemoryBackends.LlamaCpp;
-    public string Name => "llama.cpp(应用自带运行时)";
+    public string Name => "llama.cpp";
 
     public string Description =>
         "适合:大多数情况 —— 应用自己装好、自己启动,不用填地址,模型在「资源 · Resources」面板下载。"
@@ -81,6 +81,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// CLI arms there is no per-install question to answer — a household's own llama-server is reached
     /// through <see cref="OpenAiCompatibleSource"/> instead, which is exactly why this one never searches
     /// PATH.</summary>
+    /// <summary>Managed — we install, start and own it.</summary>
+    public string Group => MemoryGroups.Managed;
+
     public RuntimeOrigin Origin(MemorySourceContext ctx) =>
         new(MemoryRuntimeOrigins.App, "应用安装并运行 —— 不需要你自己装");
 
@@ -138,7 +141,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
 
         // Present and has a model: ready to BIND. Whether the process happens to be up right now is not the
         // household's problem — starting it is ours.
-        var state = await ctx.Llama.ProbeAsync(ct: ct);
+        // LiveAsync, not ProbeAsync: this needs installed/serving, and the full probe additionally runs
+        // llama-server twice for a build tag and a device list that this sentence never mentions.
+        var state = await ctx.Llama.LiveAsync(ct);
         return state.Serving || state.Installed
             ? SourceStatus.Ready
             : new SourceStatus(false, state.Problem ?? "llama.cpp 还没有就绪。");

@@ -373,7 +373,6 @@ public static class GatherlightApp
             // authenticated claude CLI) and never required: with no Ollama the feature is simply absent and
             // recall behaves as it did before it existed. Loopback-only by default — a remote embedder would
             // send every household fact off this machine on every write.
-            .AddSingleton<IOllamaRuntime, OllamaRuntime>()
             // The runtime this app PROVISIONS for local models, as of 2026-08-22. Registered beside
             // Ollama rather than replacing it: Ollama stays reachable as a HOUSEHOLD backend, and the
             // difference is now visible in the picker (see RuntimeOrigin).
@@ -383,7 +382,6 @@ public static class GatherlightApp
             .AddSingleton<Platform.Agent.Llm.Services.IReindexStatus, Platform.Agent.Llm.Services.ReindexStatus>()
             // Model downloads in flight. A singleton for the same reason: a multi-gigabyte pull outlives the
             // POST that started it, and the panel goes and looks rather than holding the request open.
-            .AddSingleton<Platform.Agent.Llm.Services.IModelPullStatus, Platform.Agent.Llm.Services.ModelPullStatus>()
             // One live agent run at a time across chat AND background jobs (single-writer data tree)
             .AddSingleton<IAgentGate, AgentGate>()
             .AddSingleton<IPromptHarness, PromptHarness>()

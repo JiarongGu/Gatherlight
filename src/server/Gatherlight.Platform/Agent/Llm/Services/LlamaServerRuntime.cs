@@ -30,7 +30,21 @@ public interface ILlamaServerRuntime
     /// <summary>The provisioned <c>llama-server.exe</c>, or null when 资源 has not fetched it.</summary>
     string? Locate();
 
+    /// <summary>The FULL state, including the build tag and the device list — both of which cost a child
+    /// process on a memo miss. For 资源, which displays them.</summary>
     Task<LlamaServerState> ProbeAsync(bool refresh = false, CancellationToken ct = default);
+
+    /// <summary>The state a BINDING decision needs: is it installed, is it answering, what models are on
+    /// disk. Never spawns anything.
+    ///
+    /// <para>Separate from <see cref="ProbeAsync"/> because the two questions have different costs and
+    /// different owners. 记忆检索 asks "can this layer run here", which is a file check and a loopback
+    /// connect; 资源 asks "what exactly did we install", which means running the binary. Measured
+    /// 2026-08-22: the recall panel was calling the second to answer the first and spending ~3.4 s of a
+    /// ~5 s load on a build number it never displayed. <c>Version</c> and <c>Devices</c> come back empty
+    /// here — an honest "not asked" rather than a stale value, so nothing can render one believing it was
+    /// checked.</para></summary>
+    Task<LlamaServerState> LiveAsync(CancellationToken ct = default);
 
     /// <summary>Make sure the router is answering, starting it only if the port is silent.</summary>
     Task<bool> EnsureServingAsync(CancellationToken ct = default);
@@ -96,6 +110,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     private readonly object _gate = new();
     private LlamaServerState? _cached;
     private DateTimeOffset _cachedAt;
+    // Memoized facts about the BINARY — see BinaryFactsAsync. Deliberately not cleared by Invalidate():
+    // that exists for the live state, and the file has not changed just because the server was restarted.
+    private (string Key, string? Version, IReadOnlyList<string> Devices)? _binaryFacts;
     private Process? _started;
 
     public LlamaServerRuntime(IPlatformContext platform, IHttpClientFactory http,
@@ -202,8 +219,52 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// loop, and a full probe shells out to <c>--version</c> and <c>--list-devices</c>. That was up to 80
     /// process spawns while waiting 20 s for a server to come up — wasteful, and slow enough to make the
     /// wait it was measuring longer than the thing it was waiting for.</para></summary>
+    /// <summary>Is anything accepting connections on our port, answered within a bounded time?
+    ///
+    /// <para>A raw TCP connect rather than a shorter <c>HttpClient</c> timeout, because the cost being
+    /// bounded here IS the connect, and <c>HttpClient.Timeout</c> covers the whole request — it cannot cut
+    /// a connect short. Doing it with a socket also keeps this out of the DI-configured client, so no other
+    /// caller's timeouts change.</para>
+    ///
+    /// <para><b>This must stay a real check rather than "did we start one?"</b> A forced kill orphans a
+    /// router that the next start ADOPTS instead of duplicating, so the answer cannot come from our own
+    /// child-process handle: after a hard kill we hold nothing and there is still a server on that
+    /// port.</para></summary>
+    private async Task<bool> CanConnectAsync(CancellationToken ct)
+    {
+        // 300 ms is generous for loopback by two orders of magnitude, and it is the whole cost of being
+        // wrong: a false negative just means the panel says "not started", which is a state it can
+        // already show and which starting it corrects.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromMilliseconds(300));
+        try
+        {
+            if (!Uri.TryCreate(BaseUrl, UriKind.Absolute, out var uri)) return false;
+            using var tcp = new System.Net.Sockets.TcpClient();
+            await tcp.ConnectAsync(uri.Host, uri.Port, timeout.Token);
+            return tcp.Connected;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;   // the CALLER gave up — distinct from our own gate firing, and not our answer to give
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task<(bool Serving, IReadOnlyList<string> Models)> IsServingAsync(CancellationToken ct)
     {
+        // A CLOSED loopback port is not free to ask about. Measured on 2026-08-22: a refused connect to
+        // 127.0.0.1 costs 2.016 s on this platform — the OS retransmits before it gives up, and
+        // HttpClient.Timeout does not bound the connect phase, so the 4 s below never came into it. That
+        // two seconds was most of what the 记忆检索 panel spent loading, every visit, for a household with
+        // no layer bound to llama.cpp — i.e. the default. A server we started is on loopback and answers in
+        // single-digit milliseconds, so anything slower than this gate is not a slow server, it is no
+        // server; failing the gate is the same answer as a refused GET, arrived at 10× sooner.
+        if (!await CanConnectAsync(ct)) return (false, Array.Empty<string>());
+
         try
         {
             using var http = _http.CreateClient();
@@ -231,10 +292,20 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             if (!refresh && _cached is not null && DateTimeOffset.UtcNow - _cachedAt < TimeSpan.FromSeconds(20))
                 return _cached;
         }
+        return await BuildAsync(withBinaryFacts: true, ct);
+    }
 
+    /// <summary>No cache of its own: everything it reads is already cheap, and a second clock over a
+    /// 300 ms answer would only add a window in which the panel shows a server that has since stopped.</summary>
+    public Task<LlamaServerState> LiveAsync(CancellationToken ct = default) =>
+        BuildAsync(withBinaryFacts: false, ct);
+
+    private async Task<LlamaServerState> BuildAsync(bool withBinaryFacts, CancellationToken ct)
+    {
         var exe = Locate();
-        var devices = exe is null ? Array.Empty<string>() : await DevicesAsync(exe, ct);
-        var version = exe is null ? null : await VersionAsync(exe, ct);
+        var (version, devices) = exe is null || !withBinaryFacts
+            ? (null, (IReadOnlyList<string>)Array.Empty<string>())
+            : await BinaryFactsAsync(exe, ct);
 
         var (serving, models) = await IsServingAsync(ct);
 
@@ -253,7 +324,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             devices.Any(d => d.StartsWith("Vulkan", StringComparison.OrdinalIgnoreCase)),
             problem);
 
-        lock (_gate) { _cached = state; _cachedAt = DateTimeOffset.UtcNow; }
+        // Only the FULL state is cached: a Live one has empty Version/Devices by design, and letting it
+        // populate this would serve 资源 a blank build number that looks like a failed install.
+        if (withBinaryFacts) lock (_gate) { _cached = state; _cachedAt = DateTimeOffset.UtcNow; }
         return state;
     }
 
@@ -363,6 +436,54 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             _log.LogWarning("warming {Model} failed: {Msg}", modelId, ex.Message);
             return false;
         }
+    }
+
+    /// <summary>The build tag and the device list, which are properties of the BINARY and not of the
+    /// running server — so they are memoized on the file's identity rather than on a clock.
+    ///
+    /// <para><b>Why this is not a micro-optimisation.</b> Both answers cost a child process, and this
+    /// binary is not a cheap one to start: measured on 2026-08-22, <c>--version</c> takes 1811 ms and
+    /// <c>--list-devices</c> 1592 ms, because llama-server loads its Vulkan backends before printing
+    /// anything. <see cref="ProbeAsync"/> ran both, so a cold 记忆检索 panel spent ~3.4 s of its ~5 s
+    /// waiting for two strings that had not changed since the file was downloaded. The 20-second cache did
+    /// not help: it is exactly the wrong granularity here, short enough that every real visit to the panel
+    /// missed it and long enough to look like it was doing something.</para>
+    ///
+    /// <para>Keyed on path + last-write-time + length, so the provisioner replacing the exe invalidates
+    /// this by itself — no <see cref="Invalidate"/> call to remember, and therefore none to forget. That
+    /// matters because a stale BUILD number is the one thing that would make an update look like it had not
+    /// applied.</para>
+    ///
+    /// <para>The two spawns also run concurrently now, so even a genuine miss costs one of them rather than
+    /// both. A duplicate miss under load does the work twice and stores the same answer twice, which is
+    /// why this takes no lock across the await — the alternative is holding one while spawning a process.</para></summary>
+    private async Task<(string? Version, IReadOnlyList<string> Devices)> BinaryFactsAsync(
+        string exe, CancellationToken ct)
+    {
+        string key;
+        try
+        {
+            var fi = new FileInfo(exe);
+            key = $"{exe}|{fi.LastWriteTimeUtc.Ticks}|{fi.Length}";
+        }
+        catch
+        {
+            // Cannot identify the file, so cannot safely reuse an answer about it. Ask.
+            key = Guid.NewGuid().ToString();
+        }
+
+        lock (_gate)
+        {
+            if (_binaryFacts is { } f && f.Key == key) return (f.Version, f.Devices);
+        }
+
+        var devicesTask = DevicesAsync(exe, ct);
+        var versionTask = VersionAsync(exe, ct);
+        var devices = await devicesTask;
+        var version = await versionTask;
+
+        lock (_gate) { _binaryFacts = (key, version, devices); }
+        return (version, devices);
     }
 
     private async Task<string?> VersionAsync(string exe, CancellationToken ct)

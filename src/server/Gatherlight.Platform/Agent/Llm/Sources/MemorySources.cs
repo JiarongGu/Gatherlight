@@ -29,11 +29,9 @@ public static class MemorySources
     public static readonly IReadOnlyList<IMemoryJudgeSource> Judge = new IMemoryJudgeSource[]
     {
         new ClaudeCliJudgeSource(),
-        new OllamaJudgeSource(),
         // ONE class in BOTH lists — the first backend to implement both layer interfaces, which is the
         // case this design was built for. Two instances, because the two layers may point at different
         // servers and each instance reads its own layer's address.
-        new OpenAiCompatibleSource(MemoryLayers.Judge),
         // The SECOND class in both lists, and the runtime the app provisions as of 2026-08-22. Same
         // protocol as the entry above, opposite ownership — see LlamaCppSource.
         new LlamaCppSource(MemoryLayers.Judge),
@@ -41,8 +39,10 @@ public static class MemorySources
 
     public static readonly IReadOnlyList<IMemorySemanticSource> Semantic = new IMemorySemanticSource[]
     {
-        new OllamaSemanticSource(),
-        new OpenAiCompatibleSource(MemoryLayers.Semantic),
+        // The CLI arm: no vectors, no local model, no GPU — it stores rephrasings at write time so a
+        // differently-worded question still matches. One class plus one line, which is what this catalog is
+        // shaped for, and it is what makes SemanticDeclined empty.
+        new ClaudeCliSemanticSource(),
         new LlamaCppSource(MemoryLayers.Semantic),
         // 内置 — the one backend with NO prerequisite outside the app. Its arrival is what turned a
         // declined entry into a bindable one, which is exactly the "one class plus one line" this catalog
@@ -54,25 +54,37 @@ public static class MemorySources
     /// <see cref="DeclinedBackend"/> for why an impossible option is shown rather than omitted.</summary>
     public static readonly IReadOnlyList<DeclinedBackend> JudgeDeclined = new[]
     {
-        new DeclinedBackend(MemoryBackends.BuiltIn, "内置(随应用附带)", BuiltInNotYet),
+        new DeclinedBackend(MemoryBackends.BuiltIn, "ONNX", BuiltInCannotJudge,
+            // Under 自带 alongside llama.cpp, which CAN judge — so the group is usable and this
+            // member stops being a dead choice, it is just the arm of it that does not serve here.
+            MemoryGroups.Managed),
     };
 
     /// <summary>Backends 语义 cannot run on, with the reason. <b>The built-in runtime is NO LONGER here</b> —
     /// it shipped for this layer, so it moved from this list into <see cref="Semantic"/>. It stays declined
     /// for 判断, which would need an in-process CHAT model (a much larger thing than an embedder).</summary>
-    public static readonly IReadOnlyList<DeclinedBackend> SemanticDeclined = new[]
-    {
-        new DeclinedBackend(MemoryBackends.ClaudeCli, "Claude CLI",
-            "Claude 不提供嵌入接口 —— 它生成文字,不生成向量,所以这一层没有它。"
-            + "但这不代表 Claude 帮不上按语义找东西:Lyntai 实测里,把「答对了却排在后面」捞上来的"
-            + "主要是「判断」那一层(漏检 0.54 → 0.19)—— 想让改写过的问法也能问到,先开「判断」更划算。"),
-    };
+    /// <summary>Backends 语义 cannot run on. EMPTY, and that is the point.
+    ///
+    /// <para>Claude used to be here with a paragraph explaining that it ships no embeddings endpoint, so the
+    /// layer "could not have it". True about embeddings and false as a conclusion: the layer was defined as
+    /// embeddings BY US, which made it unavailable on precisely the machines that cannot run a local model.
+    /// <see cref="ClaudeCliSemanticSource"/> serves the layer's actual job — a paraphrase finds the fact —
+    /// by storing rephrasings instead of vectors, so there is nothing left to decline and nothing left to
+    /// explain. A declined entry is the right shape for a real impossibility; it is the wrong shape for an
+    /// option nobody had built.</para></summary>
+    public static readonly IReadOnlyList<DeclinedBackend> SemanticDeclined = Array.Empty<DeclinedBackend>();
 
-    /// <summary>One sentence, shared: the two layers decline it for the same reason, and saying it twice in
-    /// two wordings would let them drift into looking like two different limitations.</summary>
-    private const string BuiltInNotYet =
-        "还没有随应用附带的模型运行时 —— 现在本机模型都跑在 Ollama 上,要单独装。"
-        + "这一项做好之后会自动出现在这里,不需要改任何设置。";
+    /// <summary>Why 内置 cannot judge. ONE layer now, not two — 内置 shipped for 语义, so this stopped being
+    /// a shared sentence and the name says which one it belongs to.
+    ///
+    /// <para>It was rewritten because the old wording had gone false in both halves: it said no app-provided
+    /// runtime existed and that a local model meant installing Ollama yourself. As of 2026-08-22 the app
+    /// provisions llama.cpp, which sits in THIS SAME group and can judge — so the honest answer is that the
+    /// group is fine and this one arm of it is not. Pointing at the sibling matters: a household reading a
+    /// flat "not available" under 自带 would conclude the whole heading was unfinished.</para></summary>
+    private const string BuiltInCannotJudge =
+        "「判断」需要一个能对话的模型在应用进程里跑,这个还没做 —— ONNX 这条只做「语义」的向量。"
+        + "但「内置」这一组照样能用:同一组里的 llama.cpp 由应用自己安装和启动,下载一个对话模型就能做判断。";
 
     public const string DefaultJudgeSource = "claude-cli";
 
@@ -80,11 +92,17 @@ public static class MemorySources
     /// recall, so it is the app's most frequent model call by a wide margin.</summary>
     public const string DefaultJudgeModel = "haiku";
 
+    /// <summary>Both lookups go through <see cref="MemoryBackends.Canonical"/>, so an install still
+    /// naming the removed <c>ollama</c> backend resolves to the generic one instead of falling through to a
+    /// default — which for 判断 would silently move the household to the CLI and for 语义 would turn the
+    /// layer off.</summary>
     public static IMemoryJudgeSource? FindJudge(string? id) =>
-        Judge.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+        Judge.FirstOrDefault(s =>
+            string.Equals(s.Id, MemoryBackends.Canonical(id), StringComparison.OrdinalIgnoreCase));
 
     public static IMemorySemanticSource? FindSemantic(string? id) =>
-        Semantic.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+        Semantic.FirstOrDefault(s =>
+            string.Equals(s.Id, MemoryBackends.Canonical(id), StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Which source 判断 is bound to, honouring the pre-2026-08-21 <c>JudgeTransport</c> key.
     ///

@@ -201,27 +201,17 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         : System.Runtime.InteropServices.RuntimeInformation.OSArchitecture
             == System.Runtime.InteropServices.Architecture.Arm64 ? "win32-arm64" : "win32-x64";
 
-    // Ollama — the LOCAL model runtime behind optional semantic recall. Only needed when the household
-    // turns "本地模型" on, and not at all when they already have Ollama (OllamaRuntime prefers a
-    // machine-wide install, which is also the one carrying their GPU runtimes).
+    // NO OLLAMA CONSTANTS. The download url, both checksums and the arch switch lived here to serve a
+    // `ResourceSpec` that no longer exists: the runtime this app provisions is llama.cpp, and Ollama is
+    // reached — if a household runs it — through `openai-compat` by address, which needs nothing from us.
+    // Left in place they were a pinned url and two hashes nobody read, i.e. the next person's evidence that
+    // we still install it.
     //
-    // sha256-PINNED, like MinGit and node rather than like the claude CLI, and for the reason this file
-    // already states: a GitHub release asset can be replaced by its publisher, so the checksum — not the
-    // URL — is what guarantees the bytes of an executable we are about to run. Staleness costs little
-    // here (Ollama's local API is stable, and an old runtime keeps working) whereas a stale claude CLI
-    // eventually stops talking to the API, which is why that one reads its version live instead.
-    // Bump version and BOTH checksums together, never one.
-    public const string OllamaVersion = "0.32.15";
-    private const string OllamaSha256X64 = "a1d11d46a944f9c7521f5e9a3a5db51cd3365401da627d96c204698fc6914ff9";
-    private const string OllamaSha256Arm64 = "51655f2700236bdff09c8cfb174b0855d354ec40775e66069d9b63f32a666937";
-    private static bool OllamaArm64 =>
+    // The arch switch moved to LlamaCppArm64 below, because llama.cpp needs the same question answered and
+    // it was borrowing Ollama's name for it.
+    private static bool LlamaCppArm64 =>
         System.Runtime.InteropServices.RuntimeInformation.OSArchitecture
             == System.Runtime.InteropServices.Architecture.Arm64;
-    private static string OllamaSha256 => OllamaArm64 ? OllamaSha256Arm64 : OllamaSha256X64;
-    private static string OllamaUrl =>
-        Override("GATHERLIGHT_OLLAMA_ZIP_URL")   // the pin still applies: a mirror serves the same file
-        ?? $"https://github.com/ollama/ollama/releases/download/v{OllamaVersion}/"
-           + (OllamaArm64 ? "ollama-windows-arm64.zip" : "ollama-windows-amd64.zip");
 
     /// <summary>llama.cpp's <c>llama-server</c> — the runtime this app PROVISIONS for local models, chosen
     /// over Ollama on 2026-08-22 after measuring both. Decision, alternatives and numbers:
@@ -243,8 +233,8 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     public const string LlamaCppVersion = "b10549";
     private const string LlamaCppSha256X64 = "8e7b0e6382a5bcbf57c79cf54b61483e9f7b26561d4413f28095cdaee256207b";
     private const string LlamaCppSha256Arm64 = "88453b6c9ca186885ac22b3505f5591381068d830ebc622a499af73a3607d8c2";
-    private static string LlamaCppSha256 => OllamaArm64 ? LlamaCppSha256Arm64 : LlamaCppSha256X64;
-    private static string LlamaCppAsset => OllamaArm64
+    private static string LlamaCppSha256 => LlamaCppArm64 ? LlamaCppSha256Arm64 : LlamaCppSha256X64;
+    private static string LlamaCppAsset => LlamaCppArm64
         ? $"llama-{LlamaCppVersion}-bin-win-cpu-arm64.zip"
         : $"llama-{LlamaCppVersion}-bin-win-vulkan-x64.zip";
     private static string LlamaCppUrl =>
@@ -363,23 +353,16 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             NeededFor: "「记忆检索」里本机模型的运行时:语义的嵌入模型与判断的本机对话模型都跑在它上面"
                 + " —— 自带 Vulkan,NVIDIA / AMD / Intel 通用;仅在启用本机模型时需要",
             Kind: ResourceKind.Zip, InstallDir: "llama-cpp", ReadyMarker: "llama-server.exe",
-            ApproxBytes: OllamaArm64 ? 12_339_627 : 34_936_498,
+            ApproxBytes: LlamaCppArm64 ? 12_339_627 : 34_936_498,
             Url: LlamaCppUrl,
             Sha256: LlamaCppSha256),
-        new ResourceSpec(
-            Id: "ollama", Name: $"Ollama 本地模型运行时({OllamaVersion})",
-            // Names BOTH consumers: one Ollama serves the 语义 embedder and the 判断 local judge — same
-            // daemon, same URL, different models on it. Saying "语义检索的运行时" made the judge's local
-            // arm look like a separate thing, which is the confusion the 记忆检索 panel just had to fix.
-            NeededFor: "「记忆检索」里本机模型的运行时:语义检索的嵌入模型、判断的本机对话模型都跑在它上面"
-                + " —— 仅在启用时需要;已自行安装 Ollama 则无需下载",
-            Kind: ResourceKind.Zip, InstallDir: "ollama", ReadyMarker: "ollama.exe",
-            // The official package, GPU runtimes included. A CPU-only subset was considered and rejected:
-            // it would install a SECOND, weaker Ollama beside a household's real one, and optimising the
-            // download size against whether the thing performs is the wrong trade.
-            ApproxBytes: OllamaArm64 ? 210_000_000 : 1_460_000_000,
-            Url: OllamaUrl,
-            Sha256: OllamaSha256),
+        // NO `ollama` SPEC, deliberately. The app used to offer a 1.46 GB Ollama download here, which
+        // contradicted the 2026-08-22 runtime decision (docs/self-managed-llm-runtime.md): the runtime we
+        // provision is llama.cpp, and Ollama is a HOUSEHOLD origin — detected and connected to, never
+        // installed by us. Leaving the spec in place meant 资源 could install a second, weaker copy beside
+        // a household's real one, and it is what made a provisioned runtime and a manual prerequisite
+        // indistinguishable in the first place. An install a household already made keeps working:
+        // OllamaRuntime.Locate() still finds a copy under {data}/state/resources/ollama.
         new ResourceSpec(
             Id: "claude", Name: "Claude CLI(智能体引擎)",
             NeededFor: "计划与执行对话的引擎 —— 没有它,聊天无法进行;下载后还需登录一次",
@@ -387,7 +370,8 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             ApproxBytes: 266_000_000,
             Url: ClaudeBaseUrl),
         new ResourceSpec(
-            Id: "embed-model", Name: "内置嵌入模型(EmbeddingGemma 300M)",
+            Id: Agent.Llm.Sources.BuiltInSemanticSource.ResourceId,
+            Name: "内置嵌入模型(EmbeddingGemma 300M)",
             // Says what it REPLACES, because that is the decision the household is making: this is the
             // alternative to installing Ollama at all for 语义, and it is the smaller of the two — 222 MB
             // here against Ollama's runtime plus a 622 MB model.

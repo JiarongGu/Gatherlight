@@ -34,40 +34,68 @@ and **CI/release** packaging. New server modules: `Platform/Ops/{Scoring,Trace,C
 
 **Memory recall is a set-up surface, not a fixed behaviour** (校准 · Cortex → 记忆检索). Three
 complementary layers: the always-on 公式 FORMULA floor (graph decay + rank fusion + FTS trigram), a
-判断 JUDGE that annotates every write and reorders every recall, and 语义 SEMANTIC vectors from a
-local model. Each layer is a ROW with a backend and a model, and **a backend serves a layer by
-EXISTING** — one interface per layer (`Agent/Llm/Sources`), a static catalog of implementations
-(`MemorySources`), and nothing that filters. Backends are `claude-cli` · `ollama` ·
-`openai-compat` (any local OpenAI-compatible service — llama-server, LM Studio, vLLM, Jan; the household
-supplies a loopback URL, which is enforced) · `builtin` (**语义 only**: EmbeddingGemma-300M as ONNX run
-in-process by ONNX Runtime, model provisioned as a sha256-pinned `Files` resource — the one backend with no
-prerequisite outside the app, and the smaller path at 222 MB against Ollama's 622 MB *plus* its runtime.
-Every choice in it was measured first, `docs/builtin-model-runner.md`; 判断 has no built-in arm because that
-needs an in-process chat model). A fourth axis crosses these: a backend's **ORIGIN** — `bundled` · `app` ·
-`household`, i.e. *whose* runtime it is (`RuntimeOrigin`), resolved per install and now stated in the picker.
-Its absence let a provisioned Ollama read as a manual prerequisite for months. **Every layer lists all of
-them**, and one it cannot use is shown with
-its reason rather than omitted: 语义 offers no Claude arm because no `ClaudeCliSemanticSource` exists (no
-embeddings endpoint), not because a predicate excludes it. `OpenAiCompatibleSource` implements BOTH layer
-interfaces — the case that design exists for — as two instances, one per layer, since the judge and the
-embedder may be different servers. The catalog is static
-rather than a DI collection because startup wires from it *while the container is being built*, and the
-console renders from the same list afterwards — one list, no second registry to drift. Adding a backend
-(the deferred ONNX embedder) is one class plus one line.
-**The runtime the app provisions is llama.cpp's `llama-server`, not Ollama** (2026-08-22, measured:
-35 MB against 1460, same 9/10 retrieval, 25 ms/query against 69 — `docs/self-managed-llm-runtime.md`).
-Ollama stays a *household* origin, connected to but never installed by us. `LlamaServerRuntime` runs it in
-router mode; `--n-gpu-layers` and warming are launch CONTRACT, not tuning, because without either it is
-silently 30× slower or stalls 17 s on the first recall. Models are not portable between the two — Ollama's
-own GGUF blobs fail to load in llama.cpp — so each is a fresh pinned download. Not yet wired into recall:
-记忆检索 still binds `claude-cli` / `ollama` / `builtin`.
-**Models are provisioning artifacts, so 资源 owns them** — `/api/manage/models` lists, pulls and deletes
-them beside chromium, git and the local runtimes, with the measured shortlist (`EmbeddingCatalog`,
-re-measurable with `dev.mjs embed-bench`) as decision support for downloading. 记忆检索 keeps only the
-recall decision: which model each layer uses. Rebuilding the index runs detached with progress, and the
-panel reports index COVERAGE rather than a history of runs. 语义 sits under a 高级 divider on Lyntai's
-measurement that 0% of recall misses are retrieval failures — **attributed as Lyntai's, on Lyntai's
-corpus**, until somebody measures this household's own.
+判断 JUDGE that annotates every write and reorders every recall, and 语义 SEMANTIC that changes what is
+RETRIEVABLE. Each layer is a ROW with a backend and a model, and **a backend serves a layer by EXISTING** —
+one interface per layer (`Agent/Llm/Sources`), a static catalog of implementations (`MemorySources`), and
+nothing that filters.
+
+**THREE answers to "where does this layer's model come from"** (`MemoryGroups`, keyed on what it costs the
+household), which is what the picker shows — and the third one is *no model*:
+
+| group | backends | what it costs |
+|---|---|---|
+| **Claude CLI** | `claude-cli` | an account, nothing local. 判断 annotates + verifies; 语义 REPHRASES — Claude has no embeddings endpoint, so it stores other wordings of each fact (`knowledge.aka`, in the trigram index) and a paraphrase matches one. Quota + a CLI spawn per call |
+| **llama.cpp** | `llama-cpp` · `builtin` | disk, no quota, no address. `llama-cpp` is the runtime we download and start (both layers); `builtin` is EmbeddingGemma-300M as ONNX in our own process (语义 only, 222 MB, measured first — `docs/builtin-model-runner.md`). Models come from 资源, sha256-pinned and ranked |
+| **内置** | *none* | nothing. Choosing it turns the layer off and leaves 公式 doing the work |
+
+**内置 holds no backends, and that is its meaning.** "Off" used to be a separate 停用 button, which made
+having a model look mandatory; it is a real answer to the question the row asks, so it sits in the row.
+`BackendGroups` therefore keeps a group with zero sources *only* for this id — the filter that drops empty
+headings would otherwise delete the option. And "off" means two different things per layer (判断 has a live
+switch, 语义 unbinds), so the action is a PROP on `BackendPicker`, which knows nothing about layers.
+
+**The name was a false claim until 2026-08-22.** 内置 labelled the llama.cpp group, whose own description
+said the app DOWNLOADS the runtime and the models — 35 MB plus 222 MB–2.5 GB. The word moved to the option
+that genuinely costs nothing; the group that downloads is named after what it downloads.
+
+A fourth axis crosses these: a backend's **ORIGIN** — `bundled` · `app` · `household`, i.e. *whose* runtime
+it is (`RuntimeOrigin`). `claude-cli` is the last backend where that question is live (we provision a copy
+and a household may have their own, so only `Locate()` knows which won); the rest are constants. `p51` can
+no longer drive the `app` branch and says so rather than pretending — every suite must point
+`GATHERLIGHT_CLAUDE_CMD` at the stub, which wins over a planted file by design.
+
+**TWO BACKENDS WERE RETIRED, for different reasons, and neither is silently redirected.** `ollama`
+(2026-08-22): we half-managed it — detected, listed and depended on, but pulled and deleted from only some
+screens — so 记忆检索 offered a daemon's models while nothing anywhere could add or remove one. Half-managing
+someone else's runtime has no consistent version. `openai-compat` (same day): it was the one path never
+tested end to end — every case in `p51` was a denial or an address round-trip against a port with nothing
+listening, and the suite said so itself; nothing ever listed models from a live endpoint, embedded through
+it, or answered a judgement through it. Shipping an option we cannot stand behind is worse than not offering
+it. `MemoryBackends.IsRetired` covers both: binding one returns 400 and the layer carries a sentence naming
+what it used to use and what to pick. A fallback would have moved 判断 to the CLI — spending quota nobody
+chose — and switched 语义 off, both invisibly.
+
+**"Worse" and "costlier" are reasons to DESCRIBE an option, not to remove it** — and *cannot* has to mean
+cannot. Broken twice here (语义's missing Claude arm; Ollama's deleted pull/delete), both times by reasoning
+that sounded like engineering judgement; `.claude/rules/dev-conventions.md` carries the rule and both
+failures. A declined entry is only for a real impossibility — `builtin` on 判断 needs an in-process chat
+model, which does not exist.
+
+**The runtime the app provisions is llama.cpp's `llama-server`** (2026-08-22, measured: 35 MB against
+Ollama's 1460, same 9/10 retrieval, 25 ms/query against 69 — `docs/self-managed-llm-runtime.md`).
+`LlamaServerRuntime` runs it in router mode; `--n-gpu-layers` and warming are launch CONTRACT, not tuning,
+because without either it is silently 30× slower or stalls 17 s on the first recall. Models are not portable
+from Ollama — its GGUF blobs fail to load in llama.cpp — so each is a fresh pinned download.
+
+**Models are provisioning artifacts, so 资源 owns them — the ones WE provision.** `/api/manage/models`
+returns ONE list where `installed` is a field, not two arrays: the pinned GGUFs of `GgufCatalog` plus the
+ONNX embedder, each with its measured ranking, all deletable, beside chromium, git and llama.cpp. It renders
+as one table with one row shape, because "downloaded" is a state of a model rather than a different kind of
+object — it was three components and three left edges before. 记忆检索 keeps only the recall decision: which
+model each layer uses. Rebuilding the index runs detached with progress, and the panel reports index
+COVERAGE rather than a history of runs. Lyntai's measurement that 0% of recall misses are retrieval failures
+is **attributed as Lyntai's, on Lyntai's corpus** — it is a statement about a stack that HAS an embedder, so
+it cannot also be the reason an install without one is offered nothing.
 
 On top of THAT, the **platform/container track** (S1–S6, `docs/ROADMAP.md`) turned the app into a
 host for one agent-driven site: `site.json` declares the site and drives the scope guard; capabilities

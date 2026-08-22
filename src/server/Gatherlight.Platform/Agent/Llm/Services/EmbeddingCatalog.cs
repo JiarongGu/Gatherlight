@@ -109,7 +109,7 @@ public static class EmbeddingCatalog
     };
 
     public static EmbeddingModelOption? Find(string? id) =>
-        id is null ? null : Options.FirstOrDefault(o => OllamaState.Matches(id, o.Id) || o.Id == id);
+        id is null ? null : Options.FirstOrDefault(o => ModelId.Matches(id, o.Id) || o.Id == id);
 
     /// <summary>Whether <paramref name="id"/> is SHAPED like an Ollama model reference. This replaces the
     /// old "must be in the catalog" gate, which blocked every model released after we cut a version — the

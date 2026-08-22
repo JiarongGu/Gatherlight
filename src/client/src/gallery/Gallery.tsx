@@ -159,9 +159,8 @@ export function Gallery() {
           onSelect={() => {}}
           options={[
             { value: 'a', label: 'Claude CLI' },
-            { value: 'b', label: '本机 · Ollama' },
-            { value: 'c', label: '其他本机服务' },
-            { value: 'd', label: '内置(随应用附带)', available: false },
+            { value: 'b', label: '本机' },
+            { value: 'c', label: '内置', available: false },
           ]}
         />
       </Item>

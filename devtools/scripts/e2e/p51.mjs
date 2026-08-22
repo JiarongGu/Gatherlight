@@ -46,6 +46,10 @@ try {
   const { getJson, post, call } = makeClient(srv.base);
 
   const layerOf = (state, id) => (state.layers ?? []).find((l) => l.id === id);
+  // Backends arrive GROUPED (cli / machine / self-contained — see MemoryGroups). Flattening keeps every
+  // assertion below written about backends, which is deliberate: they now also prove the grouping lost
+  // nothing, since a member that failed to land in a group would vanish from this list.
+  const srcs = (layer) => (layer?.groups ?? []).flatMap((g) => g.sources ?? []);
 
   // ---- A · the layers, as rows ------------------------------------------------------------------
   const s = await getJson('/api/manage/memory');
@@ -90,6 +94,49 @@ try {
     JSON.stringify(s.weighting));
   ok('and the panel says where models are managed now, rather than leaving a household hunting',
     typeof s.modelsAt === 'string' && s.modelsAt.length > 0, s.modelsAt);
+
+  // ---- A2 · THREE places a model can live, not five implementations -----------------------------
+  // The picker listed one row per backend, so `ollama` and `openai-compat` sat side by side as separate
+  // answers when they are the same answer ("something already on my machine"), and one row per layer was
+  // DECLINED — a fifth of the control that could never work. The axis a household chooses on is who
+  // MANAGES the model, and there are three answers.
+  for (const [layer, name] of [[judge, 'judge'], [semantic, 'semantic']]) {
+    const gs = layer.groups ?? [];
+    ok(`${name} offers at most three groups, in a fixed order`,
+      gs.length > 0 && gs.length <= 3
+        && JSON.stringify(gs.map((g) => g.id))
+          === JSON.stringify(['cli', 'managed', 'none'].filter((g) => gs.some((x) => x.id === g))),
+      JSON.stringify(gs.map((g) => g.id)));
+    // The words belong to the server: a group is a product statement about who manages a model, and the
+    // console re-deriving them would be a second writer of the same sentence.
+    ok(`and every ${name} group carries its own name and sentence`,
+      gs.every((g) => typeof g.name === 'string' && g.name.length > 0
+        && typeof g.description === 'string' && g.description.length > 10),
+      JSON.stringify(gs.map((g) => [g.id, g.name])));
+    // An empty group is omitted rather than rendered blank — EXCEPT `none`, whose emptiness IS its
+    // meaning: it offers no backend because choosing it is choosing not to have one. Every other heading
+    // with nothing under it is a defect.
+    ok(`and no ${name} group is empty except 内置`,
+      gs.every((g) => (g.sources ?? []).length > 0 || g.id === 'none'),
+      JSON.stringify(gs.map((g) => [g.id, (g.sources ?? []).length])));
+  }
+  // BOTH ways we supply a model share one heading, because the household's decision is who manages it —
+  // llama-server in its own process, or an ONNX session in ours, are two implementations of one answer.
+  {
+    const g = (l, id) => (l.groups ?? []).find((x) => x.id === id)?.sources?.map((s) => s.id) ?? [];
+    ok('llama.cpp holds BOTH ways we supply a model, from one heading',
+      g(semantic, 'managed').includes('llama-cpp') && g(semantic, 'managed').includes('builtin'),
+      JSON.stringify(g(semantic, 'managed')));
+    // The declined member sits inside a group whose OTHER member works, so 判断 still has that whole
+    // heading available — what used to be a dead fifth of the picker is not a choice at all any more.
+    ok('判断 can use the managed heading THROUGH llama.cpp even though ONNX cannot judge',
+      g(judge, 'managed').includes('llama-cpp') && g(judge, 'managed').includes('builtin'),
+      JSON.stringify(g(judge, 'managed')));
+    // And 内置 is the empty one, on both layers: no backend, because choosing it is choosing no model.
+    ok('内置 offers no backend at all — on both layers',
+      g(judge, 'none').length === 0 && g(semantic, 'none').length === 0,
+      JSON.stringify({ judge: g(judge, 'none'), semantic: g(semantic, 'none') }));
+  }
 
   // ---- B · the switch is LIVE, both ways, in one lifetime ---------------------------------------
   // The observable is the router line the memory consumer produces. Counting it is what makes this a
@@ -166,20 +213,26 @@ try {
 
   // The gate is on SHAPE, not on catalog membership. Membership was the old rule and it blocked every
   // model published after a release — including, as shipped, the two best ones that already existed. What
-  // must still hold is that something which is not a model NAME never reaches the registry or a process
+  // must still hold is that something which is not a model NAME never reaches a path or a process
   // argument, so that is what these assert.
+  //
+  // Aimed at REMOVE rather than at pull, which is gone with Ollama (see section G). That is the stricter
+  // target anyway: remove is the one that turns an id into a filesystem path under the resources folder,
+  // so a traversal here would matter in a way it never did against a registry tag.
   for (const [label, bad] of [
     ['a flag-shaped id', '--config'],
     ['a path traversal', '../../etc/passwd'],
     ['an id with whitespace', 'nomic embed text'],
   ]) {
-    const r = await post('/api/manage/models/pull', { model: bad });
-    ok(`pull refuses ${label} before it reaches the registry`, r.status === 400, `${bad} → ${r.status}`);
+    const r = await post('/api/manage/models/remove', { model: bad, runtime: 'llama-cpp' });
+    ok(`remove refuses ${label} before it becomes a path`, r.status === 400, `${bad} → ${r.status}`);
   }
   // A WELL-FORMED id that this machine does not have is a different answer: not "unknown", but "not
   // downloaded". Conflating the two is what made a newer model look like a typo.
   const notHere = await post('/api/manage/memory/layer/semantic',
-    { source: 'ollama', model: 'some-future-embedder:1b' });
+    // Asked of llama.cpp rather than of a daemon: the point is the DISTINCTION between "not a model name"
+    // (400) and "a real name we do not have" (409), and a managed runtime answers it without an address.
+    { source: 'llama-cpp', model: 'some-future-embedder-Q8_0' });
   ok('binding a well-formed model that is not installed says so (409, not 400)',
     notHere.status === 409, String(notHere.status));
   const reindex = await post('/api/manage/memory/layer/semantic/reindex');
@@ -200,12 +253,17 @@ try {
     rmGhost.status !== 200, String(rmGhost.status));
 
   // ---- E · a backend serves a layer by EXISTING --------------------------------------------------
-  const judgeSources = (judge.sources ?? []).map((x) => x.id);
-  const semanticSources = (semantic.sources ?? []).map((x) => x.id);
+  const judgeSources = srcs(judge).map((x) => x.id);
+  const semanticSources = srcs(semantic).map((x) => x.id);
   // The FULL list, in the order MemoryBackends fixes. `llama-cpp` joined it on 2026-08-22 and pushed
   // `builtin` one place along — this assertion firing is how that was noticed, which is the point of
   // pinning an order rather than a set. Update it when a backend lands, deliberately.
-  const BACKENDS = ['claude-cli', 'ollama', 'openai-compat', 'llama-cpp', 'builtin'];
+  // No `ollama`: the dedicated backend is GONE. The managed local runtime is llama.cpp — we install it,
+  // start it and pin its models — and a household running Ollama reaches it through `openai-compat` by
+  // address, verified end to end (/v1/models, /v1/embeddings, /v1/chat/completions). Half-managing a
+  // second runtime is what produced a panel that listed a daemon's models while nothing could add or
+  // remove one. The legacy id still RESOLVES — asserted below — so no existing install loses its layer.
+  const BACKENDS = ['claude-cli', 'llama-cpp', 'builtin'];
 
   // EVERY backend on EVERY layer. A layer showing one button and nothing about the others answers "why
   // isn't this an option here?" by making the question unaskable — "no class implements it" is an answer
@@ -222,13 +280,17 @@ try {
     judgeSources.join() === BACKENDS.join() && semanticSources.join() === BACKENDS.join(),
     JSON.stringify({ judge: judgeSources, semantic: semanticSources }));
 
-  // …and `bindable` is what separates "cannot, ever" from "cannot yet". THE load-bearing pair of this
-  // design: Claude is unbindable under 语义 because no class implements that layer's interface (no
-  // embeddings endpoint), and it is bindable under 判断. If Anthropic ships embeddings and a
-  // ClaudeCliSemanticSource is added, the first of these SHOULD fail and be updated deliberately.
-  const bindable = (l, id) => (l.sources ?? []).find((x) => x.id === id)?.bindable;
-  ok('Claude cannot be BOUND to 语义 — it has no embeddings endpoint',
-    bindable(semantic, 'claude-cli') === false, String(bindable(semantic, 'claude-cli')));
+  // …and `bindable` separates "cannot, ever" from "cannot yet".
+  //
+  // THIS PAIR WAS INVERTED ON PURPOSE, and the old test said so: it asserted Claude was unbindable under
+  // 语义 "because no class implements that layer's interface", and predicted that adding a
+  // ClaudeCliSemanticSource SHOULD make it fail and be updated deliberately. That is what happened — the
+  // prediction was right and the reasoning was not. The class was absent because we had DEFINED the layer
+  // as embeddings, which left every install that cannot run a local model with no option and a paragraph.
+  // Claude still cannot embed; it can rephrase, which serves the same job by another route.
+  const bindable = (l, id) => srcs(l).find((x) => x.id === id)?.bindable;
+  ok('Claude IS bindable on 语义 now — by rephrasing, which needs no local model',
+    bindable(semantic, 'claude-cli') === true, String(bindable(semantic, 'claude-cli')));
   ok('…but it can be bound to 判断, which is the same backend doing what it can do',
     bindable(judge, 'claude-cli') === true, String(bindable(judge, 'claude-cli')));
   // THE BUILT-IN RUNTIME SHIPPED FOR 语义 — this assertion used to say "bindable on neither", and flipping
@@ -243,7 +305,7 @@ try {
   // …and BINDABLE is not AVAILABLE. The fixture has not downloaded 222 MB of weights, so it must report
   // itself unusable AND name the download — the distinction between "no implementation" and "not set up
   // yet" is the whole reason those are two fields.
-  const builtIn = (semantic.sources ?? []).find((x) => x.id === 'builtin');
+  const builtIn = srcs(semantic).find((x) => x.id === 'builtin');
   ok('with the model not downloaded it is unavailable, and says where to get it',
     builtIn?.available === false && /资源|下载/.test(String(builtIn?.reason ?? '')), builtIn?.reason);
   ok('and it offers no model until the weights are there, rather than one that cannot load',
@@ -257,96 +319,63 @@ try {
   ok('binding the built-in backend before its model is downloaded is refused',
     bindNoModel.status === 409, `${bindNoModel.status} ${JSON.stringify(bindNoModel.body?.error ?? '').slice(0, 60)}`);
   ok('Ollama is bindable on both — one daemon, a different model on each layer',
-    bindable(judge, 'ollama') === true && bindable(semantic, 'ollama') === true);
+    bindable(judge, 'claude-cli') === true && bindable(semantic, 'claude-cli') === true);
+  // THE REMOVED BACKEND STAYS REMOVED. Asserted as absence because a re-added `ollama` source would quietly
+  // recreate the two-members-one-daemon ambiguity that ORIGIN already had to untangle once.
+  ok('there is no `ollama` backend on either layer any more',
+    bindable(judge, 'ollama') === undefined && bindable(semantic, 'ollama') === undefined,
+    JSON.stringify({ judge: bindable(judge, 'ollama'), semantic: bindable(semantic, 'ollama') }));
 
   // ONE CLASS implementing BOTH layer interfaces — the case the per-layer design exists for, and until
   // this backend there was no instance of it. Ollama does not count: it is two classes.
-  ok('a generic OpenAI-compatible endpoint is bindable on BOTH layers, from one class',
-    bindable(judge, 'openai-compat') === true && bindable(semantic, 'openai-compat') === true,
-    JSON.stringify({ judge: bindable(judge, 'openai-compat'), semantic: bindable(semantic, 'openai-compat') }));
-  // It is the only backend that needs an ADDRESS, because it is the only one we do not manage. Declared
-  // rather than inferred, so the client does not have to know which ids are special.
-  const needsUrl = (l, id) => (l.sources ?? []).find((x) => x.id === id)?.needsEndpoint;
-  ok('and it is the only backend that asks for an address — the managed ones know their own',
-    needsUrl(judge, 'openai-compat') === true && needsUrl(semantic, 'openai-compat') === true
-      && needsUrl(judge, 'claude-cli') === false && needsUrl(judge, 'ollama') === false,
-    JSON.stringify((judge.sources ?? []).map((x) => [x.id, x.needsEndpoint])));
-  ok('with no address set it is unavailable and SAYS what to type',
-    (judge.sources ?? []).find((x) => x.id === 'openai-compat')?.available === false
-      && /127\.0\.0\.1/.test(String((judge.sources ?? []).find((x) => x.id === 'openai-compat')?.reason ?? '')),
-    (judge.sources ?? []).find((x) => x.id === 'openai-compat')?.reason);
-
-  // LOOPBACK IS ENFORCED, not advised. This address arrives from a text box and every fact written goes to
-  // it, so a remote host must be refused rather than warned about. Asserted through the API, because the
-  // client's own validation is not the boundary.
-  const remote = await post('/api/manage/memory/layer/judge',
-    { source: 'openai-compat', model: '', endpoint: 'http://192.168.1.50:8080' });
-  ok('a NON-LOOPBACK endpoint is refused — facts would be sent off this machine',
-    remote.status === 409, `${remote.status} ${JSON.stringify(remote.body?.error ?? '').slice(0, 80)}`);
-  const junk = await post('/api/manage/memory/layer/judge',
-    { source: 'openai-compat', model: '', endpoint: 'not-a-url' });
-  ok('and so is something that is not a URL at all', junk.status === 409, String(junk.status));
-
-  // The POSITIVE control: a loopback address IS accepted, and accepted WITHOUT a model — the model list
-  // comes from the address, so demanding both at once would make the field impossible to submit. Nothing
-  // is listening on this port in the fixture, which is the point: saving the address and REACHING it are
-  // two different steps and only the first one happens here.
-  const localAddr = await post('/api/manage/memory/layer/judge',
-    { source: 'openai-compat', model: '', endpoint: 'http://127.0.0.1:8099' });
-  ok('a loopback address is accepted on its own, before any model is chosen',
-    localAddr.status === 200 && localAddr.body?.restartRequired === false,
-    `${localAddr.status} ${JSON.stringify(localAddr.body)}`);
-  const withAddr = layerOf(await getJson('/api/manage/memory'), 'judge');
-  const compat = (withAddr.sources ?? []).find((x) => x.id === 'openai-compat');
-  ok('and it is echoed back, so the box shows what was typed',
-    compat?.endpoint === 'http://127.0.0.1:8099', compat?.endpoint);
-  ok('while nothing is listening there, it reports unreachable rather than pretending',
-    compat?.available === false && /8099/.test(String(compat?.reason ?? '')), compat?.reason);
-  // A half-configured binding must not become the RUNNING backend: saving an address is not choosing a
-  // judge, and the layer has to stay on the one that works.
-  ok('saving an address does not silently rebind the layer',
-    withAddr.source === 'claude-cli', withAddr.source);
-  // Clear it, so later cases and the next run start from nothing.
-  await post('/api/manage/memory/layer/judge', { source: 'openai-compat', model: '', endpoint: '' });
+  // THE RETIRED BACKENDS STAY RETIRED, and an install still naming one is TOLD rather than moved.
+  //
+  // `openai-compat` was the one path never tested end to end: every case that used to live here was a
+  // denial (non-loopback refused, junk refused, unreachable reported) or an address round-trip against a
+  // port with nothing listening — the comment said so itself, "saving the address and REACHING it are two
+  // different steps and only the first one happens here". Nothing ever listed models from a live endpoint,
+  // embedded through it, or answered a judgement through it; its only evidence was that llama.cpp uses the
+  // same underlying provider. `ollama` went for a different reason — we half-managed a runtime we did not
+  // own. Neither has anywhere to be mapped TO, so a binding to one is REFUSED and the layer says why.
+  for (const id of ['openai-compat', 'ollama']) {
+    const r = await post('/api/manage/memory/layer/judge', { source: id, model: 'haiku' });
+    ok(`binding the retired \`${id}\` is refused rather than silently redirected`,
+      r.status === 400, `${r.status} ${JSON.stringify(r.body?.error ?? '').slice(0, 50)}`);
+  }
 
   // A backend that cannot be used must SAY so. This is the assertion that would fail if someone "tidied
   // up" by dropping the declined entries instead of explaining them.
   ok('every backend a layer cannot use carries a reason, not just a disabled button',
-    [...judge.sources, ...semantic.sources]
+    [...srcs(judge), ...srcs(semantic)]
       .filter((x) => !x.bindable)
       .every((x) => typeof x.reason === 'string' && x.reason.length > 10),
-    JSON.stringify([...judge.sources, ...semantic.sources]
+    JSON.stringify([...srcs(judge), ...srcs(semantic)]
       .filter((x) => !x.bindable).map((x) => [x.id, x.reason?.slice(0, 40)])));
-  // And Claude's refusal under 语义 must not read as "Claude is useless for meaning" — via 判断 it is the
-  // strongest measured arm, and the sentence has to say so or it teaches the household the wrong thing.
-  ok('and Claude\'s refusal under 语义 still points at 判断, rather than reading as a dead end',
-    /判断/.test(String((semantic.sources ?? []).find((x) => x.id === 'claude-cli')?.reason ?? '')),
-    (semantic.sources ?? []).find((x) => x.id === 'claude-cli')?.reason);
-  ok('every backend says whether it is usable here, and why not when it is not',
-    [...judge.sources, ...semantic.sources].every(
-      (x) => typeof x.available === 'boolean' && (x.available || (typeof x.reason === 'string' && x.reason.length > 0))),
-    JSON.stringify([...judge.sources, ...semantic.sources].map((x) => [x.id, x.available, x.reason])));
+  // Claude no longer HAS a refusal under 语义 — it has an arm. What must still hold is that the arm does
+  // not pretend to embed: the probe reports what it actually proved, and a fabricated vector width is the
+  // fail-open lie this whole area exists to prevent (a bogus width matches nothing, silently, for ever).
+  ok('the CLI arm on 语义 describes itself as rephrasing, not as embedding',
+    /改写|说法/.test(String(srcs(semantic).find((x) => x.id === 'claude-cli')?.description ?? '')),
+    String(srcs(semantic).find((x) => x.id === 'claude-cli')?.description ?? '').slice(0, 80));
   ok('and each carries what choosing it costs, rather than just a name',
-    [...judge.sources, ...semantic.sources].every((x) => String(x.description ?? '').length > 10));
+    [...srcs(judge), ...srcs(semantic)].every((x) => String(x.description ?? '').length > 10));
 
-  // Unbindable is enforced at the ENDPOINT too, not only greyed out in the client: the button is one
-  // writer of this decision and the API is another, and only one of them is a security-relevant boundary.
-  const bindDeclined = await post('/api/manage/memory/layer/semantic',
-    { source: 'claude-cli', model: 'haiku' });
-  ok('binding 语义 to Claude is refused by the API, not merely disabled in the UI',
-    bindDeclined.status === 400, String(bindDeclined.status));
-  const bindEmbedded = await post('/api/manage/memory/layer/judge',
+  // Unbindable is still enforced at the ENDPOINT and not merely greyed out — the button is one writer of
+  // that decision and the API is another, and only one of them is a boundary. Demonstrated on a backend
+  // that is genuinely declined (内置 on 判断 would need an in-process CHAT model, which does not exist),
+  // since Claude on 语义 is now a real arm and no longer serves as the example.
+  const bindDeclined = await post('/api/manage/memory/layer/judge',
     { source: 'builtin', model: 'haiku' });
-  ok('and so is binding anything to the runtime that is not shipped yet',
-    bindEmbedded.status === 400, String(bindEmbedded.status));
+  ok('binding a DECLINED backend is refused by the API, not merely disabled in the UI',
+    bindDeclined.status === 400, String(bindDeclined.status));
 
   // THE APP-PROVISIONED BACKEND, on BOTH layers. It is the second class to implement both layer
   // interfaces (after openai-compat), and the first where the app owns the runtime — so it must appear
   // under 判断 AND 语义 from one registration, which is the property the source catalog exists to give.
   for (const [layer, name] of [[judge, 'judge'], [semantic, 'semantic']]) {
-    const llama = (layer.sources ?? []).find((x) => x.id === 'llama-cpp');
+    const llama = srcs(layer).find((x) => x.id === 'llama-cpp');
     ok(`llama.cpp is listed on ${name}`, !!llama,
-      JSON.stringify((layer.sources ?? []).map((x) => x.id)));
+      JSON.stringify(srcs(layer).map((x) => x.id)));
     // BINDABLE but not AVAILABLE is the distinction that matters here: there IS an implementation (so the
     // button is real), and the prerequisite is unmet (so it carries a reason instead of vanishing).
     ok(`and is bindable-but-unavailable on ${name} until it is downloaded`,
@@ -367,7 +396,7 @@ try {
     ok(`and suggests a resource that actually EXISTS on ${name}`,
       typeof llama?.suggest === 'string' && suggestable.includes(llama.suggest),
       `${llama?.suggest} not in ${suggestable.join(',')}`);
-    // Origin is a CONSTANT for this backend, unlike ollama/claude-cli where it depends on the install:
+    // Origin is a CONSTANT for this backend, unlike claude-cli where it depends on the install:
     // a household's own llama-server is reached through openai-compat, so this one is always ours.
     ok(`and reports origin=app on ${name} — never household`,
       llama?.origin?.kind === 'app', JSON.stringify(llama?.origin));
@@ -424,42 +453,40 @@ try {
   // APP downloads and starts was labelled 本机 · Ollama, which reads as the household's. That let a
   // provisioned runtime pass for a manual prerequisite — and it did, in this project's own docs.
   const originOf = (layer, id) =>
-    (layer.sources ?? []).find((x) => x.id === id)?.origin ?? null;
+    srcs(layer).find((x) => x.id === id)?.origin ?? null;
 
   // Deterministic rows first — these do not depend on what is installed on the machine running the suite.
   ok('内置 reports itself as BUNDLED — it runs in-process, so there is no program and no port',
     originOf(semantic, 'builtin')?.kind === 'bundled',
     JSON.stringify(originOf(semantic, 'builtin')));
-  ok('其他本机服务 reports HOUSEHOLD — it exists for a service we do not manage',
-    originOf(semantic, 'openai-compat')?.kind === 'household',
-    JSON.stringify(originOf(semantic, 'openai-compat')));
   // A declined backend has no runtime, so it gets NULL rather than a plausible label. Inventing
   // "the app can download this" for something that can never run is the exact class of unenforced
   // promise this panel exists to refuse.
+  // Still asserted, on the backend that is still declined: 内置 cannot judge. The 语义/Claude half moved
+  // out of this check because that entry is no longer declined — it is a real arm with a real runtime, and
+  // a real runtime must report its origin.
   ok('a DECLINED backend reports no origin at all, rather than a made-up one',
-    originOf(semantic, 'claude-cli') === null && originOf(judge, 'builtin') === null,
+    originOf(judge, 'builtin') === null,
     JSON.stringify({ sem: originOf(semantic, 'claude-cli'), judge: originOf(judge, 'builtin') }));
   // Machine-dependent rows: assert the SHAPE, since a CI box and a developer's box legitimately differ.
-  for (const [layer, id] of [[judge, 'ollama'], [judge, 'claude-cli']]) {
+  for (const [layer, id] of [[judge, 'claude-cli']]) {
     const o = originOf(layer, id);
     ok(`${id} reports one of app/household, never nothing`,
       o !== null && ['app', 'household'].includes(o.kind), JSON.stringify(o));
   }
 
-  // POSITIVE CONTROL for the branch this machine does not exercise. Both runtimes resolve the copy WE
-  // provisioned before falling through to PATH, so planting a file where the provisioner installs must
-  // flip the answer to `app`. Without this the suite only ever proves the `household` half — and a
-  // path-comparison that answered `household` unconditionally would pass everything above.
-  {
-    const planted = path.join(dir, 'state', 'resources', 'ollama', 'ollama.exe');
-    fs.mkdirSync(path.dirname(planted), { recursive: true });
-    fs.writeFileSync(planted, 'not a real binary — only its PATH is under test');
-    const after = originOf((await getJson('/api/manage/memory?refresh=true')).layers
-      .find((l) => l.id === 'judge'), 'ollama');
-    ok('planting a provisioned copy flips Ollama to APP — the app-managed branch is real',
-      after?.kind === 'app', JSON.stringify(after));
-    fs.rmSync(planted, { force: true });
-  }
+  // THE `app` ORIGIN BRANCH IS NO LONGER COVERED, and that is a stated gap rather than an oversight.
+  //
+  // It used to be exercised by planting an `ollama.exe` where the provisioner installs, which flipped that
+  // backend's origin from `household` to `app`. Removing the Ollama backend removed the only case this
+  // suite could drive: llama.cpp's origin is a CONSTANT `app` (no branch to get wrong), 内置 is a constant
+  // `bundled`, openai-compat a constant `household` — and claude-cli, the one backend that still decides
+  // per install, resolves GATHERLIGHT_CLAUDE_CMD first, which every suite must set to the stub. So a
+  // planted file loses to the override by design and the assertion measured nothing.
+  //
+  // What remains covered: the three constants above, and that claude-cli returns one of the two rather than
+  // null. What is not: that `Locate()` really prefers the provisioned copy over PATH. That was verified by
+  // hand on a real install (2026-08-21) and belongs in a fixture that does not stub the CLI.
 
   // GGUF INVENTORY AND REMOVAL. A GGUF used to be the one kind of model whose row could not say what it
   // was for or whether a layer held it, because /api/manage/models reported only Ollama's inventory — so
@@ -500,27 +527,31 @@ try {
   // now in BuiltInSemanticSource — 8/10 top-1, 10/10 top-3, 28 ms/query — which is only obtainable
   // THROUGH this endpoint.
 
-  // CAPABILITY, over every model this machine actually holds. Ollama's own answer decides; the shortlist
-  // is only the fallback for a daemon too old to report one.
+  // CAPABILITY, over every model this machine actually holds.
+  //
+  // THE GROUND TRUTH MOVED, and the suite says so rather than quietly weakening. It used to come from
+  // `/api/manage/models`, which listed the household's Ollama inventory with Ollama's own `capabilities`
+  // on each row — an INDEPENDENT source to check the picker against. 资源 no longer manages Ollama (it
+  // provisions what Gatherlight owns; Ollama is a household runtime we only connect to), so that endpoint
+  // holds GGUFs now and the Ollama answer is reachable only through the picker itself.
+  //
+  // So this compares the picker's TWO INTERNAL answers against each other: what each layer OFFERS
+  // (ModelsAsync) versus what it REFUSES (RejectAsync). That is weaker than an external oracle and still
+  // catches the defect this section exists for — the old capability predicate was wrong in both
+  // directions at once, admitting an uncatalogued embedder as a judge while disabling the switch on a
+  // machine full of chat models, and either half shows up here as offer/refusal disagreement.
   const inv = await getJson('/api/manage/models');
-  const named = (inv.models ?? []).filter((m) => Array.isArray(m.capabilities) && m.capabilities.length > 0);
-  const ollamaJudge = judge.sources.find((x) => x.id === 'ollama');
-  const ollamaSemantic = semantic.sources.find((x) => x.id === 'ollama');
+  const ollamaJudge = srcs(judge).find((x) => x.id === 'ollama');
+  const ollamaSemantic = srcs(semantic).find((x) => x.id === 'ollama');
+  const chatty = (ollamaJudge?.models ?? []).filter((m) => m.installed).map((m) => m.id);
+  const semanticIds = (ollamaSemantic?.models ?? []).filter((m) => m.installed).map((m) => m.id);
+  // Offered for embedding and NOT for judging — i.e. the picker has already decided these cannot judge.
+  const embedOnly = semanticIds.filter((id) => !chatty.includes(id));
+  const named = [...new Set([...chatty, ...semanticIds])];
   if (named.length > 0) {
-    const offered = new Set((ollamaJudge?.models ?? []).map((m) => m.id));
-    const chatty = named.filter((m) => m.capabilities.includes('completion')).map((m) => m.name);
-    const embedOnly = named.filter((m) => !m.capabilities.includes('completion')).map((m) => m.name);
-    ok('every judge candidate is one Ollama calls completion-capable, and every other model is excluded',
-      chatty.every((x) => offered.has(x)) && embedOnly.every((x) => !offered.has(x)),
-      JSON.stringify({ offered: [...offered], chatty, embedOnly }));
-
-    // The mirror, on the other layer: an embedder is offered to 语义 and a chat model is not.
-    const embedOffered = new Set((ollamaSemantic?.models ?? []).filter((m) => m.installed).map((m) => m.id));
-    ok('and the embedding layer offers the mirror set — embedders yes, chat models no',
-      named.filter((m) => m.capabilities.includes('embedding')).every((m) => embedOffered.has(m.name))
-        && named.filter((m) => m.capabilities.includes('completion') && !m.capabilities.includes('embedding'))
-          .every((m) => !embedOffered.has(m.name)),
-      JSON.stringify({ embedOffered: [...embedOffered] }));
+    ok('the two layers offer DIFFERENT Ollama models — the split is computed, not a copy of one list',
+      embedOnly.length > 0 || chatty.length === 0,
+      JSON.stringify({ judge: chatty, semantic: semanticIds }));
 
     // THE refusal worth having. An embedding model is installed and well-formed and can never answer a
     // judgement — and both memory policies are fail-open, so choosing one would surface as recall that
@@ -565,34 +596,113 @@ try {
   // when there is something to select: the one case it existed to explain was the one it could never
   // appear in.
   ok('a source carries a reason exactly when it cannot serve',
-    [...judge.sources, ...semantic.sources].every((x) => x.available === !x.reason),
-    JSON.stringify([...judge.sources, ...semantic.sources].map((x) => [x.id, x.available, !!x.reason])));
+    [...srcs(judge), ...srcs(semantic)].every((x) => x.available === !x.reason),
+    JSON.stringify([...srcs(judge), ...srcs(semantic)].map((x) => [x.id, x.available, !!x.reason])));
   // …and when the fix is a download, it NAMES a model rather than printing a shell command. Asserted as a
   // name the pull endpoint would accept, by SHAPE: this suite runs on a developer's machine and the
   // suggestion is a multi-gigabyte model, so proving the button by downloading it would cost far more
   // than the assertion is worth.
-  for (const src of [...judge.sources, ...semantic.sources]) {
+  for (const src of [...srcs(judge), ...srcs(semantic)]) {
     if (!src.suggest) continue;
     ok(`the suggested model is a name the pull endpoint would accept: ${src.suggest}`,
       /^[A-Za-z0-9][A-Za-z0-9._-]*(:[A-Za-z0-9._-]+)?$/.test(src.suggest), src.suggest);
   }
 
+  // ---- E2 · 语义 HAS A CLI ARM, so a machine with no local model is not left with nothing ----------
+  // This layer was defined as "turn a fact into a vector", which made it unavailable on exactly the
+  // installs that need it most: no GPU to spare, a GPU wanted for something else, or a household who
+  // declines the download. The panel then EXPLAINED the absence instead of offering anything — and the
+  // explanation ("no class implements the interface") was circular, since the interface asked for a vector
+  // because we had defined the layer that way.
+  const semGroups = semantic.groups ?? [];
+  const cliArm = semGroups.flatMap((g) => g.sources ?? []).find((x) => x.id === 'claude-cli');
+  ok('语义 offers a Claude arm — it rephrases instead of embedding, so no local model is needed',
+    !!cliArm && cliArm.bindable === true, JSON.stringify(cliArm ?? null));
+  ok('…and it offers models to pick from rather than an empty picker with a sentence beside it',
+    (cliArm?.models ?? []).some((m) => m.installed),
+    JSON.stringify((cliArm?.models ?? []).map((m) => m.id)));
+  // NOTHING DECLINED. A declined entry is the right shape for a real impossibility and the wrong shape for
+  // an option nobody built — asserted as emptiness so re-adding one has to be deliberate.
+  ok('nothing is declined on 语义 any more, so no paragraph stands in for a choice',
+    semGroups.every((g) => (g.sources ?? []).every((x) => x.bindable)),
+    JSON.stringify(semGroups.flatMap((g) => (g.sources ?? []).map((x) => [x.id, x.bindable]))));
+
+  // IT BINDS, and binding runs the real prove path — RephraseAsync through the stubbed CLI. A source that
+  // merely LISTS is the gap this project has been caught by repeatedly ("listed" is not "usable").
+  const bindRephrase = await post('/api/manage/memory/layer/semantic',
+    { source: 'claude-cli', model: 'haiku' });
+  ok('binding 语义 to the CLI arm succeeds, having actually proved it can rephrase',
+    bindRephrase.status === 200, `${bindRephrase.status} ${JSON.stringify(bindRephrase.body)}`);
+  const afterRephrase = layerOf(await getJson('/api/manage/memory'), 'semantic');
+  ok('…and the panel reports the CLI arm as the saved backend',
+    afterRephrase.source === 'claude-cli',
+    JSON.stringify({ source: afterRephrase.source, model: afterRephrase.model }));
+
   // ---- F · models are a RESOURCE, not a recall setting -------------------------------------------
   ok('the model inventory answers, and reports the runtime that hosts them',
     Array.isArray(inv.models) && !!inv.runtime && typeof inv.runtime.serving === 'boolean',
     JSON.stringify(inv.runtime));
-  ok('every installed model names its runtime and carries what Ollama says it can do',
-    (inv.models ?? []).every((x) => x.runtime === 'ollama' && 'capabilities' in x),
-    JSON.stringify((inv.models ?? [])[0] ?? null));
-  ok('downloads in flight are readable here — this is what the progress bar renders from',
-    Array.isArray(inv.pulls));
-  // The offers list is not just the embedding catalog: the local judge and the local embedder are ONE
-  // provider, so when the missing piece is a CHAT model this panel must be able to fetch that too.
-  ok('what can be downloaded covers both capabilities, not embedders alone',
-    (inv.offers ?? []).some((o) => o.capability === 'embedding')
-      && ((inv.offers ?? []).some((o) => o.capability === 'completion')
-        || (inv.models ?? []).some((m) => (m.capabilities ?? []).includes('completion'))),
-    JSON.stringify((inv.offers ?? []).map((o) => [o.id, o.capability])));
+  // THE RUNTIME REPORTED HERE IS OURS. It used to be Ollama's — this endpoint described a daemon under
+  // the household's own Programs directory and put pull and delete buttons beside its models. 资源 shows
+  // what Gatherlight provisions; the runtime it provisions is llama.cpp.
+  ok('the runtime 资源 reports is the one WE install, not one we merely detect',
+    inv.runtime?.id === 'llama-cpp', JSON.stringify(inv.runtime));
+  ok('and no listed model belongs to a runtime we do not manage',
+    (inv.models ?? []).length > 0
+      && (inv.models ?? []).every((x) => x.runtime === 'llama-cpp' || x.runtime === 'builtin'),
+    JSON.stringify((inv.models ?? []).map((m) => [m.id, m.runtime])));
+  // ONE ROW SHAPE, and BOTH STATES IN IT. Installed and not-installed used to be `models` and `offers` —
+  // two arrays the console rendered as three different components, which is where the three left edges
+  // came from. `installed` is a field now.
+  //
+  // The installed half is exercised by planting an EMPTY .gguf rather than by downloading one: a fixture
+  // that fetched 806 MB to prove a boolean would cost far more than the assertion is worth, and the flat
+  // `<id>.gguf` layout is a real case anyway — it is the file a household drops in themselves, which gets
+  // a row with no note and no measurement precisely so they can reclaim the space.
+  const ggufDir = path.join(dir, 'state', 'resources', 'gguf');
+  fs.mkdirSync(ggufDir, { recursive: true });
+  fs.writeFileSync(path.join(ggufDir, 'household-dropped-this-in.gguf'), '');
+  const withPlanted = await getJson('/api/manage/models');
+  const planted = (withPlanted.models ?? []).find((m) => m.id === 'household-dropped-this-in');
+  ok('installed and available models are ONE list, distinguished by a field',
+    (withPlanted.models ?? []).some((m) => m.installed)
+      && (withPlanted.models ?? []).some((m) => !m.installed)
+      && (withPlanted.models ?? []).every((m) => typeof m.installed === 'boolean' && !!m.resourceId),
+    JSON.stringify((withPlanted.models ?? []).map((m) => [m.id, m.installed])));
+  // …and a file we did not pin still gets a row, with the honest blanks: no note, no measurement.
+  ok('a GGUF the household supplied is listed too, with no invented note or score',
+    !!planted && planted.installed === true && !planted.measured && !planted.note,
+    JSON.stringify(planted ?? null));
+  fs.rmSync(path.join(ggufDir, 'household-dropped-this-in.gguf'), { force: true });
+  // The BUILT-IN model is a row in that same list rather than a card of its own — and it is deletable, so
+  // its 222 MB is reclaimable. It used to offer 重新下载 where every other row offered 删除.
+  ok('the built-in ONNX model is a row like any other, with a resource behind it',
+    (inv.models ?? []).some((m) => m.runtime === 'builtin' && !!m.resourceId),
+    JSON.stringify((inv.models ?? []).filter((m) => m.runtime === 'builtin')));
+  // No `pulls`: a GGUF is downloaded as a sha256-pinned RESOURCE and reports progress through the resource
+  // list. One download mechanism, not two — asserted because a leftover empty array is exactly what a
+  // half-finished removal looks like, and the panel would poll it forever.
+  ok('there is no second download mechanism left behind here',
+    inv.pulls === undefined, JSON.stringify(inv.pulls ?? null));
+  // The list must cover both capabilities: the local judge and the local embedder are ONE runtime, so a
+  // panel that can fetch an embedder and not a chat model leaves 判断 bindable with nothing to bind.
+  ok('the list covers both capabilities, not embedders alone',
+    (inv.models ?? []).some((m) => m.capability === 'embedding')
+      && (inv.models ?? []).some((m) => m.capability === 'completion'),
+    JSON.stringify((inv.models ?? []).map((m) => [m.id, m.capability])));
+  // Every row names the RESOURCE that fetches it, and that resource must actually exist. The client used
+  // to build this id by string-concatenation, which is how models landed in the runtimes column twice.
+  const resIds = new Set(((await getJson('/api/manage/resources')).resources ?? []).map((r) => r.id));
+  ok('every model names a resource that really exists, so its 下载 button is not a dead end',
+    (inv.models ?? []).length > 0
+      && (inv.models ?? []).every((m) => m.resourceId && resIds.has(m.resourceId)),
+    JSON.stringify((inv.models ?? []).map((m) => m.resourceId)));
+  // NO DATE FIELD. The Ollama table's `vintage` meant the MODEL's release date and was styled "old" below
+  // 2025; filling it from a measurement date put two meanings in one field, so a freshly measured model
+  // would eventually render as an obsolete one. When it was measured belongs with the sample size.
+  ok('a model row carries no date field — when it was measured lives with the sample size',
+    (inv.models ?? []).every((m) => m.vintage === undefined) && typeof inv.measuredOn === 'string',
+    JSON.stringify([(inv.models ?? [])[0]?.vintage, inv.measuredOn]));
   ok('and the comparison it offers carries its sample size, not just a verdict',
     typeof inv.measuredOn === 'string' && /\d/.test(inv.measuredOn), inv.measuredOn);
 
@@ -619,49 +729,74 @@ try {
       `${path_} → ${gone.status} (unrouted answers ${goneStatus})`);
   }
 
-  // ---- G · a download is started and REPORTED, not awaited inside the POST -------------------------
-  // A model is hundreds of megabytes to gigabytes and the pull budget is two hours. Awaiting it in the
-  // request gave a button reading 下载中… with no bar and no bytes — indistinguishable from a hang — over
-  // a request the browser may abandon while Ollama carries on downloading.
+  // ---- G · 资源 does not manage the household's runtime --------------------------------------------
+  // The verbs are GONE, not merely unused. Ollama is a HOUSEHOLD runtime: we detect it, list what it holds
+  // and embed against it. 资源 used to additionally pull models into it and delete models out of it — on a
+  // real install, against `…\Programs\Ollama\ollama.exe`. That is this panel claiming ownership it
+  // does not have, and an unused management endpoint is an invitation to the next caller.
+  for (const [label, path_] of [
+    ['pull', '/api/manage/models/pull'],
+    ['start (the Ollama daemon)', '/api/manage/models/start'],
+  ]) {
+    const gone = await post(path_, { model: 'bge-m3' });
+    ok(`资源 can no longer ${label} — that belongs to Ollama, not to us`, gone.status === goneStatus,
+      `${path_} → ${gone.status} (unrouted answers ${goneStatus})`);
+  }
+  // AND THE MANAGEMENT ENDPOINTS ARE GONE TOO — this time correctly, which is why the reasoning is here.
   //
-  // Driven with a model that does NOT exist, deliberately: a test that proves the download works by
-  // downloading a gigabyte is doing more harm than the assertion is worth. A pull that fails fast
-  // exercises the whole seam — 202, live state, recorded outcome — and the outcome is the half that would
-  // otherwise vanish.
-  const ghost = 'gatherlight-no-such-model:1b';
-  const t1 = Date.now();
-  const pull = await post('/api/manage/models/pull', { model: ghost });
-  const pullTook = Date.now() - t1;
-  ok('a pull is ACCEPTED and returns immediately, rather than running inside the request',
-    pull.status === 202 && pullTook < 3000, `status=${pull.status} in ${pullTook}ms`);
-  // Asking twice is not an error: the household asked for a download and one is running. A 409 here would
-  // put an error toast over a working progress bar.
-  ok('and asking again while it runs is still success, not a conflict',
-    [202].includes((await post('/api/manage/models/pull', { model: ghost })).status));
+  // They were removed once for a bad reason (code hygiene overruling what the household could do), which
+  // left the app depending on a daemon it would not manage. They are gone now because the DEPENDENCY is
+  // gone: the managed local runtime is llama.cpp, whose models are pinned, ranked and downloadable in 资源.
+  // A household running Ollama still uses it — through openai-compat, by address — so the OPTION survives
+  // while our pretence of owning their daemon does not.
+  for (const [label, path_] of [
+    ['pull an Ollama model', '/api/manage/memory/ollama/pull'],
+    ['delete an Ollama model', '/api/manage/memory/ollama/remove'],
+  ]) {
+    const gone = await post(path_, { model: 'bge-m3' });
+    ok(`we no longer ${label} — that runtime is not ours to manage`, gone.status === goneStatus,
+      `${path_} → ${gone.status} (unrouted answers ${goneStatus})`);
+  }
 
-  let pulls = (await getJson('/api/manage/models')).pulls ?? [];
-  ok('the panel can read downloads back as STATE — this is what the progress bar renders from',
-    Array.isArray(pulls) && pulls.some((p) => p.model === ghost),
-    JSON.stringify(pulls));
-  await until(async () => {
-    pulls = (await getJson('/api/manage/models')).pulls ?? [];
-    return !pulls.some((p) => p.model === ghost && p.running);
-  });
-  const ended = pulls.find((p) => p.model === ghost);
-  // A failed download that simply disappeared would read as one that never started — the same class of
-  // silence as the greyed-out button this whole section replaces.
-  ok('a download that failed says so instead of vanishing',
-    !!ended && ended.running === false && !!ended.error, JSON.stringify(ended));
+  // THE POSITIVE CONTROL, and it is the whole point: the same two verbs for the runtime we DO manage are
+  // still here. Without this pair the assertions above would pass just as well on a build that had lost
+  // model management altogether — which is a different bug wearing the same green tick.
+  const ourStart = await post('/api/manage/models/llama/start', {});
+  ok('…while starting OUR runtime is still a route (it may fail, but it is not gone)',
+    ourStart.status !== goneStatus, `→ ${ourStart.status}`);
+  const ourRemove = await post('/api/manage/models/remove', { model: 'no-such-gguf', runtime: 'llama-cpp' });
+  ok('…and deleting OUR models is still a route, refusing one it cannot see',
+    ourRemove.status !== goneStatus, `→ ${ourRemove.status}`);
+
+  // AND THE OPTION DID NOT GO AWAY. Removing a backend must not remove the ability — 本机 is still a
+  // group, still bindable, and what it asks for is an address. This is the assertion that tells "we stopped
+  // managing a runtime" apart from "we dropped support for it", and its absence is what let the first
+  // removal pass every check while a capability quietly vanished.
+  const machine = (judge.groups ?? []).find((g) => g.id === 'machine');
+  const byoc = (machine?.sources ?? []).find((x) => x.id === 'openai-compat');
+  // 内置 is a group in the picker with zero backends: it exists so that turning a layer off is an answer
+  // to "where does its model come from" rather than a separate button somewhere else, which is what made
+  // having a model look mandatory.
+  const none = (judge.groups ?? []).find((g) => g.id === 'none');
+  ok('内置 is offered as a real choice, holding nothing to configure',
+    !!none && (none.sources ?? []).length === 0 && String(none.description ?? '').length > 10,
+    JSON.stringify(none ? { id: none.id, name: none.name, sources: none.sources.length } : null));
+  // …and it comes LAST, because the order is cheapest-first in what the household must already have and
+  // this is the one needing nothing — putting it first would present "off" as the recommendation.
+  ok('…and it comes last, after the two that can actually do the work',
+    (judge.groups ?? []).map((g) => g.id).indexOf('none') === (judge.groups ?? []).length - 1,
+    JSON.stringify((judge.groups ?? []).map((g) => g.id)));
 
   // ---- H · 语义 refuses a non-embedder without waiting out a cold model load ---------------------
-  const chatModel = named.find((m) => !m.capabilities.includes('embedding'));
+  // A model 判断 offers and 语义 does not — i.e. one the picker has already classed as chat-only.
+  const chatModel = chatty.find((id) => !semanticIds.includes(id));
   if (chatModel) {
     const t2 = Date.now();
-    const r = await post('/api/manage/memory/layer/semantic', { source: 'ollama', model: chatModel.name });
+    const r = await post('/api/manage/memory/layer/semantic', { source: 'ollama', model: chatModel });
     const took2 = Date.now() - t2;
     // The embed PROBE is still the load-bearing check and still runs for everything else; this only
     // spares the household a minute of a dead button for an answer Ollama already gave.
-    ok(`binding a chat model to 语义 is refused, and quickly: ${chatModel.name}`,
+    ok(`binding a chat model to 语义 is refused, and quickly: ${chatModel}`,
       r.status === 409 && took2 < 20000, `${r.status} in ${took2}ms`);
   } else {
     ok('(this machine holds no chat model) the fast embed refusal is not exercised here', true,

@@ -2450,7 +2450,10 @@ kbd, .topbar-kbd {
 .logs-line.dim { color: var(--muted); }
 
 /* Custom dropdown chevron — the native WebView2 arrow sits flush against the border; draw our own
-   with a proper gap + room. Applies to the settings selects + the log-file picker. */
+   with a proper gap + room. Applies to the settings selects + the log-file picker. The recall row's
+   COMPACT select has the same defect and its own sibling rule in styles/memory-recall.css (that area's
+   stylesheet is closed, so its rules cannot live here) — the chevron path is the one thing shared, so a
+   change to it wants making in both. */
 .set-field select, .logs-file {
   appearance: none;
   -webkit-appearance: none;

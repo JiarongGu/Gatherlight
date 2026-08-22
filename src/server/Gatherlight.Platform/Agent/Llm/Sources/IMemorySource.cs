@@ -69,6 +69,11 @@ public interface IMemorySource
     /// truthfully. A constant here would have to pick one and be wrong for the other half of installs —
     /// which is the shape of the mistake that made this member necessary.</para></summary>
     RuntimeOrigin Origin(MemorySourceContext ctx);
+
+    /// <summary>Which of the three headings this source appears under — see <see cref="MemoryGroups"/> for
+    /// why the picker groups at all. A constant per source: unlike <see cref="Origin"/>, nothing about the
+    /// install changes who manages a given implementation.</summary>
+    string Group { get; }
 }
 
 /// <summary>
@@ -98,10 +103,27 @@ public interface IMemoryJudgeSource : IMemorySource
 /// <summary>
 /// A backend that can turn a fact into a VECTOR, so a paraphrase finds it.
 ///
-/// <para>There is deliberately no <c>ClaudeCliSemanticSource</c>: Anthropic ships no embeddings endpoint,
-/// so one cannot exist. That absence IS the rule — see <see cref="IMemorySource"/>. It is a narrow technical
+/// <para>There is no <c>ClaudeCliSemanticSource</c> because THIS INTERFACE asks for a vector: <see
+/// cref="ProveAsync"/> returns a width, and every implementation registers an embedder plus a vector store.
+/// Anthropic ships no embeddings endpoint, so Claude cannot satisfy that shape.
+///
+/// <para><b>Do not upgrade that into "Claude cannot do meaning-based recall", which is what the earlier
+/// wording here did.</b> "An absent class, not an exclusion" is true and says nothing on its own: the class
+/// is absent because WE defined this layer as embeddings. The layer's purpose — a paraphrase finds the fact
+/// — has a non-vector route Claude can serve, namely rewriting the query into several phrasings and running
+/// the existing FTS-trigram + graph retrieval over each. That would change what is RETRIEVABLE, which is
+/// the property separating this layer from the judge, so it belongs here rather than there. It is UNBUILT,
+/// not impossible: Lyntai exposes no query-rewrite seam (its <c>ExpandAsync</c> is graph-neighbour
+/// expansion), and it would cost a model call on every recall, on top of the judge's. A real design
+/// decision — which is exactly why it must not hide behind a sentence about a missing file.</para>
+///
+/// <para>It is a narrow technical
 /// fact and NOT a reason to tell a household Claude cannot help meaning-based recall: through the judge it
-/// is the strongest measured arm Lyntai has (miss 0.54 → 0.19).</para>
+/// is the strongest measured arm Lyntai has (miss 0.5357 → 0.1857). Strongest, not cheapest — Lyntai priced
+/// that arm at $66 per 1,000 recalls through the CLI and concluded the cost-effective judge is a free local
+/// `gemma3:4b` at 0.2571, which already beats its ground-truth reference. So this figure belongs in a
+/// sentence about what a judge CAN do, never in one about what to turn on first; that sentence has to cite
+/// the local number, or it recommends the arm the measurement argues against.</para>
 /// </summary>
 public interface IMemorySemanticSource : IMemorySource
 {

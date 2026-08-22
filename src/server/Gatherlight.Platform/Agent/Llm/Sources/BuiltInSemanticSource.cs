@@ -56,8 +56,22 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
     /// scored, and a literal there could drift from the one the picker names.</para></summary>
     public const string ModelId = "embeddinggemma-300m-onnx";
 
+    /// <summary>What this model IS, independent of whether it is on disk yet.
+    ///
+    /// <para>Hoisted out of <see cref="ModelsAsync"/> because 资源 must describe it BEFORE it is
+    /// installed — a download row and an installed row are the same model in two states, so they have to
+    /// read from the same facts. <c>ModelsAsync</c> returns exactly this when configured; the console reads
+    /// it directly. Two copies of the size and the measurement is how a table ends up disagreeing with the
+    /// row above it.</para></summary>
+    public static readonly ModelOption Catalog = new(
+        ModelId, "EmbeddingGemma 300M(内置)", Installed: true,
+        SizeBytes: 222_000_000,
+        Note: "与「本机」里 Ollama 推荐的是同一个模型,但量化方式不同 —— "
+            + "实测前三名命中相同(10/10),首位命中 8/10 对 9/10,而每次查询更快;在应用内直接运行。",
+        Measured: new EmbeddingMeasurement(8, 10, 28, 10, "2026-08-22"));
+
     public string Id => MemoryBackends.BuiltIn;
-    public string Name => "内置(随应用附带)";
+    public string Name => "ONNX";
 
     public string Description =>
         "适合:想占地方最少、且完全不想多一个进程 —— 它在应用内直接运行,没有常驻服务,也没有端口。"
@@ -88,6 +102,9 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
     /// <summary>Bundled: the ONNX session runs inside this process. The one backend with no second
     /// process anywhere — which, now that llama-server beats it on quality, is most of what it still
     /// uniquely offers.</summary>
+    /// <summary>SelfContained — it runs inside our own process.</summary>
+    public string Group => MemoryGroups.Managed;
+
     public RuntimeOrigin Origin(MemorySourceContext ctx) =>
         new(MemoryRuntimeOrigins.Bundled, "在应用内直接运行 —— 没有第二个进程,也没有端口");
 
@@ -112,14 +129,7 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
     public Task<IReadOnlyList<ModelOption>> ModelsAsync(
         MemorySourceContext ctx, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<ModelOption>>(IsConfigured(ctx.Settings)
-            ? new[]
-            {
-                new ModelOption(ModelId, "EmbeddingGemma 300M(内置)", Installed: true,
-                    SizeBytes: 222_000_000,
-                    Note: "与「本机 · Ollama」里推荐的是同一个模型,但量化方式不同 —— "
-                        + "实测前三名命中相同(10/10),首位命中 8/10 对 9/10,而每次查询更快;在应用内直接运行。",
-                    Measured: new EmbeddingMeasurement(8, 10, 28, 10, "2026-08-22")),
-            }
+            ? new[] { Catalog }
             : Array.Empty<ModelOption>());
 
     /// <summary>PROVE it embeds, exactly as the other arms do. Here it also front-loads the 197 MB model

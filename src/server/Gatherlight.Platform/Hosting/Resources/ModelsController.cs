@@ -22,20 +22,16 @@ namespace Gatherlight.Server.Platform.Hosting.Resources;
 [ApiController]
 public sealed class ModelsController : ControllerBase
 {
-    private readonly IOllamaRuntime _ollama;
     private readonly ILlamaServerRuntime _llama;
     private readonly ServerConfigService _config;
-    private readonly IModelPullStatus _pulls;
     private readonly IPlatformContext _platform;
     private readonly ILogger<ModelsController> _log;
 
-    public ModelsController(IOllamaRuntime ollama, ILlamaServerRuntime llama, ServerConfigService config,
-        IModelPullStatus pulls, IPlatformContext platform, ILogger<ModelsController> log)
+    public ModelsController(ILlamaServerRuntime llama, ServerConfigService config,
+        IPlatformContext platform, ILogger<ModelsController> log)
     {
-        _ollama = ollama;
         _llama = llama;
         _config = config;
-        _pulls = pulls;
         _platform = platform;
         _log = log;
     }
@@ -71,53 +67,138 @@ public sealed class ModelsController : ControllerBase
         return $"20 条中英混排事实 · 10 个改写提问 · {when}";
     }
 
+    /// <summary>The inventory 资源 is entitled to show: the runtime the app installs, and the models the
+    /// app downloaded.
+    ///
+    /// <para><b>Ollama is deliberately absent, and that is a correction rather than a simplification.</b>
+    /// This endpoint used to list the household's Ollama models with pull and delete buttons beside them —
+    /// against, on a real install, <c>…\Programs\Ollama\ollama.exe</c>, a program we did not put there.
+    /// 资源 is the panel for what Gatherlight provisions; a delete button aimed at somebody else's tool is
+    /// not a convenience, it is this panel claiming ownership it does not have. 本机 models are still fully
+    /// usable — 记忆检索 lists them, because it reads the Ollama probe directly and never went through here
+    /// — and they are managed with Ollama, which is what 本机 MEANS (see <c>MemoryGroups</c>).</para>
+    ///
+    /// <para>Consequently there is no <c>pulls</c> field and no pull endpoint: a GGUF is downloaded as a
+    /// sha256-pinned RESOURCE like git or node, and reports progress through the resource list it already
+    /// belongs to. One download mechanism, not two.</para></summary>
+    /// <summary>Every model Gatherlight manages — ONE list, installed or not.
+    ///
+    /// <para><b>Why not two.</b> This used to return `models` (on disk) and `offers` (downloadable), and
+    /// the console rendered them as three different components: a card for the built-in one, a grid row
+    /// inside a disclosure for a downloaded GGUF, a table row for an undownloaded one. Three shapes and
+    /// three left edges for one kind of object, differing only by a boolean. Downloaded is a STATE of a
+    /// model, not a separate species, so it is a field on the row and the table sorts on it.</para>
+    ///
+    /// <para><b>Ollama is deliberately absent</b>, and that is a correction rather than a simplification.
+    /// This endpoint used to list the household's Ollama models with pull and delete buttons beside them —
+    /// against, on a real install, an <c>ollama.exe</c> under their own Programs directory, a program we
+    /// did not put there. 资源 is the panel for what Gatherlight provisions; a delete button aimed at
+    /// somebody else's tool is not a convenience, it is this panel claiming ownership it does not have.
+    /// 本机 models are still fully usable — 记忆检索 lists them, because it reads the Ollama probe directly
+    /// and never went through here — and they are managed with Ollama, which is what 本机 MEANS.</para>
+    ///
+    /// <para>Consequently there is no <c>pulls</c> field and no pull endpoint: every model here is a
+    /// sha256-pinned RESOURCE and reports download progress through the resource list it already belongs
+    /// to. One download mechanism, not two.</para></summary>
     [HttpGet("api/manage/models")]
     public async Task<IActionResult> Get([FromQuery] bool refresh = false)
     {
-        var s = await _ollama.ProbeAsync(refresh);
         var mem = Settings();
         var judgeModel = MemorySources.ResolveJudgeModel(mem);
-        var rec = EmbeddingCatalog.Recommend(s.GpuLikely);
+        var probe = await _llama.ProbeAsync(refresh);
+        var models = Models(mem, judgeModel);
 
         return Ok(new
         {
-            // The runtime that hosts them. Reported here rather than assumed, and carrying its own
-            // problem sentence, because "no models" and "no daemon" have completely different fixes.
+            // The runtime that hosts the llama.cpp rows — OURS. It carries its own problem sentence
+            // because "no models" and "not started" have completely different fixes, and an empty list
+            // says neither.
             runtime = new
             {
-                id = "ollama", baseUrl = s.BaseUrl, installed = s.Installed, serving = s.Serving,
-                version = s.Version, executable = s.Executable, gpuLikely = s.GpuLikely, problem = s.Problem,
+                id = MemoryBackends.LlamaCpp, baseUrl = probe.BaseUrl, installed = probe.Installed,
+                serving = probe.Serving, version = probe.Version, executable = probe.Executable,
+                // Reported by --list-devices, not guessed — this is the panel that pays for that answer.
+                gpuLikely = probe.GpuLikely, devices = probe.Devices, problem = probe.Problem,
             },
-            // On disk NOW: what it costs, what Ollama says it can do, and whether a layer is holding it.
-            // `capabilities` is passed through rather than reduced to a boolean of ours: it is null on a
-            // daemon too old to report the field, and a guess printed as a fact is worse than a blank.
-            // BOTH runtimes' inventories, in one list, discriminated by `runtime`. The field was always
-            // there — the shape anticipated a second runtime long before there was one — so llama.cpp's
-            // models needed no new endpoint, and a GGUF stops being the one kind of model whose row cannot
-            // say what it is for or whether a layer is holding it.
-            models = s.Models.Select(m => (object)new
-            {
-                id = m.Name, name = m.Name, runtime = "ollama", sizeBytes = m.SizeBytes,
-                capabilities = m.Capabilities,
-                inUse = InUse(m.Name, mem, judgeModel),
-                measured = Measured(m.Name),
-            }).Concat(GgufModels(mem, judgeModel)),
-            // Offerable but absent — the measured embedding shortlist, plus a chat model when this machine
-            // has none. That last row is why this list is not just the embedding catalog: the local judge
-            // and the local embedder are ONE provider, so a panel that installs an embedder with a button
-            // has no business answering "you need a chat model" with a shell command.
-            offers = Offers(s),
-            recommendation = new { id = rec.Id, reason = rec.Reason, caution = rec.Caution },
-            // The sample size travels with the numbers. "9/10" invites the right question where "很好"
-            // does not, and a measurement with no denominator is an opinion wearing a number.
+            models,
+            // Recommended from what is NOT yet installed, and null once there is nothing left to suggest.
+            // A fixed id here named the embedder, which is the first thing a household installs — so the
+            // moment they took the advice the panel went on recommending a model they already had. A
+            // recommendation that survives being followed is not a recommendation, it is a slogan.
+            recommendation = Recommend(models),
+            // The sample size travels with the numbers, here as everywhere: "9/10" invites the right
+            // question where a bare adjective does not.
             measuredOn = MeasuredOnLabel(),
-            // Downloads in flight (and the last few that finished). Read from memory rather than from the
-            // probe, so a progress bar stays live while the 20s probe cache does its job.
-            pulls = _pulls.Current.Select(p => new
-            {
-                model = p.Model, running = p.Running, percent = p.Percent, status = p.Status, error = p.Error,
-            }),
         });
+    }
+
+    /// <summary>One row per model the app manages, in the order the choice is actually made: by what the
+    /// model is FOR, then by what you already have.</summary>
+    private IReadOnlyList<ModelRowView> Models(MemorySourceSettings mem, string? judgeModel)
+    {
+        var rows = new List<ModelRowView>(GgufRows(mem, judgeModel)) { BuiltInRow(mem) };
+        return rows
+            .OrderBy(r => r.Capability == "embedding" ? 0 : 1)
+            .ThenByDescending(r => r.Installed)
+            .ThenBy(r => r.SizeBytes)
+            .ToList();
+    }
+
+    /// <summary>The in-process ONNX embedder, as a row like any other — it is a model with a size, a
+    /// capability and a state. Its facts come from <see cref="BuiltInSemanticSource.Catalog"/>, the single
+    /// writer, so this row and the picker cannot disagree about what it scored.</summary>
+    private ModelRowView BuiltInRow(MemorySourceSettings mem)
+    {
+        var c = BuiltInSemanticSource.Catalog;
+        var installed = OnnxEmbedder.IsPresent(
+            Path.Combine(_platform.ResourcesPath, BuiltInSemanticSource.ResourceId));
+        // Bound only if 语义 is on the BUILT-IN backend. The same model id under a different backend is a
+        // different thing, and reporting the wrong one as in-use either disables a live delete button or
+        // enables a dangerous one.
+        var inUse = MemorySources.ResolveSemantic(mem)?.Id == MemoryBackends.BuiltIn
+            && string.Equals(mem.Config.EmbeddingModel, c.Id, StringComparison.OrdinalIgnoreCase)
+                ? MemoryLayers.Semantic : null;
+        return new ModelRowView(
+            c.Id, c.Name, MemoryBackends.BuiltIn, "embedding",
+            c.SizeBytes ?? 0, installed, inUse, c.Note ?? "",
+            c.Measured is null ? null : new MeasuredView(
+                c.Measured.RecallTop1, c.Measured.RecallTop3, c.Measured.Queries, c.Measured.MsPerQuery),
+            BuiltInSemanticSource.ResourceId);
+    }
+
+    /// <summary>Every GGUF — on disk and fetchable — from one pass.
+    ///
+    /// <para>The shelf is a CLOSED list, unlike the Ollama one it replaced: we are the downloader here
+    /// (repo, commit, checksum), so a model we have not pinned is a model we cannot verify. A file the
+    /// household dropped into the directory themselves still gets a row, because it is on their disk and
+    /// they may want the space back; it simply has no note and no measurement.</para></summary>
+    private IEnumerable<ModelRowView> GgufRows(MemorySourceSettings mem, string? judgeModel)
+    {
+        var dir = Services.ResourceProvisioner.ProvisionedGgufDir(_platform.ResourcesPath);
+        var onDisk = Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath);
+        var ids = onDisk
+            .Concat(GgufCatalog.Models.Select(m => m.Id))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var id in ids)
+        {
+            var known = GgufCatalog.Find(id);
+            var installed = onDisk.Contains(id, StringComparer.OrdinalIgnoreCase);
+            // Definitive from the catalogue for anything we pinned; the name heuristic — one writer, the
+            // same one the router's presets use — only for a file the household supplied.
+            var embedding = known is not null
+                ? known.Capability == GgufCapability.Embedding
+                : Services.ResourceProvisioner.IsEmbeddingGguf(id);
+            yield return new ModelRowView(
+                id, known?.Name ?? id, MemoryBackends.LlamaCpp,
+                embedding ? "embedding" : "completion",
+                installed ? SizeOnDisk(dir, id, known?.ApproxBytes ?? 0) : known?.ApproxBytes ?? 0,
+                installed, GgufInUse(id, mem, judgeModel), known?.Note ?? "",
+                known?.Measured is { } k
+                    ? new MeasuredView(k.RecallTop1, k.RecallTop3, k.Queries, k.MsPerQuery)
+                    : null,
+                GgufCatalog.ResourceIdFor(id));
+        }
     }
 
     /// <summary>What a model scored on this app's own recall job. Null for anything nobody benchmarked,
@@ -125,48 +206,52 @@ public sealed class ModelsController : ControllerBase
     /// zero, and an unmeasured model would then look like a bad one.</summary>
     public sealed record MeasuredView(int Top1, int Top3, int Queries, int MsPerQuery);
 
-    /// <summary>A model on the shelf rather than on the disk — what a download would get you.</summary>
-    public sealed record ModelOfferView(
+    /// <summary>One model the app manages. <paramref name="Installed"/> is the ONLY difference between a
+    /// row you can delete and a row you can download — which is exactly why they are one type: two types
+    /// became two components became three left edges.</summary>
+    /// <param name="ResourceId">What to provision to get it. Sent rather than derived client-side; the
+    /// client building this id by concatenation is how models landed in the runtimes column twice.</param>
+    /// <para>There is deliberately NO vintage/date field. The Ollama table had one meaning the MODEL's
+    /// release date, which the console styled as "old" below 2025 — and filling it from a measurement date
+    /// (the only date a pinned GGUF carries) put two meanings in one field, so a freshly measured model
+    /// would eventually render as an obsolete one. WHEN it was measured belongs with the sample size, in
+    /// the footnote, which is where every other qualifier on these numbers already lives.</para>
+    private sealed record ModelRowView(
         string Id, string Name, string Runtime, string Capability,
-        long ApproxBytes, int? Dimensions, string Note, string? Vintage, MeasuredView? Measured);
+        long SizeBytes, bool Installed, string? InUse, string Note,
+        MeasuredView? Measured, string ResourceId);
 
-    /// <summary>The embedding shortlist this machine does not hold, plus a chat model when it holds none.
-    /// <para>A named shape rather than two anonymous ones because the second row genuinely differs — no
-    /// dimensions, no measurement, a different capability — and two near-identical anonymous types cannot
-    /// be concatenated anyway. Naming it is what makes the difference legible instead of a cast.</para></summary>
-    private static IReadOnlyList<ModelOfferView> Offers(OllamaState s)
+    /// <summary>Which model to put the 推荐 badge on, or null when there is nothing left to advise.
+    ///
+    /// <para>Only what is NOT installed can be recommended. A fixed id here named the embedder, which is
+    /// the first thing a household installs — so the moment they took the advice the badge matched no row
+    /// and the line went on recommending a model they already had.</para>
+    ///
+    /// <para>Order of preference: the measured GGUF embedder, then the built-in one (same weights, no
+    /// runtime needed), then a chat model — which is the gap that actually BLOCKS something, since 判断 can
+    /// be bound to llama.cpp with no completion model to bind it to, and both memory policies are
+    /// fail-open, so that surfaces as a judge which silently never runs.</para></summary>
+    private static object? Recommend(IReadOnlyList<ModelRowView> models)
     {
-        var offers = EmbeddingCatalog.Options
-            .Where(o => !s.Has(o.Id))
-            .Select(o => new ModelOfferView(
-                o.Id, o.Name, "ollama", "embedding", o.ApproxBytes, o.Dimensions, o.Note, o.Vintage,
-                o.Measured is null ? null : new MeasuredView(
-                    o.Measured.RecallTop1, o.Measured.RecallTop3, o.Measured.Queries, o.Measured.MsPerQuery)))
-            .ToList();
+        var offers = models.Where(m => !m.Installed).ToList();
+        var pick = offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedEmbedder)
+            ?? offers.FirstOrDefault(o => o.Id == BuiltInSemanticSource.ModelId)
+            ?? offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedJudge)
+            ?? offers.FirstOrDefault(o => o.Capability == "embedding")
+            ?? offers.FirstOrDefault();
+        if (pick is null) return null;
 
-        if (!s.Has(OllamaJudgeSource.Suggested))
-            offers.Add(new ModelOfferView(
-                OllamaJudgeSource.Suggested,
-                $"{OllamaJudgeSource.Suggested}(对话模型 · 可用于「判断」)",
-                "ollama", "completion", SuggestedJudgeBytes, null,
-                "小而快的对话模型 —— 「判断」这一层用它就够,而且不消耗账号额度。", null, null));
-
-        return offers;
-    }
-
-    /// <summary>Which layer, if any, is holding this model — the reason a delete is refused, named.
-    /// <para>Deliberately the only question this controller asks about recall. It has to be asked: recall is
-    /// fail-open, so deleting a bound model gives searches that quietly find less rather than an error
-    /// naming what was removed.</para></summary>
-    private static string? InUse(string name, MemorySourceSettings mem, string? judgeModel)
-    {
-        if (MemorySources.ResolveSemantic(mem) is not null && mem.Config.EmbeddingModel is { } emb
-            && OllamaState.Matches(name, emb)) return MemoryLayers.Semantic;
-
-        if (MemorySources.ResolveJudge(mem).Id != MemorySources.DefaultJudgeSource
-            && judgeModel is { } j && OllamaState.Matches(name, j)) return MemoryLayers.Judge;
-
-        return null;
+        return new
+        {
+            id = pick.Id,
+            reason = pick.Capability == "embedding"
+                ? "「语义」那一层用它 —— 这几个里只有它在本应用自己的 10 题检索基准上量过。"
+                : "「判断」那一层用它 —— 你已经有嵌入模型了,缺的是一个对话模型;没有它,判断可以绑到 llama.cpp"
+                  + "却一次也跑不起来,而且不会报错。",
+            caution = pick.Measured is null
+                ? "「判断」那一层的质量还没有按模型实测过,所以这一行只有延迟和体积,没有质量分。"
+                : null,
+        };
     }
 
     /// <summary>Which layer is holding a GGUF, if any — and it checks the BACKEND, not just the name.
@@ -189,36 +274,6 @@ public sealed class ModelsController : ControllerBase
         return null;
     }
 
-    /// <summary>The GGUFs on disk, as inventory rows — the same facts an Ollama model carries, because the
-    /// household is answering the same questions about them: what is it for, how big, is anything using it.
-    ///
-    /// <para><b>`capabilities` is DEFINITIVE here, where Ollama's is reported.</b> Ollama answers what a
-    /// model can do and we pass that through, nulling it when the daemon is too old to say. A GGUF we
-    /// provisioned needs no such hedge — the catalogue recorded what it is when it was pinned. A file the
-    /// household dropped in themselves falls back to the name heuristic, which is the one case where this
-    /// is a guess, and it is the same single writer the router's presets use.</para></summary>
-    private IEnumerable<object> GgufModels(MemorySourceSettings mem, string? judgeModel)
-    {
-        var dir = Services.ResourceProvisioner.ProvisionedGgufDir(_platform.ResourcesPath);
-        foreach (var id in Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath))
-        {
-            var embedding = Services.ResourceProvisioner.IsEmbeddingGguf(id);
-            var known = GgufCatalog.Find(id);
-            yield return new
-            {
-                id,
-                name = known?.Name ?? id,
-                runtime = MemoryBackends.LlamaCpp,
-                sizeBytes = SizeOnDisk(dir, id, known?.ApproxBytes ?? 0),
-                capabilities = new[] { embedding ? "embedding" : "completion" },
-                inUse = GgufInUse(id, mem, judgeModel),
-                measured = known?.Measured is { } k
-                    ? new MeasuredView(k.RecallTop1, k.RecallTop3, k.Queries, k.MsPerQuery)
-                    : null,
-            };
-        }
-    }
-
     /// <summary>Actual bytes on disk, falling back to the catalogue's figure. Measured rather than quoted
     /// because a household deciding what to delete wants the space they would get back, and a partially
     /// written file would otherwise report its intended size.</summary>
@@ -236,12 +291,6 @@ public sealed class ModelsController : ControllerBase
         }
         catch (IOException) { /* fall through to the declared size */ }
         return fallback;
-    }
-
-    private static MeasuredView? Measured(string name)
-    {
-        var m = EmbeddingCatalog.Find(name)?.Measured;
-        return m is null ? null : new MeasuredView(m.RecallTop1, m.RecallTop3, m.Queries, m.MsPerQuery);
     }
 
     /// <summary>Start the runtime ONLY when nothing is answering — a household's own instance is left
@@ -294,63 +343,12 @@ public sealed class ModelsController : ControllerBase
         return Ok(new { ok = true, warmed, models = state.Models, devices = state.Devices });
     }
 
-    [HttpPost("api/manage/models/start")]
-    public async Task<IActionResult> Start()
-    {
-        var ok = await _ollama.EnsureServingAsync();
-        return ok
-            ? Ok(new { ok = true })
-            : StatusCode(409, new { error = (await _ollama.ProbeAsync(refresh: true)).Problem ?? "无法启动 Ollama。" });
-    }
-
-    /// <summary>Start a download and RETURN — progress is read back from <c>GET /api/manage/models</c>.
-    /// <para>Detached because a model is hundreds of megabytes to gigabytes over whatever line the household
-    /// has: awaited inside the POST it gave a button reading 下载中… with no bar and no bytes for minutes,
-    /// indistinguishable from a hang — over a request the browser may abandon while Ollama carries on
-    /// downloading, which is how a completed pull got reported as a failure.</para></summary>
-    [HttpPost("api/manage/models/pull")]
-    public IActionResult Pull([FromBody] ModelRequest body)
-    {
-        if (string.IsNullOrWhiteSpace(body?.Model)) return BadRequest(new { error = "model is required" });
-        // Shape, not membership. A catalog baked into a release cannot contain a model published after it —
-        // which is exactly how this shipped without the two strongest options that already existed. See
-        // EmbeddingCatalog.IsWellFormedId for what the gate still checks and why that is the right line.
-        if (!EmbeddingCatalog.IsWellFormedId(body.Model))
-            return BadRequest(new { error = $"模型名称格式不正确:{body.Model}" });
-
-        var model = body.Model.Trim();
-        // Already downloading is SUCCESS, not a conflict: the household asked for a download and one is
-        // running. A 409 here would drop an error toast over a working progress bar.
-        if (!_pulls.TryStart(model))
-            return Accepted(new { ok = true, started = false, model, note = "这个模型已经在下载中。" });
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                // Deliberately NOT the request's CancellationToken: the work outlives the POST, so binding
-                // it would abort the download the moment the browser stopped waiting.
-                await _ollama.PullModelAsync(model,
-                    (percent, status) => _pulls.Report(model, percent, status),
-                    CancellationToken.None);
-                _pulls.Finish(model, null);
-                _log.LogInformation("pulled local model {Model}", model);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning("model pull failed for {Model}: {Msg}", model, ex.Message);
-                _pulls.Finish(model, ex.Message);
-            }
-        });
-        return Accepted(new { ok = true, started = true, model, note = "开始下载 —— 进度显示在模型列表里。" });
-    }
-
     /// <summary>Delete a model, freeing its disk.
     /// <para>Refused for one a layer is BOUND to, even when that binding is not running yet: recall is
     /// fail-open, so the household would see searches that quietly find less rather than an error naming
     /// what they removed. The refusal says which layer, and where to change it.</para></summary>
     [HttpPost("api/manage/models/remove")]
-    public async Task<IActionResult> Remove([FromBody] ModelRequest body)
+    public IActionResult Remove([FromBody] ModelRequest body)
     {
         var model = body?.Model?.Trim();
         if (!EmbeddingCatalog.IsWellFormedId(model))
@@ -361,44 +359,49 @@ public sealed class ModelsController : ControllerBase
 
         var mem = Settings();
 
-        // A GGUF is a directory we own, so removal is a delete rather than a daemon call — but it goes
-        // through the same in-use gate, for the same reason: recall is fail-open, so deleting a bound model
-        // gives searches that quietly find less instead of an error naming what was removed.
-        if (string.Equals(body?.Runtime, MemoryBackends.LlamaCpp, StringComparison.OrdinalIgnoreCase))
-        {
-            var holder = GgufInUse(model!, mem, MemorySources.ResolveJudgeModel(mem));
-            if (holder is not null)
-                return StatusCode(409, new
-                {
-                    error = holder == MemoryLayers.Semantic
-                        ? $"{model} 正在用于语义检索 —— 请先在「记忆检索」里换个模型或停用该层,再删除。"
-                        : $"{model} 正在用于记忆判断 —— 请先在「记忆检索」里换个模型或后端,再删除。",
-                });
-            return RemoveGguf(model!);
-        }
+        // BOTH kinds of model are deletable, and through the same gate. The built-in one used to offer
+        // 重新下载 where a GGUF offered 删除 — two different verbs in one column for two rows of the same
+        // table, and no way at all to reclaim its 222 MB. Every model here is a directory we created, so
+        // "delete" means the same thing for all of them.
+        //
+        // The gate exists because recall is fail-open: deleting a BOUND model gives searches that quietly
+        // find less rather than an error naming what was removed. Only our own models reach here — an
+        // Ollama model is the household's, managed with Ollama (see Get()).
+        var builtIn = string.Equals(body?.Runtime, MemoryBackends.BuiltIn, StringComparison.OrdinalIgnoreCase);
+        var holder = builtIn
+            ? BuiltInRow(mem).InUse
+            : GgufInUse(model!, mem, MemorySources.ResolveJudgeModel(mem));
+        if (holder is not null)
+            return StatusCode(409, new
+            {
+                error = holder == MemoryLayers.Semantic
+                    ? $"{model} 正在用于语义检索 —— 请先在「记忆检索」里换个模型或停用该层,再删除。"
+                    : $"{model} 正在用于记忆判断 —— 请先在「记忆检索」里换个模型或后端,再删除。",
+            });
+        return builtIn ? RemoveBuiltIn(model!) : RemoveGguf(model!);
+    }
 
-        switch (InUse(model!, mem, MemorySources.ResolveJudgeModel(mem)))
-        {
-            case MemoryLayers.Semantic:
-                return StatusCode(409, new
-                {
-                    error = $"{model} 正在用于语义检索 —— 请先在「记忆检索」里换个模型或停用该层,再删除。",
-                });
-            case MemoryLayers.Judge:
-                return StatusCode(409, new
-                {
-                    error = $"{model} 正在用于记忆判断 —— 请先在「记忆检索」里换个后端或模型,再删除。",
-                });
-        }
+    /// <summary>Delete the provisioned ONNX model directory.
+    ///
+    /// <para>Refuses an id that is not the built-in model's, so this cannot be pointed at an arbitrary
+    /// resource: the resources folder also holds git, node, the CLI and llama.cpp, and a delete endpoint
+    /// that took any install directory would be a way to uninstall the app's own runtimes through the
+    /// model table. <see cref="ResourceProvisioner"/> re-reads the ready marker on every Status() call, so
+    /// removing the directory is the whole operation — there is no cached "installed" to invalidate.</para></summary>
+    private IActionResult RemoveBuiltIn(string modelId)
+    {
+        if (!string.Equals(modelId, BuiltInSemanticSource.ModelId, StringComparison.OrdinalIgnoreCase))
+            return StatusCode(404, new { error = $"没有找到本机模型 {modelId}。" });
 
+        var dir = Path.Combine(_platform.ResourcesPath, BuiltInSemanticSource.ResourceId);
         try
         {
-            await _ollama.RemoveModelAsync(model!);
-            return Ok(new { ok = true, removed = model });
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+            return Ok(new { ok = true, removed = modelId });
         }
         catch (Exception ex)
         {
-            _log.LogWarning("removing {Model} failed: {Msg}", model, ex.Message);
+            _log.LogWarning("removing {Model} failed: {Msg}", modelId, ex.Message);
             return StatusCode(502, new { error = ex.Message });
         }
     }

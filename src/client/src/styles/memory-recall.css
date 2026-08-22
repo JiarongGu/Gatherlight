@@ -61,14 +61,43 @@
    rather than for the judge: both layers use it now, and the buttons are rendered from what the server
    reports rather than from a fixed pair, so a rule named .mem-judge would have been a second thing to
    rename the day 语义 grows a second backend. */
-.mem-src { margin-top: 11px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.mem-src {
+  margin-top: 11px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  /* ONE height for every field-shaped control in this row. It has to be stated, because equal padding
+     does NOT produce equal height across element types: measured 2026-08-22 with identical
+     `padding: 5px` and `font-size: 11px`, the segmented buttons came out 26px, the address input 26.5px
+     and the model select 28.5px — a <select> carries a taller intrinsic content box than an <input>, and
+     both differ from a <button>. So the row had four heights and read as a misalignment rather than as a
+     set of controls. Matched to the segmented control, which is the row's anchor and shares its rule with
+     the access-mode picker in Settings — the fields come to IT rather than the other way round, so this
+     panel cannot drift away from that one.
+
+     The 使用 button is deliberately left at the console's standard .cx-btn height: a primary action
+     standing taller than the fields it acts on is a decision, whereas an input and a select disagreeing
+     by 2px is only ever an accident. */
+  --mem-ctl-h: 26px;
+}
 .mem-src .cx-seg { flex: 0 0 auto; }
 /* Quiet: it names the control beside it, it is not a heading. */
 .mem-src-lbl { flex: none; font-size: 11.5px; color: var(--muted); }
+/* The native WebView2 dropdown arrow sits FLUSH against the border — the same defect `.set-field select`
+   and `.logs-file` already fix in styles.css, whose comment records the diagnosis. This is a sibling of
+   that rule rather than a share of it, for two reasons: this area's stylesheet is CLOSED (every rule for
+   `.mem-src-*` lives in this file — see main.tsx on why adding one back to styles.css breaks that), and the
+   metrics differ anyway, because this select is the compact one (26px tall, 11px mono) where that one is
+   34px at 13px. Only the chevron path is common; if it changes, both want changing. */
 .mem-src-sel {
-  font-family: var(--font-mono); font-size: 11px; padding: 5px 9px;
+  font-family: var(--font-mono); font-size: 11px;
+  /* Room for the chevron on the right, normal text inset on the left. */
+  padding: 0 24px 0 9px;
+  height: var(--mem-ctl-h); box-sizing: border-box;
   border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--surface-2); color: var(--text-2); max-width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='9' height='6' viewBox='0 0 11 7'><path d='M1 1l4.5 4.5L10 1' fill='none' stroke='%23998f7d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
 }
 /* Every explanatory line under the picker takes its own row — a reason, a pointer to 资源 and a count of
    what could still be downloaded are sentences, not chips. */
@@ -76,8 +105,9 @@
 /* A model id inside a sentence. Mono because it is something you type or compare, not something you read. */
 .mem-mono { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
 
-/* A backend this LAYER cannot use — Claude under 语义, the built-in runtime under 判断. Listed on purpose:
-   omitting it answers "why isn't this an option?" by making the question unaskable.
+/* A backend this LAYER cannot use — the built-in ONNX runtime under 判断, which would need an in-process
+   chat model. Listed on purpose: omitting it answers "why isn't this an option?" by making the question
+   unaskable. (Claude under 语义 used to be styled by this rule and no longer is — it became a real arm.)
 
    It must read QUIETER than the options that work. The first attempt did the opposite by accident: it set
    `border-style: dashed` on a base rule whose `border: none` leaves border-WIDTH at its initial `medium`,
@@ -110,7 +140,10 @@
 /* The address of a service we do not manage. Mono because it is a URL you type and compare, and sized to
    fit a loopback address plus a port without wrapping the row. */
 .mem-src-url {
-  font-family: var(--font-mono); font-size: 11px; padding: 5px 9px; width: 21ch;
+  font-family: var(--font-mono); font-size: 11px; padding: 0 9px; width: 24ch;
+  /* Vertical padding replaced by a height: with both, the taller of the two wins and the shared
+     --mem-ctl-h stops being shared. */
+  height: var(--mem-ctl-h); box-sizing: border-box;
   border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--surface-2); color: var(--text-2);
 }
@@ -141,8 +174,11 @@
 .mem-tbl-wrap { overflow-x: auto; }
 .mem-tbl { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 620px; }
 .mem-tbl th {
-  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
-  font-weight: 400; text-align: left; color: var(--muted);
+  /* Tracking and uppercase are latin small-caps devices. Applied to 检索质量 / 每次查询 they only push
+     the glyphs apart — CJK has no case to transform and no letter-spacing convention — which is why these
+     headers read as damaged rather than as quiet. Kept small and quiet by SIZE and COLOUR instead. */
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.04em;
+  font-weight: 400; text-align: left; color: var(--muted); white-space: nowrap;
   padding: 0 12px 8px 0; border-bottom: 1px solid var(--border);
 }
 .mem-tbl td {
@@ -156,11 +192,13 @@
 /* A measurement that says "do not pick this" has to LOOK different — the number
    alone is easy to skim past when every row is styled identically. */
 .mem-tbl td.bad b { color: var(--danger); }
-.mem-tbl td.mem-old { color: var(--muted); }
 .mem-tbl td.mem-act { text-align: right; padding-right: 0; white-space: nowrap; }
 .mem-m-name { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 4px; }
 .mem-m-name b { font-family: var(--font-display); font-size: 13.5px; font-weight: 600; color: var(--text); }
-.mem-m-note { font-size: 11.5px; color: var(--muted); line-height: 1.55; max-width: 44ch; }
+/* Capped for readability, not for layout. At 44ch this wrapped to three lines inside a 528px column —
+   measured — so the cell looked cramped while half of it stood empty. A cap belongs at the line length
+   prose stops being readable at, which is much wider than the narrowest column this table ever has. */
+.mem-m-note { font-size: 11.5px; color: var(--muted); line-height: 1.55; max-width: 68ch; }
 .mem-m-sub { font-family: var(--font-mono); font-size: 10px; color: var(--muted); margin-top: 3px; }
 .mem-act-pair { display: inline-flex; gap: 6px; }
 
@@ -169,33 +207,23 @@
    same components new class names at their new address would be two idioms for one thing. */
 .res-models { margin-top: 26px; }
 .res-models .res-item { margin-bottom: 4px; }
-/* TWO WAYS TO GET A LOCAL MODEL, contained rather than merely labelled. A caption with no boundary left
-   the comparison table floating between the groups, where it read as applying to both — and 内置 pulls
-   nothing, so that reading is simply wrong. The rule down the left is what makes the nesting a fact. */
-.res-group { padding-left: 13px; border-left: 2px solid var(--border-soft); margin: 18px 0 4px; }
-.res-group + .res-group { margin-top: 22px; }
-/* Quiet: a caption over a group, not a heading competing with 本机模型 above it. */
-.res-group-h {
-  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em;
-  color: var(--muted); margin-bottom: 9px;
-}
+/* NO .res-group AND NO .mem-disk HERE ANY MORE. 本机模型 was two captioned groups holding three
+   different renderings of one object — a ResourceRow card for the built-in model, a grid row inside a
+   已下载的模型 disclosure for a downloaded GGUF, a table row for an undownloaded one — which is where the
+   three left edges came from (measured: 395 · 410 · 423). It is one table now, `installed` is a column's
+   worth of state, and the rules that made the nesting visible have nothing left to nest. Deleted rather
+   than left dormant: a selector matching nothing is the thing the next person restyles by mistake.
 
-/* What Ollama holds, and what it costs in disk. */
-.mem-disk { margin-top: 18px; }
-.mem-disk-list {
-  margin-top: 10px; display: flex; flex-direction: column;
-  border: 1px solid var(--border-soft); border-radius: var(--radius); overflow: hidden;
+   The recommendation keeps its accent as a BOX rather than a left rule. A rule would put its text 13px
+   right of the table it is advising about, whereas a box's own padding reads as padding. */
+.res-models > .mem-rec {
+  border-left: 0; padding: 10px 12px; margin: 16px 0 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
-.mem-disk-row {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: center;
-  padding: 9px 13px; font-size: 12px; border-bottom: 1px solid var(--border-soft);
-}
-.mem-disk-row:last-child { border-bottom: 0; }
-.mem-disk-row:nth-child(odd) { background: color-mix(in srgb, var(--surface) 55%, transparent); }
-.mem-disk-id { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.mem-disk-id .res-badge { flex: none; }
-.mem-disk-name { font-family: var(--font-mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mem-disk-size { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+/* The id under the name, and any sub-figure, may need to carry a failure. */
+.mem-m-sub.warn { color: var(--warn); }
 
 /* Any model at all, for the ones nobody has measured yet. */
 .mem-other {

@@ -71,6 +71,15 @@ public interface IKnowledgeStore
     /// <summary>Record where this fact lives in the derived graph index. Null clears it.</summary>
     Task SetGraphRefAsync(long id, string? graphRef);
 
+    /// <summary>Store alternate phrasings for a fact, so a differently-worded question still matches it.
+    /// Null clears them.
+    ///
+    /// <para>DERIVED, like the graph ref beside it: <c>knowledge</c> stays the record of truth and these are
+    /// a search aid regenerated from it, which is why they live in a column rather than a table and why
+    /// losing them costs nothing but recall quality. The FTS trigger picks the new value up on UPDATE, so
+    /// writing here is the whole operation.</para></summary>
+    Task SetAkaAsync(long id, string? aka);
+
     /// <summary>Resolve graph references back to their rows, IN THE ORDER GIVEN — the graph did the
     /// ranking, so re-sorting here would throw it away. Each row comes back paired with the ref that
     /// found it, so the caller can attach that hit's retrievability. A ref with no row is skipped
@@ -122,6 +131,12 @@ public sealed class KnowledgeStore : IKnowledgeStore
             "INSERT INTO knowledge(kind, topic, content, source, confidence, hits, created_at, updated_at) " +
             "VALUES (@kind, @topic, @content, @source, @confidence, 0, @now, @now); SELECT last_insert_rowid();",
             new { kind, topic, content, source, confidence = Math.Clamp(confidence, 0, 1), now });
+    }
+
+    public async Task SetAkaAsync(long id, string? aka)
+    {
+        using var conn = _db.Open();
+        await conn.ExecuteAsync("UPDATE knowledge SET aka = @aka WHERE id = @id", new { id, aka });
     }
 
     public async Task<List<KnowledgeRow>> RecallAsync(string query, string? kind, int limit)

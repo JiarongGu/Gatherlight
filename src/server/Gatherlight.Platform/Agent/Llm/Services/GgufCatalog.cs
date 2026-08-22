@@ -70,7 +70,7 @@ public static class GgufCatalog
             "ggml-org/embeddinggemma-300M-GGUF", "0f741b5a6585bd53aeb15cd1372c56f2a0f65e12",
             "embeddinggemma-300M-Q8_0.gguf",
             "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63", 333_590_944,
-            "语义检索用。和「本机 · Ollama」里推荐的是同一个模型,量化方式不同 —— 实测检索质量相同,体积只有一半。",
+            "语义检索用。和「本机」里 Ollama 推荐的是同一个模型,量化方式不同 —— 实测检索质量相同,体积只有一半。",
             new EmbeddingMeasurement(9, 10, 25, 10, "2026-08-22")),
 
         new GgufModel(

@@ -1,6 +1,6 @@
 # 内置 · Built-in model runner — which runtime, and why
 
-The 记忆检索 panel lists **内置(随应用附带)** as a backend on both recall layers and says it is not shipped
+The 记忆检索 panel lists **ONNX**, under the **内置** heading, as a backend on both recall layers and says it is not shipped
 yet. This document picks what will implement it. Written 2026-08-22.
 
 **Terms** (see `.claude/rules/dev-conventions.md`): a **backend** is *where a model comes from* —

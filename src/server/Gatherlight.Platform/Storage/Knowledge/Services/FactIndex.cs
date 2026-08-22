@@ -134,10 +134,19 @@ public sealed class FactIndex : IFactIndex
     /// <see cref="DropGraphVectorsAsync"/>; the writing and searching are the engine's own.</summary>
     private readonly IVectorStore? _vectors;
 
+    // The CLI 语义 arm: a one-shot model call per write that stores rephrasings, for installs with no
+    // local model. Both nullable — the arm is off unless a household bound it, and everything here works
+    // exactly as before when they have not.
+    private readonly Lyntai.Llm.ILlmClient? _llm;
+    private readonly Kernel.Services.ServerConfigService? _config;
+
     public FactIndex(IMemoryEngineFactory? engines, IKnowledgeStore store,
         IMemoryGraphStore? graph = null, ILogger<FactIndex>? log = null,
-        ISemanticMemory? semantic = null, IVectorStore? vectors = null)
+        ISemanticMemory? semantic = null, IVectorStore? vectors = null,
+        Lyntai.Llm.ILlmClient? llm = null, Kernel.Services.ServerConfigService? config = null)
     {
+        _llm = llm;
+        _config = config;
         _store = store;
         _graph = graph;
         _log = log;
@@ -162,12 +171,51 @@ public sealed class FactIndex : IFactIndex
             // The fact's kind rides on the knowledge row, which is what the recall filters on.
             var reference = await _engine.RememberAsync(
                 new MemoryWrite(TaskKey, AllFacts, content, Headline: topic), ct);
+            await ExpandAkaAsync(kind, topic, content, ct);
             return Encode(reference);
         }
         catch (Exception ex)
         {
             _log?.LogWarning(ex, "fact index: could not index {Kind}/{Topic}; it stays findable by FTS", kind, topic);
             return null;
+        }
+    }
+
+    /// <summary>Store other ways to say this fact, when 语义 is bound to the CLI arm.
+    ///
+    /// <para>This is the write-time half of <see cref="Agent.Llm.Sources.ClaudeCliSemanticSource"/>: the
+    /// layer's job is that a paraphrase finds the fact, and on a machine with no local model the only way
+    /// to buy that is to write the paraphrases down. Costs one model call per fact — the same class of cost
+    /// 判断 already pays per write — and nothing at recall time, which is the path the household waits on.
+    ///
+    /// <para>NEVER throws and never blocks the write. A fact that failed to gain phrasings is a fact that
+    /// is merely as findable as it was before; a fact that failed to be written is data loss. Which way
+    /// round that trade goes is not a close call.</para></summary>
+    private async Task ExpandAkaAsync(string kind, string topic, string content, CancellationToken ct)
+    {
+        if (_llm is null || _config is null) return;
+        var mem = _config.Current.Memory;
+        // The SAVED binding, read per write rather than captured at startup: this arm registers nothing,
+        // so there is no DI-time snapshot to go stale, and binding it must take effect on the next fact
+        // rather than after a restart.
+        if (!string.Equals(mem.SemanticSource, Agent.Llm.Sources.MemoryBackends.ClaudeCli,
+                StringComparison.OrdinalIgnoreCase))
+            return;
+        try
+        {
+            var phrasings = await Agent.Llm.Sources.ClaudeCliSemanticSource.RephraseAsync(
+                _llm, mem.EmbeddingModel, content, ct);
+            if (phrasings.Count == 0) return;
+            var row = (await _store.RecallAsync(topic, kind, 1)).FirstOrDefault();
+            if (row is null) return;
+            await _store.SetAkaAsync(row.Id, string.Join('\n', phrasings));
+            _log?.LogInformation("fact index: stored {Count} phrasings for {Kind}/{Topic}",
+                phrasings.Count, kind, topic);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex,
+                "fact index: could not expand {Kind}/{Topic}; it stays as findable as before", kind, topic);
         }
     }
 

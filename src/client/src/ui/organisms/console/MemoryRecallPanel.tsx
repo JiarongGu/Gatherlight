@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { PanelButton, PanelBadge } from '@/ui/atoms';
-import { BackendPicker, type BackendView } from '@/ui/molecules';
+import { BackendPicker, type BackendGroup } from '@/ui/molecules';
 import { inHost } from '@/lib/host';
 
 /**
@@ -9,11 +9,19 @@ import { inHost } from '@/lib/host';
  * It renders INSIDE 校准 · Cortex, so it follows Cortex's vocabulary rather than inventing one — the amber
  * left edge for active, display serif names, mono for anything you compare.
  *
- * TWO THINGS IT DELIBERATELY NO LONGER DOES. It does not download or delete models: a model is a file with
- * a size and a capability, so it lives in 资源 beside the runtime that hosts it. And it holds no list of
- * which backend can serve which layer — the server sends the sources for each layer, and a backend is in
- * that list because a class implementing the layer's interface exists. That is why 语义 shows no Claude
- * arm: not a filter here, an absent class there.
+ * IT MANAGES NO MODELS AT ALL, and that is now consistent rather than a gap. Everything Gatherlight
+ * provisions — the pinned GGUFs, the ONNX embedder — lives in 资源 beside the runtime that hosts it, tested
+ * and ranked and downloadable there. Everything else belongs to a service the household runs, reached by
+ * address through 本机, and managed with that service's own tools.
+ *
+ * The in-between state is what was wrong: for a while this panel listed a daemon's models and offered them
+ * while nothing anywhere could add or remove one. Half-managing somebody else's runtime has no consistent
+ * version — either the app owns a runtime or it connects to one.
+ *
+ * It holds no list of which backend can serve which layer — the server sends the groups, and a backend is
+ * in one because a class implementing that layer's interface exists. Nothing here FILTERS, which is the
+ * property that matters; what an absent class never licensed was withholding a choice (see
+ * IMemorySemanticSource — 语义 has a Claude arm precisely because that reasoning was wrong).
  */
 
 // A backend's shape belongs to BackendPicker — the molecule that renders it — so this panel imports the
@@ -30,7 +38,9 @@ interface LayerView {
   // What is RUNNING, as opposed to what is saved — in the SAME vocabulary, because two vocabularies for
   // one comparison can never come out equal, which reads as a restart permanently owed.
   activeSource: string | null; activeModel: string | null;
-  sources: BackendView[];
+  /** The three places a model can live (cli / machine / self-contained), each with its member backends —
+   *  see MemoryGroups. Grouped by the SERVER so the group's name and sentence have one writer. */
+  groups: BackendGroup[];
   note?: string | null;
   reindex?: {
     running: boolean; done: number; total: number;
@@ -62,7 +72,7 @@ export function MemoryRecallPanel(
 
   const semantic = s?.layers.find((l) => l.id === 'semantic');
   // Poll ONLY while a rebuild runs. It outlives the request that started it, so the panel has to go and
-  // look; polling always would spend a probe of Ollama every second and a half on an idle screen.
+  // look; polling always would probe every backend every second and a half on an idle screen.
   // Gate on a DERIVED boolean — keying the effect on `s` would tear down the interval every tick.
   const rebuilding = semantic?.reindex?.running ?? false;
   useEffect(() => {
@@ -103,6 +113,14 @@ export function MemoryRecallPanel(
 
   const bind = (layer: string) => (source: string, model: string, endpoint?: string) =>
     post(`/api/manage/memory/layer/${layer}`, { source, model, endpoint }, `bind:${layer}`);
+
+  // WHAT "no model" MEANS, per layer — the 内置 group has no backend to bind, so the picker needs the
+  // action handed to it. 判断 has a LIVE switch (its enrichment flag, effective immediately); 语义 is a
+  // startup registration, so it unbinds. Two different verbs for one option, which is exactly why this is a
+  // prop rather than something BackendPicker works out — it knows nothing about layers.
+  const offFor = (l: LayerView) => l.id === 'judge'
+    ? { active: !l.on, apply: () => post('/api/manage/memory/enrichment', { enabled: false }, 'enrich') }
+    : { active: !l.on, apply: () => post('/api/manage/memory/layer/semantic/off', undefined, 'off') };
 
   return (
     <>
@@ -157,8 +175,9 @@ export function MemoryRecallPanel(
             <div className="mem-layer-desc">{judge.what}</div>
             <div className="mem-layer-desc"><b>费用</b> {judge.cost}</div>
             {judge.on && (
-              <BackendPicker sources={judge.sources} boundSource={judge.source} boundModel={judge.model}
-                busy={busy} bind={bind('judge')} modelsAt={s.modelsAt} />
+              <BackendPicker groups={judge.groups} boundSource={judge.source} boundModel={judge.model}
+                busy={busy} bind={bind('judge')}
+              off={offFor(judge)} modelsAt={s.modelsAt} />
             )}
           </div>
           <div className="mem-layer-side">
@@ -187,8 +206,9 @@ export function MemoryRecallPanel(
             </div>
             <div className="mem-layer-desc">{semantic.what}</div>
             <div className="mem-layer-desc"><b>费用</b> {semantic.cost}</div>
-            <BackendPicker sources={semantic.sources} boundSource={semantic.source} boundModel={semantic.model}
-              busy={busy} bind={bind('semantic')} modelsAt={s.modelsAt} />
+            <BackendPicker groups={semantic.groups} boundSource={semantic.source} boundModel={semantic.model}
+              busy={busy} bind={bind('semantic')}
+              off={offFor(semantic)} modelsAt={s.modelsAt} />
             {semantic.note && <div className="mem-fine">说明:{semantic.note}</div>}
 
             {/* The rebuild, while it runs and after it ends. It used to be a greyed-out button and
@@ -236,6 +256,7 @@ export function MemoryRecallPanel(
           </div>
         </div>
       </div>
+
     </>
   );
 }
@@ -245,7 +266,11 @@ export function MemoryRecallPanel(
  *  moment it mattered. */
 function backendLabel(layer: LayerView, sourceId: string | null, model: string | null) {
   if (!sourceId) return '未设置';
-  const src = layer.sources.find((x) => x.id === sourceId);
+  // Flattened: the badge names the BACKEND that is running, not the group, because "Ollama" and
+  // "llama.cpp" are what a household needs to see when a restart is owed — the group heading (本机 · Machine)
+  // holds both and is one level too coarse to tell them apart. Which is also why the member names are BARE:
+  // the heading already says who manages it, so repeating that in every member just made the badge long.
+  const src = (layer.groups ?? []).flatMap((g) => g.sources).find((x) => x.id === sourceId);
   const name = src?.name ?? sourceId;
   // The CLI arm's model is one of three well-known names, so it reads fine inline; a local model id is
   // long, and the badge is the wrong place for it only when there is nothing else to say.

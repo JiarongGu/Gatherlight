@@ -21,18 +21,58 @@ public static class MemoryLayers
 /// gives.</para></summary>
 public static class MemoryBackends
 {
+    /// <summary>Map a stored backend id onto one that still exists.
+    ///
+    /// <para>ONE entry today: <c>ollama</c> → <c>openai-compat</c>, because the dedicated Ollama backend was
+    /// removed and the generic one reaches the same daemon (verified — see <see cref="Ollama"/>). Applied on
+    /// READ rather than by rewriting settings.json, matching how <c>memory.judgeTransport</c> is handled: a
+    /// read-time map cannot half-succeed, and there is no migration to run twice.</para></summary>
+    public static string Canonical(string? id) => id ?? "";
+
+    /// <summary>Ids that used to name a backend and no longer resolve to one.
+    ///
+    /// <para><b>Nothing to map them TO, which is why they are surfaced instead.</b> `ollama` briefly pointed
+    /// at `openai-compat`; then that went as well — it was the one path never tested end to end, its whole
+    /// proof being that it correctly refuses things. So an install bound to either has no backend, and the
+    /// two ways to handle that are opposites: fall back quietly, or SAY so. Falling back is what this area
+    /// keeps getting caught by — 判断 would move to the CLI and start spending account quota nobody chose,
+    /// and 语义 would simply switch off and report nothing. The layer therefore carries a sentence naming
+    /// what it used to use and what to pick now.</para></summary>
+    public static bool IsRetired(string? id) =>
+        string.Equals(id, Ollama, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(id, OpenAiCompatible, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The authenticated Claude CLI — a provisioned resource, run as a process.</summary>
     public const string ClaudeCli = "claude-cli";
 
-    /// <summary>An Ollama on this machine, whether the household's own or the copy the app provisioned.
-    /// One daemon on one port serves both layers; only the model differs. It gets its own backend not
-    /// because it is special as a runtime — it speaks the same API as the one below — but because the app
-    /// MANAGES it: listing, pulling and deleting models is what 资源's buttons rest on.</summary>
+    /// <summary>LEGACY ONLY — an id that may still be sitting in an existing <c>settings.json</c>. There
+    /// is no Ollama backend any more.
+    ///
+    /// <para><b>Why it went.</b> The managed local runtime is llama.cpp: we download it, start it, pin its
+    /// models by sha256 and publish their measured ranking as downloadable resources. Ollama was a second
+    /// runtime we half-managed — detected, listed and depended on, but pulled and deleted from only some
+    /// screens — and that inconsistency was visible to the household. It bought nothing that survives
+    /// scrutiny either: verified 2026-08-22 against a live daemon, <see cref="OpenAiCompatible"/> reaches it
+    /// completely (<c>/v1/models</c> enumerates, <c>/v1/embeddings</c> returned 768 dims,
+    /// <c>/v1/chat/completions</c> answered). So a household running Ollama still uses it — by address, like
+    /// any other service they run. The OPTION is intact; only our pretence of owning it is gone.</para>
+    ///
+    /// <para>See <see cref="IsRetired"/> for what happens to an install still bound to it.</para></summary>
     public const string Ollama = "ollama";
 
-    /// <summary>Any other local runtime speaking the OpenAI-compatible API — llama.cpp's llama-server,
-    /// LM Studio, vLLM, Jan, LocalAI. The household supplies the address and brings their own models; we
-    /// cannot download or delete anything there, and the picker says so.</summary>
+    /// <summary>Any local runtime speaking the OpenAI-compatible API — Ollama, LM Studio, vLLM, Jan,
+    /// LocalAI, a llama-server they started themselves. The household supplies the address and brings their
+    /// own models; we cannot download or delete anything there, and the picker says so.
+    ///
+    /// <para><b>RETIRED too</b>, and for a different reason from Ollama's: it was never tested end to end.
+    /// Every case in <c>p51</c> was a denial (non-loopback refused, junk refused, unreachable reported) or an
+    /// address round-trip against a port with nothing listening — the suite's own comment said "saving the
+    /// address and REACHING it are two different steps and only the first one happens here". No test, and no
+    /// run, ever listed models from a live endpoint, embedded through it, or answered a judgement through it.
+    /// Its only real evidence was that <see cref="LlamaCpp"/> uses the same underlying Lyntai provider.
+    /// Shipping an option we cannot stand behind is worse than not offering it; the honest alternatives were
+    /// to test it properly or drop it, and dropping it is what the product wanted anyway now that every
+    /// remaining path is measured and pinned.</para></summary>
     public const string OpenAiCompatible = "openai-compat";
 
     /// <summary>llama.cpp's <c>llama-server</c>, PROVISIONED and run by this app — the self-managed runtime
@@ -84,7 +124,10 @@ public static class MemoryBackends
 /// <para>A declined backend is never bindable: it has no source, so there is nothing to bind. That is why
 /// this is a separate list rather than a flag on <see cref="SourceStatus"/> — a shape that cannot be
 /// selected should not be reachable through the type that selects things.</para></summary>
-public sealed record DeclinedBackend(string Id, string Name, string Reason);
+/// <param name="Group">Which heading it appears under — see <see cref="MemoryGroups"/>. Declared, not
+/// derived: there is no source to ask, and a declined backend still belongs somewhere, because "why can
+/// Claude not embed?" is a question about a place a household was looking.</param>
+public sealed record DeclinedBackend(string Id, string Name, string Reason, string Group);
 
 /// <summary>Whether a source can serve its layer on THIS machine right now, and the one sentence the
 /// household reads when it cannot.
@@ -100,6 +143,82 @@ public sealed record DeclinedBackend(string Id, string Name, string Reason);
 public sealed record SourceStatus(bool Available, string? Reason = null, string? Suggest = null)
 {
     public static readonly SourceStatus Ready = new(true);
+}
+
+/// <summary>WHERE THE MODEL LIVES — the three-way choice a household actually makes.
+///
+/// <para><b>Five backends were never five decisions.</b> The picker listed one row per implementation, so
+/// `ollama` and `openai-compat` sat side by side as separate answers when they are the same answer
+/// ("something already on my machine, that I run"), and `llama-cpp` and `builtin` likewise ("Gatherlight
+/// handles it"). One row per layer was also DECLINED — 内置 cannot judge, Claude cannot embed — which made
+/// a fifth of the control dead. The axis the household is choosing on is WHO MANAGES THE MODEL, and there
+/// are exactly three answers.</para>
+///
+/// <para><b>The implementation stops being a decision and becomes a consequence.</b> Within a group the
+/// household picks a MODEL, and a model belongs to exactly one source — an Ollama tag is Ollama's, a GGUF
+/// is llama.cpp's, the ONNX bundle is its own. So no rule has to choose an engine for them, and nothing
+/// auto-selects: the model choice IS the source choice, one level down where it belongs.</para>
+///
+/// <para>Grouping is therefore PRESENTATION. Sources stay one class per implementation
+/// (<see cref="MemorySources"/>), the wire still binds a source, and this only says which heading a source
+/// appears under — so a new backend joins a group instead of adding a button.</para></summary>
+public static class MemoryGroups
+{
+    /// <summary>The authenticated Claude account. No local model, nothing downloaded.</summary>
+    public const string Cli = "cli";
+
+    /// <summary>A model the app downloads and runs — llama.cpp's <c>llama-server</c>, or the ONNX session we
+    /// host in-process. Both are ours to install, start and delete; both cost disk.</summary>
+    public const string Managed = "managed";
+
+    /// <summary>NO MODEL. Choosing it turns the layer off and leaves 公式 doing the work — which is the only
+    /// thing here that genuinely needs nothing installed, and therefore the only thing entitled to be
+    /// called 内置.
+    ///
+    /// <para><b>Why this is a group and not just an absence.</b> "Off" was previously reachable only by a
+    /// separate 停用 button, so the picker implied a model was mandatory and the way out lived elsewhere. It
+    /// is a real answer to "where does this layer's model come from" — nowhere — so it belongs in the same
+    /// row as the other answers, and it holds no backends because there is nothing to configure.</para>
+    ///
+    /// <para><b>And the name was a false claim before this.</b> 内置 used to label the llama.cpp group, whose
+    /// own description said the app DOWNLOADS the runtime and the models: 35 MB plus 222 MB–2.5 GB. Nothing
+    /// about that is built in. The word moved to the option that costs nothing, and the group that downloads
+    /// is now named after what it downloads.</para></summary>
+    public const string None = "none";
+
+    /// <summary>Fixed display order, cheapest-first in what the household must already have: an account they
+    /// use, then a download, then nothing at all.</summary>
+    private static readonly string[] Ordered = { Cli, Managed, None };
+    public static IReadOnlyList<string> Order => Ordered;
+
+    public static int Rank(string id)
+    {
+        var i = Array.IndexOf(Ordered, id);
+        return i < 0 ? int.MaxValue : i;
+    }
+
+    /// <summary>What the picker calls each group. Three short words on one row with the model select and the
+    /// button — the earlier <c>zh · en</c> shape wrapped it.</summary>
+    public static string Name(string group) => group switch
+    {
+        Cli => "Claude CLI",
+        Managed => "llama.cpp",
+        None => "内置",
+        _ => group,
+    };
+
+    /// <summary>One sentence per group, answering "what does choosing this cost me" — which is the question
+    /// actually being asked, and the axis the three names are ordered on.</summary>
+    public static string Description(string group) => group switch
+    {
+        Cli => "用已登录的 Claude 账号:不在这台机器上跑模型,不用下载任何东西 —— "
+             + "代价是消耗账号额度,每次调用都要启动一次 CLI。",
+        Managed => "由应用下载、启动和管理的模型:llama.cpp 跑一个常驻服务,或直接在应用进程内跑 ONNX。"
+             + "模型在「资源 · Resources」面板下载,都实测排过名 —— 占磁盘,但不消耗账号额度,也不用填地址。",
+        None => "不用模型:这一层关掉,检索只靠「公式」(图衰减 + 排名融合 + 三元组全文检索)。"
+             + "不下载任何东西、不消耗额度、不占显存 —— 也就没有这一层带来的提升。",
+        _ => "",
+    };
 }
 
 /// <summary>WHO PROVIDES THE RUNTIME behind a backend, for this install.
@@ -170,11 +289,14 @@ public sealed record MemorySourceSettings(MemoryConfig Config, string ResourcesP
 /// <para>Passed per call rather than injected, so a source can be a stateless instance in a static
 /// catalog — which is what lets ONE list serve <c>GatherlightApp</c> before the container exists and the
 /// console after it. Two lists for one set is the drift this arrangement is built to avoid.</para></summary>
+/// <param name="Llm">The one-shot LLM client, for an arm whose work IS a model call rather than a
+/// service to connect to. Nullable because most sources never need it and a null must not stop them being
+/// described — a source that cannot work without it says so from <c>StatusAsync</c> instead.</param>
 public sealed record MemorySourceContext(
-    IOllamaRuntime Ollama,
     IClaudeCliRuntime Claude,
     ILlamaServerRuntime Llama,
-    MemorySourceSettings Settings)
+    MemorySourceSettings Settings,
+    Lyntai.Llm.ILlmClient? Llm = null)
 {
     public MemoryConfig Config => Settings.Config;
 }

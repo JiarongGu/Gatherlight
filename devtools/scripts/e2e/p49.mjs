@@ -188,12 +188,18 @@ try {
       ok('and it is the SMALL one: under 60 MB, where Ollama is over a gigabyte',
         (llama?.approxBytes ?? 0) > 5_000_000 && (llama?.approxBytes ?? 0) < 60_000_000,
         String(llama?.approxBytes));
-      // Order is the product's answer to "which of these is ours" — the runtime we install above the one
-      // we merely connect to. It reversed the day llama.cpp was picked, so a silent re-sort would undo it.
+      // OLLAMA IS NOT HERE, and this is the assertion that keeps it out. 资源 provisions what Gatherlight
+      // manages; Ollama is a HOUSEHOLD runtime we detect and connect to. The spec used to sit right here
+      // offering a 1.46 GB download, which is how "a runtime the app installs" and "a prerequisite you
+      // install yourself" became indistinguishable — to a household, and then to us, in our own docs.
+      //
+      // Paired with its positive control on the next line, because a denial alone would also pass on a
+      // build that had lost the whole catalog: llama.cpp — the runtime we DO install — must still be here.
       const ids = rows.map((r) => r.id);
-      ok('and it is listed BEFORE Ollama — the one we install, then the one we detect',
-        ids.indexOf('llama-cpp') >= 0 && ids.indexOf('llama-cpp') < ids.indexOf('ollama'),
-        ids.join(','));
+      ok('Ollama is NOT offered for download — we connect to it, we do not install it',
+        !ids.includes('ollama'), ids.join(','));
+      ok('…while the runtime we DO manage is still offered (the control for that denial)',
+        ids.includes('llama-cpp'), ids.join(','));
 
       // THE SHELF. Every GGUF in GgufCatalog becomes a resource, generated rather than hand-written — one
       // list for one set. Asserted as a shape rather than by name so adding a model does not break this,
@@ -219,7 +225,7 @@ try {
       ok('every model declares itself a model, and every runtime a runtime',
         ggufs.every((r) => r.category === 'model')
           && rows.find((r) => r.id === 'embed-model')?.category === 'model'
-          && ['git', 'node', 'llama-cpp', 'ollama', 'claude']
+          && ['git', 'node', 'llama-cpp', 'claude']
             .every((i) => rows.find((r) => r.id === i)?.category === 'runtime'),
         JSON.stringify(rows.map((r) => `${r.id}:${r.category}`)));
     }

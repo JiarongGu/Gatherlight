@@ -435,13 +435,49 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   is built — so a regression that re-buys the embedding and reads none of it now announces itself instead of
   showing up as "recall feels no different". Verified both ways on 2026-08-21: silent on the current wiring,
   and firing by name with `SemanticSeedK` put back to 0.
+- **"Worse" and "costly" are reasons to DESCRIBE an option, not to remove it — and "cannot" has to mean
+  cannot.** This was violated twice in one session, both times by reasoning that sounded like engineering
+  judgement and was actually a decision taken away from the household.
+  **(1) 语义 had no Claude arm** and the panel explained why: "Claude ships no embeddings endpoint, so this
+  layer cannot have it." The first clause is true; the conclusion was not. The layer was defined as
+  embeddings BY US, so the missing class was a consequence of our definition, not a limit of Claude's — and
+  the effect was that a machine which cannot run a local model (no GPU to spare, a GPU wanted for something
+  else, a household declining a 222 MB download) was offered NOTHING for that layer, with a paragraph where
+  a choice belonged. "No class implements the interface" is circular whenever we wrote the interface.
+  `ClaudeCliSemanticSource` now serves the layer's actual job — a paraphrase finds the fact — by storing
+  rephrasings instead of vectors. It is genuinely worse than an embedder for wording nobody anticipated, and
+  that sentence is in its description rather than in a refusal.
+  **(2) Ollama's pull/delete was deleted** because 资源 was scoped to "only what Gatherlight provisions".
+  That scope decision is about what a PANEL SHOWS; it got carried through into removing
+  `PullModelAsync`/`RemoveModelAsync` from `IOllamaRuntime` and the endpoints with them, justified as "an
+  unused management verb is an invitation to the next caller". Code hygiene does not outrank what the
+  household can do. It cost the free-form field whose own docstring records why it exists — *a catalogue
+  baked into a release cannot contain a model published after it*, and this product already shipped once
+  without the two strongest options that existed. Restored under 记忆检索 · 本机 — and then removed AGAIN, on
+  purpose, when Ollama stopped being a backend at all: at that point the app no longer depended on the daemon,
+  so there was nothing left to half-manage. Two removals of the same code, one wrong and one right; the
+  difference is whether the DEPENDENCY went with it, not how tidy the interface looked.
+  **The test:** if the honest sentence is "it does this less well" or "this costs more", ship the option with
+  that sentence attached and let the household weigh it. A DECLINED entry is only for a real impossibility
+  (内置 on 判断 needs an in-process chat model, which does not exist) — never for an option nobody built.
+  A model row saying "you do not need this" is the same error in miniature: state the trade-off, and say
+  when it is unmeasured. And a removed capability needs a test asserting the household can still do it —
+  both removals above passed every check, because nothing asserted the ability existed (`p51` now does).
+
 - **VOCABULARY, because this area had none and the gap cost a whole design conversation.** FOUR words, and
   they are not interchangeable. A **LAYER** is a job (公式 · 判断 · 语义). A **BACKEND** is *where the model
-  comes from* — `claude-cli` · `ollama` · `openai-compat` · `builtin` (`MemoryBackends`). A **MODEL** is
+  comes from* — `claude-cli` · `llama-cpp` · `builtin` (`MemoryBackends`). `ollama` and `openai-compat`
+  were backends until 2026-08-22 and are now RETIRED ids: `IsRetired` refuses a binding to either and the
+  layer says what to pick instead, because the two silent alternatives were moving 判断 onto account
+  quota and switching 语义 off. A **GROUP** is one of the three answers the picker offers — `cli` ·
+  `managed` · `none` — keyed on what it COSTS, and `none` deliberately holds no backends: choosing it
+  turns the layer off, which is a real answer to "where does the model come from" and used to be a
+  separate button. A **MODEL** is
   what a backend serves. An **ORIGIN** is *whose runtime it is* — `bundled` (in our process) · `app` (we
   downloaded and start it) · `household` (they run it, we only connect) — `RuntimeOrigin`, resolved PER
-  INSTALL because for `ollama` and `claude-cli` the app provisions a copy AND a household may have their
-  own, so only `Locate()` knows which won. **That fourth word was missing and its absence cost the second
+  INSTALL because for `claude-cli` the app provisions a copy AND a household may have their own, so only
+  `Locate()` knows which won — it is the last backend where that question is live, which is why `p51` can
+  no longer drive the `app` branch and says so instead of pretending. **That fourth word was missing and its absence cost the second
   design conversation**: the picker said only 本机 · Ollama, "your Ollama", while 资源 had been downloading
   and starting it since 2026-08-21 — so a provisioned runtime read as a manual prerequisite, to a household
   and then to us, and a false claim ("语义 is the only layer you cannot switch on without installing a
@@ -449,11 +485,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   instead of being omitted — omitting it answers "why isn't this an option?" only in the source tree.
   `openai-compat` is ONE class for the whole OpenAI-compatible family (llama-server · LM Studio · vLLM ·
   Jan · LocalAI), not one per product, for the same reason `EmbeddingCatalog` is not a gate: a list of
-  products goes stale the moment somebody ships a new runtime. Ollama keeps its own backend because the app
-  can MANAGE it (list/pull/delete) — a distinction the panel states rather than papering over — though as
-  of 2026-08-22 the runtime the app PROVISIONS is llama.cpp, not Ollama (next bullet). And a
-  household-typed address is loopback-only (`GATHERLIGHT_LLM_ALLOW_REMOTE=1` to override), because every
-  fact written goes to it.
+  products goes stale the moment somebody ships a new runtime. Ollama keeps its own backend because the app can
+  *enumerate* it — a model list comes back from the daemon, where `openai-compat` only knows what an address
+  reports. It does NOT manage it: as of 2026-08-22 the runtime the app provisions is llama.cpp (next
+  bullet). **It is not a backend at all any more** — see the RETIRED ids in the vocabulary bullet: first we
+  stopped installing it, then stopped managing its models, and finally stopped connecting to it, because each
+  step left the app depending on a runtime it would not own. The intermediate state is the instructive one:
+  记忆检索 offered a daemon's models while nothing anywhere could add or remove one, which is a shape with no
+  consistent version. `p49` asserts the absent spec against the present `llama-cpp` one, and `p51` asserts
+  that binding a retired id is REFUSED (400) rather than silently redirected — the fallback would have moved
+  判断 onto account quota nobody chose and switched 语义 off, both invisibly.
   The docs previously described this one axis three ways — "the local model", "the judge's *transport*", "the
   embedder" — and named it never, so every discussion of it had to invent a term. **The trap in that
   invention:** 嵌入 already means *embedding* here (`EmbeddingCatalog`, 嵌入模型, the 嵌入 badge), so
@@ -489,9 +530,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   backend, a **static catalog** (`MemorySources`) — never a predicate over capability strings. That earlier
   predicate was wrong in both directions at once: a machine whose models were all catalogued embedders got a
   dead switch with no explanation, and the first UNCATALOGUED embedder passed straight through the check
-  written to stop it, into a fail-open policy. 语义 offers no Claude arm because no `ClaudeCliSemanticSource`
-  exists (no embeddings endpoint) — an absent class, not an exclusion — and a backend that could do both would
-  implement both interfaces and appear in both toggles with no other edit. **Static rather than a DI
+  written to stop it, into a fail-open policy. 语义 DOES have a Claude arm now (`ClaudeCliSemanticSource`, rephrasing
+  rather than embedding) — for a while it had none, and the panel explained the absence instead, which was
+  the wrong shape: an absent class is a fact about what we wrote, never a reason to withhold a choice. What
+  the catalog still guarantees is that nothing FILTERS — a layer's arms are the classes implementing its
+  interface, never a predicate over capability strings. **Static rather than a DI
   collection** because `GatherlightApp` wires from it *inside* `AddLyntai(b => …)`, while the container is
   being built: a DI collection would need a second registration-time list, and two lists for one set is the
   drift `check-ui-registry` exists to catch. Sources take runtime deps as a per-call `MemorySourceContext`.
