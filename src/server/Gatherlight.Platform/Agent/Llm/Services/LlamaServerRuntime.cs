@@ -72,9 +72,15 @@ public interface ILlamaServerRuntime
 /// </summary>
 public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 {
-    /// <summary>Not llama.cpp's own 8080 — that is a common port for a household's own services, and this
-    /// is a daemon we start without asking. Adjacent to Ollama's 11434 so the two read as siblings.</summary>
-    private const string DefaultBaseUrl = "http://127.0.0.1:11435";
+    /// <summary>The base of the port range. Not llama.cpp's own 8080 — that is a common port for a
+    /// household's own services, and this is a daemon we start without asking. Adjacent to Ollama's 11434 so
+    /// the two read as siblings.</summary>
+    private const int PortBase = 11435;
+
+    /// <summary>How many ports the per-install hash may land in. Small, because a collision between two
+    /// installs is recoverable (the second adopts the first's router) while a wide range would wander into
+    /// ports something else may own.</summary>
+    private const int PortSpan = 64;
 
     /// <summary>Enough for one embedder plus one judge, which is every layer this product has. Higher would
     /// let an idle model hold VRAM for nothing; lower would evict one of the two on every alternation.</summary>
@@ -103,23 +109,47 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <summary>Env override → loopback default, with the loopback guard applied. Non-loopback is refused
     /// for the same reason as Ollama's: every fact the household writes goes to whatever does the
     /// embedding, and a remote address does that silently and forever.</summary>
-    public string BaseUrl => ResolveBaseUrl(_log);
+    public string BaseUrl => ResolveBaseUrl(_platform.ResourcesPath, _log);
 
     /// <summary>Env override → loopback default, guard applied. STATIC for the same reason
     /// <see cref="OllamaRuntime.ResolveBaseUrl"/> is: the recall source resolves this endpoint at DI
     /// registration time, before any container exists, and this service resolves it again later. Two answers
     /// for one endpoint is how an install ends up embedding against one address and reporting another.</summary>
-    public static string ResolveBaseUrl(ILogger? log = null)
+    /// <summary>The port THIS install's router listens on — derived from the data folder.
+    ///
+    /// <para><b>A fixed port was wrong, and an e2e run proved it.</b> With one hard-coded 11435, a second
+    /// Gatherlight on the same machine finds the first's router already answering, adopts it (which is the
+    /// correct behaviour for OUR router surviving a restart) and then serves the OTHER install's models from
+    /// the other install's data folder. The suite hit exactly this: a fixture with no llama-server binary
+    /// reported <c>installed:false, serving:true</c> and listed a model belonging to the developer's real
+    /// install. Ollama can hard-code 11434 because a household runs one shared Ollama; this router is
+    /// private, holds our models, and is started by us — so it must be per-install.</para>
+    ///
+    /// <para>Deterministic rather than ephemeral, because a restart has to find its own router again for
+    /// adoption to work. FNV-1a over the resolved data path, so two folders differing anywhere land
+    /// apart.</para></summary>
+    public static int PortFor(string dataPath)
+    {
+        var key = Path.GetFullPath(dataPath).TrimEnd(Path.DirectorySeparatorChar).ToLowerInvariant();
+        unchecked
+        {
+            var h = 2166136261u;
+            foreach (var c in key) { h ^= c; h *= 16777619u; }
+            return PortBase + (int)(h % PortSpan);
+        }
+    }
+
+    public static string ResolveBaseUrl(string dataPath, ILogger? log = null)
     {
         var raw = Environment.GetEnvironmentVariable("GATHERLIGHT_LLAMACPP_URL");
-        if (string.IsNullOrWhiteSpace(raw)) return DefaultBaseUrl;
+        if (string.IsNullOrWhiteSpace(raw)) return $"http://127.0.0.1:{PortFor(dataPath)}";
         if (Uri.TryCreate(raw, UriKind.Absolute, out var u) && !u.IsLoopback
             && Environment.GetEnvironmentVariable("GATHERLIGHT_LLM_ALLOW_REMOTE") != "1")
         {
             log?.LogWarning(
                 "Ignoring llama-server URL {Url}: a non-loopback runtime would send household facts off "
                 + "this machine. Set GATHERLIGHT_LLM_ALLOW_REMOTE=1 if that is truly intended.", raw);
-            return DefaultBaseUrl;
+            return $"http://127.0.0.1:{PortFor(dataPath)}";
         }
         return raw.TrimEnd('/');
     }

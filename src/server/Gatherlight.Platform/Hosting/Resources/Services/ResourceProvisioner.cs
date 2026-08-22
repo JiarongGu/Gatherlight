@@ -56,6 +56,8 @@ public sealed record ResourceSpec(
     string? ArchiveRoot = null,
     // For ResourceKind.Files: what to fetch and where each piece lands.
     IReadOnlyList<ResourceFile>? Files = null,
+    // See ResourceStatus.ModelId.
+    string? ModelId = null,
     // WHAT THIS IS, for a panel that groups runtimes separately from the models they host. Derived here
     // rather than inferred by the client from a list of ids: that list existed, drifted the moment the GGUF
     // ids changed shape, and put three models back in the runtimes column beside Chromium — the exact
@@ -80,7 +82,12 @@ public sealed record ResourceStatus(
     string Id, string Name, string NeededFor, long ApproxBytes,
     bool Installed, string State, int Percent, string? Message,
     string? Version = null, string? Available = null, string? Detail = null,
-    string Category = ResourceCategory.Runtime);
+    string Category = ResourceCategory.Runtime,
+    // For a model resource that a RUNTIME also reports as inventory: the id that runtime knows it by.
+    // Non-null means "something else already shows this once it is installed", which is how the console
+    // avoids listing an installed GGUF twice — as a download row and as a table row — without parsing ids.
+    // Null for runtimes, and for the in-process ONNX model, which no runtime enumerates.
+    string? ModelId = null);
 
 public interface IResourceProvisioner
 {
@@ -431,7 +438,8 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             {
                 new ResourceFile(m.File, Agent.Llm.Services.GgufCatalog.UrlFor(m), m.Sha256),
             },
-            Category: ResourceCategory.Model)))
+            Category: ResourceCategory.Model,
+            ModelId: m.Id)))
         .ToArray();
 
     /// <summary>Where a provisioned node lands. Read by the sandbox probe and the Node leaf tools, so
@@ -515,7 +523,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             available = _latestClaude;
         }
         return new ResourceStatus(s.Id, s.Name, s.NeededFor, s.ApproxBytes, installed, state,
-            p?.Percent ?? 0, p?.Message, version, available, Category: s.Category);
+            p?.Percent ?? 0, p?.Message, version, available, Category: s.Category, ModelId: s.ModelId);
     }).ToList();
 
     // The newest CLI the vendor is serving, as of the last check. Null until something checks — a field,

@@ -57,6 +57,11 @@ const LAYER_NAMES: Record<string, string> = { judge: '判断', semantic: '语义
 export interface BuiltInModelRow {
   id: string; name: string; neededFor: string; approxBytes: number;
   installed: boolean; state: string; percent: number; message: string | null;
+  /** Set when a RUNTIME also reports this model as inventory — see ResourceStatus.ModelId. Once such a
+   *  model is installed the table below shows it with its capability and its in-use layer, so the download
+   *  row retires rather than listing the same 334 MB twice. Null for the in-process ONNX model, which no
+   *  runtime enumerates and which therefore keeps its row for good. */
+  modelId?: string | null;
 }
 
 export function LocalModelsPanel(
@@ -73,6 +78,19 @@ export function LocalModelsPanel(
 ) {
   const [inv, setInv] = useState<Inventory | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+
+  // A model resource retires from this list once it is installed AND a runtime reports it below —
+  // otherwise the same GGUF appears twice, as a download row and as an inventory row. Keyed on the
+  // server's own `modelId` link rather than on parsing ids, which is the mistake that put models in the
+  // runtimes column twice already.
+  //
+  // Declared AFTER the state it reads: a const initialiser runs immediately, so computing this above
+  // `useState` put `inv` in its temporal dead zone — a runtime ReferenceError that tsc does not flag,
+  // because the reference sits inside a closure.
+  const shownInTable = (r: BuiltInModelRow) =>
+    !!r.modelId && !!inv?.models.some((m) => m.id === r.modelId);
+  const builtInPending = builtIn.filter((r) => !r.installed || !shownInTable(r));
+
   const [open, setOpen] = useState(false);
 
   const load = async (refresh = false) => {
@@ -124,10 +142,10 @@ export function LocalModelsPanel(
           reading top-to-bottom should meet the no-setup option before the one with a daemon. It is a
           resource row (the provisioner owns it), rendered HERE rather than in the list above: it is a
           model, and this is where models live. */}
-      {builtIn.length > 0 && (
+      {builtInPending.length > 0 && (
         <div className="res-group">
           <div className="res-group-h">内置 —— 不需要另外安装任何东西</div>
-          {builtIn.map((r) => (
+          {builtInPending.map((r) => (
             <ResourceRow
               key={r.id}
               name={r.name}
@@ -210,13 +228,18 @@ export function LocalModelsPanel(
                     <span className="mem-disk-name">{m.name}</span>
                     {m.capabilities?.includes('embedding') && <PanelBadge kind="state">嵌入</PanelBadge>}
                     {m.capabilities?.includes('completion') && <PanelBadge kind="state">对话</PanelBadge>}
+                    {/* WHICH runtime holds it. Two runtimes can hold the same weights under different
+                        names (embeddinggemma:300m on Ollama, embeddinggemma-300M-Q8_0 as a GGUF), so a row
+                        that does not say leaves the household unable to tell what they are deleting. */}
+                    <PanelBadge kind="note">{m.runtime === 'llama-cpp' ? 'llama.cpp' : m.runtime}</PanelBadge>
                   </span>
                   <span className="mem-disk-size">{mb(m.sizeBytes)}</span>
                   {m.inUse
                     ? <span className="res-running">{LAYER_NAMES[m.inUse] ?? m.inUse}使用中</span>
                     : (
                       <PanelButton disabled={busy === `rm:${m.id}`}
-                        onClick={() => post('/api/manage/models/remove', { model: m.id }, `rm:${m.id}`)}>
+                        onClick={() => post('/api/manage/models/remove',
+                          { model: m.id, runtime: m.runtime }, `rm:${m.id}`)}>
                         删除
                       </PanelButton>
                     )}

@@ -57,7 +57,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
 
     /// <summary>Where the runtime listens — resolved from the SAME static the service uses, so the endpoint
     /// registered at DI time and the one probed later cannot diverge.</summary>
-    public string? Endpoint(MemorySourceSettings s) => LlamaServerRuntime.ResolveBaseUrl();
+    public string? Endpoint(MemorySourceSettings s) => LlamaServerRuntime.ResolveBaseUrl(s.ResourcesPath);
 
     /// <summary>Configured = the runtime is on disk AND there is a model of the right kind for this layer.
     ///
@@ -179,7 +179,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public async Task<EmbedProbe?> ProveAsync(MemorySourceContext ctx, string model, CancellationToken ct = default)
     {
         if (!await ctx.Llama.EnsureServingAsync(ct)) return null;
-        var url = LlamaServerRuntime.ResolveBaseUrl();
+        var url = LlamaServerRuntime.ResolveBaseUrl(ctx.Settings.ResourcesPath);
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };

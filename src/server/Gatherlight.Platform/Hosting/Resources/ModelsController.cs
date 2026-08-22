@@ -91,13 +91,17 @@ public sealed class ModelsController : ControllerBase
             // On disk NOW: what it costs, what Ollama says it can do, and whether a layer is holding it.
             // `capabilities` is passed through rather than reduced to a boolean of ours: it is null on a
             // daemon too old to report the field, and a guess printed as a fact is worse than a blank.
-            models = s.Models.Select(m => new
+            // BOTH runtimes' inventories, in one list, discriminated by `runtime`. The field was always
+            // there — the shape anticipated a second runtime long before there was one — so llama.cpp's
+            // models needed no new endpoint, and a GGUF stops being the one kind of model whose row cannot
+            // say what it is for or whether a layer is holding it.
+            models = s.Models.Select(m => (object)new
             {
                 id = m.Name, name = m.Name, runtime = "ollama", sizeBytes = m.SizeBytes,
                 capabilities = m.Capabilities,
                 inUse = InUse(m.Name, mem, judgeModel),
                 measured = Measured(m.Name),
-            }),
+            }).Concat(GgufModels(mem, judgeModel)),
             // Offerable but absent — the measured embedding shortlist, plus a chat model when this machine
             // has none. That last row is why this list is not just the embedding catalog: the local judge
             // and the local embedder are ONE provider, so a panel that installs an embedder with a button
@@ -163,6 +167,75 @@ public sealed class ModelsController : ControllerBase
             && judgeModel is { } j && OllamaState.Matches(name, j)) return MemoryLayers.Judge;
 
         return null;
+    }
+
+    /// <summary>Which layer is holding a GGUF, if any — and it checks the BACKEND, not just the name.
+    ///
+    /// <para>The Ollama version above compares model names alone, which is safe there because a tag is
+    /// Ollama-shaped. Here it would not be: a household could plausibly have `embeddinggemma:300m` on
+    /// Ollama and `embeddinggemma-300M-Q8_0` as a GGUF, and reporting the wrong one as in-use turns a
+    /// delete button into a label on a model nobody is using — or worse, leaves it enabled on one that is.
+    /// So the layer must ALSO be bound to llama.cpp for its model to count.</para></summary>
+    private static string? GgufInUse(string modelId, MemorySourceSettings mem, string? judgeModel)
+    {
+        if (MemorySources.ResolveSemantic(mem)?.Id == MemoryBackends.LlamaCpp
+            && string.Equals(mem.Config.EmbeddingModel, modelId, StringComparison.OrdinalIgnoreCase))
+            return MemoryLayers.Semantic;
+
+        if (MemorySources.ResolveJudge(mem).Id == MemoryBackends.LlamaCpp
+            && string.Equals(judgeModel, modelId, StringComparison.OrdinalIgnoreCase))
+            return MemoryLayers.Judge;
+
+        return null;
+    }
+
+    /// <summary>The GGUFs on disk, as inventory rows — the same facts an Ollama model carries, because the
+    /// household is answering the same questions about them: what is it for, how big, is anything using it.
+    ///
+    /// <para><b>`capabilities` is DEFINITIVE here, where Ollama's is reported.</b> Ollama answers what a
+    /// model can do and we pass that through, nulling it when the daemon is too old to say. A GGUF we
+    /// provisioned needs no such hedge — the catalogue recorded what it is when it was pinned. A file the
+    /// household dropped in themselves falls back to the name heuristic, which is the one case where this
+    /// is a guess, and it is the same single writer the router's presets use.</para></summary>
+    private IEnumerable<object> GgufModels(MemorySourceSettings mem, string? judgeModel)
+    {
+        var dir = Services.ResourceProvisioner.ProvisionedGgufDir(_platform.ResourcesPath);
+        foreach (var id in Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath))
+        {
+            var embedding = Services.ResourceProvisioner.IsEmbeddingGguf(id);
+            var known = GgufCatalog.Find(id);
+            yield return new
+            {
+                id,
+                name = known?.Name ?? id,
+                runtime = MemoryBackends.LlamaCpp,
+                sizeBytes = SizeOnDisk(dir, id, known?.ApproxBytes ?? 0),
+                capabilities = new[] { embedding ? "embedding" : "completion" },
+                inUse = GgufInUse(id, mem, judgeModel),
+                measured = known?.Measured is { } k
+                    ? new MeasuredView(k.RecallTop1, k.RecallTop3, k.Queries, k.MsPerQuery)
+                    : null,
+            };
+        }
+    }
+
+    /// <summary>Actual bytes on disk, falling back to the catalogue's figure. Measured rather than quoted
+    /// because a household deciding what to delete wants the space they would get back, and a partially
+    /// written file would otherwise report its intended size.</summary>
+    private static long SizeOnDisk(string ggufDir, string modelId, long fallback)
+    {
+        try
+        {
+            var nested = Path.Combine(ggufDir, modelId);
+            if (Directory.Exists(nested))
+                return new DirectoryInfo(nested).EnumerateFiles("*.gguf").Sum(f => f.Length);
+            // System.IO.File, fully qualified: inside a controller, bare `File` binds to
+            // ControllerBase.File(byte[], string) and the error names a method nobody wrote.
+            var flat = Path.Combine(ggufDir, modelId + ".gguf");
+            if (System.IO.File.Exists(flat)) return new FileInfo(flat).Length;
+        }
+        catch (IOException) { /* fall through to the declared size */ }
+        return fallback;
     }
 
     private static MeasuredView? Measured(string name)
@@ -282,8 +355,28 @@ public sealed class ModelsController : ControllerBase
         var model = body?.Model?.Trim();
         if (!EmbeddingCatalog.IsWellFormedId(model))
             return BadRequest(new { error = $"模型名称格式不正确:{body?.Model}" });
+        // The check above rejects the shapes that are dangerous to hand to a process or a path — no
+        // traversal, no leading dash, a conservative character set — which is exactly as necessary for a
+        // filename as for an Ollama tag, so both runtimes pass through it.
 
         var mem = Settings();
+
+        // A GGUF is a directory we own, so removal is a delete rather than a daemon call — but it goes
+        // through the same in-use gate, for the same reason: recall is fail-open, so deleting a bound model
+        // gives searches that quietly find less instead of an error naming what was removed.
+        if (string.Equals(body?.Runtime, MemoryBackends.LlamaCpp, StringComparison.OrdinalIgnoreCase))
+        {
+            var holder = GgufInUse(model!, mem, MemorySources.ResolveJudgeModel(mem));
+            if (holder is not null)
+                return StatusCode(409, new
+                {
+                    error = holder == MemoryLayers.Semantic
+                        ? $"{model} 正在用于语义检索 —— 请先在「记忆检索」里换个模型或停用该层,再删除。"
+                        : $"{model} 正在用于记忆判断 —— 请先在「记忆检索」里换个模型或后端,再删除。",
+                });
+            return RemoveGguf(model!);
+        }
+
         switch (InUse(model!, mem, MemorySources.ResolveJudgeModel(mem)))
         {
             case MemoryLayers.Semantic:
@@ -310,11 +403,41 @@ public sealed class ModelsController : ControllerBase
         }
     }
 
-    public sealed record ModelRequest(string Model);
+    /// <param name="Runtime">Which runtime holds it. Sent by the caller rather than inferred, because an
+    /// Ollama tag and a GGUF id are not reliably distinguishable and guessing wrong here deletes the wrong
+    /// thing — or reports success while deleting nothing.</param>
+    public sealed record ModelRequest(string Model, string? Runtime = null);
 
     /// <summary>Text to embed with the BUILT-IN model. Capped because this is a measurement door, not a
     /// general-purpose embedding service — an uncapped one is a CPU-bound endpoint behind the access
     /// gate.</summary>
+    /// <summary>Delete a provisioned GGUF — both layouts, because both are enumerated (a directory we
+    /// created, or a bare file the household dropped in). Refuses anything that is not actually a model we
+    /// can see, so a malformed id cannot be turned into a path.</summary>
+    private IActionResult RemoveGguf(string modelId)
+    {
+        if (!Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath)
+                .Contains(modelId, StringComparer.OrdinalIgnoreCase))
+            return StatusCode(404, new { error = $"没有找到本机模型 {modelId}。" });
+
+        var dir = Services.ResourceProvisioner.ProvisionedGgufDir(_platform.ResourcesPath);
+        try
+        {
+            var nested = Path.Combine(dir, modelId);
+            if (Directory.Exists(nested)) Directory.Delete(nested, recursive: true);
+            var flat = Path.Combine(dir, modelId + ".gguf");
+            if (System.IO.File.Exists(flat)) System.IO.File.Delete(flat);
+            _llama.Invalidate();
+            _log.LogInformation("removed gguf {Model}", modelId);
+            return Ok(new { ok = true, removed = modelId });
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("removing gguf {Model} failed: {Msg}", modelId, ex.Message);
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
     public sealed record EmbedRequest(string[] Texts);
 
     private const int MaxEmbedTexts = 64;

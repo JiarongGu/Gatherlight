@@ -393,6 +393,17 @@ try {
   // sources follow. A bare "not available" is what sends a household hunting.
   ok('and says where to get it, rather than just that it is missing',
     /资源/.test(String(llamaCold.problem ?? '')), String(llamaCold.problem));
+  // ITS OWN PORT, derived from the data folder. A fixed port made this suite report `installed:false,
+  // serving:true` and list the DEVELOPER's model — a fixture adopting the real install's router, which is
+  // the same bug two Gatherlights on one machine would hit: each adopts the other and serves the wrong
+  // data folder's models. Asserted as loopback-and-in-range rather than as a literal, since the value is a
+  // hash of a path that differs per fixture.
+  {
+    const u = new URL(String(llamaCold.baseUrl));
+    ok('the runtime has its OWN loopback port, derived from this install',
+      u.hostname === '127.0.0.1' && Number(u.port) >= 11435 && Number(u.port) < 11499,
+      String(llamaCold.baseUrl));
+  }
   ok('and reports no devices and no models, instead of guessing',
     (llamaCold.devices ?? []).length === 0 && (llamaCold.models ?? []).length === 0,
     JSON.stringify({ devices: llamaCold.devices, models: llamaCold.models }));
@@ -449,6 +460,24 @@ try {
       after?.kind === 'app', JSON.stringify(after));
     fs.rmSync(planted, { force: true });
   }
+
+  // GGUF INVENTORY AND REMOVAL. A GGUF used to be the one kind of model whose row could not say what it
+  // was for or whether a layer held it, because /api/manage/models reported only Ollama's inventory — so
+  // its delete button went to Ollama's remove and would have done nothing.
+  const inv2 = await getJson('/api/manage/models');
+  ok('the inventory is per-RUNTIME, so both can report into one list',
+    (inv2.models ?? []).every((m) => typeof m.runtime === 'string' && m.runtime.length > 0),
+    JSON.stringify((inv2.models ?? []).map((m) => `${m.id}:${m.runtime}`).slice(0, 4)));
+  // Removal must be told WHICH runtime: an Ollama tag and a GGUF id are not reliably distinguishable, and
+  // guessing deletes the wrong thing or reports success having deleted nothing.
+  const rmGgufGhost = await post('/api/manage/models/remove',
+    { model: 'not-installed-at-all', runtime: 'llama-cpp' });
+  ok('removing a GGUF that is not installed is a 404, not a false success',
+    rmGgufGhost.status === 404, `${rmGgufGhost.status}`);
+  // The id gate applies to BOTH runtimes — for a GGUF it is a filename, which needs it at least as much.
+  const rmGgufBad = await post('/api/manage/models/remove', { model: '../escape', runtime: 'llama-cpp' });
+  ok('and a traversal-shaped id is refused before it can become a path',
+    rmGgufBad.status === 400, `${rmGgufBad.status}`);
 
   // THE BENCHMARK DOOR. `dev.mjs embed-bench` scores every Ollama-hosted embedder through
   // /v1/embeddings; the in-process 内置 backend has no such endpoint, so it was the one arm nobody could
