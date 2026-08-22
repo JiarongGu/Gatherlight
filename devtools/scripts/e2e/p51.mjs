@@ -950,10 +950,23 @@ try {
   {
     const u = new URL(String(llamaCold.baseUrl));
     let asked = 0;
+    const hits = [];
     const fake = http.createServer((req, res) => {
-      asked++;
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ data: [{ id: 'zzalready-running' }] }));
+      if (req.url === '/v1/models') {
+        asked++;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        // The router REPORTS which models it holds, and the start endpoint warms exactly those. One
+        // embedder and one chat model, because the two take different warm calls.
+        res.end(JSON.stringify({ data: [{ id: 'zzwarm-embed-model' }, { id: 'zzwarm-chat-model' }] }));
+        return;
+      }
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        hits.push({ path: req.url, body });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{}');
+      });
     });
     await new Promise((r) => fake.listen(Number(u.port), '127.0.0.1', r));
     try {
@@ -962,6 +975,34 @@ try {
         started.status === 200, `${started.status} ${JSON.stringify(started.body)}`);
       ok('…and it really probed the running router rather than assuming',
         asked > 0, `GET /v1/models seen ${asked} time(s)`);
+
+      // ---- STARTING MEANS START-AND-WARM ------------------------------------------------------
+      //
+      // llama.cpp loads models LAZILY: --models-max is a cap, not a preload, so the first request for a
+      // model spawns a child and waits — 17.3 s measured for a 1B q4. Returning when the router answers
+      // would hand back a runtime that stalls on the first real recall, which is the very cost this
+      // runtime was chosen to remove. Nothing checked that warming happened.
+      //
+      // Reachable without a spawn after all: the start endpoint warms the models the ROUTER reports, so
+      // a fake router naming two models gets both warm calls sent to it.
+      // COUNTED AT THE FAKE SERVER, not read from the response. The first version of this asserted
+      // `started.body.warmed.length === 2` — and it PASSED with the warm call deleted, because the
+      // endpoint still built that list from the models it had probed. A field reporting that work
+      // happened is not evidence the work happened; that is this whole session in one assertion.
+      ok('every model the router reports is warmed, not just started',
+        hits.length === 2 && (started.body?.warmed ?? []).length === 2,
+        JSON.stringify({ requests: hits.map((h) => h.path), reported: started.body?.warmed }));
+
+      // The two warm calls are NOT the same request, and sending an embedder a chat completion (or the
+      // reverse) fails against a real llama-server — `embeddings = true` restricts that child to one API.
+      const embedHit = hits.find((h) => h.body.includes('zzwarm-embed-model'));
+      const chatHit = hits.find((h) => h.body.includes('zzwarm-chat-model'));
+      ok('an EMBEDDER is warmed through /v1/embeddings',
+        embedHit?.path === '/v1/embeddings' && embedHit.body.includes('"input"'),
+        JSON.stringify(embedHit));
+      ok('a CHAT model is warmed through /v1/chat/completions',
+        chatHit?.path === '/v1/chat/completions' && chatHit.body.includes('"messages"'),
+        JSON.stringify(chatHit));
     } finally {
       await new Promise((r) => fake.close(r));
     }
