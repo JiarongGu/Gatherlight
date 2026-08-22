@@ -33,6 +33,10 @@ interface ResourceStatus {
   version: string | null;
   available: string | null;
   detail: string | null;
+  /** WHAT it is — 'runtime' (a program) or 'model' (weights). Declared by the server, because the client
+   *  deciding this from a list of ids is what put three models in the runtimes column: the list said
+   *  `embed-gguf` while the ids had become `gguf-<model>`, and nothing failed — the rows just moved. */
+  category: 'runtime' | 'model';
 }
 
 // An update exists only when BOTH versions are known and they differ. Unknown-vs-known is NOT an update:
@@ -42,7 +46,8 @@ interface ResourceStatus {
 // Listing it up beside Git and Chromium put models in two places again — the split that section exists
 // to end — and made its own lead text ("both layers take their models from here") false for the one
 // backend that needs nothing installed.
-const MODEL_RESOURCES = ['embed-model', 'embed-gguf'];
+// Grouping is the SERVER's answer now (ResourceCategory). The hardcoded id list this replaces drifted
+// within two commits of being written — a rename of the GGUF ids left it matching nothing, silently.
 
 // Both rows were hidden for one commit, while llama.cpp was provisionable but nothing could BIND to it —
 // a 下载 button that fetches 354 MB and changes nothing is the dead control this console keeps refusing.
@@ -88,8 +93,8 @@ export function ResourcesPanel({ toast, onRestart }: { toast: (t: string, k?: 'o
 
   // A MODEL goes in the models section, even though the provisioner owns it like any other resource.
   const offered = items.filter((r) => !NOT_YET_REACHABLE.includes(r.id));
-  const runtimes = offered.filter((r) => !MODEL_RESOURCES.includes(r.id));
-  const modelRows = offered.filter((r) => MODEL_RESOURCES.includes(r.id));
+  const runtimes = offered.filter((r) => r.category !== 'model');
+  const modelRows = offered.filter((r) => r.category === 'model');
 
   return (
     <div className="mng-view set">

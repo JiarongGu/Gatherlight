@@ -55,7 +55,22 @@ public sealed record ResourceSpec(
     // files sit under a content path. Null = the archive root itself (with single-wrapper flattening).
     string? ArchiveRoot = null,
     // For ResourceKind.Files: what to fetch and where each piece lands.
-    IReadOnlyList<ResourceFile>? Files = null);
+    IReadOnlyList<ResourceFile>? Files = null,
+    // WHAT THIS IS, for a panel that groups runtimes separately from the models they host. Derived here
+    // rather than inferred by the client from a list of ids: that list existed, drifted the moment the GGUF
+    // ids changed shape, and put three models back in the runtimes column beside Chromium — the exact
+    // miscategorisation the 本机模型 section exists to end, reintroduced by a rename. A resource is a model
+    // because the thing that declares it says so.
+    string Category = ResourceCategory.Runtime);
+
+/// <summary>What a resource IS, for grouping. Strings because they cross the wire to the console.</summary>
+public static class ResourceCategory
+{
+    /// <summary>A program: a browser, git, node, a model runtime.</summary>
+    public const string Runtime = "runtime";
+    /// <summary>Weights. Belongs beside the runtime that hosts it, not beside Chromium.</summary>
+    public const string Model = "model";
+}
 
 /// <summary>Live provisioning state for one resource (for the setup UI to poll). <paramref name="Version"/>
 /// / <paramref name="Available"/> are populated only for a resource whose version we actually track (the
@@ -64,7 +79,8 @@ public sealed record ResourceSpec(
 public sealed record ResourceStatus(
     string Id, string Name, string NeededFor, long ApproxBytes,
     bool Installed, string State, int Percent, string? Message,
-    string? Version = null, string? Available = null, string? Detail = null);
+    string? Version = null, string? Available = null, string? Detail = null,
+    string Category = ResourceCategory.Runtime);
 
 public interface IResourceProvisioner
 {
@@ -389,7 +405,8 @@ public sealed class ResourceProvisioner : IResourceProvisioner
                 // vocabulary at a quarter of the size.
                 new ResourceFile(Agent.Llm.Services.OnnxEmbedder.TokenizerFile, EmbedModelUrl("tokenizer.model"),
                     "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c"),
-            }),
+            },
+            Category: ResourceCategory.Model),
     }
         // ONE SPEC PER CATALOGUED GGUF, generated rather than hand-written, because the catalogue is the
         // thing that changes and two lists for one set is the drift this codebase keeps paying for.
@@ -413,7 +430,8 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             Files: new[]
             {
                 new ResourceFile(m.File, Agent.Llm.Services.GgufCatalog.UrlFor(m), m.Sha256),
-            })))
+            },
+            Category: ResourceCategory.Model)))
         .ToArray();
 
     /// <summary>Where a provisioned node lands. Read by the sandbox probe and the Node leaf tools, so
@@ -497,7 +515,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             available = _latestClaude;
         }
         return new ResourceStatus(s.Id, s.Name, s.NeededFor, s.ApproxBytes, installed, state,
-            p?.Percent ?? 0, p?.Message, version, available);
+            p?.Percent ?? 0, p?.Message, version, available, Category: s.Category);
     }).ToList();
 
     // The newest CLI the vendor is serving, as of the last check. Null until something checks — a field,

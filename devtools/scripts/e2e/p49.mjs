@@ -210,6 +210,18 @@ try {
         ids.includes('gguf-embeddinggemma-300M-Q8_0'), ids.join(','));
       ok('and a CHAT gguf is offered too (判断 needs one, and had none)',
         ids.some((i) => i.startsWith('gguf-gemma-3-')), ids.join(','));
+
+      // WHAT each resource IS, declared by the server. This is pinned because it broke silently TWICE:
+      // the console grouped models by a hardcoded list of ids, and both times an id changed shape the
+      // list matched nothing and weights quietly reappeared in the runtimes column beside Chromium.
+      // Nothing threw either time — the rows just moved. Category comes from the spec now, and this
+      // asserts the property rather than the position, so a rename cannot re-break it.
+      ok('every model declares itself a model, and every runtime a runtime',
+        ggufs.every((r) => r.category === 'model')
+          && rows.find((r) => r.id === 'embed-model')?.category === 'model'
+          && ['git', 'node', 'llama-cpp', 'ollama', 'claude']
+            .every((i) => rows.find((r) => r.id === i)?.category === 'runtime'),
+        JSON.stringify(rows.map((r) => `${r.id}:${r.category}`)));
     }
     srv.stop(); srv = undefined;
   }
