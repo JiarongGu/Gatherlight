@@ -46,7 +46,7 @@ household), which is what the picker shows — and the third one is *no model*:
 
 | group | backends | what it costs |
 |---|---|---|
-| **Claude CLI** | `claude-cli` | an account, nothing local. 判断 annotates + verifies; 语义 REPHRASES — Claude has no embeddings endpoint, so it stores other wordings of each fact (`knowledge.aka`, in the trigram index) and a paraphrase matches one. **At least one wording must be in ANOTHER LANGUAGE**: that was offered as one option among three until 2026-08-23 and the model never took it (four phrasings on a real fact, zero latin characters), so the layer only added same-language surface the lexical floor already reached. Proven directly — an English question retrieves a Chinese-only fact; its aggregate effect is NOT measured, see the rules. Quota + a CLI spawn per call |
+| **Claude CLI** | `claude-cli` | an account, nothing local. 判断 annotates + verifies; 语义 REPHRASES — Claude has no embeddings endpoint, so it stores other wordings of each fact (`knowledge.aka`, in the trigram index), **at least one in another language**, and a differently-worded or differently-*languaged* question matches one. Quota + a CLI spawn per call |
 | **本机模型** | `llama-cpp` · `builtin` | disk, no quota, no address. `llama-cpp` is the runtime we download and start (both layers); `builtin` is EmbeddingGemma-300M as ONNX in our own process (语义 only, 222 MB, measured first — `docs/builtin-model-runner.md`). Models come from 资源, sha256-pinned and ranked |
 | **不用模型** | *none* | nothing. Choosing it turns the layer off and leaves 公式 doing the work |
 
@@ -56,17 +56,7 @@ having a model look mandatory; it is a real answer to the question the row asks,
 headings would otherwise delete the option. And "off" means two different things per layer (判断 has a live
 switch, 语义 unbinds), so the action is a PROP on `BackendPicker`, which knows nothing about layers.
 
-**Both group names were false claims, in opposite directions, and the second one hid a real capability.**
-First 内置 labelled the download group, whose own description said the app fetches a runtime and models —
-35 MB plus 222 MB–2.5 GB, nothing built-in about it. Moving the word to the costs-nothing option fixed that
-and created a collision the same day: `builtin` · 内置 is the id and the 资源 label of the ONNX embedder
-running INSIDE this process, so one word meant "a real model, hosted by us" in one panel and "no model at
-all" in the other. Meanwhile the group holding that embedder was called **llama.cpp** — after a runtime it
-does not use. Together those told a Claude-CLI household that real vectors required downloading and running
-another program, when the option needing neither was sitting right there under both wrong names. Now:
-**本机模型** (keyed on cost, true of both members), **不用模型** (what it is), and 内置 belongs to the thing
-that is built in. `p51` asserts both — a group is never named after one of its runtimes, and 内置 never
-names the empty group.
+**Group names describe COST, never a member runtime.** 本机模型 holds two ways to supply a model — llama.cpp's resident service and `builtin`, an ONNX session in our own process — so naming it after either would misdescribe the other, and 内置 belongs to the thing that is actually built in rather than to the no-model option. Both names were wrong once, in opposite directions; the failure and its cost are in `.claude/rules/dev-conventions.md`, and `p51` asserts both invariants.
 
 A fourth axis crosses these: a backend's **ORIGIN** — `bundled` · `app` · `household`, i.e. *whose* runtime
 it is (`RuntimeOrigin`). `claude-cli` is the last backend where that question is live (we provision a copy

@@ -573,16 +573,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `ClaudeCliSemanticSource` now serves the layer's actual job — a paraphrase finds the fact — by storing
   rephrasings instead of vectors. It is genuinely worse than an embedder for wording nobody anticipated, and
   that sentence is in its description rather than in a refusal.
-  **(2) Ollama's pull/delete was deleted** because 资源 was scoped to "only what Gatherlight provisions".
-  That scope decision is about what a PANEL SHOWS; it got carried through into removing
-  `PullModelAsync`/`RemoveModelAsync` from `IOllamaRuntime` and the endpoints with them, justified as "an
-  unused management verb is an invitation to the next caller". Code hygiene does not outrank what the
-  household can do. It cost the free-form field whose own docstring records why it exists — *a catalogue
-  baked into a release cannot contain a model published after it*, and this product already shipped once
-  without the two strongest options that existed. Restored under 记忆检索 · 本机 — and then removed AGAIN, on
-  purpose, when Ollama stopped being a backend at all: at that point the app no longer depended on the daemon,
-  so there was nothing left to half-manage. Two removals of the same code, one wrong and one right; the
-  difference is whether the DEPENDENCY went with it, not how tidy the interface looked.
+  **(2) A capability was deleted for tidiness.** 资源 was scoped to "only what Gatherlight provisions" —
+  a decision about what a PANEL SHOWS — and that got carried through into removing the model pull/delete
+  verbs and their endpoints, justified as "an unused management verb is an invitation to the next caller".
+  Code hygiene does not outrank what the household can do. It cost the free-form field whose own docstring
+  recorded why it existed: *a catalogue baked into a release cannot contain a model published after it.*
+  The same code was later removed AGAIN, correctly, when that runtime stopped being a backend at all and
+  the app no longer depended on it. **Two removals of the same code, one wrong and one right; the
+  difference is whether the DEPENDENCY went with it, not how tidy the interface looked.**
   **The test:** if the honest sentence is "it does this less well" or "this costs more", ship the option with
   that sentence attached and let the household weigh it. A DECLINED entry is only for a real impossibility
   (内置 on 判断 needs an in-process chat model, which does not exist) — never for an option nobody built.
@@ -801,7 +799,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (`ResourceProvisioner` → `/api/manage/resources`, the 资源 · Resources console panel) into
   `{data}/state/resources/…`
   (in the data folder → survives updates, fetched once). Runtime resolvers prefer that copy
-  (`PlaywrightHost` browsers path, `GitCliService.GitExe` and `ClaudeCliRuntime.Locate` data-aware).
+  (`PlaywrightHost` browsers path, `GitCliService.LocateGit` and `ClaudeCliRuntime.Locate` data-aware).
   `build-production.mjs --offline` bundles them for air-gapped installs. The Playwright **driver** (`libs/.playwright`,
   the chromium-install bootstrap) is still bundled.
 - **A resource the app cannot BOOT without is provisioned automatically, never reported.** git is that
