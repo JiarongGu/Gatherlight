@@ -64,12 +64,43 @@ public sealed record KnowledgeRow(
 public interface IKnowledgeStore
 {
     Task<long> LearnAsync(string kind, string topic, string content, string? source, double confidence);
-    Task<List<KnowledgeRow>> RecallAsync(string query, string? kind, int limit);
+    /// <param name="exclude">Rows the caller has ALREADY shown for this recall, by id — left out of the
+    /// result, and with it out of the <c>hits</c> increment.
+    ///
+    /// <para>It exists because FTS now TOPS UP a graph answer instead of only replacing an empty one, so
+    /// the two paths overlap. "Give me more, but not these" is the top-up's actual contract, and stating it
+    /// beats fetching rows the caller will discard.</para>
+    ///
+    /// <para><b>The honest note on <c>hits</c>:</b> without this, a fact found by both paths would count
+    /// twice for one recall — which today is unobservable, because <c>hits</c> is incremented on every
+    /// recall, mapped onto <see cref="KnowledgeRow"/>, and read by NOTHING: not the ranking (which orders
+    /// by confidence then bm25), not <c>MemoryTools.Row</c>, not the client. So this prevents a latent
+    /// wrong number rather than a visible one. That the counter has no reader is its own question —
+    /// recorded rather than answered here, since "read it or stop writing it" is a product decision and
+    /// silently deleting a column the backup carries is not a refactor.</para></param>
+    Task<List<KnowledgeRow>> RecallAsync(string query, string? kind, int limit,
+        IReadOnlyCollection<long>? exclude = null);
     /// <summary>EMA reinforcement: confirmations pull confidence toward 1, refutations toward 0.</summary>
     Task ReinforceAsync(long id, bool positive);
 
     /// <summary>Record where this fact lives in the derived graph index. Null clears it.</summary>
     Task SetGraphRefAsync(long id, string? graphRef);
+
+    /// <summary>Store alternate phrasings for a fact, addressed by its unique <c>(kind, topic)</c>.
+    ///
+    /// <para><b>By key, not by search.</b> The first version looked the row up with <c>RecallAsync(topic)</c>
+    /// — a full-text query ordered by confidence — to find the fact it had just written. That can return a
+    /// DIFFERENT fact: a topic under three characters produces no FTS token at all and falls back to
+    /// <c>LIKE %topic%</c>, and even a matching query returns the highest-CONFIDENCE hit rather than this
+    /// one. Phrasings on the wrong fact are worse than none: they make an unrelated fact answer a question
+    /// it has nothing to do with, and nothing would ever report it. <c>(kind, topic)</c> is what
+    /// <see cref="LearnAsync"/> upserts on, so it identifies exactly one row.</para>
+    ///
+    /// <para>DERIVED, like the graph ref beside it: <c>knowledge</c> stays the record of truth and these are
+    /// a search aid regenerated from it, which is why they live in a column rather than a table and why
+    /// losing them costs nothing but recall quality. The FTS trigger picks the new value up on UPDATE, so
+    /// writing here is the whole operation.</para></summary>
+    Task SetAkaAsync(string kind, string topic, string? aka);
 
     /// <summary>Resolve graph references back to their rows, IN THE ORDER GIVEN — the graph did the
     /// ranking, so re-sorting here would throw it away. Each row comes back paired with the ref that
@@ -124,9 +155,21 @@ public sealed class KnowledgeStore : IKnowledgeStore
             new { kind, topic, content, source, confidence = Math.Clamp(confidence, 0, 1), now });
     }
 
-    public async Task<List<KnowledgeRow>> RecallAsync(string query, string? kind, int limit)
+    public async Task SetAkaAsync(string kind, string topic, string? aka)
     {
         using var conn = _db.Open();
+        await conn.ExecuteAsync(
+            "UPDATE knowledge SET aka = @aka WHERE kind = @kind AND topic = @topic",
+            new { kind, topic, aka });
+    }
+
+    public async Task<List<KnowledgeRow>> RecallAsync(string query, string? kind, int limit,
+        IReadOnlyCollection<long>? exclude = null)
+    {
+        using var conn = _db.Open();
+        // Over-ask by however many are being excluded, so filtering them out cannot shrink the page below
+        // what the caller asked for and the store could have supplied.
+        var take = limit + (exclude?.Count ?? 0);
         // FTS5 (BM25-ranked, trigram) when the query has a usable ≥3-char token; else LIKE.
         var match = FtsQuery.Build(query);
         var raw = match is not null
@@ -136,13 +179,13 @@ public sealed class KnowledgeStore : IKnowledgeStore
                 "WHERE knowledge_fts MATCH @match AND (@kind IS NULL OR k.kind = @kind) " +
                 // Confidence first (verified facts surface first — the established contract), bm25
                 // relevance as the tiebreaker among equally-trusted matches.
-                "ORDER BY CAST(k.confidence AS REAL) DESC, bm25(knowledge_fts) LIMIT @limit",
-                new { match, kind, limit })
+                "ORDER BY CAST(k.confidence AS REAL) DESC, bm25(knowledge_fts) LIMIT @take",
+                new { match, kind, take })
             : await conn.QueryAsync(
                 "SELECT id, kind, topic, content, source, confidence, hits, created_at, updated_at " +
                 "FROM knowledge WHERE (topic LIKE @like ESCAPE '\\' OR content LIKE @like ESCAPE '\\') AND (@kind IS NULL OR kind = @kind) " +
-                "ORDER BY CAST(confidence AS REAL) DESC, updated_at DESC LIMIT @limit",
-                new { like = $"%{FtsQuery.EscapeLike(query)}%", kind, limit });
+                "ORDER BY CAST(confidence AS REAL) DESC, updated_at DESC LIMIT @take",
+                new { like = $"%{FtsQuery.EscapeLike(query)}%", kind, take });
         // Manual mapping: SQLite's dynamic typing (NUMERIC/BLOB affinity surprises) breaks
         // Dapper's strict positional-record materialization — coerce each column explicitly.
         var rows = raw
@@ -150,6 +193,8 @@ public sealed class KnowledgeStore : IKnowledgeStore
                 Convert.ToInt64(d.id), (string)d.kind, (string)d.topic, (string)d.content,
                 (string?)d.source, CoerceDouble((object)d.confidence), Convert.ToInt32(d.hits),
                 (string)d.created_at, (string)d.updated_at))
+            .Where(r => exclude is null || !exclude.Contains(r.Id))
+            .Take(limit)
             .ToList();
         if (rows.Count > 0)
         {

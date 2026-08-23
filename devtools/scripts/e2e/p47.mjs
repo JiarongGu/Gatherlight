@@ -156,6 +156,13 @@ try {
   // allowed to do.
   const authoredPage = { title: 'Household dashboard', root: { type: 'Text', text: 'authored by the agent' } };
   fs.writeFileSync(path.join(dataDir, 'ui', 'household-dashboard.json'), JSON.stringify(authoredPage, null, 2));
+  // uploads/ is in the backup's Folders list and was asserted by NOTHING. Delete it from that list and
+  // every check here still passes, while every file the household attached — the PDFs and photos the
+  // planner works from — silently stops travelling. Exactly the drift that lost `ui/` and `site.json`,
+  // which is why the rule is to assert each directory BY NAME rather than trust the list.
+  fs.mkdirSync(path.join(dataDir, 'uploads'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'uploads', 'household-attachment.txt'), 'attached by a human');
+
   const manifestPath = path.join(dataDir, 'site.json');
   const siteManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   siteManifest.capabilities = { ...(siteManifest.capabilities ?? {}), enabled: ['a_promoted_capability'] };
@@ -189,6 +196,12 @@ try {
 
   // Named for the page the AGENT wrote, never the template's welcome.json — the seeder re-creates
   // that one, so asserting on it would pass with `ui/` left out of the backup entirely.
+  const restoredUpload = path.join(restoreDir, 'uploads', 'household-attachment.txt');
+  ok('an uploaded file survives the round trip',
+    fs.existsSync(restoredUpload)
+      && fs.readFileSync(restoredUpload, 'utf8') === 'attached by a human',
+    'uploads/household-attachment.txt is missing after restore');
+
   const restoredPage = path.join(restoreDir, 'ui', 'household-dashboard.json');
   ok('THE POINT: an agent-authored PAGE survives the backup round trip', fs.existsSync(restoredPage),
     'ui/household-dashboard.json is missing after restore');

@@ -175,6 +175,59 @@ try {
       ok('reported installed, and saying what it is for',
         gitRow?.installed === true && /数据仓库/.test(String(gitRow?.neededFor ?? '')),
         JSON.stringify(gitRow));
+
+      // THE RUNTIME THIS APP PROVISIONS FOR LOCAL MODELS. Asserted here rather than downloaded: p49's own
+      // case D exists because a surprise 37 MB is its own defect, and that applies to a suite too. What
+      // matters is that the entry is declared, pinned and cheap — the download itself was verified by hand
+      // (35 MB zip → 98 MB extracted → `--list-devices` enumerating two GPUs).
+      const llama = rows.find((r) => r.id === 'llama-cpp');
+      ok('the catalog carries the llama.cpp runtime entry', !!llama,
+        JSON.stringify(rows.map((r) => r.id)));
+      // Size is the whole argument for choosing it over Ollama — 42× smaller — so a bound is asserted
+      // rather than the exact byte count, which moves with every upstream build.
+      ok('and it is the SMALL one: under 60 MB, where Ollama is over a gigabyte',
+        (llama?.approxBytes ?? 0) > 5_000_000 && (llama?.approxBytes ?? 0) < 60_000_000,
+        String(llama?.approxBytes));
+      // OLLAMA IS NOT HERE, and this is the assertion that keeps it out. 资源 provisions what Gatherlight
+      // manages; Ollama is a HOUSEHOLD runtime we detect and connect to. The spec used to sit right here
+      // offering a 1.46 GB download, which is how "a runtime the app installs" and "a prerequisite you
+      // install yourself" became indistinguishable — to a household, and then to us, in our own docs.
+      //
+      // Paired with its positive control on the next line, because a denial alone would also pass on a
+      // build that had lost the whole catalog: llama.cpp — the runtime we DO install — must still be here.
+      const ids = rows.map((r) => r.id);
+      ok('Ollama is NOT offered for download — we connect to it, we do not install it',
+        !ids.includes('ollama'), ids.join(','));
+      ok('…while the runtime we DO manage is still offered (the control for that denial)',
+        ids.includes('llama-cpp'), ids.join(','));
+
+      // THE SHELF. Every GGUF in GgufCatalog becomes a resource, generated rather than hand-written — one
+      // list for one set. Asserted as a shape rather than by name so adding a model does not break this,
+      // except for the two the product actually recommends, which are named on purpose.
+      const ggufs = rows.filter((r) => r.id.startsWith('gguf-'));
+      ok('every catalogued GGUF is offerable as a resource', ggufs.length >= 2,
+        JSON.stringify(ggufs.map((r) => r.id)));
+      ok('and each is sha256-pinnable with a real size, not a placeholder',
+        ggufs.every((r) => r.approxBytes > 1_000_000), JSON.stringify(ggufs.map((r) => r.approxBytes)));
+      // BOTH capabilities have to be downloadable, and this is the assertion that would have caught the
+      // gap this increment closed: 判断 could be BOUND to llama.cpp while no chat model existed to bind
+      // it to, so its status pointed at a 资源 row that was not there.
+      ok('an EMBEDDING gguf is offered (语义 needs one)',
+        ids.includes('gguf-embeddinggemma-300M-Q8_0'), ids.join(','));
+      ok('and a CHAT gguf is offered too (判断 needs one, and had none)',
+        ids.some((i) => i.startsWith('gguf-gemma-3-')), ids.join(','));
+
+      // WHAT each resource IS, declared by the server. This is pinned because it broke silently TWICE:
+      // the console grouped models by a hardcoded list of ids, and both times an id changed shape the
+      // list matched nothing and weights quietly reappeared in the runtimes column beside Chromium.
+      // Nothing threw either time — the rows just moved. Category comes from the spec now, and this
+      // asserts the property rather than the position, so a rename cannot re-break it.
+      ok('every model declares itself a model, and every runtime a runtime',
+        ggufs.every((r) => r.category === 'model')
+          && rows.find((r) => r.id === 'embed-model')?.category === 'model'
+          && ['git', 'node', 'llama-cpp', 'claude']
+            .every((i) => rows.find((r) => r.id === i)?.category === 'runtime'),
+        JSON.stringify(rows.map((r) => `${r.id}:${r.category}`)));
     }
     srv.stop(); srv = undefined;
   }

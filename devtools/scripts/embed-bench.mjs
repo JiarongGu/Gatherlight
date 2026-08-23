@@ -9,6 +9,7 @@
 // Usage:
 //   node devtools/scripts/embed-bench.mjs                 # every embedding-looking model installed
 //   node devtools/scripts/embed-bench.mjs bge-m3 …        # just these
+//   node devtools/scripts/embed-bench.mjs builtin …       # the in-process 内置 model (app must be up)
 //
 // Fidelity matters more than convenience here, so three things are deliberate:
 //   · it calls the OpenAI-COMPATIBLE /v1/embeddings, the endpoint AddOpenAiCompatibleEmbedder uses.
@@ -18,7 +19,17 @@
 //     not run that way is worse than not measuring it.
 //   · the corpus is fictional and mixed zh/en, matching a household whose notes are mostly Chinese.
 //     An English-only fixture is how `nomic-embed-text` came to be recommended in the first place.
+//
+// `builtin` IS THE ONE ARM THAT DOES NOT SPEAK HTTP. It is an ONNX session inside the app, so there is
+// no /v1/embeddings to call and — until this — no way to score the only backend that needs no setup.
+// Its "same score as Ollama" rested on the 8-query probe from choosing the runtime, which
+// docs/builtin-model-runner.md says of itself cannot rank two working embedders. So the app exposes
+// POST /api/manage/models/embed, which embeds through the product's own OnnxEmbedder; that is a
+// different transport, not different embedding, and the corpus below stays the single source of truth
+// rather than being restated in C#.
 const BASE = process.env.GATHERLIGHT_OLLAMA_URL || process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
+const APP = process.env.GATHERLIGHT_URL || 'http://127.0.0.1:5317';
+const BUILTIN = 'builtin';
 
 // 20 facts. The distractors carry as much weight as the targets: several share vocabulary with the
 // WRONG question, so a model cannot score by keyword overlap.
@@ -59,7 +70,7 @@ const QUERIES = [
   ['哪天去博物馆会白跑一趟', 9],
 ];
 
-const embed = async (model, input) => {
+const embedOllama = async (model, input) => {
   const r = await fetch(`${BASE}/v1/embeddings`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ model, input }),
@@ -67,6 +78,21 @@ const embed = async (model, input) => {
   if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 160)}`);
   return (await r.json()).data.map((d) => d.embedding);
 };
+
+// The in-process arm. A 409 means the model is not downloaded — a different problem from a broken
+// model, and worth saying so rather than printing a bare status code.
+const embedBuiltin = async (_model, input) => {
+  const r = await fetch(`${APP}/api/manage/models/embed`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ texts: input }),
+  });
+  if (r.status === 409) throw new Error('内置 model not downloaded — 资源 · Resources → 内置嵌入模型');
+  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 160)}`);
+  return (await r.json()).vectors;
+};
+
+const embed = (model, input) =>
+  (model === BUILTIN ? embedBuiltin : embedOllama)(model, input);
 
 const cos = (a, b) => {
   let d = 0, na = 0, nb = 0;
@@ -83,14 +109,31 @@ const installed = async () => {
     .filter((n) => /embed|minilm|bge|gte|e5/i.test(n));
 };
 
+/** Is the app up AND holding the built-in model? Both, because either alone cannot be scored. */
+const builtinAvailable = async () => {
+  try {
+    const r = await fetch(`${APP}/api/manage/models/embed`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ texts: ['probe'] }),
+    });
+    return r.ok;
+  } catch { return false; }
+};
+
 let models = process.argv.slice(2);
 if (models.length === 0) {
   models = await installed();
+  // Included by DEFAULT rather than on request: the whole reason its numbers were thin is that it took
+  // a deliberate extra step to measure. A run that silently skips the shipped backend is the failure
+  // this file exists to prevent.
+  if (await builtinAvailable()) models.unshift(BUILTIN);
+  else console.log(`(内置 skipped — app not reachable at ${APP}, or its model is not downloaded)\n`);
   if (models.length === 0) {
-    console.log(`no embedding-looking models installed at ${BASE} — pull one, or name models explicitly.`);
+    console.log(`no embedding-looking models installed at ${BASE}, and 内置 unavailable`
+      + ` — pull one, or name models explicitly.`);
     process.exit(1);
   }
-  console.log(`measuring the ${models.length} embedding model(s) installed here\n`);
+  console.log(`measuring ${models.length} embedder(s)\n`);
 }
 
 const rows = [];
@@ -110,9 +153,10 @@ for (const model of models) {
       if (pos < 3) top3++; else misses.push(`${q} → #${pos + 1}`);
     }
     const msPerQuery = Math.round((Date.now() - tq) / QUERIES.length);
-    rows.push({ model, dims: docs[0].length, top1, top3, msPerQuery });
-    console.log(`${model}: dims=${docs[0].length} top1=${top1}/${QUERIES.length} top3=${top3}/${QUERIES.length}`
-      + ` · corpus ${corpusMs}ms · ${msPerQuery}ms/query`);
+    const where = model === BUILTIN ? 'in-process' : 'ollama';
+    rows.push({ model, where, dims: docs[0].length, top1, top3, msPerQuery });
+    console.log(`${model} [${where}]: dims=${docs[0].length} top1=${top1}/${QUERIES.length}`
+      + ` top3=${top3}/${QUERIES.length} · corpus ${corpusMs}ms · ${msPerQuery}ms/query`);
     for (const m of misses) console.log(`    miss: ${m}`);
   } catch (e) {
     console.log(`${model}: FAILED — ${e.message}`);
@@ -120,11 +164,19 @@ for (const model of models) {
 }
 
 if (rows.length) {
-  console.log('\n| model | dims | top-1 | top-3 | ms/query |');
-  console.log('|---|---|---|---|---|');
+  console.log('\n| model | runs | dims | top-1 | top-3 | ms/query |');
+  console.log('|---|---|---|---|---|---|');
   for (const r of rows.sort((a, b) => b.top1 - a.top1 || a.msPerQuery - b.msPerQuery)) {
-    console.log(`| ${r.model} | ${r.dims} | ${r.top1}/${QUERIES.length} | ${r.top3}/${QUERIES.length} | ${r.msPerQuery} |`);
+    console.log(`| ${r.model} | ${r.where} | ${r.dims} | ${r.top1}/${QUERIES.length}`
+      + ` | ${r.top3}/${QUERIES.length} | ${r.msPerQuery} |`);
   }
   console.log('\nUpdate EmbeddingCatalog.cs from this — and keep the caveat with it: 10 queries separates'
     + '\na broken model from a working one, and cannot rank two working ones.');
+  if (rows.some((r) => r.where === 'in-process') && rows.some((r) => r.where === 'ollama')) {
+    console.log('\nREAD THE ms/query COLUMN ACROSS RUNTIMES WITH CARE. The retrieval columns compare'
+      + '\ndirectly — same corpus, same queries, same symmetric prompting. Latency does not: 内置 is an'
+      + '\nONNX Runtime CPU session in this process, Ollama is a GPU server one HTTP hop away. The figure'
+      + '\nis what the household experiences from each, which is the useful comparison, but it is not a'
+      + '\nlike-for-like measurement of the two models.');
+  }
 }

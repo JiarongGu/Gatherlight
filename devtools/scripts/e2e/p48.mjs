@@ -87,6 +87,13 @@ try {
     facts.map((f) => f.retrievability).join(','));
   // The record of truth still owns provenance — the whole reason recall hydrates from `knowledge`
   // instead of answering out of the index.
+  // The usage counter has a READER now. It was incremented on every recall and consumed by nothing —
+  // not the ranking, not this projection, not the client — which is the "bought and never consulted"
+  // shape one level down from the embedding at SemanticSeedK 0. It earns its place on rows matched by
+  // TEXT or SUBJECT, which carry no retrievability and would otherwise have no usage signal at all.
+  ok('a hit reports how much use the fact actually gets',
+    facts.every((f) => typeof f.used === 'number'),
+    JSON.stringify(facts.map((f) => f.used)));
   ok('a hit still carries its source and confidence from the record of truth',
     facts.every((f) => typeof f.source === 'string' && f.source.length > 0 && typeof f.confidence === 'number'),
     JSON.stringify(facts[0]));
@@ -136,9 +143,146 @@ try {
   // What the console shows instead of a history of rebuilds: how much of what the household knows is
   // actually searchable. A rebuild interrupted by a restart shows here as a shortfall and is repaired by
   // the next startup back-fill, so nothing needs to remember that a run once existed.
-  const cov = (await c.getJson('/api/manage/memory'))?.localModel?.coverage;
+  // Read off the SEMANTIC layer's row: 记忆检索 is layers[] now, each with its own backend and model.
+  const cov = ((await c.getJson('/api/manage/memory'))?.layers ?? [])
+    .find((l) => l.id === 'semantic')?.coverage;
   ok('the console can report index coverage, and it is complete after normal writes',
     cov && cov.total >= 3 && cov.indexed === cov.total, JSON.stringify(cov));
+
+  // --- N. PHRASINGS LAND ON THE FACT THEY CAME FROM -----------------------------------------------
+  //
+  // The 语义 CLI arm expands each fact at write time and stores the wordings in `knowledge.aka`, which the
+  // trigram index searches. The first version found the row it had just written by SEARCHING for its topic
+  // — RecallAsync(topic), full-text, ordered by CONFIDENCE — so it could attach one fact's phrasings to a
+  // different fact. Phrasings on the wrong fact are worse than none: an unrelated fact starts answering a
+  // question it has nothing to do with, and nothing reports it.
+  //
+  // This repro is built to make the old code fail deterministically rather than by luck:
+  //   · the second topic is TWO characters, so FtsQuery drops it and recall falls back to LIKE %..%
+  //   · the first topic CONTAINS the second as a substring, so that LIKE matches both rows
+  //   · the first fact has the higher confidence, and the fallback orders by confidence DESC
+  // so the old lookup would have returned fact ONE while writing fact TWO.
+  const bindRephrase = await fetch(`${base}/api/manage/memory/layer/semantic`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ source: 'claude-cli', model: 'haiku' }),
+  });
+  ok('(setup) 语义 binds to the CLI rephrasing arm', bindRephrase.status === 200, String(bindRephrase.status));
+
+  await remember(c, 'pet', '猫粮偏好', '家里的猫只吃鱼味罐头,不碰鸡肉味的。', 0.95);
+  await remember(c, 'pet', '猫粮', '猫粮放在玄关的柜子里。', 0.30);
+
+  const akaDb = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'));
+  const akaRows = akaDb.prepare(
+    "SELECT topic, COALESCE(aka,'') AS aka FROM knowledge WHERE kind = 'pet' ORDER BY topic").all();
+  const akaOf = (t) => akaRows.find((r) => r.topic === t)?.aka ?? '';
+
+  // The stub answers every prompt, so if NOTHING came back the seam is broken rather than the routing —
+  // say which, instead of reporting a routing failure for a plumbing one.
+  const anyExpanded = akaRows.some((r) => r.aka.length > 0);
+  ok('the CLI arm expands a fact on write, storing other wordings beside it',
+    anyExpanded, JSON.stringify(akaRows));
+
+  if (anyExpanded) {
+    // THE ASSERTION. Under the old lookup the second write would have overwritten the FIRST row and left
+    // its own empty — so "both rows carry their own" is exactly the discriminator.
+    // THE ASSERTION: BOTH rows carry phrasings. Under the old lookup the second write would have resolved
+    // to the FIRST row (two-character topic → no FTS token → LIKE %猫粮% matches both → ordered by
+    // confidence, and fact one is 0.95 against 0.30), overwriting that row and leaving its own empty.
+    //
+    // Deliberately NOT asserting the two differ: the claude stub answers every prompt with the same canned
+    // text, so content cannot discriminate here and an inequality check would be asserting the stub. What
+    // it CAN prove is which ROW each write reached, which is precisely what was broken.
+    ok('and each fact keeps its OWN phrasings — the second write cannot land on the first row',
+      akaOf('猫粮').length > 0 && akaOf('猫粮偏好').length > 0,
+      JSON.stringify(akaRows.map((r) => [r.topic, r.aka.length])));
+  }
+  akaDb.close();
+
+  // BACKFILL: binding the arm must reach facts that ALREADY EXISTED.
+  //
+  // The harbour facts were written at the top of this suite, before 语义 was bound to anything, so they
+  // carry no phrasings. Rebuilding is the only control the product offers for that — and for this arm it
+  // used to be a silent no-op: ReindexSemanticAsync guarded on `_semantic`, which is non-null only when an
+  // EMBEDDER was registered, and the CLI arm registers nothing by design. So the endpoint accepted, the
+  // detached run "finished", and an existing knowledge base could never gain phrasings. The layer applied
+  // to future writes only, which is not what binding it says.
+  const akaOfTopic = (t) => {
+    const db = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'));
+    try {
+      return db.prepare("SELECT COALESCE(aka,'') AS aka FROM knowledge WHERE topic = ?").get(t)?.aka ?? '';
+    } finally { db.close(); }
+  };
+  ok('(fixture) a fact written BEFORE the binding has no phrasings',
+    akaOfTopic('harbour teahouse listing') === '', JSON.stringify(akaOfTopic('harbour teahouse listing')));
+
+  const reindex = await fetch(`${base}/api/manage/memory/layer/semantic/reindex`, { method: 'POST' });
+  ok('a rebuild is accepted for the rephrasing arm', reindex.status === 202 || reindex.status === 200,
+    String(reindex.status));
+
+  let backfilled = '';
+  for (let i = 0; i < 60; i++) {
+    backfilled = akaOfTopic('harbour teahouse listing');
+    if (backfilled.length > 0) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  ok('THE POINT: rebuilding reaches the facts that predate the binding',
+    backfilled.length > 0, JSON.stringify(backfilled));
+
+  // ...AND IT COSTS NOTHING TO DO SO. The rephrasing arm writes a knowledge COLUMN; nothing of it lives in
+  // the graph. Routing it through the destructive rebuild — which the first version did — discarded every
+  // decay position and link the household had accumulated in exchange for nothing, and made "bind it, then
+  // rebuild" advice with a hidden price. `linked` is the observable: the co-recall section above built
+  // those edges, and a rebuild resets them to zero.
+  const linkedAfter = (await c.call('recall_facts', { query: 'harbour teahouse', limit: 5 }))
+    .result?.facts?.filter((f) => (f.linked ?? 0) > 0).length ?? 0;
+  ok('…and the graph kept its links — the phrasing backfill is not a rebuild',
+    linkedAfter > 0, `facts still linked: ${linkedAfter}`);
+
+  // STORED IS NOT FOUND. Everything above proves phrasings were WRITTEN; none of it proves they can be
+  // reached, which is the only thing this layer is for. `zzfishpref` appears in no fact's text — only in
+  // the phrasings — so a hit can have come from nowhere else.
+  //
+  // This is the seam where the arm could be silently inert: recall tries the GRAPH first, and the graph
+  // indexes the fact's content, which never contained the phrasings. `aka` lives in the FTS table, and
+  // MemoryTools falls back to FTS only when the graph resolved NOTHING. So the phrasings are consulted
+  // exactly when the graph abstains — and if the graph answers with something irrelevant instead, they
+  // are never consulted at all.
+  const viaPhrase = await c.call('recall_facts', { query: 'zzfishpref', limit: 5 });
+  const phraseTopics = (viaPhrase.result?.facts ?? []).map((f) => f.topic);
+  ok('THE POINT: a wording that exists ONLY in the stored phrasings finds the fact',
+    phraseTopics.includes('猫粮偏好'),
+    `ranked=${viaPhrase.result?.ranked} topics=${JSON.stringify(phraseTopics)}`);
+
+  // …and it finds the RIGHT one. The other fact carries its own distinct phrasing, so a hit on both would
+  // mean the phrasings are being matched loosely enough to be worthless.
+  ok('and the other fact, with its own phrasings, is not dragged along',
+    !phraseTopics.includes('猫粮'), JSON.stringify(phraseTopics));
+  // A DIFFERENT LANGUAGE REACHES THE FACT. This is the layer's actual purpose and it was not being
+  // served: the rephrase prompt offered 另一种语言的常见叫法 as one of three options, the model always
+  // chose same-language synonyms, and a household writing in Chinese and asking in English got nothing
+  // from a feature costing a model call per fact. The prompt now REQUIRES a line in another language;
+  // this asserts the retrieval half, which is the half that can silently rot.
+  const viaEnglish = await c.call('recall_facts', { query: 'zzseafood tins', limit: 5 });
+  ok('THE POINT: an English query reaches a fact whose text is entirely Chinese',
+    (viaEnglish.result?.facts ?? []).some((f) => f.topic === '猫粮偏好'),
+    JSON.stringify((viaEnglish.result?.facts ?? []).map((f) => f.topic)));
+
+  // …AND IT SURVIVES THE GRAPH ANSWERING SOMETHING ELSE. This is the assertion that matters most for
+  // this layer, and it FAILED when written: `harbour` matches three unrelated facts lexically, the graph
+  // therefore resolved a full answer, and FTS — the only index that holds `aka` — used to run solely when
+  // the graph resolved NOTHING. So a household's paid-for phrasings were reachable only by a query that
+  // matched nothing else at all, which is a much narrower promise than the layer makes.
+  //
+  // The first version of this probe was vacuous and passed: it used `猫粮`, which matches 猫粮偏好's own
+  // TOPIC, so the graph found the fact lexically and the phrasing was never needed. The lexical term has
+  // to match an UNRELATED fact for the question to be asked at all.
+  const mixed = await c.call('recall_facts', { query: 'zzfishpref harbour', limit: 5 });
+  ok('a phrasing still wins when the query ALSO matches unrelated facts lexically',
+    (mixed.result?.facts ?? []).map((f) => f.topic).includes('猫粮偏好'),
+    `ranked=${mixed.result?.ranked} topics=${JSON.stringify((mixed.result?.facts ?? []).map((f) => f.topic))}`);
+
+  // Put the layer back as it was, so later cases in this suite see the state they expect.
+  await fetch(`${base}/api/manage/memory/layer/semantic/off`, { method: 'POST' });
 
   // --- 6. a backup import rebuilds the index ------------------------------------------------------
   const zip = await fetch(`${base}/api/backup/export`);
@@ -204,6 +348,101 @@ try {
     .map((r) => r.scope);
   ok('and the entries moved to the current layout', afterScopes.length === 1 && afterScopes[0] !== 'price',
     `scopes=${JSON.stringify(afterScopes)}`);
+
+
+  // ---- A VERDICT REACHES THE ORDERING ----------------------------------------------------------
+  //
+  // The panel tells the household that facts the judge marks as answering rank higher. A clause with no
+  // enforcement behind it is a defect, so this holds Lyntai to it — and it is a CANARY rather than a test
+  // of our code: if a release stops the verdict reaching the ordering, that sentence silently becomes a
+  // false promise and nothing else would notice.
+  //
+  // ONE CALL, with the baseline taken from inside it. The stub records the numbered notes it was shown,
+  // which is the engine's ranking BEFORE the verdict is applied, then endorses the LAST of them. Four
+  // earlier fixtures were vacuous because they tried to establish a baseline with a SECOND recall — and
+  // recall reinforces what it returns, so the control call moves the very ranking it was meant to measure.
+  try { fs.unlinkSync(path.join(process.cwd(), 'devtools', '_stub-verdict.txt')); } catch {}
+  const verdictPage = (await uc.call('recall_facts', { query: 'harbour teahouse zzjudge', limit: 6 }))
+    .result?.facts ?? [];
+  const shown = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), 'devtools', '_stub-verdict.txt'), 'utf8') || '[]');
+
+  ok('(fixture) the judge saw several candidates and endorsed the last of them',
+    shown.length >= 2 && verdictPage.length >= 2, JSON.stringify({ shown, page: verdictPage.map((f) => f.topic) }));
+
+  ok('THE POINT: the endorsed candidate was NOT top of the pre-verdict ranking',
+    shown[shown.length - 1] !== shown[0], JSON.stringify(shown));
+
+  ok('...and it comes back at the top of the page',
+    verdictPage[0]?.topic === shown[shown.length - 1],
+    JSON.stringify({ endorsed: shown[shown.length - 1], page: verdictPage.map((f) => f.topic) }));
+
+  // ---- SUBJECT HANDLES ARE SEARCHABLE ----------------------------------------------------------
+  //
+  // With 判断 on, every write is annotated and its subjects — stable handles naming what the fact is
+  // ABOUT — are recorded. They used to be read by exactly two things, both at WRITE time: linking two
+  // facts, and prompting the annotator to reuse a handle. No recall path touched them, so the household
+  // paid a model call for them and could never search them.
+  //
+  // The handles here appear in NO fact's text (the stub answers the annotation prompt with words the
+  // content does not contain). That is what makes this test mean something: lexical recall cannot
+  // produce these hits, so if the fact comes back, the subject lookup is the only thing that found it.
+  await remember(uc, 'household', 'partner celebration date', '伴侣的生日在春天,通常在家里过。');
+  await remember(uc, 'household', 'document renewal', '旅行证件下个月到期,要提前去换。');
+
+  // NON-VACUITY, and the assertion that would have caught the whole feature being inert: prove the
+  // annotation actually RAN and stored handles. Without this, every check below could pass by the
+  // fallback path returning something plausible for an unrelated reason.
+  const subjectRows = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'))
+    .prepare("SELECT subject FROM lyntai_memory_subject WHERE engine = 'facts/graph'").all()
+    .map((r) => r.subject);
+  ok('the annotation recorded subject handles for the new facts',
+    subjectRows.includes('pairbond') && subjectRows.includes('paperwork'),
+    JSON.stringify(subjectRows));
+
+  // …and NONE of them is a word the facts actually say, so a hit below cannot come from the text.
+  const partnerText = '伴侣的生日在春天,通常在家里过。';
+  ok('the handles are absent from the fact text — so lexical recall cannot produce them',
+    !partnerText.includes('pairbond') && !partnerText.includes('paperwork'), partnerText);
+
+  const bySubject = await uc.call('recall_facts', { query: 'pairbond', limit: 5 });
+  const subjHits = bySubject.result?.facts ?? [];
+  ok('THE POINT: a query naming a subject handle finds the fact whose text never says it',
+    subjHits.some((f) => f.topic === 'partner celebration date'),
+    JSON.stringify(subjHits.map((f) => f.topic)));
+
+  // The route is REPORTED, not silently blended in. A subject hit has no measured retrievability, so
+  // printing 0.0 would claim the fact is fully decayed — a statement about the household's own memory
+  // that nothing checked. Same reason `ranked` exists.
+  const partnerHit = subjHits.find((f) => f.topic === 'partner celebration date');
+  ok('…and says HOW it was found, instead of reporting a retrievability it never measured',
+    partnerHit?.matched === 'subject' && partnerHit?.retrievability === undefined,
+    JSON.stringify(partnerHit));
+
+  // SELECTIVITY. A handle is not a wildcard: the other annotated fact carries a different one and must
+  // stay out. Without this the feature could "pass" by appending every annotated fact to every recall.
+  ok('a handle pulls in ITS facts, not every annotated fact',
+    !subjHits.some((f) => f.topic === 'document renewal'),
+    JSON.stringify(subjHits.map((f) => f.topic)));
+
+  // A HANDLE MUST BE NAMED, NOT MERELY SPELLED. An ASCII handle needs a word boundary: `pairbond` sits
+  // inside `repairbonded`, and a household asking about one thing must not be handed a fact about
+  // another because its handle happens to be a substring. (CJK handles keep plain substring matching —
+  // Chinese has no spaces to anchor to, the same reason this product's FTS is trigram.)
+  const spurious = await uc.call('recall_facts', { query: 'repairbonded surfaces', limit: 5 });
+  ok('a handle spelled INSIDE a longer word does not count as naming it',
+    !(spurious.result?.facts ?? []).some((f) => f.topic === 'partner celebration date'),
+    JSON.stringify((spurious.result?.facts ?? []).map((f) => f.topic)));
+
+  // ADDITIVE, NEVER A REORDERING. The original ranked query must be untouched — subject hits are
+  // appended after the graph's own answer, so a fact the ranking already found keeps its place.
+  const stillRanked = await uc.call('recall_facts', { query: 'harbour teahouse', limit: 5 });
+  const stillTop = (stillRanked.result?.facts ?? [])[0];
+  ok('an ordinary ranked recall is unchanged — the addition cannot displace a better hit',
+    stillRanked.result?.ranked === 'graph' && stillTop?.matched === undefined
+      && typeof stillTop?.retrievability === 'number',
+    JSON.stringify({ ranked: stillRanked.result?.ranked, top: stillTop?.topic, m: stillTop?.matched }));
+
 } catch (err) {
   fail('e2e-p48 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {

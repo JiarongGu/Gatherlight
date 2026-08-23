@@ -273,6 +273,17 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   so a household that chose LAN mode and took the documented opt-in got a refusal quoting the setting
   they had already set — while `Gatherlight.Host` honoured it. A denial without its positive control
   is half a test.
+- **WAN WITHOUT TLS IS A TOKEN IN PLAINTEXT, and it used to look as calm as a safe setup.** The token
+  requirement is genuinely enforced — an unauthenticated non-loopback bind refuses to start — but HTTPS is
+  only ever a 建议, and the console's danger styling keyed SOLELY on a missing token. So the configuration
+  that ships a bearer credential across the internet in clear text rendered in the same grey as a correct
+  one. Both halves were true and one was invisible, which is the same defect shape as an unenforced claim
+  arriving from the other direction. The settings panel now flags WAN-with-TLS-off separately — a
+  different hole from having no token, fixed by a different switch, so not folded into the same sentence.
+  Deliberately NOT made fail-closed: refusing to start would be ours to impose on a household who may be
+  behind their own terminating proxy, and this file's own rule is that "costlier" describes an option
+  rather than removing it. Asserted in `desktop-e2e`, which can drive the segmented control safely
+  because it sets React state only — nothing is written until 保存, which the harness never presses.
 - **TLS is Kestrel-native** (`TlsCertificate.Resolve`): a self-signed cert generated + reused from
   `state/gatherlight-tls.pfx`, or a configured PFX. Config lives in `security.*` (settings.json) +
   `GATHERLIGHT_BIND`·`_ACCESS_TOKEN`·`_TRUST_LOOPBACK`·`_TLS[_CERT]` env overrides.
@@ -334,7 +345,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   came back looking intact with the household's own pages gone, and `SiteManifestStep` writes a fresh
   default, so the app came up working and merely forgot what it was allowed to do. When a new record
   directory is added to the site, add it here — and assert it in `p47` by NAME, never by the
-  template-seeded file that would come back anyway.
+  template-seeded file that would come back anyway. **`uploads/` was in the list and asserted by nothing**
+  until 2026-08-23: dropping it from `Folders` left every check green while every file the household had
+  attached stopped travelling. The rule already existed and `ui/` and `site.json` were added under it after
+  they were lost — the directory ALREADY in the list was never retro-fitted, which is how a rule written
+  after an incident covers the next case and not the previous one. Confirmed by dropping it: `p47` fails.
 - **The backup carries `.git`, so LOOSE OBJECTS are a backup-size problem.** Git writes every new
   object loose — one zlib file each — and only packs when told; a loose object is already-compressed
   data a zip cannot squeeze. A restore writes a whole tree that way, so the objects ride into the NEXT
@@ -370,13 +385,124 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing", which is a lie told on their own data. `recall_facts` therefore reports `ranked:
   graph|fts`, because a graph answer and a fallback answer are otherwise indistinguishable. Proof lives
   in `e2e-p48`, whose restore assertion was confirmed to FAIL with the rebuild removed.
+- **WHAT THE RECALL LAYERS DO, and what is actually evidenced.**
+
+  | | does | evidence |
+  |---|---|---|
+  | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost |
+  | **判断** | subject handles on every write; judges which candidates answered | **+2 facts recovered in each of cross-language, third-language and code-switched probes; 0 same-language.** Costs **9–17 s per recall** (CLI spawn; the 公式 floor is 68–90 ms) |
+  | **语义 · Claude CLI** | stores other wordings of a fact, **≥1 in another language** | capability proven directly: an English question retrieves a Chinese-only fact. Aggregate effect NOT measured — see the rule below on why this tool cannot |
+
+  With `VerificationFilters` off (how we register it) a verdict does not filter or re-sort. It sets
+  `answered` and narrows which nodes are REINFORCED — and that narrowing reaches the ordering anyway:
+  endorsing a fact the engine ranked third brings it to the top of the same page, against a measured
+  no-verdict baseline. Its benefit is therefore real but indirect, which is why same-language probes show
+  0.000 and multilingual ones show a flat −0.125 miss rate.
+
+- **THREE RULES FOR MEASURING ANY OF THIS.** They are here because ignoring them produced three sessions
+  of wrong conclusions, and each is cheap to apply.
+  **(1) When a measurement says "no effect", check the instrument can EXPRESS the effect.** `recall-bench`
+  generated questions *in the fact's own language* — the one case the lexical floor already handles — so
+  it could never see an enrichment layer working. It now generates FOUR sets (`QUESTION_SETS`): same,
+  cross, a third language, and CODE-SWITCHED, which is how people actually type in chat. A zh↔en flip
+  alone is too narrow; a household with Japanese or Korean material is not served by it. (The Japanese
+  floor beats the English one because the index is TRIGRAM and Japanese shares kanji with Chinese.)
+  **(2) Only the WITHIN-RUN paired comparison is trustworthy.** Recall REINFORCES, so a run mutates what
+  it measures. Anything compared across runs is unattributable — and two adjacent runs agreeing shows
+  convergence, not stability. The bench is paired and counterbalanced for this reason. A layer whose state
+  is durable rows (语义's phrasings) therefore cannot be A/B'd by this tool at all; that needs a fixture
+  whose graph resets between arms, which `recall-bench` deliberately is not.
+  **(3) A capability question needs ONE FACT, not a corpus.** "Does a stored phrasing retrieve its fact?"
+  is settled by writing one fact and querying a wording that appears only in its phrasings. Reaching for a
+  16-fact benchmark to answer it is what made this look unanswerable for three sessions.
+
+- **REQUIRE IT, DON'T OFFER IT — the rephrase prompt.** It listed 另一种语言的常见叫法 as one option among
+  three, and a model asked for "a different wording" takes the synonym every time: measured on a real
+  fact, four phrasings and not one latin character. The layer therefore added only same-language surface
+  the lexical floor already reached. The prompt now REQUIRES a line in another language, and `e2e-p48`
+  asserts the retrieval half (an English query reaching a Chinese-only fact), failing when the stub's
+  cross-language phrasing is removed. Generalises: when a prompt lists alternatives, the model picks the
+  cheapest, so anything load-bearing has to be mandatory rather than mentioned.
+
+- **A LAYER'S COST LINE DESCRIBES THE BOUND ARM.** 判断 has always derived its cost from `boundJudge`;
+  语义 carried a fixed string from when its only arm was an embedder — 「不消耗 token;资料不离开这台电脑」
+  — so a household who chose the Claude arm was told their facts stay on their machine while every fact
+  was being sent to Claude and billed. Adding an arm to a layer means re-reading everything the layer
+  SAYS: a fixed string cannot be wrong about a backend that did not exist when it was written, which is
+  exactly why nobody re-reads it. `p51` binds each arm and asserts the claim tracks it, including that a
+  LOCAL arm still says the data stays put.
+
+- **Switching 语义 off does NOT clear what it wrote.** Phrasings live in `knowledge.aka`, which the FTS
+  table indexes unconditionally — so 15 facts were still matching on their stored phrasings after the layer
+  was turned off, and nothing in the product said so. Turning a layer off stops it producing; it does not
+  retract what it produced. **The `/off` response now says so**, and deliberately does not delete them —
+  the persistence has a real upside (re-enabling costs no re-derivation, which is ~46 s per fact), so the
+  defect was the silence, not the effect. A CLEAR action stays a separate decision, because it turns on
+  whether phrasings are the layer's output or part of the fact, and putting one inside an "off" button
+  would answer that question by accident.
+- **FTS TOPS THE PAGE UP; it is not only a fallback for an empty one** — and until 2026-08-22 it was, which
+  quietly cost the 语义 CLI arm most of its value. Phrasings live in `knowledge.aka`, which is in the FTS
+  table and in NO graph node (the graph indexes a fact's CONTENT, which never contained them), while
+  `MemoryTools` ran the FTS recall only when the graph resolved nothing. So a household paying a model call
+  per fact got phrasings reachable only by a query that matched nothing else at all — a far narrower promise
+  than the layer makes. Demonstrated in `e2e-p48`: `zzfishpref harbour` resolved the three lexically-matching
+  facts and silently dropped the one whose stored phrasing was the query's only real match. Now FTS fills
+  slots the caller asked for and the graph did not use — **topping up, never merging**, so the graph's rows
+  keep their place and their order and nothing can displace a ranked hit (the property that makes the
+  subject append safe). Rows added this way carry `matched:"text"`, but only when the graph also answered:
+  on an empty page `ranked` already says `fts` for the whole result and marking each row states it twice.
+  **The first version of that test was VACUOUS and passed** — it used a term matching the target fact's own
+  topic, so the graph found it lexically and the phrasing was never needed. To ask the question at all, the
+  lexical term has to match an UNRELATED fact. Topping up also made the two paths OVERLAP, so
+  `RecallAsync` takes an `exclude` set: "give me more, but not these" is the top-up's real contract, and it
+  stops a fact found both ways counting twice in `knowledge.hits`. **That counter turned out to have no
+  reader at all** — incremented on every recall, mapped onto `KnowledgeRow`, and used by neither the ranking
+  (confidence then bm25), nor `MemoryTools.Row`, nor the client, which is why the double-count was a latent
+  wrong number rather than a visible one. **Resolved by giving it a reader** (`used` on each recalled row)
+  rather than by dropping a column the backup carries: it earns its place on rows matched by TEXT or by
+  SUBJECT, which carry no retrievability and so had no usage signal at all. "Read it or stop writing it" —
+  and reading it was the smaller change.
+- **A WORKAROUND FOR A LYNTAI GAP IS RECORDED ON BOTH SIDES, or it becomes a duplicate feature.** We are
+  review-only on Lyntai, so our fixes for its gaps live here and the request lives in its `TASKS.md`. Each
+  half has to name the other: the code says *this exists because the library does not do it, and here is
+  what happens when it does*; the task says *an adopter already shipped a workaround, so landing this means
+  telling them to remove it*. Without both, a future release closes the gap silently and the app keeps
+  running its own copy — two implementations in one call path, each looking necessary to whoever reads only
+  one repository. `FactIndex.AppendBySubjectAsync` ↔ Lyntai Part 94 is the worked example, and it also shows
+  the note must state the CONSEQUENCE precisely rather than warn vaguely: there, an engine-side seed would
+  not double any row (we dedup by graph ref) and would report better numbers than we can, so the honest
+  instruction is "delete this", not "beware of conflicts".
+- **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
+  is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
+  recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
+  reuse a handle. **No recall path touched them**, so a household asking "配偶" got nothing from a fact whose
+  text says 太太, while a handle saying exactly that sat in the store, paid for by a model call they had
+  already made. Same shape as the embedding bought on every write with `SemanticSeedK` at 0 — a cost with no
+  matching benefit, invisible from every API response. `FactIndex.AppendBySubjectAsync` closes it: handles
+  matching the query as SUBSTRINGS (the query is a sentence and CJK has no spaces — the same reason the FTS
+  is trigram), normalized by CALLING `MemorySubject.Normalize` rather than restating it, because the store's
+  write applied it and a private `ToLower()` folds `"I"` differently under a Turkish culture. **APPENDED
+  after the graph's answer, never merged into it**: `ByGraphRefsAsync` preserves rank order exactly, so this
+  can only lengthen a short page and never displace a better hit — which is why it needs no tuning knob.
+  That is also why the handles are NOT put into the FTS text, where a generic handle would compete for bm25
+  against the fact's own words. A subject hit reports `matched:"subject"` and **omits** retrievability and
+  degree — neither was measured, and printing `0.0` claims the fact is fully decayed, a statement about the
+  household's memory that nothing checked (the `ranked` principle, one level down). Proof lives in `e2e-p48`
+  and was confirmed to FAIL with the append removed — the query returns `[]`, since no fact's text contains
+  the handle. **The stub taught the same lesson twice**: its annotation branch must read only the text after
+  the last `Fact:`, because Lyntai composes the prompt as [known subjects] + [earlier facts] + the write, so
+  a whole-prompt scan hands every handle to every write. That is the p28 cross-fire exactly, one call site
+  over, and it was caught by the selectivity assertion rather than in production.
 - **Recall quality is THREE INDEPENDENT SWITCHES, and where each one's config lives is decided by WHEN it
   is read.** *Formula* (graph decay + rank fusion + FTS trigram) is the floor: always on, no setup, no
   cost. *Claude CLI* adds annotation per write and verification per recall — and costs a model call for
-  each, measured at 4 for 3 writes + 1 recall. *Local model* adds real semantic vectors from a LOCAL
-  Ollama: disk and local compute, no tokens, and nothing leaves the machine. They are independent rather
-  than tiered because they are complements — verification REORDERS what was retrieved, embeddings change
-  what is RETRIEVABLE — so a household must be able to drop the token cost without losing local semantics.
+  each, measured at 4 for 3 writes + 1 recall. *Local model* adds real semantic vectors from a runtime this app
+  PROVISIONS — llama.cpp's `llama-server`, or the in-process ONNX embedder (`builtin`). It said
+  "a LOCAL Ollama" until 2026-08-23, months after Ollama stopped being a backend at all: disk and
+  local compute, no tokens, and nothing leaves the machine. They are independent rather
+  than tiered because they are complements — verification acts on what was retrieved (and reaches the ordering
+  indirectly, by narrowing what gets reinforced — see the 判断 bullet), while the semantic layer
+  changes what is RETRIEVABLE AT ALL — so a household must be able to drop the token cost without losing local semantics.
   The enrichment was adopted wholesale with Lyntai 3.0 and spent that per-operation cost for months with
   no way to decline it; the default stays ON (turning it off by default would silently degrade recall on
   upgrade) but declining is now a setting. **It is an `app_config` value read per call, not a
@@ -390,10 +516,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   found nothing useful and teaches the engine exactly the wrong thing. The LOCAL MODEL is the honest
   exception and stays in `settings.json`: the embedder, vector store and engine member are consumed at DI
   REGISTRATION time, before the container — and therefore the DB — exists, the same reason `security.*`
-  lives there. **A consumer routed in
-  `DefaultModelByConsumer` must also be listed in cortex's `ModelCatalog`** or its model is routable in
-  principle and unreachable in practice: `memory` was exactly that, with a comment promising a live
-  override the product gave no way to set. Proof lives in `e2e-p51`.
+  lives there. **A consumer routed in `DefaultModelByConsumer` must be settable SOMEWHERE the household can
+  reach** — otherwise its model is routable in principle and unreachable in practice, which `memory` was for
+  a while, with a comment promising a live override the product gave no way to set. Cortex's `ModelCatalog`
+  is the default home and the right one for `chat`/`extract`/`scorer`. **`memory` is the exception and is
+  deliberately absent from it**: 记忆检索 binds the judge's model together with its BACKEND, and a cortex row
+  beside that was a SECOND writer of one value — the one that won. A household who set 记忆判断 to `haiku`
+  there and later moved the judge to a local model had the router asking the Ollama provider for a model
+  called `haiku`; both memory policies are fail-open, so the symptom was zero model calls and no error at
+  all. Two controls for one value is worse than one control in an unexpected place. Proof lives in
+  `e2e-p51`, which asserts the cortex row is GONE as well as that the binding writes the key.
 - **Meaning-based fact recall is a GRAPH OPTION and ONE SCOPE — not a second engine member.** Both halves
   were got wrong first, both failed silently, and neither was visible from any API response, so the
   reasoning is on the record. (1) With an embedder + vector store registered, `UseGraph()` already embeds
@@ -429,12 +561,165 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   is built — so a regression that re-buys the embedding and reads none of it now announces itself instead of
   showing up as "recall feels no different". Verified both ways on 2026-08-21: silent on the current wiring,
   and firing by name with `SemanticSeedK` put back to 0.
-- **The memory judge's BACKEND is a choice, and a named client cannot route on candidates it does not own.**
-  Annotation (every write) + verification (every recall) is the app's most frequent model call, so it may run
-  on a local Ollama model instead of the CLI — `memory.judgeTransport`/`judgeModel` in `settings.json`,
-  because naming it registers a provider and a named `ILlmClient` while the container is built. The policies'
-  own `Model` stays **null** so the router resolves per consumer and cortex's live `llm.model.memory` keeps
-  working; only `DefaultModelByConsumer["memory"]` changes. **The trap:** `LlmRouterFactory.For()` narrows a
+- **"Worse" and "costly" are reasons to DESCRIBE an option, not to remove it — and "cannot" has to mean
+  cannot.** This was violated twice in one session, both times by reasoning that sounded like engineering
+  judgement and was actually a decision taken away from the household.
+  **(1) 语义 had no Claude arm** and the panel explained why: "Claude ships no embeddings endpoint, so this
+  layer cannot have it." The first clause is true; the conclusion was not. The layer was defined as
+  embeddings BY US, so the missing class was a consequence of our definition, not a limit of Claude's — and
+  the effect was that a machine which cannot run a local model (no GPU to spare, a GPU wanted for something
+  else, a household declining a 222 MB download) was offered NOTHING for that layer, with a paragraph where
+  a choice belonged. "No class implements the interface" is circular whenever we wrote the interface.
+  `ClaudeCliSemanticSource` now serves the layer's actual job — a paraphrase finds the fact — by storing
+  rephrasings instead of vectors. It is genuinely worse than an embedder for wording nobody anticipated, and
+  that sentence is in its description rather than in a refusal.
+  **(2) A capability was deleted for tidiness.** 资源 was scoped to "only what Gatherlight provisions" —
+  a decision about what a PANEL SHOWS — and that got carried through into removing the model pull/delete
+  verbs and their endpoints, justified as "an unused management verb is an invitation to the next caller".
+  Code hygiene does not outrank what the household can do. It cost the free-form field whose own docstring
+  recorded why it existed: *a catalogue baked into a release cannot contain a model published after it.*
+  The same code was later removed AGAIN, correctly, when that runtime stopped being a backend at all and
+  the app no longer depended on it. **Two removals of the same code, one wrong and one right; the
+  difference is whether the DEPENDENCY went with it, not how tidy the interface looked.**
+  **The test:** if the honest sentence is "it does this less well" or "this costs more", ship the option with
+  that sentence attached and let the household weigh it. A DECLINED entry is only for a real impossibility
+  (内置 on 判断 needs an in-process chat model, which does not exist) — never for an option nobody built.
+  A model row saying "you do not need this" is the same error in miniature: state the trade-off, and say
+  when it is unmeasured. And a removed capability needs a test asserting the household can still do it —
+  both removals above passed every check, because nothing asserted the ability existed (`p51` now does).
+
+- **VOCABULARY, because this area had none and the gap cost a whole design conversation.** FOUR words, and
+  they are not interchangeable. A **LAYER** is a job (公式 · 判断 · 语义). A **BACKEND** is *where the model
+  comes from* — `claude-cli` · `llama-cpp` · `builtin` (`MemoryBackends`). `ollama` and `openai-compat`
+  were backends until 2026-08-22 and are now RETIRED ids: `IsRetired` refuses a binding to either and the
+  layer says what to pick instead, because the two silent alternatives were moving 判断 onto account
+  quota and switching 语义 off. A **GROUP** is one of the three answers the picker offers — `cli` ·
+  `managed` · `none` — keyed on what it COSTS, and `none` deliberately holds no backends: choosing it
+  turns the layer off, which is a real answer to "where does the model come from" and used to be a
+  separate button. **Their display names are 本机模型 and 不用模型, and both were wrong before 2026-08-22
+  in ways that cost a household a real option.** `managed` was called **llama.cpp** — after ONE of its two
+  runtimes; the other is an ONNX session in our own process using no part of llama.cpp. `none` was called
+  **内置**, which is simultaneously the id and 资源 label of that in-process embedder. So the picker told a
+  Claude-CLI household that real vectors meant downloading and running another program (wrong: 内置 is
+  222 MB of weights in this process), while the word for that very thing meant "switch the layer off" one
+  panel over. A group is named for what it COSTS, never after a member; and one word gets one meaning.
+  `p51` pins both. A **MODEL** is
+  what a backend serves. An **ORIGIN** is *whose runtime it is* — `bundled` (in our process) · `app` (we
+  downloaded and start it) · `household` (they run it, we only connect) — `RuntimeOrigin`, resolved PER
+  INSTALL because for `claude-cli` the app provisions a copy AND a household may have their own, so only
+  `Locate()` knows which won — it is the last backend where that question is live, which is why `p51` cannot
+  drive the `app` branch (its stub override outranks a planted file) and `p50` case F asserts it instead,
+  claudeless and against a real download. It was briefly recorded as an uncovered gap, which was one
+  assumption too many: the override does not make the branch unreachable, it just means the fixture has to
+  be one that never stubs the CLI. **That fourth word was missing and its absence cost the second
+  design conversation**: the picker said only 本机 · Ollama, "your Ollama", while 资源 had been downloading
+  and starting it since 2026-08-21 — so a provisioned runtime read as a manual prerequisite, to a household
+  and then to us, and a false claim ("语义 is the only layer you cannot switch on without installing a
+  separate program") shipped in the panel, the resource row and the release notes on the strength of it. **Every layer lists every backend**, and one it cannot use carries its reason
+  instead of being omitted — omitting it answers "why isn't this an option?" only in the source tree.
+  **`ollama` and `openai-compat` are RETIRED ids — past tense throughout.** This passage used to argue in
+  the present tense that "Ollama keeps its own backend because the app can enumerate it", then that it does
+  not manage it, then that it is not a backend at all — three positions in four lines, written as the
+  decision moved and never reconciled. What holds now: `MemoryBackends.IsRetired` covers both, binding
+  either returns 400, and the layer names what to pick instead.
+  Why each went. **Ollama** was retired in steps, and the middle step is the instructive one: we stopped
+  installing it, then stopped managing its models, and finally stopped connecting to it — leaving, in
+  between, a 记忆检索 that offered a daemon's models while nothing anywhere could add or remove one. Half
+  -managing someone else's runtime has no consistent version. **`openai-compat`** was the one path never
+  tested end to end: every case in `p51` was a denial or an address round-trip against a port with nothing
+  listening, and nothing ever listed models from a live endpoint, embedded through it, or answered a
+  judgement through it.
+  Worth keeping from the old text, because it is a design rule rather than a status: `openai-compat` was
+  ONE class for the whole OpenAI-compatible family (llama-server · LM Studio · vLLM · Jan · LocalAI), not
+  one per product, for the same reason `EmbeddingCatalog` is not a gate — a list of products goes stale the
+  moment somebody ships a new runtime.
+  `p49` asserts the absent spec against the present `llama-cpp` one, and `p51` asserts that binding a
+  retired id is REFUSED (400) rather than silently redirected — the fallback would have moved 判断 onto
+  account quota nobody chose and switched 语义 off, both invisibly.
+  The docs previously described this one axis three ways — "the local model", "the judge's *transport*", "the
+  embedder" — and named it never, so every discussion of it had to invent a term. **The trap in that
+  invention:** 嵌入 already means *embedding* here (`EmbeddingCatalog`, 嵌入模型, the 嵌入 badge), so
+  "embedded"/"嵌入式" for a bundled runtime collides with it head-on and a sentence like "cli/local for the
+  judge and embedded for 语义" parses correctly under BOTH readings. Hence **`builtin` · 内置**, which cannot
+  be confused with 嵌入. Say backend, not transport; say built-in, not embedded.
+- **The runtime the app PROVISIONS is llama.cpp's `llama-server`, not Ollama** (decided, measured and
+  accepted 2026-08-22 — `docs/self-managed-llm-runtime.md` carries the numbers, the eliminated alternatives
+  and what only running it revealed). Ollama is not gone: it stays a **household** origin, detected and
+  connected to but never installed by us, because plenty of households run their own. `llama-cpp` is 35 MB
+  against Ollama's 1460, matches its retrieval (9/10 top-1 on the `EmbeddingCatalog` fixture) and beats its
+  latency (25 ms/query through the app against 69). Three things about it are load-bearing and all three
+  fail SILENTLY, which is why they are here and not only in the doc:
+  **(1) `--n-gpu-layers` is launch CONTRACT.** Absent it, llama-server runs on the CPU and logs nothing —
+  222 ms/query against 7 ms, on the path of every recall. It goes into a generated per-model preset, which
+  is the form whose effect was verified in the child's own argv. **`p51` now asserts the generated preset
+  rather than trusting the comment** — the only mention of it in the suite used to be a comment citing a
+  manual measurement, which is a contract enforced by remembering. It is drivable with llama.cpp absent
+  because `WritePresets` runs BEFORE the spawn: a stub binary that merely exists clears the executable
+  check, the spawn then fails, and the preset is on disk regardless (the trick `p50` case F uses). Both
+  halves were confirmed to FAIL when broken — the missing flag, and `embeddings = true` written onto every
+  model instead of only embedders.
+  **(2) Models load LAZILY**, so starting means start-and-WARM. `--models-max` is a cap, not a preload; the
+  first request for a model spawns a child and waits (17.3 s for a 1B q4). Returning when the router answers
+  hands back a runtime that stalls on the first real recall — the very cost this runtime was chosen to remove.
+  **`p51` pins it, and needed no spawn either**: the start endpoint warms the models the ROUTER reports, so a
+  fake router naming two models receives both warm calls. It asserts the two are DIFFERENT requests —
+  `/v1/embeddings` for an embedder, `/v1/chat/completions` otherwise — because `embeddings = true` restricts
+  that child to one API and the wrong warm call fails against a real llama-server.
+  **The first version of that test was vacuous and this is the useful part**: it asserted the endpoint's own
+  `warmed` list, which still came back complete with the warm call deleted, because the endpoint builds it
+  from the models it probed. A field reporting that work happened is not evidence the work happened. It now
+  counts the requests that arrived at the fake server, and fails with `requests:[] reported:[both]` — which
+  is the shape of every self-reported metric in this codebase, one level down.
+  **(3) `embeddings = true` RESTRICTS a child to embeddings**, so it goes only on embedders, and the answer
+  has exactly ONE writer (`ResourceProvisioner.IsEmbeddingGguf`) — exact for what we provision, a *stated*
+  name heuristic for a GGUF the household dropped in. It briefly had two copies of a substring test in two
+  files, which is the drift this file keeps paying for.
+  Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
+  (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
+  already there" is not on the table. And `LlamaServerRuntime` deliberately does **not** search PATH: a
+  household's own llama-server is already reachable as `openai-compat` with an address they typed, and
+  collapsing the two is precisely the ambiguity that hid the Ollama provisioning for months. `Dispose` kills
+  the tree on graceful shutdown; a forced kill orphans a router, which the next start ADOPTS rather than
+  duplicates (measured — two processes across a restart, not four). **The adoption is `EnsureServingAsync`
+  probing `Serving` BEFORE it checks the executable exists**, and `p51` pins that ordering: with nothing
+  installed at all, a start against a port that already answers succeeds. Swap those two lines and every
+  start on a machine with an orphan spawns a duplicate — confirmed, the test fails with the
+  not-downloaded refusal. It needs no real binary, which is why the gap was worth re-examining rather
+  than recording.
+- **A recall layer's BACKEND is a SOURCE, and a source serves a layer by existing.** One interface per layer
+  (`Agent/Llm/Sources`: `IMemoryJudgeSource`, `IMemorySemanticSource`, sharing `IMemorySource`), one class per
+  backend, a **static catalog** (`MemorySources`) — never a predicate over capability strings. That earlier
+  predicate was wrong in both directions at once: a machine whose models were all catalogued embedders got a
+  dead switch with no explanation, and the first UNCATALOGUED embedder passed straight through the check
+  written to stop it, into a fail-open policy. 语义 DOES have a Claude arm now (`ClaudeCliSemanticSource`, rephrasing
+  rather than embedding) — for a while it had none, and the panel explained the absence instead, which was
+  the wrong shape: an absent class is a fact about what we wrote, never a reason to withhold a choice. What
+  the catalog still guarantees is that nothing FILTERS — a layer's arms are the classes implementing its
+  interface, never a predicate over capability strings. **Static rather than a DI
+  collection** because `GatherlightApp` wires from it *inside* `AddLyntai(b => …)`, while the container is
+  being built: a DI collection would need a second registration-time list, and two lists for one set is the
+  drift `check-ui-registry` exists to catch. Sources take runtime deps as a per-call `MemorySourceContext`.
+  **A source also declares whether binding it needs a RESTART** (`TakesEffectOnRestart`): true for an arm
+  whose `Register` wires something into the container, which is built once; false for one whose effect is at
+  WRITE time and reads the saved binding per call. The panel infers "running" for 语义 from whether the
+  container holds an `ISemanticMemory`, so the CLI arm — which registers nothing — read as permanently
+  un-applied and the banner asked forever for a restart that would change nothing. That is exactly the
+  failure `MemoryRecallPanel`'s own comment records about a remembered model compared against a null running
+  one, recurring one case over. The answer lives on the SOURCE, not in an `if (id == "claude-cli")`, because
+  a per-id branch is the if/else chain this catalog exists to replace.
+  Bindings live in `settings.json` (`memory.judgeSource`/`judgeModel`/`semanticSource`/`embeddingModel`) —
+  consumed at DI registration, before the DB opens — while 判断's on/off stays live in `app_config`, and the
+  console reports the two as different kinds of change. **`memory.judgeTransport` is legacy**, resolved on
+  read (`cli`→`claude-cli`, `local`→`ollama`) and never written again; its `judgeModel` belonged to the LOCAL
+  arm alone and was deliberately REMEMBERED across a switch back to the CLI, so reading it unconditionally
+  hands an Ollama model id to Claude — a badge reading `Claude CLI · gemma3:4b`, caught only against a real
+  data folder and now pinned by `p51`'s case I on a pre-seeded legacy config.
+- **ONE control writes the judge's model.** `DefaultModelByConsumer["memory"]` and cortex's live
+  `llm.model.memory` were two writers and cortex won, so a household who set 记忆判断 to `haiku` and later
+  moved the judge local had the router asking Ollama for `haiku` — fail-open both sides, hence zero calls and
+  no error. `POST /api/manage/memory/layer/judge` writes source and model together; the cortex row is gone.
+  The policies' own `Model` stays **null** so the router still resolves per consumer.
+  **The trap:** `LlmRouterFactory.For()` narrows a
   named client's provider POOL but reuses the same options, so a client pooled over `ollama-chat` still
   resolved candidates from `UseDefaultCandidates("claude-cli")` — a provider absent from its own pool. Every
   call logged `router: skipping claude-cli — no provider with this id registered` and failed, and since both
@@ -445,6 +730,23 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   cleanly; the probe that caught it drives a real write + recall and reads which backend answered. An
   EMBEDDING model is refused as a judge by name — installed, well-formed, and unable to answer a judgement,
   which fail-open would turn into recall that quietly never improves.
+- **A REBUILD SERVES BOTH 语义 ARMS, and guarding it on `_semantic` served only one.** `_semantic` is
+  non-null exactly when an EMBEDDER was registered at startup; the Claude CLI rephrasing arm registers
+  nothing by design, so for a household bound to it `ReindexSemanticAsync` returned 0 and did nothing —
+  while the endpoint still accepted and the detached run still "finished". The effect: binding that arm
+  reached FUTURE writes only, an existing knowledge base could never gain phrasings, and the single control
+  offered for exactly that reported success having done nothing. Both arms re-derive the same way (re-remember
+  every fact), so the question is not "is there an embedder" but "is anything bound that a rewrite would
+  re-derive". **They do NOT cost the same thing, and routing both through the rebuild was the next mistake.**
+  The rephrasing arm's output is a knowledge COLUMN (`aka`, picked up by the FTS trigger on UPDATE) — none
+  of it lives in the graph — so rebuilding to produce it discards every decay position and link the
+  household has accumulated in exchange for nothing. An embedder is the opposite: its vectors belong to the
+  graph's entries and are written as each is remembered, so re-embedding really is re-remembering. The CLI
+  arm gets `ExpandEachAsync` instead, which touches only the column. That is not a tidiness point: the
+  over-broad version made "bind it, then rebuild" advice with a hidden price, and made measuring the arm's
+  own benefit an operation nobody should agree to. Proof lives in `e2e-p48`, which writes facts BEFORE binding the arm
+  and was confirmed to FAIL against the old guard — the phrasings stay empty. Note this also makes the
+  advice "bind it, then rebuild" true; it was not, and the panel gave no sign.
 - **A rebuild runs detached, and the console reports COVERAGE rather than a run history.** `ReindexSemanticAsync`
   re-remembers every fact (a model call each with enrichment on), so running it inside the POST gave a
   greyed-out button for minutes — indistinguishable from a hang, over a request the browser may abandon while
@@ -497,7 +799,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (`ResourceProvisioner` → `/api/manage/resources`, the 资源 · Resources console panel) into
   `{data}/state/resources/…`
   (in the data folder → survives updates, fetched once). Runtime resolvers prefer that copy
-  (`PlaywrightHost` browsers path, `GitCliService.GitExe` and `ClaudeCliRuntime.Locate` data-aware).
+  (`PlaywrightHost` browsers path, `GitCliService.LocateGit` and `ClaudeCliRuntime.Locate` data-aware).
   `build-production.mjs --offline` bundles them for air-gapped installs. The Playwright **driver** (`libs/.playwright`,
   the chromium-install bootstrap) is still bundled.
 - **A resource the app cannot BOOT without is provisioned automatically, never reported.** git is that
@@ -518,6 +820,45 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   why `e2e-p49`'s case C makes git appear **mid-life** (confirmed to hang the gate against the pre-fix
   binary). A household that already has git downloads nothing — `p49` asserts that too, because a
   surprise 37 MB is its own defect.
+- **The app can hold its OWN Claude login, and a panel must not block on a process spawn.** Two things the
+  claude-CLI surface got wrong, both fixed together because both were about the same row.
+  **(1) One session for two users.** The CLI keeps credentials in a config directory, so every process
+  started as the same OS user shares a session — the app was signed in as whoever the household is signed in
+  as in their own terminal. Fine when those are the same account and wrong when they are not (a personal
+  account for their own work, a family one for the planner). `CLAUDE_CONFIG_DIR` isolates it completely
+  (verified 2026-08-22: the same binary reported `loggedIn:false, authMethod:none` against a fresh directory
+  while the machine session stayed signed in, and wrote its own `.claude.json` there). `ClaudeSessionMode`
+  is `machine` (default, unchanged behaviour) or `app` (`{data}/state/resources/claude/home`), stored in
+  `app_config` because it is read per call — so the next spawn uses it, no restart — and `Apply()` SETS the
+  variable for `app` and CLEARS it for `machine`, because a stale `CLAUDE_CONFIG_DIR` would silently keep the
+  app on an account they had switched away from. It lives under `state/`, which the backup does NOT carry
+  (`plans household .claude ui uploads .git`) — an OAuth token has no business travelling in a zip.
+  **Signing out is offered ONLY for the app's own session**, and the refusal is the point: the machine's
+  login is the household's own terminal credential, and ending it from our panel is the same overreach as a
+  delete button aimed at a daemon we did not install.
+  **(2) The login instruction could not be followed.** Five places said "run `claude auth login` in a
+  terminal", which is unactionable for a CLI installed through 资源: that copy lives in
+  `{data}/state/resources/claude/` and the directory is never added to PATH — we resolve it internally and
+  pass `CLAUDE_CMD`. `StartLogin()` spawns the RESOLVED binary, one attempt at a time, and is the one spawn
+  in this codebase that WANTS a window (every other is `CreateNoWindow`; with output redirected the CLI may
+  not treat it as a terminal). It is loopback-only — not as a permission check, the access gate already
+  decided who may call it, but because the window opens on the server's machine and "started" would be a lie
+  to a remote browser. **No e2e positive control, stated as a gap**: success opens an interactive console,
+  and the refusal half is not drivable either because `Locate()` falls through to PATH, so even a CLI-less
+  fixture resolves one on a developer machine — attempting it spawned real windows twice before the attempt
+  was removed. `p50` asserts everything that does not spawn.
+  **(3) A PANEL MUST NOT AWAIT A PROCESS.** 资源 took ~0.7 s to render anything because it awaited the CLI
+  probe, and 本机模型 took 3.24 s on the first open after every restart because it awaited llama.cpp's full
+  probe (`--version` 1811 ms + `--list-devices` 1592 ms, for two strings that decorate one row). Both now
+  read what is CACHED, kick a background refresh, and send null for the unknown field — null being
+  deliberately distinct from "absent", because "no GPU" and "nobody has asked yet" are different answers.
+  Measured after: 0.02 s and 0.25 s. **The trap in doing this**: taking the probe off the request path also
+  took `Apply()` off it, and `Apply()` is what adopts a CLI installed from that very panel by setting
+  `CLAUDE_CMD` — so a fresh install stopped being picked up until something else happened to probe. That is
+  the resolve-once trap this file already documents, re-created one layer out; `p50`'s "installed mid-life is
+  adopted with no restart" caught it. Apply is microseconds (two env reads, a `File.Exists`, a set) and now
+  runs on every request while the probe does not — the two costs are separate and only one of them is slow.
+
 - **A resource the app cannot WORK without but CAN boot without is OFFERED, never forced.** The claude
   CLI is that one, and it is the mirror image of the git rule above — same root failure, opposite remedy.
   It was the last runtime dependency we merely assumed: a fresh install spawned the PATH `claude` that
@@ -540,6 +881,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (Windows refuses to overwrite a loaded exe, and an update is exactly when one may be mid-chat) by
   renaming the old copy aside. Proof lives in `e2e-p50`, whose tampered-download denial is paired with
   the same bytes installing under the right checksum, and whose case A asserts the app boots ANYWAY.
+  **The login SPAWN is tested too, and the reason it briefly was not is worth keeping.** It was recorded as
+  untestable because succeeding opens an interactive console — true of `claude auth login`, which waits for
+  a human in a browser and never returns, and false of the thing a suite actually runs. Case G points
+  `GATHERLIGHT_CLAUDE_CMD` at a `.cmd` that appends its argv to a file and exits, then asserts `auth login`
+  reached it: the real rule is that a suite must not leave a window WAITING for somebody, not that no child
+  may ever have one. It needs its own stub rather than reusing `writeAuthStub` because `StartLogin` uses
+  ShellExecute — which takes a FILE, where every other spawn takes `node <script>` — and that difference is
+  the point of the test. Two vacuity guards ride along: the marker must also contain the probe's own `auth
+  status` (proving the file is that stub's log and not an artefact), and the remote refusal is asserted by
+  its MESSAGE, because `StartLogin`'s reentrancy guard returns the same 409 as a remote click.
 - **Auto-update is two-phase**: the server (`Platform/Hosting/Update`) checks the configured
   GitHub release + downloads/sha256-verifies into `{install}/.update/staged`; the C++ launcher
   overlays it on the next restart (a running exe can't replace itself) and is itself excluded
@@ -611,8 +962,66 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 ## Dev loop
 
-- `node devtools/dev.mjs <server|host|desktop-e2e|vite|build|publish|resources-pack|e2e|smoke|memory|eval|embed-bench|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs>`
+- `node devtools/dev.mjs <server|host|desktop-e2e|vite|build|publish|resources-pack|e2e|smoke|memory|eval|embed-bench|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs|check-host-actions>`
   — kept in step with the tool's own usage line (`dev.mjs`, bottom of the switch).
+- **`fatal: timeout` USUALLY MEANS THE SERVER NEVER BOUND, and the reason is in the fixture's own log.**
+  A suite whose Kestrel fails to start reports only that the harness ran out of patience — which reads
+  exactly like a hang in the code under test, and cost a long hunt for a regression that did not exist.
+  The real line was three deep in `devtools/_e2e-pN-data/state/logs/`: `SocketException — an attempt was
+  made to access a socket in a way forbidden by its access permissions` (WSAEACCES). **Windows
+  dynamically RESERVES tcp ranges** (Hyper-V/WSL/Docker; `netsh interface ipv4 show excludedportrange
+  protocol=tcp`), and on 2026-08-23 those ranges moved mid-session to cover 5321–5420 and 5487–5586 —
+  29 of the suites' ports. The same fleet had passed 51/51 an hour earlier on the same numbers, which is
+  the tell that it is machine state and not the tree. Renumbering the suites is churn for a transient
+  condition and the new band can be reserved next reboot; the fix is that `dev.mjs e2e` now prints the
+  fixture's last `[ERROR]` line beside a failure, because that log is CLOBBERED by the next run of the
+  suite and this is the only moment it is still true. If it recurs: check the excluded ranges first.
+- **A UI HARNESS MUST RETRY THE ACTION, not only poll the result.** `desktop-e2e` polled for the view
+  after clicking a tab ONCE — and a click dispatched before React has wired the handler is swallowed
+  silently, so no amount of waiting produces the view. That flapped run to run and reads as "the Cortex
+  tab is broken". Same shape twice more in the same file: the memory cards were read after a fixed 900 ms
+  (the panel fetches its own state after Cortex mounts, so the assertion reported "renders nothing" while
+  a diagnostic three lines later found all three), and the enrichment toggle was read 900 ms after
+  clicking, mid-refetch, so it reported "the switch does not flip". **A fixed sleep does not fail
+  honestly — it fails as a wrong description of the product**, which is worse than a red that says
+  "timed out". Poll the condition, and re-issue the action each round.
+- **`host --dev` FAILS LOUDLY on a wedged WebView2 profile, and the symptom is why.** The flag points
+  WebView2 at a throwaway user-data folder and deletes it each run — with `force: true`, which SWALLOWS a
+  failed delete. `msedgewebview2.exe` children OUTLIVE the host and keep handles on that folder, so the
+  delete half-succeeds, WebView2 fails to initialise, and **the host exits ~30 s after startup with
+  nothing in the log** — it completes startup migration, serves, then vanishes. That reads as "the app
+  crashes", which is the wrong investigation entirely. The plain `dev.mjs host` (what ships) is unaffected
+  and stays up; only the debug path breaks, so a release is not gated on it. Now the removal is verified
+  and a failure says which process to kill.
+- **`dev.mjs check-doc-refs` — every code identifier a LIVE doc names must exist.** Docs rot silently: a
+  class is renamed, the prose pointing at it is not, and the next session follows the reference, finds
+  nothing, and re-derives what was already written down. A WRONG doc costs more than a missing one — a
+  search plus the time spent trusting it. Found by hand first (`GitCliService.GitExe`, whose member is
+  `LocateGit`; three Ollama APIs still named in a rule after the backend went), which is why it is now a
+  check rather than a habit.
+  **Scope is the design.** Only the docs a session is expected to ACT on are checked;
+  `docs/superpowers/plans|specs` are point-in-time records, and a July plan naming a since-renamed class is
+  HISTORY, not an error — rewriting it would destroy the record of what was decided. Checking them would
+  produce noise that trains everyone to ignore the check.
+  **The allowlist is keyed `doc::identifier`, not by identifier.** `ClaudeCliRunner` is legitimate in
+  `ROADMAP.md`, which records that a phase DELETED it, and would be a rotted reference anywhere presenting
+  it as current — a bare-name allowlist cannot tell those apart, and the second case is the one that
+  matters. Every entry carries a reason, so the list forces a decision rather than silencing one. Three of
+  the five current entries are not drift at all: a filename PATTERN, an MSBuild property named while
+  explaining that we do NOT use it, and a class belonging to Vidora, a sibling project.
+  **It checks three kinds of reference**: backticked SYMBOLS, markdown LINKS to local files, and
+  backticked PATHS. Paths resolve against every base the docs legitimately write relative to, plus the
+  `Platform/<Group>/<Name>` and `Product/Planner/<Name>` prefixes the layout rule itself prescribes —
+  mapping those in the checker is right, because rewriting the docs to spell out the project directory
+  would make them disagree with the convention stated three bullets above. Two allowlist kinds recur and
+  both are legitimate: files in the DATA folder (user data, not the tree) and files in a SIBLING PROJECT
+  a note compares against. 318 references across 12 live docs; confirmed non-vacuous by planting a
+  renamed class, a dead link and a dead path.
+- **`dev.mjs e2e all` NAMES what it did not cover.** `desktop-e2e` drives the real UI over CDP and cannot
+  join the fleet — it needs `dev.mjs host --dev` and a WebView2 window — so the fleet's summary says so
+  where "all green" is read. Being outside the fleet is exactly why it rotted once: it asserted control
+  names a rename had retired months earlier and nothing noticed, because nothing ran it. A gap nobody is
+  reminded of is a gap that comes back, and the reminder costs one line.
 - e2e suites live in `devtools/scripts/e2e/` as `pN.mjs` (discovered by `^p\d+\.mjs$`); they self-host
   the server against isolated `devtools/_e2e-*` data folders with the claude stub; every phase of work
   lands with its suite green. Shared harness: `devtools/scripts/e2e/_e2e-common.mjs` (leading `_` → not

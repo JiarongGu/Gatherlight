@@ -18,6 +18,7 @@
 //   node devtools/dev.mjs check-layering    - assert Platform/ never references Product/
 //   node devtools/dev.mjs check-ui-registry - assert the C# schemas and TS renderers agree
 //   node devtools/dev.mjs check-tool-docs   - assert every registered tool is one the agent is TOLD about
+//   node devtools/dev.mjs check-host-actions - assert the desktop host's actions and lib/host.ts agree
 //   node devtools/dev.mjs embed-bench [models…] - measure embedding models on this app's own recall job
 import { spawnSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -160,6 +161,14 @@ switch (cmd) {
     run('node', [path.join(repo, 'devtools', 'scripts', 'check-tool-docs.mjs'), ...args]);
     break;
 
+  case 'check-host-actions':
+    run('node', [path.join(repo, 'devtools', 'scripts', 'check-host-actions.mjs'), ...args]);
+    break;
+
+  case 'check-doc-refs':
+    run('node', [path.join(repo, 'devtools', 'scripts', 'check-doc-refs.mjs'), repo, ...args]);
+    break;
+
   case 'smoke':
     run('node', [path.join(repo, 'devtools', 'scripts', 'smoke-real-claude.mjs')]);
     break;
@@ -198,7 +207,18 @@ switch (cmd) {
       // Fresh user-data folder each --dev run → WebView2 spawns its OWN browser process (the debug
       // port applies only to a newly-created process, never a shared/pre-existing one).
       const udf = path.join(repo, 'devtools', '_webview2-dev');
+      // VERIFY the removal instead of forcing and hoping. `force: true` swallows failures, and WebView2
+      // spawns msedgewebview2.exe children that OUTLIVE the host and keep handles on this profile — so a
+      // delete can half-succeed and leave a corrupt one. WebView2 then fails to initialise and the host
+      // exits ~30 s after startup with nothing in the log, which reads as "the app crashes" rather than
+      // "the debug profile is wedged". Cost an hour to find; the fix is to say so.
       fs.rmSync(udf, { recursive: true, force: true });
+      if (fs.existsSync(udf)) {
+        console.error(`host --dev: could not clear ${udf} — a msedgewebview2.exe from an earlier --dev run`
+          + ' still holds it. Close the host window (or `taskkill /IM msedgewebview2.exe /F`) and retry;'
+          + ' starting with a half-deleted profile makes the host exit silently a few seconds in.');
+        process.exit(1);
+      }
       env.GATHERLIGHT_WEBVIEW_USERDATA = udf;
       fs.writeFileSync(path.join(repo, 'devtools', '_cdp-port'), String(port));
       console.log(`host --dev: WebView2 CDP on ${port} (devtools/_cdp-port)`);
@@ -300,6 +320,14 @@ switch (cmd) {
     // Re-measure the embedding shortlist. The numbers in EmbeddingCatalog.cs came from here, and models
     // keep appearing — a measured claim nobody can reproduce is just an opinion with a number on it.
     run('node', [path.join(repo, 'devtools', 'scripts', 'embed-bench.mjs'), ...args]);
+    break;
+
+  case 'recall-bench':
+    // What 判断 recovers on THIS household's own facts. 记忆检索 tells them 判断 matters more than 语义 and
+    // cites Lyntai's corpus for it; this is the same question asked of the corpus the advice is about.
+    // Needs a running server (it toggles the live switch and calls recall_facts through it), and prints
+    // numbers only — never a fact, never a question.
+    run('node', [path.join(repo, 'devtools', 'scripts', 'recall-bench.mjs'), ...args]);
     break;
 
   case 'publish':
@@ -459,6 +487,15 @@ switch (cmd) {
     const totalSuiteSec = results.reduce((n, r) => n + r.ms, 0) / 1000;
     console.log(`  suite time total ${totalSuiteSec.toFixed(0)}s across ${results.length}`
       + ` · median ${(results.map((r) => r.ms).sort((a, b) => a - b)[results.length >> 1] / 1000).toFixed(0)}s`);
+    // WHAT THIS RUN DID NOT COVER, said where "all green" is read. desktop-e2e drives the real UI over
+    // CDP and cannot join this fleet — it needs `dev.mjs host --dev` and a WebView2 window. Being
+    // outside the fleet is exactly why it rotted once: it asserted control names that a rename had
+    // retired months earlier, and nothing noticed because nothing ran it. A gap nobody is reminded of
+    // is a gap that comes back.
+    if (sel === 'all') {
+      console.log('  NOT in this fleet: desktop-e2e (real UI over CDP — needs `dev.mjs host --dev`).'
+        + ' Run it before a release; it has rotted unnoticed before.');
+    }
     for (const f of failed) {
       // Say WHERE it died, not just that it did. A suite that printed its PASS marker and then
       // aborted is a teardown crash; one that stopped mid-assertions is a real failure — and the
@@ -470,6 +507,25 @@ switch (cmd) {
       const where = marked ? 'finished' : `stopped after ${checks} check(s)`;
       console.log(`  ✗ ${f.suite} — ${f.signal ? `signal ${f.signal}` : `exit ${f.status}`}`
         + ` · ${where}${bad ? `, ${bad} failing` : ''}`);
+      // WHY THE SERVER NEVER CAME UP, from the fixture's OWN log. A suite whose server fails to bind
+      // reports only `fatal: timeout`, which describes the harness's patience rather than the cause —
+      // and reads exactly like a hang in the code under test. It cost a long hunt for a regression that
+      // did not exist: the real message was three lines into the fixture log, saying Windows had
+      // reserved the port (WSAEACCES, from a dynamic Hyper-V/WSL exclusion range that moves between
+      // reboots). The log is CLOBBERED by the next run of that suite, so surfacing it here is the only
+      // moment it is still true.
+      // Also when the suite DID print its marker but died on a fatal (a timeout prints one), because
+      // that is the case where the harness's own message is least informative.
+      if (!marked || f.out.includes('fatal:')) {
+        try {
+          const dir = path.join(repo, 'devtools', `_e2e-${f.suite}-data`, 'state', 'logs');
+          const newest = fs.readdirSync(dir).filter((n) => n.endsWith('.log')).sort().pop();
+          const text = fs.readFileSync(path.join(dir, newest), 'utf8');
+          const err = text.split(String.fromCharCode(10))
+            .filter((l) => l.includes('[ERROR]') || l.includes('Exception:')).pop();
+          if (err) console.log(`      fixture log: ${err.trim().slice(0, 170)}`);
+        } catch { /* no fixture log — nothing to add */ }
+      }
     }
     if (failed.length) process.exitCode = 1;
     break;
@@ -574,6 +630,10 @@ switch (cmd) {
   }
 
   default:
-    console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|smoke|memory|eval|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs>');
+    // Generated by hand but CHECKED against the switch above — the two drifted (embed-bench, desktop-e2e,
+// new-tool and shot were all missing), and a usage line that omits a command is how a tool goes unused.
+console.log('usage: node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|desktop-e2e'
+  + '|smoke|shot|memory|eval|embed-bench|recall-bench|test-data|new-tool|fetch-tools|install-hooks'
+  + '|check-sensitive|check-layering|check-ui-registry|check-tool-docs|check-host-actions|check-doc-refs>');
     process.exitCode = cmd ? 1 : 0;
 }

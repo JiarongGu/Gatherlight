@@ -3,6 +3,15 @@
 Design notes for the next pass on the memory-recall surface. Written 2026-08-21, at the end of a session
 that fixed the surface's UX defects and then found that the layer *model* underneath them needs work too.
 
+> **BUILT 2026-08-22.** §2 shipped, and §3's questions are answered below in place. The design landed
+> differently from what §2 proposed, on the household's correction: rather than one flat capability-filtered
+> inventory, **each layer owns an interface and a backend serves a layer by implementing it**
+> (`Agent/Llm/Sources`, catalog in `MemorySources`, shaped like `CortexConfigService.ModelCatalog`). Nothing
+> filters — 语义 offers no Claude arm because no `ClaudeCliSemanticSource` exists. Proof in `e2e-p51`.
+>
+> Keep this document for §1, which is still the reasoning behind the weighting, and for the two open
+> questions that survive at the bottom.
+
 ---
 
 ## 1. The finding that reorders everything else
@@ -48,35 +57,87 @@ that hosts it (`ResourceProvisioner.Catalog`, `Id: "ollama"`, already a resource
 
 Target shape:
 
-| concern | today | after |
+| concern | before | **shipped 2026-08-22** |
 |---|---|---|
-| list / pull / delete local models | `/api/manage/memory/local/{pull,remove}` | `/api/manage/models` — resource logic |
-| which model each layer uses | `/api/manage/memory/{judge,local/enable}` | unchanged — recall logic |
-| the measured embedding-model table | 记忆检索 | **open question** — see below |
-| 判断 / 语义 pickers | 记忆检索 | unchanged, filtered by capability |
+| list / pull / delete local models | `/api/manage/memory/local/{pull,remove}` | `/api/manage/models` — 资源 |
+| start the local runtime | `/api/manage/memory/local/start` | `/api/manage/models/start` — 资源 |
+| which model each layer uses | `/api/manage/memory/{judge,local/enable,local/disable}` | `POST /api/manage/memory/layer/{layer}` (+ `/off`) — one endpoint |
+| the measured embedding-model table | 记忆检索 | 资源, with the download |
+| 判断 / 语义 pickers | 记忆检索, two hand-built lists | 记忆检索, rendered from the layer's registered sources |
+| the judge's model | cortex `llm.model.memory` (a SECOND writer, which won) | bound with its source; cortex row removed |
 
 **Filter by capability, not by curated kind lists.** Each model reports what it can do; each layer offers
 the models that can serve it. A model reporting *both* capabilities then serves both layers — which two
 hard-coded kind sections cannot express. `OllamaModel.CanComplete` / `CanEmbed` already exist for this.
 
-## 3. Open questions to settle before building
+## 3. Open questions — ANSWERED 2026-08-22
 
-- **Where does the measured recall table go?** It is decision support for *which embedder to download*, so
-  it argues for 资源. But `MemoryRecall.tsx` carries a standing warning against separating the comparison
-  from the switch it satisfies ("turning the feature on would mean going somewhere else to finish").
-  Possible answer: the table travels with the download (资源), the picker keeps a one-line recommendation.
-- **Is 语义 worth its surface area at all?** Given §1, an honest panel might present 判断 as the primary
-  recall control and 语义 as an advanced addition, rather than as co-equal thirds. Needs a measurement on
-  *this* household's corpus before deciding — Lyntai's corpus is not ours.
-- **Interaction with the existing backlog item "Phase B embeddings"** (ONNX embedder as a provisioned
-  resource). That item already assumes embeddings-as-a-resource; if it lands, the 资源 move should host it
-  the same way it hosts Ollama's models, and `IEmbedder` gains a second production implementation.
-- **Does the judge's own model belong in the same picker vocabulary?** It is chosen in two places today —
-  transport here, model in cortex's `llm.model.memory`.
+- **Where does the measured recall table go?** → **资源**, with the download. The standing warning
+  (don't separate a comparison from the switch it satisfies) is respected differently: the layer's picker
+  offers only what is INSTALLED, and when there is nothing to offer it names the panel and the model to
+  fetch. So the household is never mid-setup with no next step — but the comparison, which is decision
+  support for *downloading*, sits where downloading happens.
+- **Is 语义 worth its surface area?** → **Yes, but as the advanced one.** It is under a 高级 divider,
+  one click, with its state still in the status pill row. The note carries Lyntai's numbers **attributed as
+  Lyntai's, on Lyntai's corpus** — and that attribution stays until somebody measures this household's own,
+  which is now its own backlog item. Being secondary is a reason to present a layer later, not a reason to
+  drop it from "what is running right now".
+- **Interaction with "Phase B embeddings"** → **its landing place is built.** An
+  `EmbeddedSemanticSource : IMemorySemanticSource` plus one line in `MemorySources.Semantic` makes it a
+  third arm in 语义's toggle, with no controller or client change. A judge counterpart is the same shape.
+- **Does the judge's model belong in the same picker?** → **Yes, and it had to.** The two places were not
+  merely inconvenient, they disagreed: cortex's `llm.model.memory` OVERRODE
+  `DefaultModelByConsumer["memory"]`, so a household who set 记忆判断 to `haiku` and later moved the judge
+  local had the router asking Ollama for `haiku` — fail-open on both policies, so zero calls and no error.
+  The cortex row is gone; binding the layer writes source and model together.
+
+## 3c. FIRST LOCAL MEASUREMENT (2026-08-22) — direction confirmed, magnitude not
+
+`dev.mjs recall-bench` now asks §1's question of the corpus the advice is about. It samples the household's
+own facts, has a model write one paraphrase question per fact (self-labelling: the fact's id is the answer),
+and scores `recall_facts` with 判断 off and on. It prints numbers and ids only — never a fact, never a
+question — and caches the generated set in the DATA folder, because that set is household content.
+
+On this development machine — **16 facts, 12 probes, limit 3, 语义 off**:
+
+| configuration | top-1 | miss rate | MRR | ms/query |
+|---|---|---|---|---|
+| 公式 only | 5/12 | 0.500 | 0.458 | **37** |
+| 公式 + 判断 | 6/12 | 0.417 | 0.528 | **8 905** |
+
+- **The direction holds:** 判断 improved every column. So the shape of Lyntai's claim survives contact with
+  a different corpus.
+- **The magnitude does not transfer:** −0.083 here against their −0.35. The panel's wording is therefore
+  still correct to attribute the number rather than claim it.
+- **A cost nobody had measured: 240× the latency.** 8.9 s per recall against 37 ms. Lyntai measured 3.0 s
+  for a Haiku judge; the gap is a CLI process spawn per call. Every `recall_facts` the agent makes pays it.
+  That is a real argument for the local-model arm that has nothing to do with tokens.
+  **Acted on 2026-08-22:** 判断's cost line in 记忆检索 now names it — "实测每次检索约 9 秒 …… 只用「公式」时是
+  0.04 秒" — because cost was two things and only the token half was ever stated. The floor travels with it;
+  a duration with nothing to compare it against is not a decision. `p51` asserts both, so it cannot quietly
+  go back to mentioning only tokens. The LOCAL arm's latency is still unquoted: the panel says only that it
+  skips the spawn, since nobody has measured it on this corpus and this is the panel that refuses plausible
+  figures.
+- **It is NOT a conclusion, and the tool says so itself.** 12 probes moves the rate by 0.08 per query. The
+  first version of this bench nearly reported something worse than a borrowed number: at `limit 8` on a
+  16-fact corpus, random ranking "finds" the answer 50% of the time, so 0.667 → 0.500 was measuring page
+  size, not recall. It now prints the chance baseline above its own verdict.
+
+Re-run it when the knowledge base reaches a few hundred facts; that is when the magnitude becomes worth
+quoting, and when 语义 is worth A/B-ing across a restart.
+
+## 3b. What is still open
+
+- **A local measurement AT SCALE.** §3c has the direction on 16 facts. The magnitude needs a corpus big
+  enough that a page is a small fraction of it — and 语义's own contribution needs two runs, since it is a
+  startup registration.
+- **The other cortex consumers.** `extract` and `scorer` are one-shot `ILlmClient` consumers, so they
+  *could* take a local backend the way 判断 does — the mechanism is proven. `chat` cannot: it runs the agent
+  path (`IAgentSession`) and never routes. Not attempted; recorded so the asymmetry is a known one.
 
 ## 4. What the 2026-08-21 session already did (do not redo)
 
-All verified, `e2e-p51` green, **uncommitted at time of writing**:
+All verified, `e2e-p51` green, shipped in `cadb913`:
 
 - **Judge candidates are capability-driven** (Ollama's `capabilities`, catalog only as the fallback for an
   older daemon), a reason is shown when the switch is unavailable, and the `<select>` value is derived

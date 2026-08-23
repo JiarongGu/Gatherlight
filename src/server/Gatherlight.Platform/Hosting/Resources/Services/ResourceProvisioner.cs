@@ -18,7 +18,22 @@ public enum ResourceKind
     /// the version and its sha256 read LIVE from the vendor's manifest rather than pinned in our source.
     /// That inversion is the point — see <see cref="ResourceProvisioner.ClaudeBaseUrl"/>.</summary>
     ClaudeCli,
+    /// <summary>A set of LOOSE files, each with its own url + sha256, landing at declared paths inside the
+    /// install dir. For an artifact published as individual files rather than an archive — a model on
+    /// HuggingFace, say.
+    /// <para>Per-file DESTINATIONS are the load-bearing part, not a convenience: an ONNX model with
+    /// external weights only loads when the <c>.onnx_data</c> sits exactly beside its <c>.onnx</c>, and
+    /// "download these three URLs somewhere" cannot promise that.</para></summary>
+    Files,
 }
+
+/// <summary>One file of a <see cref="ResourceKind.Files"/> resource.</summary>
+/// <param name="RelativePath">Where it lands inside the install dir, forward slashes.</param>
+/// <param name="Url">Immutable, ideally content-addressed — a HuggingFace <c>/resolve/&lt;commit-sha&gt;/</c>
+/// URL rather than <c>/resolve/main/</c>, so the bytes cannot change under the pin.</param>
+/// <param name="Sha256">Verified before anything is installed. Unlike the NuGet bundle (immutable by
+/// published version) these are plain files on a CDN, so the checksum IS the integrity guarantee.</param>
+public sealed record ResourceFile(string RelativePath, string Url, string Sha256);
 
 /// <summary>
 /// A large resource (or a bundle of them) that ships download-at-setup instead of inside the app
@@ -38,7 +53,26 @@ public sealed record ResourceSpec(
     string? Sha256 = null,
     // The subpath inside the extracted archive that IS the payload root — for a package archive whose
     // files sit under a content path. Null = the archive root itself (with single-wrapper flattening).
-    string? ArchiveRoot = null);
+    string? ArchiveRoot = null,
+    // For ResourceKind.Files: what to fetch and where each piece lands.
+    IReadOnlyList<ResourceFile>? Files = null,
+    // See ResourceStatus.ModelId.
+    string? ModelId = null,
+    // WHAT THIS IS, for a panel that groups runtimes separately from the models they host. Derived here
+    // rather than inferred by the client from a list of ids: that list existed, drifted the moment the GGUF
+    // ids changed shape, and put three models back in the runtimes column beside Chromium — the exact
+    // miscategorisation the 本机模型 section exists to end, reintroduced by a rename. A resource is a model
+    // because the thing that declares it says so.
+    string Category = ResourceCategory.Runtime);
+
+/// <summary>What a resource IS, for grouping. Strings because they cross the wire to the console.</summary>
+public static class ResourceCategory
+{
+    /// <summary>A program: a browser, git, node, a model runtime.</summary>
+    public const string Runtime = "runtime";
+    /// <summary>Weights. Belongs beside the runtime that hosts it, not beside Chromium.</summary>
+    public const string Model = "model";
+}
 
 /// <summary>Live provisioning state for one resource (for the setup UI to poll). <paramref name="Version"/>
 /// / <paramref name="Available"/> are populated only for a resource whose version we actually track (the
@@ -47,7 +81,13 @@ public sealed record ResourceSpec(
 public sealed record ResourceStatus(
     string Id, string Name, string NeededFor, long ApproxBytes,
     bool Installed, string State, int Percent, string? Message,
-    string? Version = null, string? Available = null, string? Detail = null);
+    string? Version = null, string? Available = null, string? Detail = null,
+    string Category = ResourceCategory.Runtime,
+    // For a model resource that a RUNTIME also reports as inventory: the id that runtime knows it by.
+    // Non-null means "something else already shows this once it is installed", which is how the console
+    // avoids listing an installed GGUF twice — as a download row and as a table row — without parsing ids.
+    // Null for runtimes, and for the in-process ONNX model, which no runtime enumerates.
+    string? ModelId = null);
 
 public interface IResourceProvisioner
 {
@@ -161,27 +201,127 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         : System.Runtime.InteropServices.RuntimeInformation.OSArchitecture
             == System.Runtime.InteropServices.Architecture.Arm64 ? "win32-arm64" : "win32-x64";
 
-    // Ollama — the LOCAL model runtime behind optional semantic recall. Only needed when the household
-    // turns "本地模型" on, and not at all when they already have Ollama (OllamaRuntime prefers a
-    // machine-wide install, which is also the one carrying their GPU runtimes).
+    // NO OLLAMA CONSTANTS. The download url, both checksums and the arch switch lived here to serve a
+    // `ResourceSpec` that no longer exists: the runtime this app provisions is llama.cpp, and Ollama is
+    // reached — if a household runs it — through `openai-compat` by address, which needs nothing from us.
+    // Left in place they were a pinned url and two hashes nobody read, i.e. the next person's evidence that
+    // we still install it.
     //
-    // sha256-PINNED, like MinGit and node rather than like the claude CLI, and for the reason this file
-    // already states: a GitHub release asset can be replaced by its publisher, so the checksum — not the
-    // URL — is what guarantees the bytes of an executable we are about to run. Staleness costs little
-    // here (Ollama's local API is stable, and an old runtime keeps working) whereas a stale claude CLI
-    // eventually stops talking to the API, which is why that one reads its version live instead.
-    // Bump version and BOTH checksums together, never one.
-    public const string OllamaVersion = "0.32.15";
-    private const string OllamaSha256X64 = "a1d11d46a944f9c7521f5e9a3a5db51cd3365401da627d96c204698fc6914ff9";
-    private const string OllamaSha256Arm64 = "51655f2700236bdff09c8cfb174b0855d354ec40775e66069d9b63f32a666937";
-    private static bool OllamaArm64 =>
+    // The arch switch moved to LlamaCppArm64 below, because llama.cpp needs the same question answered and
+    // it was borrowing Ollama's name for it.
+    private static bool LlamaCppArm64 =>
         System.Runtime.InteropServices.RuntimeInformation.OSArchitecture
             == System.Runtime.InteropServices.Architecture.Arm64;
-    private static string OllamaSha256 => OllamaArm64 ? OllamaSha256Arm64 : OllamaSha256X64;
-    private static string OllamaUrl =>
-        Override("GATHERLIGHT_OLLAMA_ZIP_URL")   // the pin still applies: a mirror serves the same file
-        ?? $"https://github.com/ollama/ollama/releases/download/v{OllamaVersion}/"
-           + (OllamaArm64 ? "ollama-windows-arm64.zip" : "ollama-windows-amd64.zip");
+
+    /// <summary>llama.cpp's <c>llama-server</c> — the runtime this app PROVISIONS for local models, chosen
+    /// over Ollama on 2026-08-22 after measuring both. Decision, alternatives and numbers:
+    /// <c>docs/self-managed-llm-runtime.md</c>.
+    ///
+    /// <para><b>Vulkan on x64, and that is the whole reason the download is 34 MB.</b> llama.cpp publishes
+    /// one archive per GPU backend, which looks like it makes US responsible for detecting the household's
+    /// hardware — except Vulkan is vendor-neutral. Measured on the development machine, this one artifact
+    /// enumerates <c>Vulkan0: NVIDIA GeForce RTX 4080 Laptop</c> AND <c>Vulkan1: Intel Arc</c>, and the CPU
+    /// backend rides along (16 <c>ggml-cpu-*.dll</c> micro-arch variants) for a machine with no usable
+    /// driver. CUDA would be 147 MB plus a 391 MB cudart for one vendor; not worth the branching.</para>
+    ///
+    /// <para><b>arm64 gets the CPU build</b> — there is no <c>win-vulkan-arm64</c> asset. It is 12 MB and
+    /// slower, which is the honest state of Windows-on-ARM here rather than something to paper over.</para>
+    ///
+    /// <para><b>Version and BOTH checksums move together.</b> Unlike the claude CLI (which reads its version
+    /// live because a stale one stops talking to the API), a pinned llama-server keeps working: it speaks to
+    /// model files on disk, not to a service that can deprecate it.</para></summary>
+    public const string LlamaCppVersion = "b10549";
+    private const string LlamaCppSha256X64 = "8e7b0e6382a5bcbf57c79cf54b61483e9f7b26561d4413f28095cdaee256207b";
+    private const string LlamaCppSha256Arm64 = "88453b6c9ca186885ac22b3505f5591381068d830ebc622a499af73a3607d8c2";
+    private static string LlamaCppSha256 => LlamaCppArm64 ? LlamaCppSha256Arm64 : LlamaCppSha256X64;
+    private static string LlamaCppAsset => LlamaCppArm64
+        ? $"llama-{LlamaCppVersion}-bin-win-cpu-arm64.zip"
+        : $"llama-{LlamaCppVersion}-bin-win-vulkan-x64.zip";
+    private static string LlamaCppUrl =>
+        Override("GATHERLIGHT_LLAMACPP_ZIP_URL")
+        ?? $"https://github.com/ggml-org/llama.cpp/releases/download/{LlamaCppVersion}/{LlamaCppAsset}";
+
+    /// <summary>Where <c>llama-server.exe</c> lands once provisioned. Public so the runtime service that
+    /// launches it and the source that reports its provenance ask the same question of one answer.</summary>
+    public static string ProvisionedLlamaServer(string resourcesPath) =>
+        Path.Combine(resourcesPath, "llama-cpp", "llama-server.exe");
+
+    /// <summary>The directory llama-server's router scans (<c>--models-dir</c>). Every GGUF the app
+    /// provisions lands here, flat, because that is what the router enumerates — and the file NAME becomes
+    /// the model id a caller asks for, which is why the resource declares its destination filename rather
+    /// than inheriting whatever the URL happened to end with.</summary>
+    public static string ProvisionedGgufDir(string resourcesPath) =>
+        Path.Combine(resourcesPath, "gguf");
+
+    /// <summary>The GGUFs the app can download now live in <see cref="Agent.Llm.Services.GgufCatalog"/>,
+    /// which generates one spec per entry (see <see cref="Catalog"/>). They were hand-written constants here
+    /// while there was exactly one; the moment a second was needed, two lists for one set would have been
+    /// the drift this file keeps warning about.</summary>
+
+    /// <summary>Every GGUF model id installed on this machine, derived the way llama-server's router
+    /// derives it — which is the only definition that matters, since the router is what a caller will then
+    /// ask for by name.
+    ///
+    /// <para><b>Two layouts, on purpose — and NOT as a migration path.</b> A model in its own directory
+    /// takes the DIRECTORY's name (that is what `--models-dir` reports, measured 2026-08-22); a bare `.gguf`
+    /// at the top level takes its filename. Everything the app provisions is the first form, and the flat
+    /// form never shipped — so the reason to read it is a household dropping their OWN GGUF into the folder,
+    /// which the router will happily serve and which this must therefore see too. (The router also
+    /// de-duplicates the two when they name the same model, verified 2026-08-22, so a folder holding both
+    /// reports the model once.)</para>
+    ///
+    /// <para>ONE writer, because `LlamaServerRuntime` (which generates the router's presets) and
+    /// `LlamaCppSource` (which offers models to a layer) must agree exactly. They briefly had two copies of
+    /// a flat-file scan, which would have silently stopped finding anything the moment the layout
+    /// changed.</para></summary>
+    public static IReadOnlyList<string> InstalledGgufIds(string resourcesPath)
+    {
+        var dir = ProvisionedGgufDir(resourcesPath);
+        if (!Directory.Exists(dir)) return Array.Empty<string>();
+        try
+        {
+            var flat = Directory.EnumerateFiles(dir, "*.gguf")
+                .Select(f => Path.GetFileNameWithoutExtension(f)!);
+            var nested = Directory.EnumerateDirectories(dir)
+                .Where(d => Directory.EnumerateFiles(d, "*.gguf").Any())
+                .Select(d => Path.GetFileName(d)!);
+            return flat.Concat(nested)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (IOException) { return Array.Empty<string>(); }
+    }
+
+    /// <summary>Is this GGUF an EMBEDDER? Asked here because this is the only place that knows what the app
+    /// provisioned, and the answer must have exactly one writer: llama-server's <c>embeddings</c> flag
+    /// RESTRICTS a child to embeddings, so getting it wrong makes a judge refuse to talk or an embedder
+    /// serve chat requests that can never succeed. It was briefly answered in two places with two copies of
+    /// a substring test, which is the drift this codebase keeps paying for.
+    ///
+    /// <para><b>Exact match on what we ship; a NAME HEURISTIC for anything else, and that is stated rather
+    /// than hidden.</b> A household may drop their own GGUF into the folder — the router will serve it, and
+    /// we have no manifest for it. Guessing from the filename is then the only option available, so it is
+    /// used deliberately and only there. Provisioning a second embedder means adding it to this list, not
+    /// relying on its name.</para></summary>
+    public static bool IsEmbeddingGguf(string modelId) =>
+        Agent.Llm.Services.GgufCatalog.Find(modelId) is { } known
+            // Catalogued: we downloaded it, so the capability is a fact, not an inference.
+            ? known.Capability == Agent.Llm.Services.GgufCapability.Embedding
+            // Household-supplied file: no manifest, so the name is all there is.
+            : modelId.Contains("embed", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The 内置 embedder's model, pinned by COMMIT rather than by <c>main</c> — a branch ref would
+    /// let the bytes change under a checksum that then stops matching, which reads as a corrupt download.
+    /// <para>EmbeddingGemma 300M, q4, as exported by the onnx-community mirror. The variant, the tokenizer
+    /// file and the absence of a task prompt were all MEASURED before being chosen (8/8 top-1, tying the
+    /// Ollama arm on the same fixture) — see <c>docs/builtin-model-runner.md</c> before changing any of
+    /// them, because each one fails silently rather than loudly.</para></summary>
+    private const string EmbedModelCommit = "5090578d9565bb06545b4552f76e6bc2c93e4a66";
+
+    private static string EmbedModelUrl(string path) =>
+        Override("GATHERLIGHT_EMBED_MODEL_BASE_URL") is { } b ? $"{b.TrimEnd('/')}/{path}"
+        : $"https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/{EmbedModelCommit}/{path}";
 
     public static readonly IReadOnlyList<ResourceSpec> Catalog = new[]
     {
@@ -205,27 +345,86 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             ApproxBytes: 32_000_000,
             Url: $"https://nodejs.org/dist/{NodeVersion}/node-{NodeVersion}-win-x64.zip",
             Sha256: NodeSha256),
+        // Listed BEFORE Ollama on purpose: this is the runtime the app installs, and Ollama is now the one
+        // we merely connect to if a household already runs it. The panel's order is the product's answer to
+        // "which of these is ours".
         new ResourceSpec(
-            Id: "ollama", Name: $"Ollama 本地模型运行时({OllamaVersion})",
-            // Names BOTH consumers: one Ollama serves the 语义 embedder and the 判断 local judge — same
-            // daemon, same URL, different models on it. Saying "语义检索的运行时" made the judge's local
-            // arm look like a separate thing, which is the confusion the 记忆检索 panel just had to fix.
-            NeededFor: "「记忆检索」里本机模型的运行时:语义检索的嵌入模型、判断的本机对话模型都跑在它上面"
-                + " —— 仅在启用时需要;已自行安装 Ollama 则无需下载",
-            Kind: ResourceKind.Zip, InstallDir: "ollama", ReadyMarker: "ollama.exe",
-            // The official package, GPU runtimes included. A CPU-only subset was considered and rejected:
-            // it would install a SECOND, weaker Ollama beside a household's real one, and optimising the
-            // download size against whether the thing performs is the wrong trade.
-            ApproxBytes: OllamaArm64 ? 210_000_000 : 1_460_000_000,
-            Url: OllamaUrl,
-            Sha256: OllamaSha256),
+            Id: "llama-cpp", Name: $"本机模型运行时 · llama.cpp({LlamaCppVersion})",
+            NeededFor: "「记忆检索」里本机模型的运行时:语义的嵌入模型与判断的本机对话模型都跑在它上面"
+                + " —— 自带 Vulkan,NVIDIA / AMD / Intel 通用;仅在启用本机模型时需要",
+            Kind: ResourceKind.Zip, InstallDir: "llama-cpp", ReadyMarker: "llama-server.exe",
+            ApproxBytes: LlamaCppArm64 ? 12_339_627 : 34_936_498,
+            Url: LlamaCppUrl,
+            Sha256: LlamaCppSha256),
+        // NO `ollama` SPEC, deliberately. The app used to offer a 1.46 GB Ollama download here, which
+        // contradicted the 2026-08-22 runtime decision (docs/self-managed-llm-runtime.md): the runtime we
+        // provision is llama.cpp, and Ollama is a HOUSEHOLD origin — detected and connected to, never
+        // installed by us. Leaving the spec in place meant 资源 could install a second, weaker copy beside
+        // a household's real one, and it is what made a provisioned runtime and a manual prerequisite
+        // indistinguishable in the first place. An install a household already made keeps working:
+        // OllamaRuntime.Locate() still finds a copy under {data}/state/resources/ollama.
         new ResourceSpec(
             Id: "claude", Name: "Claude CLI(智能体引擎)",
             NeededFor: "计划与执行对话的引擎 —— 没有它,聊天无法进行;下载后还需登录一次",
             Kind: ResourceKind.ClaudeCli, InstallDir: "claude", ReadyMarker: "claude.exe",
             ApproxBytes: 266_000_000,
             Url: ClaudeBaseUrl),
-    };
+        new ResourceSpec(
+            Id: Agent.Llm.Sources.BuiltInSemanticSource.ResourceId,
+            Name: "内置嵌入模型(EmbeddingGemma 300M)",
+            // Says what it REPLACES, because that is the decision the household is making: this is the
+            // alternative to installing Ollama at all for 语义, and it is the smaller of the two — 222 MB
+            // here against Ollama's runtime plus a 622 MB model.
+            NeededFor: "「记忆检索 · 语义」的内置后端 —— 不必安装 Ollama;实测检索质量与本机 Ollama 接近,"
+                + "而且在应用内直接运行(更快、不需要常驻服务)",
+            Kind: ResourceKind.Files, InstallDir: "embed-model",
+            // The .onnx is the marker rather than the weights: it is the file ONNX Runtime is handed, and
+            // ProvisionFilesAsync only moves the directory in once EVERY checksum passed, so the marker
+            // existing really does mean the set is complete.
+            ReadyMarker: Agent.Llm.Services.OnnxEmbedder.ModelFile,
+            ApproxBytes: 222_000_000,
+            Files: new[]
+            {
+                new ResourceFile("onnx/model_q4.onnx", EmbedModelUrl("onnx/model_q4.onnx"),
+                    "ad1dfee81a70f7944b9b9d1cc6e48075b832881cf33fab2f2b248be78f3f0043"),
+                // EXTERNAL WEIGHTS. It must sit beside the .onnx above — the graph references it by
+                // relative name — which is the reason this resource kind declares destinations at all.
+                new ResourceFile("onnx/model_q4.onnx_data", EmbedModelUrl("onnx/model_q4.onnx_data"),
+                    "599962c3143b040de2dd05e5975be3e9091dd067cacc6a8f7186e3203bab9e02"),
+                // The SentencePiece vocabulary (4.7 MB), NOT the 20 MB tokenizer.json: Microsoft.ML
+                // .Tokenizers cannot read HuggingFace's fast-tokenizer JSON, and this is the same
+                // vocabulary at a quarter of the size.
+                new ResourceFile(Agent.Llm.Services.OnnxEmbedder.TokenizerFile, EmbedModelUrl("tokenizer.model"),
+                    "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c"),
+            },
+            Category: ResourceCategory.Model),
+    }
+        // ONE SPEC PER CATALOGUED GGUF, generated rather than hand-written, because the catalogue is the
+        // thing that changes and two lists for one set is the drift this codebase keeps paying for.
+        //
+        // Each model gets its OWN InstallDir, and that is a correctness requirement rather than tidiness:
+        // ProvisionFilesAsync deletes the install directory before moving the staged copy in, so two
+        // models sharing `gguf/` would erase each other. Per-model directories also make the router's id
+        // ours to choose — measured 2026-08-22, `--models-dir` RECURSES and derives the id from the
+        // DIRECTORY name when a model sits in one, so naming the directory after the model keeps the id
+        // stable whatever the upstream filename is. A pre-existing flat file resolves to the same id and
+        // is de-duplicated rather than doubled, which is what makes this safe on an install that already
+        // has one.
+        .Concat(Agent.Llm.Services.GgufCatalog.Models.Select(m => new ResourceSpec(
+            Id: Agent.Llm.Services.GgufCatalog.ResourceIdFor(m.Id),
+            Name: m.Name,
+            NeededFor: m.Note,
+            Kind: ResourceKind.Files,
+            InstallDir: Path.Combine("gguf", m.Id),
+            ReadyMarker: m.File,
+            ApproxBytes: m.ApproxBytes,
+            Files: new[]
+            {
+                new ResourceFile(m.File, Agent.Llm.Services.GgufCatalog.UrlFor(m), m.Sha256),
+            },
+            Category: ResourceCategory.Model,
+            ModelId: m.Id)))
+        .ToArray();
 
     /// <summary>Where a provisioned node lands. Read by the sandbox probe and the Node leaf tools, so
     /// the path exists in exactly one place.</summary>
@@ -243,6 +442,11 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// binary claims.</summary>
     public static string ClaudeVersionMarker(string resourcesPath) =>
         Path.Combine(resourcesPath, "claude", "version.txt");
+
+    /// <summary>Where the 内置 embedder's model lands. Read by <c>BuiltInSemanticSource</c> and written
+    /// here, so the path exists in exactly one place — same contract as <see cref="ProvisionedNode"/>.</summary>
+    public static string ProvisionedEmbedModel(string resourcesPath) =>
+        Path.Combine(resourcesPath, "embed-model");
 
     /// <summary>The installed claude version, or null when it was never provisioned here (a machine-wide
     /// install has no marker of ours — and that is a legitimate, fully working configuration).</summary>
@@ -303,7 +507,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             available = _latestClaude;
         }
         return new ResourceStatus(s.Id, s.Name, s.NeededFor, s.ApproxBytes, installed, state,
-            p?.Percent ?? 0, p?.Message, version, available);
+            p?.Percent ?? 0, p?.Message, version, available, Category: s.Category, ModelId: s.ModelId);
     }).ToList();
 
     // The newest CLI the vendor is serving, as of the last check. Null until something checks — a field,
@@ -401,6 +605,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             {
                 case ResourceKind.Bundle: await ProvisionBundleAsync(spec, p); break;
                 case ResourceKind.ClaudeCli: await ProvisionClaudeAsync(spec, p); break;
+                case ResourceKind.Files: await ProvisionFilesAsync(spec, p); break;
                 default: await ProvisionZipAsync(spec, p); break;
             }
             Set(p, "ready", 100, "已就绪");
@@ -505,6 +710,60 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         {
             try { if (File.Exists(zip)) File.Delete(zip); } catch { /* best-effort */ }
             try { if (Directory.Exists(extract)) Directory.Delete(extract, true); } catch { /* best-effort */ }
+        }
+    }
+
+    // ---- Loose files: N urls, each verified, all staged, then moved in as one directory ----
+    // ALL-OR-NOTHING is the point. A model with external weights is useless with one of its two halves, so
+    // a half-finished download must not become the install: everything lands in .staging, every checksum is
+    // checked, and only then does the directory move into place. The alternative — writing each file to its
+    // final home as it arrives — produces an install that LOOKS present (the ready marker exists) and
+    // throws on the first embed, which is exactly the "installed is not usable" failure this codebase keeps
+    // paying for elsewhere.
+    private async Task ProvisionFilesAsync(ResourceSpec spec, Prog p)
+    {
+        var files = spec.Files;
+        if (files is null || files.Count == 0) throw new InvalidOperationException("no files declared");
+
+        var staging = Path.Combine(_data.ResourcesPath, ".staging");
+        Directory.CreateDirectory(staging);
+        var stage = Path.Combine(staging, spec.Id);
+        try
+        {
+            if (Directory.Exists(stage)) Directory.Delete(stage, true);
+            Directory.CreateDirectory(stage);
+
+            // One progress bar over the whole set, weighted by declared size, rather than a bar that snaps
+            // back to zero on every file — the same reason the Ollama pull sums its layers by digest.
+            var share = 92.0 / files.Count;
+            for (var i = 0; i < files.Count; i++)
+            {
+                var f = files[i];
+                var dest = Path.Combine(stage, f.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+
+                var basePct = i * share;
+                Set(p, "running", (int)basePct, $"下载中… ({i + 1}/{files.Count})");
+                await DownloadAsync(f.Url, dest,
+                    pct => Set(p, "running", (int)(basePct + pct * share / 100.0),
+                        $"下载中… ({i + 1}/{files.Count})"),
+                    CapFor(spec));
+
+                var actual = await Sha256Async(dest);
+                if (!string.Equals(actual, f.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"{f.RelativePath} 的 sha256 不匹配(期望 {f.Sha256[..8]}…)");
+            }
+
+            Set(p, "running", 97, "安装中…");
+            var installed = InstallPath(spec);
+            if (Directory.Exists(installed)) Directory.Delete(installed, true);
+            Directory.CreateDirectory(Path.GetDirectoryName(installed)!);
+            Directory.Move(stage, installed);
+        }
+        finally
+        {
+            try { if (Directory.Exists(stage)) Directory.Delete(stage, true); } catch { /* best-effort */ }
         }
     }
 

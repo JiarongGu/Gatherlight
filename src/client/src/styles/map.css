@@ -1,0 +1,148 @@
+/* map.css — lifted out of styles.css, which had grown past 3400 lines with every area interleaved.
+   This block was CLOSED when it moved: every rule for its selectors was inside it and nothing else was,
+   so importing it after styles.css cannot reorder it against anything. Keep it that way — a rule for
+   another area added here, or one of these added back to styles.css, breaks that guarantee.
+
+   ONE EXCEPTION, on purpose: `.leaflet-tooltip.map-tip` (+ ::before, + .map-tip-sub) stayed in
+   styles.css with the other Leaflet overrides, because that is what it is. It cannot be reordered
+   against anything here — those selectors appear NOWHERE in this file, and there is no bare
+   `.leaflet-tooltip` rule for them to outrank. If you add `.map-tip` styling here, that stops being
+   true and the styles.css rule (2 classes) wins over yours (1) regardless of file order. */
+
+/* ===================== L3 MapCanvas ===================== */
+.map-canvas {
+  position: relative;
+  margin: 16px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.map-canvas.map-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  height: 100vh !important;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+.map-expand-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1000;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 15px;
+  box-shadow: var(--shadow-sm);
+}
+.map-expand-btn:hover { color: var(--accent); border-color: var(--accent); }
+.map-footer { background: var(--surface-2); padding: 5px 10px; font-size: 11px; color: var(--muted); }
+.map-fallback {
+  padding: 14px;
+  background: var(--surface-2);
+  color: var(--muted);
+  border-radius: var(--radius);
+  font-size: 13px;
+  margin: 12px 0;
+}
+.map-fallback code, .map-footer code { background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+/* Height-stable shimmer while the leaflet map chunk loads (uses .sk-shimmer). */
+.map-skeleton { display: grid; place-items: center; border-radius: var(--radius); margin: 12px 0; color: var(--muted); font-size: 12.5px; }
+
+/* Numbered route pin / accent dot (L.divIcon) */
+.map-pin { background: none !important; border: none !important; }
+.map-pin-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--accent);
+  color: #fff;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.45);
+}
+.map-pin-dot {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background: var(--accent);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+.map-pin-num.active,
+.map-pin-dot.active {
+  transform: scale(1.18);
+  box-shadow: 0 0 0 4px var(--accent-soft), 0 2px 7px rgba(0, 0, 0, 0.5);
+}
+
+/* Detail card shown on pin click */
+.map-detail-card {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 1000;
+  width: 244px;
+  max-width: calc(100% - 56px);
+  display: flex;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px 12px 12px 12px;
+}
+.map-detail-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.map-detail-close:hover { background: var(--surface-2); color: var(--text); }
+.map-detail-num {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+}
+.map-detail-body { flex: 1; min-width: 0; padding-right: 14px; }
+.map-detail-title { font-weight: 600; color: var(--text); font-size: 14px; line-height: 1.3; }
+.map-detail-sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.map-detail-coord {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  margin: 5px 0;
+}
+.map-detail-link { font-size: 12px; color: var(--accent); text-decoration: none; }
+.map-detail-link:hover { text-decoration: underline; }

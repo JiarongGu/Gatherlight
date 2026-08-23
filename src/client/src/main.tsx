@@ -19,6 +19,26 @@ import { AuthGate } from './screens';
 import { ErrorBoundary } from './ui/ErrorBoundary';
 import { ThemeProvider, useTheme, antdThemeConfig } from './lib/theme';
 import './styles.css';
+// Area stylesheets, lifted out of styles.css once it passed 3400 lines with every area interleaved.
+//
+// IMPORTED AFTER styles.css, and that is not arbitrary: each of these was CLOSED when it moved — every
+// rule for its selectors was inside the block and nothing else was — so no rule here can be reordered
+// against a rule there, and the cascade is unchanged. Adding a rule for one of these areas back into
+// styles.css, or a rule for a DIFFERENT area into one of these, silently breaks that guarantee.
+//
+// Two compound selectors DELIBERATELY stayed behind — `.leaflet-tooltip.map-tip` (a Leaflet override)
+// and `.mng-view.jobs .jobs-toolbar` (console layout). Each is higher-specificity and has no
+// counterpart in its partial, so order cannot matter; both files say so at the top. Read that note
+// before adding a rule for either selector.
+//
+// Only the self-contained areas moved. res · eval · set · cmdk are still interleaved through styles.css
+// and cannot be lifted without reordering equal-specificity rules across the app; see the CSS note in
+// docs/ before attempting it.
+import './styles/map.css';
+import './styles/grant.css';
+import './styles/kb.css';
+import './styles/jobs.css';
+import './styles/memory-recall.css';
 
 function ThemedApp() {
   const { mode } = useTheme();

@@ -31,6 +31,7 @@ const PORT_MISSING = 5506;
 const PORT_SIGNED_OUT = 5507;
 const PORT_SIGNED_IN = 5508;
 const PORT_PROVISION = 5509;
+const PORT_LOGIN = 5511;
 
 const RAW_WIN32 = /系统找不到指定的文件|An error occurred trying to start process/;
 const GENERIC = /CLI 报告错误/;
@@ -58,6 +59,17 @@ const freshDir = (suffix) => {
 
 /** A stand-in CLI: answers `auth status --json` like the real one, and fails every actual run — which is
  *  what a signed-out or broken CLI does, and what the diagnosis has to survive. */
+/** POST returning status + parsed body — these endpoints answer with a sentence, and the assertions read
+ *  it, so a helper that threw away the body would make every failure say only "409". */
+const cliPost = async (base, path, body) => {
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: body ? { 'content-type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+};
+
 const writeAuthStub = (dir, { loggedIn }) => {
   const file = path.join(dir, 'auth-stub.mjs');
   fs.writeFileSync(file, `
@@ -131,6 +143,21 @@ try {
     (await (await fetch(`${srv.base}/api/health`)).json()).migrating === false);
   const rowA = await claudeRow(srv.base);
   ok('the resources catalog carries a claude entry', !!rowA, 'no claude row');
+
+  // THE LOGIN ROUTE IS NOT DRIVEN FROM HERE, and that is a decision rather than an omission.
+  //
+  // POST /api/manage/resources/claude/login spawns `auth login` on the RESOLVED binary — which is the whole
+  // point of it, because the advice it replaces ("run `claude auth login` in a terminal") is unactionable
+  // for a CLI installed through 资源: that copy lives in {data}/state/resources/claude/ and the directory is
+  // never added to PATH. But a call that succeeds opens an interactive console waiting for a human in a
+  // browser, and a suite must not open windows on the machine running it.
+  //
+  // Nor can the refusal half be driven safely: `Locate()` falls through to PATH, so on a developer machine
+  // with its own claude even this CLI-LESS fixture resolves one and the call spawns. Attempting it here did
+  // exactly that, twice, before the attempt was removed. What IS asserted instead — below and in case C —
+  // is every observable that does not spawn: the row's own line names the button, and a failed turn names
+  // where to log in rather than a command that may not resolve. The spawn itself was verified by hand
+  // (2026-08-22: resolved binary starts, probe cache dropped, the row's line flips on completion).
   ok('reported not installed, and saying what it is for',
     rowA?.installed === false && /引擎|聊天/.test(String(rowA?.neededFor ?? '')), JSON.stringify(rowA));
   ok('and the row states it is unusable rather than staying silent',
@@ -166,13 +193,64 @@ try {
   const rowC = await claudeRow(srv.base);
   ok('the panel distinguishes signed-out from missing',
     /未登录/.test(String(rowC?.detail ?? '')), String(rowC?.detail));
+  // …and the row's own line points at the button too, so the panel and the failed-turn message agree.
+  ok('and the row names the button rather than a terminal command',
+    /登录/.test(String(rowC?.detail ?? '')) && !/auth login/.test(String(rowC?.detail ?? '')),
+    String(rowC?.detail));
+  // ---- WHOSE LOGIN the app uses ------------------------------------------------------------------
+  // The CLI keeps credentials in a config directory, so every process started as the same OS user shares
+  // one session: the app was signed in as whoever the household is signed in as in their own terminal.
+  // Fine when those are the same account, wrong when they are not. CLAUDE_CONFIG_DIR isolates it —
+  // verified by hand 2026-08-22, the same binary reporting loggedIn:false against a fresh directory while
+  // the machine session stayed signed in.
+  //
+  // What the fixture CAN check is the choice itself: its default, that it round-trips, that a bad value is
+  // refused, and that logout respects whose credential it is. It cannot check the isolation, because the
+  // auth stub answers from a canned JSON regardless of which directory it is pointed at — asserting that
+  // would be asserting our own stub.
+  const sess = async () =>
+    (await (await fetch(`${srv.base}/api/manage/resources`)).json()).claudeSession;
+  const s0 = await sess();
+  ok('the app shares the machine login by DEFAULT — nothing set, nothing changed',
+    s0?.mode === 'machine', JSON.stringify(s0));
+  ok('and it reports where its own credentials would live, before they exist',
+    typeof s0?.home === 'string' && s0.home.length > 0, JSON.stringify(s0));
+
+  // LOGOUT IS REFUSED while the app shares the machine's login. That credential belongs to the household's
+  // own terminal; ending it from our panel is the overreach this codebase already unlearned once with
+  // somebody else's model daemon. The refusal is the assertion — and it names the way to get a separate one.
+  const logoutShared = await cliPost(srv.base, '/api/manage/resources/claude/logout');
+  ok('signing out is refused while the app shares the machine login',
+    logoutShared.status === 409 && /自己终端|切到/.test(String(logoutShared.body?.error ?? '')),
+    `${logoutShared.status} ${JSON.stringify(logoutShared.body?.error ?? '')}`);
+
+  const bad = await cliPost(srv.base, '/api/manage/resources/claude/session', { mode: 'sideways' });
+  ok('an unknown session mode is refused rather than defaulted', bad.status === 400, String(bad.status));
+
+  const toApp = await cliPost(srv.base, '/api/manage/resources/claude/session', { mode: 'app' });
+  ok('switching to the app\'s own session succeeds', toApp.status === 200, String(toApp.status));
+  ok('…and the panel reports the new mode without a restart',
+    (await sess())?.mode === 'app', JSON.stringify(await sess()));
+  // Now it IS ours to end, so the refusal must stop: whether the CLI succeeds is its business, but a 409
+  // here would mean the app was still calling somebody else's login its own.
+  const logoutOwn = await cliPost(srv.base, '/api/manage/resources/claude/logout');
+  ok('…and signing out is no longer refused, because that session is ours',
+    logoutOwn.status !== 409, String(logoutOwn.status));
+
+  await cliPost(srv.base, '/api/manage/resources/claude/session', { mode: 'machine' });
+  ok('switching back leaves the shared login in place', (await sess())?.mode === 'machine');
+
   const cC = makeClient(srv.base);
   const startC = await cC.post('/api/chat', { message: '给明天建一个日计划' });
   const idC = startC.body?.id ?? startC.body?.sessionId;
   if (idC) {
     const msgC = String((await cC.waitPhase(idC, 'error'))?.error ?? '');
     ok('and a failed turn tells the household to log in', /登录/.test(msgC), msgC);
-    ok('naming the actual command to run', /auth login/.test(msgC), msgC);
+    // WAS `/auth login/`. That assertion pinned advice which could not be followed for a CLI we
+    // installed — its directory is never on PATH — so the message now names the panel and the button that
+    // spawns the resolved binary. Updated deliberately: the old assertion was right about the old text.
+    ok('naming WHERE to log in, rather than a command that may not resolve',
+      /资源|登录/.test(msgC) && !/auth login/.test(msgC), msgC);
   }
   srv.stop(); srv = undefined;
 
@@ -257,7 +335,108 @@ try {
   const rowE = await claudeRow(srv.base);
   ok('and the panel reports it installed, with its version',
     rowE?.installed === true && rowE?.version === '9.9.9', JSON.stringify(rowE));
+
+  // THE `app` ORIGIN BRANCH — recorded in p51 as an uncovered gap, and covered HERE instead.
+  //
+  // p51 cannot reach it: every suite must point GATHERLIGHT_CLAUDE_CMD at a stub, and an explicit override
+  // outranks the provisioned copy, so a planted file loses to the override by design. This case is the one
+  // place the condition arises without arranging it — it runs claudeless, and has just downloaded a real
+  // file to exactly where the provisioner installs. `Locate()` therefore returns the provisioned path and
+  // RuntimeOriginFrom compares it against that same path.
+  //
+  // Worth asserting because answering `household` unconditionally would pass every other origin check in
+  // the suite. Telling "we installed this" apart from "you did" is the entire point of the axis, and their
+  // conflation is what let a provisioned runtime read as a manual prerequisite for months.
+  const { getJson: getF } = makeClient(srv.base);
+  const memF = await getF('/api/manage/memory');
+  const claudeOrigin = (memF.layers ?? [])
+    .flatMap((l) => l.groups ?? [])
+    .flatMap((g) => g.sources ?? [])
+    .find((x) => x.id === 'claude-cli')?.origin;
+  // The KIND alone would be vacuous here, and nearly shipped that way. `Locate()` returning NULL also
+  // answers `app` \u2014 phrased as an offer, "\u5e94\u7528\u53ef\u4ee5\u4e0b\u8f7d\u5e76\u8fd0\u884c" \u2014 so a broken path comparison on a machine
+  // where nothing resolved would satisfy `kind === 'app'` for entirely the wrong reason. The two branches
+  // are only distinguishable by their TEXT, so that is what separates "we found our copy" from "we found
+  // nothing and would download one".
+  ok('a CLI at the provisioned path reports origin=app, not the household\u2019s',
+    claudeOrigin?.kind === 'app', JSON.stringify(claudeOrigin));
+  ok('\u2026by having FOUND our copy, not by offering to download one',
+    /\u4e0d\u9700\u8981\u4f60\u81ea\u5df1\u88c5/.test(String(claudeOrigin?.text ?? '')), JSON.stringify(claudeOrigin));
   srv.stop(); srv = undefined;
+
+  // --- G · the login button spawns the RESOLVED binary -------------------------------------------
+  //
+  // Previously recorded as untestable, which was too strong a claim. The objection was that SUCCEEDING
+  // opens an interactive console — true of `claude auth login`, which waits for a human in a browser and
+  // never returns. It is not true of a stub that records its arguments and exits. The real rule is that a
+  // suite must not leave a window waiting for somebody, not that no child process may ever have one.
+  //
+  // What this proves is the reason the button exists at all: it runs the binary this install RESOLVES to,
+  // rather than the bare word `claude` a household following our older advice would have typed — which
+  // cannot work for a copy we provisioned, whose directory is never on PATH.
+  const dirG = freshDir('g');
+  const marker = path.join(dirG, 'spawned.txt');
+  const loginStub = path.join(dirG, 'login-stub.cmd');
+  // A .cmd rather than the usual `node <file>` stub: StartLogin uses ShellExecute so the login window is
+  // the child's own, and ShellExecute takes a FILE, not a command line. That difference is the point — it
+  // is why this path needs its own stub instead of reusing writeAuthStub.
+  fs.writeFileSync(loginStub, [
+    '@echo off',
+    `echo %* >> "${marker}"`,
+    'if "%1"=="auth" if "%2"=="status" (',
+    '  echo {"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty",'
+      + '"email":"household@example.com","subscriptionType":"max"}',
+    '  exit /b 0',
+    ')',
+    'exit /b 1',
+    '',
+  ].join('\r\n'));
+
+  srv = startServer({
+    dataDir: dirG, port: PORT_LOGIN,
+    env: { ...claudeless, GATHERLIGHT_CLAUDE_CMD: loginStub },
+  });
+  await settled(srv.base);
+
+  const started = await cliPost(srv.base, '/api/manage/resources/claude/login');
+  ok('the login button starts the flow rather than refusing', started.status === 202,
+    `${started.status} ${JSON.stringify(started.body)}`);
+
+  // Polled: the spawn is detached by design — the endpoint answers before the child has run, which is what
+  // keeps a browser flow that waits for a human off the request path.
+  let spawned = '';
+  for (let i = 0; i < 40; i++) {
+    spawned = fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8') : '';
+    if (/auth login/.test(spawned)) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  ok('…and it really ran the resolved binary, with `auth login`',
+    /auth login/.test(spawned), JSON.stringify(spawned.trim().split(/\r?\n/).slice(-3)));
+
+  // ANTI-VACUITY. The assertion above would also pass if the endpoint spawned something on its own and the
+  // marker happened to exist — so prove the marker is written BY THIS BINARY, by checking the probe's own
+  // `auth status` call landed in the same file. Both lines present means the file is this stub's argv log.
+  ok('the marker really is this stub\u2019s argv log, not an artefact',
+    /auth status/.test(spawned), JSON.stringify(spawned.trim().split(/\r?\n/).slice(0, 2)));
+
+  // REMOTE IS REFUSED. The window opens on the machine running the server, so a remote click would open a
+  // window nobody can see and report success — the endpoint checks the peer is loopback. Asserted through
+  // a forwarded header because the fixture can only connect over loopback: this proves the check reads the
+  // CONNECTION rather than a header any caller could set.
+  const spoofRes = await fetch(`${srv.base}/api/manage/resources/claude/login`, {
+    method: 'POST',
+    headers: { 'X-Forwarded-For': '203.0.113.9' },
+  });
+  const spoofBody = await spoofRes.json().catch(() => ({}));
+  // Asserted on the REASON, not the status. A second call can legitimately be refused by StartLogin's own
+  // reentrancy guard if the stub has not finished exiting, and that 409 is indistinguishable from a remote
+  // refusal by status alone — which would make this flaky AND misleading. The two carry different messages,
+  // so the precise claim is available: whatever happens, it is never the machine-location refusal.
+  ok('a spoofed forwarded-for does not turn a loopback click into a remote one',
+    spoofRes.status === 202 || !/那台机器/.test(String(spoofBody.error ?? '')),
+    `${spoofRes.status} ${JSON.stringify(spoofBody)}`);
+  srv.stop(); srv = undefined;
+
 } catch (err) {
   fail('e2e-p50 fatal: ' + err.message);
   console.error(srv?.log?.().slice(-3000) ?? '');

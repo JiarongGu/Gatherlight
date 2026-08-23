@@ -37,6 +37,8 @@ const chunks = [];
 for await (const c of process.stdin) chunks.push(c);
 const prompt = Buffer.concat(chunks).toString('utf8');
 
+const NEWLINE = String.fromCharCode(10);
+const NOTES_HEAD = 'Notes:' + NEWLINE;
 const emit = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
 const sessionId = `stub-${Date.now().toString(36)}`;
 
@@ -170,6 +172,75 @@ if (prompt.includes('SCORING TASK')) {
   const verdict = JSON.stringify({ score: 0.8, reason });
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
   done(verdict);
+  process.exit(0);
+}
+
+// Memory ANNOTATION (Lyntai's LlmMemoryAnnotationPolicy): it asks for `{"subjects":[...]}` — stable
+// handles naming what a fact is about. Answered here so a suite can drive REAL annotated writes rather
+// than hand-inserting rows into the graph store, which would only ever prove the fixture agrees with
+// itself about the layout.
+//
+// The handles are deliberately words the fact's own text does NOT contain. That is the whole point: if a
+// handle appeared in the content, lexical recall would find the fact anyway and a passing subject test
+// would prove nothing. Anything unrecognised gets no subjects, so ordinary suites are unaffected.
+if (prompt.includes('{"subjects"')) {
+  // Only the fact being ANNOTATED, never the whole prompt. Lyntai composes this as
+  // [known subjects] + [earlier facts] + "Fact:\n<content>", so a whole-prompt scan reads the EARLIER
+  // facts' markers too and hands every handle to every write — which is precisely the cross-fire that
+  // the "read the CURRENT request" rule further down exists to prevent, one call site over. It cost a
+  // failing selectivity assertion here rather than shipping, because that assertion exists.
+  const fact = prompt.split('Fact:\n').pop();
+  const handles = [];
+  if (fact.includes('伴侣')) handles.push('pairbond');
+  if (fact.includes('旅行证件')) handles.push('paperwork');
+  const verdict = JSON.stringify({ subjects: handles });
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
+  done(verdict);
+  process.exit(0);
+}
+
+// Memory VERIFICATION (Lyntai's LlmMemoryVerificationPolicy). It sends a question plus a numbered list of
+// one-line notes, and wants {"relevant":[1,4]} — 1-based indices into that list.
+//
+// GATED ON A MARKER IN THE QUERY. Every other suite depends on this call being unparseable: p48 pins that
+// a failed judge leaves `answered` ABSENT rather than false, which is the asymmetric fail-open, and
+// answering every verification here would silently delete that coverage.
+//
+// It endorses the LAST note and records the whole list. That list is the engine's ranking BEFORE the
+// verdict is applied, which makes it the in-call baseline — the control that took four vacuous fixtures
+// to find. Endorsing the last note therefore endorses a candidate that demonstrably was not on top.
+if (prompt.includes('zzjudge') && prompt.includes(NOTES_HEAD)) {
+  const notes = (prompt.split(NOTES_HEAD).pop() || '').split(NEWLINE).filter((l) => /^\d+\.\s/.test(l));
+  const texts = notes.map((l) => l.replace(/^\d+\.\s*/, ''));
+  fs.writeFileSync(path.join(import.meta.dirname, '..', '_stub-verdict.txt'), JSON.stringify(texts));
+  const verdict = JSON.stringify({ relevant: notes.length > 0 ? [notes.length] : [] });
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
+  done(verdict);
+  process.exit(0);
+}
+
+// Memory 语义 REPHRASING (ClaudeCliSemanticSource.RephraseAsync): "other ways to say the same thing",
+// stored in knowledge.aka and indexed by the trigram FTS so a differently-worded question still matches.
+//
+// Answered with a DISTINCTIVE token that appears nowhere in the fact's own text, which is the only way to
+// test what this layer claims: a query hitting that token can only have matched a stored phrasing. Until
+// this branch existed the phrasings were whatever the generic handler happened to return, so the suite
+// could assert they were STORED and never that they could be FOUND.
+if (prompt.includes('同义扩展')) {
+  const fact = prompt.split('\n\n').pop();
+  // One line in ANOTHER LANGUAGE, because that is what the real prompt now REQUIRES — and requiring it
+  // is the fix that made this layer do anything at all. It listed 另一种语言的常见叫法 as one of three
+  // options, so the model always took the easy one: measured on a real fact, four phrasings and not one
+  // latin character. The layer was reachable and useless, which is why every multilingual probe showed
+  // no benefit from it while 判断 recovered +2 in each.
+  const lines = fact.includes('鱼味')
+    ? ['猫咪的口味偏好 zzfishpref', '这只猫爱吃海鲜口味', 'the cat only eats zzseafood tins']
+    : fact.includes('玄关')
+      ? ['猫粮的存放位置 zzstorage', '干粮收在门口的柜子']
+      : ['换一种说法'];
+  const text = lines.join('\n');
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  done(text);
   process.exit(0);
 }
 

@@ -150,6 +150,16 @@ const required = () => [
   // when someone tries to fill a visa form, which is months after the release.
   path.join(res, 'template', '.claude', 'forms', 'japan-visa-itinerary.json'),
   ...['inspect', 'fill', 'fill-itinerary', 'merge'].map((e) => path.join(res, 'tools', 'pdf-form', `${e}.cjs`)),
+  // ONNX Runtime's NATIVE library, for 记忆检索's 内置 embedder. It rides along in the bulk move of the
+  // publish output — but so did the pdf-form leaves, right up until they didn't, and its absence surfaces
+  // only when a household binds 语义 to the built-in backend, which may be months after the release.
+  //
+  // Also worth asserting because the RID matters: a NON-RID publish drags in the iOS (57 MB) and Android
+  // (50 MB) natives and puts win-x64's under runtimes/win-x64/native/ instead of beside the managed
+  // assemblies, where P/Invoke will not find it. `dotnet publish -r <rid>` flattens it here — measured
+  // 15.7 MB, against 138 MB unpruned.
+  path.join(libs, 'onnxruntime.dll'),
+  path.join(libs, 'Microsoft.ML.Tokenizers.dll'),
 ];
 
 // 3.5 native C++ launcher → top-level Gatherlight.exe (carries the app icon; launches libs/host).

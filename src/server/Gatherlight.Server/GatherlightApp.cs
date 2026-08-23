@@ -35,11 +35,6 @@ public static class GatherlightApp
     /// fact sits outside the top few never enters the ranking at all.</para></summary>
     private const int SemanticSeedK = 24;
 
-    /// <summary>The Ollama chat backend's id, and the named client that routes ONLY over it. Separate from
-    /// the embedder's registration: judging locally and embedding locally are independent choices, and a
-    /// household may take either without the other.</summary>
-    private const string OllamaProviderId = "ollama-chat";
-    private const string MemoryJudgeClient = "memory-judge";
 
     public static WebApplication Build(
         GatherlightServerOptions? options = null, string[]? args = null, ServerConfigService? config = null)
@@ -94,37 +89,41 @@ public static class GatherlightApp
         builder.Logging.AddFilter<Platform.Kernel.Logging.FileLoggerProvider>("Microsoft", fwLevel);
         builder.Logging.AddFilter<Platform.Kernel.Logging.FileLoggerProvider>("System", fwLevel);
 
-        // Optional semantic recall, decided ONCE here. The embedder, the vector store and the engine's
-        // semantic member are all DI registrations, so this is a startup decision by construction — the
-        // console says a change needs a restart rather than pretending it takes effect live. Both halves
-        // are required together: enabled with no model has nothing to embed with, so a half-configured
-        // install stays off rather than failing at the first fact write.
-        var memoryConfig = config.Current.Memory;
-        var embeddingModel = memoryConfig.EmbeddingModel;
-        var semanticOn = memoryConfig.SemanticEnabled && !string.IsNullOrWhiteSpace(embeddingModel);
-        var ollamaUrl = Platform.Agent.Llm.Services.OllamaRuntime.ResolveBaseUrl(memoryConfig.OllamaUrl);
-
-        // WHICH BACKEND JUDGES A RECALL. The claude CLI stays the default; a household may move the judge
-        // to a model on their own machine instead. This is a transport choice, not a quality shortcut:
-        // Lyntai measured a local gemma3:4b beating its ground-truth reference on both miss-rate and junk
-        // admitted, so the local arm is not the cheap-and-worse option it sounds like.
+        // WHICH BACKEND SERVES EACH RECALL LAYER, resolved from the one catalog the console also renders
+        // from. Both are startup decisions by construction — a provider, a named client, an embedder and a
+        // vector store are all DI registrations — so the console reports a restart rather than pretending
+        // a change took effect live. See MemorySources for why that catalog is static rather than a DI
+        // collection: this code runs while the container is being built, so there is nothing to resolve yet.
         //
-        // Why it is worth offering at all: annotation runs on EVERY fact write and verification on EVERY
-        // recall, so this seam is the app's most frequent model call by a wide margin. Moving it local
-        // takes it off the household's account quota entirely, removes a network round-trip from the
-        // latency path of every recall, and lets memory keep working with no connection — none of which
-        // the CLI arm can offer at any model size.
-        var judgeModel = memoryConfig.JudgeModel;
-        var judgeLocal = string.Equals(memoryConfig.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(judgeModel);
+        // Neither layer is a quality shortcut. Lyntai measured a local gemma3:4b beating its ground-truth
+        // reference on junk admitted, so 判断's local arm is not the cheap-and-worse option it sounds like;
+        // and annotation runs on EVERY fact write with verification on EVERY recall, which makes this seam
+        // the app's most frequent model call by a wide margin — the reason moving it off the account quota
+        // is worth offering at all.
+        var memoryConfig = config.Current.Memory;
+        // The startup-time facts a source can be asked about before the container exists: its config, and
+        // where provisioned resources live (the built-in embedder's readiness is "are the weights on disk",
+        // which is not a config value). Derived the same way IPlatformContext derives it, because this runs
+        // before IPlatformContext can be resolved.
+        var memorySettings = new Platform.Agent.Llm.Sources.MemorySourceSettings(
+            memoryConfig, Path.Combine(Path.GetFullPath(options.DataPath), "state", "resources"));
+
+        var judgeSource = Platform.Agent.Llm.Sources.MemorySources.ResolveJudge(memorySettings);
+        var judgeModel = Platform.Agent.Llm.Sources.MemorySources.ResolveJudgeModel(memorySettings)
+            ?? Platform.Agent.Llm.Sources.MemorySources.DefaultJudgeModel;
+
+        // A bound source with no model has nothing to embed WITH, so a half-configured install stays off
+        // rather than failing at the first fact write.
+        var semanticSource = Platform.Agent.Llm.Sources.MemorySources.ResolveSemantic(memorySettings);
+        var embeddingModel = memoryConfig.EmbeddingModel;
+        var semanticOn = semanticSource is not null && !string.IsNullOrWhiteSpace(embeddingModel);
 
         builder.Services
             .AddSingleton(options)
             // WHAT WE ACTUALLY WIRED, captured here because this is the only place that knows. The console
             // reports it beside the saved setting so its backend badge names the model doing the work
             // rather than the one chosen a moment ago and not yet restarted into.
-            .AddSingleton(new Platform.Agent.Llm.Services.MemoryJudgeWiring(
-                judgeLocal ? "local" : "cli", judgeLocal ? judgeModel : null))
+            .AddSingleton(new Platform.Agent.Llm.Services.MemoryJudgeWiring(judgeSource.Id, judgeModel))
             // The config resolved above (one instance, one settings.json reader).
             .AddSingleton(config)
             .AddSingleton<Platform.Site.Services.ISiteManifestStore, Platform.Site.Services.SiteManifestStore>()
@@ -172,16 +171,21 @@ public static class GatherlightApp
                     o.ModelKeyPrefix = "llm.model.";
                     o.DefaultModelByConsumer["scorer"] = "haiku"; // cheap-judge default; llm.model.scorer overrides live
                     // The memory judges (annotation per write, verification per recall) bill to
-                    // Lyntai's own "memory" consumer tag; llm.model.memory overrides live.
+                    // Lyntai's own "memory" consumer tag.
                     //
-                    // The local judge changes this DEFAULT rather than pinning the policy's own Model:
-                    // pinning would capture the model at registration and silently kill the live cortex
-                    // override that the CLI judge has always had. Same mechanism, different default.
-                    o.DefaultModelByConsumer["memory"] = judgeLocal ? judgeModel! : "haiku";
+                    // ONE SOURCE OF TRUTH for which model judges. It used to be two — this default AND
+                    // cortex's live llm.model.memory, which overrides it — so a household that had ever set
+                    // 记忆判断 to haiku and later moved the judge to a local model got the router asking the
+                    // OLLAMA provider for a model called "haiku". Both memory policies are fail-open, so
+                    // the symptom was no model calls and no error at all. 记忆检索's picker now writes that
+                    // key itself whenever it binds this layer, and cortex no longer offers a second place
+                    // to disagree from. The value is still a DEFAULT rather than a pin on the policy's own
+                    // Model, because pinning would capture it at registration and kill the live override.
+                    o.DefaultModelByConsumer["memory"] = judgeModel;
                 })
                 // Live per-consumer model routing (the scorers' judge model) read from app_config each call.
                 .AddLiveModelRouting()
-                // The local judge's backend has to appear here even though only the memory client uses it.
+                // A source's own provider has to appear here even though only the memory client uses it.
                 // A named client (AddLlmClient) narrows the PROVIDER POOL but inherits these candidates, so
                 // a client pooled over "ollama-chat" alone with candidates naming only "claude-cli" matches
                 // nothing and every call fails — silently, because both memory policies are fail-open. It
@@ -189,9 +193,10 @@ public static class GatherlightApp
                 // registered`. Filed upstream; the order below is the containment.
                 //
                 // claude-cli stays FIRST, so this is a fallback rather than a re-route: the default client
-                // reaches Ollama only when the CLI fails. That touches the one-shot ILlmClient consumers
-                // (the scorers) and not the agent path, which runs through IAgentSession and never routes.
-                .UseDefaultCandidates(judgeLocal ? ["claude-cli", OllamaProviderId] : ["claude-cli"])
+                // reaches a source's provider only when the CLI fails. That touches the one-shot ILlmClient
+                // consumers (the scorers) and not the agent path, which runs through IAgentSession and
+                // never routes.
+                .UseDefaultCandidates(["claude-cli", .. judgeSource.CandidateProviderIds])
                 // Lyntai owns scoring + conversation persistence: its SQLite storage lands lyntai_score_result,
                 // lyntai_thread/lyntai_message (+ other lyntai_* tables) in the same gatherlight.db. Kept EAGER
                 // (default SchemaMigration.OnStartup → migrates synchronously here, during DI) so the lyntai_*
@@ -245,9 +250,10 @@ public static class GatherlightApp
                 //     no setup. The floor the other two build on, and what remains when both are off.
                 //   · CLAUDE CLI (below) — tokens per write and per recall.
                 //   · LOCAL MODEL (further down) — disk and local compute, no tokens.
-                // Keeping them independent is deliberate: verification reorders what was retrieved while
-                // embeddings change what is retrievable at all, so they are complements, and a household
-                // must be able to drop the token cost without losing local semantics.
+                // Keeping them independent is deliberate: verification acts on what was retrieved (which
+                // of it answered, and therefore which of it is worth reinforcing) while embeddings change
+                // what is retrievable at all, so they are complements, and a household must be able to
+                // drop the token cost without losing local semantics.
                 //
                 // The model-backed memory steps (both fail-open — a judge failure leaves behaviour
                 // exactly as it was, which is also what keeps the stubbed-CLI e2e honest):
@@ -258,7 +264,15 @@ public static class GatherlightApp
                 // model judge which recalled candidates actually ANSWERED the query — on Lyntai's
                 // measured corpus the model-free ranking IS the miss rate (every missed answer was a
                 // candidate ranked below the cut), and a haiku judge roughly halves it. A verdict
-                // only ever reorders (VerificationFilters stays false); Model stays null so the
+                // does not FILTER and does not re-sort (VerificationFilters stays false): it sets
+                // `answered` and narrows which nodes get REINFORCED. That narrowing DOES reach the
+                // ordering — endorsing a fact the engine ranked third brings it to the top of the same
+                // page, measured against a no-verdict baseline. This comment first said a verdict "only
+                // ever reorders"; the correction over-swung and said it never touches the ranking at all.
+                // Neither was right. Separately, on this household's 16 facts recall came out
+                // byte-identical with the judge on and off (MRR 0.646 both ways) at 78 ms against
+                // 8,936 — it endorsed what already ranked top, so nothing moved. It CAN move a result;
+                // here it did not; Model stays null so the
                 // "memory" consumer routing above decides, live-overridable.
                 ;
                 // Both are OPT-OUTABLE now, and until this they were not: adopted wholesale with Lyntai
@@ -276,10 +290,10 @@ public static class GatherlightApp
                 // BYO seam. Off returns the library's own no-opinion values, a state the engine already
                 // treats as "no policy registered" — so the switch is safe to flip at runtime.
                 // ClientName is the seam Lyntai documents for exactly this — a name selects BACKENDS, never
-                // permissions — and it is null for the CLI arm, which then uses the default client. Model
-                // stays null in both arms so the router resolves it per consumer and cortex keeps its live
-                // override; see DefaultModelByConsumer above.
-                var judgeClient = judgeLocal ? MemoryJudgeClient : null;
+                // permissions — and the SOURCE owns which name that is (null for the CLI arm, which then
+                // uses the default client). Model stays null on both policies so the router resolves it per
+                // consumer; see DefaultModelByConsumer above.
+                var judgeClient = judgeSource.ClientName;
                 b.Services.AddSingleton<Lyntai.Memory.Annotation.IMemoryAnnotationPolicy>(sp =>
                     new Platform.Agent.Llm.Services.SwitchableAnnotationPolicy(
                         new Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy(
@@ -321,50 +335,38 @@ public static class GatherlightApp
                 .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeListFilesTool(
                     sp.GetRequiredService<Platform.Kernel.Services.ISiteContext>()));
 
-                // ---- Optional: meaning-based recall, embedded by a LOCAL Ollama --------------------
-                // Registered only when the household set it up, which is why this is a block rather than
-                // one more link in the chain. Three things had to be true for it to be worth wiring at
-                // all, and each is enforced somewhere rather than assumed:
-                //   · LOCAL. Embedding a fact means handing the household's private material to whatever
-                //     embeds it; a cloud endpoint would ship their plans to a third party on every write.
-                //     OllamaRuntime.ResolveBaseUrl refuses a non-loopback URL without an explicit opt-in,
-                //     and is used HERE too so the URL we embed against is the one the panel reports.
-                //   · OPTIONAL. Off by default. With it off — or with Ollama absent — recall behaves
-                //     exactly as it did before this existed.
-                //   · AFTER UseSqliteStorage. UseSqliteVectorStore checks for the Governance feature at
-                //     WIRING time (it owns the lyntai_vector table), so ordering here is load-bearing,
-                //     not cosmetic — which is the whole reason the fluent chain became a block.
-                // The local judge's backend + the named client that reaches ONLY it. Registered separately
-                // from the embedder below because the two are independent: a household may judge locally
-                // without semantic recall, or the reverse.
+                // ---- Each layer's backend registers ITSELF ------------------------------------------
+                // A block rather than one more link in the chain, and it stays a block for a reason that
+                // outlived the if/else it replaced: UseSqliteVectorStore (inside the semantic source)
+                // checks for the Governance feature at WIRING time, because it owns the lyntai_vector
+                // table — so running AFTER UseSqliteStorage is load-bearing here, not cosmetic.
                 //
-                // UseProviders fails loudly when the id is unregistered rather than narrowing to whatever
-                // exists — which is the behaviour that matters here, since the silent alternative is
-                // falling back to the household's paid default for every write and every recall, i.e.
-                // exactly the outcome naming a client was meant to prevent.
-                if (judgeLocal)
-                {
-                    b.AddOllamaProvider(baseUrl: ollamaUrl, id: OllamaProviderId)
-                     .AddLlmClient(MemoryJudgeClient, c => c.UseProviders(OllamaProviderId));
-                }
+                // What each source contributes is its own business now. The CLI's Register is a no-op (its
+                // provider is already the default); Ollama's judge adds a provider plus a named client
+                // reaching ONLY it; Ollama's semantic arm adds the embedder, the vector store and the
+                // ISemanticMemory marker. An embedded runtime would add whatever it needs, with no edit
+                // here at all.
+                //
+                // Two properties the sources are trusted to keep, both enforced in their own files:
+                //   · LOCAL. Embedding a fact hands the household's private material to whatever embeds
+                //     it, so a cloud endpoint would ship their plans to a third party on every write.
+                //     ResolveBaseUrl refuses a non-loopback URL without an explicit opt-in and is called
+                //     HERE, so the URL we embed against is the one the panel reports.
+                //   · OPTIONAL. With 语义 unbound — or Ollama absent — recall behaves exactly as it did
+                //     before any of this existed.
+                //
+                // UseProviders fails loudly when an id is unregistered rather than narrowing to whatever
+                // exists — the behaviour that matters here, since the silent alternative is falling back to
+                // the household's paid default on every write and every recall, i.e. exactly the outcome
+                // naming a client was meant to prevent.
+                // Each source resolves its OWN endpoint, so this call site does not know (and must not
+                // decide) whether a backend is a daemon on a port, a household-typed URL, or a process.
+                judgeSource.Register(b, new Platform.Agent.Llm.Sources.MemoryWiringContext(
+                    judgeModel, judgeSource.Endpoint(memorySettings) ?? "", memorySettings));
 
                 if (semanticOn)
-                {
-                    b.AddOpenAiCompatibleEmbedder("ollama", o =>
-                     {
-                         o.BaseUrl = ollamaUrl;
-                         o.Model = embeddingModel;
-                         // Keyless: a local Ollama takes no bearer token, and inventing one would only
-                         // make a misconfigured remote endpoint look authenticated.
-                     })
-                     .UseSqliteVectorStore()
-                     // The embedder + vector store above are what the GRAPH member picks up; that is where
-                     // meaning-based recall actually happens (SemanticSeedK, at the top of this class).
-                     // AddSemanticMemory stays for its registration alone: ISemanticMemory resolves only
-                     // when an embedder did, so its presence is the app's "semantic recall is available"
-                     // signal — read by FactIndex and by the 记忆检索 panel, written to by neither.
-                     .AddSemanticMemory();
-                }
+                    semanticSource!.Register(b, new Platform.Agent.Llm.Sources.MemoryWiringContext(
+                        embeddingModel!, semanticSource.Endpoint(memorySettings) ?? "", memorySettings));
             })
             // Lyntai's cortex (IPromptRegistry / IModelRoutingStore) reads/writes the app's OWN app_config
             // table — single source of truth for cortex.prompt.* / llm.model.*, no lyntai_kv duplicate. Plain
@@ -380,13 +382,15 @@ public static class GatherlightApp
             // authenticated claude CLI) and never required: with no Ollama the feature is simply absent and
             // recall behaves as it did before it existed. Loopback-only by default — a remote embedder would
             // send every household fact off this machine on every write.
-            .AddSingleton<IOllamaRuntime, OllamaRuntime>()
+            // The runtime this app PROVISIONS for local models, as of 2026-08-22. Registered beside
+            // Ollama rather than replacing it: Ollama stays reachable as a HOUSEHOLD backend, and the
+            // difference is now visible in the picker (see RuntimeOrigin).
+            .AddSingleton<ILlamaServerRuntime, LlamaServerRuntime>()
             // One reindex at a time, and its progress. A singleton because the run outlives the request
             // that started it — see IReindexStatus for why that had to change.
             .AddSingleton<Platform.Agent.Llm.Services.IReindexStatus, Platform.Agent.Llm.Services.ReindexStatus>()
             // Model downloads in flight. A singleton for the same reason: a multi-gigabyte pull outlives the
             // POST that started it, and the panel goes and looks rather than holding the request open.
-            .AddSingleton<Platform.Agent.Llm.Services.IModelPullStatus, Platform.Agent.Llm.Services.ModelPullStatus>()
             // One live agent run at a time across chat AND background jobs (single-writer data tree)
             .AddSingleton<IAgentGate, AgentGate>()
             .AddSingleton<IPromptHarness, PromptHarness>()
@@ -453,7 +457,13 @@ public static class GatherlightApp
                     // Passed EXPLICITLY, like every argument here: this is a hand-written factory, so an
                     // optional constructor parameter added later is not injected — it silently takes its
                     // default. That is how the vector cleanup came to compile, register and do nothing.
-                    sp.GetService<Lyntai.Memory.IVectorStore>()))
+                    sp.GetService<Lyntai.Memory.IVectorStore>(),
+                    // …and how the 语义 CLI arm did exactly the same, one release later, despite the
+                    // warning directly above. It binds, the panel reports it bound, and every fact was
+                    // written with an empty `aka` because these two arrived as null. Caught only by an e2e
+                    // case that read the column — nothing else could have.
+                    sp.GetService<Lyntai.Llm.ILlmClient>(),
+                    sp.GetService<Platform.Kernel.Services.ServerConfigService>()))
             .AddSingleton<Platform.Storage.Knowledge.Services.IProcessLog, Platform.Storage.Knowledge.Services.ProcessLog>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RememberFactTool>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RecallFactsTool>()
@@ -609,6 +619,9 @@ public static class GatherlightApp
             // After RecordIndexStep, and NOT part of it: this one back-fills rather than rebuilds,
             // because a rebuild every boot would erase the decay + link state the index accumulates.
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.FactIndexStep>()
+            // After the fact index: warming a model matters only once recall exists to use it, and
+            // this step does nothing at all unless a layer is BOUND to llama.cpp.
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.LlamaWarmStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DataRepoMaintenanceStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealStateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.MemorySeedStep>()

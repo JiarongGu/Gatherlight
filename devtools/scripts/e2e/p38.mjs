@@ -56,6 +56,12 @@ const out = {
   readGranted:  await probe(() => fs.readFileSync(\`\${site}/plans/trips/2026-08-kyoto.md\`, 'utf8')),
   writeCache:   await probe(() => fs.writeFileSync(\`\${site}/cache/probe.txt\`, 'x')),
   readState:    await probe(() => fs.readFileSync(\`\${site}/state/gatherlight.db\`)),
+  // The card promises the capability cannot READ OR CHANGE settings or the database. Only the read
+  // half was probed, so half a two-verb promise was enforced by evidence and half by assumption —
+  // and the write scope is a SEPARATE --permission grant from the read scope, so it genuinely can
+  // differ. Writes to a NEW path under state/, because clobbering the fixture's own database would
+  // destroy the thing under test if the denial ever failed.
+  writeState:   await probe(() => fs.writeFileSync(\`\${site}/state/probe-escape.txt\`, 'x')),
   writeRecords: await probe(() => fs.writeFileSync(\`\${site}/plans/evil.md\`, 'x')),
   spawn:        await probe(async () => { const cp = await import('node:child_process');
                                           const r = cp.spawnSync(process.execPath, ['-e', '1']);
@@ -125,6 +131,10 @@ try {
   ok('readGranted = allowed (positive control — declared fs.read)', v.readGranted === 'allowed', v.readGranted);
   ok('writeCache = allowed (positive control — declared fs.write)', v.writeCache === 'allowed', v.writeCache);
   ok('readState = blocked (platform state/ outside any grant)', v.readState === 'blocked', v.readState);
+  // The other half of the same card clause. Read and write are separate grants with separate directory
+  // sets, so "cannot read or change" needs both verbs proved rather than one and an inference.
+  ok('writeState = blocked (the card promises "read OR CHANGE", so both verbs are proved)',
+    v.writeState === 'blocked', v.writeState);
   ok('writeRecords = blocked (plans/ granted read-only, not write)', v.writeRecords === 'blocked', v.writeRecords);
   ok('spawn = blocked (node --permission denies child_process spawn)', v.spawn === 'blocked', v.spawn);
   ok('worker = blocked (node --permission denies worker_threads)', v.worker === 'blocked', v.worker);

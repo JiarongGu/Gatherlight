@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Spin, Alert } from '@/ui/atoms';
 import { getMigrationStatus, retryMigration, type MigrationSnapshot } from '@/lib/migrationApi';
+import { hostPost, inHost } from '@/lib/host';
 
 const STEP_ICON: Record<string, string> = { pending: '○', running: '…', ok: '✓', failed: '✗', skipped: '–' };
 
@@ -76,7 +77,9 @@ export function MigrationOverlay() {
           <Alert type="error" showIcon message={snap.error ?? '升级失败'} style={{ maxWidth: 480 }} />
           <div style={{ display: 'flex', gap: 8 }}>
             <Button type="primary" loading={retrying} onClick={() => void onRetry()}>重试</Button>
-            <Button onClick={() => { try { (window as any).chrome?.webview?.postMessage('openLogs'); } catch { /* browser */ } }}>打开日志</Button>
+            {/* Only the desktop host can open a log file; in a browser this posted a message nobody
+                received, so the button sat there doing nothing at the one moment it mattered. */}
+            {inHost && <Button onClick={() => hostPost('openLogs')}>打开日志</Button>}
           </div>
         </div>
       )}

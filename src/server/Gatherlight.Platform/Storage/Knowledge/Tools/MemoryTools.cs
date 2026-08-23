@@ -67,7 +67,12 @@ public sealed class RecallFactsTool : IGatherlightTool
     public string Name => "recall_facts";
 
     public string Description =>
-        "从跨会话知识库检索已存的事实(按主题/内容匹配;越常用、越近期被用到的排得越前,并会带出相关联的事实)。规划涉及曾经核验过的场所/价格/政策时先查这里,能省去重复调研。返回的 ref 可用 expand_fact 展开关联。";
+        // The last clause is not decoration. A capability the agent is never TOLD about stays unused while
+        // every check passes — the failure this very tool once had, when the fact store held 16 entries and
+        // had never been recalled because nothing mentioned it. Subject recall is new reach: the query may
+        // name what a fact is ABOUT rather than repeat its words, so saying so is what makes it reachable.
+        "从跨会话知识库检索已存的事实(按主题/内容匹配;越常用、越近期被用到的排得越前,并会带出相关联的事实)。规划涉及曾经核验过的场所/价格/政策时先查这里,能省去重复调研。返回的 ref 可用 expand_fact 展开关联。"
+        + "检索词也可以直接写这条事实『是关于什么的』,不必照搬原文用词 —— 例如问「证件」也能命中一条只写了护照到期的事实;这类命中会标 matched:\"subject\"。";
 
     public string InputSchema => ToolSchema.Of(b => b
         .Str("query", "检索词(匹配 topic 或 content)", required: true)
@@ -86,6 +91,8 @@ public sealed class RecallFactsTool : IGatherlightTool
         var arr = new JsonArray();
         var ranked = "fts";
 
+        var seenIds = new HashSet<long>();
+
         var ranking = await _index.RankAsync(query, kind, limit, ct);
         var hits = ranking.Hits;
         if (hits.Count > 0)
@@ -95,21 +102,61 @@ public sealed class RecallFactsTool : IGatherlightTool
             if (rows.Count > 0)
             {
                 ranked = "graph";
+                foreach (var (row, _) in rows.Take(limit)) seenIds.Add(row.Id);
                 foreach (var (row, graphRef) in rows.Take(limit))
                 {
                     var hit = byRef[graphRef];
                     var o = Row(row);
                     o["ref"] = graphRef;
-                    o["retrievability"] = Math.Round(hit.Retrievability, 3);
-                    o["linked"] = hit.Degree;
+                    if (hit.BySubject)
+                    {
+                        // NOT retrievability 0 and NOT linked 0. This fact was found because the query names
+                        // one of its subject handles, so neither number was measured — and "0.0" reads as
+                        // "fully decayed", which is a claim about the household's memory that nothing
+                        // checked. Same reason `ranked` exists: the route matters to what the answer means.
+                        o["matched"] = "subject";
+                    }
+                    else
+                    {
+                        o["retrievability"] = Math.Round(hit.Retrievability, 3);
+                        o["linked"] = hit.Degree;
+                    }
                     arr.Add(o);
                 }
             }
         }
 
-        if (arr.Count == 0)
+        // FTS TOPS THE PAGE UP; it is no longer only a fallback for an empty one.
+        //
+        // It used to run ONLY when the graph resolved nothing, and that quietly cost the 语义 CLI arm most
+        // of its value. Phrasings live in `knowledge.aka`, which is in the FTS table and in NO graph node —
+        // the graph indexes a fact's content, which never contained them. So the household paid a model
+        // call per fact for phrasings that were consulted only when the graph abstained ENTIRELY. Measured
+        // in e2e-p48: `zzfishpref harbour` returned the three lexically-matching facts and silently
+        // dropped the one whose stored phrasing was the query's only real match.
+        //
+        // Topping up rather than merging keeps the graph's answer authoritative: its rows come first and
+        // in its order, and these only fill slots the caller asked for and the graph did not use. So this
+        // cannot displace a ranked hit — the same property that makes the subject append safe — and when
+        // the graph already fills the page nothing changes at all. The cost is one local FTS query, which
+        // is microseconds beside a recall the judge can make take seconds.
+        if (arr.Count < limit)
         {
-            foreach (var row in await _store.RecallAsync(query, kind, limit)) arr.Add(Row(row));
+            // `seenIds` is passed rather than filtered on afterwards: this is a top-up, so "not these" is
+            // part of the request. It also keeps `hits` honest — RecallAsync increments every row it
+            // returns, and the two paths now overlap, so a fact found by both would count twice for one
+            // recall. Nothing reads that counter today, which makes it a latent wrong number rather than a
+            // visible one; see IKnowledgeStore.RecallAsync.
+            foreach (var row in await _store.RecallAsync(query, kind, limit, seenIds))
+            {
+                if (arr.Count >= limit) break;
+                if (!seenIds.Add(row.Id)) continue;
+                var o = Row(row);
+                // Only when the graph also answered. If FTS filled an empty page, `ranked` already says
+                // "fts" for the whole result and marking each row would be the same fact stated twice.
+                if (ranked == "graph") o["matched"] = "text";
+                arr.Add(o);
+            }
         }
 
         // `ranked` is not decoration: without it a graph result and a fallback result are
@@ -132,6 +179,13 @@ public sealed class RecallFactsTool : IGatherlightTool
         ["content"] = r.Content,
         ["source"] = r.Source,
         ["confidence"] = Math.Round(r.Confidence, 3),
+        // READ IT OR STOP WRITING IT. `hits` is incremented on every recall and was consumed by nothing —
+        // not the ranking (confidence then bm25), not this projection, not the client. A counter with no
+        // reader is the same "bought and never consulted" shape as the embedding at SemanticSeedK 0, just
+        // cheaper. Emitting it is the smaller of the two honest fixes, and it earns its place: a row
+        // matched by TEXT or by SUBJECT carries no retrievability, so this is the only signal it has for
+        // how much use a fact actually gets.
+        ["used"] = r.Hits,
         ["updatedAt"] = r.UpdatedAt,
     };
 }

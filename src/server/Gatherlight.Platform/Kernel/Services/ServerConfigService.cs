@@ -177,18 +177,42 @@ public sealed class MemoryConfig
     /// overrides, and a non-loopback value is ignored unless <c>GATHERLIGHT_OLLAMA_ALLOW_REMOTE=1</c>.</summary>
     public string? OllamaUrl { get; set; }
 
-    /// <summary>Which backend judges recalls and annotates writes: <c>cli</c> (the authenticated claude
-    /// CLI, the default) or <c>local</c> (a model on this machine, via Ollama).
-    /// <para>Here rather than in <c>app_config</c> for the same reason the embedder is: naming the backend
-    /// registers a provider and a named <c>ILlmClient</c>, which happens while the container is being
-    /// built. The MODEL stays live in cortex (<c>llm.model.memory</c>) — only the transport needs a
-    /// restart, and the console says so instead of pretending otherwise.</para></summary>
+    /// <summary>LEGACY — superseded by <see cref="JudgeSource"/>, and still READ so an install written
+    /// before 2026-08-21 keeps working: <c>cli</c> maps to <c>claude-cli</c>, <c>local</c> to <c>ollama</c>
+    /// (see <c>MemorySources.ResolveJudge</c>). Never written again — the first save through 记忆检索
+    /// clears it, so no install carries two answers to one question for long.</summary>
     public string? JudgeTransport { get; set; }
 
-    /// <summary>The local judge model when <see cref="JudgeTransport"/> is <c>local</c> — e.g.
-    /// <c>gemma3:4b</c>. It becomes the "memory" consumer's DEFAULT model rather than a fixed one, so
-    /// cortex's live override still works exactly as it does for the CLI judge.</summary>
+    /// <summary>Which backend serves 判断 — an <c>IMemorySource.Id</c>: <c>claude-cli</c> or <c>ollama</c>.
+    /// <para>Here rather than in <c>app_config</c> for the same reason the embedder is: naming the backend
+    /// registers a provider and a named <c>ILlmClient</c>, which happens while the container is being
+    /// built. The console reports a restart instead of pretending otherwise.</para></summary>
+    public string? JudgeSource { get; set; }
+
+    /// <summary>The model 判断 runs on — <c>haiku</c> on the CLI arm, an Ollama model id such as
+    /// <c>gemma3:4b</c> on the local one.
+    /// <para>It becomes the "memory" consumer's DEFAULT model rather than a fixed one. 记忆检索 writes
+    /// <c>llm.model.memory</c> to match whenever it binds this layer, because those were once two
+    /// independent writers of one value and the cortex one silently won — handing "haiku" to the Ollama
+    /// provider for a household that had set it once and switched backends later.</para></summary>
     public string? JudgeModel { get; set; }
+
+    /// <summary>Which backend serves 语义 — an <c>IMemorySource.Id</c>. Null with an
+    /// <see cref="EmbeddingModel"/> still present means the layer is OFF but its choice is remembered, so
+    /// turning it back on costs neither the download nor the reindex again.</summary>
+    public string? SemanticSource { get; set; }
+
+    /// <summary>Base URL of the OpenAI-compatible service serving 判断, when that is its backend —
+    /// llama.cpp's <c>llama-server</c>, LM Studio, vLLM, Jan.
+    /// <para>Per layer, not shared, because the two can legitimately be different servers. Loopback-checked
+    /// on read (<c>OpenAiCompatibleSource.ResolveLocal</c>): a remote address would send household facts off
+    /// this machine, and this value arrives from a text box.</para></summary>
+    public string? JudgeEndpoint { get; set; }
+
+    /// <summary>Base URL of the OpenAI-compatible service serving 语义, when that is its backend. Same
+    /// loopback rule as <see cref="JudgeEndpoint"/>, and it matters more here: an embedder sees every fact
+    /// on every write.</summary>
+    public string? SemanticEndpoint { get; set; }
 }
 
 public sealed class ServerConfigService
