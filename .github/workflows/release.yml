@@ -117,6 +117,18 @@ jobs:
             Set-Content $p $c -NoNewline -Encoding utf8
             $changed = "true"
             Write-Host "wrote version $final to $p (commit deferred until the gate + bundle pass)"
+
+            # -replace returns the string UNCHANGED when the pattern does not match. So a reformatted
+            # props file, or the property moving, would leave the OLD version in place while this step
+            # still printed "wrote version X", set changed=true, and later committed "chore: release vX"
+            # for a bump that never happened — the whole release then ships the previous version under
+            # the new tag. Read it back through the SAME reader the build uses; re-running the regex
+            # would only re-ask the question that just lied.
+            $wrote = node -e "import('./devtools/project.config.mjs').then(m=>process.stdout.write(String(m.default.version)))"
+            if ($wrote -ne $final) {
+              Write-Host "::error::bump did not take — $p still reads '$wrote', expected '$final'. The <VersionPrefix> pattern in this step no longer matches the file."
+              exit 1
+            }
           }
 
           "changed=$changed" >> $env:GITHUB_OUTPUT
@@ -171,12 +183,62 @@ jobs:
           GATHERLIGHT_VERSION: ${{ steps.version.outputs.version }}
         run: node devtools/scripts/build-production.mjs win-x64 --zip
 
+      # A release that ships the WRONG version number is silent, and in the field it is close to
+      # unfixable: the running app reports its own version from the ENTRY ASSEMBLY (`AppVersion.Semver`
+      # over `GetName().Version`) and the updater compares that against the release. Ship a bundle built
+      # at the OLD version under the NEW tag and every install decides it is already current — so the one
+      # mechanism that could deliver the fix is the mechanism that broke. That is the exact failure
+      # `src/Directory.Build.props` was created to end, recurring one layer out.
+      #
+      # Nothing downstream would have noticed: the tag comes from the INPUT, the release body from a
+      # file, and the artifact from whatever zip happened to be in publish/. So assert it here, at the
+      # only point where the intended version and the built bytes both exist.
+      - name: Verify the bundle carries the release version
+        shell: pwsh
+        run: |
+          $want = "${{ steps.version.outputs.version }}"
+          $base = $want -replace '[-+].*$', ''   # AppVersion reads major.minor.patch only
+          $bad = $false
+
+          # 1. what the updater DIFFS against.
+          $manifest = Get-Content "publish/Gatherlight/manifest.json" -Raw | ConvertFrom-Json
+          if ($manifest.version -ne $want) {
+            Write-Host "::error::manifest.json reports '$($manifest.version)', expected '$want'"
+            $bad = $true
+          }
+
+          # 2. what the running app REPORTS — the value that decides whether an install is ever offered
+          #    an update. Mirrors AppVersion.Resolve() rather than reading ProductVersion, because that
+          #    is a different field (InformationalVersion) and agreeing with it proves nothing about the
+          #    one the code actually reads.
+          $dll = "publish/Gatherlight/libs/Gatherlight.Host.dll"
+          $v = [Reflection.AssemblyName]::GetAssemblyName((Resolve-Path $dll)).Version
+          $semver = "$($v.Major).$($v.Minor).$([Math]::Max($v.Build,0))"
+          if ($semver -ne $base) {
+            Write-Host "::error::$dll reports '$semver', expected '$base' — the -p:Version override did not reach the host assembly"
+            $bad = $true
+          }
+
+          if ($bad) { exit 1 }
+          Write-Host "version $want agrees: Directory.Build.props, manifest.json and Gatherlight.Host.dll"
+
       - name: Locate artifact
         id: artifact
         shell: pwsh
         run: |
-          $zip = Get-ChildItem "publish\*.zip" | Select-Object -First 1
-          if (-not $zip) { Write-Host "::error::no bundle zip produced"; exit 1 }
+          # BY NAME, not first-match. `Select-Object -First 1` takes whichever zip sorts first, and every
+          # step after this one trusts it — so a re-run leaving an older zip behind, or a second RID being
+          # added later, would upload one bundle while the release named another. The pattern is
+          # build-production.mjs's own, and the product name is read rather than restated so the two
+          # cannot drift.
+          $name = node -e "import('./devtools/project.config.mjs').then(m=>process.stdout.write(String(m.default.name)))"
+          $expected = "$name-${{ steps.version.outputs.version }}-win-x64.zip"
+          $zip = Get-Item (Join-Path "publish" $expected) -ErrorAction SilentlyContinue
+          if (-not $zip) {
+            $present = (Get-ChildItem "publish\*.zip" -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', '
+            Write-Host "::error::expected bundle publish\$expected was not produced. Present: $(if ($present) { $present } else { '(none)' })"
+            exit 1
+          }
           Write-Host "artifact: $($zip.FullName) ($([math]::Round($zip.Length/1MB,1)) MB)"
           "path=$($zip.FullName)" >> $env:GITHUB_OUTPUT
 

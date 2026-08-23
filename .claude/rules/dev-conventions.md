@@ -778,6 +778,21 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 ## Packaging & auto-update
 
+- **The app version has ONE source: `src/Directory.Build.props` (`<VersionPrefix>`).** Every csproj under
+  `src/` inherits it and `devtools/project.config.mjs` reads it, so grepping a csproj for `<Version>` finds
+  nothing and **proves nothing** — the one csproj that does set it is `Gatherlight.Resources`, which tracks
+  the Playwright package rather than the app. Said here because the absence reads as a missing value: it
+  cost a false "the version isn't wired up" report right after 1.2.0 shipped correctly.
+  A wrong version is the rare defect that disables its own remedy — the running app reports itself from the
+  entry assembly (`AppVersion.Semver`) and the updater compares THAT against the release, so a bundle built
+  at the OLD version and tagged with the NEW one leaves every install deciding it is already current. The
+  version is never set by hand — `release.yml` owns the bump, the tag and the release; the checks below
+  exist so that ownership is verified rather than assumed. The release workflow
+  therefore (a) reads the bump back through `project.config.mjs` after writing it, because PowerShell's
+  `-replace` returns the string unchanged on no-match and would otherwise report success for a bump that
+  never happened, and (b) asserts `manifest.json` and the shipped `Gatherlight.Host.dll` both agree with the
+  version being tagged, before the commit/tag/release steps. Selecting the artifact by NAME rather than
+  first-match belongs to the same failure: every later step trusts whichever zip was picked.
 - `dev.mjs publish` (→ `devtools/scripts/build-production.mjs`) builds the **framework-dependent** host
   (~20 MB; the .NET 10 runtime is NOT bundled — the launcher installs it once at first run via the
   official MS installers, `src/launcher/dotnet_runtime.cpp`, so updates are ~20 MB not ~110 MB) **plus

@@ -27,6 +27,14 @@ const LIVE = [
   'docs/DEPLOYMENT.md', 'docs/release-notes/next.md',
 ];
 
+// Docs that are LIVE when they exist but are legitimately absent the rest of the time. A missing entry
+// from LIVE is normally a defect worth failing on — someone deleted a doc the project depends on — but
+// `next.md` is CONSUMED by a release (renamed to `<version>.md`), so it is missing on every freshly
+// released tree. Failing there would make the check red for a correct repo the day after every release,
+// and a check that cries wolf on the happy path is one everybody learns to skip. Checked when present,
+// silent when not.
+const OPTIONAL = new Set(['docs/release-notes/next.md']);
+
 // Identifiers a live doc may name even though they are not in the tree, keyed `doc::identifier`. PER-DOC
 // on purpose: `ClaudeCliRunner` is legitimate in ROADMAP.md, which records that it was DELETED, and would
 // be a rotted reference anywhere that presented it as current. A bare-identifier allowlist cannot tell
@@ -91,7 +99,10 @@ let failures = 0;
 let checked = 0;
 for (const rel of LIVE) {
   const file = path.join(repo, rel);
-  if (!fs.existsSync(file)) { console.log(`  ! listed but missing: ${rel}`); failures++; continue; }
+  if (!fs.existsSync(file)) {
+    if (OPTIONAL.has(rel)) continue;
+    console.log(`  ! listed but missing: ${rel}`); failures++; continue;
+  }
   const text = fs.readFileSync(file, 'utf8');
   const seen = new Set();
   for (const m of text.matchAll(IDENT)) {
