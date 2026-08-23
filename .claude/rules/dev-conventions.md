@@ -985,6 +985,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   clicking, mid-refetch, so it reported "the switch does not flip". **A fixed sleep does not fail
   honestly — it fails as a wrong description of the product**, which is worse than a red that says
   "timed out". Poll the condition, and re-issue the action each round.
+- **`host --dev` FAILS LOUDLY on a wedged WebView2 profile, and the symptom is why.** The flag points
+  WebView2 at a throwaway user-data folder and deletes it each run — with `force: true`, which SWALLOWS a
+  failed delete. `msedgewebview2.exe` children OUTLIVE the host and keep handles on that folder, so the
+  delete half-succeeds, WebView2 fails to initialise, and **the host exits ~30 s after startup with
+  nothing in the log** — it completes startup migration, serves, then vanishes. That reads as "the app
+  crashes", which is the wrong investigation entirely. The plain `dev.mjs host` (what ships) is unaffected
+  and stays up; only the debug path breaks, so a release is not gated on it. Now the removal is verified
+  and a failure says which process to kill.
 - **`dev.mjs check-doc-refs` — every code identifier a LIVE doc names must exist.** Docs rot silently: a
   class is renamed, the prose pointing at it is not, and the next session follows the reference, finds
   nothing, and re-derives what was already written down. A WRONG doc costs more than a missing one — a

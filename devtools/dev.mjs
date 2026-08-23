@@ -207,7 +207,18 @@ switch (cmd) {
       // Fresh user-data folder each --dev run → WebView2 spawns its OWN browser process (the debug
       // port applies only to a newly-created process, never a shared/pre-existing one).
       const udf = path.join(repo, 'devtools', '_webview2-dev');
+      // VERIFY the removal instead of forcing and hoping. `force: true` swallows failures, and WebView2
+      // spawns msedgewebview2.exe children that OUTLIVE the host and keep handles on this profile — so a
+      // delete can half-succeed and leave a corrupt one. WebView2 then fails to initialise and the host
+      // exits ~30 s after startup with nothing in the log, which reads as "the app crashes" rather than
+      // "the debug profile is wedged". Cost an hour to find; the fix is to say so.
       fs.rmSync(udf, { recursive: true, force: true });
+      if (fs.existsSync(udf)) {
+        console.error(`host --dev: could not clear ${udf} — a msedgewebview2.exe from an earlier --dev run`
+          + ' still holds it. Close the host window (or `taskkill /IM msedgewebview2.exe /F`) and retry;'
+          + ' starting with a half-deleted profile makes the host exit silently a few seconds in.');
+        process.exit(1);
+      }
       env.GATHERLIGHT_WEBVIEW_USERDATA = udf;
       fs.writeFileSync(path.join(repo, 'devtools', '_cdp-port'), String(port));
       console.log(`host --dev: WebView2 CDP on ${port} (devtools/_cdp-port)`);
