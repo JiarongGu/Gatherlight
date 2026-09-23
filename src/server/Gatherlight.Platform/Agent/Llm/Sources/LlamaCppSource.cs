@@ -281,7 +281,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         MemorySourceContext ctx, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<ModelOption>>(ModelsOnDisk(ctx.Settings)
             .Select(id => new ModelOption(
-                id, id, Installed: true,
+                id, DisplayName(id), Installed: true,
                 // The measurement travels with the MODEL, from the catalogue that pinned it — not compared
                 // against one hardcoded id here, which would silently stop reporting the moment a second
                 // measured model was added.
@@ -290,6 +290,17 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                 // in, rather than a sentence invented about a file nobody measured.
                 Note: GgufCatalog.Find(id)?.Note))
             .ToList());
+
+    /// <summary>What the picker SHOWS for a model — the id stays the value it binds.
+    ///
+    /// <para>A catalogued model shows the catalogue's name, which already says its kind (「LAMAR 600M(Q5 · 判断 ·
+    /// 重排)」); it used to show the raw file id, so on 判断 a reranker and a chat model read alike although
+    /// binding one moves only the checking. A GGUF the household dropped in keeps its raw id — we know nothing
+    /// else about it — with its kind marked on 判断, the one layer that mixes two kinds; 语义 lists embedders
+    /// only, where a mark would say nothing.</para></summary>
+    private string DisplayName(string id) =>
+        GgufCatalog.Find(id)?.Name
+        ?? (_layer == MemoryLayers.Judge ? $"{id}({(IsReranker(id) ? "重排" : "对话")})" : id);
 
     /// <summary>Judge side: refuse an embedder by NAME before any call. Cheap and certain — we downloaded
     /// these files, so unlike the generic arm we know what they are without asking the server. Then prove the

@@ -92,6 +92,9 @@ fs.writeFileSync(path.join(resources, 'gguf', `${JUDGE_MODEL}.gguf`), '');
 fs.writeFileSync(path.join(resources, 'gguf', `${EMBED_MODEL}.gguf`), '');
 for (const m of [RERANK_MODEL, LEXICAL_RERANK, BACKWARDS_RERANK, BROKEN_RERANK, SHORT_RERANK])
   fs.writeFileSync(path.join(resources, 'gguf', `${m}.gguf`), '');
+// A CATALOGUED reranker too, by its pinned id, so the picker's name for it can be read (case 5). Never bound.
+const CATALOGUED_RERANK = 'LAMAR-600m.Q5_K_M';
+fs.writeFileSync(path.join(resources, 'gguf', `${CATALOGUED_RERANK}.gguf`), '');
 
 makeTestData(rerankDir);
 const rerankResources = path.join(rerankDir, 'state', 'resources');
@@ -408,6 +411,18 @@ try {
   const judgeManaged = String(groupOf(rrLayer, 'managed').description ?? '');
   ok('…and so does the 本机模型 group sentence on 判断: a reranker\'s tagging goes to Claude',
     /重排/.test(judgeManaged) && /发给 Claude/.test(judgeManaged), judgeManaged);
+  // What the 判断 picker SHOWS for each model: it listed raw file ids, so a reranker and a chat model read
+  // alike although binding one moves only the checking. A catalogued model shows the catalogue's name (which
+  // says 重排); a household-dropped one keeps its raw id with its kind marked.
+  const llamaModels = (layer) => (layer.groups ?? []).flatMap((g) => g.sources ?? [])
+    .find((x) => x.id === 'llama-cpp')?.models ?? [];
+  const shownAs = (id) => llamaModels(rrLayer).find((m) => m.id === id)?.name;
+  ok('the 判断 picker names a catalogued reranker by its catalogue name, which says 重排',
+    /^LAMAR 600M/.test(String(shownAs(CATALOGUED_RERANK))) && /重排/.test(String(shownAs(CATALOGUED_RERANK))),
+    JSON.stringify(llamaModels(rrLayer).map((m) => [m.id, m.name])));
+  ok("…and marks a household-dropped model's kind beside its raw id",
+    shownAs(RERANK_MODEL) === `${RERANK_MODEL}(重排)` && shownAs(JUDGE_MODEL) === `${JUDGE_MODEL}(对话)`,
+    JSON.stringify(llamaModels(rrLayer).map((m) => [m.id, m.name])));
   // Control: on 语义 no member sends anything anywhere, so the group's no-quota claim stays — and stays true.
   const semManaged = String(groupOf(layerOf(await c2.getJson('/api/manage/memory'), 'semantic'), 'managed').description ?? '');
   ok('(control) on 语义 the same group still says it spends no quota — true of every member there',
