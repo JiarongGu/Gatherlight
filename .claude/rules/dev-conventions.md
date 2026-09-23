@@ -726,6 +726,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   fake router naming two models receives both warm calls. It asserts the two are DIFFERENT requests —
   `/v1/embeddings` for an embedder, `/v1/chat/completions` otherwise — because `embeddings = true` restricts
   that child to one API and the wrong warm call fails against a real llama-server.
+  **It warms OUR models, not everything the router lists**. The real router also lists the machine's
+  llama.cpp/HF cache, and warming those loaded unrelated models and evicted ours. The filter is
+  `InstalledGgufIds`, the same as the restart re-warm. `p51` lists an unplanted model and asserts it is not
+  warmed.
   **The first version of that test was vacuous and this is the useful part**: it asserted the endpoint's own
   `warmed` list, which still came back complete with the warm call deleted, because the endpoint builds it
   from the models it probed. A field reporting that work happened is not evidence the work happened. It now

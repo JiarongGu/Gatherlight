@@ -976,9 +976,14 @@ try {
       if (req.url === '/v1/models') {
         asked++;
         res.writeHead(200, { 'content-type': 'application/json' });
-        // The router REPORTS which models it holds, and the start endpoint warms exactly those. One
-        // embedder and one chat model, because the two take different warm calls.
-        res.end(JSON.stringify({ data: [{ id: 'zzwarm-embed-model' }, { id: 'zzwarm-chat-model' }, { id: 'zzwarm-rerank-model' }] }));
+        // The router REPORTS which models it holds, and the start endpoint warms exactly those THAT
+        // WE PROVISIONED. zzcache-chat-model is not planted on disk below — it stands in for the machine's
+        // own llama.cpp/Hugging Face cache, which the real router lists beside ours and which the start
+        // button must not load.
+        res.end(JSON.stringify({ data: [
+          { id: 'zzwarm-embed-model' }, { id: 'zzwarm-chat-model' }, { id: 'zzwarm-rerank-model' },
+          { id: 'zzcache-chat-model' },
+        ] }));
         return;
       }
       let body = '';
@@ -990,6 +995,12 @@ try {
       });
     });
     await new Promise((r) => fake.listen(Number(u.port), '127.0.0.1', r));
+    // OURS are files in {data}/state/resources/gguf; the router also lists the machine's llama.cpp/HF cache
+    // (zzcache-chat-model here), which the start button must NOT load.
+    const warmGguf = path.join(dir, 'state', 'resources', 'gguf');
+    fs.mkdirSync(warmGguf, { recursive: true });
+    for (const m of ['zzwarm-embed-model', 'zzwarm-chat-model', 'zzwarm-rerank-model'])
+      fs.writeFileSync(path.join(warmGguf, `${m}.gguf`), '');
     try {
       const started = await post('/api/manage/models/llama/start');
       ok('THE POINT: a port that already answers is adopted, with no binary installed at all',
@@ -1004,15 +1015,24 @@ try {
       // would hand back a runtime that stalls on the first real recall, which is the very cost this
       // runtime was chosen to remove. Nothing checked that warming happened.
       //
-      // Reachable without a spawn after all: the start endpoint warms the models the ROUTER reports, so
-      // a fake router naming two models gets both warm calls sent to it.
+      // Reachable without a spawn after all: the start endpoint warms the models the ROUTER reports AND
+      // WE PROVISIONED, so a fake router naming three of ours gets three warm calls sent to it.
       // COUNTED AT THE FAKE SERVER, not read from the response. The first version of this asserted
       // `started.body.warmed.length === 2` — and it PASSED with the warm call deleted, because the
       // endpoint still built that list from the models it had probed. A field reporting that work
       // happened is not evidence the work happened; that is this whole session in one assertion.
-      ok('every model the router reports is warmed, not just started',
+      ok('every model of OURS the router reports is warmed, not just started',
         hits.length === 3 && (started.body?.warmed ?? []).length === 3,
         JSON.stringify({ requests: hits.map((h) => h.path), reported: started.body?.warmed }));
+
+      // THE POINT of this case: the real router also lists the machine's own llama.cpp/Hugging Face cache
+      // (four unrelated chat models, seen on a real restart) beside ours, and loading those is not ours to
+      // do — under --models-max it would evict the model this app actually needs. Same rule as the restart
+      // re-warm (LlamaServerRuntime.EnsureServesAsync), applied to this second caller.
+      ok('THE POINT: a model the router lists but we did not provision is NOT warmed',
+        !hits.some((h) => h.body.includes('zzcache-chat-model'))
+          && !(started.body?.warmed ?? []).includes('zzcache-chat-model'),
+        JSON.stringify({ requests: hits.map((h) => `${h.path} ${h.body.slice(0, 60)}`), reported: started.body?.warmed }));
 
       // The two warm calls are NOT the same request, and sending an embedder a chat completion (or the
       // reverse) fails against a real llama-server — `embeddings = true` restricts that child to one API.
@@ -1030,6 +1050,10 @@ try {
         JSON.stringify(rerankHit));
     } finally {
       await new Promise((r) => fake.close(r));
+      // Leave the directory as later cases expect it — the next block plants its own files under the
+      // same path and does not expect these three still sitting there.
+      for (const m of ['zzwarm-embed-model', 'zzwarm-chat-model', 'zzwarm-rerank-model'])
+        fs.rmSync(path.join(warmGguf, `${m}.gguf`), { force: true });
     }
   }
 

@@ -339,7 +339,13 @@ public sealed class ModelsController : ControllerBase
     /// <summary>Start the router, and WARM the models — the second half is not optional. `--models-max` is
     /// a cap, not a preload: llama-server loads a model on its first request, measured at 17.3 s for a 1B
     /// q4. Returning as soon as the router answers would hand the household a runtime that stalls on its
-    /// first real recall, which is the cost this runtime was chosen to remove.</summary>
+    /// first real recall, which is the cost this runtime was chosen to remove.
+    ///
+    /// <para>Warms OUR models only — the router also lists whatever sits in the machine's llama.cpp/Hugging
+    /// Face cache (four unrelated chat models, seen on a real machine), and loading those into the GPU is
+    /// not ours to do: under `--models-max` it evicts the ones this app needs. Same rule the restart
+    /// re-warm already applies (<see cref="ILlamaServerRuntime.EnsureServesAsync"/>), here for the other
+    /// caller.</para></summary>
     [HttpPost("api/manage/models/llama/start")]
     public async Task<IActionResult> LlamaStart()
     {
@@ -350,8 +356,13 @@ public sealed class ModelsController : ControllerBase
             });
 
         var state = await _llama.ProbeAsync(refresh: true);
+        // Warm OUR models only — the files 资源 provisioned. The real router also lists the machine's llama.cpp /
+        // Hugging Face cache (four unrelated chat models on one real machine); loading those is not ours to do, and
+        // under --models-max it evicts the ones this app needs. Same rule as the restart re-warm, one writer:
+        // ResourceProvisioner.InstalledGgufIds. Proof: e2e-p51.
+        var ours = Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath);
         var warmed = new List<string>();
-        foreach (var m in state.Models)
+        foreach (var m in state.Models.Where(m => ours.Contains(m, StringComparer.OrdinalIgnoreCase)))
         {
             // Same single writer the preset generator uses — a second copy of this test here is how the
             // preset and the warm-up would come to disagree about what a model is.
