@@ -108,20 +108,25 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
 /// <para><b>UPSTREAM SHIPPED PART OF THIS, AND IT DOES NOT REPLACE THE CLASS OUTRIGHT.</b> Lyntai
 /// <c>docs/task-archive.md</c> Part 276 (decision D170) added <c>LlmVerificationOptions.ContentChars</c>
 /// (default 0), shipping in the release AFTER 3.2.0 — the one this app currently consumes. It renders the
-/// candidate's content ALONE, not <c>"topic — content"</c>: D170 rejected the combined shape because it
-/// doubles tokens when the headline is engine-derived (which ours is — the fact index writes the topic as
-/// the headline, so <c>ContentChars</c> and this class's <c>both</c> mode are paying for the topic twice).
-/// So adopting it is a MEASURED decision, not a mechanical swap — <c>dev.mjs judge-bench</c> compares this
-/// class's <c>both</c> and <c>content</c> modes: if <c>content</c> scores as well, set
-/// <c>ContentChars = MaxChars</c> where the LLM verifier is built and delete this class; if the topic prefix
-/// earns its tokens, keep this class and leave <c>ContentChars</c> at 0 — with it &gt; 0, upstream reads
-/// <c>Content</c> itself and ignores this class's rewritten <c>Headline</c>, which would make this class
-/// dead code running for nothing.</para>
+/// candidate's content ALONE, not <c>"topic — content"</c>: D170 rejected the combined shape because, for an
+/// engine-DERIVED headline (the first <c>HeadlineChars</c> of the content), it repeats the content's opening
+/// and so doubles the tokens. Ours is AUTHORED — <c>FactIndex.IndexAsync</c> passes <c>Headline: topic</c> —
+/// which is the very case D170 cites as the reason for adding <c>ContentChars</c> at all ("an application
+/// that authors headlines hands the judge a label"). So <c>both</c> adds a label rather than a copy — though
+/// household facts often restate their own topic in the content, so it may still pay for it twice. Whether
+/// the topic earns its tokens is what judge-bench measures (<c>both</c> vs <c>content</c>), and that is the
+/// MEASURED decision this class exists to let happen — <c>dev.mjs judge-bench</c> compares this class's
+/// <c>both</c> and <c>content</c> modes: if <c>content</c> scores as well, set <c>ContentChars = MaxChars</c>
+/// where the LLM verifier is built and delete this class; if the topic earns its tokens, keep this class and
+/// leave <c>ContentChars</c> at 0 — with it &gt; 0, upstream reads <c>Content</c> itself and ignores this
+/// class's rewritten <c>Headline</c>, which would make this class dead code running for nothing.</para>
 ///
-/// <para><b>Cost.</b> The judge is shown several times the recall's limit — Lyntai's
-/// <c>VerificationDepth</c> defaults to 4×, and the fact index asks for up to 3× the page — so the prompt
-/// grows with depth × line length; the bench's latency column is where that trade-off is priced, not this
-/// class.</para>
+/// <para><b>Cost.</b> <c>FactIndex.RankAsync</c> asks the engine for <c>min(3×limit, 100)</c> candidates when
+/// no kind is given, but a flat 100 whenever a kind IS given (a kind narrows AFTER the ranking, so a thin
+/// kind needs a far wider one to fill its own page). Lyntai's <c>VerificationDepth</c> then shows the judge up
+/// to 4× THAT many — so at the default limit of 8, the judge sees up to 96 candidates on a kind-less recall
+/// and up to 400 on one naming a kind. The prompt grows with that depth × line length; the bench's latency
+/// column is where the trade-off is priced, not this class.</para>
 ///
 /// <para>Topics stay the STORED headline, so <c>expand_fact</c>'s neighbour list is unchanged; only what the judge
 /// reads changes.</para></summary>
@@ -138,8 +143,9 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 
     /// <summary>What the judge is shown, read ONCE at startup from the measurement knob
     /// <c>GATHERLIGHT_JUDGE_INPUT</c>: <c>both</c> (default, <c>"topic — content"</c>), <c>content</c> (content
-    /// alone — how Lyntai's upcoming <c>ContentChars</c> renders it) or <c>headline</c> (topics only, the old
-    /// behaviour). Anything else means <c>both</c>.</summary>
+    /// alone — identical to how Lyntai's upcoming <c>ContentChars</c> renders it below <see cref="MaxChars"/>;
+    /// above it upstream cuts at a word boundary where this class cuts hard) or <c>headline</c> (topics only,
+    /// the old behaviour). Anything else means <c>both</c>.</summary>
     public static readonly string Mode = (Environment.GetEnvironmentVariable("GATHERLIGHT_JUDGE_INPUT") ?? "").Trim().ToLowerInvariant() switch
     {
         "headline" => "headline",
