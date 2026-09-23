@@ -1161,6 +1161,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   both are legitimate: files in the DATA folder (user data, not the tree) and files in a SIBLING PROJECT
   a note compares against. 318 references across 12 live docs; confirmed non-vacuous by planting a
   renamed class, a dead link and a dead path.
+  **A qualified `Type.Member` is checked against the TYPE, and against its code only.** The symbol pass used
+  to match the last segment anywhere in the corpus, comments included — so a method renamed on 2026-09-23
+  stayed "resolved" in this file for as long as one e2e suite's COMMENT still carried its old name: the doc and
+  the stale comment kept each other alive. When the tree declares the type in C#, the member must now appear in
+  a declaring file with comments and string literals blanked out (a small tokenizer, because a regex cannot
+  tell `//` in a URL from a comment). A type the tree does not declare — Lyntai's, the BCL's — still falls back
+  to the last segment, deliberately: the app uses Lyntai types it never names, and demanding the type there
+  flagged real API. The known cost is that a MISSPELLED in-tree type takes that fallback too. Confirmed against
+  the original case (a doc naming the old member while a planted comment carries it: the old checker passes, this
+  one fails) with a misspelled member and a live one as controls.
 - **`dev.mjs e2e all` NAMES what it did not cover.** `desktop-e2e` drives the real UI over CDP and cannot
   join the fleet — it needs `dev.mjs host --dev` and a WebView2 window — so the fleet's summary says so
   where "all green" is read. Being outside the fleet is exactly why it rotted once: it asserted control

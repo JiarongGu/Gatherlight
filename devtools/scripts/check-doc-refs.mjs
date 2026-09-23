@@ -44,6 +44,9 @@ const OPTIONAL = new Set(['docs/release-notes/next.md']);
 const ALLOWED = new Map([
   ['.claude/rules/dev-conventions.md::pN.mjs',
     'a filename PATTERN, not a file — the suites are p1.mjs, p2.mjs, …'],
+  ['.claude/rules/dev-conventions.md::GitCliService.GitExe',
+    'the rotted reference this check was built after, quoted as the example — the same sentence names the '
+    + 'real member, LocateGit'],
   ['docs/DEPLOYMENT.md::IncludeNativeLibrariesForSelfExtract',
     'an MSBuild property quoted while explaining why the shipped host is framework-dependent and does '
     + 'NOT use it'],
@@ -74,6 +77,9 @@ const CODE_EXT = new Set(['.cs', '.mjs', '.ts', '.tsx', '.json', '.js', '.cmd', 
 const SKIP_DIR = new Set(['bin', 'obj', 'node_modules', '.git']);
 
 const corpus = [];
+// Every C# source, kept apart so a qualified `Type.Member` can be checked against the files that DECLARE
+// `Type` — see pass 1.
+const csFiles = [];
 (function walk(dir) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     if (e.isDirectory()) {
@@ -82,11 +88,98 @@ const corpus = [];
       walk(path.join(dir, e.name));
     } else if (CODE_EXT.has(path.extname(e.name))) {
       corpus.push(e.name);
-      try { corpus.push(fs.readFileSync(path.join(dir, e.name), 'utf8')); } catch { /* unreadable */ }
+      try {
+        const text = fs.readFileSync(path.join(dir, e.name), 'utf8');
+        corpus.push(text);
+        if (path.extname(e.name) === '.cs') csFiles.push(text);
+      } catch { /* unreadable */ }
     }
   }
 })(repo);
 const code = corpus.join('\n');
+
+// C# with its comments and string literals blanked out, leaving only what the compiler reads as code.
+//
+// WHY. A name that survives only in a COMMENT is exactly the rotted reference this check exists to find —
+// and the whole-corpus substring match below cannot see the difference. It let a ResourceProvisioner method
+// through after it was renamed to `GgufKind` (a yes/no embedder test, retired when a third GGUF kind
+// arrived), because an e2e suite's comment still carried the old name: the doc and the comment kept each
+// other alive. (Not spelled out here on purpose — this file is in the corpus too.)
+//
+// A tokenizer rather than a regex, because a regex cannot tell `//` in a URL string from a comment, and
+// guessing wrong in the permissive direction is the very failure being fixed. Handled: `//` and `/* */`
+// comments; "regular", @"verbatim" and """raw""" strings (with any `$` prefix); 'c'har literals. A regular
+// string or char literal also ends at a newline, so a misread interpolation hole costs one line at most.
+function csCode(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    const next = src[i + 1];
+    if (c === '/' && next === '/') {
+      while (i < n && src[i] !== '\n') i++;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      const end = src.indexOf('*/', i + 2);
+      i = end < 0 ? n : end + 2;
+      out += ' ';
+      continue;
+    }
+    if (c === '"') {
+      // Raw: three or more quotes open it, and the same run closes it.
+      let q = 0;
+      while (src[i + q] === '"') q++;
+      if (q >= 3) {
+        const close = '"'.repeat(q);
+        const end = src.indexOf(close, i + q);
+        i = end < 0 ? n : end + q;
+        out += ' ';
+        continue;
+      }
+      // Verbatim when an `@` sits in the prefix just before the quote (`@"`, `$@"`, `@$"`).
+      const verbatim = src[i - 1] === '@' || (src[i - 1] === '$' && src[i - 2] === '@');
+      i++;
+      while (i < n) {
+        if (verbatim) {
+          if (src[i] === '"' && src[i + 1] === '"') { i += 2; continue; }
+          if (src[i] === '"') { i++; break; }
+        } else {
+          if (src[i] === '\\') { i += 2; continue; }
+          if (src[i] === '"' || src[i] === '\n') { i++; break; }
+        }
+        i++;
+      }
+      out += ' ';
+      continue;
+    }
+    if (c === "'") {
+      i++;
+      while (i < n) {
+        if (src[i] === '\\') { i += 2; continue; }
+        if (src[i] === "'" || src[i] === '\n') { i++; break; }
+        i++;
+      }
+      out += ' ';
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+// Type name → the CODE (comments and strings removed) of every C# file that declares it. Built lazily, one
+// type at a time, because only the handful of types the docs qualify are ever asked about.
+const declared = new Map();
+function declaringCode(type) {
+  if (!declared.has(type)) {
+    const decl = new RegExp(`\\b(?:class|record|struct|interface|enum)\\s+${type}\\b`);
+    declared.set(type, csFiles.filter((f) => decl.test(f)).map(csCode).filter((c) => decl.test(c)));
+  }
+  return declared.get(type);
+}
 
 // Backticked, PascalCase-ish or a source filename. Deliberately narrow: prose words in backticks
 // (`plans/`, `--limit=3`, `aka`) are not claims that a symbol exists, and flagging them would bury the
@@ -111,8 +204,30 @@ for (const rel of LIVE) {
     seen.add(id);
     checked++;
     if (ALLOWED.has(`${rel}::${id}`)) continue;
-    // A dotted name is checked on its LAST segment: `Foo.Bar` is satisfied by a member named Bar, because
-    // matching the whole dotted path would fail on every method the docs qualify by its class.
+    // A QUALIFIED `Type.Member` whose Type this tree declares in C# is checked against THAT type: the
+    // member must appear as code — not in a comment, not in a string — in a file declaring the type.
+    // Matching only the last segment anywhere in the corpus (the fallback below) passed a renamed
+    // ResourceProvisioner member because a stale comment in an e2e suite still said it, and would equally pass
+    // a member moved to another class.
+    const parts = id.split('.');
+    if (parts.length === 2 && /^[A-Z]/.test(parts[1])) {
+      const [type, member] = parts;
+      const decls = declaringCode(type);
+      if (decls.length > 0) {
+        if (!decls.some((c) => new RegExp(`\\b${member}\\b`).test(c))) {
+          console.log(`  ✗ ${rel}: \`${id}\` — ${type} is declared in the tree, but has no member ${member} `
+            + '(outside comments and strings)');
+          failures++;
+        }
+        continue;
+      }
+    }
+    // Everything else — a type this tree does not declare (Lyntai's, the BCL's), a namespace, a longer
+    // path — is checked on its LAST segment: `Foo.Bar` is satisfied by a name Bar anywhere in the code,
+    // because matching the whole dotted path would fail on every method the docs qualify by its class. The
+    // type half is deliberately NOT required here: the app uses Lyntai types it never names
+    // (`AgentSessionOptions` is reached through an options lambda), so demanding it would flag the
+    // dependency's real API — the known cost is that a MISSPELLED in-tree type falls through to this path.
     const needle = id.includes('.') && !id.endsWith('.mjs') && !id.endsWith('.cs')
       ? id.split('.').pop() : id;
     if (!code.includes(needle)) {
