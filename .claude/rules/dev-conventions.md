@@ -246,8 +246,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   diagnosis rewrites the failed-turn messages other suites assert on. **It also emits what claude 2.1.28x
   really sends** — `system/thinking_tokens` progress events carrying the session id — because Lyntai 3.2's
   reader turns each into a `SessionStarted`, and without `AgentRunner`'s once-per-run guard every tick was a
-  stored `system` row (`e2e-p43` counts them; Lyntai Part 272 is the upstream fix, after which the guard
-  goes). A stub that only speaks the stream shape of a year ago keeps every suite green against a CLI
+  stored `system` row (`e2e-p43` counts them). Fixed upstream as Lyntai `docs/task-archive.md` Part 275 — one
+  SessionStarted per session id — shipping in the release after 3.2.0: delete the guard on that bump. A stub that only speaks the stream shape of a year ago keeps every suite green against a CLI
   nobody runs any more.
 
 ## Security / remote access (`Platform/Hosting/Security`)

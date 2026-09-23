@@ -60,8 +60,9 @@ public sealed class AgentRunner : IAgentRunner
             // `system` event carrying a session_id, and claude 2.1.28x emits `system/thinking_tokens`
             // progress events that carry one — so a thinking turn produced a stored, invisible "system"
             // row per progress tick. The session id cannot change inside a run, so the first one is the
-            // whole fact. WORKAROUND FOR A LYNTAI GAP (filed in its TASKS.md): once the reader yields
-            // SessionStarted only for `system/init`, delete this guard — nothing else here depends on it.
+            // whole fact. WORKAROUND FOR A LYNTAI GAP, FIXED UPSTREAM (Lyntai docs/task-archive.md Part 275:
+            // the reader now yields one SessionStarted per session id) and shipping in the release after
+            // 3.2.0 — delete this guard on that bump; nothing else here depends on it.
             var sessionAnnounced = false;
             result = await _session.RunAsync(options, onEvent: e =>
             {
