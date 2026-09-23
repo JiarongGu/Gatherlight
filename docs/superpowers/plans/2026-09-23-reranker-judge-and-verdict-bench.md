@@ -498,11 +498,15 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
         // MEASUREMENT KNOBS — read by `dev.mjs judge-bench` (docs/judge-bench.md), never settings. Each one
         // that is active says so on the console, because the bench refuses to report an arm whose knob did
         // not take: two arms that silently ran the same configuration would read as "no difference".
-        var fuseVerdicts = string.Equals(
-            Environment.GetEnvironmentVariable("GATHERLIGHT_VERDICT_COMBINATION"), "fuse", StringComparison.OrdinalIgnoreCase);
-        if (fuseVerdicts) Console.WriteLine("[measurement] verdict combination = Fuse (GATHERLIGHT_VERDICT_COMBINATION)");
-        if (Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode != "both")
-            Console.WriteLine($"[measurement] judge input = {Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode} (GATHERLIGHT_JUDGE_INPUT)");
+        // Announced whenever SET, with the raw value beside what it resolved to: a typo ("contents") silently
+        // resolving to the default is exactly the "two arms ran the same configuration" failure.
+        var combinationRaw = Environment.GetEnvironmentVariable("GATHERLIGHT_VERDICT_COMBINATION");
+        var fuseVerdicts = string.Equals(combinationRaw?.Trim(), "fuse", StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(combinationRaw))
+            Console.WriteLine($"[measurement] verdict combination = {(fuseVerdicts ? "Fuse" : "Partition")} (GATHERLIGHT_VERDICT_COMBINATION={combinationRaw})");
+        var judgeInputRaw = Environment.GetEnvironmentVariable("GATHERLIGHT_JUDGE_INPUT");
+        if (!string.IsNullOrWhiteSpace(judgeInputRaw))
+            Console.WriteLine($"[measurement] judge input = {Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode} (GATHERLIGHT_JUDGE_INPUT={judgeInputRaw})");
 ```
 
 - [ ] **Step 2: Apply the combination** — replace `.AddMemoryEngine("facts", e => e.UseGraph());` with:
@@ -525,7 +529,9 @@ const d = process.cwd() + '/devtools/_knob-check'; makeTestData(d);
 const s = startServer({ dataDir: d, port: 5415, env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse', GATHERLIGHT_JUDGE_INPUT: 'headline' } });
 try { await waitHealthy(s.base); console.log(s.log().split('\n').filter((l) => l.includes('[measurement]')).join('\n')); } finally { s.stop(); }"
 ```
-Expected: both `[measurement] …` lines printed.
+Expected: `[measurement] verdict combination = Fuse (GATHERLIGHT_VERDICT_COMBINATION=fuse)` and
+`[measurement] judge input = headline (GATHERLIGHT_JUDGE_INPUT=headline)`. Repeat with `GATHERLIGHT_JUDGE_INPUT: 'contents'`
+(a typo) → it prints `judge input = both (GATHERLIGHT_JUDGE_INPUT=contents)`, which is how a typo becomes visible.
 
 - [ ] **Step 4: Commit**
 
@@ -586,13 +592,13 @@ const facts = Array.from({ length: N }, (_, i) => all[Math.floor(i * stride)]);
 
 const ARMS = {
   formula: { label: '公式 only (判断 off)', enrichment: false, env: {} },
-  topic: { label: 'Claude judge · topic only', enrichment: true,
-    env: { GATHERLIGHT_JUDGE_INPUT: 'headline' }, knob: /judge input = headline/ },
-  content: { label: 'Claude judge · topic — content · partition', enrichment: true, env: {} },
+  topic: { label: 'Claude judge · topic only', enrichment: true, judgeInput: 'headline',
+    env: { GATHERLIGHT_JUDGE_INPUT: 'headline' }, knob: /judge input = headline \(/ },
+  content: { label: 'Claude judge · topic — content · partition', enrichment: true, judgeInput: 'both', env: {} },
   // How Lyntai's upcoming LlmVerificationOptions.ContentChars renders a candidate: content ALONE (Part 276 / D170).
-  contentonly: { label: 'Claude judge · content only · partition', enrichment: true,
-    env: { GATHERLIGHT_JUDGE_INPUT: 'content' }, knob: /judge input = content/ },
-  fuse: { label: 'Claude judge · topic — content · fuse', enrichment: true,
+  contentonly: { label: 'Claude judge · content only · partition', enrichment: true, judgeInput: 'content',
+    env: { GATHERLIGHT_JUDGE_INPUT: 'content' }, knob: /judge input = content \(/ },
+  fuse: { label: 'Claude judge · topic — content · fuse', enrichment: true, judgeInput: 'both',
     env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/ },
 };
 const arms = arg('arms', 'formula,topic,content,contentonly,fuse').split(',').filter(Boolean).map((k) => {
@@ -726,6 +732,19 @@ try {
         + String(s.ms).padEnd(7) + String(s.judged).padEnd(8) + delta);
     }
   }
+  // WHAT THE JUDGE IS SHOWN PER RECALL — latency alone cannot price it (on the CLI arm a 9–17 s spawn dominates
+  // and the cost is quota). Estimated from the fixture: the judge sees min(4 × min(3 × limit, 100), corpus)
+  // candidates (Lyntai's 4× VerificationDepth over FactIndex's over-ask). On a large corpus a KIND-filtered recall
+  // asks for 100 and would show up to 400 — this fixture cannot exercise that, and the doc must say so.
+  const candidates = Math.min(4 * Math.min(3 * LIMIT, 100), FIXTURE.facts.length);
+  const lineOf = (f, mode) => Math.min(401,
+    mode === 'headline' ? f.topic.length : mode === 'content' ? f.content.length : `${f.topic} — ${f.content}`.length);
+  console.log(`\njudge input per recall (estimated; ${candidates} candidates each):`);
+  for (const arm of arms.filter((a) => a.judgeInput)) {
+    const avg = FIXTURE.facts.reduce((a, f) => a + lineOf(f, arm.judgeInput), 0) / FIXTURE.facts.length;
+    report.judgeChars = { ...(report.judgeChars ?? {}), [arm.key]: Math.round(avg * candidates) };
+    console.log(`  ${arm.label.padEnd(44)} ~${Math.round(avg * candidates)} chars (${Math.round(avg)} per candidate)`);
+  }
   fs.writeFileSync(path.join(WORK, 'results.json'),
     JSON.stringify({ ...report, rows: Object.fromEntries(arms.map((a) => [a.key, a.rows])) }, null, 2));
   console.log(`\nraw rows: ${path.join(WORK, 'results.json')}`);
@@ -789,7 +808,8 @@ facts incl. near-duplicate clusters; four questions each: same / cross / third l
 - topic — content vs content only: <the measured difference, per set, and mean latency> — decides whether
   adopting Lyntai's ContentChars (content alone) loses anything
 - content partition vs fuse: <the measured difference, per set>
-- latency: <ms per recall per arm>
+- latency: <ms per recall per arm>, and the estimated judge input per recall (chars) — the two together price
+  the content modes; say plainly that kind-filtered recalls (up to 400 candidates) were not exercised
 
 ### What it does NOT say
 - One fixture, 60 facts, one run per arm. A difference of one or two questions is inside noise.
