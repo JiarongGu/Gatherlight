@@ -33,11 +33,15 @@ public sealed class LlamaWarmStep : IMigrationStep
     private readonly IPlatformContext _platform;
     private readonly MigrationState _state;
     private readonly IClaudeCliRuntime _claude;
+    private readonly IAppConfigService _appConfig;
     private readonly ILogger<LlamaWarmStep> _log;
 
     public LlamaWarmStep(ILlamaServerRuntime llama, ServerConfigService config, IPlatformContext platform,
-        MigrationState state, IClaudeCliRuntime claude, ILogger<LlamaWarmStep> log)
-    { _llama = llama; _config = config; _platform = platform; _state = state; _claude = claude; _log = log; }
+        MigrationState state, IClaudeCliRuntime claude, IAppConfigService appConfig, ILogger<LlamaWarmStep> log)
+    {
+        _llama = llama; _config = config; _platform = platform; _state = state; _claude = claude;
+        _appConfig = appConfig; _log = log;
+    }
 
     public string Id => "llama-warm";
     public string Title => "启动本机模型运行时(llama.cpp)";
@@ -51,22 +55,45 @@ public sealed class LlamaWarmStep : IMigrationStep
         var judge = MemorySources.ResolveJudge(settings);
         var semantic = MemorySources.ResolveSemantic(settings);
 
-        // A binding whose model file is gone now falls back (MemorySources.ResolveJudge/ResolveSemantic). Say so:
+        // A binding whose MODEL is not one of the layer's files now falls back (MemorySources.ResolveJudge/
+        // ResolveSemantic). Say so, in the log as well as the overlay — the overlay is gone once migration ends:
         // otherwise 判断 is quietly on the CLI and 语义 quietly off, and nothing tells the household why. Before the
         // fallback existed the warm below said it instead, with 没能载入 — for a layer still wired to the file.
+        // WHY and the fix are the source's clause (WhyNotHere), the same one the bind endpoint refuses with.
+        // Only the model is announced: a missing runtime, or the built-in embedder's missing files, still fall back
+        // without a word here (a residual dev-conventions records).
         var llamaJudge = MemorySources.FindJudge(MemoryBackends.LlamaCpp);
         if (MemorySources.SavedIs(settings.Config, MemoryBackends.LlamaCpp) && judge.Id != MemoryBackends.LlamaCpp
             && settings.Config.JudgeModel is { Length: > 0 } goneJudge && llamaJudge is not null
             && !llamaJudge.HasModel(settings, goneJudge))
-            _state.AddWarning($"「判断」绑定的本机模型 {goneJudge} 已不在模型目录里 —— 这次启动判断退回 Claude CLI。"
-                + GetItBack(goneJudge));
+        {
+            // WHAT THE FALLBACK COSTS: for a household that chose a local judge, this start is the first time their
+            // facts go to Claude and the account pays. The quota clause is MemorySources.CliTaggingCost — one writer,
+            // the one the reranker's cost line and bind toast carry. 判断's own switch decides whether any of it is
+            // spent now, so "消耗账号额度" is never said while nothing is being called.
+            var cli = "标注与核对都改由它完成:写入时" + MemorySources.CliTaggingCost + ";检索时每次也调用一次";
+            var cost = MemoryEnrichment.IsOn(_appConfig)
+                ? $" —— {cli}"
+                : $"(「判断」现在是关着的,暂时不会调用;打开后{cli})";
+            _log.LogWarning("memory judge is bound to llama.cpp model {Model}, which is not one of its models on disk; " +
+                "falling back to the Claude CLI for this start", goneJudge);
+            _state.AddWarning($"「判断」绑定的本机模型用不了:{llamaJudge.WhyNotHere(settings, goneJudge)}。"
+                + $"这次启动「判断」退回 Claude CLI{cost}。处理好之后重启服务才会用回它;也可以在「记忆检索」另选一个。");
+        }
         var llamaSemantic = MemorySources.FindSemantic(MemoryBackends.LlamaCpp);
         if (string.Equals(settings.Config.SemanticSource, MemoryBackends.LlamaCpp, StringComparison.OrdinalIgnoreCase)
             && semantic?.Id != MemoryBackends.LlamaCpp
             && settings.Config.EmbeddingModel is { Length: > 0 } goneEmbed && llamaSemantic is not null
             && !llamaSemantic.HasModel(settings, goneEmbed))
-            _state.AddWarning($"「语义」绑定的本机模型 {goneEmbed} 已不在模型目录里 —— 这次启动语义检索不会生效。"
-                + GetItBack(goneEmbed));
+        {
+            _log.LogWarning("semantic recall is bound to llama.cpp model {Model}, which is not one of its embedders " +
+                "on disk; the layer is off for this start", goneEmbed);
+            // The REBUILD belongs in the remedy: a fact written while the layer is off is stored without a vector,
+            // and only a rebuild ever gives it one — getting the model back and restarting does not.
+            _state.AddWarning($"「语义」绑定的本机模型用不了:{llamaSemantic.WhyNotHere(settings, goneEmbed)}。"
+                + "这次启动语义检索不会生效,这段时间写入的事实不带向量。处理好之后重启服务,再在「记忆检索」"
+                + "重新建立一次语义索引,这些事实才会补上向量;也可以在「记忆检索」另选一个。");
+        }
 
         var judgeModel = judge.Id == MemoryBackends.LlamaCpp
             ? MemorySources.ResolveJudgeModel(settings) : null;
@@ -125,10 +152,4 @@ public sealed class LlamaWarmStep : IMigrationStep
             _state.AddWarning($"「{layer}」的本机模型 {model} 没能载入 —— {loss}。");
         }
     }
-
-    /// <summary>What brings a missing model back. 资源 can re-fetch only what the catalogue pins; a GGUF the
-    /// household dropped in themselves has no row there, so sending them to 资源 for it would point at nothing.</summary>
-    private static string GetItBack(string model) =>
-        (GgufCatalog.Find(model) is not null ? "在「资源 · Resources」重新下载它" : "把这个文件放回模型目录")
-        + ",或在「记忆检索」另选一个。";
 }

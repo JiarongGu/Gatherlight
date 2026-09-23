@@ -37,7 +37,9 @@
 //   9. An embedder that is WIRED but DOWN at startup: the fact index indexes nothing and leaves its layout
 //      marker, so no fact is stored without its vector, and the next start does the work.
 //  10. A BOUND model whose file is gone falls back at startup — 判断 to the CLI, 语义 off — even while another
-//      model of its kind remains on disk, and the startup warnings name the model and what happened.
+//      model of its kind remains on disk; the startup warnings name the model, what the fallback costs and what
+//      brings it back; and the fact index's layout marker keeps the vector rebuild owed rather than claiming it done.
+//      10b: bind refuses a model startup would drop — one the router lists but our folder does not hold.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -741,7 +743,13 @@ try {
     judgeSource: 'llama-cpp', judgeModel: 'zzgone-chat',
     semanticSource: 'llama-cpp', embeddingModel: 'zzgone-embed',
   } }, null, 2), 'utf8');
-  goneServer = startServer({ dataDir: goneDir, port: GONE_PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
+  const goneArgsLog = path.join(goneDir, 'stub-args.jsonl');
+  fs.rmSync(goneArgsLog, { force: true });
+  const beforeGone = hits.length;
+  goneServer = startServer({
+    dataDir: goneDir, port: GONE_PORT,
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_STUB_ARGS_LOG: goneArgsLog },
+  });
   await waitHealthy(goneServer.base);
   const gc = makeClient(goneServer.base);
   const goneMem = await gc.getJson('/api/manage/memory');
@@ -750,17 +758,88 @@ try {
   ok('THE POINT: 判断 whose bound GGUF is gone falls back to the CLI — a surviving reranker does not keep it',
     gJudge.activeSource === 'claude-cli' && gJudge.activeModel === 'haiku',
     JSON.stringify({ active: gJudge.activeSource, activeModel: gJudge.activeModel }));
+  // Positive field values, not "not llama-cpp": layerOf answers {} for a missing layer, so a negative check alone
+  // would pass on a renamed field or layer.
   ok('…and 语义 whose bound GGUF is gone is off — a surviving embedder does not keep it',
-    gSem.activeSource !== 'llama-cpp', JSON.stringify({ active: gSem.activeSource, activeModel: gSem.activeModel }));
+    gSem.on === false && gSem.activeSource === null,
+    JSON.stringify({ on: gSem.on, active: gSem.activeSource, activeModel: gSem.activeModel }));
+
   // Startup warnings live on the migration status — the same read case 7's warmWarning() uses.
   const goneWarnings = ((await (await fetch(`${goneServer.base}/api/migration/status`)).json()).warnings ?? [])
     .map(String);
-  ok('the startup says WHICH model is gone and what happened to the layer — judge',
-    goneWarnings.some((w) => w.includes('zzgone-chat') && /Claude CLI/.test(w)), JSON.stringify(goneWarnings));
+  const judgeWarn = goneWarnings.find((w) => w.includes('zzgone-chat')) ?? '';
+  const semWarn = goneWarnings.find((w) => w.includes('zzgone-embed')) ?? '';
+  // A household-dropped GGUF has no row in 资源, so the sentence has to say where the file goes back.
+  ok('the startup says WHICH model is gone, where its file goes back, and that 判断 is on the CLI now',
+    /绑定的本机模型用不了/.test(judgeWarn) && /Claude CLI/.test(judgeWarn)
+      && judgeWarn.includes(path.join('state', 'resources', 'gguf')),
+    judgeWarn || JSON.stringify(goneWarnings));
+  ok('…and what that COSTS — the account, and the facts going to Claude, for the first time for a local judge',
+    /账号额度/.test(judgeWarn) && /事实内容会发给 Claude/.test(judgeWarn), judgeWarn);
   // Not the warm step's 没能载入: that is the sentence a layer STILL WIRED to the missing file produced — it
   // names the model and 语义 too, so without this exclusion the check passed before the fix.
-  ok('…and 语义', goneWarnings.some((w) => w.includes('zzgone-embed') && /语义/.test(w) && !/没能载入/.test(w)),
-    JSON.stringify(goneWarnings));
+  ok('…and for 语义: off, with a remedy that carries the restart AND the rebuild — facts written meanwhile have no vector',
+    /语义/.test(semWarn) && !/没能载入/.test(semWarn) && /重启服务/.test(semWarn) && /语义索引/.test(semWarn),
+    semWarn || JSON.stringify(goneWarnings));
+
+  // THE LAYOUT MARKER. With 语义 bound to an embedder that is not wired, the fact index moved its entries and no
+  // vectors — so the marker must not claim the vectors are done. It used to say "3", the start that had the model
+  // back then only synced, and the vectors Lyntai 3.2's address change orphaned were never re-embedded. "2" is what
+  // it says instead: entries here, vectors owed, so the next start with the embedder rebuilds.
+  const goneLayout = (() => {
+    const db = new DatabaseSync(path.join(goneDir, 'state', 'gatherlight.db'), { readOnly: true });
+    try { return db.prepare("SELECT value FROM app_config WHERE key = 'facts.index.layout'").get()?.value ?? null; }
+    finally { db.close(); }
+  })();
+  ok('THE POINT: with the bound embedder not wired, the layout marker keeps the vector rebuild owed ("2", not "3")',
+    goneLayout === '2', `facts.index.layout=${JSON.stringify(goneLayout)}`);
+
+  // By ROUTING, not by report: a fact write is annotated by the CLI on the CLI's model, and nothing that reached
+  // the fake router since this server started — its boot included — names a gone model.
+  const wroteGone = await gc.call('remember_fact', {
+    kind: 'household', topic: 'zzgonefact kitchen shelf',
+    content: 'The zzgonefact teapot lives on the second kitchen shelf.',
+    source: 'https://example.test/zzgone', confidence: 0.8,
+  });
+  ok('remember_fact stores the fact on the fallen-back server', wroteGone.status === 200 && wroteGone.result?.ok === true,
+    JSON.stringify(wroteGone.result));
+  const goneCalls = () => (fs.existsSync(goneArgsLog) ? fs.readFileSync(goneArgsLog, 'utf8') : '')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  await until(() => goneCalls().some((x) => x.kind === 'annotation' && x.tail.includes('zzgonefact')), 60000)
+    .catch(() => {});
+  const goneAnnotated = goneCalls().filter((x) => x.kind === 'annotation' && x.tail.includes('zzgonefact'));
+  ok('…annotated by the CLI on the CLI\'s model', goneAnnotated.length > 0 && goneAnnotated.every((x) => modelOf(x) === 'haiku'),
+    JSON.stringify(goneAnnotated.map(modelOf)));
+  ok('…and nothing reached the router naming a gone model',
+    !hits.slice(beforeGone).some((h) => String(h.model ?? '').startsWith('zzgone')),
+    JSON.stringify(hits.slice(beforeGone).map((h) => `${h.path} ${h.model}`)));
+
+  // (control) a server whose bound model IS on disk says none of this — case 6's, which booted bound to a planted
+  // reranker. Without it, a HasModel that always said no would pass every check above.
+  const rerankWarnings = ((await (await fetch(`${base3}/api/migration/status`)).json()).warnings ?? []).map(String);
+  ok('(control) a server whose bound model is on disk gets no such warning',
+    !rerankWarnings.some((w) => /绑定的本机模型用不了/.test(w)), JSON.stringify(rerankWarnings));
+
+  // --- 10b. BIND refuses what startup would drop ----------------------------------------------------------
+  // The resolver keeps a binding only while its model is one of the layer's files, so bind has to ask the same of
+  // the NEW model. A model the router lists without our folder holding it — llama.cpp's own cache on a real machine
+  // — used to pass: the router served it, the warm answered, the binding saved, and the next restart fell back.
+  const CACHE_ONLY = 'zzcacheonly-chat';
+  served.add(CACHE_ONLY);
+  const beforeCacheOnly = layerOf(await c3.getJson('/api/manage/memory'), 'judge').model;
+  const cacheOnly = await c3.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: CACHE_ONLY });
+  const cacheOnlyErr = String(cacheOnly.body?.error ?? '');
+  ok('THE POINT: a model the router lists but our folder does not hold is refused at bind, saying where it is missing',
+    cacheOnly.status === 409 && cacheOnlyErr.includes(CACHE_ONLY) && /不在模型目录/.test(cacheOnlyErr),
+    `${cacheOnly.status} ${cacheOnlyErr || JSON.stringify(cacheOnly.body)}`);
+  ok('…and the refusal saves nothing', layerOf(await c3.getJson('/api/manage/memory'), 'judge').model === beforeCacheOnly,
+    JSON.stringify({ before: beforeCacheOnly, after: layerOf(await c3.getJson('/api/manage/memory'), 'judge').model }));
+  // A file that IS there but of the wrong kind says so, rather than that it is missing.
+  const wrongKind = await c3.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: LATE_EMBED });
+  const wrongKindErr = String(wrongKind.body?.error ?? '');
+  ok('an embedder on disk is refused as a judge as the wrong KIND, not as missing',
+    wrongKind.status === 409 && /嵌入模型/.test(wrongKindErr) && !/不在模型目录/.test(wrongKindErr),
+    `${wrongKind.status} ${wrongKindErr || JSON.stringify(wrongKind.body)}`);
 } catch (err) {
   fail('e2e-p52 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {

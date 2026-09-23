@@ -169,6 +169,30 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public bool HasModel(MemorySourceSettings s, string model) =>
         ModelsOnDisk(s).Contains(model, StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The three ways <see cref="HasModel"/> says no, each with its own fix: the file is there but of a
+    /// kind this layer cannot use; it is gone and 资源 can fetch it again (a model the catalogue pins); or it is
+    /// gone and only the household can put it back — a GGUF they dropped in has no row in 资源, so sending them
+    /// there would point at nothing. Named as the panel names it: the catalogue's name where there is one.</summary>
+    public string WhyNotHere(MemorySourceSettings s, string model)
+    {
+        var known = GgufCatalog.Find(model);
+        var shown = known?.Name ?? model;
+        if (ResourceProvisioner.InstalledGgufIds(s.ResourcesPath).Contains(model, StringComparer.OrdinalIgnoreCase))
+            return _layer == MemoryLayers.Semantic
+                ? $"{shown} 是{KindName(model)},「语义」用不了 —— 语义需要一个嵌入模型"
+                : $"{shown} 是{KindName(model)},「判断」用不了 —— 判断需要一个对话模型或重排模型";
+        return known is not null
+            ? $"{shown} 不在模型目录里 —— 可以在「资源 · Resources」面板下载它"
+            : $"{model} 不在模型目录({ResourceProvisioner.ProvisionedGgufDir(s.ResourcesPath)})里 —— 可以把它的文件放回那里";
+    }
+
+    private static string KindName(string model) => ResourceProvisioner.GgufKind(model) switch
+    {
+        GgufCapability.Embedding => "嵌入模型",
+        GgufCapability.Reranking => "重排模型",
+        _ => "对话模型",
+    };
+
     /// <summary>The GGUFs on disk that suit THIS layer. Ids come from
     /// <see cref="ResourceProvisioner.InstalledGgufIds"/> — the router's own rule, one writer — and the kind
     /// filter is what stops a chat model being offered to 语义 (see the class comment).</summary>
@@ -309,15 +333,13 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         GgufCatalog.Find(id)?.Name
         ?? (_layer == MemoryLayers.Judge ? $"{id}({(IsReranker(id) ? "重排" : "对话")})" : id);
 
-    /// <summary>Judge side: refuse an embedder by NAME before any call. Cheap and certain — we downloaded
-    /// these files, so unlike the generic arm we know what they are without asking the server. Then prove the
-    /// model does its job: a chat model must answer, a reranker must pass <see cref="ScreenRerankerAsync"/>.</summary>
+    /// <summary>Judge side: prove the model does its job — a chat model must answer, a reranker must pass
+    /// <see cref="ScreenRerankerAsync"/>. The wrong KIND never gets here: the bind endpoint asks
+    /// <see cref="HasModel"/> first, whose kind filter refuses an embedder by name, before any call. (This method
+    /// used to repeat that check; with HasModel answering first it could no longer be reached.)</summary>
     public async Task<string?> RejectAsync(MemorySourceContext ctx, string model, CancellationToken ct = default)
     {
-        if (ResourceProvisioner.GgufKind(model) == GgufCapability.Embedding)
-            return $"{model} 是嵌入模型,不能用来做判断 —— 判断需要一个对话模型或重排模型。";
-
-        // Then PROVE it: installed is not usable, and a judge that cannot answer fails open, i.e. silently.
+        // PROVE it: installed is not usable, and a judge that cannot answer fails open, i.e. silently.
         // SERVES, not serving: a model downloaded after the router started is unknown to it until a restart,
         // and the runtime either restarts its own router or says what would (EnsureServesAsync).
         if (await ctx.Llama.EnsureServesAsync(model, ct) is { } unserved) return unserved;

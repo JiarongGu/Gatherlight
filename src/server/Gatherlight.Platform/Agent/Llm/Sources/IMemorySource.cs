@@ -63,6 +63,12 @@ public interface IMemorySource
     /// checks its files. Only a backend whose models are files that can vanish answers otherwise.</para></summary>
     bool HasModel(MemorySourceSettings s, string model) => true;
 
+    /// <summary>Why <paramref name="model"/> is not one of this layer's models here, as a clause without a full stop
+    /// — asked only after <see cref="HasModel"/> said no. The bind refusal and the startup warning each frame it, so
+    /// the two cannot disagree about what is wrong or what fixes it, and the source says it because only the source
+    /// knows where its models live and which kinds its layer takes.</summary>
+    string WhyNotHere(MemorySourceSettings s, string model) => $"{model} 不是这一层在这台机器上能用的模型";
+
     /// <summary>Register whatever this source needs at startup — a provider, a named client, an embedder, a
     /// vector store. A no-op for a backend that is already registered by default.</summary>
     void Register(LyntaiBuilder b, MemoryWiringContext ctx);

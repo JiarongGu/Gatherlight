@@ -40,21 +40,25 @@ public sealed class FactIndexStep : IMigrationStep
     private const string LayoutKey = "facts.index.layout";
     private const string Layout = "3";
 
-    /// <summary>The layout whose ENTRIES are still at the current address — only its vectors moved.</summary>
+    /// <summary>The layout whose ENTRIES are at the current address and whose VECTORS are not: the pre-3.2 layout,
+    /// and also what is recorded while a bound embedder is not wired (<see cref="EmbedderOwed"/>) — either way, the
+    /// next start with an embedder wired rebuilds, re-embedding every indexed fact.</summary>
     private const string VectorsOnlyMoved = "2";
 
     private readonly IFactIndex _index;
     private readonly IKnowledgeStore _store;
     private readonly IAppConfigService _config;
+    private readonly ServerConfigService _settings;
     private readonly MigrationState? _state;
     private readonly ILogger<FactIndexStep>? _log;
 
     public FactIndexStep(IFactIndex index, IKnowledgeStore store, IAppConfigService config,
-        MigrationState? state = null, ILogger<FactIndexStep>? log = null)
+        ServerConfigService settings, MigrationState? state = null, ILogger<FactIndexStep>? log = null)
     {
         _index = index;
         _store = store;
         _config = config;
+        _settings = settings;
         _state = state;
         _log = log;
     }
@@ -101,7 +105,8 @@ public sealed class FactIndexStep : IMigrationStep
             // Nothing reads a vector on this install, so nothing was stranded. A rebuild here would throw
             // away the decay positions and links the household has accumulated in exchange for nothing. If an
             // embedder is bound LATER, binding it already asks for a re-index, which drops every collection
-            // under the graph's prefix — the orphaned old-address ones included.
+            // under the graph's prefix — the orphaned old-address ones included. One bound but NOT wired (its
+            // model file gone) asks for nothing, which is why the marker below then stays at this layout.
             _log?.LogInformation("fact index: layout {Stored} -> {Layout} moved only vector addresses, and no " +
                 "embedder is wired; keeping the graph as it is", stored, Layout);
             await _index.SyncAsync(ct);
@@ -123,8 +128,33 @@ public sealed class FactIndexStep : IMigrationStep
             }
         }
 
+        // WHAT HAPPENED, and no more. With an embedder OWED — bound in settings, not wired this start — the entries
+        // are at the current address and the vectors are not, which is exactly what VectorsOnlyMoved says. Recording
+        // the current layout instead told the start that has the embedder back that nothing was owed: it only
+        // Synced, the vectors Lyntai 3.2's address change orphaned were never re-embedded, and semantic recall
+        // stayed empty with nothing anywhere saying so. A bound model whose file is gone reaches this (the resolver
+        // turns 语义 off), and so do a deleted runtime and the built-in embedder's missing files. Proof: e2e-p52
+        // case 10.
+        var layout = EmbedderOwed() ? VectorsOnlyMoved : Layout;
+        if (layout != Layout)
+            _log?.LogWarning("fact index: 语义 is bound to an embedder that is not wired this start; recording " +
+                "layout {Recorded}, not {Layout}, so the start that has it back re-embeds every fact", layout, Layout);
         // Last, deliberately: a crash mid-rebuild leaves the marker unset too, so the next start retries
         // rather than settling into the silent FTS fallback this exists to prevent.
-        _config.Set(LayoutKey, Layout);
+        _config.Set(LayoutKey, layout);
+    }
+
+    /// <summary>Is 语义 bound to an EMBEDDER arm that is not wired this start?
+    /// <para>"Embedder arm" is asked of the source, never of its id: <see cref="Agent.Llm.Sources.IMemorySource.TakesEffectOnRestart"/>
+    /// is true for exactly the 语义 arms whose Register wires an embedder and its vector store (llama.cpp, built-in)
+    /// and false for the CLI arm, which registers nothing and stores phrasings instead. A 语义 arm has nothing else
+    /// to register, so for this layer "wired at startup" IS "embeds" — should one ever register something else,
+    /// this is the line to revisit.</para></summary>
+    private bool EmbedderOwed()
+    {
+        if (_index.Embeds) return false;
+        var m = _settings.Current.Memory;
+        return !string.IsNullOrWhiteSpace(m.SemanticSource) && !string.IsNullOrWhiteSpace(m.EmbeddingModel)
+            && Agent.Llm.Sources.MemorySources.FindSemantic(m.SemanticSource) is { TakesEffectOnRestart: true };
     }
 }

@@ -525,6 +525,12 @@ public sealed class MemoryRecallController : ControllerBase
             if (!EmbeddingCatalog.IsWellFormedId(model))
                 return BadRequest(new { error = $"模型名称格式不正确:{model}" });
 
+            // The resolver keeps a binding only while its model is one of this layer's files (HasModel), so bind
+            // asks the same of the NEW model — or a model the router happened to list (llama.cpp's own cache)
+            // would bind here and silently fall back at the next restart. Asked before anything calls the router.
+            if (!source.HasModel(Settings(), model!))
+                return StatusCode(409, new { error = source.WhyNotHere(Settings(), model!) + "。" });
+
             // A model that is installed, well-formed and unable to judge would sail into a FAIL-OPEN
             // policy, where the only symptom is recall that quietly never improves.
             if (await source.RejectAsync(ctx, model!) is { } why) return StatusCode(409, new { error = why });
@@ -592,6 +598,10 @@ public sealed class MemoryRecallController : ControllerBase
             }
             if (!EmbeddingCatalog.IsWellFormedId(model))
                 return BadRequest(new { error = $"模型名称格式不正确:{model}" });
+
+            // Same rule as 判断: what bind accepts, the resolver must keep (HasModel).
+            if (!source.HasModel(Settings(), model!))
+                return StatusCode(409, new { error = source.WhyNotHere(Settings(), model!) + "。" });
 
             // PROVE it embeds before saving. Installed is not usable, and the failure would surface only as
             // recall that finds nothing — indistinguishable from a household that knows nothing.

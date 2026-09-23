@@ -754,8 +754,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - **A FAILED EMBED IS NOT AN ERROR TO THE ENGINE — so nothing may write through a router that is down.**
   Lyntai's graph engine catches a failed write-time embed and stores the fact anyway, without its vector
   ("storing without signals or links"), and the fact still gets its graph reference, so no back-fill ever
-  returns to it: semantic recall simply never finds it again, and coverage reads 100%. Three things follow,
-  all found by review and confirmed on the real binary (`docs/self-managed-llm-runtime.md`):
+  returns to it: semantic recall simply never finds it again, and coverage reads 100%. Four things follow,
+  all found by review, the first three confirmed on the real binary (`docs/self-managed-llm-runtime.md`):
   **(1) `LlamaWarmStep` runs BEFORE `FactIndexStep`.** The other way round, the 3.2 layout rebuild re-remembered
   every fact before anything had started llama-server (a graceful shutdown kills it): a real install came up
   with 6 of 6 facts indexed and **0 vectors**, marker written. Fixed, the same repro keeps 6.
@@ -765,6 +765,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   up, down (the fake refuses embeds), up, and fails without the probe: the marker is written against the
   refusing embedder and the facts are never re-embedded.
   **(3) A router restart is refused while anything writes through it** — see the next bullet.
+  **(4) An embedder that is BOUND but not WIRED leaves the vector rebuild owed.** When the saved 语义 arm is one
+  that registers an embedder (`TakesEffectOnRestart` — for this layer that IS "embeds") but none is wired this
+  start — its model file gone, its runtime gone, the built-in files missing — `FactIndexStep` records layout "2"
+  (entries at the current address, vectors not) where it used to record "3". "3" told the start that had the
+  embedder back that nothing was owed: it only synced, the vectors Lyntai 3.2's address change orphaned were
+  never re-embedded, and semantic recall stayed empty without a word. Same rule as (2), a marker says only what
+  happened. `e2e-p52` case 10, confirmed to FAIL with the rule removed.
 - **A model downloaded while OUR router runs is restarted in — within limits, each for a failure found in
   review.** The router reads its models directory and preset file ONCE (measured: `400 model not found`
   before and after the presets are rewritten, until a restart), so `LlamaServerRuntime.EnsureServesAsync`
@@ -825,8 +832,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   **Configured is not the same as bound.** `IsConfigured` asks whether the backend can be wired at all:
   runtime present, any model of the layer's kind. The resolvers also ask `HasModel` for the BOUND one. It is a
   separate member because the bind endpoint asks `IsConfigured` before it saves the new model. Without it, a
-  deleted chat judge stayed wired while a reranker remained, and every recall was NoOpinion. The fallback is
-  announced at startup (`LlamaWarmStep`). Proof: `e2e-p52` case 10.
+  deleted chat judge stayed wired while a reranker remained, and every recall was NoOpinion. The bind endpoint
+  asks `HasModel` of the NEW model too, so what bind accepts the resolver keeps — a model the router listed from
+  llama.cpp's own cache used to bind and then fall back at the next restart. WHY a model is not there is the
+  source's clause, `WhyNotHere` (wrong kind; gone and 资源 can fetch it; gone and only the household can put it
+  back), shared by the bind refusal and the startup warning. What `LlamaWarmStep` announces is exactly a gone or
+  wrong MODEL — with what the CLI fallback costs, and for 语义 the restart and rebuild that bring it back.
+  Proof: `e2e-p52` cases 10 and 10b. **Residuals, stated rather than fixed:** a missing llama.cpp RUNTIME and the
+  built-in embedder's missing FILES still fall back silently at startup; and a hand-deleted file under a RUNNING
+  embedder leaves 语义 wired for the rest of that run while the panel, which resolves, says it is off, and the
+  rebuild refuses with 「尚未启用」. Only a hand deletion reaches that — 资源 refuses to delete a bound model.
 - **ONE control writes the judge's model.** `DefaultModelByConsumer["memory"]` and cortex's live
   `llm.model.memory` were two writers and cortex won, so a household who set 记忆判断 to `haiku` and later
   moved the judge local had the router asking Ollama for `haiku` — fail-open both sides, hence zero calls and
