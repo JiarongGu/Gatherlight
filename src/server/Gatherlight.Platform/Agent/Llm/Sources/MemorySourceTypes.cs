@@ -233,7 +233,8 @@ public static class MemoryGroups
         Managed when layer == MemoryLayers.Judge =>
             "由应用下载、启动和管理的模型(llama.cpp),占磁盘、不用填地址,模型在「资源 · Resources」面板下载,"
              + "都实测排过名。对话模型:判断整个在本机完成,不消耗账号额度。重排模型:只有检索时的核对在本机 —— "
-             + "写入事实时的主题标注由 Claude CLI 完成,消耗账号额度,事实内容会发给 Claude。",
+             // The tagging clause is MemorySources.CliTaggingCost, like the toast, cost line and model note.
+             + $"写入事实时的主题标注由 Claude CLI 完成 —— {MemorySources.CliTaggingCost}。",
         Managed => "由应用下载、启动和管理的模型,两种跑法:llama.cpp 起一个常驻服务,或者「内置」—— "
              + "直接在应用进程内跑 ONNX,不额外启动任何程序。模型在「资源 · Resources」面板下载,都实测排过名 —— "
              + "占磁盘,但不消耗账号额度,也不用填地址。",
