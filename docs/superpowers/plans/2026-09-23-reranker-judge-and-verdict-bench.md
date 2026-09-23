@@ -739,11 +739,11 @@ try {
   const candidates = Math.min(4 * Math.min(3 * LIMIT, 100), FIXTURE.facts.length);
   const lineOf = (f, mode) => Math.min(401,
     mode === 'headline' ? f.topic.length : mode === 'content' ? f.content.length : `${f.topic} — ${f.content}`.length);
-  console.log(`\njudge input per recall (estimated; ${candidates} candidates each):`);
+  console.log(`\njudge input per recall (estimated; ${candidates} candidates at most — the engine gathers only what matches or links):`);
   for (const arm of arms.filter((a) => a.judgeInput)) {
     const avg = FIXTURE.facts.reduce((a, f) => a + lineOf(f, arm.judgeInput), 0) / FIXTURE.facts.length;
     report.judgeChars = { ...(report.judgeChars ?? {}), [arm.key]: Math.round(avg * candidates) };
-    console.log(`  ${arm.label.padEnd(44)} ~${Math.round(avg * candidates)} chars (${Math.round(avg)} per candidate)`);
+    console.log(`  ${arm.label.padEnd(44)} up to ~${Math.round(avg * candidates)} chars (${Math.round(avg)} per candidate)`);
   }
   fs.writeFileSync(path.join(WORK, 'results.json'),
     JSON.stringify({ ...report, rows: Object.fromEntries(arms.map((a) => [a.key, a.rows])) }, null, 2));
