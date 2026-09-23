@@ -549,8 +549,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   reader finding nothing (silent fallback to a default model) or hands `provider:model` straight to `--model`.
   A migration moves what is already stored for `scorer`/`memory` only, and `MemoryService.cs`'s export/import
   (~154, the memory bundle's `SetModel` import over `_cortex.Models()`'s tunable-consumer list) has to SPLIT the
-  same way — `chat`/`extract`/`validate` keep `llm.model.<consumer>` in the bundle, `scorer` alone becomes
-  `llm.route.scorer` (`memory` already never travels in it — `ExportAsync`'s own comment says why). D176's own
+  same way — `chat`/`extract` keep `llm.model.<consumer>` in the bundle (`validate` is not tunable, so it never
+  travels), `scorer` alone becomes `llm.route.scorer` (`memory` already never travels in it — `ExportAsync`'s own
+  comment says why). D176's own
   warn-once for a leftover key covers only ITS `lyntai.model.` prefix (`IModelRoutingStore.cs` ~37-47, a
   Lyntai-namespaced constant, not our configured one) — our `llm.model.` namespace gets no such warning, so this
   migration has no safety net if a key is missed. `MemoryRecallController.cs` ~550 and `BackupService.cs` ~242's
