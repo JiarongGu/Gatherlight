@@ -495,10 +495,12 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// listed" restarted a healthy router on two slow probes in a row.</item>
     /// <item><b>Ours</b> — a router we adopted (an orphan of an earlier run, or a household's own) is not ours
     /// to kill, and an app restart would only adopt it again; the household is told which process to end.</item>
-    /// <item><b>Loses nothing</b> — <see cref="ILlamaRestartPolicy"/>. While the router is down every embed
-    /// fails, and a fact written then is stored WITHOUT its vector, permanently and silently (the engine
-    /// catches a failed write-time embed). So it is refused while 语义 embeds through this router or a
-    /// reindex runs, with a sentence saying so; what remains is 判断's verification, which fails open.</item>
+    /// <item><b>Loses nothing</b> — <see cref="ILlamaRestartPolicy"/>. While the router is down every call to
+    /// it fails, and a fact written then is stored WITHOUT its vector — or, under a chat judge, its subject tags —
+    /// permanently and silently (the engine catches a failed write-time embed; annotation fails open). So it is
+    /// refused while 语义 embeds through this router, while 判断 annotates through it (a chat model), or while a
+    /// reindex runs, with a sentence saying so. What remains is a reranker judge's verification, which fails
+    /// open.</item>
     /// </list>
     /// <para>After a restart the requested model is warmed HERE, before returning, so the caller's own screen
     /// or proof is not a second concurrent load; what was warm before is then re-warmed ONE AT A TIME, off the

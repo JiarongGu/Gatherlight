@@ -791,10 +791,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   listed" restarted a healthy router on two slow probes; **never an ADOPTED router** (an orphan of an earlier
   run, or the household's own) — not ours to kill, and an app restart would only adopt it again, so the bind
   and the startup warning name the process to end (`e2e-p52` case 8, on both layers, and case 7's warning);
-  **never while 语义 embeds through it or a reindex runs** (`ILlamaRestartPolicy`) — the restart window is
-  exactly the failed-embed case above, so the bind says to restart the service instead. Start, restart and stop
-  hold ONE lock: probe-then-spawn is a check-then-act on a port, and a concurrent spawn during a restart once
-  made the live router look adopted, because `_started` was set before the process answered — it is set only
+  **never while 语义 embeds through it, 判断 annotates through it (a chat model), or a reindex runs**
+  (`ILlamaRestartPolicy`) — the restart window is exactly the failed-embed case above, so the bind says to
+  restart the service instead. A chat judge's annotation is lost the same way a vector is: fail-open, at write
+  time, for good. Verified on the real binary (the runtime doc), because no fake can be a router we started.
+  Start, restart and stop hold ONE lock: probe-then-spawn is a check-then-act on a port, and a concurrent
+  spawn during a restart once made the live router look adopted, because `_started` was set before the process answered — it is set only
   after, now, and `Dispose` marks the runtime disposed before taking the lock so nothing spawns after it. After
   a restart the requested model is warmed before returning and the rest re-warmed one at a time (llama.cpp
   loads concurrently badly), only if ours — the real router also lists the machine's llama.cpp cache.

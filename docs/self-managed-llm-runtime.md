@@ -299,3 +299,33 @@ vectors**, the rebuild logged "6/6 facts indexed"), and `FactIndexStep` probes o
 is wired but does not answer, indexes nothing, leaves the marker, and says so in a startup warning. Driven on the
 real binary by holding the router's port with a listener that answers 503: boot 2 left the marker at 2 and the 6
 vectors untouched, with the warning; boot 3, port freed, rebuilt to 6 vectors and marker 3.
+
+### 2026-09-24 — no restart while a CHAT judge tags through the router
+
+Same build. A llama.cpp chat judge ANNOTATES every fact write through our router, and annotation is fail-open, so
+a fact written while the router restarts is stored without subject tags, for good — the tag's version of the lost
+vector above. `LlamaRestartPolicy` refused a restart only for 语义 and a reindex. The setup, on a scratch install
+with the stub CLI: 判断 bound at startup to `gemma-3-1b-it-Q4_K_M` (the catalogue's pinned chat judge, downloaded
+through 资源, sha256 verified), LAMAR also on disk, 语义 off. The router was ours and the judge warmed in 4.1–5.5 s.
+Then bge-reranker-v2-m3 was hardlinked in and 判断 bound to it, while a fact was written every 250 ms.
+
+- **Before the fix, three runs.** Two returned **200**, in 9.9 s and 9.6 s, after ONE router restart each (a new
+  router PID). The port refused connections for 2.3 s (measured in one of the two). The new router spawned 1.4 s
+  after the restart decision, and bge warmed in 5.6–5.9 s. The facts written in that window lost their tags: 2 of
+  5 in one run and 1 of 5 in the other were stored with **no subjects** (`lyntai_memory_subject`), and their
+  annotation calls logged `Failed — … actively refused` or `An error occurred while sending the request`. Every
+  fact written before and after the bind was tagged. The remaining run (the first of the three) returned **500**
+  after 9.6 s. The restart killed the router, then the re-probe's `GET /v1/models` hit its 4 s
+  `HttpClient.Timeout`. `IsServingAsync` lets EVERY `OperationCanceledException` through, the timeout's included,
+  so the exception escaped the bind and NO router was left running. The next fact's annotation was refused. That
+  is a separate defect, and this change does not fix it: the policy now keeps a chat judge off that path, but a
+  reranker judge's restart can still meet it.
+- **After the fix: 409 in 31 ms**, saying 「…「判断」正在用这个 llama.cpp 的对话模型给写入的事实做主题标注:重启它的那几秒里写入的事实会永久没有标注,所以应用不会自动重启它 —— 请重启服务,新模型会随 llama.cpp 一起载入。」
+  There were **0** restarts and 0 spawns in `state/logs`, the router PID was the same before and after, and the
+  port accepted connections throughout. The facts written during and after the bind were annotated through
+  llama.cpp (subjects stored), so 「正在…做主题标注」 describes what was actually happening. `settings.json` was
+  unchanged.
+- **Control, after the fix.** 判断 was bound to LAMAR (a reranker) at startup, then the same bind returned **200** in
+  10.4 s after one restart. The port refused connections for 2.8 s, bge warmed in 5.7 s, and LAMAR re-warmed 5.3 s
+  later. All 21 facts written meanwhile were annotated by the CLI, and none touched llama.cpp. A reranker judge's
+  router carries only verification, which fails open for those seconds and writes nothing.
