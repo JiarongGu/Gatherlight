@@ -751,6 +751,49 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   start on a machine with an orphan spawns a duplicate — confirmed, the test fails with the
   not-downloaded refusal. It needs no real binary, which is why the gap was worth re-examining rather
   than recording.
+- **A FAILED EMBED IS NOT AN ERROR TO THE ENGINE — so nothing may write through a router that is down.**
+  Lyntai's graph engine catches a failed write-time embed and stores the fact anyway, without its vector
+  ("storing without signals or links"), and the fact still gets its graph reference, so no back-fill ever
+  returns to it: semantic recall simply never finds it again, and coverage reads 100%. Three things follow,
+  all found by review and confirmed on the real binary (`docs/self-managed-llm-runtime.md`):
+  **(1) `LlamaWarmStep` runs BEFORE `FactIndexStep`.** The other way round, the 3.2 layout rebuild re-remembered
+  every fact before anything had started llama-server (a graceful shutdown kills it): a real install came up
+  with 6 of 6 facts indexed and **0 vectors**, marker written. Fixed, the same repro keeps 6.
+  **(2) `FactIndexStep` probes one embed first** (`IFactIndex.EmbedderReadyAsync`, the engine's own routing)
+  and, when an embedder is wired but does not answer, indexes nothing, writes no marker and warns — the rule
+  being that a marker is written only after work that actually happened. `e2e-p52` case 9 boots one folder
+  up, down (the fake refuses embeds), up, and fails without the probe: the marker is written against the
+  refusing embedder and the facts are never re-embedded.
+  **(3) A router restart is refused while anything writes through it** — see the next bullet.
+- **A model downloaded while OUR router runs is restarted in — within limits, each for a failure found in
+  review.** The router reads its models directory and preset file ONCE (measured: `400 model not found`
+  before and after the presets are rewritten, until a restart), so `LlamaServerRuntime.EnsureServesAsync`
+  restarts a router we started when a bind names a model it does not list. Not otherwise:
+  **only when the probe ANSWERED without the model** — a failed probe says nothing, and reading it as "not
+  listed" restarted a healthy router on two slow probes; **never an ADOPTED router** (an orphan of an earlier
+  run, or the household's own) — not ours to kill, and an app restart would only adopt it again, so the bind
+  and the startup warning name the process to end (`e2e-p52` case 8, on both layers, and case 7's warning);
+  **never while 语义 embeds through it or a reindex runs** (`ILlamaRestartPolicy`) — the restart window is
+  exactly the failed-embed case above, so the bind says to restart the service instead. Start, restart and stop
+  hold ONE lock: probe-then-spawn is a check-then-act on a port, and a concurrent spawn during a restart once
+  made the live router look adopted, because `_started` was set before the process answered — it is set only
+  after, now, and `Dispose` marks the runtime disposed before taking the lock so nothing spawns after it. After
+  a restart the requested model is warmed before returning and the rest re-warmed one at a time (llama.cpp
+  loads concurrently badly), only if ours — the real router also lists the machine's llama.cpp cache.
+  **The restart branch has NO e2e coverage**: the fake router can only ever be adopted, and no stub can be a
+  real router. It was verified by hand on the real binary — a bind racing 资源's start button left one router
+  and a second restart still worked; with 语义 on llama.cpp the same bind was refused with 0 restarts.
+- **A reranker judge: capped input, and its tagging state said out loud.** One (query, document) pair past the
+  router's 4096-token batch fails the WHOLE `/v1/rerank` call (measured: ~6,000 Chinese characters ≈ 4,960
+  tokens → 500, the short document beside it unscored too; the limit is per pair — 96 long documents in one call
+  scored), and the scoring verifier is fail-open, so one long fact made every recall that surfaced it
+  unverified. `RerankInputCap` sends at most 1,000 characters per candidate, ~830 tokens at the worst rate
+  measured (0.83 per UTF-16 unit, common CJK); `e2e-p52` case 6b, and `p51` pins `ctx-size = 4096` on the
+  preset. And because a reranker hands TAGGING to the CLI, a signed-out or missing CLI means no tagging at all —
+  fail-open, unreported — so the 判断 row, the bind toast and the startup warning read the CLI's CACHED probe
+  (`MemorySources.CliTaggingNow`; a panel must not await a process) and say whether tagging is happening, and
+  nothing when nobody has probed yet (`e2e-p52` case 7, signed out against signed in; the unknown state is not
+  drivable — the startup CLI step always probes).
 - **A recall layer's BACKEND is a SOURCE, and a source serves a layer by existing.** One interface per layer
   (`Agent/Llm/Sources`: `IMemoryJudgeSource`, `IMemorySemanticSource`, sharing `IMemorySource`), one class per
   backend, a **static catalog** (`MemorySources`) — never a predicate over capability strings. That earlier
