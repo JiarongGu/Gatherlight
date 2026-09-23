@@ -360,3 +360,449 @@ No `judge failed open` warning fired for any arm (see the CLI-failures bullet be
   2 queries (both in `cross`, p = 0.500, within the sanity threshold). That is the smallest real difference this
   run's own noise floor produced by chance alone; a reported gap of that size or smaller in any other comparison
   should be read as within the run's own measurement noise, not as a finding.
+
+## Run 2 — rerankers (2026-09-23, llama.cpp b10549; claude 2.1.280, never called)
+
+**Command**
+
+```
+node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,formula2 \
+  --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M --resources=devtools/_rr-res \
+  --baseline=devtools/_judge-bench/results-2026-09-23T091740.681Z.json:content \
+  --port-base=5620 --llama-port=5660 > devtools/_judge-bench-rr.txt 2>&1
+```
+
+`--resources` pointed at a scratch folder holding the pinned llama.cpp runtime (`b10549`, Vulkan x64) and both
+GGUFs, each sha256-checked against its `GgufCatalog` pin — not at a household's data folder, which this run never
+read. The two port flags restate the defaults, which sat outside every tcp range Windows had reserved on the
+machine that day.
+
+**Seed** — Run 1's, reused (created 2026-09-23T08:55:21.396Z, annotated by claude `2.1.280 (Claude Code)`,
+fixture sha256 `9680443e206495ca8bcd067f80f4705cff5e31a365504fbac438413002ecf555`).
+App HEAD `bc7041c` (v1.2.0). Order seed **12345** (240 queries, 0 same-fact adjacencies), **6 arms in
+parallel**, latency sample 12 queries. Formula positions digest **`f661eb6a056e`** —
+**equal to Run 1's**, so both runs asked the same questions, in the same order, of the same starting graph. That
+is what lets `--baseline` pair every arm here with Run 1's `content` arm query by query, and it accepted the
+pairing (digest, order seed, fact count and fixture hash all match). No arm made a claude-cli call at startup or
+during the run (0/0 in every row of the latency table below): nothing was re-derived from the seed, and the
+subject tags every arm recalls against are the seed's, written by the CLI.
+
+**Read this before the numbers — how a reranker's verdict reaches the page.** The app binds a reranker through
+Lyntai's `ScoringVerificationPolicy` with `EndorseCount` = `RecallFactsTool.DefaultRecallLimit` = 8, which is also
+this bench's page size. Every recall, the reranker scores every candidate and endorses its 8 best. Under
+**partition** (the product's default) the endorsed group is promoted ahead of everything else **keeping the
+engine's own order inside it** — the verdict is one bit per candidate, and the reranker's scores are not used for
+ordering. So under partition the reranker decides WHICH eight facts reach the page and the engine decides which
+of them comes FIRST. Two consequences run through every table below: `endorsed` equals `judged` in every reranker
+arm by construction (it endorses a full page each time — not a sign of anything, unlike the Claude judge's
+129/234), and the reranker's effect lands on found@8 far more than on top-1.
+
+### Accuracy — the four sets and `all`
+
+```
+== same ==
+arm                                             n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)      60   0    60     0       0         42/60     54/60     0.769   320            
+公式 · no verification · A/A twin               60   0    60     0       0         42/60     54/60     0.769   315            +0 / +0 / +0.000
+reranker LAMAR-600m.Q5_K_M · partition          60   0    60     60      60        42/60     57/60     0.795   608            +0 / +3 / +0.027
+reranker LAMAR-600m.Q5_K_M · fuse               60   0    60     60      60        42/60     55/60     0.785   607            +0 / +1 / +0.017
+reranker bge-reranker-v2-m3-Q5_K_M · partition  60   0    60     60      60        43/60     57/60     0.808   621            +1 / +3 / +0.039
+reranker bge-reranker-v2-m3-Q5_K_M · fuse       60   0    60     60      60        42/60     55/60     0.790   643            +0 / +1 / +0.021
+
+== cross ==
+arm                                             n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)      60   0    60     0       0         1/60      6/60      0.042   384            
+公式 · no verification · A/A twin               60   0    60     0       0         1/60      6/60      0.042   383            +0 / +0 / +0.000
+reranker LAMAR-600m.Q5_K_M · partition          60   0    60     60      60        1/60      49/60     0.174   836            +0 / +43 / +0.133
+reranker LAMAR-600m.Q5_K_M · fuse               60   0    60     60      60        1/60      9/60      0.051   834            +0 / +3 / +0.009
+reranker bge-reranker-v2-m3-Q5_K_M · partition  60   0    60     60      60        3/60      48/60     0.221   843            +2 / +42 / +0.179
+reranker bge-reranker-v2-m3-Q5_K_M · fuse       60   0    60     60      60        2/60      12/60     0.071   832            +1 / +6 / +0.030
+
+== third ==
+arm                                             n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)      60   0    55     0       0         1/60      18/60     0.119   328            
+公式 · no verification · A/A twin               60   0    55     0       0         1/60      18/60     0.119   331            +0 / +0 / +0.000
+reranker LAMAR-600m.Q5_K_M · partition          60   0    55     55      55        5/60      45/60     0.274   708            +4 / +27 / +0.155
+reranker LAMAR-600m.Q5_K_M · fuse               60   0    55     55      55        5/60      22/60     0.191   710            +4 / +4 / +0.072
+reranker bge-reranker-v2-m3-Q5_K_M · partition  60   0    55     55      55        7/60      42/60     0.278   695            +6 / +24 / +0.159
+reranker bge-reranker-v2-m3-Q5_K_M · fuse       60   0    55     55      55        8/60      21/60     0.209   700            +7 / +3 / +0.089
+
+== mixed ==
+arm                                             n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)      60   0    59     0       0         35/60     47/60     0.657   375            
+公式 · no verification · A/A twin               60   0    59     0       0         35/60     47/60     0.657   375            +0 / +0 / +0.000
+reranker LAMAR-600m.Q5_K_M · partition          60   0    59     59      59        38/60     57/60     0.731   818            +3 / +10 / +0.074
+reranker LAMAR-600m.Q5_K_M · fuse               60   0    59     59      59        37/60     51/60     0.702   826            +2 / +4 / +0.045
+reranker bge-reranker-v2-m3-Q5_K_M · partition  60   0    59     59      59        37/60     56/60     0.720   808            +2 / +9 / +0.063
+reranker bge-reranker-v2-m3-Q5_K_M · fuse       60   0    59     59      59        35/60     51/60     0.681   808            +0 / +4 / +0.024
+
+== all ==
+arm                                             n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)      240  0    234    0       0         79/240    125/240   0.397   352            
+公式 · no verification · A/A twin               240  0    234    0       0         79/240    125/240   0.397   351            +0 / +0 / +0.000
+reranker LAMAR-600m.Q5_K_M · partition          240  0    234    234     234       86/240    208/240   0.494   743            +7 / +83 / +0.097
+reranker LAMAR-600m.Q5_K_M · fuse               240  0    234    234     234       85/240    137/240   0.432   744            +6 / +12 / +0.035
+reranker bge-reranker-v2-m3-Q5_K_M · partition  240  0    234    234     234       90/240    203/240   0.507   742            +11 / +78 / +0.110
+reranker bge-reranker-v2-m3-Q5_K_M · fuse       240  0    234    234     234       87/240    139/240   0.438   746            +8 / +14 / +0.041
+```
+
+### Paired vs `formula` — McNemar exact, per query
+
+`b` = formula hit & arm miss, `c` = formula miss & arm hit. Interval = Agresti–Min 95% for the net rate
+`(c − b) / pairs`; equivalence needs the whole interval inside ±3pp.
+
+```
+  top-1:
+  arm                                             set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  公式 · no verification · A/A twin               all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+                                                  same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                  cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                  third   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                  mixed   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+  reranker LAMAR-600m.Q5_K_M · partition          all     240    1/8      0.039   +7 (+2.9pp)      [+0.4, +5.4]pp      no          YES (arm better)
+                                                  same    60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+                                                  cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                  third   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —           
+                                                  mixed   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —           
+  reranker LAMAR-600m.Q5_K_M · fuse               all     240    1/7      0.070   +6 (+2.5pp)      [+0.1, +4.9]pp      no          no
+                                                  same    60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+                                                  cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                  third   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —           
+                                                  mixed   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —           
+  reranker bge-reranker-v2-m3-Q5_K_M · partition  all     240    3/14     0.013   +11 (+4.6pp)     [+1.2, +7.9]pp      no          YES (arm better)
+                                                  same    60     2/3      1.000   +1 (+1.7pp)      [-6.1, +9.3]pp      —           
+                                                  cross   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —           
+                                                  third   60     0/6      0.031   +6 (+10.0pp)     [+1.7, +17.7]pp     —           
+                                                  mixed   60     1/3      0.625   +2 (+3.3pp)      [-3.8, +10.2]pp     —           
+  reranker bge-reranker-v2-m3-Q5_K_M · fuse       all     240    3/11     0.057   +8 (+3.3pp)      [+0.2, +6.4]pp      no          no
+                                                  same    60     2/2      1.000   +0 (+0.0pp)      [-7.1, +7.1]pp      —           
+                                                  cross   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —           
+                                                  third   60     0/7      0.016   +7 (+11.7pp)     [+2.8, +19.8]pp     —           
+                                                  mixed   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+  found@8:
+  arm                                             set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  公式 · no verification · A/A twin               all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+                                                  same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                  cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                  third   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                  mixed   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+  reranker LAMAR-600m.Q5_K_M · partition          all     240    0/83     <0.001  +83 (+34.6pp)    [+28.3, +40.3]pp    no          YES (arm better)
+                                                  same    60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —           
+                                                  cross   60     0/43     <0.001  +43 (+71.7pp)    [+57.5, +81.3]pp    —           
+                                                  third   60     0/27     <0.001  +27 (+45.0pp)    [+30.8, +56.3]pp    —           
+                                                  mixed   60     0/10     0.002   +10 (+16.7pp)    [+6.4, +25.8]pp     —           
+  reranker LAMAR-600m.Q5_K_M · fuse               all     240    3/15     0.008   +12 (+5.0pp)     [+1.5, +8.4]pp      no          YES (arm better)
+                                                  same    60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —           
+                                                  cross   60     1/4      0.375   +3 (+5.0pp)      [-2.8, +12.5]pp     —           
+                                                  third   60     1/5      0.219   +4 (+6.7pp)      [-1.8, +14.7]pp     —           
+                                                  mixed   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —           
+  reranker bge-reranker-v2-m3-Q5_K_M · partition  all     240    1/79     <0.001  +78 (+32.5pp)    [+26.2, +38.3]pp    no          YES (arm better)
+                                                  same    60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —           
+                                                  cross   60     0/42     <0.001  +42 (+70.0pp)    [+55.7, +79.8]pp    —           
+                                                  third   60     1/25     <0.001  +24 (+40.0pp)    [+25.4, +52.0]pp    —           
+                                                  mixed   60     0/9      0.004   +9 (+15.0pp)     [+5.2, +23.8]pp     —           
+  reranker bge-reranker-v2-m3-Q5_K_M · fuse       all     240    5/19     0.007   +14 (+5.8pp)     [+1.8, +9.8]pp      no          YES (arm better)
+                                                  same    60     2/3      1.000   +1 (+1.7pp)      [-6.1, +9.3]pp      —           
+                                                  cross   60     1/7      0.070   +6 (+10.0pp)     [+0.5, +18.9]pp     —           
+                                                  third   60     2/5      0.453   +3 (+5.0pp)      [-4.0, +13.7]pp     —           
+                                                  mixed   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —           
+```
+
+### Paired across runs vs Run 1's `content` — McNemar exact, per query
+
+Same seed, same order, digest `f661eb6a056e` on both sides. `b` = Run 1 `content` hit & arm miss, `c` = the
+reverse.
+
+```
+  top-1:
+  arm                                             set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  公式 · no verification (seed tags present)      all     240    53/0     <0.001  -53 (-22.1pp)    [-27.2, -16.6]pp    no          YES (arm worse)
+                                                  same    60     15/0     <0.001  -15 (-25.0pp)    [-35.3, -13.1]pp    —           
+                                                  cross   60     10/0     0.002   -10 (-16.7pp)    [-25.8, -6.4]pp     —           
+                                                  third   60     15/0     <0.001  -15 (-25.0pp)    [-35.3, -13.1]pp    —           
+                                                  mixed   60     13/0     <0.001  -13 (-21.7pp)    [-31.6, -10.4]pp    —           
+  公式 · no verification · A/A twin               all     240    53/0     <0.001  -53 (-22.1pp)    [-27.2, -16.6]pp    no          YES (arm worse)
+                                                  same    60     15/0     <0.001  -15 (-25.0pp)    [-35.3, -13.1]pp    —           
+                                                  cross   60     10/0     0.002   -10 (-16.7pp)    [-25.8, -6.4]pp     —           
+                                                  third   60     15/0     <0.001  -15 (-25.0pp)    [-35.3, -13.1]pp    —           
+                                                  mixed   60     13/0     <0.001  -13 (-21.7pp)    [-31.6, -10.4]pp    —           
+  reranker LAMAR-600m.Q5_K_M · partition          all     240    47/1     <0.001  -46 (-19.2pp)    [-24.1, -13.9]pp    no          YES (arm worse)
+                                                  same    60     15/0     <0.001  -15 (-25.0pp)    [-35.3, -13.1]pp    —           
+                                                  cross   60     10/0     0.002   -10 (-16.7pp)    [-25.8, -6.4]pp     —           
+                                                  third   60     11/0     <0.001  -11 (-18.3pp)    [-27.8, -7.7]pp     —           
+                                                  mixed   60     11/1     0.006   -10 (-16.7pp)    [-26.8, -5.5]pp     —           
+  reranker LAMAR-600m.Q5_K_M · fuse               all     240    48/1     <0.001  -47 (-19.6pp)    [-24.6, -14.2]pp    no          YES (arm worse)
+                                                  same    60     15/0     <0.001  -15 (-25.0pp)    [-35.3, -13.1]pp    —           
+                                                  cross   60     10/0     0.002   -10 (-16.7pp)    [-25.8, -6.4]pp     —           
+                                                  third   60     11/0     <0.001  -11 (-18.3pp)    [-27.8, -7.7]pp     —           
+                                                  mixed   60     12/1     0.003   -11 (-18.3pp)    [-28.7, -6.8]pp     —           
+  reranker bge-reranker-v2-m3-Q5_K_M · partition  all     240    44/2     <0.001  -42 (-17.5pp)    [-22.5, -12.3]pp    no          YES (arm worse)
+                                                  same    60     14/0     <0.001  -14 (-23.3pp)    [-33.5, -11.7]pp    —           
+                                                  cross   60     9/1      0.021   -8 (-13.3pp)     [-22.9, -2.9]pp     —           
+                                                  third   60     9/0      0.004   -9 (-15.0pp)     [-23.8, -5.2]pp     —           
+                                                  mixed   60     12/1     0.003   -11 (-18.3pp)    [-28.7, -6.8]pp     —           
+  reranker bge-reranker-v2-m3-Q5_K_M · fuse       all     240    45/0     <0.001  -45 (-18.8pp)    [-23.6, -13.6]pp    no          YES (arm worse)
+                                                  same    60     15/0     <0.001  -15 (-25.0pp)    [-35.3, -13.1]pp    —           
+                                                  cross   60     9/0      0.004   -9 (-15.0pp)     [-23.8, -5.2]pp     —           
+                                                  third   60     8/0      0.008   -8 (-13.3pp)     [-21.8, -4.0]pp     —           
+                                                  mixed   60     13/0     <0.001  -13 (-21.7pp)    [-31.6, -10.4]pp    —           
+  found@8:
+  arm                                             set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  公式 · no verification (seed tags present)      all     240    13/5     0.096   -8 (-3.3pp)      [-6.8, +0.2]pp      no          no
+                                                  same    60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —           
+                                                  cross   60     8/3      0.227   -5 (-8.3pp)      [-18.8, +2.7]pp     —           
+                                                  third   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —           
+                                                  mixed   60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+  公式 · no verification · A/A twin               all     240    13/5     0.096   -8 (-3.3pp)      [-6.8, +0.2]pp      no          no
+                                                  same    60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —           
+                                                  cross   60     8/3      0.227   -5 (-8.3pp)      [-18.8, +2.7]pp     —           
+                                                  third   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —           
+                                                  mixed   60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+  reranker LAMAR-600m.Q5_K_M · partition          all     240    1/76     <0.001  +75 (+31.3pp)    [+25.0, +37.0]pp    no          YES (arm better)
+                                                  same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                  cross   60     0/38     <0.001  +38 (+63.3pp)    [+48.8, +73.8]pp    —           
+                                                  third   60     0/29     <0.001  +29 (+48.3pp)    [+34.0, +59.6]pp    —           
+                                                  mixed   60     1/9      0.021   +8 (+13.3pp)     [+2.9, +22.9]pp     —           
+  reranker LAMAR-600m.Q5_K_M · fuse               all     240    12/16    0.572   +4 (+1.7pp)      [-2.7, +6.0]pp      no          no
+                                                  same    60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+                                                  cross   60     8/6      0.791   -2 (-3.3pp)      [-15.4, +9.0]pp     —           
+                                                  third   60     0/6      0.031   +6 (+10.0pp)     [+1.7, +17.7]pp     —           
+                                                  mixed   60     2/4      0.688   +2 (+3.3pp)      [-5.1, +11.6]pp     —           
+  reranker bge-reranker-v2-m3-Q5_K_M · partition  all     240    1/71     <0.001  +70 (+29.2pp)    [+23.0, +34.8]pp    no          YES (arm better)
+                                                  same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                  cross   60     0/37     <0.001  +37 (+61.7pp)    [+47.1, +72.3]pp    —           
+                                                  third   60     0/26     <0.001  +26 (+43.3pp)    [+29.3, +54.6]pp    —           
+                                                  mixed   60     1/8      0.039   +7 (+11.7pp)     [+1.7, +20.9]pp     —           
+  reranker bge-reranker-v2-m3-Q5_K_M · fuse       all     240    12/18    0.362   +6 (+2.5pp)      [-2.0, +7.0]pp      no          no
+                                                  same    60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+                                                  cross   60     8/9      1.000   +1 (+1.7pp)      [-11.8, +15.0]pp    —           
+                                                  third   60     0/5      0.063   +5 (+8.3pp)      [+0.6, +15.5]pp     —           
+                                                  mixed   60     2/4      0.688   +2 (+3.3pp)      [-5.1, +11.6]pp     —           
+```
+
+### Paired — every reranker against every other
+
+`b` = right-hand arm hit & left-hand arm miss, `c` = the reverse (`rr:` = partition, `rrf:` = fuse).
+
+```
+  top-1:
+  arm                                                            set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  rrf:LAMAR-600m.Q5_K_M vs rr:LAMAR-600m.Q5_K_M                  all     240    1/0      1.000   -1 (-0.4pp)      [-1.6, +0.7]pp      YES         no
+                                                                 same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                                 cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                                 third   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                                 mixed   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —           
+  rr:bge-reranker-v2-m3-Q5_K_M vs rr:LAMAR-600m.Q5_K_M           all     240    2/6      0.289   +4 (+1.7pp)      [-0.8, +4.1]pp      no          no
+                                                                 same    60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —           
+                                                                 cross   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —           
+                                                                 third   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —           
+                                                                 mixed   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —           
+  rrf:bge-reranker-v2-m3-Q5_K_M vs rr:LAMAR-600m.Q5_K_M          all     240    4/5      1.000   +1 (+0.4pp)      [-2.1, +3.0]pp      YES         no
+                                                                 same    60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+                                                                 cross   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —           
+                                                                 third   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —           
+                                                                 mixed   60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —           
+  rr:bge-reranker-v2-m3-Q5_K_M vs rrf:LAMAR-600m.Q5_K_M          all     240    2/7      0.180   +5 (+2.1pp)      [-0.5, +4.6]pp      no          no
+                                                                 same    60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —           
+                                                                 cross   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —           
+                                                                 third   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —           
+                                                                 mixed   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+  rrf:bge-reranker-v2-m3-Q5_K_M vs rrf:LAMAR-600m.Q5_K_M         all     240    3/5      0.727   +2 (+0.8pp)      [-1.6, +3.3]pp      no          no
+                                                                 same    60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+                                                                 cross   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —           
+                                                                 third   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —           
+                                                                 mixed   60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+  rrf:bge-reranker-v2-m3-Q5_K_M vs rr:bge-reranker-v2-m3-Q5_K_M  all     240    4/1      0.375   -3 (-1.3pp)      [-3.2, +0.7]pp      no          no
+                                                                 same    60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —           
+                                                                 cross   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —           
+                                                                 third   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —           
+                                                                 mixed   60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+  found@8:
+  arm                                                            set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  rrf:LAMAR-600m.Q5_K_M vs rr:LAMAR-600m.Q5_K_M                  all     240    71/0     <0.001  -71 (-29.6pp)    [-35.1, -23.5]pp    no          YES (arm worse)
+                                                                 same    60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+                                                                 cross   60     40/0     <0.001  -40 (-66.7pp)    [-76.8, -52.2]pp    —           
+                                                                 third   60     23/0     <0.001  -23 (-38.3pp)    [-49.5, -24.7]pp    —           
+                                                                 mixed   60     6/0      0.031   -6 (-10.0pp)     [-17.7, -1.7]pp     —           
+  rr:bge-reranker-v2-m3-Q5_K_M vs rr:LAMAR-600m.Q5_K_M           all     240    5/0      0.063   -5 (-2.1pp)      [-4.0, -0.1]pp      no          no
+                                                                 same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —           
+                                                                 cross   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —           
+                                                                 third   60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —           
+                                                                 mixed   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —           
+  rrf:bge-reranker-v2-m3-Q5_K_M vs rr:LAMAR-600m.Q5_K_M          all     240    69/0     <0.001  -69 (-28.8pp)    [-34.3, -22.8]pp    no          YES (arm worse)
+                                                                 same    60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+                                                                 cross   60     37/0     <0.001  -37 (-61.7pp)    [-72.3, -47.1]pp    —           
+                                                                 third   60     24/0     <0.001  -24 (-40.0pp)    [-51.2, -26.2]pp    —           
+                                                                 mixed   60     6/0      0.031   -6 (-10.0pp)     [-17.7, -1.7]pp     —           
+  rr:bge-reranker-v2-m3-Q5_K_M vs rrf:LAMAR-600m.Q5_K_M          all     240    1/67     <0.001  +66 (+27.5pp)    [+21.5, +33.1]pp    no          YES (arm better)
+                                                                 same    60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —           
+                                                                 cross   60     0/39     <0.001  +39 (+65.0pp)    [+50.5, +75.3]pp    —           
+                                                                 third   60     0/20     <0.001  +20 (+33.3pp)    [+20.2, +44.3]pp    —           
+                                                                 mixed   60     1/6      0.125   +5 (+8.3pp)      [-0.6, +16.8]pp     —           
+  rrf:bge-reranker-v2-m3-Q5_K_M vs rrf:LAMAR-600m.Q5_K_M         all     240    5/7      0.774   +2 (+0.8pp)      [-2.1, +3.7]pp      no          no
+                                                                 same    60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+                                                                 cross   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —           
+                                                                 third   60     3/2      1.000   -1 (-1.7pp)      [-9.3, +6.1]pp      —           
+                                                                 mixed   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+  rrf:bge-reranker-v2-m3-Q5_K_M vs rr:bge-reranker-v2-m3-Q5_K_M  all     240    64/0     <0.001  -64 (-26.7pp)    [-32.1, -20.8]pp    no          YES (arm worse)
+                                                                 same    60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+                                                                 cross   60     36/0     <0.001  -36 (-60.0pp)    [-70.7, -45.4]pp    —           
+                                                                 third   60     21/0     <0.001  -21 (-35.0pp)    [-46.1, -21.7]pp    —           
+                                                                 mixed   60     5/0      0.063   -5 (-8.3pp)      [-15.5, -0.6]pp     —           
+```
+
+### A/A sanity check
+
+```
+A/A SANITY CHECK — each pair ran the identical configuration from the identical snapshot, so its p on `all`
+must stay ≥ 0.05; if it does not, the paired test is seeing something that is not there and the run is suspect.
+
+formula vs formula2 (engine — no model in the loop):   Δ top-1 / found / MRR   ·   paired p (top-1, found@8)
+  same    +0 / +0 / +0.000           ·   p 1.000, 1.000
+  cross   +0 / +0 / +0.000           ·   p 1.000, 1.000
+  third   +0 / +0 / +0.000           ·   p 1.000, 1.000
+  mixed   +0 / +0 / +0.000           ·   p 1.000, 1.000
+  all     +0 / +0 / +0.000           ·   p 1.000, 1.000
+
+judge A/A: NOT run (add content,content2) — nothing shows how far the judge wanders between identical runs.
+
+formula positions digest: f661eb6a056e (240 queries, 60 facts, order seed 12345) — equal digests across runs mean identical formula rows, the precondition for comparing runs
+```
+
+The engine A/A pair is byte-identical everywhere, so the run passes its own sanity check. There is **no model A/A
+pair in this run**: the bench's model twin is `content2`, the Claude judge, and no reranker arm ran twice (see
+"What it does NOT say").
+
+### Latency
+
+```
+latency (ms) — parallel: mean over the accuracy pass, 6 arm(s) at once; serial median: one arm at a time, first 12 queries, judge arms counting only recalls that carried a verdict
+arm                                             ms (parallel)  ms (serial median)  cli ok/failed (accuracy)  cli ok/failed (total)  judge
+公式 · no verification (seed tags present)      352            226                 0/0                       0/0                    off · claude-cli · haiku
+公式 · no verification · A/A twin               351            245                 0/0                       0/0                    off · claude-cli · haiku
+reranker LAMAR-600m.Q5_K_M · partition          743            474                 0/0                       0/0                    on · llama-cpp · LAMAR-600m.Q5_K_M
+reranker LAMAR-600m.Q5_K_M · fuse               744            423                 0/0                       0/0                    on · llama-cpp · LAMAR-600m.Q5_K_M
+reranker bge-reranker-v2-m3-Q5_K_M · partition  742            489                 0/0                       0/0                    on · llama-cpp · bge-reranker-v2-m3-Q5_K_M
+reranker bge-reranker-v2-m3-Q5_K_M · fuse       746            432                 0/0                       0/0                    on · llama-cpp · bge-reranker-v2-m3-Q5_K_M
+```
+
+### Warnings
+
+None. The bench printed no WARNING line: no reranker arm left a graph recall without a verdict (`judged` equals
+`graph` in every set), no query errored, and no claude-cli call was made at startup or at any time during the
+run.
+
+### By fact language — the household's case
+
+Not the bench's own output: computed from this run's saved rows and Run 1's (`results-2026-09-23T113455.224Z.json`,
+`results-2026-09-23T091740.681Z.json`), by the fact's language as `recall-questions.mjs` decides it (40 Chinese,
+16 English, 4 Japanese facts). top-1 / found@8 / n. The Chinese-fact rows of `same` and `mixed` are the
+household's case: Chinese facts, asked in Chinese or code-switched.
+
+```
+set · facts   公式          LAMAR · partition  BGE · partition  LAMAR · fuse  BGE · fuse  Claude content (Run 1)
+same · zh     31 / 36 / 40  30 / 37 / 40       29 / 37 / 40     30 / 35 / 40  29 / 35 / 40  37 / 37 / 40
+same · en      7 / 14 / 16   8 / 16 / 16       10 / 16 / 16      8 / 16 / 16   9 / 16 / 16  16 / 16 / 16
+mixed · zh    21 / 31 / 40  23 / 39 / 40       23 / 38 / 40     22 / 33 / 40  22 / 33 / 40  32 / 33 / 40
+mixed · en    14 / 16 / 16  14 / 16 / 16       13 / 16 / 16     14 / 16 / 16  13 / 16 / 16  16 / 16 / 16
+cross · zh     0 /  0 / 40   0 / 30 / 40        0 / 30 / 40      0 /  1 / 40   0 /  3 / 40   7 /  7 / 40
+third · zh     1 / 13 / 40   5 / 30 / 40        5 / 28 / 40      5 / 15 / 40   5 / 15 / 40  12 / 12 / 40
+```
+
+LAMAR against BGE (partition), paired on the same queries (LAMAR-only hits / BGE-only hits): `same` × Chinese
+facts, top-1 1/0 and found@8 0/0; `mixed` × Chinese facts, top-1 0/0 and found@8 1/0. On the household's case the
+two rerankers disagree on exactly two of 80 queries, both in LAMAR's favour, which no test can distinguish from
+nothing. (`same` × English facts: top-1 0/2, BGE's way.)
+
+### What it says
+
+- **Reranker vs 公式, by set.** Under partition both rerankers are a large, significant gain on **found@8**: LAMAR
+  125 → 208/240 (paired 0/83, p < 0.001, net +83 = **+34.6pp**, 95% CI **[+28.3, +40.3]pp**), BGE 125 → 203/240
+  (1/79, p < 0.001, net +78 = **+32.5pp**, [+26.2, +38.3]pp). The gain is where the lexical floor fails: cross
+  6 → 49 / 48 of 60 (+71.7 / +70.0pp, both p < 0.001), third 18 → 45 / 42 (+45.0 / +40.0pp, p < 0.001), mixed
+  47 → 57 / 56 (+16.7pp p = 0.002 / +15.0pp p = 0.004); on `same`, where formula already found 54/60, +3 each
+  (p = 0.250, not significant). On **top-1** the gain is small but it is a finding for both: LAMAR +7 = **+2.9pp**
+  (1/8, p = 0.039, [+0.4, +5.4]pp), BGE +11 = **+4.6pp** (3/14, p = 0.013, [+1.2, +7.9]pp); no set is
+  significant in the opposite direction, and the only significant set is BGE's `third` (+10.0pp, p = 0.031). That
+  top-1 barely moves is the partition's arithmetic described above, not the reranker failing to rank: in `cross`,
+  LAMAR puts the answer on the page 49 times out of 60 and first once, because first is still the engine's pick,
+  and the engine's cross-language ranking is near random (formula 1/60).
+- **Reranker vs the Claude judge (Run 1's `content`, same seed).** The two judges make opposite trades. On
+  **top-1** every reranker arm is significantly **worse** than the Claude judge: LAMAR partition 86 vs 132
+  (47/1, p < 0.001, net −46 = **−19.2pp**, [−24.1, −13.9]pp), BGE partition 90 vs 132 (44/2, net −42 =
+  **−17.5pp**, [−22.5, −12.3]pp), and every set agrees, each one itself significant (same −25.0 / −23.3pp, cross
+  −16.7 / −13.3pp, third −18.3 / −15.0pp, mixed −16.7 / −18.3pp). On **found@8** both partition arms are
+  significantly **better**: LAMAR 208 vs 133 (1/76, p < 0.001, net +75 = **+31.3pp**, [+25.0, +37.0]pp), BGE 203
+  vs 133 (1/71, net +70 = **+29.2pp**, [+23.0, +34.8]pp) — from cross (+63.3 / +61.7pp), third (+48.3 / +43.3pp)
+  and mixed (+13.3pp p = 0.021 / +11.7pp p = 0.039), while on `same` their found@8 hits are identical query
+  for query (0/0).
+  Both judges are shown the same candidate list (up to 60). The Claude judge endorses only what it judges to
+  answer: when it finds the answer, partition puts it first, so its top-1 and found@8 hits nearly coincide (132
+  and 133); when it does not, the page stays the engine's, which is why its found@8 is barely above 公式's (133
+  vs 125, not a finding in Run 1). A reranker always endorses a full page of its eight best, so the answer lands
+  on the page far more often, in whatever position the engine gives it. The fuse arms reach neither finding
+  against `content` on found@8 (LAMAR +4, p = 0.572; BGE +6, p = 0.362) and lose on top-1 like the partition
+  arms.
+- **Serial latency.** One arm at a time over 12 queries, the reranker arms' median recall is **423–489 ms**
+  against **226–245 ms** for 公式 alone: a reranker verdict adds roughly 0.2–0.25 s per recall. Run 1's Claude
+  judge arms took **8733–11722 ms** on the same measure (content · partition 9531 ms), so a reranker recall is
+  about 20× faster than a Claude-judged one and spends no account quota. The parallel means (742–746 ms against
+  351–352) were contended: six arms at once, all four reranker arms sharing one llama-server router on one GPU.
+- **LAMAR vs BGE — the fixture could not separate them.** Paired in this run, partition against partition: on
+  top-1, BGE +4 (2/6, p = 0.289, net +1.7pp, 95% CI [−0.8, +4.1]pp) — not significant, and not equivalent because
+  the interval reaches past +3pp; on found@8, LAMAR +5 (BGE's net −5 = −2.1pp, 5/0, p = 0.063, [−4.0, −0.1]pp) —
+  not significant, and not equivalent because the interval reaches past −3pp. So on both measures the bench's
+  answer is **neither** — no difference and no equivalence — and the two point estimates even point opposite ways.
+  The same holds for fuse against fuse (top-1 3/5, p = 0.727, [−1.6, +3.3]pp; found@8 5/7, p = 0.774,
+  [−2.1, +3.7]pp) and in every set, none of which is significant either way. On the household's case — Chinese
+  facts asked in Chinese, and code-switched questions about them — the two disagree on two queries of 80, both
+  LAMAR's (see "By fact language"); BGE's small top-1 lead on `all` comes from elsewhere, e.g. English facts
+  asked in English (10 vs 8 of 16). Latency is a wash (474 vs 489 ms serial, partition).
+  **Recommended: `bge-reranker-v2-m3-Q5_K_M`**, by the rule declared before the run (neither significant nor
+  equivalent → the smaller file) — and the rule decided it by **1,408 bytes** (468,392,352 against 468,393,760):
+  the files are the same size for any purpose a household has. It is a tie-break, not a measured preference, and
+  a household on LAMAR gives up nothing this fixture can see.
+  `GgufCatalog.RecommendedReranker` and both reranker notes say so.
+- **Partition vs fuse, per reranker.** For LAMAR, top-1 is **equivalent** (fuse vs partition 1/0, p = 1.000,
+  95% CI [−1.6, +0.7]pp, inside ±3pp) and found@8 is significantly **worse** under fuse (71/0, p < 0.001,
+  −29.6pp, [−35.1, −23.5]pp). For BGE, top-1 is **neither** (4/1, p = 0.375, [−3.2, +0.7]pp — the lower bound
+  just past −3pp) and found@8 is significantly **worse** under fuse (64/0, p < 0.001, −26.7pp, [−32.1, −20.8]pp);
+  in both, the found@8 loss comes mostly from cross and third, with no set significant the other way. Fuse gives
+  back nearly all of the reranker's found@8 gain: against 公式 it keeps +12 / +14 on found@8 (+5.0pp p = 0.008 /
+  +5.8pp p = 0.007, both findings) of partition's +83 / +78, and its top-1 gain over 公式 (+6 / +8) is not a
+  finding (p = 0.070 / 0.057). That matches how Lyntai measured fuse, as insurance: here it sits at the base on
+  top-1 and a little above it on found@8, with no set significantly below the base. Partition stays the default
+  for a reranker binding.
+  The partition's documented failure mode — a verdict endorsing a full page replaces the page instead of
+  refining it — is exactly what happens here, because `EndorseCount` equals the page; on this fixture that
+  replacement IS the benefit, and fuse, which exists to soften it, removes most of it.
+
+### What it does NOT say
+
+- One fixture (60 invented facts), one run per arm, one quantisation of each reranker (Q5_K_M), one llama.cpp
+  build (`b10549`, Vulkan) on one machine's GPU. LAMAR against BGE is **unresolved**, not "equal": the bench showed
+  neither a difference nor an equivalence, and a larger or differently built fixture could separate them.
+- No reranker arm ran twice, so this run has no model A/A pair: nothing here shows how far a reranker arm drifts
+  between identical runs. The Claude side of the cross-run comparison was also measured once — Run 1's own
+  `content`/`content2` A/A differed by 2 queries — so a cross-run gap of that size is inside the noise. The
+  cross-run findings above (42–75 queries) are more than an order of magnitude larger; the fuse arms' found@8
+  gaps against `content` (+4, +6) are not, and were not findings.
+- The top-1 numbers describe the COMBINATION (partition, one bit per candidate) as much as the rerankers. Both
+  rerankers compute a score for every candidate and the engine does not order by it; nothing here measures what
+  top-1 would be if it did. That is a design question this run raises and does not answer.
+- The found@8 gain is tied to `EndorseCount` = 8 = this bench's page size = `recall_facts`' default. A caller
+  asking for a different limit gets a different relationship between the endorsed set and the page (fewer than 8
+  → the engine's first N of the reranker's 8; more than 8 → the reranker's 8, then the engine's). No other limit
+  was measured.
+- 语义 was off in every arm, as in Run 1. In these arms the reranker was the only component that reads across
+  languages, which is much of why its cross/third found@8 gains are so large; with an embedder the candidate
+  list itself changes, and none of these numbers say what a reranker adds on top of one.
+- A reranker scores every candidate it is shown, so its cost grows with the list. The fixture keeps every recall
+  at 60 candidates or fewer; kind-filtered recalls, which can carry up to 400, were not exercised, and nothing
+  here prices them.
+- Serial latency is a median over 12 queries with the reranker already warm; the cold load (~4.8 s, measured when
+  the screen was written) is not in it. An unrelated llama-server process was resident on the same machine during
+  the run.
+- Recall-time only. A reranker binding still annotates every fact WRITE on the Claude CLI; this run made no
+  writes, so that cost is not in these numbers.
+- The questions are the same hand-reviewed ones as Run 1's (see its last-but-one bullet).

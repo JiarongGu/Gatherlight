@@ -52,9 +52,13 @@ public sealed record GgufModel(
 ///
 /// <para><b>Measurements are per model and honestly sparse.</b> Only the embedder has been scored on the
 /// 10-query fixture (9/10 top-1, 25 ms/query through the app, 2026-08-22 — the same instrument as every
-/// number in <see cref="EmbeddingCatalog"/>). The chat models carry latency observations rather than
-/// recall scores, because 判断's quality has never been measured per model on this corpus at all; claiming
-/// otherwise is the failure this whole area keeps correcting.</para>
+/// number in <see cref="EmbeddingCatalog"/>). The two rerankers have been scored AS 判断 on the 240-question
+/// bilingual fixture (<c>docs/judge-bench.md</c>, Run 2, 2026-09-23) — top-1 and found@8, which is not the
+/// shape of <see cref="EmbeddingMeasurement"/> (top-3 of 10 queries), so those figures live in the note and
+/// <see cref="GgufModel.Measured"/> stays null rather than carrying a found@8 in a top-3 slot. The chat
+/// models carry latency observations rather than recall scores, because no local chat judge has been
+/// measured per model on this corpus; claiming otherwise is the failure this whole area keeps
+/// correcting.</para>
 /// </summary>
 public static class GgufCatalog
 {
@@ -66,11 +70,31 @@ public static class GgufCatalog
     /// of every recall and a judge that is slow is a judge a household turns off.</summary>
     public const string RecommendedJudge = "gemma-3-1b-it-Q4_K_M";
 
+    /// <summary>The reranker the bilingual bench recommends (docs/judge-bench.md, Run 2) — by the tie rule
+    /// declared before the run, NOT by a measured difference. Paired on the same 240 questions, LAMAR and BGE
+    /// were neither significantly different nor equivalent on top-1 or on found@8, so the rule took the smaller
+    /// file — and the two files differ by 1,408 bytes. Both rows' notes say the fixture could not separate them.
+    /// Its display name carries no 推荐 (unlike <see cref="RecommendedJudge"/>'s), and the console's 推荐 badge
+    /// does not read it: either would claim a preference the measurement cannot see. Re-run
+    /// <c>dev.mjs judge-bench</c> before treating it as more.</summary>
+    public const string RecommendedReranker = "bge-reranker-v2-m3-Q5_K_M";
+
     /// <summary>What every reranker row says, because it is the one thing that differs from a chat judge:
     /// only HALF of 判断 moves.</summary>
     private const string RerankerNote =
         "判断用的重排模型:检索时的判断在本机完成;写入事实时的主题标注由 Claude CLI 完成(每条事实一次调用,"
         + "事实内容会发给 Claude)。";
+
+    /// <summary>What a reranker row's measured figures are read AGAINST — the same 240 questions with 判断 off
+    /// and with the Claude CLI judge, the two other answers this layer offers (docs/judge-bench.md, Runs 1 and
+    /// 2: same seed, same questions, equal formula digests). Shared because the comparators are the same for
+    /// every reranker, and a figure with nothing beside it cannot be weighed. The trade is stated both ways:
+    /// a reranker puts the answer on the page far more often and first hardly more often, because it chooses
+    /// which eight make the page and the engine still orders them.</summary>
+    private const string RerankerMeasuredAgainst =
+        "同一测试集上,不开判断是 79/240 与 125/240(每次约 0.23 秒),Claude CLI 判断是 132/240 与 133/240"
+        + "(每次约 9.5 秒):重排把答案带进前八的次数多得多,排到第一的次数却只比不开判断略多 —— "
+        + "它挑哪八条上页,先后仍按原来的排序。";
 
     public static readonly IReadOnlyList<GgufModel> Models = new[]
     {
@@ -107,13 +131,19 @@ public static class GgufCatalog
             "mradermacher/LAMAR-600m-GGUF", "cd4da764d5b17d9996710dbf0ef5ad31c9aed182",
             "LAMAR-600m.Q5_K_M.gguf",
             "ec708b20336577c63702dd8efb23060bc611933579572bf9ad47ce2eaeda546f", 468_393_760,
-            RerankerNote + "Lyntai 在英文 LoCoMo 上实测:+9.0(完美判断是 +9.5);本应用的双语数据尚未实测。"),
+            RerankerNote + "本应用双语测试集:首位命中 86/240,前八命中 208/240,每次检索约 0.47 秒。"
+            + RerankerMeasuredAgainst + "和 BGE 的差别这个测试集分不出来。"
+            + "Lyntai 在英文 LoCoMo 上实测:+9.0(完美判断是 +9.5)。"),
         new GgufModel(
-            "bge-reranker-v2-m3-Q5_K_M", "BGE Reranker v2 M3(Q5 · 判断 · 重排)", GgufCapability.Reranking,
+            RecommendedReranker, "BGE Reranker v2 M3(Q5 · 判断 · 重排)", GgufCapability.Reranking,
             "gpustack/bge-reranker-v2-m3-GGUF", "3093af03b1a635e67b084b1d8c03c5f5e020fd05",
             "bge-reranker-v2-m3-Q5_K_M.gguf",
             "1a212007526c7083627eed92b39dd4472e90ff1374a03fb068733378220813ef", 468_392_352,
-            RerankerNote + "中文评测上比同类更强;Lyntai 量过的是它的 Q8 版本(+5.5),这个 Q5 版本与本应用的双语数据均尚未实测。"),
+            RerankerNote + "本应用双语测试集:首位命中 90/240,前八命中 203/240,每次检索约 0.49 秒。"
+            + RerankerMeasuredAgainst + "和 LAMAR 的差别这个测试集分不出来(公开的中文评测上它比同类更强;"
+            + "本应用的中文题上两者只有两题结果不同,都是 LAMAR 对);两个文件大小只差 1.4 KB,"
+            + "推荐它只是按「分不出时取较小的文件」。"
+            + "Lyntai 在英文 LoCoMo 上量过的是它的 Q8 版本(+5.5)。"),
     };
 
     public static GgufModel? Find(string? id) =>
