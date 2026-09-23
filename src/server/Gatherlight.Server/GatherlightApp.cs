@@ -287,12 +287,18 @@ public static class GatherlightApp
                             sp.GetService<ILogger<Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy>>()),
                         sp.GetRequiredService<IAppConfigService>()));
                 b.Services.AddSingleton<Lyntai.Memory.Verification.IMemoryVerificationPolicy>(sp =>
-                    new Platform.Agent.Llm.Services.SwitchableVerificationPolicy(
+                {
+                    Lyntai.Memory.Verification.IMemoryVerificationPolicy llm =
                         new Lyntai.Memory.Verification.LlmMemoryVerificationPolicy(
                             sp.GetRequiredService<Lyntai.Inference.ITextClientFactory>(),
                             new Lyntai.Memory.Verification.LlmVerificationOptions { ClientName = judgeClient },
-                            sp.GetService<ILogger<Lyntai.Memory.Verification.LlmMemoryVerificationPolicy>>()),
-                        sp.GetRequiredService<IAppConfigService>()));
+                            sp.GetService<ILogger<Lyntai.Memory.Verification.LlmMemoryVerificationPolicy>>());
+                    // The judge reads `topic — content`, not the topic headline — see JudgeSeesContentPolicy.
+                    if (Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Enabled)
+                        llm = new Platform.Agent.Llm.Services.JudgeSeesContentPolicy(llm);
+                    return new Platform.Agent.Llm.Services.SwitchableVerificationPolicy(
+                        llm, sp.GetRequiredService<IAppConfigService>());
+                });
                 // Still called: their TryAdd now stands down, but calling them keeps any future
                 // side-effect of those registrations rather than silently missing it.
                 b.AddMemoryAnnotation().AddMemoryVerification();

@@ -94,3 +94,52 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
             ? _inner.VerifyAsync(request, ct)
             : Task.FromResult(MemoryVerification.NoOpinion);
 }
+
+/// <summary>Shows an LLM judge each candidate's CONTENT, not only its headline.
+///
+/// <para><b>Why.</b> Lyntai's <see cref="LlmMemoryVerificationPolicy"/> renders each candidate as
+/// <c>"{n}. {Headline}"</c>, and the fact index writes a fact's TOPIC as its headline — so the judge decided
+/// "did this answer the question?" from topics alone. Verified against the real claude CLI 2.1.280: a fact whose
+/// topic was "weekend market" and whose content said when the market opens came back <c>answered=false</c>,
+/// which is the correct verdict on what the judge was shown. Lyntai's D108 gave every verifier
+/// <see cref="MemoryVerificationCandidate.Content"/> and left the choice of text to the POLICY; its reranker
+/// policy reads content, its LLM policy has no option to.</para>
+///
+/// <para><b>A WORKAROUND FOR A LYNTAI GAP — delete it when the gap closes.</b> Filed as Lyntai TASKS.md
+/// <b>Part 274</b> (a policy-level opt-in on <c>LlmVerificationOptions</c> to read <c>Content ?? Headline</c>).
+/// When that ships, set the option where the LLM verifier is built and delete this class: the option would
+/// render the same text, so keeping both would only double the content.</para>
+///
+/// <para>Topics stay the STORED headline, so <c>expand_fact</c>'s neighbour list is unchanged; only what the judge
+/// reads changes. <c>GATHERLIGHT_JUDGE_INPUT=headline</c> turns it off — a measurement knob for
+/// <c>dev.mjs judge-bench</c>, not a setting.</para></summary>
+public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
+{
+    /// <summary>The most one candidate may contribute. Facts are short; the cap exists so one pathological
+    /// fact cannot multiply the cost of every recall that surfaces it.</summary>
+    public const int MaxChars = 400;
+
+    private readonly IMemoryVerificationPolicy _inner;
+
+    public JudgeSeesContentPolicy(IMemoryVerificationPolicy inner) => _inner = inner;
+
+    /// <summary>False only under the measurement knob.</summary>
+    public static bool Enabled => !string.Equals(
+        Environment.GetEnvironmentVariable("GATHERLIGHT_JUDGE_INPUT"), "headline", StringComparison.OrdinalIgnoreCase);
+
+    public Task<MemoryVerification> VerifyAsync(MemoryVerificationRequest request, CancellationToken ct = default)
+        => _inner.VerifyAsync(request with
+        {
+            Candidates = [.. request.Candidates.Select(c => c.Content is { Length: > 0 } content
+                ? c with { Headline = Line($"{c.Headline} — {content}") }
+                : c)],
+        }, ct);
+
+    /// <summary>ONE line, bounded. The judge's prompt is a numbered list, so a newline inside an entry would
+    /// start a line the judge reads as another note — the same shape Lyntai's D166 fixed for recalled memory.</summary>
+    internal static string Line(string text)
+    {
+        var flat = string.Join(' ', text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)).Trim();
+        return flat.Length <= MaxChars ? flat : flat[..MaxChars] + "…";
+    }
+}
