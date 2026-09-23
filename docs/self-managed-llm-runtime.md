@@ -248,3 +248,13 @@ A warm call shaped like the app's current one for a judge (`POST /v1/chat/comple
 **500** `the current context does not logits computation. skipping` from the reranking child — sent to a COLD
 model the router still loads it first (500 after 8.2 s, status `loaded` afterwards, the next rerank 121 ms), so a
 chat warm call does warm a reranker but reports failure; a reranker's warm call has to be `/v1/rerank`.
+
+**The bind-time screen pair** (`LlamaCppSource.ScreenQuery`/`ScreenDocuments`). Query 「游泳馆成人票多少钱?」 over a
+distractor that repeats the question and never answers it (「游泳馆成人票到底多少钱,很多人在门口问价格,……」) and the
+answer (「游泳馆成人票每张四十元,儿童半价。」, index 1). Both catalogued rerankers through the router, pinned GGUFs
+sha-verified, three runs each with identical scores: LAMAR-600m.Q5_K_M ranks the answer ahead by **4.131**,
+bge-reranker-v2-m3-Q5_K_M by **3.400**. The controls are the point: a lexical scorer ranks the DISTRACTOR first —
+distinct query characters 1.000 against 0.667, character bigrams 7 of 8 against 5 — and so do both models' real
+scores reversed (a backwards GGUF). The pair it replaced could not tell: overlap ranked its answer first (0.750
+against 0.125), so a lexical model passed it. Cold ~4.8 s (the model load), warm 25–33 ms. The screen asserts
+ORDERING only — the spreads are these two models' scales, and a household-dropped reranker may score on another.

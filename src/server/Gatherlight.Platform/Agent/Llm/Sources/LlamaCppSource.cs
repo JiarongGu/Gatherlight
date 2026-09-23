@@ -46,11 +46,32 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// limit — so it has to be a constant, and the one constant that means "a page" is the tool's.</summary>
     private const int RerankEndorseCount = Storage.Knowledge.Tools.RecallFactsTool.DefaultRecallLimit;
 
-    /// <summary>The screen a reranker must pass before it may bind: the ANSWER is second in input order, so a
-    /// model that returns input order unchanged fails as surely as one that ranks backwards. Chinese query,
-    /// Chinese documents — the household's own case.</summary>
-    private const string ScreenQuery = "市场周末几点开门?";
-    private static readonly string[] ScreenDocuments = ["图书馆周一闭馆。", "东门市场周六周日早上七点开门。"];
+    /// <summary>The screen a reranker must pass before it may bind. Chinese query, Chinese documents — the
+    /// household's own case.
+    ///
+    /// <para><b>The DISTRACTOR shares more of the query than the answer does, on purpose.</b> One answer
+    /// plus unrelated noise is passed by a model that only counts overlap — a lexical scorer, or a
+    /// cross-encoder a bad conversion reduced to mean-pooled cosine — which is what Lyntai's
+    /// <c>devtools/scripts/rerank-screen.mjs</c> records about its own first fixture (it passed a GGUF that
+    /// ranks the discriminating pair BACKWARDS). Here the distractor repeats the question's words and never
+    /// answers it; the answer states the price. By distinct query characters a lexical scorer rates them
+    /// 1.000 against 0.667, and by character bigrams the distractor wins too — so overlap ranks it FIRST and
+    /// fails. The answer is also SECOND in input order, so a model returning input order fails as well.
+    /// The pair it replaced was worse than weak: overlap ranked its ANSWER first (0.750 against 0.125), so a
+    /// lexical model passed it outright; the pair first proposed instead only tied.</para>
+    ///
+    /// <para><b>Measured 2026-09-23</b> on both catalogued rerankers through llama-server's router, pinned
+    /// GGUFs sha-verified, three runs each with identical scores: LAMAR-600m.Q5_K_M puts the answer ahead by
+    /// 4.131, bge-reranker-v2-m3-Q5_K_M by 3.400; reversing those real scores — a backwards GGUF — fails.
+    /// Cold ~4.8 s (the model load), warm 25–33 ms. The screen still asserts only the ORDERING: a spread is
+    /// one model's scale, and a household-dropped reranker may score on another
+    /// (<c>docs/self-managed-llm-runtime.md</c>).</para></summary>
+    private const string ScreenQuery = "游泳馆成人票多少钱?";
+    private static readonly string[] ScreenDocuments =
+    [
+        "游泳馆成人票到底多少钱,很多人在门口问价格,工作人员说这个问题他们也不太清楚多少钱一张最准。",
+        "游泳馆成人票每张四十元,儿童半价。",
+    ];
     /// <summary>Which of <see cref="ScreenDocuments"/> answers <see cref="ScreenQuery"/>.</summary>
     private const int ScreenAnswer = 1;
 

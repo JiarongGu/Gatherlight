@@ -19,8 +19,9 @@
 //      the stub's own argv log, because a CLI asked for an unknown model is otherwise indistinguishable
 //      from one that answered badly.
 //   5. A RERANKER binding says what it moves — the checking; tagging stays on the CLI — in its toast and in
-//      the cost line beside it, where the toast used to claim both halves for every binding. And a reranker
-//      the screen refuses for a reason other than its ORDERING is told apart, quoting the server.
+//      the cost line beside it, where the toast used to claim both halves for every binding. The bind-time
+//      screen refuses a reranker that ranks by word OVERLAP, and one it refuses for a reason other than its
+//      ordering is told apart, quoting the server.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -44,6 +45,9 @@ const EMBED_MODEL = 'zzroute-embed';
 // "rerank" in the name is what classifies a household-supplied GGUF as a reranker (the same rule, checked
 // before "embed").
 const RERANK_MODEL = 'zzroute-rerank';
+// Scores by OVERLAP with the query — what a lexical scorer, or a cross-encoder a bad conversion reduced to
+// mean-pooled cosine, amounts to. The screen exists to refuse exactly this.
+const LEXICAL_RERANK = 'zzlexical-rerank';
 // Two that fail the screen for reasons that are NOT the ordering, so their sentences must say so.
 const BROKEN_RERANK = 'zzbroken-rerank';
 const SHORT_RERANK = 'zzshort-rerank';
@@ -57,7 +61,7 @@ fs.mkdirSync(path.join(resources, 'gguf'), { recursive: true });
 fs.writeFileSync(path.join(resources, 'llama-cpp', 'llama-server.exe'), '');
 fs.writeFileSync(path.join(resources, 'gguf', `${JUDGE_MODEL}.gguf`), '');
 fs.writeFileSync(path.join(resources, 'gguf', `${EMBED_MODEL}.gguf`), '');
-for (const m of [RERANK_MODEL, BROKEN_RERANK, SHORT_RERANK])
+for (const m of [RERANK_MODEL, LEXICAL_RERANK, BROKEN_RERANK, SHORT_RERANK])
   fs.writeFileSync(path.join(resources, 'gguf', `${m}.gguf`), '');
 fs.writeFileSync(path.join(dataDir, 'state', 'settings.json'), JSON.stringify({
   memory: {
@@ -103,7 +107,11 @@ const fake = http.createServer((req, res) => {
       // non-answer, because a real cross-encoder's are, and the screen must not treat an unset zero as one.
       const docs = Array.isArray(json.documents) ? json.documents.map(String) : [];
       const answers = (d) => /[0-9]|[一二两三四五六七八九十百千]+\s*(元|块|点|分钟)/.test(d);
-      const results = docs.map((d, index) => ({ index, relevance_score: answers(d) ? 3.2 : -2.1 }))
+      // The share of the query's distinct letters a document contains — overlap and nothing else.
+      const queryChars = [...new Set([...String(json.query ?? '')].filter((ch) => /\p{L}/u.test(ch)))];
+      const overlap = (d) => queryChars.filter((ch) => d.includes(ch)).length / (queryChars.length || 1);
+      const score = json.model === LEXICAL_RERANK ? overlap : (d) => (answers(d) ? 3.2 : -2.1);
+      const results = docs.map((d, index) => ({ index, relevance_score: score(d) }))
         .sort((a, b) => b.relevance_score - a.relevance_score);
       if (json.model === BROKEN_RERANK) {
         // llama-server's own refusal shape, so the screen has something of the server's to quote.
@@ -269,6 +277,18 @@ try {
   ok('…and the cost line beside it says the same thing',
     rrLayer.model === RERANK_MODEL && /重排/.test(String(rrLayer.cost)) && /Claude CLI/.test(String(rrLayer.cost)),
     JSON.stringify({ model: rrLayer.model, cost: rrLayer.cost }));
+
+  // THE SCREEN'S OWN POINT: a model that ranks by OVERLAP is refused. The screen pair makes the distractor
+  // repeat the question's words while the answer states the price, so overlap puts the distractor first.
+  // The pair it replaced let overlap rank its ANSWER first — against it this bind SUCCEEDED, which is the
+  // regression the assertion exists to catch.
+  const lexical = await c2.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: LEXICAL_RERANK });
+  const lexicalErr = String(lexical.body?.error ?? '');
+  ok('THE POINT: a reranker that ranks by word overlap fails the screen and is refused',
+    lexical.status === 409 && /自检/.test(lexicalErr), `${lexical.status} ${lexicalErr || JSON.stringify(lexical.body)}`);
+  ok('…and the refusal leaves the working binding in place',
+    layerOf(await c2.getJson('/api/manage/memory'), 'judge').model === RERANK_MODEL,
+    JSON.stringify(layerOf(await c2.getJson('/api/manage/memory'), 'judge').model));
 
   // A refusal carries what the SERVER said. It used to say 「看「日志」」, which pointed at nothing: the
   // screen logs nothing and llama-server's output is discarded.
