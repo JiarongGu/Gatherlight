@@ -1068,7 +1068,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   carries the login state, and `claude auth login` is browser-interactive with no headless flag, so the
   app detects it exactly and cannot complete it. (3) **the version is only tracked for what WE
   installed**: a household on a machine-wide CLI has no marker of ours and must never be offered an
-  "update" that would silently replace their own install. `ReplaceBinary` tolerates a running image
+  "update" that would silently replace their own install. `ReplaceBinaryAsync` tolerates a running image
   (Windows refuses to overwrite a loaded exe, and an update is exactly when one may be mid-chat) by
   renaming the old copy aside. **That fallback was DEAD CODE until 2026-09-23**: it caught `IOException`,
   and overwriting a running image is ACCESS DENIED, which .NET raises as `UnauthorizedAccessException` — so
@@ -1076,7 +1076,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   opposite. Nothing drove an UPDATE, only a first install. `e2e-p50` case H now updates 9.9.9 → 9.9.10
   under a REALLY running binary (a copy of node.exe, since a fake payload cannot run) and failed with that
   exact message before the fix; it asserts the displaced copy BY NAME when checking the next sweep,
-  because a freshly written exe is briefly held (AV) and may legitimately be set aside once more. Proof
+  because a freshly written exe is briefly held (AV) and may legitimately be set aside once more.
+  **And a HELD file is transient** (a scanner, or our own `auth status` probe spawned from the exe on the
+  panel's last poll). The rename aside gave up on it at once, so an update under load failed while the 1.3.0
+  notes promised the opposite. Both moves now retry a sharing violation for ~7 s. If the new binary cannot go
+  in, the old one is moved BACK, because a marker naming a missing binary is an install that cannot run.
+  Proof: `e2e-p50` case H2. The holder is PowerShell with `FileShare.Read`, because Node opens files with
+  delete-sharing and cannot stand in for one. Proof
   also lives in `e2e-p50`'s tampered-download denial, paired with the same bytes installing under the
   right checksum, and case A asserts the app boots ANYWAY.
   **The login SPAWN is tested too, and the reason it briefly was not is worth keeping.** It was recorded as

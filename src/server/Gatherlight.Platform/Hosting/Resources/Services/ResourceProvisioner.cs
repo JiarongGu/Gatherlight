@@ -805,7 +805,16 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             Set(p, "running", 97, "安装中…");
             var dest = ProvisionedClaude(_data.ResourcesPath);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            ReplaceBinary(staged, dest);
+            try
+            {
+                await ReplaceBinaryAsync(staged, dest);
+            }
+            catch (IOException ex) when (IsHeld(ex))
+            {
+                // The row shows ex.Message to the household; .NET's is English and says nothing about what to do.
+                throw new InvalidOperationException(
+                    "Claude CLI 的文件正被别的程序占用(可能是杀毒软件在扫描),这次没能替换 —— 已安装的版本不受影响,稍后再点「更新」。", ex);
+            }
             // The marker is written LAST, and only after the binary is in place: a marker naming a version
             // that is not on disk would make the panel report an install that cannot run.
             await File.WriteAllTextAsync(ClaudeVersionMarker(_data.ResourcesPath), version);
@@ -838,8 +847,15 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// <see cref="UnauthorizedAccessException"/> — NOT an <see cref="IOException"/>. This caught only the
     /// latter for months, so the fallback never ran in the one case it exists for and an update during a
     /// chat failed with "Access to the path is denied" (measured, and pinned by <c>e2e-p50</c> case H,
-    /// which updates under a really running binary). A sharing violation is the IOException half.</para></summary>
-    private static void ReplaceBinary(string staged, string dest)
+    /// which updates under a really running binary). A sharing violation is the IOException half.</para>
+    /// <para><b>A HELD file is transient, and the rename aside used to give up on it at once.</b> A scanner
+    /// reading a fresh exe, or our own <c>auth status</c> probe spawned from it on the panel's last poll, opens
+    /// it without FILE_SHARE_DELETE — and the rename fails with a sharing violation for as long as that lasts.
+    /// That failed an update under load (p50 case H, 2026-09-24) while the release notes promised updates no
+    /// longer fail in use. So both moves retry a sharing violation for a few seconds, and if the new binary
+    /// cannot be moved in, the old one is moved BACK: a version marker naming a binary that is not on disk is
+    /// an install that cannot run. Proof: <c>e2e-p50</c> case H2.</para></summary>
+    private static async Task ReplaceBinaryAsync(string staged, string dest)
     {
         // Sweep any earlier displaced copy first — this is the only thing that ever deletes them.
         foreach (var stale in Directory.EnumerateFiles(Path.GetDirectoryName(dest)!, "claude.exe.old-*"))
@@ -848,12 +864,40 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         try
         {
             File.Move(staged, dest, overwrite: true);
+            return;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* fall back below */ }
+
+        var aside = $"{dest}.old-{Guid.NewGuid():N}";
+        await RetryWhileHeldAsync(() => File.Move(dest, aside));   // permitted even while the image is loaded
+        try
         {
-            var aside = $"{dest}.old-{Guid.NewGuid():N}";
-            File.Move(dest, aside);                  // permitted even while the image is loaded
-            File.Move(staged, dest);
+            await RetryWhileHeldAsync(() => File.Move(staged, dest));
+        }
+        catch
+        {
+            try { File.Move(aside, dest); } catch { /* nothing more to try; the error below says what failed */ }
+            throw;
+        }
+    }
+
+    /// <summary>ERROR_SHARING_VIOLATION (32) or ERROR_LOCK_VIOLATION (33): another process has the file open
+    /// in a way that forbids this operation, which is transient by nature.</summary>
+    internal static bool IsHeld(Exception ex) => ex is IOException io && (io.HResult & 0xFFFF) is 32 or 33;
+
+    /// <summary>~7 s in all — long enough for a scan or a probe, short enough that the panel's progress row
+    /// never looks hung.</summary>
+    private static readonly int[] HeldRetryMs = [200, 400, 800, 1600, 2000, 2000];
+
+    private static async Task RetryWhileHeldAsync(Action op)
+    {
+        for (var i = 0; ; i++)
+        {
+            try { op(); return; }
+            catch (IOException ex) when (IsHeld(ex) && i < HeldRetryMs.Length)
+            {
+                await Task.Delay(HeldRetryMs[i]);
+            }
         }
     }
 

@@ -373,7 +373,7 @@ try {
   //
   // The vendor moves the CLI, so a copy we installed must follow — and an update is exactly when a copy
   // may be mid-chat. Windows will not OVERWRITE a loaded image; it will RENAME one, which is what
-  // ReplaceBinary falls back to. Until this case existed, nothing drove an update at all (only a first
+  // ReplaceBinaryAsync falls back to. Until this case existed, nothing drove an update at all (only a first
   // install), and the fallback was dead code: overwriting a running exe raises UnauthorizedAccessException,
   // which is not an IOException, so the rename never ran and the update failed with "access denied".
   //
@@ -432,6 +432,55 @@ try {
   ok('once the old copy exits, the next install sweeps it away',
     row.state === 'ready' && displaced.length > 0 && !displaced.some((f) => left.includes(f)),
     JSON.stringify({ state: row.state, displaced, left }));
+
+  // ---- H2 · the file is HELD (a scanner, or our own probe) while the update replaces it -----------
+  // Node opens files with FILE_SHARE_DELETE, so it cannot stand in for the holder; PowerShell's
+  // [IO.File]::Open(..., FileShare.Read) denies rename exactly as a scanner does. The marker proves the
+  // hold is real before the update starts — without it the case could pass by racing the holder.
+  const hold = (ms) => {
+    const marker = path.join(dirF, `_hold-${ms}.txt`);
+    fs.rmSync(marker, { force: true });
+    const ps = `$f=[IO.File]::Open('${claudeExe}','Open','Read','Read'); Set-Content -LiteralPath '${marker}' 'held'; `
+      + `Start-Sleep -Milliseconds ${ms}; $f.Close()`;
+    const p = spawn('powershell', ['-NoProfile', '-Command', ps], { stdio: 'ignore' });
+    return { p, ready: until(() => fs.existsSync(marker), 15000) };
+  };
+  const payloadV3 = Buffer.from('#!/fake claude cli payload v3\n' + 'z'.repeat(4096));
+  channelVersion = '9.9.11';
+  channelPayload = payloadV3;
+  published = crypto.createHash('sha256').update(payloadV3).digest('hex');
+  await until(async () => (await claudeRow(srv.base))?.available === '9.9.11', 30000).catch(() => {});
+
+  const brief = hold(1500);
+  await brief.ready;
+  prov = await cF.post('/api/manage/resources/claude/provision');
+  row = await until(async () => {
+    const r = await claudeRow(srv.base);
+    return r && (r.state === 'error' || (r.state === 'ready' && r.version === '9.9.11')) ? r : null;
+  });
+  ok('THE POINT: an update over a briefly HELD file waits it out and lands',
+    row.state === 'ready' && row.version === '9.9.11'
+      && Buffer.compare(fs.readFileSync(claudeExe), payloadV3) === 0, JSON.stringify(row));
+  await until(() => brief.p.exitCode !== null, 15000).catch(() => {});
+
+  const payloadV4 = Buffer.from('#!/fake claude cli payload v4\n' + 'w'.repeat(4096));
+  channelVersion = '9.9.12';
+  channelPayload = payloadV4;
+  published = crypto.createHash('sha256').update(payloadV4).digest('hex');
+  await until(async () => (await claudeRow(srv.base))?.available === '9.9.12', 30000).catch(() => {});
+  const long = hold(20000);
+  await long.ready;
+  prov = await cF.post('/api/manage/resources/claude/provision');
+  row = await until(async () => {
+    const r = await claudeRow(srv.base);
+    return r && r.state !== 'running' ? r : null;
+  });
+  ok('a file held past the retry budget fails with a SENTENCE, not .NET text',
+    row.state === 'error' && /占用/.test(row.message ?? '') && !/process cannot access/i.test(row.message ?? ''),
+    JSON.stringify(row));
+  ok('…and the installed binary is untouched — still v3, still there',
+    fs.existsSync(claudeExe) && Buffer.compare(fs.readFileSync(claudeExe), payloadV3) === 0);
+  long.p.kill();
   release.close();
   srv.stop(); srv = undefined;
 
