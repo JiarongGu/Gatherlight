@@ -186,3 +186,53 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
         return flat[..cut] + "…";
     }
 }
+
+/// <summary>Caps what a SCORING verifier (a reranker) is sent per candidate — the reranker's counterpart of
+/// <see cref="JudgeSeesContentPolicy.MaxChars"/>, which only ever bounded the LLM judge.
+///
+/// <para><b>Why a cap is not optional here — measured 2026-09-23 on the real llama-server</b>, both catalogued
+/// rerankers, preset <c>ctx-size</c>/<c>batch-size</c>/<c>ubatch-size = 4096</c>
+/// (<c>docs/self-managed-llm-runtime.md</c>): one (query, document) pair past 4096 tokens fails the WHOLE
+/// <c>/v1/rerank</c> call — <c>500 input (4965 tokens) is too large to process</c>, the short document beside
+/// it unscored too. The scoring policy is fail-open, so a single long fact turned every recall that surfaced it
+/// into <c>NoOpinion</c>, and nothing said so. ~6,000 characters of English is ~1,600 tokens and passes;
+/// ~6,000 of Chinese is ~4,960 and fails. The limit is per PAIR only: 96 documents of ~1,660 tokens each in
+/// one call succeeded (in ~9.7 s).</para>
+///
+/// <para><b>Why <see cref="MaxChars"/> is 1000.</b> The worst rate measured was 0.83 tokens per UTF-16 unit
+/// (common CJK; emoji ~0.48, rare CJK collapses to a handful of tokens), so 1000 characters is ~830 tokens —
+/// under a fifth of the limit, room for the query and for a household-dropped reranker whose tokenizer is
+/// several times greedier. And it bounds cost: the same 96-candidate page at the cap is about half the ~9.7 s
+/// above. Household facts are granular, so a real fact is whole at this length; only a pathological one is
+/// cut, and cut is better than every recall that surfaces it going unverified.</para></summary>
+public sealed class RerankInputCap : IMemoryVerificationPolicy
+{
+    /// <summary>The most one candidate's text may run, in UTF-16 units. See the class comment.</summary>
+    public const int MaxChars = 1000;
+
+    private readonly IMemoryVerificationPolicy _inner;
+
+    public RerankInputCap(IMemoryVerificationPolicy inner) => _inner = inner;
+
+    /// <summary>Both the content and the headline, because the scoring policy reads the content and falls back
+    /// to the headline when none was supplied.</summary>
+    public Task<MemoryVerification> VerifyAsync(MemoryVerificationRequest request, CancellationToken ct = default)
+        => _inner.VerifyAsync(request with
+        {
+            Candidates = [.. request.Candidates.Select(c => c with
+            {
+                Headline = Cap(c.Headline),
+                Content = c.Content is null ? null : Cap(c.Content),
+            })],
+        }, ct);
+
+    /// <summary>At most <see cref="MaxChars"/>, never splitting a surrogate pair. No ellipsis: a reranker scores
+    /// the text, and a mark it was never trained on is noise in the one thing it reads.</summary>
+    public static string Cap(string text)
+    {
+        if (text.Length <= MaxChars) return text;
+        var cut = MaxChars;
+        if (char.IsHighSurrogate(text[cut - 1])) cut--;
+        return text[..cut];
+    }
+}

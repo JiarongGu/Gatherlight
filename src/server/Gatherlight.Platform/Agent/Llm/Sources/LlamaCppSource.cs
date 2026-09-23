@@ -106,13 +106,14 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         !IsReranker(ctx.Model)
             ? JudgeWiring.Llm(ClientId, AnnotationModel(ctx.Model))
             // Verification by the reranker; annotation by the default client on the CLI's default model.
-            : new JudgeWiring(null, AnnotationModel(ctx.Model), sp =>
+            // CAPPED: one pair past the router's 4096-token batch fails the whole rerank call — see RerankInputCap.
+            : new JudgeWiring(null, AnnotationModel(ctx.Model), sp => new RerankInputCap(
                 new Lyntai.Memory.Verification.ScoringVerificationPolicy(
                     sp.GetServices<Lyntai.Inference.IModelProvider>(),
                     new Lyntai.Memory.Verification.ScoringVerificationOptions
                         { ProviderId = RerankProviderId, EndorseCount = RerankEndorseCount },
                     sp.GetService<ILogger<Lyntai.Memory.Verification.ScoringVerificationPolicy>>(),
-                    sp.GetService<Lyntai.Inference.IProviderRouterFactory>()));
+                    sp.GetService<Lyntai.Inference.IProviderRouterFactory>())));
 
     /// <summary>A reranker's id must never reach the CLI, which would be asked for a model it has never heard
     /// of — so a reranker binding annotates on the CLI's default judge model.</summary>

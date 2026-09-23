@@ -272,3 +272,15 @@ binding bge restarted the router (1.3 s from the decision to "starting … with 
 the bind returned 200 in 9.2 s, and LAMAR was warm again 5.9 s later. A router we ADOPTED (an orphan of an earlier
 run, or the household's own) is not ours to kill and an app restart would only adopt it again, so there the bind is
 refused with a sentence saying the llama-server process must be ended for the model to load.
+
+**One long document fails the WHOLE rerank call** (same build and presets, measured 2026-09-23, both
+rerankers). A batch of one long document plus one short one: English of 6 263 characters (Lyntai's `longProbe`
+shape) is ~1 600 tokens and scores; 12 503 is ~3 160 and scores; 20 823 is 5 218 tokens and the call answers
+**500** `input (5218 tokens) is too large to process. increase the physical batch size (current batch size:
+4096)` — the short document unscored too. Chinese costs about three times as much per character: 4 089
+characters is ~3 400 tokens and scores, 6 010 is ~4 960 and fails the same way. The limit is per PAIR, not per
+call: 96 documents of 2 000 Chinese characters (~1 660 tokens each, ~160 000 in all) scored in one call, in
+~9.7 s. The worst rate measured was 0.83 tokens per UTF-16 unit (common CJK; emoji ~0.48; rare CJK, Extension
+A or B, collapses to a handful of tokens). Since the scoring verifier is fail-open, a single long fact made every
+recall that surfaced it unverified, silently — so `RerankInputCap` sends at most 1 000 characters per candidate
+(~830 tokens at the worst rate measured). llama-server does NOT truncate per pair.

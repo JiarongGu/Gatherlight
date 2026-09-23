@@ -512,6 +512,29 @@ try {
     reranked().some((h) => h.body.includes('zzrerankquery') && h.body.includes('zzrerankcontent')),
     JSON.stringify(hits.slice(beforeRecall6).map((h) => `${h.path} ${h.model} ${h.body.slice(0, 160)}`)));
 
+  // --- 6b. a LONG fact is capped before it reaches the reranker ------------------------------------------
+  // Measured on the real llama-server: one (query, document) pair past the router's 4096-token batch fails the
+  // WHOLE /v1/rerank call with a 500, and the verifier is fail-open — so one long fact turned every recall that
+  // surfaced it into no verdict at all. ~3,200 characters of Chinese is ~2,700 tokens; the cap is 1,000.
+  const longContent = 'zzlonghead 天文社每周五晚上在楼顶观测。' + '观测记录与器材清单。'.repeat(320) + ' zzlongtail';
+  const wroteLong = await c3.call('remember_fact', {
+    kind: 'household', topic: 'zzlongtopic 天文社', content: longContent,
+    source: 'https://example.test/zzlong', confidence: 0.8,
+  });
+  ok('(fixture) a long fact is stored whole', wroteLong.status === 200 && wroteLong.result?.ok === true,
+    JSON.stringify(wroteLong.result));
+  const beforeLong = hits.length;
+  await c3.call('recall_facts', { query: 'zzlongquery 天文社每周五晚上在楼顶观测', limit: 5 });
+  const longDocs = () => hits.slice(beforeLong)
+    .filter((h) => h.path === '/v1/rerank' && h.body.includes('zzlongquery'))
+    .flatMap((h) => { try { return JSON.parse(h.body).documents ?? []; } catch { return []; } })
+    .map(String);
+  await until(() => longDocs().some((d) => d.includes('zzlonghead')), 60000).catch(() => {});
+  const sentLong = longDocs().filter((d) => d.includes('zzlonghead'));
+  ok('THE POINT: the reranker is sent the long fact CAPPED — its head, never its tail, at most 1000 characters',
+    sentLong.length > 0 && sentLong.every((d) => d.length <= 1000 && !d.includes('zzlongtail')),
+    JSON.stringify(sentLong.map((d) => ({ length: d.length, tail: d.includes('zzlongtail') }))));
+
   // --- 7. whether a reranker's TAGGING is happening, said where it is decided ---------------------------
   // A reranker hands tagging to the Claude CLI, and a CLI that is signed out means NO tagging — the annotation
   // policy is fail-open, so every fact is written unlabelled and nothing reports it. The 判断 row, the bind
