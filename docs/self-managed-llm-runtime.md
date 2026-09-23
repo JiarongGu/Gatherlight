@@ -236,3 +236,15 @@ Re-run it before acting on any number above.
 - [LocalAI](https://github.com/mudler/LocalAI) · [releases](https://github.com/mudler/LocalAI/releases/latest)
 - [Foundry Local](https://github.com/microsoft/foundry-local) · [What is Foundry Local?](https://learn.microsoft.com/en-us/azure/foundry-local/what-is-foundry-local)
 - [Ollama releases](https://github.com/ollama/ollama/releases)
+
+## 2026-09-23 — a RERANKER in router mode (gate for 判断's reranker arm)
+
+Build `llama-server --version` → `version: 0.1.2-dev (build 10549, commit b2e5e9b28)`. Preset section `reranking = true` + `ctx-size`/`batch-size`/
+`ubatch-size = 4096` (a cross-encoder needs the whole pair in one physical batch). `/v1/models` listed the model;
+`/v1/rerank` on 「市场周末几点开门?」 over [图书馆周一闭馆。, 东门市场周六周日早上七点开门。] ranked index 1 first
+(4.9242 vs -6.4054); the English query over the same Chinese documents also ranked index 1 first (1.8458 vs -6.5160).
+First call (model load) 10 850 ms, warm call 28 ms.
+A warm call shaped like the app's current one for a judge (`POST /v1/chat/completions`, `max_tokens: 1`) gets
+**500** `the current context does not logits computation. skipping` from the reranking child — sent to a COLD
+model the router still loads it first (500 after 8.2 s, status `loaded` afterwards, the next rerank 121 ms), so a
+chat warm call does warm a reranker but reports failure; a reranker's warm call has to be `/v1/rerank`.
