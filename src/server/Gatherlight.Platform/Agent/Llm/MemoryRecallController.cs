@@ -97,6 +97,7 @@ public sealed class MemoryRecallController : ControllerBase
         var mem = _config.Current.Memory;
         var ctx = Context();
         var boundJudge = MemorySources.ResolveJudge(Settings());
+        var boundJudgeModel = MemorySources.ResolveJudgeModel(Settings());
         var boundSemantic = MemorySources.ResolveSemantic(Settings());
         var (indexed, totalFacts) = await _knowledge.CoverageAsync();
 
@@ -160,8 +161,9 @@ public sealed class MemoryRecallController : ControllerBase
                     // OUR number, so unlike the weighting note below it needs no attribution.
                     // The local arm avoids the spawn; its own latency is deliberately NOT quoted, because
                     // nobody has measured it here and a plausible figure is the thing this panel refuses.
-                    cost = boundJudge.Cost(MemorySources.ResolveJudgeModel(Settings())),
-                    source = boundJudge.Id, model = MemorySources.ResolveJudgeModel(Settings()),
+                    // The texts live on each source's `Cost` (IMemoryJudgeSource) — the bound arm describes itself.
+                    cost = boundJudge.Cost(boundJudgeModel),
+                    source = boundJudge.Id, model = boundJudgeModel,
                     activeSource = _judgeWiring.Transport, activeModel = _judgeWiring.Model,
                     groups = judgeGroups,
                     // A saved backend that no longer exists is SAID, never silently

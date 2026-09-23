@@ -18,10 +18,8 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
         "每次记录事实、每次检索各消耗一次调用,实测每次检索 9–17 秒(本机模型没有这次进程启动)。" +
         "Lyntai 在自己的语料上实测这是漏检最低的一档(0.54 → 0.19)。";
 
-    /// <summary>Null = the default client. The CLI provider is already registered.</summary>
-    public string? ClientName => null;
-
-    public JudgeWiring Wiring(MemoryWiringContext ctx) => JudgeWiring.Llm(null, ctx.Model);
+    /// <summary>Null client = the default client: the CLI provider is already registered.</summary>
+    public JudgeWiring Wiring(MemoryWiringContext ctx) => JudgeWiring.Llm(null, AnnotationModel(ctx.Model));
 
     public string AnnotationModel(string model) => model;
 

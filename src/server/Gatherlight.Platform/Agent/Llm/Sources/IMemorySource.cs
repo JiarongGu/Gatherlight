@@ -103,20 +103,13 @@ public interface IMemoryJudgeSource : IMemorySource
     /// refusal, naming the model.</summary>
     Task<string?> RejectAsync(MemorySourceContext ctx, string model, CancellationToken ct = default);
 
-    /// <summary>The Lyntai client name the judge runs on, or null for the default client. A name selects
-    /// BACKENDS, never permissions.
-    /// <para>The name is the WHOLE mechanism since Lyntai 3.1 (its D87): a named client narrows the
-    /// candidate list along with the provider pool. Before that it narrowed only the pool, so each source
-    /// also had to append its provider to the GLOBAL candidate list — which let the default client reach a
-    /// backend it was never meant to. That workaround (Lyntai Part 93) is gone.</para></summary>
-    string? ClientName { get; }
-
     /// <summary>How this source's judge is wired for <c>ctx.Model</c>. Called at composition, alongside
     /// <see cref="IMemorySource.Register"/> — see <see cref="JudgeWiring"/> for why the source decides.</summary>
     JudgeWiring Wiring(MemoryWiringContext ctx);
 
     /// <summary>The model ANNOTATION runs on when this source is bound to <paramref name="model"/> — what the
-    /// binding endpoint writes to <c>llm.model.memory</c>. Must agree with <see cref="Wiring"/>.</summary>
+    /// binding endpoint writes to <c>llm.model.memory</c>. Must agree with <see cref="Wiring"/>, which is why
+    /// every implementation builds its wiring FROM this rather than restating the rule.</summary>
     string AnnotationModel(string model);
 
     /// <summary>The layer's cost line for this source bound to <paramref name="model"/>. It describes the BOUND

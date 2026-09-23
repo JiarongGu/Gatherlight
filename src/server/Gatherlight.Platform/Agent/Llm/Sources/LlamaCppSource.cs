@@ -51,9 +51,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         + "判断与语义共用同一个进程、各用自己的模型,所以两层都开也只有一个常驻服务。"
         + "实测语义检索 10 题首位命中 9 题、每次查询 0.025 秒;判断每次约 0.15–0.20 秒。";
 
-    public string? ClientName => ClientId;
-
-    public JudgeWiring Wiring(MemoryWiringContext ctx) => JudgeWiring.Llm(ClientId, ctx.Model);
+    public JudgeWiring Wiring(MemoryWiringContext ctx) => JudgeWiring.Llm(ClientId, AnnotationModel(ctx.Model));
 
     public string AnnotationModel(string model) => model;
 

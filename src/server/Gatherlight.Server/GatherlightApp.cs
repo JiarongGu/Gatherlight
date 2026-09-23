@@ -297,9 +297,10 @@ public static class GatherlightApp
                 // BYO seam. Off returns the library's own no-opinion values, a state the engine already
                 // treats as "no policy registered" — so the switch is safe to flip at runtime.
                 // ClientName is the seam Lyntai documents for exactly this — a name selects BACKENDS, never
-                // permissions — and the SOURCE owns which name that is (null for the CLI arm, which then
-                // uses the default client). Model stays null on both policies so the router resolves it per
-                // consumer; see DefaultModelByConsumer above.
+                // permissions — and which name annotation uses is judgeWiring.AnnotationClient, i.e. the bound
+                // source's own answer (null for the CLI arm, which then uses the default client); the verifier
+                // is whatever judgeWiring.Verifier builds. Model stays null on both policies so the router
+                // resolves it per consumer; see DefaultModelByConsumer above.
                 b.Services.AddSingleton<Lyntai.Memory.Annotation.IMemoryAnnotationPolicy>(sp =>
                     new Platform.Agent.Llm.Services.SwitchableAnnotationPolicy(
                         new Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy(
