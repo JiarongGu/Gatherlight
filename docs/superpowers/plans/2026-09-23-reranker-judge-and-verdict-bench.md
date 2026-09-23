@@ -501,8 +501,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
         var fuseVerdicts = string.Equals(
             Environment.GetEnvironmentVariable("GATHERLIGHT_VERDICT_COMBINATION"), "fuse", StringComparison.OrdinalIgnoreCase);
         if (fuseVerdicts) Console.WriteLine("[measurement] verdict combination = Fuse (GATHERLIGHT_VERDICT_COMBINATION)");
-        if (!Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Enabled)
-            Console.WriteLine("[measurement] judge input = headline only (GATHERLIGHT_JUDGE_INPUT)");
+        if (Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode != "both")
+            Console.WriteLine($"[measurement] judge input = {Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode} (GATHERLIGHT_JUDGE_INPUT)");
 ```
 
 - [ ] **Step 2: Apply the combination** — replace `.AddMemoryEngine("facts", e => e.UseGraph());` with:
@@ -557,7 +557,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 // llama.cpp binary and GGUFs from --resources (default local/state/resources) and nothing else there.
 //
 // Usage:
-//   node devtools/dev.mjs judge-bench                                 # formula, topic, content, fuse
+//   node devtools/dev.mjs judge-bench                                 # formula, topic, content, contentonly, fuse
 //   node devtools/dev.mjs judge-bench --arms=formula,content --n=20
 //   node devtools/dev.mjs judge-bench --arms=formula --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M
 import fs from 'node:fs';
@@ -588,11 +588,14 @@ const ARMS = {
   formula: { label: '公式 only (判断 off)', enrichment: false, env: {} },
   topic: { label: 'Claude judge · topic only', enrichment: true,
     env: { GATHERLIGHT_JUDGE_INPUT: 'headline' }, knob: /judge input = headline/ },
-  content: { label: 'Claude judge · content · partition', enrichment: true, env: {} },
-  fuse: { label: 'Claude judge · content · fuse', enrichment: true,
+  content: { label: 'Claude judge · topic — content · partition', enrichment: true, env: {} },
+  // How Lyntai's upcoming LlmVerificationOptions.ContentChars renders a candidate: content ALONE (Part 276 / D170).
+  contentonly: { label: 'Claude judge · content only · partition', enrichment: true,
+    env: { GATHERLIGHT_JUDGE_INPUT: 'content' }, knob: /judge input = content/ },
+  fuse: { label: 'Claude judge · topic — content · fuse', enrichment: true,
     env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/ },
 };
-const arms = arg('arms', 'formula,topic,content,fuse').split(',').filter(Boolean).map((k) => {
+const arms = arg('arms', 'formula,topic,content,contentonly,fuse').split(',').filter(Boolean).map((k) => {
   if (!ARMS[k]) throw new Error(`unknown arm '${k}' — one of ${Object.keys(ARMS).join(', ')}`);
   return { key: k, ...ARMS[k] };
 });
@@ -763,9 +766,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Files:** Create `docs/judge-bench.md`
 
-- [ ] **Step 1: Run** (≈720 recalls with a CLI judge call each, arms in parallel; about an hour)
+- [ ] **Step 1: Run** (≈960 recalls with a CLI judge call each, arms in parallel; about an hour)
 
-Run: `node devtools/dev.mjs judge-bench --arms=formula,topic,content,fuse > devtools/_judge-bench-cli.txt 2>&1`
+Run: `node devtools/dev.mjs judge-bench --arms=formula,topic,content,contentonly,fuse > devtools/_judge-bench-cli.txt 2>&1`
 Expected: the five tables at the end of the file. If a seed or arm error aborts, fix the cause and re-run — do not report partial tables.
 
 - [ ] **Step 2: Write `docs/judge-bench.md`** with the measured numbers (copy the `all` table and the four per-set tables verbatim from `devtools/_judge-bench-cli.txt`), in this structure:
@@ -783,6 +786,8 @@ facts incl. near-duplicate clusters; four questions each: same / cross / third l
 
 ### What it says
 - topic-only vs content: <the measured difference, per set>
+- topic — content vs content only: <the measured difference, per set, and mean latency> — decides whether
+  adopting Lyntai's ContentChars (content alone) loses anything
 - content partition vs fuse: <the measured difference, per set>
 - latency: <ms per recall per arm>
 
@@ -794,6 +799,9 @@ facts incl. near-duplicate clusters; four questions each: same / cross / third l
 Fill the "What it says" bullets from the numbers only. **Decision rules (write the one that applies):**
 - If `content` beats `topic` on top-1 or found@8 in `all` → the Task 2 fix is confirmed; say by how much.
 - If `content` is WORSE than `topic` → stop and report to the owner before Part C; do not rationalise it.
+- If `contentonly` is within 2 questions of `content` on `all` and faster → record that the topic prefix does not
+  earn its tokens, so on the Lyntai bump that ships `ContentChars` the decorator is deleted in favour of it.
+  Otherwise record that the prefix earns its place and the decorator stays.
 - `fuse` changes the product default ONLY as a separate, owner-approved decision, and only if it beats
   `content` (partition) in `all` without losing in any set. Otherwise record it as insurance, per Lyntai.
 
@@ -1540,7 +1548,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
    **"A reranker verifies; it never annotates."** — why the halves split (`JudgeWiring`), that `llm.model.memory`
    holds the ANNOTATION model (p52's THE TRAP), the screen (answer-second input, Lyntai's backwards-model finding),
    `EndorseCount = 8` and why it is a constant, and the preset contract (`reranking = true` + 4096 batches; p51).
-4. Under the judge-content workaround: cite `JudgeSeesContentPolicy` ↔ Lyntai Part 274 (recorded on both sides).
+4. Under the judge-content workaround: cite `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 /
+   D170 (`LlmVerificationOptions.ContentChars`, content alone), and what judge-bench Run 1 decided about it.
 - Run: `node devtools/dev.mjs check-doc-refs` → OK.
 
 - [ ] **Step 2: release notes** — append to `docs/release-notes/next.md`:
