@@ -395,7 +395,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   | | does | evidence |
   |---|---|---|
   | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost. On the 240-question bilingual fixture (`docs/judge-bench.md`): top-1 79/240, found@8 125/240, ~0.23 s per recall |
-  | **判断 · Claude CLI** | subject handles on every write; judges which candidates answered, and promotes those to the front | **top-1 79 → 132/240 (+22.1pp, p < 0.001, 95% [+16.6, +27.2]pp), each of the four sets significant on its own; found@8 125 → 133, not a finding (p = 0.096)** — `docs/judge-bench.md` Run 1, 2026-09-23, the judge reading each fact's CONTENT. Costs **~9.5 s per recall** there (serial median; 8.7–11.7 s across Run 1's judge arms; **9–17 s** measured earlier on the household's own facts) — a CLI spawn per call. Before the content fix, on the household's own facts: +2 facts in each multilingual probe, 0 same-language |
+  | **判断 · Claude CLI** | subject handles on every write; judges which candidates answered, and promotes those to the front | **top-1 79 → 130/240 (+21.3pp, p < 0.001, 95% [+15.9, +26.3]pp), each of the four sets significant on its own; found@8 125 → 131, not a finding (p = 0.210)** — `docs/judge-bench.md` Run 1, 2026-09-23, its `contentonly` arm: the judge reading each fact's CONTENT alone, the input that ships since 2026-09-24. Its `content` arm — topic — content, the 1.3.0 input — read top-1 132 (+22.1pp, [+16.6, +27.2]pp) and found@8 133 (p = 0.096), and the two were measured equivalent. Costs **~8.7 s per recall** there (serial median; ~9.5 s for topic — content; 8.7–11.7 s across Run 1's judge arms; **9–17 s** measured earlier on the household's own facts) — a CLI spawn per call. Before the content fix, on the household's own facts: +2 facts in each multilingual probe, 0 same-language |
   | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 125 → 208 (LAMAR) / 203 (BGE) of 240 (+34.6 / +32.5pp, both p < 0.001) — cross-language 6 → 49 / 48 of 60; top-1 79 → 86 / 90 (+2.9pp p = 0.039 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 2, 2026-09-23. ~0.47–0.49 s per recall, warm, on one GPU, ≤60 candidates. LAMAR vs BGE: no finding either way — found@8 leans LAMAR 5–0 (p = 0.063, interval excluding zero); BGE is `RecommendedReranker` by the smaller-file tie-break registered before the run, and by nothing else. Lyntai, on ITS English LoCoMo corpus (`docs/memory-measurements.md` there, evidence-hit, n = 200), in ONE run — 2026-09-10, `embeddinggemma-300M` embedder, base 85.5%, a perfect judge +7.0: BGE Q8 +5.5, LAMAR Q8 +5.5, LAMAR Q5 (our file) +6.0. Its 2026-09-15 run read LAMAR Q5 at +9.0 of 9.5 over `nomic-embed-text` (base 83.0%); Lyntai's own rule is that a reranker's delta belongs to the configuration, so quote the base and embedder with it or not at all — the household notes quote neither |
   | **语义 · Claude CLI** | stores other wordings of a fact, **≥1 in another language** | capability proven directly: an English question retrieves a Chinese-only fact. Aggregate effect NOT measured — see the rule below on why this tool cannot |
 
@@ -403,9 +403,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Claude judge changes WHAT COMES FIRST. A reranker endorses a full page of its eight best every time, so the
   answer lands on the page far more often, in whatever position the engine gives it; the Claude judge endorses
   only what it judges to answer, so when it finds the answer that fact goes first (its top-1 and found@8 nearly
-  coincide, 132 and 133), and when it does not the page stays the engine's. Against Run 1's `content` arm on the
-  same seed and questions, both rerankers are significantly worse on top-1 (−19.2 / −17.5pp) and significantly
-  better on found@8 (+31.3 / +29.2pp) — at about 1/20 of the latency and no account quota per recall.
+  coincide, 130 and 131 content-only, 132 and 133 on topic — content), and when it does not the page stays the
+  engine's. Against Run 1's `content` arm — topic — content, the 1.3.0 input; Run 2 was paired with that arm,
+  not with the content-only one that ships since, which Run 1 found equivalent to it — on the same seed and
+  questions, both rerankers are significantly worse on top-1 (−19.2 / −17.5pp) and significantly better on
+  found@8 (+31.3 / +29.2pp) — at about 1/20 of the latency and no account quota per recall.
 
   With `VerificationFilters` off (how we register it) a verdict REMOVES nothing — but it is not inert: under
   Lyntai's default `VerdictCombination`, Partition, every endorsed candidate is PROMOTED ahead of the rest, in
@@ -500,7 +502,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Lyntai's source on 2026-09-24 and switched to `FilePathOf` there — `ToolDetail`'s OWN copy of the same
   fallback chain stays, because it takes a parsed `JsonElement` for a UI label, not the `ToolCall` `FilePathOf`
   takes, so only one of the two copies is gone.
-  **Three are open today, and each says what ends it.**
+  **Four are open today, and each says what ends it.**
   **(1) `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170.** Lyntai's LLM judge
   rendered each candidate as its headline alone, and our headline is the fact's TOPIC, so the judge decided
   "did this answer?" from topics; the decorator shows it the content. Upstream closed the gap with
@@ -508,12 +510,26 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   content" — and Part 276's own outcome names our decorator as the thing to remove. Whether the topic was worth
   keeping was MEASURED rather than argued: `docs/judge-bench.md` Run 1 found content alone EQUIVALENT to topic —
   content on top-1 and found@8 (2/0 pairs, p = 0.500, 95% [−2.2, +0.6]pp, inside ±3pp) with ~24% less
-  candidate text. So on that bump: set `ContentChars = JudgeSeesContentPolicy.MaxChars` where `JudgeWiring.Llm`
-  builds the verifier, and delete the class, its `GATHERLIGHT_JUDGE_INPUT` knob and the bench arms that set it
-  (`topic`, `contentonly`). Not both: with `ContentChars` above 0 upstream reads the content itself and ignores
-  the decorator's rewritten headline, so keeping it would be dead code running on every recall. **Content alone
-  is the default since 2026-09-24** (owner-approved on the measured equivalence above), so on the bump the only
-  change is setting `ContentChars` and deleting the class, the knob and the `topic`/`contentonly` arms.
+  candidate text. **Content alone is the default since 2026-09-24** (owner-approved on the measured equivalence
+  above). **On the bump**, four things, because the bench and a suite pin this knob to `both`: (a) set
+  `ContentChars = JudgeSeesContentPolicy.MaxChars` where `JudgeWiring.Llm` builds the verifier, and delete the
+  class and its `GATHERLIGHT_JUDGE_INPUT` knob, both announcements included — not both mechanisms: with
+  `ContentChars` above 0 upstream reads the content itself and ignores the decorator's rewritten headline, so
+  keeping it would be dead code running on every recall; (b) in `judge-bench.mjs`, `topic` and `contentonly` go,
+  `content` and `content2` COLLAPSE into the content-only default (no env, no knob, relabelled — they stay,
+  because `content` is the paired reference arm and `content2` the judge's A/A twin), and `fuse` drops its
+  judge-input pin and second knob regex, keeping the verdict-combination one — left pinned, those three
+  would each throw "its knob did not announce itself"; (c) `e2e-p52` case 7b, which asserts `judge input = both` in
+  state/logs, moves to the other knob — `GATHERLIGHT_VERDICT_COMBINATION=fuse` on the same signed-in server
+  (non-default, so the logged value can only come from the knob; case 7 makes no recall there, so Fuse changes
+  nothing it asserts); (d) accept that `both` can no longer be reproduced: Run 1's `content` rows become its only
+  record, which is fine because Run 1 measured it equivalent — but a `--baseline=…:content` against a pre-bump
+  results file then pairs content-only with `both` under one arm name. The full list is in the class comment.
+  **The flip also moved the llama.cpp CHAT judge, and that is UNMEASURED.** `JudgeWiring.Llm` builds the
+  verifier for both LLM judges (`ClaudeCliJudgeSource`, and `LlamaCppSource` bound to a chat GGUF), while
+  `docs/judge-bench.md` benched only the Claude judge and the rerankers. It is left unscoped on purpose: the bump
+  gives every LLM verifier the same content-only rendering through `ContentChars`, so the flip only brings that
+  date forward for the local judge — without a measurement, which is why no figure is quoted for it.
   **(2) `JudgeScopedModelRoutingStore` ↔ `docs/task-archive.md` Part 284 / D176, closed the same day it was
   filed.** Lyntai's live override (`IModelRoutingStore`, which served `llm.model.memory`) was keyed by CONSUMER
   alone, so it could not know which client or provider a model name was written for, and a key written for one
@@ -590,6 +606,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   different argument for a real pre-flight — skipping the cost of walking every fact when the whole batch will
   fail anyway — is not what D175's deferred trigger names, and would need its OWN Lyntai item if it turns out
   to matter.)
+  **(4) `AgentRunner`'s once-per-run `SessionStarted` guard ↔ `docs/task-archive.md` Part 275.** Lyntai 3.2's
+  stream reader yields a `SessionStarted` for EVERY `system` event carrying a session id, and claude 2.1.28x's
+  `system/thinking_tokens` progress events carry one, so without the guard every tick of a thinking turn was a
+  stored, invisible `system` row. Part 275 makes the reader yield one per session id, shipping in the release
+  after 3.2.0, and the guard's own comment says to delete it then. On the bump: delete the `sessionAnnounced`
+  flag and its check — nothing else in the bridge depends on it — and keep `e2e-p43` green: it counts the stored
+  `system` rows against a stub that really emits those progress events, so it fails if the upstream fix did not
+  land (the stub bullet under *LLM / process spawning* records the stub's half).
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
@@ -860,6 +884,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   happened. An install with NO marker yet and an owed embedder therefore pays TWO rebuilds — one now, for the
   scope move, and one when the embedder returns — because Lyntai can re-embed only by re-remembering. That is
   the price of the vectors, not a bug. `e2e-p52` case 10, confirmed to FAIL with the rule removed.
+  **It covers only a start that REACHES the marker write** — one with no marker yet, or with "2" or older stored.
+  With "3" already stored, `FactIndexStep` syncs and returns before it ever asks whether an embedder is owed, so
+  a model that vanishes AFTER an install reached "3" leaves the marker at "3": the facts written while it was
+  gone keep no vector, and the start that has it back only syncs. Those facts are recovered only by the manual
+  rebuild that the gone-model startup warning (`LlamaWarmStep`) asks for — 「再在「记忆检索」重新建立一次语义
+  索引」 — which is why that warning carries the rebuild and not only the restart.
 - **A model downloaded while OUR router runs is restarted in — within limits, each for a failure found in
   review.** The router reads its models directory and preset file ONCE (measured: `400 model not found`
   before and after the presets are rewritten, until a restart), so `LlamaServerRuntime.EnsureServesAsync`
@@ -876,8 +906,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   is: fail-open, at write time, for good. Verified on the real binary (the runtime doc), because no fake can be a router we started.
   "Annotates" means RUNNING with 判断 switched on: switched off, the chat judge makes no call and the restart
   goes ahead. A binding that is only SAVED loses nothing either, and is refused anyway because the service
-  restart it is owed loads the new model too — in its own sentence (「已改用…要重启服务才会生效」), never the
-  running one's loss clause, which would be false. Start, restart and stop hold ONE lock: probe-then-spawn is a
+  restart it is owed loads the new model too — in its own sentence (「设置的是这个 llama.cpp 的…模型,但还没有
+  生效」), never the running one's loss clause, which would be false. It said 「已改用」 ("has switched to") until
+  2026-09-24, which was false whenever nothing had switched — a bound model missing when the container was built
+  and back on disk since resolves as saved-not-running too. And every refusal, loss or owed, ends by saying the
+  choice was NOT saved and must be made again after the restart (`LlamaRestartPolicy.ReselectAfterRestart`, also on
+  the port-release refusal): the bind answers 409 and writes nothing, so "restart the service" alone promised a
+  model the restart would load into the router and not into the layer. Start, restart and stop hold ONE lock: probe-then-spawn is a
   check-then-act on a port, and a concurrent spawn during a restart once made the live router look adopted,
   because `_started` was set before the process answered — it is set only after, now, and `Dispose` marks the
   runtime disposed before taking the lock so nothing spawns after it. After a restart the requested model is
@@ -899,7 +934,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   reads `_restarting` and says the app is restarting llama.cpp rather than blaming another process. Proof:
   `e2e-p51` and `e2e-p52` case 8a (a fake that accepts and never answers `/v1/models`): the held sentence, and NO
   spawn attempted in the fixture's log — the no-spawn check fails when a held port falls through to the spawn —
-  plus ten real-binary restarts in the runtime doc, where the wait never had to wait. **The restart branch has NO
+  plus ten real-binary restarts in the runtime doc, where the wait never had to wait. **Asserted by nothing,
+  stated as gaps:** `HeldProblem`'s other two sentences — 「应用正在重启 llama.cpp」 (our own restart window) and
+  「应用启动的 llama.cpp 还在运行,但端口…没有回应」 (a router we started, too busy to answer) — because a fake is
+  always ADOPTED, so case 8a reaches only the stranger's sentence; and the port-release timeout's sentence
+  (「…秒内没有让出端口…」), which no suite can reach and none of the ten real restarts produced. **The restart branch has NO
   e2e coverage**: the fake router can only ever be adopted, and no stub can be a real router. It was verified by hand on the real binary — a bind racing 资源's start button
   left one router and a second restart still worked; with 语义 on llama.cpp the same bind was refused with 0
   restarts.
@@ -951,7 +990,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   source's clause, `WhyNotHere` (wrong kind; not there and 资源 can fetch it; not there and only the household
   can put it there), shared by the bind refusal and the startup warning. What `LlamaWarmStep` announces is exactly a gone or
   wrong MODEL — with what the CLI fallback costs, and for 语义 the restart and rebuild that bring it back.
-  Proof: `e2e-p52` cases 10 and 10b. **Residuals, stated rather than fixed:** a missing llama.cpp RUNTIME and the
+  **And whether the CLI it falls back to can do ANY of it.** The warning said what the CLI takes over and never
+  whether it could: a missing or signed-out CLI tags nothing and checks nothing, fail-open, so the sentence
+  promised work that was not happening. It now reads the cached probe through `MemorySources.CliTaggingNow` —
+  the same reader as the bind toast and the reranker's warm warning — and says nothing when nobody has probed.
+  It uses that state's `Why` and `Fix`, never its `Text`, whose 「检索时的核对照常」 is true beside a running
+  reranker and false after a fallback that moved the checking to the same CLI.
+  Proof: `e2e-p52` cases 10 (a gone CHAT judge, CLI signed in — also the control for the next), 10b, and 10c (a
+  gone RERANKER, CLI signed out: only the checking moves, and nothing is tagged or checked until it signs in —
+  confirmed to FAIL, on that assertion alone, with the appended sentence removed). **Gap:** the branch where 判断
+  is switched OFF is asserted by nothing — the switch lives in
+  `app_config`, so a fixture would have to set it in the database before the boot that falls back.
+  **Residuals, stated rather than fixed:** a missing llama.cpp RUNTIME and the
   built-in embedder's missing FILES still fall back silently at startup; and a hand-deleted file under a RUNNING
   embedder leaves 语义 wired for the rest of that run while the panel, which resolves, says it is off, and the
   rebuild refuses with 「尚未启用」. Only a hand deletion reaches that — 资源 refuses to delete a bound model.
@@ -1248,7 +1298,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   holder is PowerShell with `FileShare.Read`, because Node opens files with delete-sharing and cannot
   stand in for one; H3's and H5's spin on the open, since the download is unopenable while being written,
   and assert their own marker so a missed window fails instead of passing vacuously. **Still undriven:**
-  the boot-time restore — no suite restarts a server in the displaced state. Proof
+  the boot-time restore — no suite restarts a server in the displaced state; and the middle of the three
+  on-disk sentences, 「旧版本已移到一旁、没能放回」 — it needs the move BACK to fail, and every case lets it succeed
+  (H3 holds only the download, so the move back is exactly what rescues it). Proof
   also lives in `e2e-p50`'s tampered-download denial, paired with the same bytes installing under the
   right checksum, and case A asserts the app boots ANYWAY.
   **The login SPAWN is tested too, and the reason it briefly was not is worth keeping.** It was recorded as

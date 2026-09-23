@@ -218,8 +218,10 @@ try {
   // even carries this key) — so without a reconcile the target's stale llm.model.memory (opus, bound just
   // above) would survive untouched beside the freshly restored settings.json (claude-cli / sonnet), and
   // the scoped routing store only withholds a saved key across a CLIENT mismatch — both are the default
-  // client here, so a same-client mismatch reads the stale key straight through. Zero enrichment, no
-  // error, either side of a restart.
+  // client here, so a same-client mismatch reads the stale key straight through. Here both names are valid
+  // CLI models, so the judge silently runs on opus when the restored settings say sonnet — the WRONG model,
+  // with no error, either side of a restart. (Zero enrichment is the GGUF case: a stale key naming a model the
+  // running client cannot serve, which fails open.)
   ok('THE POINT: a restore drops the target\'s stale llm.model.memory rather than leaving it beside a restored settings.json it can contradict',
     readMemKey() === undefined, `llm.model.memory=${JSON.stringify(readMemKey())}`);
 

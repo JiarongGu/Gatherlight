@@ -40,6 +40,8 @@
 //      model of its kind remains on disk; the startup warnings name the model, what the fallback costs and what
 //      brings it back; and the fact index's layout marker keeps the vector rebuild owed rather than claiming it done.
 //      10b: bind refuses a model startup would drop — one the router lists but our folder does not hold.
+//      10c: the fallback's OTHER branch — a gone RERANKER, where only the checking moves — onto a CLI that is
+//      signed out: the warning says nothing will be tagged or checked until it signs in (case 10 is the control).
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -85,6 +87,8 @@ const SIGNED_IN_PORT = 5416;
 const REBUILD_PORTS = [5417, 5418, 5419];
 // Case 10: a folder whose settings name GGUFs that are no longer on disk.
 const GONE_PORT = 5420;
+// Case 10c: a folder whose settings name a gone RERANKER, booted against a signed-out CLI.
+const GONE_OUT_PORT = 5421;
 
 // Case 6: a SECOND server that boots already bound to the reranker, in a data folder of its own. Its own
 // port too — never 5412/5413, which cases 1–5 used.
@@ -241,6 +245,7 @@ let signedOutServer = null;
 let signedInServer = null;
 let rebuildServer = null;
 let goneServer = null;
+let goneOutServer = null;
 try {
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
   const base = `http://127.0.0.1:${PORT}`;
@@ -590,7 +595,8 @@ try {
   // The judge-input knob rides along on this server (case 7b): it only affects an LLM verifier, and this one
   // runs a reranker, so it changes nothing here except whether the logs say it is set. Pinned to `both` —
   // NOT the default since 2026-09-24 — so the case is still exercising a knob that was actually SET, rather
-  // than a value that would now be there anyway.
+  // than a value that would now be there anyway. The Lyntai bump that ships ContentChars deletes this knob; 7b
+  // then moves to GATHERLIGHT_VERDICT_COMBINATION=fuse (JudgeSeesContentPolicy's class comment, "ON THE BUMP").
   signedInServer = startServer({
     dataDir: signedInDir, port: SIGNED_IN_PORT,
     env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_INPUT: 'both' },
@@ -780,7 +786,21 @@ try {
     dataDir: goneDir, port: GONE_PORT,
     env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_STUB_ARGS_LOG: goneArgsLog },
   });
-  await waitHealthy(goneServer.base);
+  // 10c's folder, booted beside it: a gone RERANKER, and case 7's signed-out CLI to fall back onto.
+  const goneOutDir = dataDirFor('p52-gone-signedout');
+  makeTestData(goneOutDir);
+  const goneOutRes = path.join(goneOutDir, 'state', 'resources');
+  fs.mkdirSync(path.join(goneOutRes, 'llama-cpp'), { recursive: true });
+  fs.mkdirSync(path.join(goneOutRes, 'gguf'), { recursive: true });
+  fs.writeFileSync(path.join(goneOutRes, 'llama-cpp', 'llama-server.exe'), '');
+  fs.writeFileSync(path.join(goneOutDir, 'state', 'settings.json'), JSON.stringify({ memory: {
+    judgeSource: 'llama-cpp', judgeModel: 'zzgone-rerank',
+  } }, null, 2), 'utf8');
+  goneOutServer = startServer({
+    dataDir: goneOutDir, port: GONE_OUT_PORT,
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_CLAUDE_CMD: `node ${signedOutStub}` },
+  });
+  await Promise.all([waitHealthy(goneServer.base), waitHealthy(goneOutServer.base)]);
   const gc = makeClient(goneServer.base);
   const goneMem = await gc.getJson('/api/manage/memory');
   const gJudge = layerOf(goneMem, 'judge');
@@ -805,7 +825,7 @@ try {
       && judgeWarn.includes(path.join('state', 'resources', 'gguf')),
     judgeWarn || JSON.stringify(goneWarnings));
   // A CHAT judge did both halves locally, so both move — for a reranker only the checking would (ChecksOnly);
-  // that branch needs a boot of its own and is not driven here.
+  // that branch boots on its own, in 10c.
   ok('…and what that COSTS — the account, and the facts going to Claude, for the first time for a local chat judge',
     /账号额度/.test(judgeWarn) && /事实内容会发给 Claude/.test(judgeWarn) && /标注与核对都改由它完成/.test(judgeWarn),
     judgeWarn);
@@ -847,6 +867,26 @@ try {
     !hits.slice(beforeGone).some((h) => String(h.model ?? '').startsWith('zzgone')),
     JSON.stringify(hits.slice(beforeGone).map((h) => `${h.path} ${h.model}`)));
 
+  // --- 10c. the fallback's OTHER branch, onto a CLI that cannot do any of it ------------------------------
+  // The warning said what the CLI takes over and never whether it CAN: a missing or signed-out CLI takes over
+  // nothing — both policies are fail-open, so no fact is tagged and no recall checked, and nothing else says so.
+  // A gone RERANKER here, so this is also the only boot of the branch where only the checking moves.
+  const goneOutJudge = layerOf(await makeClient(goneOutServer.base).getJson('/api/manage/memory'), 'judge');
+  ok('(fixture) a gone reranker falls back to the CLI too', goneOutJudge.activeSource === 'claude-cli',
+    JSON.stringify({ active: goneOutJudge.activeSource, activeModel: goneOutJudge.activeModel }));
+  const goneOutWarn = ((await (await fetch(`${goneOutServer.base}/api/migration/status`)).json()).warnings ?? [])
+    .map(String).find((w) => w.includes('zzgone-rerank')) ?? '';
+  ok('a gone RERANKER moves only the checking — the tagging was on the CLI all along',
+    /本来就由它完成/.test(goneOutWarn) && /核对也改由它完成/.test(goneOutWarn) && !/标注与核对都改由它完成/.test(goneOutWarn),
+    goneOutWarn || '(no warning naming the model)');
+  ok('THE POINT: onto a signed-out CLI, the fallback warning says nothing is tagged OR checked until it signs in',
+    /还没有登录/.test(goneOutWarn) && /不会被标注/.test(goneOutWarn) && /也不会核对/.test(goneOutWarn)
+      && /点「登录」/.test(goneOutWarn),
+    goneOutWarn || '(no warning naming the model)');
+  // Case 10's server fell back onto the default stub, which answers signed in — so the same sentence must be absent.
+  ok('(control) onto a signed-in CLI (case 10), the warning carries no such sentence',
+    judgeWarn.length > 0 && !/在它能用之前/.test(judgeWarn) && !/还没有登录/.test(judgeWarn), judgeWarn);
+
   // (control) a server whose bound model IS on disk says none of this — case 6's, which booted bound to a planted
   // reranker. Without it, a HasModel that always said no would pass every check above.
   const rerankWarnings = ((await (await fetch(`${base3}/api/migration/status`)).json()).warnings ?? []).map(String);
@@ -880,6 +920,7 @@ try {
   try { rerankServer?.stop(); } catch {}
   try { signedOutServer?.stop(); } catch {}
   try { signedInServer?.stop(); } catch {}
+  try { goneOutServer?.stop(); } catch {}
   try { rebuildServer?.stop(); } catch {}
   try { goneServer?.stop(); } catch {}
   fake.closeAllConnections();

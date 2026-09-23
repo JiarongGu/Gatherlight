@@ -642,7 +642,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 if (!await WaitForPortReleaseAsync(ct))
                     return $"应用为了载入 {modelId} 停下了 llama.cpp,但旧的 llama-server 进程 {PortReleaseTimeout.TotalSeconds:0} 秒内"
                          + $"没有让出端口 {new Uri(BaseUrl).Port},所以这次没有重新启动它,llama.cpp 现在没有在运行 —— 稍等片刻再试一次;"
-                         + "如果仍然这样,在任务管理器里结束 llama-server.exe 后重启服务。";
+                         + "如果仍然这样,在任务管理器里结束 llama-server.exe 后重启服务。"
+                         + LlamaRestartPolicy.ReselectAfterRestart;
                 // Only now, with the port FREE, is it probed — so a router we just killed is never reported as a
                 // stranger holding the port; that case is the sentence above.
                 restarted = await EnsureServingCoreAsync(ct);

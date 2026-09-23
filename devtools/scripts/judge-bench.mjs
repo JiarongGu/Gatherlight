@@ -155,6 +155,9 @@ const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
 
 // Every arm pins BOTH knobs; the server treats a blank value as unset. Without the pin, a knob exported in
 // the shell that launched the bench would leak into every arm that did not set it.
+// GATHERLIGHT_JUDGE_INPUT is deleted on the Lyntai bump that ships ContentChars, and these arms change with it —
+// `topic`/`contentonly` go, `content`/`content2` become knob-less content-only arms, `fuse` keeps one knob. The
+// full list is JudgeSeesContentPolicy's class comment, "ON THE BUMP"; after it, `both` cannot be reproduced.
 const PINNED = { GATHERLIGHT_JUDGE_INPUT: '', GATHERLIGHT_VERDICT_COMBINATION: '' };
 const ARMS = {
   formula: { label: '公式 · no verification (seed tags present)', enrichment: false, env: {} },

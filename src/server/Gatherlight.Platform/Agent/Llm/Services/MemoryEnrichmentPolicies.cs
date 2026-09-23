@@ -116,20 +116,46 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
 /// household facts often restate their own topic in the content, so it may still pay for it twice. Whether
 /// the topic earns its tokens is the MEASURED decision this class exists to let happen —
 /// <c>dev.mjs judge-bench</c> compares this class's <c>both</c> and <c>content</c> modes: if <c>content</c>
-/// scores as well, set <c>ContentChars = MaxChars</c>
-/// where the LLM verifier is built and delete this class; if the topic earns its tokens, keep this class and
-/// leave <c>ContentChars</c> at 0 — with it &gt; 0, upstream reads <c>Content</c> itself and ignores this
-/// class's rewritten <c>Headline</c>, which would make this class dead code running for nothing.</para>
+/// scores as well, the bump replaces this class with <c>ContentChars</c> (below); if the topic earns its tokens,
+/// keep this class and leave <c>ContentChars</c> at 0 — with it &gt; 0, upstream reads <c>Content</c> itself and
+/// ignores this class's rewritten <c>Headline</c>, which would make this class dead code running for
+/// nothing.</para>
 ///
 /// <para><b>MEASURED, and the first branch won.</b> <c>docs/judge-bench.md</c> Run 1 (2026-09-23): content
 /// alone is EQUIVALENT to <c>both</c> on top-1 and on found@8 (2/0 pairs, p = 0.500, 95% [−2.2, +0.6] pp,
-/// inside ±3 pp), with ~24% less candidate text. The topic does not earn its tokens. So when the app takes the
-/// Lyntai release carrying Part 276: set <c>ContentChars = MaxChars</c> in <c>JudgeWiring.Llm</c>, and delete
-/// this class, the <c>GATHERLIGHT_JUDGE_INPUT</c> knob and the judge-bench arms that set it (<c>topic</c>,
-/// <c>contentonly</c>). Lyntai's side of the note is Part 276's own outcome, which names this decorator as the
-/// thing to remove (dev-conventions: a workaround is recorded on both sides). Content alone has been the
-/// default since 2026-09-24; <c>both</c> stays selectable for the bench until the bump deletes this
-/// class.</para>
+/// inside ±3 pp), with ~24% less candidate text. The topic does not earn its tokens. Content alone has been the
+/// default since 2026-09-24; <c>both</c> stays selectable, for the bench, until the bump deletes this class.</para>
+///
+/// <para><b>ON THE BUMP</b> — the Lyntai release carrying Part 276. Lyntai's side of this note is Part 276's own
+/// outcome, which names this decorator as the thing to remove (dev-conventions: a workaround is recorded on both
+/// sides). It is more than one line, because the bench and <c>e2e-p52</c> pin this class's knob to <c>both</c>:
+/// <list type="number">
+/// <item>Set <c>ContentChars = MaxChars</c> where <c>JudgeWiring.Llm</c> builds the verifier; delete this class
+/// and the <c>GATHERLIGHT_JUDGE_INPUT</c> knob (its two announcements in <c>GatherlightApp</c>, console and
+/// logger).</item>
+/// <item><c>judge-bench.mjs</c>: <c>topic</c> and <c>contentonly</c> go. <c>content</c> and <c>content2</c> stay —
+/// the paired reference arm and the judge's A/A twin — but COLLAPSE into the content-only default: no env, no
+/// <c>knob</c>, relabelled. <c>fuse</c> drops its <c>GATHERLIGHT_JUDGE_INPUT</c> pin and its second knob regex,
+/// keeping only the verdict-combination one; <c>PINNED</c> and the default <c>--arms</c> list lose the knob and
+/// the two arms. Left pinned, the three arms that stay would each throw "its knob did not announce
+/// itself".</item>
+/// <item><c>e2e-p52</c> case 7b asserts <c>judge input = both</c> reaches state/logs. It moves to the other knob:
+/// start the signed-in server with <c>GATHERLIGHT_VERDICT_COMBINATION=fuse</c> (non-default, so the logged value
+/// can only have come from the knob; case 7 makes no recall on that server, so Fuse changes nothing it asserts)
+/// and match <c>Measurement knob set: verdict combination = Fuse</c>.</item>
+/// </list>
+/// After that, <c>both</c> cannot be reproduced at all: the bench measures content alone, and Run 1's <c>content</c>
+/// rows stay the only record of "topic — content". That is acceptable because Run 1 measured the two
+/// equivalent; but a <c>--baseline=…:content</c> against a pre-bump results file then pairs content-only against
+/// <c>both</c> under one arm name, so say so when quoting such a comparison.</para>
+///
+/// <para><b>THE LOCAL CHAT JUDGE WAS FLIPPED TOO, UNMEASURED.</b> <c>JudgeWiring.Llm</c> builds the verifier for
+/// BOTH LLM judges — <c>ClaudeCliJudgeSource</c> and <c>LlamaCppSource</c> bound to a chat GGUF — so the 2026-09-24
+/// default moved the llama.cpp chat judge to content alone as well. <c>docs/judge-bench.md</c> benched the Claude
+/// judge (Run 1) and the rerankers (Run 2), never a local chat judge on either input. The owner approved the flip
+/// on the Claude judge's measurement; for the local one it only brings forward what Lyntai's <c>ContentChars</c>
+/// will give every LLM verifier on the bump anyway, and it is deliberately not scoped in code. Quote no figure for
+/// the local chat judge's input until a bench arm measures it.</para>
 ///
 /// <para><b>Cost.</b> <c>FactIndex.RankAsync</c> asks the engine for <c>min(3×limit, 100)</c> candidates when
 /// no kind is given, but a flat 100 whenever a kind IS given (a kind narrows AFTER the ranking, so a thin

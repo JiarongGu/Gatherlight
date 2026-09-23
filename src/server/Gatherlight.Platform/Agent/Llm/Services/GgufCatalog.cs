@@ -98,10 +98,13 @@ public static class GgufCatalog
     /// 2: same seed, same questions, equal formula digests). Shared because the comparators are the same for
     /// every reranker, and a figure with nothing beside it cannot be weighed. The trade is stated both ways:
     /// a reranker puts the answer on the page far more often and first hardly more often, because it chooses
-    /// which eight make the page and the engine still orders them.</summary>
+    /// which eight make the page and the engine still orders them.
+    /// <para>The Claude figures are Run 1's CONTENT-ONLY arm (130 / 131, serial median 8.7 s) — the judge input
+    /// that ships since 2026-09-24 — not its <c>content</c> arm (topic — content: 132 / 133, 9.5 s), the 1.3.0
+    /// input, which Run 1 measured equivalent. A number belongs to its configuration.</para></summary>
     private const string RerankerMeasuredAgainst =
-        "同一测试集上,不开判断是 79/240 与 125/240(每次约 0.23 秒),Claude CLI 判断是 132/240 与 133/240"
-        + "(每次约 9.5 秒):重排把答案带进前八的次数多得多,排到第一的次数却只比不开判断略多 —— "
+        "同一测试集上,不开判断是 79/240 与 125/240(每次约 0.23 秒),Claude CLI 判断是 130/240 与 131/240"
+        + "(每次约 8.7 秒):重排把答案带进前八的次数多得多,排到第一的次数却只比不开判断略多 —— "
         + "它挑哪八条上页,先后仍按原来的排序。";
 
     /// <summary>What a reranker row's latency was measured UNDER: serial medians with the model already loaded,

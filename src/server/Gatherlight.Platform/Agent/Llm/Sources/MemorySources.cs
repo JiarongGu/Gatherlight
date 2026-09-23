@@ -128,13 +128,18 @@ public static class MemorySources
         cli is null ? null
         : !cli.Runnable
             ? new(false, "写入事实时的主题标注要用 Claude CLI,但这台机器上现在没有可运行的 CLI —— 装好并登录之前,"
-                + "新写入的事实不会被标注;检索时的核对照常。可在「资源 · Resources」面板安装。",
-                "这台机器上没有可运行的 Claude CLI")
+                + "新写入的事实不会被标注;检索时的核对照常。" + InstallCli,
+                "这台机器上没有可运行的 Claude CLI", InstallCli)
         : !cli.LoggedIn
             ? new(false, "写入事实时的主题标注要用 Claude CLI,但它现在还没有登录 —— 登录之前,新写入的事实不会被"
-                + "标注;检索时的核对照常。在「资源」面板点「登录」。",
-                "Claude CLI 还没有登录")
-        : new(true, "写入事实时的主题标注由 Claude CLI 完成(已登录)。", null);
+                + "标注;检索时的核对照常。" + SignInCli,
+                "Claude CLI 还没有登录", SignInCli)
+        : new(true, "写入事实时的主题标注由 Claude CLI 完成(已登录)。", null, null);
+
+    /// <summary>The remedies <see cref="CliTaggingNow"/> names — kept apart from its <c>Text</c> so a surface that
+    /// cannot use that sentence whole can still name the fix in the same words.</summary>
+    private const string InstallCli = "可在「资源 · Resources」面板安装。";
+    private const string SignInCli = "在「资源」面板点「登录」。";
 
     /// <summary>Both lookups go through <see cref="MemoryBackends.Canonical"/>, so an install still
     /// naming the removed <c>ollama</c> backend resolves to the generic one instead of falling through to a
@@ -250,4 +255,6 @@ public static class MemorySources
 /// <param name="Text">The whole sentence, for a surface where the checking is running (the panel, the toast).</param>
 /// <param name="Why">Just the cause, for a surface that says something else about the checking — the startup
 /// warning, where llama.cpp is down and "checking carries on" would be false. Null when it works.</param>
-public sealed record TaggingState(bool Works, string Text, string? Why);
+/// <param name="Fix">Just the remedy, for the same kind of surface — the fallback warning, where the CHECKING moved
+/// to this same CLI and so <see cref="Text"/>'s 「检索时的核对照常」 would be false. Null when it works.</param>
+public sealed record TaggingState(bool Works, string Text, string? Why, string? Fix);

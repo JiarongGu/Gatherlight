@@ -82,10 +82,23 @@ public sealed class LlamaWarmStep : IMigrationStep
                     ? " —— 写入时的主题标注本来就由它完成(" + MemorySources.CliTaggingCost + ");"
                       + "现在检索时的核对也改由它完成:每次检索一次调用,同样消耗账号额度,候选事实的内容也会发给 Claude"
                     : $" —— 标注与核对都改由它完成:{cliTagging};检索时每次也调用一次";
+            // …AND WHETHER THE CLI CAN DO ANY OF IT. Everything above says what the CLI takes over; a CLI that is
+            // missing or signed out takes over nothing — both policies are fail-open, so no fact is tagged and no
+            // recall is checked, and nothing else reports it. Read from the CACHED probe (ClaudeRuntimeStep ran it
+            // earlier in this startup) through MemorySources.CliTaggingNow, the reader the bind toast and the
+            // reranker's warning below use; nothing when nobody has probed. Its Why and Fix, not its Text: Text
+            // says 「检索时的核对照常」, true beside a running reranker and false here, where the checking moved to
+            // this same CLI. Said whatever 判断's switch is: off, nothing happens now, and switched on it still will
+            // not until the CLI works — true both ways.
+            var cliNow = MemorySources.CliTaggingNow(_claude.Cached);
+            var cliCannot = cliNow is { Works: false }
+                ? $"注意:{cliNow.Why},在它能用之前,写入的事实不会被标注,检索时也不会核对 —— {cliNow.Fix}"
+                : "";
             _log.LogWarning("memory judge is bound to llama.cpp model {Model}, which is not one of its models on disk; " +
                 "falling back to the Claude CLI for this start", goneJudge);
             _state.AddWarning($"「判断」绑定的本机模型用不了:{llamaJudge.WhyNotHere(settings, goneJudge)}。"
-                + $"这次启动「判断」退回 Claude CLI{cost}。处理好之后重启服务才会用回它;也可以在「记忆检索」另选一个。");
+                + $"这次启动「判断」退回 Claude CLI{cost}。处理好之后重启服务才会用回它;也可以在「记忆检索」另选一个。"
+                + cliCannot);
         }
         var llamaSemantic = MemorySources.FindSemantic(MemoryBackends.LlamaCpp);
         if (string.Equals(settings.Config.SemanticSource, MemoryBackends.LlamaCpp, StringComparison.OrdinalIgnoreCase)

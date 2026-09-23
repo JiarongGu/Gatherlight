@@ -30,7 +30,10 @@ public sealed record JudgeWiring(
     Func<IServiceProvider, IMemoryVerificationPolicy> Verifier)
 {
     /// <summary>An LLM judge on <paramref name="client"/>: both halves on the same model. The verifier is shown
-    /// each fact's content (<see cref="JudgeSeesContentPolicy"/>) unless the measurement knob asks for topics.</summary>
+    /// each fact's content (<see cref="JudgeSeesContentPolicy"/>) unless the measurement knob asks for topics.
+    /// It serves BOTH LLM judges — the Claude CLI and a llama.cpp chat GGUF — so whatever it shows one it shows
+    /// the other; only the Claude judge's input was measured (<see cref="JudgeSeesContentPolicy"/> says what that
+    /// leaves unmeasured).</summary>
     public static JudgeWiring Llm(string? client, string model) => new(client, model, sp =>
     {
         IMemoryVerificationPolicy llm = new LlmMemoryVerificationPolicy(
