@@ -509,34 +509,49 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   builds the verifier, and delete the class, its `GATHERLIGHT_JUDGE_INPUT` knob and the bench arms that set it
   (`topic`, `contentonly`). Not both: with `ContentChars` above 0 upstream reads the content itself and ignores
   the decorator's rewritten headline, so keeping it would be dead code running on every recall.
-  **(2) `JudgeScopedModelRoutingStore` ↔ `TASKS.md` Part 284.** Lyntai's live override (`IModelRoutingStore`,
-  which serves `llm.model.memory`) is keyed by CONSUMER alone, so it cannot know which client or provider a
-  model name was written for, and a key written for one binding is read by another — after a fallback, or
-  between a rebind and its restart (previous bullet). The app withholds the key while the saved binding would
-  annotate through a different client than the running one. Part 284 records two shapes, neither decided: a
-  live override SCOPED to the client (or provider) it names, consulted only when resolving for it; or the
-  router refusing, VISIBLY, a live model no resolved candidate can serve. If it lands scoped: delete
-  `JudgeScopedModelRoutingStore` and its registration ahead of the live routing, have the binding endpoint write
-  the scoped key, and keep `e2e-p52` cases 4 and 4b green — both fail with either half of today's fix removed.
-  If it lands as a visible refusal instead, the class stays: a refusal only makes the fail-open loud, it does
-  not stop the wrong client being asked, so withholding the key here is still what keeps a stale binding from
-  reaching a client it was never written for. Until either shape lands, a release could close the gap without
-  this store noticing, and it would keep running beside it.
-  **(3) `IFactIndex.EmbedderReadyAsync` ↔ `docs/task-archive.md` Part 285 / D175.** A failed write-time embed is
-  silent — Lyntai's graph engine catches it, stores the fact anyway WITHOUT its vector, and gives it a graph
-  reference regardless, so no back-fill ever returns to it (measured: a real install came up 6/6 "indexed" with
-  0 vectors, coverage reading 100%). And the embedding route is INTERNAL, so asking "can this write embed right
-  now" before a bulk write means restating the engine's own filter rather than calling it. D175 closed HALF of
-  this upstream (unreleased, shipping after 3.2.0, Breaking): `IMemoryEngine.RememberAsync` now returns a
-  `MemoryWriteResult` whose `Ran` names the tiers that took the write, so a vector-less write is observable
-  AFTER the fact — the app's one call site is `FactIndex.cs`'s `IndexAsync`, and it will need recompiling on the
-  bump since the return type changed. D175 deliberately did NOT build the other half — a readiness probe, "can
-  the engine embed right now" — calling that a public probe of an internal filter for a need nobody had shown;
-  its stated trigger is "a consumer that must decide BEFORE writing anything", which is `EmbedderReadyAsync`.
-  On that bump: `FactIndex` reads `.Ran` off the `RememberAsync` result and stops treating a written graph ref
-  as fully indexed when the vector flag its engine kind owes is missing — rebuild-owed, or a warning, rather
-  than trusting coverage. `EmbedderReadyAsync` itself is NOT deleted then: its trigger is exactly the half D175
-  deferred, so it keeps restating the engine's filter until a release ships that probe.
+  **(2) `JudgeScopedModelRoutingStore` ↔ `docs/task-archive.md` Part 284 / D176, closed the same day it was
+  filed.** Lyntai's live override (`IModelRoutingStore`, which served `llm.model.memory`) was keyed by CONSUMER
+  alone, so it could not know which client or provider a model name was written for, and a key written for one
+  binding was read by another — after a fallback, or between a rebind and its restart (previous bullet). The app
+  withholds the key while the saved binding would annotate through a different client than the running one.
+  D176 retires `GetModelOverrideAsync`: a live override is now a ROUTE, provider AND model together —
+  `GetRouteAsync`, value `provider:model[, …]` — and a route naming a provider THIS CONTAINER has not registered
+  is ignored, with a warning, while the given candidates serve. That is exactly the two situations this class
+  exists for: after a fallback, `GatherlightApp` registers the FALLBACK-RESOLVED source (the CLI; see
+  `ResolveJudge`), so a stale route still naming the old runtime is never a registered provider this session;
+  between a rebind and its restart, the newly-bound provider is equally unregistered until the restart wires it.
+  So — provided the binding endpoint writes the route as `provider:model` rather than a bare model, which it has
+  to on the bump anyway — D176's own per-call check already does this class's job for both scenarios.
+  (`claude-cli` is registered unconditionally, so a route naming it is never held back this way — correct, since
+  the CLI needs no restart to become servable.) On the bump: this class stops COMPILING (`GetModelOverrideAsync`
+  is gone); `GatherlightApp.cs` ~173/~190 break too (`ModelKeyPrefix` → `RouteKeyPrefix`); every
+  `llm.model.<consumer>` key becomes a route, `llm.route.<consumer>` = `provider:model[, …]` — cortex's
+  chat/extract/scorer keys and the memory binding's own writer (`MemoryRecallController.cs` ~550) alike — with a
+  migration for what is already stored, since an old bare-model value under the retired prefix reads as inert
+  under the new one (D176's own rule for its `lyntai.model.` predecessor). `MemoryService.cs` ~154's `SetModel`
+  import and `BackupService.cs` ~242's delete of `llm.model.memory` touch the same keys and need the same
+  rename. Once the route write carries the provider: delete `JudgeScopedModelRoutingStore` and its registration
+  ahead of the live routing, have the binding endpoint write the route directly, and confirm `e2e-p52` case 4 —
+  which fails TODAY with either half of this class's own fix removed; case 4b is a POSITIVE control, catching a
+  store that withholds UNCONDITIONALLY — still passes on the route mechanism alone before deleting this class.
+  **(3) `IFactIndex.EmbedderReadyAsync` ↔ `docs/task-archive.md` Part 285 / D175 — and D175 says REPLACE it, not
+  keep it.** A failed write-time embed is silent — Lyntai's graph engine catches it, stores the fact anyway
+  WITHOUT its vector, and gives it a graph reference regardless, so no back-fill ever returns to it (measured: a
+  real install came up 6/6 "indexed" with 0 vectors, coverage reading 100%). D175's own words: "`Ran` serves the
+  rebuild, and a public probe would publish the internal embedding route's filter for a need nobody has shown."
+  Its deferred trigger is "a consumer that must decide BEFORE writing anything" — but this method's only caller,
+  `FactIndexStep`, guards exactly `SyncAsync` and the layout `RebuildAsync`: the rebuild/back-fill case D175
+  puts on the `Ran` side, not the deferred one. So the honest instruction is not "keep restating the filter
+  until Lyntai ships a probe" — it is: on the bump, replace the pre-flight probe with `Ran`-based detection. A
+  re-remember whose `Ran` lacks the vector tier means THAT write kept no vector; `FactIndexStep` then records no
+  layout marker and the next start retries, exactly as it does today — the app's one `RememberAsync` call site
+  (`FactIndex.cs`'s `IndexAsync`, `Encode(reference)`) needs `.Reference` added, since `MemoryWriteResult` has no
+  implicit conversion to the `MemoryRef` `Encode` takes (a caller that merely DISCARDS the result compiles
+  unchanged — this one does not). `EmbedderReadyAsync` and the routing it restates are deleted then, and
+  `e2e-p52` case 9 — the embedder-down/no-marker-written assertion — has to keep passing against the new
+  mechanism. (A genuinely different argument for a real pre-flight — skipping the cost of walking every fact
+  when the whole batch will fail anyway — is not what D175's deferred trigger names, and would need its OWN
+  Lyntai item if it turns out to matter.)
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to

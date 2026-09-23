@@ -56,20 +56,24 @@ public interface IFactIndex
     /// and the fact gets its graph reference — so no back-fill ever returns to it. An upgrade rebuild against a
     /// router that had not started yet stripped every vector from a real install that way while coverage read
     /// 100% (see <c>FactIndexStep</c>).</para>
-    /// <para><b>A WORKAROUND FOR A LYNTAI GAP — Lyntai <c>docs/task-archive.md</c> Part 285 / D175.</b> This
-    /// method exists because the library gives no way to ask "can a write embed" before attempting one, so it
-    /// restates the engine's own internal embedding filter instead. D175 closed HALF of the gap upstream
-    /// (unreleased, shipping after 3.2.0, Breaking): <c>IMemoryEngine.RememberAsync</c> now returns a
-    /// <c>MemoryWriteResult</c> whose <c>Ran</c> names the tiers that took the write, so a write stored WITHOUT
-    /// its vector is observable AFTER the fact — the coverage-reads-100%-while-empty failure above is exactly
-    /// what that closes. D175 deliberately did NOT build a readiness probe: it called that "a public probe of
-    /// an internal filter for a need nobody had shown", and its stated trigger is "a consumer that must decide
-    /// BEFORE writing anything" — which is this method. On that bump: read <c>Ran</c> off the
-    /// <c>RememberAsync</c> result in <see cref="IndexAsync"/> and stop treating a written graph ref as fully
-    /// indexed when the vector flag its engine kind owes is missing (rebuild-owed, or a warning, rather than
-    /// trusting coverage). This method itself is NOT deleted then: its trigger (decide before a bulk
-    /// write/rebuild) is exactly the half D175 deferred, so it keeps restating the engine's filter until a
-    /// release ships that probe.</para></summary>
+    /// <para><b>A WORKAROUND FOR A LYNTAI GAP — Lyntai <c>docs/task-archive.md</c> Part 285 / D175 — and D175
+    /// says to REPLACE this method, not to keep it.</b> D175's own words: "<c>Ran</c> serves the rebuild, and
+    /// a public probe would publish the internal embedding route's filter for a need nobody has shown." Its
+    /// deferred trigger is "a consumer that must decide BEFORE writing anything" — but this method's only
+    /// caller, <c>FactIndexStep</c>, guards exactly <see cref="SyncAsync"/> and the layout
+    /// <see cref="RebuildAsync"/>: the rebuild/back-fill case D175 puts on the <c>Ran</c> side, not the
+    /// deferred one. So the honest instruction is NOT "keep restating the filter until Lyntai ships a probe" —
+    /// it is: on the bump, replace this pre-flight probe with <c>Ran</c>-based detection. A re-remember whose
+    /// <c>Ran</c> lacks the vector tier means THAT write kept no vector; <c>FactIndexStep</c> then records no
+    /// layout marker and the next start retries, exactly as it does today — the app's one
+    /// <c>RememberAsync</c> call site, <see cref="IndexAsync"/>'s <c>Encode(reference)</c>, needs
+    /// <c>.Reference</c> added (<c>Encode</c> takes a <c>MemoryRef</c>; <c>MemoryWriteResult</c> has no
+    /// implicit conversion to it — a caller that merely DISCARDS the result compiles unchanged, but this one
+    /// does not). This method and the routing it restates below are deleted then, and <c>e2e-p52</c> case 9 —
+    /// the embedder-down/no-marker-written assertion — has to keep passing against the new mechanism. (A
+    /// genuinely different argument for a real pre-flight — skipping the cost of walking every fact when the
+    /// whole batch will fail anyway — is not what D175's deferred trigger names, and would need its OWN
+    /// Lyntai item if it turns out to matter.)</para></summary>
     Task<bool> EmbedderReadyAsync(CancellationToken ct = default);
 
     /// <summary>Index one fact; returns its address, or null if the index is unavailable or refused it.</summary>
@@ -209,8 +213,9 @@ public sealed class FactIndex : IFactIndex
         {
             // The same routing the engine embeds a write through (Lyntai's EmbeddingRouting is internal, so this
             // restates its one filter: a backend that produces vectors from text), so a pass here means a write
-            // would embed too. Why this restatement still has to exist, and what ends it: the workaround note
-            // on EmbedderReadyAsync above (Lyntai docs/task-archive.md Part 285 / D175).
+            // would embed too. D175 says to DELETE this restatement on the bump, in favor of Ran-based
+            // detection — see the workaround note on EmbedderReadyAsync above (docs/task-archive.md Part 285 /
+            // D175 — D175 disagrees with keeping this method at all).
             Func<Lyntai.Inference.ProviderCapabilities, bool> embeds = c => c.Supports(
                 Lyntai.Inference.ProviderKinds.Vector, Lyntai.Inference.ProviderOperation.Complete,
                 accepts: Lyntai.Inference.ProviderKinds.Text);

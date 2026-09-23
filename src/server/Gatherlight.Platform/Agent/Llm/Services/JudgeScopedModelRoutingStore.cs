@@ -27,19 +27,34 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 ///
 /// <para>Registered BEFORE <c>AddLiveModelRouting()</c>, whose <c>TryAddSingleton</c> then stands down.</para>
 ///
-/// <para><b>A WORKAROUND FOR A LYNTAI GAP — Lyntai <c>TASKS.md</c> Part 284.</b> The live override is keyed by
-/// CONSUMER alone (<see cref="IModelRoutingStore.GetModelOverrideAsync"/> takes nothing else), so the library
-/// cannot know which client or provider a model name was written for — which is exactly what lets a key written
-/// for one binding be read while resolving another. Part 284 records two shapes, neither decided: an override
-/// SCOPED to the client (or provider) it names, consulted only when resolving for it; or the router refusing,
-/// VISIBLY, a live model no resolved candidate can serve. If it lands scoped: delete this class and its
-/// registration in <c>GatherlightApp</c>, have the binding endpoint write the scoped key, and keep <c>e2e-p52</c>
-/// cases 4 and 4b green — both fail with either half of today's fix removed. If it lands as a visible refusal
-/// instead, this class still has a job: a refusal only turns the silent fail-open into a loud one, it does not
-/// stop the wrong client being asked, so withholding the key here stays what keeps a stale binding from ever
-/// reaching a client it was never written for. Until either shape lands, a release could close the gap without
-/// this class noticing, and it would keep running beside it (dev-conventions: a workaround is recorded on both
-/// sides).</para>
+/// <para><b>A WORKAROUND FOR A LYNTAI GAP — Lyntai <c>docs/task-archive.md</c> Part 284 / D176, closed the same
+/// day it was filed.</b> <see cref="IModelRoutingStore.GetModelOverrideAsync"/> is RETIRED: a live override is
+/// now a ROUTE, provider AND model together — <c>GetRouteAsync</c>, value <c>provider:model[, …]</c> — because
+/// the model-only override this class works around let a key written for one binding reach a provider it was
+/// never written for. D176: a route naming a provider THIS CONTAINER has not registered is ignored, with a
+/// warning, and the given candidates serve — which is exactly the two situations this class exists for. After a
+/// FALLBACK, <c>GatherlightApp</c> registers the FALLBACK-RESOLVED source (the CLI; see <c>ResolveJudge</c>), so
+/// a stale route still naming the old runtime is never a registered provider this session; between a REBIND and
+/// its restart, the newly-bound provider is equally unregistered until the restart that wires it. So — provided
+/// the binding endpoint writes the route as <c>provider:model</c> rather than a bare model, which it has to on
+/// the bump anyway — D176's own per-call check already does this class's job for both scenarios above.
+/// (<c>claude-cli</c> is registered unconditionally, so a route naming it is never held back this way — correct,
+/// since the CLI needs no restart to become servable.)</para>
+///
+/// <para><b>On the bump, this class stops COMPILING</b> — there is no <c>GetModelOverrideAsync</c> left to
+/// override. So does <c>GatherlightApp.cs</c>'s <c>ModelKeyPrefix</c> use (~173, ~190 — renamed to
+/// <c>RouteKeyPrefix</c>), and every <c>llm.model.&lt;consumer&gt;</c> key has to become a route —
+/// <c>llm.route.&lt;consumer&gt;</c> = <c>provider:model[, …]</c> — across cortex's chat/extract/scorer keys AND
+/// the memory binding's own writer (<c>MemoryRecallController.cs</c> ~550, which sets <c>llm.model.memory</c>
+/// directly), with a migration for what is already stored: an old bare-model value under the retired prefix
+/// reads as inert under the new one (D176's own rule for its <c>lyntai.model.</c> predecessor).
+/// <c>MemoryService.cs</c> ~154 (the memory bundle's <c>SetModel</c> import, keyed on the <c>llm.model.</c>
+/// prefix) and <c>BackupService.cs</c> ~242 (the backup's delete of <c>llm.model.memory</c>) touch the same keys
+/// and need the same rename. Once the route write carries the provider: delete this class and its registration
+/// in <c>GatherlightApp</c>, have the binding endpoint write the route directly, and confirm <c>e2e-p52</c>
+/// case 4 — which fails TODAY with either half of this class's own fix removed; case 4b is a POSITIVE control,
+/// catching a store that withholds UNCONDITIONALLY — still passes on the route mechanism alone before deleting
+/// this class's own logic.</para>
 /// </summary>
 public sealed class JudgeScopedModelRoutingStore : IModelRoutingStore
 {

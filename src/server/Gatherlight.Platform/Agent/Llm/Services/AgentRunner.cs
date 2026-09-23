@@ -116,9 +116,12 @@ public sealed class AgentRunner : IAgentRunner
                 var args = ParseArgs(tc.ArgumentsJson);
                 // EditTracker filters by tool name; feed the write path (file_path OR notebook_path OR path)
                 // so NotebookEdit (notebook_path) writes are tracked into the commit set too. Lyntai's own
-                // ClaudeToolCalls.FilePathOf already reads them in exactly that order (checked against the
-                // shipped 3.2.0 source; docs/task-archive.md Part 11 item G1 says the same — "stale on both
-                // halves"), so this uses it instead of keeping a second copy of the same fallback chain.
+                // ClaudeToolCalls.FilePathOf already reads them in exactly that order — shipped as G1 in
+                // 0.29.3 (docs/task-archive.md Part 11 files the request; the "stale on both halves" outcome
+                // is a DIFFERENT item, Part 25's "agent-event contract", 2026-08-05) — so this uses it instead
+                // of keeping a second copy of the same fallback chain. ToolDetail below still runs its own
+                // First(...) chain over the parsed args for the UI detail string; only the tracker's copy of
+                // the duplicate is gone, because ToolDetail takes a JsonElement, not a ToolCall.
                 tracker?.Record(tc.Name, ClaudeToolCalls.FilePathOf(tc));
                 emit(new AgentEvent { Kind = "tool", Tool = new ToolInfo(tc.Name, ToolDetail(tc.Name, args)) });
                 break;
