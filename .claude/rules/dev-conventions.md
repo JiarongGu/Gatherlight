@@ -848,6 +848,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   model. An
   EMBEDDING model is refused as a judge by name — installed, well-formed, and unable to answer a judgement,
   which fail-open would turn into recall that quietly never improves.
+  **A memory bundle was a third writer**: it exported and imported every `llm.model.*` key, straight into
+  `app_config`, including `memory`, whose meaning depends on a `settings.json` binding the bundle does not
+  carry. It now carries a model key only if cortex can set it, exported by cortex's own list and imported
+  through `SetModel`. That is one rule for "the household's tuning", and it refuses `memory` for the same
+  reason the cortex row is gone. Proof: `e2e-p14`.
 - **A reranker verifies; it never annotates.** A cross-encoder scores (query, document) pairs and never
   generates, so it can do the half of 判断 that checks a recall and none of the half that tags a write — the
   subject handles need a model that writes. A reranker binding is therefore TWO backends, and `JudgeWiring`

@@ -58,16 +58,14 @@ public sealed class MemoryService : IMemoryService
     private readonly ILibraryRepository _library;
     private readonly IKnowledgeStore _knowledge;
     private readonly IEntityStore _entity;
-    private readonly IAppConfigService _config;
     private readonly ICortexConfigService _cortex;
 
-    public MemoryService(IDbConnectionFactory db, ILibraryRepository library, IKnowledgeStore knowledge, IEntityStore entity, IAppConfigService config, ICortexConfigService cortex)
+    public MemoryService(IDbConnectionFactory db, ILibraryRepository library, IKnowledgeStore knowledge, IEntityStore entity, ICortexConfigService cortex)
     {
         _db = db;
         _library = library;
         _knowledge = knowledge;
         _entity = entity;
-        _config = config;
         _cortex = cortex;
     }
 
@@ -83,7 +81,17 @@ public sealed class MemoryService : IMemoryService
         var cortexRows = await conn.QueryAsync(
             "SELECT key, value FROM app_config WHERE key LIKE 'cortex.prompt.%' OR key LIKE 'llm.model.%' ORDER BY key");
         var cortex = new Dictionary<string, string>();
-        foreach (var r in cortexRows) cortex[(string)r.key] = (string)r.value;
+        // A model key travels only if cortex can SET it — the household's tuning, one rule. `memory` is not one:
+        // 记忆检索 binds the judge's model together with its BACKEND in settings.json, which this bundle does
+        // not carry, so the key alone names a model for a backend the target install never bound (a GGUF id
+        // handed to the Claude CLI; both memory policies fail open, so: zero enrichment, no error).
+        var tunable = _cortex.Models().Select(m => $"llm.model.{m.Consumer}").ToHashSet(StringComparer.Ordinal);
+        foreach (var r in cortexRows)
+        {
+            var key = (string)r.key;
+            if (key.StartsWith("llm.model.", StringComparison.Ordinal) && !tunable.Contains(key)) continue;
+            cortex[key] = (string)r.value;
+        }
         return new MemoryBundle
         {
             ExportedAt = DateTime.UtcNow.ToString("o"),
@@ -127,7 +135,9 @@ public sealed class MemoryService : IMemoryService
             if (string.IsNullOrEmpty(key) || value is null) continue;
             if (!CortexPrefixes.Any(key.StartsWith)) continue;
             // Prompt overrides must satisfy the placeholder contract, or the planner breaks quietly on the
-            // target install — route them through the validating cortex writer; model knobs go direct.
+            // target install — route them through the validating cortex writer; model knobs route through
+            // the SAME writer the cortex panel uses, which refuses a consumer it cannot set — so an older
+            // bundle carrying llm.model.memory cannot write it (see ExportAsync).
             if (key.StartsWith(promptPrefix))
             {
                 var r = _cortex.SetPrompt(key[promptPrefix.Length..], value);
@@ -135,7 +145,7 @@ public sealed class MemoryService : IMemoryService
             }
             else
             {
-                _config.Set(key, value);
+                if (!_cortex.SetModel(key["llm.model.".Length..], value)) continue;   // consumer cortex can't set — skip
             }
             cx++;
         }

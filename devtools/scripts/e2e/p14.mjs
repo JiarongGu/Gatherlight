@@ -4,6 +4,7 @@
 // startup via GATHERLIGHT_SEED_MEMORY. Two server instances, no claude/browser.
 import fs from 'node:fs';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { repo, dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy, makeClient } from './_e2e-common.mjs';
 
 const dataA = dataDirFor('p14a');
@@ -29,6 +30,12 @@ try {
   await callA('remember_fact', { kind: 'venue-url', topic: 'Export Temple official', content: 'https://example.org/temple verified', source: 'https://example.org/temple', confidence: 0.95 });
   // tune the cortex on A — this should travel with the bundle
   await fetch(`${baseA}/api/manage/cortex/model/extract`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: 'opus' }) });
+  // The judge's model is BOUND with its backend (settings.json), which a memory bundle does not carry — so
+  // the key must not travel alone. Binding the CLI judge writes llm.model.memory = sonnet on A.
+  await fetch(`${baseA}/api/manage/memory/layer/judge`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ source: 'claude-cli', model: 'sonnet' }),
+  });
 
   const exportRes = await fetch(`${baseA}/api/memory/export`);
   ok('GET /api/memory/export 200 + attachment', exportRes.status === 200 && (exportRes.headers.get('content-disposition') ?? '').includes('.json'),
@@ -40,6 +47,8 @@ try {
     JSON.stringify({ v: bundle.gatherlightMemory, lib: bundle.library.length, kn: bundle.knowledge.length }));
   ok('bundle preserves lat/nameLocal', bundle.library.some((i) => i.key === 'export-temple' && i.nameLocal === '导出寺' && Math.abs((i.lat ?? 0) - 35.01) < 0.001));
   ok('bundle carries cortex tuning', bundle.cortex && bundle.cortex['llm.model.extract'] === 'opus', JSON.stringify(bundle.cortex));
+  ok('THE POINT: the bundle does NOT carry the judge\'s model — it belongs to a binding the bundle lacks',
+    !Object.prototype.hasOwnProperty.call(bundle.cortex ?? {}, 'llm.model.memory'), JSON.stringify(bundle.cortex));
 
   // idempotent re-import into A
   const reimport = await (await fetch(`${baseA}/api/memory/import`, {
@@ -71,6 +80,19 @@ try {
   const bCortex = await getJsonB('/api/manage/cortex');
   ok('seeded cortex override survived transfer', bCortex.models.find((m) => m.consumer === 'extract')?.effective === 'opus',
     JSON.stringify(bCortex.models?.find((m) => m.consumer === 'extract')));
+
+  // An older (1.3.0-era) bundle exported before this fix DID carry llm.model.memory — hand-edit one back in
+  // and confirm import refuses to write it: a model key travels only if cortex can set it, and cortex cannot
+  // set `memory` (it binds together with a backend the bundle does not carry).
+  const foreign = { ...bundle, cortex: { ...bundle.cortex, 'llm.model.memory': 'zzforeign-chat.gguf' } };
+  const imp = await (await fetch(`${baseB}/api/memory/import`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(foreign),
+  })).json();
+  const db = new DatabaseSync(path.join(dataB, 'state', 'gatherlight.db'), { readOnly: true });
+  const memKey = db.prepare("SELECT value FROM app_config WHERE key = 'llm.model.memory'").get()?.value;
+  db.close();
+  ok('…and an older bundle that DOES carry it cannot write it (import skips a key cortex cannot set)',
+    imp.ok === true && memKey !== 'zzforeign-chat.gguf', `llm.model.memory=${JSON.stringify(memKey)}`);
 } catch (err) {
   fail('e2e-p14 fatal: ' + err.message);
   console.error(((srv?.log() ?? '') + (srv2?.log() ?? '')).slice(-3000));
