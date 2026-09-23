@@ -66,8 +66,13 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
     public static readonly ModelOption Catalog = new(
         ModelId, "EmbeddingGemma 300M(内置)", Installed: true,
         SizeBytes: 222_000_000,
-        Note: "与「本机」里 Ollama 推荐的是同一个模型,但量化方式不同 —— "
-            + "实测前三名命中相同(10/10),首位命中 8/10 对 9/10,而每次查询更快;在应用内直接运行。",
+        // Compared with the SIBLING in the same 本机模型 group — llama.cpp's GGUF of the same model, whose row
+        // carries 9/10 top-1 at 25 ms (GgufCatalog). It used to compare with an Ollama option that no longer
+        // exists, and its "每次查询更快" was only ever true against Ollama's 69 ms. The trade-off is stated,
+        // not steered: what it saves, and what it costs.
+        Note: "EmbeddingGemma 在应用进程里直接运行:不用另外下载或启动运行时,没有常驻服务,总共约 222 MB。"
+            + "与同组 llama.cpp 上的同一个模型相比,首位命中略低(10 题中 8 对 9),前三名同为 10 题,"
+            + "每次查询相近(28 对 25 毫秒)。",
         Measured: new EmbeddingMeasurement(8, 10, 28, 10, "2026-08-22"));
 
     public string Id => MemoryBackends.BuiltIn;

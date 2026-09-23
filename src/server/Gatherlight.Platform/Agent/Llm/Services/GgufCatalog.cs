@@ -78,7 +78,11 @@ public static class GgufCatalog
             "ggml-org/embeddinggemma-300M-GGUF", "0f741b5a6585bd53aeb15cd1372c56f2a0f65e12",
             "embeddinggemma-300M-Q8_0.gguf",
             "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63", 333_590_944,
-            "语义检索用。和「本机」里 Ollama 推荐的是同一个模型,量化方式不同 —— 实测检索质量相同,体积只有一半。",
+            // Compared with the SIBLING in the same group, which is the choice a household is actually making —
+            // it used to compare with an Ollama option the panel no longer has. Numbers are the two rows' own
+            // measurements, so the note cannot disagree with the table it sits in.
+            "语义检索用,由 llama.cpp 运行。和内置的 ONNX 版本是同一个 EmbeddingGemma 模型:这一版首位命中多一题"
+            + "(10 题中 9 对 8),代价是多一个运行时(约 35 MB)和一个常驻服务。",
             new EmbeddingMeasurement(9, 10, 25, 10, "2026-08-22")),
 
         new GgufModel(
@@ -86,7 +90,7 @@ public static class GgufCatalog
             "ggml-org/gemma-3-1b-it-GGUF", "f9c28bcd85737ffc5aef028638d3341d49869c27",
             "gemma-3-1b-it-Q4_K_M.gguf",
             "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135", 806_058_240,
-            "判断用。实测每次判断约 0.15–0.20 秒(Claude CLI 那条约 9 秒),而且不消耗账号额度。"
+            "判断用。实测每次判断约 0.15–0.20 秒(Claude CLI 那条实测每次检索 9–17 秒),而且不消耗账号额度。"
             + "小模型,判断质量没有单独实测过 —— 这一层的质量还没有在这个家庭的资料上按模型量过。"),
 
         new GgufModel(

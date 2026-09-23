@@ -747,6 +747,12 @@ try {
   ok('a GGUF the household supplied is listed too, with no invented note or score',
     !!planted && planted.installed === true && !planted.measured && !planted.note,
     JSON.stringify(planted ?? null));
+  // A note is read where a household CHOOSES a model, so it may only compare with an option they have.
+  // Two compared with 「本机」里 Ollama for a month after that option was retired.
+  const staleNotes = (withPlanted.models ?? []).filter((m) => /Ollama|「本机」/.test(String(m.note ?? '')));
+  ok('no model note compares with a retired option',
+    (withPlanted.models ?? []).some((m) => m.note) && staleNotes.length === 0,
+    JSON.stringify(staleNotes.map((m) => [m.id, m.note])));
   fs.rmSync(path.join(ggufDir, 'household-dropped-this-in.gguf'), { force: true });
   // The BUILT-IN model is a row in that same list rather than a card of its own — and it is deletable, so
   // its 222 MB is reclaimable. It used to offer 重新下载 where every other row offered 删除.
