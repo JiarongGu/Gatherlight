@@ -496,8 +496,9 @@ try {
     const r = await claudeRow(srv.base);
     return r && r.state !== 'running' ? r : null;
   });
-  ok('a file held past the retry budget fails with a SENTENCE, not .NET text',
-    row.state === 'error' && /占用/.test(row.message ?? '') && !/process cannot access/i.test(row.message ?? ''),
+  ok('a file held past the retry budget fails with a SENTENCE, not .NET text — the "unaffected" one',
+    row.state === 'error' && /占用/.test(row.message ?? '') && /不受影响/.test(row.message ?? '')
+      && !/process cannot access/i.test(row.message ?? ''),
     JSON.stringify(row));
   ok('…and the installed binary is untouched — still v3, still there',
     fs.existsSync(claudeExe) && Buffer.compare(fs.readFileSync(claudeExe), payloadV3) === 0);
@@ -542,6 +543,59 @@ try {
     Buffer.compare(fs.readFileSync(path.join(path.dirname(claudeExe), f)), payloadV3) === 0),
   JSON.stringify(asides()));
   onDownload.p.kill();
+  await until(() => onDownload.p.exitCode !== null || onDownload.p.signalCode !== null, 15000).catch(() => {});
+
+  // ---- H4 · a DISPLACED binary is put back BEFORE any download — even one that then fails -----------
+  // The state a failed move back leaves: no claude.exe, the old binary aside, the marker still naming it.
+  // The household is told the next 更新 puts it back, so that must not depend on the download succeeding:
+  // this one fails its checksum (the tampered-download fixture again), and the binary has to be back anyway.
+  const heldBy = (bytes) => asides().filter((f) =>
+    Buffer.compare(fs.readFileSync(path.join(path.dirname(claudeExe), f)), bytes) === 0);
+  fs.renameSync(claudeExe, path.join(path.dirname(claudeExe), 'claude.exe.old-planted'));
+  channelVersion = '9.9.14';
+  channelPayload = payloadV4;
+  published = wrongSum;
+  prov = await cF.post('/api/manage/resources/claude/provision');
+  row = await until(async () => {
+    const r = await claudeRow(srv.base);
+    return r && r.state !== 'running' ? r : null;
+  });
+  ok('(setup) the download after it fails, on its checksum',
+    row.state === 'error' && /sha256/i.test(row.message ?? ''), JSON.stringify(row));
+  ok('THE POINT: the displaced binary is back anyway — restored before the network',
+    fs.existsSync(claudeExe) && Buffer.compare(fs.readFileSync(claudeExe), payloadV3) === 0,
+    JSON.stringify({ exists: fs.existsSync(claudeExe), asides: asides() }));
+  ok('…the version it reports is unchanged',
+    row.version === '9.9.11' && versionTxt() === '9.9.11', JSON.stringify({ row: row.version, marker: versionTxt() }));
+  ok('…and no aside holds it any more', heldBy(payloadV3).length === 0, JSON.stringify(asides()));
+
+  // ---- H5 · a FIRST install whose download is held is told to download again — not that it lost anything --
+  // With no install of ours, "the old version was set aside" would be false, the button reads 「下载」 rather
+  // than 「更新」, and a household with its own CLI can still use it. H3's holder, on a fresh-looking install.
+  for (const f of ['claude.exe', 'version.txt', ...asides()])
+    fs.rmSync(path.join(path.dirname(claudeExe), f), { force: true });
+  const staged5 = path.join(dirF, 'state', 'resources', '.staging',
+    `claude-9.9.15-win32-${process.arch === 'arm64' ? 'arm64' : 'x64'}.exe`);
+  fs.rmSync(staged5, { force: true });
+  channelVersion = '9.9.15';
+  channelPayload = payloadV5;
+  published = crypto.createHash('sha256').update(payloadV5).digest('hex');
+  const firstHold = hold(staged5, 20000, { spin: true });
+  await firstHold.ready;
+  prov = await cF.post('/api/manage/resources/claude/provision');
+  row = await until(async () => {
+    const r = await claudeRow(srv.base);
+    return r && r.state !== 'running' ? r : null;
+  });
+  ok('(setup) the holder caught the first download — without it this case proves nothing',
+    fs.existsSync(firstHold.marker), JSON.stringify(row));
+  ok('THE POINT: a held first install says it did not go in, and to press 「下载」 again',
+    row.state === 'error' && /没能装上/.test(row.message ?? '') && /「下载」/.test(row.message ?? ''),
+    JSON.stringify(row));
+  ok('…and never that an old version was lost, set aside or left unaffected',
+    !/旧版本|放回|不受影响/.test(row.message ?? ''), row.message);
+  // H5 leaves no install behind; nothing after it uses this fixture — the server stops next.
+  firstHold.p.kill();
   release.close();
   srv.stop(); srv = undefined;
 

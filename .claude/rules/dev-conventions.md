@@ -1080,17 +1080,25 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   **And a HELD file is transient.** The suspect is a scanner reading the fresh exe, possibly prompted by our
   own `auth status` probe spawning it — not the spawn itself, which maps the image WITH delete-sharing (that
   is why case H can rename a running exe). The rename aside gave up on it at once, so an update under load
-  failed while the 1.3.0 notes promised the opposite. Every move now retries a sharing violation for ~7 s. If
-  the new binary cannot go in, the old one is moved BACK (retried the same way), because a marker naming a
-  missing binary is an install that cannot run; and the household's sentence is chosen by the OUTCOME —
-  "the installed version is unaffected" only while `claude.exe` is really there, otherwise that the old copy
-  was set aside and the next 更新 puts it back, which the next install's sweep does before deleting any aside.
-  Proof: `e2e-p50` case H2 holds `dest` (waited out; and past the budget, failing at the rename aside with
-  nothing moved) and H3 holds the DOWNLOAD, so the rename aside succeeds, the move in fails and only the
-  move back leaves a binary — confirmed to fail with the move back removed. The holder is PowerShell with
-  `FileShare.Read`, because Node opens files with delete-sharing and cannot stand in for one; H3's spins on
-  the open, since the download is unopenable while being written, and asserts its own marker so a missed
-  window fails instead of passing vacuously. The sweep's put-back has no e2e. Proof
+  failed while the 1.3.0 notes promised the opposite. The first overwrite stays a single attempt — the
+  fallback covers it — and every move after it retries a sharing violation for ~7 s. If the new binary
+  cannot go in, the old one is moved BACK (retried the same way), because a marker naming a missing binary
+  is an install that cannot run. **The household's sentence is chosen by the OUTCOME, three ways**:
+  `claude.exe` in place → "the installed version is unaffected"; an install of ours existed and is now
+  missing → the old copy was set aside, and 更新 or a restart puts it back; no install of ours → the
+  download did not go in, press 下载 (never "an old version was lost" to a household that had none). That
+  second promise is kept by `RestoreDisplacedClaudeAsync`, which moves the newest aside back BEFORE any
+  network request — so an offline click or a bad checksum cannot keep it aside — and again at boot from
+  `ClaudeRuntimeStep`; the sweep skipping while `claude.exe` is missing is only a backstop. Proof: `e2e-p50`
+  case H2 holds `dest` (waited out; and past the budget, "unaffected", failing at the rename aside with
+  nothing moved); H3 holds the DOWNLOAD, so the rename aside succeeds, the move in fails and only the move
+  back leaves a binary (confirmed to fail with the move back removed); H4 plants the displaced state and
+  makes the next download fail its checksum, and the binary is back anyway (confirmed to fail with the
+  top-of-provision restore removed); H5 is a first install with a held download, told to press 下载. The
+  holder is PowerShell with `FileShare.Read`, because Node opens files with delete-sharing and cannot
+  stand in for one; H3's and H5's spin on the open, since the download is unopenable while being written,
+  and assert their own marker so a missed window fails instead of passing vacuously. **Still undriven:**
+  the boot-time restore — no suite restarts a server in the displaced state. Proof
   also lives in `e2e-p50`'s tampered-download denial, paired with the same bytes installing under the
   right checksum, and case A asserts the app boots ANYWAY.
   **The login SPAWN is tested too, and the reason it briefly was not is worth keeping.** It was recorded as

@@ -106,6 +106,12 @@ public interface IResourceProvisioner
     /// that boots should never be surprised by ~265 MB it did not ask for. Never throws — an install with
     /// no network simply keeps reporting the version it has.</summary>
     Task CheckUpdatesAsync(CancellationToken ct = default);
+
+    /// <summary>Put a DISPLACED claude CLI back: an update that set the old binary aside and could not move it
+    /// back leaves no <c>claude.exe</c>, and the newest <c>claude.exe.old-*</c> is then the only copy. Called
+    /// before any download (so an offline click or a bad checksum cannot keep it aside) and at boot (so a
+    /// restart heals it). Never throws.</summary>
+    Task RestoreDisplacedClaudeAsync();
 }
 
 public sealed class ResourceProvisioner : IResourceProvisioner
@@ -776,6 +782,10 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     // and the checksum comes from the vendor's manifest for the exact version we are about to fetch.
     private async Task ProvisionClaudeAsync(ResourceSpec spec, Prog p)
     {
+        // BEFORE any network request. The "moved aside" sentence below promises the next click puts the old
+        // binary back, and that must not depend on the download that follows succeeding.
+        await RestoreDisplacedClaudeAsync();
+
         var platform = ClaudePlatform
             ?? throw new InvalidOperationException(
                 "自动下载的 Claude CLI 仅支持 Windows —— 请自行安装 Claude CLI 后重启应用。");
@@ -805,6 +815,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             Set(p, "running", 97, "安装中…");
             var dest = ProvisionedClaude(_data.ResourcesPath);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            var hadOurs = InstalledClaudeVersion(_data.ResourcesPath) is not null;
             try
             {
                 await ReplaceBinaryAsync(staged, dest);
@@ -812,10 +823,15 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             catch (IOException ex) when (IsHeld(ex))
             {
                 // The row shows ex.Message to the household; .NET's is English and says nothing about what to do.
-                // Which sentence is TRUE depends on whether the old binary is still (or back) in place.
-                throw new InvalidOperationException(File.Exists(dest)
-                    ? "Claude CLI 的文件正被别的程序占用(可能是杀毒软件在扫描),这次没能替换 —— 已安装的版本不受影响,稍后再点「更新」。"
-                    : "Claude CLI 的文件正被别的程序占用,旧版本已移到一旁、没能放回,暂时无法使用 —— 稍后再点「更新」,会先把它放回。", ex);
+                // Which sentence is TRUE depends on the outcome: whether there was an install of ours to lose, and
+                // whether it is still (or back) in place.
+                throw new InvalidOperationException(
+                    File.Exists(dest)
+                        ? "Claude CLI 的文件正被别的程序占用(可能是杀毒软件在扫描),这次没能替换 —— 已安装的版本不受影响,稍后再点「更新」。"
+                    : hadOurs
+                        ? "Claude CLI 的文件正被别的程序占用,旧版本已移到一旁、没能放回,暂时无法使用 —— 稍后再点「更新」或重启应用,会先把它放回。"
+                        : "下载好的 Claude CLI 文件正被别的程序占用(可能是杀毒软件在扫描),这次没能装上 —— 稍后再点「下载」。",
+                    ex);
             }
             // The marker is written LAST, and only after the binary is in place: a marker naming a version
             // that is not on disk would make the panel report an install that cannot run.
@@ -841,6 +857,26 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             : null;
     }
 
+    public async Task RestoreDisplacedClaudeAsync()
+    {
+        try
+        {
+            var dest = ProvisionedClaude(_data.ResourcesPath);
+            var dir = Path.GetDirectoryName(dest)!;
+            if (File.Exists(dest) || !Directory.Exists(dir)) return;
+            // The newest aside is the one that was in place last — a rename keeps the file's write time.
+            var newest = Directory.EnumerateFiles(dir, "claude.exe.old-*")
+                .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+            if (newest is null) return;
+            await RetryWhileHeldAsync(() => File.Move(newest, dest));
+            _log.LogInformation("Put the displaced claude CLI back: {Aside} → {Path}", Path.GetFileName(newest), dest);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not put the displaced claude CLI back; the next install or restart tries again");
+        }
+    }
+
     /// <summary>Move the verified binary into place, tolerating a copy that is CURRENTLY RUNNING. Windows
     /// refuses to overwrite a loaded image, and an update is exactly when one may be mid-chat — so fall
     /// back to renaming the old file aside (which Windows does allow) and let the next sweep delete it.
@@ -855,24 +891,19 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// prompted by our own <c>auth status</c> probe spawning it (the spawn itself maps the image WITH delete
     /// sharing, which is why case H can rename a running exe) — makes a move fail with a sharing violation for
     /// as long as it lasts. That failed an update under load (p50 case H, 2026-09-24) while the release notes
-    /// promised updates no longer fail in use. So every move here retries a sharing violation for a few
-    /// seconds, and if the new binary cannot be moved in, the old one is moved BACK: a version marker naming a
-    /// binary that is not on disk is an install that cannot run. Proof: <c>e2e-p50</c> case H2 (a held
-    /// <c>dest</c>, waited out) and H3 (a held download, rolled back).</para>
-    /// <para>If even the move back fails, the old copy is the newest aside and <c>dest</c> is missing — so the
-    /// next install PUTS IT BACK before sweeping, instead of deleting the only copy. No e2e drives this.</para></summary>
+    /// promised updates no longer fail in use. The first overwrite is a single attempt by design — the
+    /// fallback covers its failure — and every move after it retries a sharing violation for a few seconds.
+    /// If the new binary cannot be moved in, the old one is moved BACK: a version marker naming a binary that
+    /// is not on disk is an install that cannot run. Proof: <c>e2e-p50</c> case H2 (a held <c>dest</c>, waited
+    /// out) and H3 (a held download, rolled back).</para>
+    /// <para>If even the move back fails, the old copy is the newest aside and <c>dest</c> is missing;
+    /// <see cref="RestoreDisplacedClaudeAsync"/> puts it back before the next download (proof: H4) and at boot
+    /// (no suite restarts in that state).</para></summary>
     private static async Task ReplaceBinaryAsync(string staged, string dest)
     {
         var dir = Path.GetDirectoryName(dest)!;
-        if (!File.Exists(dest))
-        {
-            var newest = Directory.EnumerateFiles(dir, "claude.exe.old-*")
-                .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
-            if (newest is not null)
-                try { File.Move(newest, dest); } catch { /* still held; left for the next install, not swept */ }
-        }
         // Sweep any earlier displaced copy — this is the only thing that ever deletes them. Never while dest
-        // is missing: an aside is then the only copy there is.
+        // is missing: an aside is then the only copy there is (a backstop; the restore runs before this).
         if (File.Exists(dest))
             foreach (var stale in Directory.EnumerateFiles(dir, "claude.exe.old-*"))
                 try { File.Delete(stale); } catch { /* still running or locked; next time */ }
@@ -886,7 +917,8 @@ public sealed class ResourceProvisioner : IResourceProvisioner
 
         if (!File.Exists(dest))
         {
-            // Nothing to set aside (a first install), so what failed above can only be the download being held.
+            // Nothing to set aside — a first install, or a displaced copy the restore could not put back — so
+            // there is no fallback left: retry the move in itself.
             await RetryWhileHeldAsync(() => File.Move(staged, dest));
             return;
         }

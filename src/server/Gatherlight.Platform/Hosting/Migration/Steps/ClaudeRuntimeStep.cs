@@ -37,7 +37,11 @@ public sealed class ClaudeRuntimeStep : IMigrationStep
 
     public async Task RunAsync(CancellationToken ct)
     {
-        // First, and cheapest: if we provisioned a CLI into the data folder, make Lyntai spawn THAT one.
+        // An update that set our binary aside and could not move it back left no claude.exe; put it back
+        // before anything resolves the CLI, so a restart heals the install instead of reporting it missing.
+        await _resources.RestoreDisplacedClaudeAsync();
+
+        // Next, and cheapest: if we provisioned a CLI into the data folder, make Lyntai spawn THAT one.
         // Must happen before anything downstream reaches for the agent.
         _claude.Apply();
 
