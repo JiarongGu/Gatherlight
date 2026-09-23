@@ -491,7 +491,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   instruction was "delete this", not "beware of conflicts". **And the rule paid out**: Lyntai 3.1 closed both
   Part 94 and Part 93 (the candidate-list widening, below), and the 3.2 upgrade deleted both copies without
   an investigation, because each note already said what to do.
-  **Two are open today, and each says what ends it.**
+  **The failure runs the other way too, and is this rule's negative example**: `AgentRunner`'s tool-call bridge
+  carried a note claiming `ClaudeToolCalls.FilePathOf` read only `file_path`, filed as a Lyntai gap, when the
+  shipped 3.2.0 class already read `file_path` → `notebook_path` → `path` in that order — closed since
+  `docs/task-archive.md` Part 11 (item G1), whose own outcome says the item was stale on both halves — so the
+  note kept a duplicate of shipped library code in the call path until it was checked against Lyntai's source
+  on 2026-09-24 and deleted.
+  **Three are open today, and each says what ends it.**
   **(1) `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170.** Lyntai's LLM judge
   rendered each candidate as its headline alone, and our headline is the fact's TOPIC, so the judge decided
   "did this answer?" from topics; the decorator shows it the content. Upstream closed the gap with
@@ -503,16 +509,34 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   builds the verifier, and delete the class, its `GATHERLIGHT_JUDGE_INPUT` knob and the bench arms that set it
   (`topic`, `contentonly`). Not both: with `ContentChars` above 0 upstream reads the content itself and ignores
   the decorator's rewritten headline, so keeping it would be dead code running on every recall.
-  **(2) `JudgeScopedModelRoutingStore` ↔ NO Lyntai task yet, and that missing half is this rule's point.**
-  Lyntai's live override (`IModelRoutingStore`, which serves `llm.model.memory`) is keyed by CONSUMER alone, so
-  it cannot know which client or provider a model name was written for, and a key written for one binding is
-  read by another — after a fallback, or between a rebind and its restart (previous bullet). The app withholds
-  the key while the saved binding would annotate through a different client than the running one. What Lyntai
-  would need: a live override scoped to the client (or provider) it names — written with that scope and
-  consulted only for it. When it lands: delete `JudgeScopedModelRoutingStore` and its registration ahead of the
-  live routing, have the binding endpoint write the scoped key, and keep `e2e-p52` case 4 green — it fails with
-  either half of today's fix removed. Until the Lyntai task is filed, a release that closes the gap would do so
-  silently, and this store would keep running beside it.
+  **(2) `JudgeScopedModelRoutingStore` ↔ `TASKS.md` Part 284.** Lyntai's live override (`IModelRoutingStore`,
+  which serves `llm.model.memory`) is keyed by CONSUMER alone, so it cannot know which client or provider a
+  model name was written for, and a key written for one binding is read by another — after a fallback, or
+  between a rebind and its restart (previous bullet). The app withholds the key while the saved binding would
+  annotate through a different client than the running one. Part 284 records two shapes, neither decided: a
+  live override SCOPED to the client (or provider) it names, consulted only when resolving for it; or the
+  router refusing, VISIBLY, a live model no resolved candidate can serve. If it lands scoped: delete
+  `JudgeScopedModelRoutingStore` and its registration ahead of the live routing, have the binding endpoint write
+  the scoped key, and keep `e2e-p52` cases 4 and 4b green — both fail with either half of today's fix removed.
+  If it lands as a visible refusal instead, the class stays: a refusal only makes the fail-open loud, it does
+  not stop the wrong client being asked, so withholding the key here is still what keeps a stale binding from
+  reaching a client it was never written for. Until either shape lands, a release could close the gap without
+  this store noticing, and it would keep running beside it.
+  **(3) `IFactIndex.EmbedderReadyAsync` ↔ `docs/task-archive.md` Part 285 / D175.** A failed write-time embed is
+  silent — Lyntai's graph engine catches it, stores the fact anyway WITHOUT its vector, and gives it a graph
+  reference regardless, so no back-fill ever returns to it (measured: a real install came up 6/6 "indexed" with
+  0 vectors, coverage reading 100%). And the embedding route is INTERNAL, so asking "can this write embed right
+  now" before a bulk write means restating the engine's own filter rather than calling it. D175 closed HALF of
+  this upstream (unreleased, shipping after 3.2.0, Breaking): `IMemoryEngine.RememberAsync` now returns a
+  `MemoryWriteResult` whose `Ran` names the tiers that took the write, so a vector-less write is observable
+  AFTER the fact — the app's one call site is `FactIndex.cs`'s `IndexAsync`, and it will need recompiling on the
+  bump since the return type changed. D175 deliberately did NOT build the other half — a readiness probe, "can
+  the engine embed right now" — calling that a public probe of an internal filter for a need nobody had shown;
+  its stated trigger is "a consumer that must decide BEFORE writing anything", which is `EmbedderReadyAsync`.
+  On that bump: `FactIndex` reads `.Ran` off the `RememberAsync` result and stops treating a written graph ref
+  as fully indexed when the vector flag its engine kind owes is missing — rebuild-owed, or a warning, rather
+  than trusting coverage. `EmbedderReadyAsync` itself is NOT deleted then: its trigger is exactly the half D175
+  deferred, so it keeps restating the engine's filter until a release ships that probe.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to

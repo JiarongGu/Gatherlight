@@ -115,9 +115,11 @@ public sealed class AgentRunner : IAgentRunner
             {
                 var args = ParseArgs(tc.ArgumentsJson);
                 // EditTracker filters by tool name; feed the write path (file_path OR notebook_path OR path)
-                // so NotebookEdit (notebook_path) writes are tracked into the commit set too — Lyntai's
-                // ClaudeToolCalls.FilePathOf only reads file_path (filed as a Lyntai gap).
-                tracker?.Record(tc.Name, First(args, "file_path", "notebook_path", "path"));
+                // so NotebookEdit (notebook_path) writes are tracked into the commit set too. Lyntai's own
+                // ClaudeToolCalls.FilePathOf already reads them in exactly that order (checked against the
+                // shipped 3.2.0 source; docs/task-archive.md Part 11 item G1 says the same — "stale on both
+                // halves"), so this uses it instead of keeping a second copy of the same fallback chain.
+                tracker?.Record(tc.Name, ClaudeToolCalls.FilePathOf(tc));
                 emit(new AgentEvent { Kind = "tool", Tool = new ToolInfo(tc.Name, ToolDetail(tc.Name, args)) });
                 break;
             }

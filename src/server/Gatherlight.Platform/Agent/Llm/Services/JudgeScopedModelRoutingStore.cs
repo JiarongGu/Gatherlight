@@ -27,14 +27,19 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 ///
 /// <para>Registered BEFORE <c>AddLiveModelRouting()</c>, whose <c>TryAddSingleton</c> then stands down.</para>
 ///
-/// <para><b>A WORKAROUND FOR A LYNTAI GAP, and the Lyntai half is not filed yet.</b> The live override is keyed
-/// by CONSUMER alone (<see cref="IModelRoutingStore.GetModelOverrideAsync"/> takes nothing else), so the library
-/// cannot know which client or provider a model name was written for. What it would need: a live override
-/// scoped to the client (or provider) it names, written with that scope and consulted only for it. When a
-/// release has that, delete this class and its registration in <c>GatherlightApp</c>, have the binding endpoint
-/// write the scoped key, and keep <c>e2e-p52</c> case 4 green. Until the request is in Lyntai's
-/// <c>TASKS.md</c>, a release could close the gap silently and this would keep running beside it
-/// (dev-conventions: a workaround is recorded on both sides).</para>
+/// <para><b>A WORKAROUND FOR A LYNTAI GAP — Lyntai <c>TASKS.md</c> Part 284.</b> The live override is keyed by
+/// CONSUMER alone (<see cref="IModelRoutingStore.GetModelOverrideAsync"/> takes nothing else), so the library
+/// cannot know which client or provider a model name was written for — which is exactly what lets a key written
+/// for one binding be read while resolving another. Part 284 records two shapes, neither decided: an override
+/// SCOPED to the client (or provider) it names, consulted only when resolving for it; or the router refusing,
+/// VISIBLY, a live model no resolved candidate can serve. If it lands scoped: delete this class and its
+/// registration in <c>GatherlightApp</c>, have the binding endpoint write the scoped key, and keep <c>e2e-p52</c>
+/// cases 4 and 4b green — both fail with either half of today's fix removed. If it lands as a visible refusal
+/// instead, this class still has a job: a refusal only turns the silent fail-open into a loud one, it does not
+/// stop the wrong client being asked, so withholding the key here stays what keeps a stale binding from ever
+/// reaching a client it was never written for. Until either shape lands, a release could close the gap without
+/// this class noticing, and it would keep running beside it (dev-conventions: a workaround is recorded on both
+/// sides).</para>
 /// </summary>
 public sealed class JudgeScopedModelRoutingStore : IModelRoutingStore
 {

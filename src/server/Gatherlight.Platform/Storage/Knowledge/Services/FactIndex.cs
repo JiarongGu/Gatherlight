@@ -55,7 +55,21 @@ public interface IFactIndex
     /// engine catches it and stores the fact anyway, WITHOUT its vector ("storing without signals or links"),
     /// and the fact gets its graph reference — so no back-fill ever returns to it. An upgrade rebuild against a
     /// router that had not started yet stripped every vector from a real install that way while coverage read
-    /// 100% (see <c>FactIndexStep</c>).</para></summary>
+    /// 100% (see <c>FactIndexStep</c>).</para>
+    /// <para><b>A WORKAROUND FOR A LYNTAI GAP — Lyntai <c>docs/task-archive.md</c> Part 285 / D175.</b> This
+    /// method exists because the library gives no way to ask "can a write embed" before attempting one, so it
+    /// restates the engine's own internal embedding filter instead. D175 closed HALF of the gap upstream
+    /// (unreleased, shipping after 3.2.0, Breaking): <c>IMemoryEngine.RememberAsync</c> now returns a
+    /// <c>MemoryWriteResult</c> whose <c>Ran</c> names the tiers that took the write, so a write stored WITHOUT
+    /// its vector is observable AFTER the fact — the coverage-reads-100%-while-empty failure above is exactly
+    /// what that closes. D175 deliberately did NOT build a readiness probe: it called that "a public probe of
+    /// an internal filter for a need nobody had shown", and its stated trigger is "a consumer that must decide
+    /// BEFORE writing anything" — which is this method. On that bump: read <c>Ran</c> off the
+    /// <c>RememberAsync</c> result in <see cref="IndexAsync"/> and stop treating a written graph ref as fully
+    /// indexed when the vector flag its engine kind owes is missing (rebuild-owed, or a warning, rather than
+    /// trusting coverage). This method itself is NOT deleted then: its trigger (decide before a bulk
+    /// write/rebuild) is exactly the half D175 deferred, so it keeps restating the engine's filter until a
+    /// release ships that probe.</para></summary>
     Task<bool> EmbedderReadyAsync(CancellationToken ct = default);
 
     /// <summary>Index one fact; returns its address, or null if the index is unavailable or refused it.</summary>
@@ -195,7 +209,8 @@ public sealed class FactIndex : IFactIndex
         {
             // The same routing the engine embeds a write through (Lyntai's EmbeddingRouting is internal, so this
             // restates its one filter: a backend that produces vectors from text), so a pass here means a write
-            // would embed too.
+            // would embed too. Why this restatement still has to exist, and what ends it: the workaround note
+            // on EmbedderReadyAsync above (Lyntai docs/task-archive.md Part 285 / D175).
             Func<Lyntai.Inference.ProviderCapabilities, bool> embeds = c => c.Supports(
                 Lyntai.Inference.ProviderKinds.Vector, Lyntai.Inference.ProviderOperation.Complete,
                 accepts: Lyntai.Inference.ProviderKinds.Text);
