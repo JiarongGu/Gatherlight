@@ -47,7 +47,7 @@ household), which is what the picker shows — and the third one is *no model*:
 | group | backends | what it costs |
 |---|---|---|
 | **Claude CLI** | `claude-cli` | an account, nothing local. 判断 annotates + verifies; 语义 REPHRASES — Claude has no embeddings endpoint, so it stores other wordings of each fact (`knowledge.aka`, in the trigram index), **at least one in another language**, and a differently-worded or differently-*languaged* question matches one. Quota + a CLI spawn per call |
-| **本机模型** | `llama-cpp` · `builtin` | disk, no quota, no address. `llama-cpp` is the runtime we download and start (both layers); `builtin` is EmbeddingGemma-300M as ONNX in our own process (语义 only, 222 MB, measured first — `docs/builtin-model-runner.md`). Models come from 资源, sha256-pinned and ranked |
+| **本机模型** | `llama-cpp` · `builtin` | disk, no address; no quota EXCEPT a reranker on 判断, whose tagging still runs on the Claude CLI (see below). `llama-cpp` is the runtime we download and start (both layers); `builtin` is EmbeddingGemma-300M as ONNX in our own process (语义 only, 222 MB, measured first — `docs/builtin-model-runner.md`). Models come from 资源, sha256-pinned and ranked |
 | **不用模型** | *none* | nothing. Choosing it turns the layer off and leaves 公式 doing the work |
 
 **不用模型 holds no backends, and that is its meaning.** "Off" used to be a separate 停用 button, which made
@@ -80,8 +80,15 @@ chose — and switched 语义 off, both invisibly.
 **"Worse" and "costlier" are reasons to DESCRIBE an option, not to remove it** — and *cannot* has to mean
 cannot. Broken twice here (语义's missing Claude arm; Ollama's deleted pull/delete), both times by reasoning
 that sounded like engineering judgement; `.claude/rules/dev-conventions.md` carries the rule and both
-failures. A declined entry is only for a real impossibility — `builtin` on 判断 needs an in-process chat
-model, which does not exist.
+failures. A declined entry is only for a real impossibility. `builtin` on 判断 is NOT one: it is an option
+nobody built — the in-process cross-encoder path reads WordPiece only, so the one model it can run is
+English-only, while the multilingual rerankers run through llama.cpp (the design spec's §Constraints).
+
+**判断 can run on a llama.cpp RERANKER** (2026-09-23, `docs/judge-bench.md` Run 2). It VERIFIES locally and
+never annotates, so tagging stays on the Claude CLI and `llm.model.memory` holds the CLI's model, never the
+reranker's id. Measured: it puts the answer on the 8-row page far more often than the Claude judge (203–208
+vs 133 of 240), but first far less often (86–90 vs 132), at ~0.5 s against ~9.5 s. The rules for it — the
+binding screen, the per-candidate cap, the router restart limits — are in `.claude/rules/dev-conventions.md`.
 
 **The runtime the app provisions is llama.cpp's `llama-server`** (2026-08-22, measured: 35 MB against
 Ollama's 1460, same 9/10 retrieval, 25 ms/query against 69 — `docs/self-managed-llm-runtime.md`).
