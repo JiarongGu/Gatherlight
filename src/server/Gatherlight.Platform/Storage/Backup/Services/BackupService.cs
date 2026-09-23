@@ -236,10 +236,9 @@ public sealed class BackupService : IBackupService
                     // (JudgeScopedModelRoutingStore only withholds it across a client MISMATCH) — so a
                     // target bound to a llama.cpp chat GGUF, restored from a backup bound to claude-cli,
                     // keeps asking the Claude CLI for the GGUF's id after the restart. Fail-open both
-                    // sides: zero enrichment, no error. Deleting it here means the restored settings.json
-                    // is the only answer left — right after the restart, and already right before it,
-                    // because the scoped store withholds a key it did not just see written for the client
-                    // that is running.
+                    // sides: zero enrichment, no error. Deleting it here means that after the restart the
+                    // restored settings.json is the only answer; before it, the RUNNING wiring's own
+                    // default answers, which belongs to the client that is running — consistent either way.
                     _config.Delete("llm.model.memory");
                 }
             }

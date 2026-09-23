@@ -86,7 +86,8 @@ public sealed class MemoryService : IMemoryService
         // not carry, so the key alone names a model for a backend the target install never bound (a GGUF id
         // handed to the Claude CLI; both memory policies fail open, so: zero enrichment, no error).
         //
-        // ALLOW-list, not a deny-filter, and matching ImportAsync's own prefix guard below on purpose: the
+        // ALLOW-list, not a deny-filter, and matching what ImportAsync will actually WRITE (the ordinal catalog
+        // lookups in SetPrompt/SetModel, behind its looser prefix guard) on purpose: the
         // SELECT's SQLite `LIKE` is ASCII case-INSENSITIVE, so a stray-cased row (`LLM.Model.memory`) comes
         // back in `cortexRows` — a case-sensitive deny-filter on `llm.model.` would then miss it entirely
         // and let it straight through. Here it simply matches neither branch and is dropped.

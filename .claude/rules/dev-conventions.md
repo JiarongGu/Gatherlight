@@ -860,8 +860,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   survives untouched beside a freshly restored binding it can now disagree with, and the scoped routing
   store only withholds it across a CLIENT mismatch (a saved binding sharing the running client reads it
   straight through). `BackupService.ImportAsync` reconciles by deleting the key right after it copies
-  `settings.json` in, so the restored binding is the only answer left, before the restart as well as after
-  it. Proof: `e2e-p47`.
+  `settings.json` in: after the restart the restored binding is the only answer, and before it the running
+  wiring's own default answers, which belongs to the running client — consistent either way. Proof: `e2e-p47`.
 - **A reranker verifies; it never annotates.** A cross-encoder scores (query, document) pairs and never
   generates, so it can do the half of 判断 that checks a recall and none of the half that tags a write — the
   subject handles need a model that writes. A reranker binding is therefore TWO backends, and `JudgeWiring`
