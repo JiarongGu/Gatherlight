@@ -82,15 +82,30 @@ public static class MemorySources
     /// provisions llama.cpp, which sits in THIS SAME group and can judge — so the honest answer is that the
     /// group is fine and this one arm of it is not. Pointing at the sibling matters: a household reading a
     /// flat "not available" under 自带 would conclude the whole heading was unfinished.</para></summary>
+    // The group is 「本机模型」: it said 「内置」 from when that word named the group, and 内置 now names this
+    // very ONNX arm — so the sentence pointed a household at the one member that cannot judge.
     private const string BuiltInCannotJudge =
         "「判断」需要一个能对话的模型在应用进程里跑,这个还没做 —— ONNX 这条只做「语义」的向量。"
-        + "但「内置」这一组照样能用:同一组里的 llama.cpp 由应用自己安装和启动,下载一个对话模型就能做判断。";
+        + "但「本机模型」这一组照样能用:同一组里的 llama.cpp 由应用自己安装和启动,"
+        + "下载一个对话模型或重排模型就能做判断。";
 
     public const string DefaultJudgeSource = "claude-cli";
 
     /// <summary>The CLI arm's default model. Cheap on purpose: this seam runs on every write and every
     /// recall, so it is the app's most frequent model call by a wide margin.</summary>
     public const string DefaultJudgeModel = "haiku";
+
+    /// <summary>What TAGGING costs when the bound judge only CHECKS — a reranker scores and never generates, so
+    /// every fact write is annotated by the Claude CLI instead. ONE writer for the clause, because three
+    /// surfaces carry it at three moments of one decision: the reranker's model note (while choosing), the
+    /// bind toast (on choosing) and the bound cost line (afterwards).
+    ///
+    /// <para><b>The quota half was missing from all three.</b> Each said the checking is 不消耗账号额度 and
+    /// that the content goes to Claude, and none said the tagging SPENDS the account — so the only quota
+    /// statement a household read about this binding was the reassuring one. The CLI arm's own cost line has
+    /// always said it uses the signed-in account; this is that fact, for the half that stays on the CLI.
+    /// <c>e2e-p52</c> case 5 pins it in all three.</para></summary>
+    public const string CliTaggingCost = "每条事实一次调用,消耗账号额度,事实内容会发给 Claude";
 
     /// <summary>Both lookups go through <see cref="MemoryBackends.Canonical"/>, so an install still
     /// naming the removed <c>ollama</c> backend resolves to the generic one instead of falling through to a

@@ -87,7 +87,11 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public string Description =>
         "适合:大多数情况 —— 应用自己装好、自己启动,不用填地址,模型在「资源 · Resources」面板下载。"
         + "判断与语义共用同一个进程、各用自己的模型,所以两层都开也只有一个常驻服务。"
-        + "实测语义检索 10 题首位命中 9 题、每次查询 0.025 秒;判断每次约 0.15–0.20 秒。";
+        + "实测语义检索 10 题首位命中 9 题、每次查询 0.025 秒;判断用对话模型时每次约 0.15–0.20 秒,"
+        // Per call for a chat judge (docs/self-managed-llm-runtime.md); for a reranker the ADDED cost per
+        // recall under partition (docs/judge-bench.md, Run 2) — the comparable figure, not the 0.47–0.49 s
+        // whole recall the model notes quote, which includes the formula's own ~0.23 s.
+        + "用重排模型时每次检索多约 0.23–0.26 秒(都是模型已加载后的实测)。";
 
     /// <summary>A chat model does both halves on our router. A RERANKER only scores, so it verifies and the
     /// default client (the Claude CLI) annotates — on <see cref="AnnotationModel"/>, which is where the
@@ -128,11 +132,13 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public string Cost(string? model) =>
         model is not null && IsReranker(model)
             // BOTH halves, because they cost different things — and the second sentence is the one a household
-            // relies on: their facts DO leave the machine, for tagging.
+            // relies on: their facts DO leave the machine, for tagging, and on their ACCOUNT. The clause is
+            // MemorySources.CliTaggingCost; it once said only the first, which left 不消耗账号额度 above as the
+            // one quota statement about this binding.
             ? "检索时的判断由本机重排模型完成:不消耗账号额度,不联网。"
               // No 仍 ("still"): for a household moving from a local CHAT judge, tagging moves to Claude for
               // the FIRST time with this binding, and "still" would hide exactly that.
-              + "写入事实时的主题标注由 Claude CLI 完成 —— 每条事实一次调用,事实内容会发给 Claude;"
+              + "写入事实时的主题标注由 Claude CLI 完成 —— " + MemorySources.CliTaggingCost + ";"
               + "没有已登录的 CLI 时只是不标注,检索时的判断照常。"
             : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
               + "没有 CLI 那条的进程启动开销(那条实测每次检索 9–17 秒)。";

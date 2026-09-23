@@ -348,7 +348,9 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         // "which of these is ours".
         new ResourceSpec(
             Id: "llama-cpp", Name: $"本机模型运行时 · llama.cpp({LlamaCppVersion})",
-            NeededFor: "「记忆检索」里本机模型的运行时:语义的嵌入模型与判断的本机对话模型都跑在它上面"
+            // Names all three kinds it serves: a reranker for 判断 runs here too, and a row listing only the
+            // chat model would leave a household who chose one wondering why this is needed.
+            NeededFor: "「记忆检索」里本机模型的运行时:语义的嵌入模型、判断的对话模型或重排模型都跑在它上面"
                 + " —— 自带 Vulkan,NVIDIA / AMD / Intel 通用;仅在启用本机模型时需要",
             Kind: ResourceKind.Zip, InstallDir: "llama-cpp", ReadyMarker: "llama-server.exe",
             ApproxBytes: LlamaCppArm64 ? 12_339_627 : 34_936_498,
@@ -370,11 +372,13 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         new ResourceSpec(
             Id: Agent.Llm.Sources.BuiltInSemanticSource.ResourceId,
             Name: "内置嵌入模型(EmbeddingGemma 300M)",
-            // Says what it REPLACES, because that is the decision the household is making: this is the
-            // alternative to installing Ollama at all for 语义, and it is the smaller of the two — 222 MB
-            // here against Ollama's runtime plus a 622 MB model.
-            NeededFor: "「记忆检索 · 语义」的内置后端 —— 不必安装 Ollama;实测检索质量与本机 Ollama 接近,"
-                + "而且在应用内直接运行(更快、不需要常驻服务)",
+            // Says what it IS and what it COSTS. It used to say what it replaced — "no need to install Ollama,
+            // retrieval close to a local Ollama" — which compared with a backend retired on 2026-08-22, so the
+            // one sentence describing this row measured it against an option the household no longer has. Its
+            // real sibling is llama.cpp's GGUF of the same model; that comparison, with both numbers, is the
+            // model row's note (BuiltInSemanticSource.Catalog), not repeated here to drift.
+            NeededFor: "「记忆检索 · 语义」的内置嵌入模型 —— 在应用进程里直接运行:不需要另外的运行时,"
+                + "没有常驻服务,只占约 222 MB 磁盘;仅在语义选用「本机模型 · ONNX」时需要",
             Kind: ResourceKind.Files, InstallDir: "embed-model",
             // The .onnx is the marker rather than the weights: it is the file ONNX Runtime is handed, and
             // ProvisionFilesAsync only moves the directory in once EVERY checksum passed, so the marker

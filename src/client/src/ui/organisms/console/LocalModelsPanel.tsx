@@ -16,12 +16,16 @@ import { ResourceRow } from '@/ui/molecules';
  * differing only by a boolean. Downloaded is a STATE of a model, not a separate species, so there is one
  * table, `installed` is a field, and the sort puts what you have above what you could get.
  *
- * <b>This section shows only what Gatherlight manages.</b> It used to list the household's Ollama models
- * with pull and delete buttons beside them, against a copy of Ollama under their own Programs directory —
- * a program the app did not install. 资源 is the panel for what we provision; a delete button aimed at
- * somebody else's tool is not a convenience, it is this panel claiming ownership it does not have. 本机
- * models remain fully usable and are chosen in 记忆检索, which reads the Ollama probe directly and never
- * went through here; they are managed with Ollama, which is what 本机 means.
+ * <b>This section shows only what Gatherlight provisions</b> — the models of the 本机模型 group in 记忆检索:
+ * the sha256-pinned GGUFs our own llama.cpp runtime serves (embedders for 语义; chat models and rerankers for
+ * 判断) and the built-in ONNX embedder, which runs in this process. A GGUF the household dropped into the
+ * folder themselves also gets a row, with no note and no measurement, because it is on their disk and they
+ * may want the space back.
+ *
+ * It once listed the household's Ollama models too, with pull and delete buttons aimed at a program the app
+ * did not install. Ollama stopped being a backend on 2026-08-22 (and the address-typed OpenAI-compatible
+ * backend with it), so there is no model managed elsewhere left to point at: every model a layer can use is
+ * a row here.
  */
 
 /** What each GGUF kind is FOR. A reranker judges too, but only by scoring — it never writes a tag. */
@@ -155,11 +159,15 @@ export function LocalModelsPanel(
     <div className="res-models">
       <div className="mng-title">本机模型 · Local models</div>
       <div className="set-lead">
-        应用自己下载和管理的模型 —— 对应「记忆检索」里的<b>内置</b>那一组。哪一层用哪个,在
+        {/* The group is 本机模型: this said 内置 from when that word named the group, and 内置 now names
+            one member of it (the ONNX embedder). The fine print below it offered Ollama and a self-run
+            service as 记忆检索 options — both retired on 2026-08-22 — so it pointed at choices that no longer
+            exist; what it says now is the true boundary of this list. */}
+        应用自己下载和管理的模型 —— 对应「记忆检索」里的<b>本机模型</b>那一组。哪一层用哪个,在
         「校准 · Cortex → 记忆检索」里选。
         <div className="mem-fine">
-          用 Ollama 或自己跑的服务(「记忆检索」里的<b>本机</b>)?那些模型由你自己管理,不在这里列出 ——
-          直接在「记忆检索」里选就行。
+          「记忆检索」能用的本机模型都列在这里,它不连接你自己另外运行的模型服务。
+          自己放进模型文件夹的 GGUF 文件也会列出,但没有说明和实测数据。
         </div>
       </div>
 

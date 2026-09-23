@@ -143,9 +143,16 @@ public sealed class MemoryRecallController : ControllerBase
                     // Both measurements stand together: the judge CAN move a result, and on this corpus it
                     // moved nothing, because it endorsed what already ranked top. So the honest sentence
                     // describes what it does and declines to promise an improvement nobody has measured.
+                    // …and it was wrong a THIRD way: 「在本机现有的事实上实测过:排序结果与关闭时相同」 quoted ONE
+                    // household's 16 facts to every household, measured while the judge still saw only topics.
+                    // The mechanism is Lyntai's partition — an endorsed fact is promoted to the front, in the
+                    // engine's own order — and the numbers now come from the committed bilingual fixture anyone
+                    // can re-run (docs/judge-bench.md, Runs 1 and 2, `all` set): the two judges move different
+                    // things, which is the one sentence a household choosing between them needs.
                     what = "写入事实时标注主题(让讲同一件事的记录彼此关联);检索时判断哪些结果真正回答了问题,"
-                        + "被判断为「答到了」的事实会排得更靠前,也更容易被后续检索记住。"
-                        + "在本机现有的事实上实测过:排序结果与关闭时相同 —— 因为它认可的正是原本就排在前面的那几条。"
+                        + "被判断为「答到了」的事实会排到前面,也更容易被后续检索记住。"
+                        + "在本应用 240 题的双语测试集上实测:Claude CLI 判断让排第一的答案从 79 题增加到 132 题;"
+                        + "本机重排模型让答案进入前八的次数从 125 题增加到 203–208 题,排第一的只多 7–11 题。"
                         + "每次检索都要等它一次,这一点是当场就有的。",
                     // COST IS TWO THINGS, and only one of them was stated. The token cost was here from the
                     // start; the LATENCY was measured later, on this household's own facts.
@@ -159,8 +166,13 @@ public sealed class MemoryRecallController : ControllerBase
                     // essentially all of it a CLI process spawn per call. A household deciding whether to
                     // leave 判断 on is entitled to that before they notice recall feeling slow, and it is
                     // OUR number, so unlike the weighting note below it needs no attribution.
-                    // The local arm avoids the spawn; its own latency is deliberately NOT quoted, because
-                    // nobody has measured it here and a plausible figure is the thing this panel refuses.
+                    // The local arm avoids the spawn, and its latency IS quoted now that it has been measured —
+                    // this comment said "deliberately NOT quoted, nobody has measured it" long after it had
+                    // been. A warm chat judge answers in 150–204 ms (docs/self-managed-llm-runtime.md,
+                    // gemma-3-1b), quoted in LlamaCppSource.Description and the chat models' notes; a reranker
+                    // recall takes ~0.47–0.49 s warm (docs/judge-bench.md, Run 2), quoted with its conditions
+                    // in the reranker notes. Every figure carries its source; a plausible one without is still
+                    // the thing this panel refuses.
                     // The texts live on each source's `Cost` (IMemoryJudgeSource) — the bound arm describes itself.
                     cost = boundJudge.Cost(boundJudgeModel),
                     source = boundJudge.Id, model = boundJudgeModel,
@@ -278,10 +290,13 @@ public sealed class MemoryRecallController : ControllerBase
         if (!MemoryBackends.IsRetired(savedSource)) return null;
         var was = string.Equals(savedSource, MemoryBackends.Ollama, StringComparison.OrdinalIgnoreCase)
             ? "本机 Ollama" : "自填地址的本机服务";
+        // The options named here are the picker's own labels. 语义's used to end 「或选「内置」只用公式检索」 —
+        // 内置 in its OLD meaning, the no-model group, which is 「不用模型」 now while 内置 names the in-process
+        // ONNX embedder: the advice would have bound an embedder while promising formula only.
         return $"这一层原来用的是「{was}」,这个版本不再连接外部服务 —— "
             + (layer == MemoryLayers.Judge
-                ? "请改选「Claude CLI」,或在「资源」面板下载 llama.cpp 的对话模型后选「llama.cpp」。"
-                : "请改选「llama.cpp」(在「资源」面板下载嵌入模型),或选「内置」只用公式检索。");
+                ? "请改选「Claude CLI」,或在「资源」面板下载 llama.cpp 的对话模型或重排模型后选「llama.cpp」。"
+                : "请改选「llama.cpp」或「ONNX」(模型在「资源」面板下载),或选「不用模型」只用公式检索。");
     }
 
     /// <summary>Is the bound 语义 arm actually doing anything right now?
@@ -517,9 +532,11 @@ public sealed class MemoryRecallController : ControllerBase
                 // saying "标注与核对" for it told the household the opposite of the cost line beside it.
                 // No 仍 ("still"), and the content leaving the machine is SAID: a household moving here from a
                 // local chat judge is sending facts to Claude for the first time, and this is where they learn it.
+                // The tagging clause is MemorySources.CliTaggingCost — the same one the cost line and the model
+                // note carry, so the three cannot disagree about whether the account is spent.
                 note = source.ChecksOnly(model!)
                     ? $"设置已保存。重启服务后,检索时的核对将由这个模型完成;写入事实时的主题标注由 Claude CLI"
-                      + $"({source.AnnotationModel(model!)})完成 —— 每条事实的内容会发给 Claude。"
+                      + $"({source.AnnotationModel(model!)})完成 —— {MemorySources.CliTaggingCost}。"
                     : "设置已保存。重启服务后,标注与核对将由这个后端完成。",
             });
         }
@@ -558,13 +575,18 @@ public sealed class MemoryRecallController : ControllerBase
             if (probe is null)
                 return StatusCode(409, new
                 {
-                    // The two arms fail differently and must SAY so: an embedder that returned no
-                    // vector is a wrong-model-or-daemon-down problem, and a CLI that produced no phrasings
-                    // is a login-or-model problem. One message covering both describes neither.
+                    // The arms fail differently and must SAY so: a CLI that produced no phrasings is a
+                    // login-or-model problem, llama.cpp returning no vector is a wrong-model-or-runtime-down
+                    // one, and the built-in embedder returning none is its model FILES (IsConfigured already
+                    // saw them on disk, so what is left is a load that failed). One message covering all three
+                    // describes none — and this one named Ollama, a backend retired on 2026-08-22.
                     error = source.Id == MemoryBackends.ClaudeCli
                         ? $"{model} 没能改写出别的说法 —— 请确认 Claude CLI 已登录,或换一个模型。"
-                        : $"{model} 没有返回向量 —— 它可能不是嵌入模型,或 Ollama 未运行。"
-                            + "请换一个,或先在「资源 · Resources」面板确认。",
+                        : source.Id == MemoryBackends.LlamaCpp
+                            ? $"{model} 没有返回向量 —— 它可能不是嵌入模型,或本机模型运行时 llama.cpp 没能启动。"
+                                + "请换一个嵌入模型,或先在「资源 · Resources」面板确认运行时已下载。"
+                            : $"{model} 没有返回向量 —— 内置嵌入模型没能加载,文件可能不完整。"
+                                + "请在「资源 · Resources」面板把「内置嵌入模型」删除后重新下载。",
                 });
 
             var previous = _config.Current.Memory.EmbeddingModel;
@@ -662,8 +684,16 @@ public sealed class MemoryRecallController : ControllerBase
                 var embedded = await _facts.ReindexSemanticAsync(
                     CancellationToken.None,
                     new Progress<(int Done, int Total)>(p => _reindex.Report(p.Done, p.Total)));
+                // What can make it 0, read off ReindexSemanticAsync: an embedder bound since the last start
+                // (it is loaded only at startup), or an embedder that failed on every fact — llama.cpp not
+                // answering, or the built-in model's files failing to load. A MISSING built-in model never
+                // gets here: ResolveSemantic is null without it, and the 409 above answers first. The CLI arm
+                // counts every fact it visits, so it reaches 0 only with no facts at all. This used to blame
+                // Ollama, a backend retired on 2026-08-22.
                 _reindex.Finish(embedded, embedded == 0
-                    ? "没有建立任何索引 —— 通常是服务尚未重启(嵌入器只在启动时装载),或 Ollama 未运行。"
+                    ? "没有建立任何索引。如果已经有事实,通常是服务尚未重启(嵌入模型只在启动时装载);"
+                      + "已经重启过的话:用 llama.cpp 时多半是本机模型运行时没有在运行,"
+                      + "用内置嵌入模型时多半是模型文件不完整,可在「资源 · Resources」面板删除后重新下载。"
                     : null);
             }
             catch (Exception ex)

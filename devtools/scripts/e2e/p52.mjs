@@ -18,8 +18,9 @@
 //      the GGUF named by the saved judgeModel or by the live llm.model.memory the binding wrote. Read from
 //      the stub's own argv log, because a CLI asked for an unknown model is otherwise indistinguishable
 //      from one that answered badly.
-//   5. A RERANKER binding says what it moves — the checking; tagging goes to the CLI — in its toast and in
-//      the cost line beside it, where the toast used to claim both halves for every binding, and it writes
+//   5. A RERANKER binding says what it moves — the checking; tagging goes to the CLI and spends the account —
+//      in its toast, in the cost line beside it and in the catalogued rerankers' notes, where the toast used
+//      to claim both halves for every binding and none of the three said the tagging uses quota; and it writes
 //      the CLI's model to llm.model.memory, never the reranker's id. The bind-time screen really runs against
 //      the runtime and refuses a reranker that ranks by word OVERLAP or simply BACKWARDS; one it refuses for
 //      a reason other than its ordering is told apart, quoting the server.
@@ -291,8 +292,9 @@ try {
 
   // --- 5. a RERANKER binding says what it moves: the checking, not the tagging ----------------------
   // The bind toast said 「标注与核对将由这个后端完成」 for every binding. For a reranker that is false — it
-  // scores and never generates, so tagging stays on the CLI — and it contradicted the cost line on the same
-  // panel. The runtime comes back first: binding asks the source whether it is configured.
+  // scores and never generates, so the tagging goes to the Claude CLI (for this household, coming from a local
+  // chat judge, for the first time — which is why nothing below may say 仍) — and it contradicted the cost
+  // line on the same panel. The runtime comes back first: binding asks the source whether it is configured.
   fs.writeFileSync(path.join(resources, 'llama-cpp', 'llama-server.exe'), '');
   const beforeBind = hits.length;
   const rr = await c2.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: RERANK_MODEL });
@@ -318,6 +320,12 @@ try {
   // machine with this binding — and the toast is where it finds out.
   ok('…and says the facts\' content is sent to Claude, without calling that "still"',
     /发给 Claude/.test(rrNote) && !/仍/.test(rrNote), rrNote);
+  // THE QUOTA HALF. The toast, the cost line and the model notes each said the checking is 不消耗账号额度, and
+  // none said the TAGGING spends the account — so the only quota statement a household read about this
+  // binding was the reassuring one. A negative lookbehind, because the cost line's checking half says
+  // 不消耗账号额度 and a bare /账号额度/ would pass on that alone.
+  const spendsQuota = /(?<!不)消耗账号额度/;
+  ok('THE POINT: the toast says the tagging spends the account\'s quota', spendsQuota.test(rrNote), rrNote);
   ok('(control) the chat GGUF\'s toast, in case 4, still names both halves',
     /标注与核对/.test(String(bound.body?.note ?? '')), JSON.stringify(bound.body?.note));
   const rrLayer = layerOf(await c2.getJson('/api/manage/memory'), 'judge');
@@ -326,6 +334,18 @@ try {
     JSON.stringify({ model: rrLayer.model, cost: rrLayer.cost }));
   ok('…including that each fact\'s content is sent to Claude for tagging',
     /发给 Claude/.test(String(rrLayer.cost)), JSON.stringify(rrLayer.cost));
+  ok('…and that the tagging spends the account\'s quota, beside a checking half that does not',
+    spendsQuota.test(String(rrLayer.cost)) && /不消耗账号额度/.test(String(rrLayer.cost)),
+    JSON.stringify(rrLayer.cost));
+  // The third surface is the note a household reads while CHOOSING — in the picker and in 本机模型. The planted
+  // rerankers are uncatalogued and so carry no note; the pinned rows come from the inventory, which lists every
+  // catalogued GGUF whether or not it is on disk.
+  const inventory = await c2.getJson('/api/manage/models');
+  const rerankNotes = (inventory.models ?? []).filter((m) => m.capability === 'reranking' && m.note);
+  ok('…and every catalogued reranker\'s note says the same: content to Claude, on the account\'s quota',
+    rerankNotes.length >= 2
+      && rerankNotes.every((m) => spendsQuota.test(m.note) && /发给 Claude/.test(m.note)),
+    JSON.stringify(rerankNotes.map((m) => [m.id, String(m.note).slice(0, 90)])));
 
   // THE SCREEN'S OWN POINT: a model that ranks by OVERLAP is refused. The screen pair makes the distractor
   // repeat the question's words while the answer states the price, so overlap puts the distractor first.

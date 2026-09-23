@@ -87,10 +87,11 @@ public static class GgufCatalog
     public const string RecommendedReranker = "bge-reranker-v2-m3-Q5_K_M";
 
     /// <summary>What every reranker row says, because it is the one thing that differs from a chat judge:
-    /// only HALF of 判断 moves.</summary>
+    /// only HALF of 判断 moves. The tagging clause is <see cref="Sources.MemorySources.CliTaggingCost"/>, shared
+    /// with the cost line and the bind toast — it once left out that tagging spends the account.</summary>
     private const string RerankerNote =
-        "判断用的重排模型:检索时的判断在本机完成;写入事实时的主题标注由 Claude CLI 完成(每条事实一次调用,"
-        + "事实内容会发给 Claude)。";
+        "判断用的重排模型:检索时的判断在本机完成;写入事实时的主题标注由 Claude CLI 完成("
+        + Sources.MemorySources.CliTaggingCost + ")。";
 
     /// <summary>What a reranker row's measured figures are read AGAINST — the same 240 questions with 判断 off
     /// and with the Claude CLI judge, the two other answers this layer offers (docs/judge-bench.md, Runs 1 and
