@@ -826,8 +826,9 @@ fingerprint, the claude version, the question-order seed and the concurrency wit
 **Decision rules (write the one that applies):**
 - If `content` beats `topic` on top-1 or found@8 in `all` → the Task 2 fix is confirmed; say by how much.
 - If `content` is WORSE than `topic` → stop and report to the owner before Part C; do not rationalise it.
-- If `contentonly` vs `content` is EQUIVALENT — the bench's exact 95% interval for the net top-1 difference on `all`
-  lies within ±3 pp (not merely p ≥ 0.05: a low-powered test failing to find a loss is not evidence of no loss) → record
+- If `contentonly` vs `content` is EQUIVALENT — the bench's 95% interval (Agresti–Min) for the net top-1 difference on
+  `all` lies within ±3 pp (findings use the EXACT McNemar p, equivalence uses this interval; at small counts the two can
+  disagree, e.g. 0/5 → interval [+0.1, +4.0] pp next to p = 0.063, which reads as "neither") (not merely p ≥ 0.05: a low-powered test failing to find a loss is not evidence of no loss) → record
   that the topic prefix does not
   earn its tokens, so on the Lyntai bump that ships `ContentChars` the decorator is deleted in favour of it.
   If it is significantly WORSE, the prefix earns its place and the decorator stays. If it is neither significant nor
