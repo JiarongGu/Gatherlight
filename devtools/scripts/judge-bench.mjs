@@ -41,7 +41,9 @@
 // HOW TO READ IT. Every arm answers the same queries, so arms are compared PAIRED, per query, on top-1 hits and
 // on found@8 hits: against `content` and against `formula` when they ran, every reranker against every other,
 // and against `--baseline=<results.json>:<arm>` from another run. Each comparison reports McNemar's exact p, the
-// net difference c − b, and an exact 95% interval for the net rate (Clopper–Pearson on the discordant split).
+// net difference c − b, and a CONSERVATIVE 95% interval for the net rate d·(2p − 1): the [min, max] over the four
+// corners of a 97.5% Clopper–Pearson interval on the disagreement rate d = (b+c)/pairs and one on the split
+// p = c/(b+c) (p ∈ [0, 1] when b+c = 0) — Bonferroni, so jointly ≥ 95%, and never narrower than the evidence.
 //   - A FINDING needs p < 0.05 on `all` AND no question set that is itself significant (p < 0.05) in the
 //     opposite direction.
 //   - "NO DIFFERENCE" needs the 95% net interval inside ±3 pp — p ≥ 0.05 alone only says the run could not tell.
@@ -223,14 +225,18 @@ const clopperPearson = (x, n, alpha = 0.05) => [
   x === 0 ? 0 : bisect((p) => binomSum(x, n, n, p), alpha / 2, true),
   x === n ? 1 : bisect((p) => binomSum(0, x, n, p), alpha / 2, false),
 ];
-// The NET rate (c − b) / pairs = ((b + c) / pairs) · (2p − 1) with p = c / (b + c); its interval maps the exact
-// interval on p through that line. No discordant pair means the two arms answered identically: [0, 0].
+// The NET rate (c − b) / pairs = d · (2p − 1), with d = (b + c) / pairs the DISAGREEMENT rate and p = c / (b + c)
+// its split. Both are uncertain, so both get an interval: 97.5% Clopper–Pearson each (Bonferroni → jointly ≥ 95%),
+// and the net interval is [min, max] over the four corners (the product is bilinear, so the corners are the
+// extremes). Treating d as KNOWN was the first version's mistake: it made the interval no wider than the observed
+// disagreement, so 16 identical answers read as "[0, 0], equivalent" while a 20% disagreement rate was still
+// consistent with them. With no disagreement at all, p is unconstrained ([0, 1]) and the interval is [−dU, +dU].
 const netInterval = (b, c, pairs) => {
   if (pairs === 0) return null;
-  if (b + c === 0) return [0, 0];
-  const [pl, pu] = clopperPearson(c, b + c);
-  const d = (b + c) / pairs;
-  return [d * (2 * pl - 1), d * (2 * pu - 1)];
+  const [dL, dU] = clopperPearson(b + c, pairs, 0.025);
+  const [pL, pU] = b + c === 0 ? [0, 1] : clopperPearson(c, b + c, 0.025);
+  const corners = [dL, dU].flatMap((d) => [pL, pU].map((p) => d * (2 * p - 1)));
+  return [Math.min(...corners), Math.max(...corners)];
 };
 const EQUIVALENCE = 0.03;
 
@@ -426,7 +432,7 @@ const printPaired = (title, comps) => {
   for (const k of Object.keys(HITS)) {
     console.log(`  ${HIT_NAMES[k]}:`);
     console.log('  ' + pad('arm', W) + pad('set', 8) + pad('pairs', 7) + pad('b/c', 9) + pad('p', 8) + pad('net c−b', 17)
-      + pad('95% net interval', 20) + pad('equiv ±3pp', 12) + 'finding');
+      + pad('95% net interval (conservative)', 33) + pad('equiv ±3pp', 12) + 'finding');
     for (const { c, bySet, finding } of results) {
       for (const set of ['all', ...SET_KEYS]) {
         const x = bySet[set][k];
@@ -434,7 +440,7 @@ const printPaired = (title, comps) => {
         const ci = x.interval95Pp ? `[${signed(x.interval95Pp[0], 1)}, ${signed(x.interval95Pp[1], 1)}]pp` : '—';
         const eq = x.equivalent === null ? '—' : x.equivalent ? 'YES' : 'no';
         console.log('  ' + pad(set === 'all' ? c.label : '', W) + pad(set, 8) + pad(bySet[set].pairs, 7) + pad(`${x.b}/${x.c}`, 9)
-          + pad(pv(x.p), 8) + pad(net, 17) + pad(ci, 20) + pad(eq, 12) + (set === 'all' ? findingText(finding[k]) : ''));
+          + pad(pv(x.p), 8) + pad(net, 17) + pad(ci, 33) + pad(eq, 12) + (set === 'all' ? findingText(finding[k]) : ''));
       }
     }
   }
