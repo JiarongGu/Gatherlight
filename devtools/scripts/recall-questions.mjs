@@ -61,13 +61,15 @@ export const askAll = (claude, fact) => {
     + NL + 'Output ONLY a JSON object with exactly those four keys, each a string.'
     + NL + NL + `FACT: ${fact.topic} — ${fact.content}`;
   const text = run(claude, prompt).stdout ?? '';
+  // Deliberately GREEDY: spans a fenced or prose-wrapped object. If the model emits two objects the splice
+  // fails JSON.parse and returns null — fails closed — where a lazy match would risk cutting inside a value
+  // that itself contains `}`.
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) return null;
   try {
     const o = JSON.parse(m[0]);
-    return QUESTION_SETS.every((s) => typeof o[s.key] === 'string' && o[s.key].length >= 4 && o[s.key].length <= 200)
-      ? Object.fromEntries(QUESTION_SETS.map((s) => [s.key, o[s.key].trim()]))
-      : null;
+    const q = Object.fromEntries(QUESTION_SETS.map((s) => [s.key, typeof o[s.key] === 'string' ? o[s.key].trim() : null]));
+    return QUESTION_SETS.every((s) => q[s.key] && q[s.key].length >= 4 && q[s.key].length <= 200) ? q : null;
   } catch {
     return null;
   }

@@ -64,8 +64,6 @@ import { DatabaseSync } from 'node:sqlite';
 //            other three all miss.
 import { QUESTION_SETS, resolveClaude, askIn } from './recall-questions.mjs';
 
-const NL = String.fromCharCode(10);
-
 const arg = (name, dflt) => {
   const hit = process.argv.slice(2).find((a) => a.startsWith(`--${name}=`));
   return hit ? hit.split('=')[1] : dflt;
