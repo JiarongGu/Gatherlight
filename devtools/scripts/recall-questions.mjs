@@ -7,16 +7,20 @@ import { spawnSync } from 'node:child_process';
 const NL = String.fromCharCode(10);
 
 export const hasCjk = (fact) => /[一-鿿]/.test(`${fact.topic} ${fact.content}`);
+// Kana marks a Japanese fact; hanzi without kana marks a Chinese one.
+export const isJapanese = (fact) => /[぀-ヿ]/.test(`${fact.topic} ${fact.content}`);
+const languageOf = (f) => (isJapanese(f) ? 'Japanese' : hasCjk(f) ? 'Chinese' : 'English');
 
-// FOUR WAYS A REAL QUESTION ARRIVES, because a household is not monolingual.
+// FOUR WAYS A REAL QUESTION ARRIVES, because a household is not monolingual. Every set NAMES its language:
+// "the SAME language as the fact" let the model answer 7 of 16 English facts in Chinese on the committed fixture.
 //   same   — the fact's own language. The lexical floor's best case; kept as the control.
-//   cross  — the other of zh/en.
-//   third  — neither the fact's language nor English (ja).
+//   cross  — the other of zh/en (English for a Japanese fact).
+//   third  — a language that is neither the fact's nor English: Japanese, or Chinese for a Japanese fact.
 //   mixed  — CODE-SWITCHED, the way people type in chat: a Chinese sentence carrying English nouns.
 export const QUESTION_SETS = [
-  { key: 'same', label: '同语言', ask: () => 'Write it in the SAME language as the fact.' },
-  { key: 'cross', label: '跨语言', ask: (f) => (hasCjk(f) ? 'Write it in English.' : 'Write it in Chinese.') },
-  { key: 'third', label: '第三语言', ask: () => 'Write it in Japanese.' },
+  { key: 'same', label: '同语言', ask: (f) => `Write it in ${languageOf(f)}, the fact's own language.` },
+  { key: 'cross', label: '跨语言', ask: (f) => (languageOf(f) === 'English' ? 'Write it in Chinese.' : 'Write it in English.') },
+  { key: 'third', label: '第三语言', ask: (f) => (isJapanese(f) ? 'Write it in Chinese.' : 'Write it in Japanese.') },
   { key: 'mixed', label: '混合语言',
     ask: () => 'Write it CODE-SWITCHED the way a bilingual person types in chat: a Chinese sentence that '
       + 'keeps the key nouns in English. Do not translate everything into one language.' },

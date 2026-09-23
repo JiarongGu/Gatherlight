@@ -303,7 +303,7 @@
       "questions": {
         "same": "駅の前にあるお寿司屋さん、休みの曜日とお昼に営業している時間を教えてもらえますか?",
         "cross": "Which day is the sushi place by the station closed, and what hours does it serve lunch?",
-        "third": "駅のすぐそばのお寿司屋さんは何曜日がお休みで、昼の営業時間帯はいつからいつまでですか?",
+        "third": "车站旁边那家寿司店每周哪天不营业?中午几点到几点能去吃?",
         "mixed": "那家车站前面的sushi店是哪天closed的,还有lunch time是几点到几点?"
       }
     },
@@ -615,7 +615,7 @@
       "questions": {
         "same": "温泉宿の予約はどのくらい前の時期から入れられますか?また、夕飯が付く宿泊コースだと一人あたりの料金はいくらになりますか?",
         "cross": "How many months in advance can you reserve a room at a hot spring inn, and how much per person does the package with dinner cost?",
-        "third": "温泉宿に泊まるなら、何か月前から申し込めますか?夕食がセットになったプランの一人分の値段はどれくらいですか?",
+        "third": "泡温泉住的那种日式旅店最早能提前多久订房?含晚饭的套餐每人多少钱?",
         "mixed": "温泉ryokan大概可以提前几个月开始book房间啊?附dinner的plan一个人大概要多少钱?"
       }
     },
@@ -627,7 +627,7 @@
       "questions": {
         "same": "家の近くのラーメン店って何時まで開いてる?あと替え玉って追加料金かかる?",
         "cross": "How late is the ramen shop near me open, and is the extra noodle serving free?",
-        "third": "この辺のラーメン屋さんは夜何時までやっていますか?麺のおかわりはお金がかかりますか?",
+        "third": "家附近那家日式拉面店晚上开到几点?加面要不要另外收钱?",
         "mixed": "我家附近那家ramen店营业到几点啊,refill的noodles是不是free的?"
       }
     },
@@ -639,7 +639,7 @@
       "questions": {
         "same": "コンビニで宅配便を引き取るとき、店員さんに何を見せればいいですか?",
         "cross": "What do I need to show to pick up a package at a convenience store?",
-        "third": "コンビニ留めにした小包を取りに行く時は、何を提示すればいいですか?",
+        "third": "去便利店取寄存的快递,需要拿出什么给店员核对?",
         "mixed": "去convenience store取package的时候要出示什么啊?"
       }
     },
