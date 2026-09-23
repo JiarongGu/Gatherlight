@@ -23,8 +23,11 @@
 //     never asked back to back; every arm gets the SAME order. (The fixture has no cluster ids — its
 //     near-duplicates sit next to each other in file order, and the shuffle is what separates them.)
 //   - `公式 · no verification` is the baseline and it is NOT "判断 off": the seed's CLI-written subject tags
-//     are in every arm, so Δ against it is the value of the recall-time VERDICT only. Its A/A twin `formula2`
-//     runs the identical configuration; their difference is the run's NOISE FLOOR.
+//     are in every arm, so Δ against it is the value of the recall-time VERDICT only.
+//   - TWO NOISE FLOORS, from A/A twins that run an identical configuration: `formula2` beside `formula` (ENGINE
+//     noise — no model in the loop, so it is ~0 by construction and cannot bound a judge) and `content2` beside
+//     `content` (JUDGE noise — the LLM's verdicts vary run to run). A difference between judge arms is read
+//     against the judge floor; a difference vs 公式 against the larger of the two.
 //   - Accuracy is measured with every arm running in PARALLEL (so ms there is contended); LATENCY is then
 //     measured SERIALLY, one arm at a time over the first --latency-sample queries. That pass recalls again
 //     and so mutates each arm's graph — it runs after every accuracy row is recorded, so it cannot touch them.
@@ -37,7 +40,7 @@
 // llama.cpp binary and GGUFs from --resources (default local/state/resources) and nothing else there.
 //
 // Usage:
-//   node devtools/dev.mjs judge-bench                     # formula, formula2, topic, content, contentonly, fuse
+//   node devtools/dev.mjs judge-bench                     # formula, formula2, topic, content, content2, contentonly, fuse
 //   node devtools/dev.mjs judge-bench --arms=formula,content --n=20 --reuse-seed
 //   node devtools/dev.mjs judge-bench --arms=formula --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M
 // Flags: --arms= --rerankers= --n= --port-base= --llama-port= --resources= --seed= --latency-sample= --reuse-seed
@@ -106,13 +109,14 @@ const ARMS = {
   topic: { label: 'Claude judge · topic only', enrichment: true, judgeInput: 'headline',
     env: { GATHERLIGHT_JUDGE_INPUT: 'headline' }, knob: /judge input = headline \(/ },
   content: { label: 'Claude judge · topic — content · partition', enrichment: true, judgeInput: 'both', env: {} },
+  content2: { label: 'Claude judge · topic — content · partition · A/A twin', enrichment: true, judgeInput: 'both', env: {} },
   // How Lyntai's upcoming LlmVerificationOptions.ContentChars renders a candidate: content ALONE (Part 276 / D170).
   contentonly: { label: 'Claude judge · content only · partition', enrichment: true, judgeInput: 'content',
     env: { GATHERLIGHT_JUDGE_INPUT: 'content' }, knob: /judge input = content \(/ },
   fuse: { label: 'Claude judge · topic — content · fuse', enrichment: true, judgeInput: 'both',
     env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/ },
 };
-const arms = arg('arms', 'formula,formula2,topic,content,contentonly,fuse').split(',').filter(Boolean).map((k) => {
+const arms = arg('arms', 'formula,formula2,topic,content,content2,contentonly,fuse').split(',').filter(Boolean).map((k) => {
   if (!ARMS[k]) die(`unknown arm '${k}' — one of ${Object.keys(ARMS).join(', ')}`);
   return { key: k, ...ARMS[k] };
 });
@@ -414,7 +418,6 @@ try {
       + `${signed(100 * (s.found / Math.max(1, s.n) - b.found / Math.max(1, b.n)), 1)}pp / ${signed(s.mrr - b.mrr, 3)} (rates: n differs)`);
 
   const base = arms.find((a) => a.key === 'formula');
-  const twin = arms.find((a) => a.key === 'formula2');
   const LABEL_W = Math.max(dw('arm'), ...arms.map((a) => dw(a.label))) + 2;
   const COLS = [['n', 5], ['err', 5], ['graph', 7], ['judged', 8], ['endorsed', 10], ['top-1', 10], ['found@8', 10], ['MRR', 8], ['ms (parallel)', 15]];
   const report = {
@@ -448,18 +451,32 @@ try {
     }
   }
 
-  // THE NOISE FLOOR. Two arms with the identical configuration from the identical snapshot: whatever separates
-  // them is run-level noise, and an arm's Δ vs 公式 no larger than this is not a finding.
-  if (base && twin) {
-    console.log(`\nA/A NOISE FLOOR — '${base.key}' vs '${twin.key}' ran the identical configuration from the identical snapshot;`);
-    console.log('any Δ vs 公式 no larger than this is noise, not a finding:');
-    report.aa = {};
+  // THE NOISE FLOORS. Two arms with the identical configuration from the identical snapshot: whatever separates
+  // them is run-level noise. The ENGINE pair has no model in the loop, so its floor is ~0 by construction and
+  // says nothing about how much a judge's verdicts wander between runs — that is what the JUDGE pair measures.
+  const FLOORS = [
+    { kind: 'engine', a: 'formula', b: 'formula2', what: 'engine noise — no model in the loop' },
+    { kind: 'judge', a: 'content', b: 'content2', what: "judge noise — the LLM's verdicts vary run to run" },
+  ];
+  report.noiseFloor = { engine: null, judge: null };
+  let floors = 0;
+  for (const f of FLOORS) {
+    const a = arms.find((x) => x.key === f.a), b = arms.find((x) => x.key === f.b);
+    if (!a || !b) continue;
+    if (floors++ === 0) {
+      console.log('\nA/A NOISE FLOORS — each pair ran the identical configuration from the identical snapshot.');
+      console.log('Differences between JUDGE arms are compared against the judge-noise floor; differences vs 公式 against the larger of the two.');
+    }
+    console.log(`\n${f.a} vs ${f.b} (${f.what}):`);
+    report.noiseFloor[f.kind] = { arms: [f.a, f.b], sets: {} };
     for (const set of [...QUESTION_SETS.map((s) => s.key), 'all']) {
-      const a = stat(base.rows.filter(inSet(set))), b = stat(twin.rows.filter(inSet(set)));
-      report.aa[set] = { top1: b.top1 - a.top1, found: b.found - a.found, mrr: b.mrr - a.mrr, sameN: a.n === b.n };
-      console.log(`  ${pad(set, 7)} ${delta(b, a)}`);
+      const sa = stat(a.rows.filter(inSet(set))), sb = stat(b.rows.filter(inSet(set)));
+      report.noiseFloor[f.kind].sets[set] = { top1: sb.top1 - sa.top1, found: sb.found - sa.found, mrr: sb.mrr - sa.mrr, sameN: sa.n === sb.n };
+      console.log(`  ${pad(set, 7)} ${delta(sb, sa)}`);
     }
   }
+  if (!report.noiseFloor.judge && arms.some((a) => a.enrichment))
+    console.log('\njudge-noise floor: NOT measured this run (add content,content2) — judge-vs-judge differences have no bound.');
 
   console.log(`\nlatency (ms) — parallel: mean over the accuracy pass, ${arms.length} arm(s) at once;`
     + ` serial median: one arm at a time, first ${sample.length} queries`);
