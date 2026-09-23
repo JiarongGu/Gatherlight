@@ -42,6 +42,9 @@ interface LayerView {
    *  see MemoryGroups. Grouped by the SERVER so the group's name and sentence have one writer. */
   groups: BackendGroup[];
   note?: string | null;
+  /** 判断 only, and only when the running judge just CHECKS (a reranker): whether its tagging — handed to the
+   *  Claude CLI — is happening now. Null when the CLI's state is unknown, which the server will not guess. */
+  tagging?: { works: boolean; text: string } | null;
   reindex?: {
     running: boolean; done: number; total: number;
     embedded: number | null; error: string | null;
@@ -174,6 +177,11 @@ export function MemoryRecallPanel(
             </div>
             <div className="mem-layer-desc">{judge.what}</div>
             <div className="mem-layer-desc"><b>费用</b> {judge.cost}</div>
+            {/* A signed-out CLI means NO tagging for a reranker judge — fail-open, so this line is the only place
+                it shows. Warn-styled only when it is not happening. */}
+            {judge.on && judge.tagging && (
+              <div className={`mem-fine${judge.tagging.works ? '' : ' warn'}`}>{judge.tagging.text}</div>
+            )}
             {judge.on && (
               <BackendPicker groups={judge.groups} boundSource={judge.source} boundModel={judge.model}
                 busy={busy} bind={bind('judge')}

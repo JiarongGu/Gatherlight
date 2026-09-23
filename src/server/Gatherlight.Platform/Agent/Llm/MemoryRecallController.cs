@@ -111,6 +111,15 @@ public sealed class MemoryRecallController : ControllerBase
         var judgeGroups = await judgeTask;
         var semanticGroups = await semanticTask;
 
+        // WHETHER TAGGING IS HAPPENING, for a judge that only checks: a reranker hands tagging to the CLI, and a
+        // CLI that is signed out means none at all, fail-open and unreported. From the CACHED probe — the CLI
+        // arm's status above has just refreshed it — and nothing when nobody has probed yet: no guessing.
+        var runningJudge = MemorySources.FindJudge(_judgeWiring.Transport);
+        var tagging = MemoryEnrichment.IsOn(_appConfig) && runningJudge is not null
+            && _judgeWiring.Model is { } runningModel && runningJudge.ChecksOnly(runningModel)
+                ? MemorySources.CliTaggingNow(_claude.Cached)
+                : null;
+
         return Ok(new
         {
             layers = new object[]
@@ -184,6 +193,8 @@ public sealed class MemoryRecallController : ControllerBase
                     // A saved backend that no longer exists is SAID, never silently
                     // swapped — see RetiredNote.
                     retired = RetiredNote(mem.JudgeSource, MemoryLayers.Judge),
+                    // Null unless the running judge only checks AND the CLI's state is known.
+                    tagging = tagging is null ? null : new { works = tagging.Works, text = tagging.Text },
                 },
                 new
                 {
@@ -531,6 +542,11 @@ public sealed class MemoryRecallController : ControllerBase
             _appConfig.Set("llm.model.memory", source.AnnotationModel(model!));
             _log.LogInformation("memory judge bound to {Source}/{Model}", source.Id, model);
 
+            // …and whether that tagging will HAPPEN: a signed-out or missing CLI means none, which the toast's
+            // first sentence would otherwise promise. Said only when the cached probe knows — never guessed.
+            var taggingOff = source.ChecksOnly(model!) && MemorySources.CliTaggingNow(_claude.Cached) is { Works: false } off
+                ? " " + off.Text : "";
+
             return Ok(new
             {
                 ok = true, layer, source = source.Id, model, restartRequired = true,
@@ -542,7 +558,7 @@ public sealed class MemoryRecallController : ControllerBase
                 // note carry, so the three cannot disagree about whether the account is spent.
                 note = source.ChecksOnly(model!)
                     ? $"设置已保存。重启服务后,检索时的核对将由这个模型完成;写入事实时的主题标注由 Claude CLI"
-                      + $"({source.AnnotationModel(model!)})完成 —— {MemorySources.CliTaggingCost}。"
+                      + $"({source.AnnotationModel(model!)})完成 —— {MemorySources.CliTaggingCost}。{taggingOff}"
                     : "设置已保存。重启服务后,标注与核对将由这个后端完成。",
             });
         }

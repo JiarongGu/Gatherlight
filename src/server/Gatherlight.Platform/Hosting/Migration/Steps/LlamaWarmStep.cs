@@ -32,11 +32,12 @@ public sealed class LlamaWarmStep : IMigrationStep
     private readonly ServerConfigService _config;
     private readonly IPlatformContext _platform;
     private readonly MigrationState _state;
+    private readonly IClaudeCliRuntime _claude;
     private readonly ILogger<LlamaWarmStep> _log;
 
     public LlamaWarmStep(ILlamaServerRuntime llama, ServerConfigService config, IPlatformContext platform,
-        MigrationState state, ILogger<LlamaWarmStep> log)
-    { _llama = llama; _config = config; _platform = platform; _state = state; _log = log; }
+        MigrationState state, IClaudeCliRuntime claude, ILogger<LlamaWarmStep> log)
+    { _llama = llama; _config = config; _platform = platform; _state = state; _claude = claude; _log = log; }
 
     public string Id => "llama-warm";
     public string Title => "启动本机模型运行时(llama.cpp)";
@@ -63,11 +64,16 @@ public sealed class LlamaWarmStep : IMigrationStep
 
         // WHAT IS LOST, per layer — asked of the source, because for a reranker it is only half of 判断: the
         // checking runs here, the tagging never did. "Falls back to 公式" was true of a chat judge and false
-        // of a reranker, whose tagging carries on through the CLI while llama.cpp is down.
+        // of a reranker, whose tagging goes on through the CLI while llama.cpp is down — IF the CLI can tag.
+        // That is read from its CACHED probe (ClaudeRuntimeStep ran it earlier in this startup): signed out means
+        // no tagging either, and an unknown state is left unsaid rather than guessed.
+        var tagging = judgeModel is not null && judge.ChecksOnly(judgeModel)
+            ? MemorySources.CliTaggingNow(_claude.Cached) : null;
         var judgeLoss = judgeModel is null ? null
-            : judge.ChecksOnly(judgeModel)
-                ? "「判断」检索时的核对这次启动不会生效(写入时的主题标注照常由 Claude CLI 完成)"
-                : "「判断」这次启动不会生效";
+            : !judge.ChecksOnly(judgeModel) ? "「判断」这次启动不会生效"
+            : tagging is null ? "「判断」检索时的核对这次启动不会生效"
+            : tagging.Works ? "「判断」检索时的核对这次启动不会生效(写入时的主题标注照常由 Claude CLI 完成)"
+            : $"「判断」检索时的核对这次启动不会生效,写入时的主题标注也不会进行({tagging.Why})";
         var embedLoss = embedModel is null ? null : "「语义」这次启动不会生效";
 
         if (!await _llama.EnsureServingAsync(ct))

@@ -113,6 +113,29 @@ public static class MemorySources
     /// <c>e2e-p52</c> case 5 pins it in all three.</para></summary>
     public const string CliTaggingCost = "每条事实一次调用,消耗账号额度,事实内容会发给 Claude";
 
+    /// <summary>Where a checks-only judge's TAGGING stands NOW, read from the CLI's CACHED probe — or null
+    /// when nothing has probed it yet, in which case the caller says nothing rather than guess.
+    ///
+    /// <para><b>Why it has to be said at all.</b> A reranker binding moves tagging to the Claude CLI, and a CLI
+    /// that is signed out or missing means ZERO tagging: the annotation policy is fail-open, so every fact is
+    /// written unlabelled and nothing anywhere reports it. The row's status, the bind toast and the startup
+    /// warning all used to assert the tagging "carries on" regardless.</para>
+    ///
+    /// <para><b>Cached, never probed here</b> — a panel must not await a process (dev-conventions). Something
+    /// else keeps it current: the startup <c>ClaudeRuntimeStep</c>, and the CLI arm's own status on every
+    /// 记忆检索 load.</para></summary>
+    public static TaggingState? CliTaggingNow(Services.ClaudeCliState? cli) =>
+        cli is null ? null
+        : !cli.Runnable
+            ? new(false, "写入事实时的主题标注要用 Claude CLI,但这台机器上现在没有可运行的 CLI —— 装好并登录之前,"
+                + "新写入的事实不会被标注;检索时的核对照常。可在「资源 · Resources」面板安装。",
+                "这台机器上没有可运行的 Claude CLI")
+        : !cli.LoggedIn
+            ? new(false, "写入事实时的主题标注要用 Claude CLI,但它现在还没有登录 —— 登录之前,新写入的事实不会被"
+                + "标注;检索时的核对照常。在「资源」面板点「登录」。",
+                "Claude CLI 还没有登录")
+        : new(true, "写入事实时的主题标注由 Claude CLI 完成(已登录)。", null);
+
     /// <summary>Both lookups go through <see cref="MemoryBackends.Canonical"/>, so an install still
     /// naming the removed <c>ollama</c> backend resolves to the generic one instead of falling through to a
     /// default — which for 判断 would silently move the household to the CLI and for 语义 would turn the
@@ -215,3 +238,11 @@ public static class MemorySources
         return source is not null && source.IsConfigured(s) ? source : null;
     }
 }
+
+/// <summary>Whether a checks-only judge's tagging is happening now, and the sentence that says so — see
+/// <see cref="MemorySources.CliTaggingNow"/>.</summary>
+/// <param name="Works">False means NO tagging until the CLI is fixed — the case that used to go unsaid.</param>
+/// <param name="Text">The whole sentence, for a surface where the checking is running (the panel, the toast).</param>
+/// <param name="Why">Just the cause, for a surface that says something else about the checking — the startup
+/// warning, where llama.cpp is down and "checking carries on" would be false. Null when it works.</param>
+public sealed record TaggingState(bool Works, string Text, string? Why);

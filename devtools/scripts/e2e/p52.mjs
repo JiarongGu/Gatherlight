@@ -27,6 +27,8 @@
 //   6. A reranker AT WORK, on a server that booted bound to one: a fact write makes no chat call to
 //      llama.cpp and is tagged by the CLI on the CLI's model, and a recall sends the query AND each
 //      candidate's CONTENT to /v1/rerank.
+//   7. Whether a reranker's TAGGING is happening — it goes to the CLI, and a signed-out CLI means none — is
+//      said in the 判断 row, the bind toast and the startup warning, each paired with a signed-in control.
 //   8. A model downloaded AFTER the router started is unknown to it (the real router reads its models
 //      directory once). A router the app did not start is not restarted for it, and the refusal says what
 //      would load the model rather than quoting a 400.
@@ -65,6 +67,11 @@ const BROKEN_RERANK = 'zzbroken-rerank';
 const SHORT_RERANK = 'zzshort-rerank';
 // Case 8: downloaded after the router started, so the router does not list it.
 const LATE_RERANK = 'zzlate-rerank';
+// Case 7: two servers bound at boot to a reranker the router does NOT list — so the startup warm fails and the
+// warning has to say what happens to tagging — one with a signed-OUT CLI, one signed in as the control.
+const TAGGING_RERANK = 'zztagging-rerank';
+const SIGNED_OUT_PORT = 5415;
+const SIGNED_IN_PORT = 5416;
 
 // Case 6: a SECOND server that boots already bound to the reranker, in a data folder of its own. Its own
 // port too — never 5412/5413, which cases 1–5 used.
@@ -94,6 +101,31 @@ fs.writeFileSync(path.join(rerankDir, 'state', 'settings.json'), JSON.stringify(
   memory: { judgeSource: 'llama-cpp', judgeModel: RERANK_MODEL },
 }, null, 2), 'utf8');
 fs.rmSync(rerankArgsLog, { force: true });
+
+const plantTaggingFixture = (suffix) => {
+  const dir = dataDirFor(`p52-${suffix}`);
+  makeTestData(dir);
+  const res = path.join(dir, 'state', 'resources');
+  fs.mkdirSync(path.join(res, 'llama-cpp'), { recursive: true });
+  fs.mkdirSync(path.join(res, 'gguf'), { recursive: true });
+  fs.writeFileSync(path.join(res, 'llama-cpp', 'llama-server.exe'), '');
+  for (const m of [TAGGING_RERANK, RERANK_MODEL]) fs.writeFileSync(path.join(res, 'gguf', `${m}.gguf`), '');
+  fs.writeFileSync(path.join(dir, 'state', 'settings.json'), JSON.stringify({
+    memory: { judgeSource: 'llama-cpp', judgeModel: TAGGING_RERANK },
+  }, null, 2), 'utf8');
+  return dir;
+};
+const signedOutDir = plantTaggingFixture('signedout');
+const signedInDir = plantTaggingFixture('signedin');
+// A CLI that is installed and SIGNED OUT: `auth status` answers loggedIn:false (exit 1), the shape p50 uses.
+const signedOutStub = path.join(signedOutDir, 'signed-out-claude.mjs');
+fs.writeFileSync(signedOutStub, `const args = process.argv.slice(2);
+if (args[0] === 'auth' && args[1] === 'status') {
+  process.stdout.write(JSON.stringify({ loggedIn: false, authMethod: 'none', apiProvider: 'firstParty' }));
+  process.exit(1);
+}
+process.exit(1);
+`);
 fs.writeFileSync(path.join(dataDir, 'state', 'settings.json'), JSON.stringify({
   memory: {
     judgeSource: 'llama-cpp', judgeModel: JUDGE_MODEL,
@@ -178,6 +210,8 @@ const layerOf = (snapshot, id) => (snapshot?.layers ?? []).find((l) => l.id === 
 
 let server = null;
 let rerankServer = null;
+let signedOutServer = null;
+let signedInServer = null;
 try {
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
   const base = `http://127.0.0.1:${PORT}`;
@@ -457,6 +491,50 @@ try {
     reranked().some((h) => h.body.includes('zzrerankquery') && h.body.includes('zzrerankcontent')),
     JSON.stringify(hits.slice(beforeRecall6).map((h) => `${h.path} ${h.model} ${h.body.slice(0, 160)}`)));
 
+  // --- 7. whether a reranker's TAGGING is happening, said where it is decided ---------------------------
+  // A reranker hands tagging to the Claude CLI, and a CLI that is signed out means NO tagging — the annotation
+  // policy is fail-open, so every fact is written unlabelled and nothing reports it. The 判断 row, the bind
+  // toast and the startup warning each used to promise the tagging "carries on". Both servers are bound at
+  // boot to a reranker the fake router does not list, so the startup warm fails and its warning is written.
+  signedOutServer = startServer({
+    dataDir: signedOutDir, port: SIGNED_OUT_PORT,
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_CLAUDE_CMD: `node ${signedOutStub}` },
+  });
+  signedInServer = startServer({ dataDir: signedInDir, port: SIGNED_IN_PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
+  const outBase = `http://127.0.0.1:${SIGNED_OUT_PORT}`;
+  const inBase = `http://127.0.0.1:${SIGNED_IN_PORT}`;
+  await Promise.all([waitHealthy(outBase), waitHealthy(inBase)]);
+  const cOut = makeClient(outBase);
+  const cIn = makeClient(inBase);
+  const warmWarning = async (base) => {
+    const snap = await (await fetch(`${base}/api/migration/status`)).json();
+    return (snap.warnings ?? []).map(String).find((w) => w.includes(TAGGING_RERANK)) ?? '';
+  };
+
+  const outJudge = layerOf(await cOut.getJson('/api/manage/memory'), 'judge');
+  const inJudge = layerOf(await cIn.getJson('/api/manage/memory'), 'judge');
+  ok('(fixture) both servers run 判断 on the reranker',
+    outJudge.activeModel === TAGGING_RERANK && inJudge.activeModel === TAGGING_RERANK,
+    JSON.stringify({ out: outJudge.activeModel, in: inJudge.activeModel }));
+  ok('THE POINT: with the CLI signed out, the 判断 row says tagging is NOT happening',
+    outJudge.tagging?.works === false && /登录/.test(String(outJudge.tagging?.text)), JSON.stringify(outJudge.tagging));
+  ok('(control) signed in, the row says the CLI is tagging',
+    inJudge.tagging?.works === true && /Claude CLI/.test(String(inJudge.tagging?.text)), JSON.stringify(inJudge.tagging));
+
+  const outWarn = await warmWarning(outBase);
+  const inWarn = await warmWarning(inBase);
+  ok('THE POINT: the startup warning does not say tagging carries on when the CLI is signed out',
+    /登录/.test(outWarn) && !/照常/.test(outWarn), outWarn || '(no warning naming the model)');
+  ok('(control) signed in, the same warning says tagging carries on through the CLI',
+    /照常由 Claude CLI/.test(inWarn) && !/登录/.test(inWarn), inWarn || '(no warning naming the model)');
+
+  const outBind = await cOut.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: RERANK_MODEL });
+  const inBind = await cIn.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: RERANK_MODEL });
+  ok('THE POINT: binding a reranker with the CLI signed out, the toast says no tagging until it signs in',
+    outBind.status === 200 && /还没有登录/.test(String(outBind.body?.note)), `${outBind.status} ${JSON.stringify(outBind.body?.note ?? outBind.body)}`);
+  ok('(control) signed in, the toast carries no such warning',
+    inBind.status === 200 && !/还没有登录/.test(String(inBind.body?.note)), `${inBind.status} ${JSON.stringify(inBind.body?.note ?? inBind.body)}`);
+
   // --- 8. a model downloaded AFTER the router started ---------------------------------------------------
   // The household's main path: a layer already runs on llama.cpp, they download a reranker, they bind it.
   // The real router reads its models directory once, so it answers `400 model not found` for the newcomer —
@@ -478,6 +556,8 @@ try {
 } finally {
   try { server?.stop(); } catch {}
   try { rerankServer?.stop(); } catch {}
+  try { signedOutServer?.stop(); } catch {}
+  try { signedInServer?.stop(); } catch {}
   await new Promise((r) => fake.close(r));
 }
 
