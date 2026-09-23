@@ -24,6 +24,13 @@ import { ResourceRow } from '@/ui/molecules';
  * went through here; they are managed with Ollama, which is what 本机 means.
  */
 
+/** What each GGUF kind is FOR. A reranker judges too, but only by scoring — it never writes a tag. */
+const CAPABILITY_LABEL: Record<string, string> = {
+  embedding: '嵌入 · 语义',
+  completion: '对话 · 判断',
+  reranking: '重排 · 判断',
+};
+
 const mb = (n: number) =>
   n >= 1_000_000_000 ? `${(n / 1_000_000_000).toFixed(1)} GB` : `${Math.round(n / 1_000_000)} MB`;
 
@@ -242,7 +249,7 @@ export function LocalModelsPanel(
                       names (embeddinggemma-300m-onnx in-process, embeddinggemma-300M-Q8_0 as a GGUF), so a
                       row that does not say leaves you unable to tell what you are deleting. */}
                   <td className="num">{RUNTIME_NAMES[m.runtime] ?? m.runtime}</td>
-                  <td className="num">{m.capability === 'embedding' ? '嵌入 · 语义' : '对话 · 判断'}</td>
+                  <td className="num">{CAPABILITY_LABEL[m.capability] ?? m.capability}</td>
                   {/* The measurement, as a number with its denominator. "9/10" invites the right question
                       (out of how many? — the footnote answers) where "很好" does not. */}
                   <td className={`num${m.measured && m.measured.top3 * 2 <= m.measured.queries ? ' bad' : ''}`}>

@@ -150,6 +150,10 @@ export function BackendPicker(
   const url = typedUrl ?? addressed?.endpoint ?? '';
   const urlChanged = !!addressed && url !== (addressed.endpoint ?? '');
   const unchanged = source?.id === boundSource && model === boundModel && !urlChanged;
+  // The SELECTED model's own note — a reranker moving only half of 判断, say. A trade-off the household
+  // cannot see at the moment of choosing is one they did not get to weigh, so it belongs under the
+  // <select> itself rather than one click away in 本机模型.
+  const selectedNote = usable.find((m) => m.id === model)?.note;
   const fetchable = bindable.reduce((n, x) => n + x.models.filter((m) => !m.installed).length, 0);
   // A group is usable when ANY member is. The reason to show, when it is not, belongs to the member that
   // came closest — the bindable one, or the declined one if that is all there is.
@@ -187,6 +191,10 @@ export function BackendPicker(
           ))}
         </select>
       )}
+      {/* The chosen model's own trade-off — a reranker moving only half of 判断, say. Shown where the
+          model is picked, not only in 本机模型: a trade-off you cannot see at the moment of choosing is
+          one you did not get to weigh. */}
+      {selectedNote && <div className="mem-src-note">{selectedNote}</div>}
       {/* ALREADY APPLIED is a STATUS, not a disabled button. A greyed-out amber primary reading 使用中 is a
           dead control wearing the colour that means "this does something". */}
       {bindable.length > 0 && unchanged && <span className="mem-src-cur">使用中</span>}

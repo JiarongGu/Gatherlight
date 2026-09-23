@@ -137,6 +137,12 @@
   background: currentColor; opacity: 0.85;
 }
 
+/* The SELECTED model's own note, directly under the <select> — full width so it wraps onto its own line
+   rather than crowding the row of controls. Quiet like `.mem-fine`, because it is explanatory text, not a
+   value; it is a sibling rule rather than a share of `.mem-fine` because this stylesheet is CLOSED (see the
+   comment on `.mem-src-sel`) and `.mem-fine` is styles.css's rule. */
+.mem-src-note { flex: 1 1 100%; font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+
 /* The address of a service we do not manage. Mono because it is a URL you type and compare, and sized to
    fit a loopback address plus a port without wrapping the row. */
 .mem-src-url {
