@@ -34,6 +34,8 @@
 //   8. A model downloaded AFTER the router started is unknown to it (the real router reads its models
 //      directory once). A router the app did not start is not restarted for it, and the refusal says what
 //      would load the model rather than quoting a 400.
+//   9. An embedder that is WIRED but DOWN at startup: the fact index indexes nothing and leaves its layout
+//      marker, so no fact is stored without its vector, and the next start does the work.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -74,6 +76,8 @@ const LATE_RERANK = 'zzlate-rerank';
 const TAGGING_RERANK = 'zztagging-rerank';
 const SIGNED_OUT_PORT = 5415;
 const SIGNED_IN_PORT = 5416;
+// Case 9: one data folder booted three times — up, down, up — each on a port of its own.
+const REBUILD_PORTS = [5417, 5418, 5419];
 
 // Case 6: a SECOND server that boots already bound to the reranker, in a data folder of its own. Its own
 // port too — never 5412/5413, which cases 1–5 used.
@@ -150,6 +154,7 @@ const hits = [];
 // What the fake router LISTS — like the real one, fixed at its start: llama-server reads --models-dir once,
 // so a GGUF dropped in later is unknown to it until a restart (measured, docs/self-managed-llm-runtime.md).
 // Case 8 plants a model outside this set to be exactly that; adding it later stands in for the restart.
+let refuseEmbeddings = false;
 const served = new Set([JUDGE_MODEL, EMBED_MODEL, RERANK_MODEL, LEXICAL_RERANK, BACKWARDS_RERANK, BROKEN_RERANK, SHORT_RERANK]);
 const fake = http.createServer((req, res) => {
   const send = (obj) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
@@ -164,6 +169,12 @@ const fake = http.createServer((req, res) => {
     try { json = JSON.parse(body); } catch { /* recorded raw regardless */ }
     hits.push({ path: req.url, model: json.model, body });
     if (req.url === '/v1/embeddings') {
+      // Case 9: an embedder that is wired and DOWN — what a router that has not started looks like to a write.
+      if (refuseEmbeddings) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { code: 503, message: 'zzfake embedder down' } }));
+        return;
+      }
       const inputs = Array.isArray(json.input) ? json.input : [String(json.input ?? '')];
       send({
         object: 'list', model: json.model,
@@ -217,6 +228,7 @@ let server = null;
 let rerankServer = null;
 let signedOutServer = null;
 let signedInServer = null;
+let rebuildServer = null;
 try {
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
   const base = `http://127.0.0.1:${PORT}`;
@@ -626,6 +638,70 @@ try {
   const lateAgain = await c3.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: LATE_RERANK });
   ok('(control) the same model binds once the router lists it',
     lateAgain.status === 200, `${lateAgain.status} ${JSON.stringify(lateAgain.body)}`);
+
+  // --- 9. an embedder that is wired but DOWN at startup: nothing is indexed, and the marker waits ------------
+  // Lyntai's engine stores a fact whose write-time embed FAILED without its vector, and the fact gets its graph
+  // reference — so no back-fill ever returns to it. On the 3.2 upgrade the layout rebuild ran before llama.cpp
+  // had started and a real install came up with every fact indexed and no vector at all, marker written, coverage
+  // 100%. The step order now starts the router first; this is the guard for everything else that leaves the
+  // embedder down: probe once, and when it does not answer, index nothing and leave the marker for next time.
+  {
+    const probeDir = dataDirFor('p52-rebuild');
+    makeTestData(probeDir);
+    const res9 = path.join(probeDir, 'state', 'resources');
+    fs.mkdirSync(path.join(res9, 'llama-cpp'), { recursive: true });
+    fs.mkdirSync(path.join(res9, 'gguf'), { recursive: true });
+    fs.writeFileSync(path.join(res9, 'llama-cpp', 'llama-server.exe'), '');
+    fs.writeFileSync(path.join(res9, 'gguf', `${EMBED_MODEL}.gguf`), '');
+    fs.writeFileSync(path.join(probeDir, 'state', 'settings.json'), JSON.stringify({
+      memory: { semanticSource: 'llama-cpp', embeddingModel: EMBED_MODEL },
+    }, null, 2), 'utf8');
+    const layout = () => {
+      const db = new DatabaseSync(path.join(probeDir, 'state', 'gatherlight.db'));
+      try { return db.prepare("SELECT value FROM app_config WHERE key = 'facts.index.layout'").get()?.value ?? null; }
+      finally { db.close(); }
+    };
+
+    // A: facts written while the embedder answers — each one embedded.
+    rebuildServer = startServer({ dataDir: probeDir, port: REBUILD_PORTS[0], env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
+    await waitHealthy(`http://127.0.0.1:${REBUILD_PORTS[0]}`);
+    const cA = makeClient(`http://127.0.0.1:${REBUILD_PORTS[0]}`);
+    for (const [topic, content] of [
+      ['zzrebuildA 周末市场', 'The zzrebuildfact market opens at seven on weekends.'],
+      ['zzrebuildB 游泳馆', 'The zzrebuildfact pool charges forty yuan for an adult.'],
+    ]) await cA.call('remember_fact', { kind: 'household', topic, content, source: 'https://example.test/zzr', confidence: 0.8 });
+    rebuildServer.stop();
+    rebuildServer = null;
+    await new Promise((r) => setTimeout(r, 1200));
+    // The upgrade: this install is still at layout 2, so the next start REBUILDS — with the embedder refusing.
+    { const db = new DatabaseSync(path.join(probeDir, 'state', 'gatherlight.db'));
+      db.prepare("UPDATE app_config SET value = '2' WHERE key = 'facts.index.layout'").run(); db.close(); }
+    refuseEmbeddings = true;
+
+    const beforeDown = hits.length;
+    rebuildServer = startServer({ dataDir: probeDir, port: REBUILD_PORTS[1], env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
+    const downBase = `http://127.0.0.1:${REBUILD_PORTS[1]}`;
+    await waitHealthy(downBase);
+    const downWarnings = ((await (await fetch(`${downBase}/api/migration/status`)).json()).warnings ?? []).map(String);
+    ok('(fixture) the embedder was really asked, and refused',
+      hits.slice(beforeDown).some((h) => h.path === '/v1/embeddings'), JSON.stringify(hits.slice(beforeDown).map((h) => h.path)));
+    ok('THE POINT: with the embedder down, the layout marker is NOT written — nothing was rebuilt',
+      layout() === '2', `facts.index.layout=${JSON.stringify(layout())}`);
+    ok('…and the startup says so, in a sentence', downWarnings.some((w) => /嵌入模型这次启动没有响应/.test(w)),
+      JSON.stringify(downWarnings));
+    rebuildServer.stop();
+    rebuildServer = null;
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // B (control): the embedder answers again, and the next start does the work — every fact re-embedded.
+    refuseEmbeddings = false;
+    const beforeUp = hits.length;
+    rebuildServer = startServer({ dataDir: probeDir, port: REBUILD_PORTS[2], env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
+    await waitHealthy(`http://127.0.0.1:${REBUILD_PORTS[2]}`);
+    const reEmbedded = hits.slice(beforeUp).filter((h) => h.path === '/v1/embeddings' && h.body.includes('zzrebuildfact'));
+    ok('(control) once the embedder answers, the next start rebuilds, re-embeds every fact and writes the marker',
+      layout() === '3' && reEmbedded.length >= 2, JSON.stringify({ layout: layout(), reEmbedded: reEmbedded.length }));
+  }
 } catch (err) {
   fail('e2e-p52 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {
@@ -633,6 +709,7 @@ try {
   try { rerankServer?.stop(); } catch {}
   try { signedOutServer?.stop(); } catch {}
   try { signedInServer?.stop(); } catch {}
+  try { rebuildServer?.stop(); } catch {}
   await new Promise((r) => fake.close(r));
 }
 

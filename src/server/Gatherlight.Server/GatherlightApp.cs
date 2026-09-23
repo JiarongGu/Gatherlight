@@ -481,7 +481,11 @@ public static class GatherlightApp
                     // written with an empty `aka` because these two arrived as null. Caught only by an e2e
                     // case that read the column — nothing else could have.
                     sp.GetService<Lyntai.Inference.ITextClient>(),
-                    sp.GetService<Platform.Kernel.Services.ServerConfigService>()))
+                    sp.GetService<Platform.Kernel.Services.ServerConfigService>(),
+                    // The embedding backends, for one probe embed before a startup back-fill or rebuild — an
+                    // embedder that is wired and down makes every write store its fact WITHOUT a vector.
+                    sp.GetServices<Lyntai.Inference.IModelProvider>(),
+                    sp.GetService<Lyntai.Inference.IProviderRouterFactory>()))
             .AddSingleton<Platform.Storage.Knowledge.Services.IProcessLog, Platform.Storage.Knowledge.Services.ProcessLog>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RememberFactTool>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RecallFactsTool>()
@@ -634,12 +638,15 @@ public static class GatherlightApp
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.KnowledgeBaseStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SiteManifestStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.RecordIndexStep>()
+            // BEFORE the fact index, and load-bearing: when 语义 embeds through llama.cpp, FactIndexStep's
+            // writes need the router UP. It ran after this step once, so after a graceful shutdown (Dispose kills
+            // the router) the layout rebuild re-remembered every fact against a dead embedder — the engine stores
+            // a fact whose embed failed WITHOUT its vector — and a real install came up with 6 of 6 facts indexed
+            // and 0 vectors (docs/self-managed-llm-runtime.md). Does nothing unless a layer is bound to llama.cpp.
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.LlamaWarmStep>()
             // After RecordIndexStep, and NOT part of it: this one back-fills rather than rebuilds,
             // because a rebuild every boot would erase the decay + link state the index accumulates.
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.FactIndexStep>()
-            // After the fact index: warming a model matters only once recall exists to use it, and
-            // this step does nothing at all unless a layer is BOUND to llama.cpp.
-            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.LlamaWarmStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DataRepoMaintenanceStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealStateStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.MemorySeedStep>()

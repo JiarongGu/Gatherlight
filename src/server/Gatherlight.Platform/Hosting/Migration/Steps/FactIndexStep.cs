@@ -46,14 +46,16 @@ public sealed class FactIndexStep : IMigrationStep
     private readonly IFactIndex _index;
     private readonly IKnowledgeStore _store;
     private readonly IAppConfigService _config;
+    private readonly MigrationState? _state;
     private readonly ILogger<FactIndexStep>? _log;
 
     public FactIndexStep(IFactIndex index, IKnowledgeStore store, IAppConfigService config,
-        ILogger<FactIndexStep>? log = null)
+        MigrationState? state = null, ILogger<FactIndexStep>? log = null)
     {
         _index = index;
         _store = store;
         _config = config;
+        _state = state;
         _log = log;
     }
 
@@ -63,6 +65,23 @@ public sealed class FactIndexStep : IMigrationStep
 
     public async Task RunAsync(CancellationToken ct)
     {
+        // NOTHING is written while an embedder is wired but not answering — no back-fill, no rebuild, no
+        // marker. A write whose embed fails is not an error to the engine: it stores the fact WITHOUT its
+        // vector and the fact gets its graph reference, so neither a later back-fill nor this step would ever
+        // return to it. That is how a real install came up after the 3.2 upgrade with every fact indexed and
+        // no vector at all — the rebuild ran before llama.cpp had started (docs/self-managed-llm-runtime.md).
+        // The step order now starts the router first; this guards everything else that leaves it down (a
+        // failed start, a router that will not load the model). A marker is written only after work that
+        // actually happened, so skipping here just means the next start tries again.
+        if (!await _index.EmbedderReadyAsync(ct))
+        {
+            _log?.LogWarning("fact index: an embedder is wired but did not answer a probe; indexing nothing and " +
+                "leaving the layout marker as it is, so the next start retries");
+            _state?.AddWarning("「语义」的嵌入模型这次启动没有响应,事实索引没有更新 —— 已有的事实仍能按关键词找到,"
+                + "下次启动会自动重试。");
+            return;
+        }
+
         var stored = _config.Get(LayoutKey);
         if (stored == Layout)
         {

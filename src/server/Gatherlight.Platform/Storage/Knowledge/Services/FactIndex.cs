@@ -49,6 +49,15 @@ public interface IFactIndex
     /// by a layout migration that moved only the vectors: without an embedder there is nothing to move.</summary>
     bool Embeds { get; }
 
+    /// <summary>Can a write be embedded RIGHT NOW? True when no embedder is wired — there is nothing to reach —
+    /// or when one answered a probe embed.
+    /// <para><b>Asked before any bulk write, because a failed write-time embed is not an error.</b> Lyntai's graph
+    /// engine catches it and stores the fact anyway, WITHOUT its vector ("storing without signals or links"),
+    /// and the fact gets its graph reference — so no back-fill ever returns to it. An upgrade rebuild against a
+    /// router that had not started yet stripped every vector from a real install that way while coverage read
+    /// 100% (see <c>FactIndexStep</c>).</para></summary>
+    Task<bool> EmbedderReadyAsync(CancellationToken ct = default);
+
     /// <summary>Index one fact; returns its address, or null if the index is unavailable or refused it.</summary>
     Task<string?> IndexAsync(string kind, string topic, string content, CancellationToken ct = default);
 
@@ -155,8 +164,12 @@ public sealed class FactIndex : IFactIndex
     public FactIndex(IMemoryEngineFactory? engines, IKnowledgeStore store,
         IMemoryGraphStore? graph = null, ILogger<FactIndex>? log = null,
         ISemanticMemory? semantic = null, IVectorStore? vectors = null,
-        Lyntai.Inference.ITextClient? llm = null, Kernel.Services.ServerConfigService? config = null)
+        Lyntai.Inference.ITextClient? llm = null, Kernel.Services.ServerConfigService? config = null,
+        IEnumerable<Lyntai.Inference.IModelProvider>? providers = null,
+        Lyntai.Inference.IProviderRouterFactory? routing = null)
     {
+        _providers = providers;
+        _routing = routing;
         _llm = llm;
         _config = config;
         _store = store;
@@ -170,6 +183,43 @@ public sealed class FactIndex : IFactIndex
     public bool Available => _engine is not null;
 
     public bool Embeds => _engine is not null && _semantic is not null;
+
+    // The backends the graph embeds through — read only to PROBE them; see EmbedderReadyAsync.
+    private readonly IEnumerable<Lyntai.Inference.IModelProvider>? _providers;
+    private readonly Lyntai.Inference.IProviderRouterFactory? _routing;
+
+    public async Task<bool> EmbedderReadyAsync(CancellationToken ct = default)
+    {
+        if (!Embeds) return true;
+        try
+        {
+            // The same routing the engine embeds a write through (Lyntai's EmbeddingRouting is internal, so this
+            // restates its one filter: a backend that produces vectors from text), so a pass here means a write
+            // would embed too.
+            Func<Lyntai.Inference.ProviderCapabilities, bool> embeds = c => c.Supports(
+                Lyntai.Inference.ProviderKinds.Vector, Lyntai.Inference.ProviderOperation.Complete,
+                accepts: Lyntai.Inference.ProviderKinds.Text);
+            var providers = _providers ?? [];
+            var router = _routing?.For<Lyntai.Inference.VectorRequest, Lyntai.Inference.VectorResponse>(
+                    providers, Lyntai.Inference.VectorResponse.Failure, embeds, logger: _log)
+                ?? new Lyntai.Inference.ProviderRouter<Lyntai.Inference.VectorRequest, Lyntai.Inference.VectorResponse>(
+                    providers, Lyntai.Inference.VectorResponse.Failure, embeds, logger: _log);
+            if (!router.CanServe()) return false;
+            var answer = await router.CallAsync(new Lyntai.Inference.VectorRequest(
+                ["索引前的探测 · index probe"], Lyntai.Inference.EmbeddingRole.Document,
+                Lyntai.Inference.ProviderConsumers.Memory), ct);
+            if (!answer.IsOk)
+                _log?.LogWarning("fact index: the embedder did not answer a probe embed ({Verdict}): {Detail}",
+                    answer.Verdict, answer.Detail);
+            return answer.IsOk && answer.Vectors.Count > 0 && answer.Vectors[0].Length > 0;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _log?.LogWarning("fact index: the embedder did not answer a probe embed: {Msg}", ex.Message);
+            return false;
+        }
+    }
 
     public async Task<string?> IndexAsync(string kind, string topic, string content, CancellationToken ct = default)
     {

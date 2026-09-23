@@ -284,3 +284,18 @@ call: 96 documents of 2 000 Chinese characters (~1 660 tokens each, ~160 000 in 
 A or B, collapses to a handful of tokens). Since the scoring verifier is fail-open, a single long fact made every
 recall that surfaced it unverified, silently — so `RerankInputCap` sends at most 1 000 characters per candidate
 (~830 tokens at the worst rate measured). llama-server does NOT truncate per pair.
+
+**An upgrade stripped every vector from an install on 语义 · llama.cpp — reproduced, then fixed** (same build,
+2026-09-24). Lyntai's graph engine does not fail a write whose embed fails: `GraphMemoryEngine.SearchAsync` logs
+"similarity search failed … storing without signals or links" and the node is stored without its vector, and the
+fact still gets its graph reference, so no back-fill ever returns to it. The 3.2 layout rebuild (2 → 3) runs in
+`FactIndexStep`, which was registered BEFORE `LlamaWarmStep` — the first thing that starts llama-server — and a
+graceful shutdown kills the router. Reproduced on a scratch install with the real embedder
+(`embeddinggemma-300M-Q8_0`): boot 1 wrote 6 facts, 6 indexed and 6 vectors; the layout marker was set back to 2
+and the app stopped; boot 2 logged six "storing without signals or links" warnings and came up with 6 of 6 facts
+indexed, **0 vectors**, and the marker at 3 — coverage 100%, semantic recall empty, and nothing would ever repair
+it. Fixed twice over: `LlamaWarmStep` now runs before `FactIndexStep` (the same repro: 6 of 6 facts, **6
+vectors**, the rebuild logged "6/6 facts indexed"), and `FactIndexStep` probes one embed first and, when an embedder
+is wired but does not answer, indexes nothing, leaves the marker, and says so in a startup warning. Driven on the
+real binary by holding the router's port with a listener that answers 503: boot 2 left the marker at 2 and the 6
+vectors untouched, with the warning; boot 3, port freed, rebuilt to 6 vectors and marker 3.
