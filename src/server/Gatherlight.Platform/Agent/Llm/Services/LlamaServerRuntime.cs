@@ -59,8 +59,9 @@ public interface ILlamaServerRuntime
     Task<bool> EnsureServingAsync(CancellationToken ct = default);
 
     /// <summary>Make sure the router is answering AND knows <paramref name="modelId"/> — null when it does,
-    /// otherwise the sentence a household reads. A model downloaded after OUR router started restarts it; one
-    /// the router already lists never does. See the implementation for why.</summary>
+    /// otherwise the sentence a household reads. A model downloaded after OUR router started restarts it — only
+    /// when the router answered without listing it, and only when <see cref="ILlamaRestartPolicy"/> says a
+    /// restart loses nothing. See the implementation for why.</summary>
     Task<string?> EnsureServesAsync(string modelId, CancellationToken ct = default);
 
     /// <summary>Force a model to load NOW, so the first real request does not pay for it. Returns false if
@@ -131,14 +132,31 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     // Memoized facts about the BINARY — see BinaryFactsAsync. Deliberately not cleared by Invalidate():
     // that exists for the live state, and the file has not changed just because the server was restarted.
     private (string Key, string? Version, IReadOnlyList<string> Devices)? _binaryFacts;
+
+    /// <summary>The router WE started — set only once it ANSWERED. Assigned at spawn, a second router that
+    /// lost the race for the port and exited made the live one look adopted: the next bind told the household
+    /// to kill our own process, and Dispose orphaned it.</summary>
     private Process? _started;
 
+    /// <summary>ONE lock over start, restart and stop. Probe-then-spawn is a check-then-act on a port, and
+    /// three callers can overlap (a bind on either layer, 资源's start button, the startup warm step); a restart
+    /// holds the router down for seconds, which is exactly the window a concurrent "not serving → spawn" sees.
+    /// Whatever needs the router while it holds this waits, and then finds it up.</summary>
+    private readonly SemaphoreSlim _lifecycle = new(1, 1);
+
+    /// <summary>Set by <see cref="Dispose"/>, read under <see cref="_lifecycle"/> and again after a spawn
+    /// answers — so nothing a background re-warm or a late restart does can start a router after shutdown.</summary>
+    private volatile bool _disposed;
+
+    private readonly ILlamaRestartPolicy? _restartPolicy;
+
     public LlamaServerRuntime(IPlatformContext platform, IHttpClientFactory http,
-        ILogger<LlamaServerRuntime> log)
+        ILogger<LlamaServerRuntime> log, ILlamaRestartPolicy? restartPolicy = null)
     {
         _platform = platform;
         _http = http;
         _log = log;
+        _restartPolicy = restartPolicy;
     }
 
     /// <summary>Env override → loopback default, with the loopback guard applied. Non-loopback is refused
@@ -362,9 +380,19 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
     public async Task<bool> EnsureServingAsync(CancellationToken ct = default)
     {
+        await _lifecycle.WaitAsync(ct);
+        try { return await EnsureServingCoreAsync(ct); }
+        finally { _lifecycle.Release(); }
+    }
+
+    /// <summary>Probe, and spawn only if the port is silent. Callers hold <see cref="_lifecycle"/> — the public
+    /// door takes it, and the restart in <see cref="EnsureServesAsync"/> calls this while holding it already.</summary>
+    private async Task<bool> EnsureServingCoreAsync(CancellationToken ct)
+    {
+        if (_disposed) return false;
         var state = await ProbeAsync(refresh: true, ct);
         // Something already answers. It might be ours from a previous start, or a household's own on this
-        // port — either way we do not start a second one, exactly as the Ollama arm does not.
+        // port — either way we do not start a second one.
         if (state.Serving) return true;
         if (state.Executable is null) return false;
 
@@ -386,6 +414,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             "--port", port.ToString(),
         };
 
+        Process? proc = null;
         try
         {
             var psi = new ProcessStartInfo(state.Executable)
@@ -398,9 +427,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             };
             foreach (var a in args) psi.ArgumentList.Add(a);
 
-            var proc = Process.Start(psi);
+            proc = Process.Start(psi);
             if (proc is null) return false;
-            lock (_gate) _started = proc;
             // Drained, not read: a filled pipe blocks the child, and llama-server is chatty at its default
             // verbosity. Interesting lines go to our own log via the probe, not by parsing its stdout.
             proc.OutputDataReceived += (_, _) => { };
@@ -418,26 +446,37 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 if (proc.HasExited)
                 {
                     _log.LogWarning("llama-server exited during startup with code {Code}", proc.ExitCode);
+                    proc.Dispose();
                     return false;
                 }
                 // The CHEAP check — see IsServingAsync. Re-probing the binary here spawned two child
                 // processes per iteration.
-                if ((await IsServingAsync(ct)).Serving) { Invalidate(); return true; }
+                if ((await IsServingAsync(ct)).Serving)
+                {
+                    // OURS only now, and only if the app is still running — a Dispose that arrived while this
+                    // waited must not leave a router behind it.
+                    lock (_gate)
+                    {
+                        if (!_disposed) { _started = proc; proc = null; }
+                    }
+                    if (proc is not null) { Kill(proc); return false; }
+                    Invalidate();
+                    return true;
+                }
                 await Task.Delay(500, ct);
             }
             _log.LogWarning("llama-server did not answer on {Url} within 20s", BaseUrl);
+            // Never answered, so never ours — and not left running either, holding the port and the GPU.
+            Kill(proc);
             return false;
         }
         catch (Exception ex)
         {
             _log.LogWarning("starting llama-server failed: {Msg}", ex.Message);
+            if (proc is not null) Kill(proc);
             return false;
         }
     }
-
-    /// <summary>Serialises the restart below, so two callers that both find a new model unknown cause ONE
-    /// restart — the second re-checks under the lock and finds it known.</summary>
-    private readonly SemaphoreSlim _restart = new(1, 1);
 
     /// <summary>
     /// The router, answering and knowing <paramref name="modelId"/>.
@@ -446,55 +485,76 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// (<c>docs/self-managed-llm-runtime.md</c>).</b> The router reads <c>--models-dir</c> and its preset file
     /// ONCE, at start. A GGUF dropped in afterwards is not listed by <c>/v1/models</c>, and a request naming it
     /// gets <c>400 model '…' not found</c> — before AND after the preset file is rewritten, until the router is
-    /// restarted. So the household's main path — 语义 already running on llama.cpp, a reranker downloaded
-    /// from 资源, then bound — reached a router that had never heard of the model and was refused, with nothing
-    /// saying that a restart was the cure.</para>
+    /// restarted.</para>
     ///
-    /// <para><b>Restart OURS, only when it lacks the model.</b> A restart drops every warm model (the next
-    /// request pays the load again: seconds for a reranker, 17 s for a 1B chat model), so a model the router
-    /// already lists never triggers one, and what was loaded is re-warmed in the background. A router we did
-    /// NOT start — an orphan of an earlier run we adopted, or a household's own — is not ours to kill
-    /// (<see cref="Dispose"/> keeps the same rule), and an app restart would only adopt it again; so the
-    /// household is told, in a sentence naming the process, what would load the model.</para>
+    /// <para><b>Restart OURS, only when it provably lacks the model, and only when a restart loses
+    /// nothing.</b> Three conditions, each for a failure found in review:</para>
+    /// <list type="bullet">
+    /// <item><b>Provably lacks it</b> — the probe ANSWERED and did not list it. A probe that failed (the
+    /// 120 ms connect gate, the 4 s <c>/v1/models</c>) says nothing about the model, and reading it as "not
+    /// listed" restarted a healthy router on two slow probes in a row.</item>
+    /// <item><b>Ours</b> — a router we adopted (an orphan of an earlier run, or a household's own) is not ours
+    /// to kill, and an app restart would only adopt it again; the household is told which process to end.</item>
+    /// <item><b>Loses nothing</b> — <see cref="ILlamaRestartPolicy"/>. While the router is down every embed
+    /// fails, and a fact written then is stored WITHOUT its vector, permanently and silently (the engine
+    /// catches a failed write-time embed). So it is refused while 语义 embeds through this router or a
+    /// reindex runs, with a sentence saying so; what remains is 判断's verification, which fails open.</item>
+    /// </list>
+    /// <para>After a restart the requested model is warmed HERE, before returning, so the caller's own screen
+    /// or proof is not a second concurrent load; what was warm before is then re-warmed ONE AT A TIME, off the
+    /// request path — llama.cpp loads concurrently badly (its #20137), and <c>--models-max</c> is 2.</para>
     /// </summary>
     public async Task<string?> EnsureServesAsync(string modelId, CancellationToken ct = default)
     {
-        if (!await EnsureServingAsync(ct)) return "llama.cpp 没能启动 —— 请看「日志」里的原因。";
-        if (Knows(await IsServingAsync(ct), modelId)) return null;
-
-        await _restart.WaitAsync(ct);
+        await _lifecycle.WaitAsync(ct);
         try
         {
-            if (Knows(await IsServingAsync(ct), modelId)) return null;
+            if (!await EnsureServingCoreAsync(ct)) return "llama.cpp 没能启动 —— 请看「日志」里的原因。";
+            var live = await IsServingAsync(ct);
+            if (!live.Serving) return "llama.cpp 正在运行,但这次没有及时回应 —— 稍后再试。";
+            if (live.Models.Contains(modelId, StringComparer.OrdinalIgnoreCase)) return null;
+
             if (!LocalGgufIds().Contains(modelId, StringComparer.OrdinalIgnoreCase))
                 return $"{modelId} 不在模型目录里 —— 在「资源 · Resources」面板下载它。";
 
+            var unknown = $"{modelId} 是在 llama.cpp 启动之后才下载的,正在运行的 llama.cpp 要重启才会载入它。";
             bool ours;
             lock (_gate) ours = _started is { HasExited: false };
             if (!ours)
-                return $"{modelId} 是在 llama.cpp 启动之后才下载的,正在运行的 llama.cpp 要重启才会载入它。"
+                return unknown
                      + "这个 llama.cpp 进程不是应用这次启动的(可能是上次异常退出后留下的),应用不会替你结束它 —— "
                      + "在任务管理器里结束 llama-server.exe 后再试,应用会重新启动它。";
+            if (_restartPolicy?.WhyNotNow() is { } notNow) return unknown + notNow;
 
-            var warm = await LoadedModelsAsync(ct);
+            // Re-warm only OUR models. The real router also lists what sits in the machine's llama.cpp/Hugging
+            // Face cache (seen on a real restart: four cached chat models beside ours), and a model the household
+            // loaded for something else is not ours to load again.
+            var local = LocalGgufIds();
+            var warm = (await LoadedModelsAsync(ct))
+                .Where(m => local.Contains(m, StringComparer.OrdinalIgnoreCase)).ToList();
             _log.LogInformation(
                 "llama-server: restarting our router — {Model} was added after it started; re-warming {Warm}",
                 modelId, string.Join(", ", warm));
-            StopOurs();
-            if (!await EnsureServingAsync(ct)) return "llama.cpp 重启后没能启动 —— 请看「日志」里的原因。";
-            // The caller warms or screens the model it asked for; what was warm before is warmed again here,
-            // off the request path, so the other layer's next call does not stall.
-            foreach (var m in warm.Where(m => !string.Equals(m, modelId, StringComparison.OrdinalIgnoreCase)))
-                _ = WarmAsync(m, ResourceProvisioner.GgufKind(m), CancellationToken.None);
-            return Knows(await IsServingAsync(ct), modelId)
-                ? null
-                : $"llama.cpp 重启后仍然没有列出 {modelId} —— 请看「日志」里的原因。";
-        }
-        finally { _restart.Release(); }
-    }
+            StopOursCore();
+            if (!await EnsureServingCoreAsync(ct)) return "llama.cpp 重启后没能启动 —— 请看「日志」里的原因。";
+            live = await IsServingAsync(ct);
+            if (!live.Models.Contains(modelId, StringComparer.OrdinalIgnoreCase))
+                return $"llama.cpp 重启后仍然没有列出 {modelId} —— 请看「日志」里的原因。";
 
-    private static bool Knows((bool Serving, IReadOnlyList<string> Models) state, string modelId) =>
-        state.Serving && state.Models.Contains(modelId, StringComparer.OrdinalIgnoreCase);
+            await WarmCoreAsync(modelId, ResourceProvisioner.GgufKind(modelId), ct);
+            var again = warm
+                .Where(m => !string.Equals(m, modelId, StringComparison.OrdinalIgnoreCase))
+                .Take(MaxResidentModels - 1)
+                .ToList();
+            if (again.Count > 0)
+                _ = Task.Run(async () =>
+                {
+                    foreach (var m in again) await WarmAsync(m, ResourceProvisioner.GgufKind(m), CancellationToken.None);
+                });
+            return null;
+        }
+        finally { _lifecycle.Release(); }
+    }
 
     /// <summary>The models the router currently holds LOADED — <c>status.value == "loaded"</c> in its
     /// <c>/v1/models</c>. Empty when it says nothing about status (an older build, or not our router).</summary>
@@ -531,6 +591,12 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             _log.LogWarning("warming {Model} skipped: {Why}", modelId, why);
             return false;
         }
+        return await WarmCoreAsync(modelId, kind, ct);
+    }
+
+    /// <summary>The warm request itself, against a router already known to list the model.</summary>
+    private async Task<bool> WarmCoreAsync(string modelId, GgufCapability kind, CancellationToken ct)
+    {
         try
         {
             using var http = _http.CreateClient();
@@ -682,17 +748,33 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// on the next start, not duplicated — <see cref="EnsureServingAsync"/> finds the port answering and
     /// returns without spawning anything, verified 2026-08-22 (two processes before and after a restart, not
     /// four). So the failure mode is an idle router holding VRAM until the app comes back or the machine
-    /// reboots, not a pile of them.</para></summary>
-    public void Dispose() => StopOurs();
+    /// reboots, not a pile of them.</para>
+    ///
+    /// <para><b>Disposed FIRST, then the lock.</b> The flag is set before the lifecycle lock is taken —
+    /// bounded, because a shutdown must not hang on a start that is still polling — so a restart or a
+    /// background re-warm already in flight finds the flag and cannot spawn a router after this returns.</para></summary>
+    public void Dispose()
+    {
+        _disposed = true;
+        var held = _lifecycle.Wait(TimeSpan.FromSeconds(30));
+        try { StopOursCore(); }
+        finally { if (held) _lifecycle.Release(); }
+    }
 
-    /// <summary>Stop the router WE started, children and all; a no-op for one we adopted. Shared by
-    /// <see cref="Dispose"/> and the restart in <see cref="EnsureServesAsync"/>, which is why the live state is
-    /// invalidated here too: a cached "serving" must not outlive the process it describes.</summary>
-    private void StopOurs()
+    /// <summary>Stop the router WE started, children and all; a no-op for one we adopted. Callers hold
+    /// <see cref="_lifecycle"/> (Dispose, and the restart in <see cref="EnsureServesAsync"/>), which is why the
+    /// live state is invalidated here too: a cached "serving" must not outlive the process it describes.</summary>
+    private void StopOursCore()
     {
         Process? proc;
         lock (_gate) { proc = _started; _started = null; }
-        if (proc is null) return;
+        if (proc is not null) Kill(proc);
+        Invalidate();
+    }
+
+    /// <summary>Kill a router process tree and wait briefly for it — the children hold GPU memory.</summary>
+    private void Kill(Process proc)
+    {
         try
         {
             if (!proc.HasExited)
@@ -703,6 +785,5 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         }
         catch (Exception ex) { _log.LogDebug("stopping llama-server: {Msg}", ex.Message); }
         finally { proc.Dispose(); }
-        Invalidate();
     }
 }

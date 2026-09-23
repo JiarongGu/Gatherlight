@@ -404,6 +404,9 @@ public static class GatherlightApp
             // a remote one would send every household fact off this machine on every write. It replaced
             // Ollama, which was retired as a backend on 2026-08-22 (MemoryBackends.IsRetired).
             .AddSingleton<ILlamaServerRuntime, LlamaServerRuntime>()
+            // When the runtime may restart ITS router to load a model it does not list: never while anything
+            // would write through it — a fact written then is stored without its vector, for good.
+            .AddSingleton<ILlamaRestartPolicy, LlamaRestartPolicy>()
             // One reindex at a time, and its progress. A singleton because the run outlives the request
             // that started it — see IReindexStatus for why that had to change.
             .AddSingleton<Platform.Agent.Llm.Services.IReindexStatus, Platform.Agent.Llm.Services.ReindexStatus>()

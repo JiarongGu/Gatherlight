@@ -34,7 +34,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// <summary>The embedder's OWN id. One llama-server answers both routes, but since Lyntai 3.2 each route
     /// is its own provider (its D133: a host serving two routes is two registrations under two ids), and a
     /// trace should name which of the two answered.</summary>
-    private const string EmbedProviderId = "llamacpp-embed";
+    internal const string EmbedProviderId = "llamacpp-embed";
     private const string ClientId = "memory-llamacpp";
 
     /// <summary>The reranker's own provider id — a third registration against the same router (Lyntai D133:
