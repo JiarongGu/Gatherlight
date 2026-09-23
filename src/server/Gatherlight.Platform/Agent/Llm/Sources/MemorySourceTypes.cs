@@ -220,11 +220,20 @@ public static class MemoryGroups
     };
 
     /// <summary>One sentence per group, answering "what does choosing this cost me" — which is the question
-    /// actually being asked, and the axis the three names are ordered on.</summary>
-    public static string Description(string group) => group switch
+    /// actually being asked, and the axis the three names are ordered on.
+    ///
+    /// <para><b>Per LAYER, because one group costs different things on different layers.</b> On 判断 本机模型
+    /// holds a RERANKER, which only checks — its tagging goes to the Claude CLI, spending quota and sending the
+    /// fact to Claude. A single sentence saying 「不消耗账号额度」 rendered under every 判断 model choice,
+    /// including that one; a group's sentence has to be true of every member it sits above.</para></summary>
+    public static string Description(string group, string? layer = null) => group switch
     {
         Cli => "用已登录的 Claude 账号:不在这台机器上跑模型,不用下载任何东西 —— "
              + "代价是消耗账号额度,每次调用都要启动一次 CLI。",
+        Managed when layer == MemoryLayers.Judge =>
+            "由应用下载、启动和管理的模型(llama.cpp),占磁盘、不用填地址,模型在「资源 · Resources」面板下载,"
+             + "都实测排过名。对话模型:判断整个在本机完成,不消耗账号额度。重排模型:只有检索时的核对在本机 —— "
+             + "写入事实时的主题标注由 Claude CLI 完成,消耗账号额度,事实内容会发给 Claude。",
         Managed => "由应用下载、启动和管理的模型,两种跑法:llama.cpp 起一个常驻服务,或者「内置」—— "
              + "直接在应用进程内跑 ONNX,不额外启动任何程序。模型在「资源 · Resources」面板下载,都实测排过名 —— "
              + "占磁盘,但不消耗账号额度,也不用填地址。",

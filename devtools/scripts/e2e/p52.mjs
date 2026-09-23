@@ -337,6 +337,16 @@ try {
     JSON.stringify({ model: rrLayer.model, cost: rrLayer.cost }));
   ok('…including that each fact\'s content is sent to Claude for tagging',
     /发给 Claude/.test(String(rrLayer.cost)), JSON.stringify(rrLayer.cost));
+  // The FOURTH surface: the 本机模型 group's own sentence, rendered under every model choice in it. It said
+  // 「不消耗账号额度」 for the whole group — on 判断 that includes the reranker, whose tagging spends quota.
+  const groupOf = (layer, id) => (layer.groups ?? []).find((g) => g.id === id) ?? {};
+  const judgeManaged = String(groupOf(rrLayer, 'managed').description ?? '');
+  ok('…and so does the 本机模型 group sentence on 判断: a reranker\'s tagging goes to Claude',
+    /重排/.test(judgeManaged) && /发给 Claude/.test(judgeManaged), judgeManaged);
+  // Control: on 语义 no member sends anything anywhere, so the group's no-quota claim stays — and stays true.
+  const semManaged = String(groupOf(layerOf(await c2.getJson('/api/manage/memory'), 'semantic'), 'managed').description ?? '');
+  ok('(control) on 语义 the same group still says it spends no quota — true of every member there',
+    /不消耗账号额度/.test(semManaged) && !/发给 Claude/.test(semManaged), semManaged);
   ok('…and that the tagging spends the account\'s quota, beside a checking half that does not',
     spendsQuota(rrLayer.cost) && /不消耗账号额度/.test(String(rrLayer.cost)),
     JSON.stringify(rrLayer.cost));

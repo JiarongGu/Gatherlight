@@ -436,7 +436,7 @@ public sealed class MemoryRecallController : ControllerBase
             {
                 id = g,
                 name = MemoryGroups.Name(g),
-                description = MemoryGroups.Description(g),
+                description = MemoryGroups.Description(g, layer),
                 sources = views.Where(v => v.Group == g).OrderBy(v => v.Rank)
                     .Select(v => v.View).ToArray(),
             })
