@@ -41,12 +41,13 @@
 // HOW TO READ IT. Every arm answers the same queries, so arms are compared PAIRED, per query, on top-1 hits and
 // on found@8 hits: against `content` and against `formula` when they ran, every reranker against every other,
 // and against `--baseline=<results.json>:<arm>` from another run. Each comparison reports McNemar's exact p, the
-// net difference c − b, and a CONSERVATIVE 95% interval for the net rate d·(2p − 1): the [min, max] over the four
-// corners of a 97.5% Clopper–Pearson interval on the disagreement rate d = (b+c)/pairs and one on the split
-// p = c/(b+c) (p ∈ [0, 1] when b+c = 0) — Bonferroni, so jointly ≥ 95%, and never narrower than the evidence.
+// net difference c − b, and a 95% interval for the net rate (c − b)/pairs — the Agresti–Min adjusted Wald interval
+// for a paired difference in proportions, which accounts for both how often the arms disagree and how that splits.
 //   - A FINDING needs p < 0.05 on `all` AND no question set that is itself significant (p < 0.05) in the
 //     opposite direction.
-//   - "NO DIFFERENCE" needs the 95% net interval inside ±3 pp — p ≥ 0.05 alone only says the run could not tell.
+//   - "NO DIFFERENCE" (equivalent) needs the 95% net interval on `all` entirely inside ±3 pp — a TOST at α = 0.025
+//     per side, stricter than the usual 90% / α = 0.05 — and p ≥ 0.05 alone only says the run could not tell. It is
+//     judged on `all` only: a single question set's 60 pairs can essentially never reach it.
 //   - The A/A twins — `formula2` beside `formula` (no model in the loop) and `content2` beside `content` (the
 //     LLM's verdicts vary run to run) — are the SANITY CHECK: an A/A pair must show p ≥ 0.05 on `all`, else the
 //     run is suspect (a WARNING). Per-set A/A p values are printed but not warned on: ten tests at 0.05 would
@@ -54,9 +55,13 @@
 //
 // RE-ANALYSIS. `--report-only=<results.json>` recomputes every table from a finished run's saved rows — no
 // server, no model, nothing in the work dir touched — and writes `<name>.reanalysed-<iso>.json` beside it. The
-// live run and the re-analysis go through the SAME functions (the live run analyses its own saved shape), so a
-// later fix to the analysis applies retroactively to an expensive run. What an older file cannot support (no
-// router counts, no latency rows, no order seed) is said, not guessed.
+// live run SAVES before it analyses and then analyses its own saved shape through the SAME functions, so an
+// analysis bug costs a re-analysis rather than a re-run, and a later fix applies retroactively. What an older file
+// cannot support (no router counts, no latency rows, no order seed) is said, not guessed.
+// `--report-only=<rows-*.jsonl>` RECOVERS a run that never saved from its row stream: arm order from the serial
+// latency pass, the order seed confirmed by regenerating the query order, the fixture from seed.json checked
+// against the rows' questions, router totals recounted from arm-N folders only if they were created by that run —
+// and a NOTE for everything else.
 //
 // OUTPUT. Rows stream to devtools/_judge-bench/rows-<iso>.jsonl as they complete (a crash keeps what was
 // measured); the report goes to results-<iso>.json. Neither is ever deleted or truncated by a later run.
@@ -72,7 +77,7 @@
 //   node devtools/dev.mjs judge-bench --report-only=devtools/_judge-bench/results-<iso>.json [--baseline=…]
 //   node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,rr… --baseline=devtools/_judge-bench/results-<iso>.json:content
 // Flags: --arms= --rerankers= --n= --port-base= --llama-port= --resources= --seed= --latency-sample=
-//        --reuse-seed | --reseed   --report-only=<results.json>   --baseline=<results.json>:<arm>
+//        --reuse-seed | --reseed   --report-only=<results.json | rows-*.jsonl>   --baseline=<results.json>:<arm>
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -212,31 +217,19 @@ const binomSum = (from, to, n, p) => {
 // McNemar, exact: of the b + c DISCORDANT queries, is a b/c split this uneven plausible under a fair coin?
 // Two-sided binomial p = min(1, 2 · Σ_{k ≤ min(b,c)} C(b+c, k) · 0.5^(b+c)).
 const mcnemarP = (b, c) => (b + c === 0 ? 1 : Math.min(1, 2 * binomSum(0, Math.min(b, c), b + c, 0.5)));
-const bisect = (f, target, increasing) => {
-  let lo = 0, hi = 1;
-  for (let i = 0; i < 200; i++) {
-    const mid = (lo + hi) / 2;
-    if ((f(mid) < target) === increasing) lo = mid; else hi = mid;
-  }
-  return (lo + hi) / 2;
-};
-/** Exact (Clopper–Pearson) interval for a binomial proportion x/n. */
-const clopperPearson = (x, n, alpha = 0.05) => [
-  x === 0 ? 0 : bisect((p) => binomSum(x, n, n, p), alpha / 2, true),
-  x === n ? 1 : bisect((p) => binomSum(0, x, n, p), alpha / 2, false),
-];
-// The NET rate (c − b) / pairs = d · (2p − 1), with d = (b + c) / pairs the DISAGREEMENT rate and p = c / (b + c)
-// its split. Both are uncertain, so both get an interval: 97.5% Clopper–Pearson each (Bonferroni → jointly ≥ 95%),
-// and the net interval is [min, max] over the four corners (the product is bilinear, so the corners are the
-// extremes). Treating d as KNOWN was the first version's mistake: it made the interval no wider than the observed
-// disagreement, so 16 identical answers read as "[0, 0], equivalent" while a 20% disagreement rate was still
-// consistent with them. With no disagreement at all, p is unconstrained ([0, 1]) and the interval is [−dU, +dU].
+// The NET rate (c − b) / pairs, with a 95% Agresti–Min adjusted Wald interval for a PAIRED difference in
+// proportions: add 0.5 to each discordant cell, then the Wald interval on the adjusted counts, clipped to [−1, 1].
+// Two earlier versions were wrong in opposite directions. Treating the disagreement rate as KNOWN made the interval
+// no wider than the observed disagreement (16 identical answers read "[0, 0], equivalent"); bounding it and the
+// split separately at 97.5% each (Bonferroni over four corners) was valid but so conservative that "equivalent"
+// was unreachable — at 240 pairs a single 1/1 disagreement already failed ±3 pp.
+const Z975 = 1.95996;
 const netInterval = (b, c, pairs) => {
   if (pairs === 0) return null;
-  const [dL, dU] = clopperPearson(b + c, pairs, 0.025);
-  const [pL, pU] = b + c === 0 ? [0, 1] : clopperPearson(c, b + c, 0.025);
-  const corners = [dL, dU].flatMap((d) => [pL, pU].map((p) => d * (2 * p - 1)));
-  return [Math.min(...corners), Math.max(...corners)];
+  const b1 = b + 0.5, c1 = c + 0.5, n1 = pairs + 2;
+  const diff = (c1 - b1) / n1;
+  const half = Z975 * Math.sqrt(Math.max(0, (b1 + c1) - ((c1 - b1) ** 2) / n1) / (n1 * n1));
+  return [Math.max(-1, diff - half), Math.min(1, diff + half)];
 };
 const EQUIVALENCE = 0.03;
 
@@ -316,11 +309,14 @@ const loadRun = (json, source) => {
       latencyRows: json.latencyRows?.[a.key] ?? null,
     };
   });
-  if (arms.some((a) => !a.router)) notes.push('claude-cli router counts not saved — router-failure warnings cannot be recomputed');
-  else if (arms.some((a) => !a.router.startup)) notes.push('startup router counts not saved (the file predates the startup check)');
+  // A recovered run's own notes already say what its row stream could not carry; these are for saved files.
+  if (json.format !== 'recovered') {
+    if (arms.some((a) => !a.router)) notes.push('claude-cli router counts not saved — router-failure warnings cannot be recomputed');
+    else if (arms.some((a) => !a.router.startup)) notes.push('startup router counts not saved (the file predates the startup check)');
+    if (json.order?.seed === undefined) notes.push('order seed not saved — this run cannot be paired with another run');
+    if (arms.some((a) => a.migrationWarnings === null)) notes.push('startup warnings not saved for every arm');
+  }
   if (!json.latencyRows) notes.push('latency rows not saved — serial latency cannot be recomputed');
-  if (json.order?.seed === undefined) notes.push('order seed not saved — this run cannot be paired with another run');
-  if (arms.some((a) => a.migrationWarnings === null)) notes.push('startup warnings not saved for every arm');
   return {
     source,
     meta: {
@@ -401,7 +397,9 @@ const pairedTest = (arm, baseArm, set) => {
       b, c, p: mcnemarP(b, c),
       net: c - b, netPp: out.pairs ? (100 * (c - b)) / out.pairs : null,
       interval95Pp: ci ? ci.map((v) => 100 * v) : null,
-      equivalent: ci ? ci[0] >= -EQUIVALENCE - 1e-12 && ci[1] <= EQUIVALENCE + 1e-12 : null,
+      // Judged on `all` only: a single set's pairs can essentially never bound ±3 pp, so a per-set "no" says
+      // nothing and would read as evidence of a difference.
+      equivalent: set === 'all' && ci ? ci[0] >= -EQUIVALENCE - 1e-12 && ci[1] <= EQUIVALENCE + 1e-12 : null,
     };
   }
   return out;
@@ -432,7 +430,7 @@ const printPaired = (title, comps) => {
   for (const k of Object.keys(HITS)) {
     console.log(`  ${HIT_NAMES[k]}:`);
     console.log('  ' + pad('arm', W) + pad('set', 8) + pad('pairs', 7) + pad('b/c', 9) + pad('p', 8) + pad('net c−b', 17)
-      + pad('95% net interval (conservative)', 33) + pad('equiv ±3pp', 12) + 'finding');
+      + pad('95% net interval', 20) + pad('equiv ±3pp', 12) + 'finding');
     for (const { c, bySet, finding } of results) {
       for (const set of ['all', ...SET_KEYS]) {
         const x = bySet[set][k];
@@ -440,7 +438,7 @@ const printPaired = (title, comps) => {
         const ci = x.interval95Pp ? `[${signed(x.interval95Pp[0], 1)}, ${signed(x.interval95Pp[1], 1)}]pp` : '—';
         const eq = x.equivalent === null ? '—' : x.equivalent ? 'YES' : 'no';
         console.log('  ' + pad(set === 'all' ? c.label : '', W) + pad(set, 8) + pad(bySet[set].pairs, 7) + pad(`${x.b}/${x.c}`, 9)
-          + pad(pv(x.p), 8) + pad(net, 17) + pad(ci, 33) + pad(eq, 12) + (set === 'all' ? findingText(finding[k]) : ''));
+          + pad(pv(x.p), 8) + pad(net, 17) + pad(ci, 20) + pad(eq, 12) + (set === 'all' ? findingText(finding[k]) : ''));
       }
     }
   }
@@ -601,6 +599,8 @@ const analyse = (run, { baseline = null } = {}) => {
       out.warnings.push(`arm ${arm.key} — ${arm.router.accuracy.failed} claude-cli call(s) failed during the accuracy pass`);
     if (arm.router?.total && arm.router?.accuracy && arm.router.total.failed > arm.router.accuracy.failed)
       out.warnings.push(`arm ${arm.key} — ${arm.router.total.failed - arm.router.accuracy.failed} claude-cli call(s) failed during the latency pass`);
+    if (arm.router?.total && !arm.router?.accuracy && arm.router.total.failed > 0)
+      out.warnings.push(`arm ${arm.key} — ${arm.router.total.failed} claude-cli call(s) failed over the run (which pass is not recoverable)`);
     if (l.unjudged > 0)
       out.warnings.push(`arm ${arm.key} — ${l.unjudged}/${l.graphRanked} graph-ranked latency recalls carried no verdict (left out of its serial median)`);
     if (l.errors > 0)
@@ -628,12 +628,141 @@ const readResults = (file) => {
 };
 const loadOrDie = (json, source) => { try { return loadRun(json, source); } catch (e) { return die(e.message); } };
 
+// ---- the query order: ONE implementation, used by the live run and by recovery (which re-derives it) ----------
+/** A deterministic stride sample, so --n=20 covers every cluster rather than the first twenty rows. */
+const sampleFacts = (n) => {
+  const pool = FIXTURE.facts.filter((f) => f.questions);
+  const N = Math.min(n, pool.length);
+  const stride = pool.length / N;
+  return Array.from({ length: N }, (_, i) => pool[Math.floor(i * stride)]);
+};
+/** Every (fact, set) once, SHUFFLED by a seeded PRNG, with a fact's questions never back to back. */
+const queryOrder = (facts, seed) => {
+  const queries = facts.flatMap((f) => QUESTION_SETS.map((s) => ({ fact: f.id, set: s.key, q: f.questions[s.key] })));
+  const rand = mulberry32(seed);
+  for (let i = queries.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [queries[i], queries[j]] = [queries[j], queries[i]];
+  }
+  // Deterministic repair: pull a later, different fact forward.
+  for (let i = 1; i < queries.length; i++) {
+    if (queries[i].fact !== queries[i - 1].fact) continue;
+    const j = queries.findIndex((x, k) => k > i && x.fact !== queries[i - 1].fact);
+    if (j > 0) [queries[i], queries[j]] = [queries[j], queries[i]];
+  }
+  return { queries, adjacentSameFact: queries.filter((x, i) => i > 0 && x.fact === queries[i - 1].fact).length };
+};
+/** What an arm key means, when nothing else recorded it: the arm table, or a reranker key's own shape. */
+const armConfigFor = (key) => {
+  if (ARMS[key]) return { label: ARMS[key].label, enrichment: ARMS[key].enrichment, judgeInput: ARMS[key].judgeInput ?? null, reranker: null };
+  const m = /^(rrf?):(.+)$/.exec(key);
+  if (m) return { label: `reranker ${m[2]} · ${m[1] === 'rrf' ? 'fuse' : 'partition'}`, enrichment: true, judgeInput: null, reranker: m[2] };
+  return { label: key, enrichment: null, judgeInput: null, reranker: null };
+};
+
+// =============================================================================================================
+// RECOVERY from a row stream — for a run that died before it saved (or whose code analysed before saving).
+// Everything the rows do not carry is either RE-DERIVED and checked, or named as not recoverable.
+// =============================================================================================================
+const recoverFromRows = (file) => {
+  const notes = [`recovered from the row stream ${rel(file)} — not a saved results file`];
+  const rows = [];
+  let bad = 0;
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try { rows.push(JSON.parse(line)); } catch { bad++; }
+  }
+  if (bad) notes.push(`${bad} unparseable line(s) skipped (a run killed mid-write leaves a partial last line)`);
+  if (rows.length === 0) die(`${rel(file)} holds no rows`);
+  const runs = [...new Set(rows.map((r) => r.run ?? null))];
+  const runAt = runs[runs.length - 1];
+  if (runs.length > 1) notes.push(`rows from ${runs.length} runs in one stream — only the last (${runAt}) is used`);
+  const mine = rows.filter((r) => (r.run ?? null) === runAt);
+  const acc = mine.filter((r) => (r.pass ?? 'accuracy') === 'accuracy');
+  const lat = mine.filter((r) => r.pass === 'latency');
+  const keys = [...new Set(mine.map((r) => r.arm))];
+
+  // ARM ORDER is what maps an arm to its arm-N folder. The rows do not record it, but the SERIAL latency pass
+  // visits the arms in configuration order, so its first appearances are that order — if it reached every arm.
+  const latOrder = [...new Set(lat.map((r) => r.arm))];
+  const order = latOrder.length === keys.length ? latOrder : null;
+  if (order) notes.push('arm order inferred from the serial latency pass, which visits arms in configuration order');
+
+  // FACTS, FIXTURE, ORDER SEED — re-derived, then checked against the rows rather than assumed.
+  const factIds = [...new Set(acc.map((r) => r.fact))];
+  const byId = new Map(FIXTURE.facts.map((f) => [f.id, f]));
+  const qMismatch = mine.filter((r) => byId.get(r.fact)?.questions?.[r.set] !== r.q).length;
+  const seedMeta = fs.existsSync(SEED_META) ? JSON.parse(fs.readFileSync(SEED_META, 'utf8')) : null;
+  let fixtureHash = null;
+  if (qMismatch > 0) notes.push(`fixture hash not recoverable: ${qMismatch} row(s) ask a question the current fixture does not hold`);
+  else if (!seedMeta) notes.push('fixture hash not recoverable: no seed.json to confirm which fixture the run used');
+  else if (seedMeta.fixtureHash !== FIXTURE_HASH) notes.push('fixture hash not recoverable: the seed was made from a different fixture than the current one');
+  else if (runAt && Date.parse(seedMeta.createdAt) > Date.parse(runAt)) notes.push('fixture hash not recoverable: the seed was replaced after this run started');
+  else fixtureHash = FIXTURE_HASH;
+  const sample = sampleFacts(factIds.length);
+  const sameFacts = sample.length === factIds.length && sample.every((f) => factIds.includes(f.id));
+  let orderSeed = null;
+  let adjacentSameFact = null;
+  if (!sameFacts) notes.push(`fact count ${factIds.length} does not reproduce the stride sample — order seed not recoverable`);
+  else {
+    const { queries, adjacentSameFact: adj } = queryOrder(sample, ORDER_SEED);
+    const fits = acc.every((r) => queries[r.seq]?.fact === r.fact && queries[r.seq]?.set === r.set);
+    if (fits) { orderSeed = ORDER_SEED; adjacentSameFact = adj; notes.push(`order seed ${ORDER_SEED} confirmed by regenerating the query order`); }
+    else notes.push(`the query order does not match seed ${ORDER_SEED} — order seed not recoverable, so this run cannot be paired across runs`);
+  }
+  const queriesPerArm = factIds.length * QUESTION_SETS.length;
+  for (const k of keys) {
+    const n = acc.filter((r) => r.arm === k).length;
+    if (n < queriesPerArm) notes.push(`arm ${k} has ${n}/${queriesPerArm} accuracy rows — the run did not finish it`);
+  }
+
+  // ROUTER COUNTS — recounted from arm-N folders ONLY when they provably belong to this run: every run wipes and
+  // recreates them, so they must have been created after this run started and before its first row was written.
+  const dir = path.dirname(file);
+  const rowsBorn = fs.statSync(file).birthtimeMs;
+  const router = {};
+  if (!order) notes.push('arm order not recoverable (the latency pass did not reach every arm), so arm-N folders cannot be mapped — router counts not recovered');
+  else {
+    const folders = order.map((k, i) => [k, path.join(dir, `arm-${i}`)]);
+    const missing = folders.filter(([, d]) => !fs.existsSync(d));
+    const foreign = folders.filter(([, d]) => fs.existsSync(d)
+      && (fs.statSync(d).birthtimeMs < Date.parse(runAt) - 5000 || fs.statSync(d).birthtimeMs > rowsBorn + 5000));
+    if (missing.length) notes.push(`no ${missing.map(([, d]) => path.basename(d)).join(', ')} beside the row stream — router counts not recovered`);
+    else if (foreign.length) notes.push(`${foreign.map(([, d]) => path.basename(d)).join(', ')} were not created by this run — router counts not recovered`);
+    else {
+      for (const [k, d] of folders) router[k] = { total: routerOutcomes(d) };
+      notes.push('claude-cli router counts recounted from the arm folders — only the TOTAL; the startup/accuracy/latency split is not recoverable');
+    }
+  }
+  notes.push('not recoverable from rows: the judge each arm ran (source · model · on), startup warnings, the CLI version');
+
+  const byArm = (xs) => Object.fromEntries(keys.map((k) => [k, xs.filter((r) => r.arm === k).sort((a, b) => a.seq - b.seq)]));
+  const json = {
+    format: 'recovered',
+    fixtureHash, facts: factIds.length, limit: LIMIT, at: runAt,
+    seedFolder: seedMeta ? { fixtureHash: seedMeta.fixtureHash, createdAt: seedMeta.createdAt, claudeVersion: seedMeta.claudeVersion ?? null } : null,
+    order: { seed: orderSeed, queries: queriesPerArm, adjacentSameFact },
+    concurrency: keys.length,
+    latencySample: lat.length ? Math.max(...keys.map((k) => lat.filter((r) => r.arm === k).length)) : null,
+    arms: (order ?? keys).map((k) => ({ key: k, ...armConfigFor(k), router: router[k] ?? null })),
+    rows: byArm(acc),
+    ...(lat.length ? { latencyRows: byArm(lat) } : {}),
+  };
+  return { json, notes };
+};
+
 // =============================================================================================================
 // --report-only: re-analyse a finished run. No server, no model, nothing in the work dir touched.
 // =============================================================================================================
 const reportOnly = () => {
   const file = path.resolve(REPORT_ONLY);
-  const run = loadOrDie(readResults(file), rel(file));
+  if (!fs.existsSync(file)) die(`no file at ${file}`);
+  let run;
+  if (file.endsWith('.jsonl')) {
+    const { json, notes } = recoverFromRows(file);
+    run = loadOrDie(json, rel(file));
+    run.notes = [...notes, ...run.notes];
+  } else run = loadOrDie(readResults(file), rel(file));
   console.log(`re-analysing ${rel(file)} (run at ${run.meta.at ?? 'unrecorded'}, format ${run.meta.format ?? 'pre-3'}) with app ${appHead} v${appVersion}`);
   let baseline = null;
   if (BASELINE) {
@@ -643,7 +772,7 @@ const reportOnly = () => {
   }
   const analysis = analyse(run, { baseline });
   const { armStats, ...rest } = analysis;
-  const out = path.join(path.dirname(file), `${path.basename(file, '.json')}.reanalysed-${RUN_STAMP}.json`);
+  const out = path.join(path.dirname(file), `${path.basename(file).replace(/\.jsonl?$/, '')}.reanalysed-${RUN_STAMP}.json`);
   fs.writeFileSync(out, JSON.stringify({
     reanalysedAt: RUN_AT, reanalysedFrom: rel(file), reanalysedBy: { appHead, appVersion },
     ...run.meta, fixture: 'devtools/fixtures/recall-bilingual.json',
@@ -657,11 +786,8 @@ const reportOnly = () => {
 // The live run.
 // =============================================================================================================
 const live = async () => {
-  // A deterministic stride sample, so --n=20 covers every cluster rather than the first twenty rows.
-  const pool = FIXTURE.facts.filter((f) => f.questions);
-  const N = Math.min(int('n', pool.length, 1), pool.length);
-  const stride = pool.length / N;
-  const facts = Array.from({ length: N }, (_, i) => pool[Math.floor(i * stride)]);
+  const facts = sampleFacts(int('n', FIXTURE.facts.length, 1));
+  const N = facts.length;
 
   const arms = list('arms', 'formula,formula2,topic,content,content2,contentonly,fuse').map((k) => {
     if (!ARMS[k]) die(`unknown arm '${k}' — one of ${Object.keys(ARMS).join(', ')}`);
@@ -857,19 +983,7 @@ const live = async () => {
     }
 
     // ---- 4. identical questions, identical SHUFFLED order, every arm in parallel ------------------------------
-    const queries = facts.flatMap((f) => QUESTION_SETS.map((s) => ({ fact: f.id, set: s.key, q: f.questions[s.key] })));
-    const rand = mulberry32(ORDER_SEED);
-    for (let i = queries.length - 1; i > 0; i--) {
-      const j = Math.floor(rand() * (i + 1));
-      [queries[i], queries[j]] = [queries[j], queries[i]];
-    }
-    // Deterministic repair: a fact's questions are never adjacent (pull a later, different fact forward).
-    for (let i = 1; i < queries.length; i++) {
-      if (queries[i].fact !== queries[i - 1].fact) continue;
-      const j = queries.findIndex((x, k) => k > i && x.fact !== queries[i - 1].fact);
-      if (j > 0) [queries[i], queries[j]] = [queries[j], queries[i]];
-    }
-    const adjacentSameFact = queries.filter((x, i) => i > 0 && x.fact === queries[i - 1].fact).length;
+    const { queries, adjacentSameFact } = queryOrder(facts, ORDER_SEED);
 
     const recall = async (c, x) => {
       const t0 = Date.now();
@@ -913,7 +1027,9 @@ const live = async () => {
       arm.routerTotal = routerOutcomes(arm.dir);
     }
 
-    // ---- 6. save the run, then analyse EXACTLY what was saved — the path --report-only takes later ----------
+    // ---- 6. SAVE the run, THEN analyse exactly what was saved — the path --report-only takes later -----------
+    // Saving first is what makes an analysis bug cheap: the rows of an hour-long run are on disk before a single
+    // table is computed, so a throw below costs a re-analysis, not a re-run.
     const saved = {
       format: 3,
       fixture: 'devtools/fixtures/recall-bilingual.json', fixtureHash: FIXTURE_HASH, facts: N, limit: LIMIT, at: RUN_AT,
@@ -934,12 +1050,20 @@ const live = async () => {
       rows: Object.fromEntries(arms.map((a) => [a.key, a.rows])),
       latencyRows: Object.fromEntries(arms.map((a) => [a.key, a.latencyRows])),
     };
-    const run = loadRun(saved, 'this run');
-    const analysis = analyse(run, { baseline });
-    const { armStats, ...rest } = analysis;
-    const { rows, latencyRows, ...head } = saved;
     const out = path.join(WORK, `results-${RUN_STAMP}.json`);
-    fs.writeFileSync(out, JSON.stringify({ ...head, arms: armsWithStats(run.arms, analysis), ...rest, rows, latencyRows }, null, 2));
+    fs.writeFileSync(out, JSON.stringify(saved, null, 2));
+    stopAll(); // nothing below needs a server, and an analysis failure should not keep seven of them alive
+    try {
+      const run = loadRun(saved, 'this run');
+      const analysis = analyse(run, { baseline });
+      const { armStats, ...rest } = analysis;
+      const { rows, latencyRows, ...head } = saved;
+      fs.writeFileSync(out, JSON.stringify({ ...head, arms: armsWithStats(run.arms, analysis), ...rest, rows, latencyRows }, null, 2));
+    } catch (e) {
+      console.error(`\njudge-bench: the analysis failed — the run itself is SAVED (${rel(out)}).\n${e?.stack ?? e}`
+        + `\nFix the analysis, then re-analyse without re-running:\n  node devtools/dev.mjs judge-bench --report-only=${rel(out)}`);
+      process.exitCode = 1;
+    }
     console.log(`\nrow stream: ${ROWS}`);
     console.log(`raw rows: ${out}`);
   } finally {
