@@ -285,16 +285,18 @@ public static class GatherlightApp
                 // model judge which recalled candidates actually ANSWERED the query — on Lyntai's
                 // measured corpus the model-free ranking IS the miss rate (every missed answer was a
                 // candidate ranked below the cut), and a haiku judge roughly halves it. A verdict
-                // does not FILTER and does not re-sort (VerificationFilters stays false): it sets
-                // `answered` and narrows which nodes get REINFORCED. That narrowing DOES reach the
-                // ordering — endorsing a fact the engine ranked third brings it to the top of the same
-                // page, measured against a no-verdict baseline. This comment first said a verdict "only
-                // ever reorders"; the correction over-swung and said it never touches the ranking at all.
-                // Neither was right. Separately, on this household's 16 facts recall came out
-                // byte-identical with the judge on and off (MRR 0.646 both ways) at 78 ms against
-                // 8,936 — it endorsed what already ranked top, so nothing moved. It CAN move a result;
-                // here it did not; Model stays null so the
-                // "memory" consumer routing above decides, live-overridable.
+                // does not FILTER (VerificationFilters stays false) — it PROMOTES: under Lyntai's default
+                // VerdictCombination.Partition every endorsed candidate goes to the front, in the engine's
+                // own order, before the caller's limit is applied (GraphMemoryEngine.ApplyVerdict), and it
+                // also narrows which nodes get REINFORCED. That is why endorsing a fact the engine ranked
+                // third brings it to the top of the same page, and why a reranker endorsing a full page
+                // decides which facts make it (docs/judge-bench.md, Run 2). This comment first said a
+                // verdict "only ever reorders"; the correction over-swung and said it never touches the
+                // ranking at all, and then credited the reordering to reinforcement. Separately, on this
+                // household's 16 facts recall came out byte-identical with the judge on and off (MRR 0.646
+                // both ways) at 78 ms against 8,936 — the judge then saw only topics, and it endorsed what
+                // already ranked top, so nothing moved. It CAN move a result; there it did not. Model stays
+                // null so the "memory" consumer routing above decides, live-overridable.
                 ;
                 // Both are OPT-OUTABLE now, and until this they were not: adopted wholesale with Lyntai
                 // 3.0, they have spent a haiku call on every remember_fact and every recall since —

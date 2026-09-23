@@ -26,6 +26,15 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// was built with. The policies' own <c>Model</c> stays null, so nothing is pinned at registration.</para>
 ///
 /// <para>Registered BEFORE <c>AddLiveModelRouting()</c>, whose <c>TryAddSingleton</c> then stands down.</para>
+///
+/// <para><b>A WORKAROUND FOR A LYNTAI GAP, and the Lyntai half is not filed yet.</b> The live override is keyed
+/// by CONSUMER alone (<see cref="IModelRoutingStore.GetModelOverrideAsync"/> takes nothing else), so the library
+/// cannot know which client or provider a model name was written for. What it would need: a live override
+/// scoped to the client (or provider) it names, written with that scope and consulted only for it. When a
+/// release has that, delete this class and its registration in <c>GatherlightApp</c>, have the binding endpoint
+/// write the scoped key, and keep <c>e2e-p52</c> case 4 green. Until the request is in Lyntai's
+/// <c>TASKS.md</c>, a release could close the gap silently and this would keep running beside it
+/// (dev-conventions: a workaround is recorded on both sides).</para>
 /// </summary>
 public sealed class JudgeScopedModelRoutingStore : IModelRoutingStore
 {

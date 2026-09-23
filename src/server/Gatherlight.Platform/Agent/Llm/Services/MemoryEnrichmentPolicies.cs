@@ -121,6 +121,14 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
 /// leave <c>ContentChars</c> at 0 — with it &gt; 0, upstream reads <c>Content</c> itself and ignores this
 /// class's rewritten <c>Headline</c>, which would make this class dead code running for nothing.</para>
 ///
+/// <para><b>MEASURED, and the first branch won.</b> <c>docs/judge-bench.md</c> Run 1 (2026-09-23): content
+/// alone is EQUIVALENT to <c>both</c> on top-1 and on found@8 (2/0 pairs, p = 0.500, 95% [−2.2, +0.6] pp,
+/// inside ±3 pp), with ~24% less candidate text. The topic does not earn its tokens. So when the app takes the
+/// Lyntai release carrying Part 276: set <c>ContentChars = MaxChars</c> in <c>JudgeWiring.Llm</c>, and delete
+/// this class, the <c>GATHERLIGHT_JUDGE_INPUT</c> knob and the judge-bench arms that set it (<c>topic</c>,
+/// <c>contentonly</c>). Lyntai's side of the note is Part 276's own outcome, which names this decorator as the
+/// thing to remove (dev-conventions: a workaround is recorded on both sides).</para>
+///
 /// <para><b>Cost.</b> <c>FactIndex.RankAsync</c> asks the engine for <c>min(3×limit, 100)</c> candidates when
 /// no kind is given, but a flat 100 whenever a kind IS given (a kind narrows AFTER the ranking, so a thin
 /// kind needs a far wider one to fill its own page). Lyntai's <c>VerificationDepth</c> then shows the judge up

@@ -46,7 +46,7 @@ const RESTART_PORT = 5413;
 const argsLog = path.join(dataDir, 'stub-args.jsonl');
 const JUDGE_MODEL = 'zzroute-chat';
 // "embed" in the name is what classifies a household-supplied GGUF as an embedder
-// (ResourceProvisioner.IsEmbeddingGguf) — the same rule the real router's presets follow.
+// (ResourceProvisioner.GgufKind) — the same rule the real router's presets follow.
 const EMBED_MODEL = 'zzroute-embed';
 // "rerank" in the name is what classifies a household-supplied GGUF as a reranker (the same rule, checked
 // before "embed").

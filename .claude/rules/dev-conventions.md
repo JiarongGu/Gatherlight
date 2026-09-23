@@ -394,15 +394,27 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
   | | does | evidence |
   |---|---|---|
-  | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost |
-  | **判断** | subject handles on every write; judges which candidates answered | **+2 facts recovered in each of cross-language, third-language and code-switched probes; 0 same-language.** Costs **9–17 s per recall** (CLI spawn; the 公式 floor is 68–90 ms) |
+  | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost. On the 240-question bilingual fixture (`docs/judge-bench.md`): top-1 79/240, found@8 125/240, ~0.23 s per recall |
+  | **判断 · Claude CLI** | subject handles on every write; judges which candidates answered, and promotes those to the front | **top-1 79 → 132/240 (+22.1pp, p < 0.001, 95% [+16.6, +27.2]pp), each of the four sets significant on its own; found@8 125 → 133, not a finding (p = 0.096)** — `docs/judge-bench.md` Run 1, 2026-09-23, the judge reading each fact's CONTENT. Costs **~9.5 s per recall** there (serial median; 8.7–11.7 s across Run 1's judge arms; **9–17 s** measured earlier on the household's own facts) — a CLI spawn per call. Before the content fix, on the household's own facts: +2 facts in each multilingual probe, 0 same-language |
+  | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 125 → 208 (LAMAR) / 203 (BGE) of 240 (+34.6 / +32.5pp, both p < 0.001) — cross-language 6 → 49 / 48 of 60; top-1 79 → 86 / 90 (+2.9pp p = 0.039 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 2, 2026-09-23. ~0.47–0.49 s per recall, warm, on one GPU, ≤60 candidates. LAMAR vs BGE: no finding either way — found@8 leans LAMAR 5–0 (p = 0.063, interval excluding zero); BGE is `RecommendedReranker` by the smaller-file tie-break registered before the run, and by nothing else. Lyntai, on ITS English LoCoMo corpus: +9.0 of the 9.5 evidence-hit points a perfect judge offers (LAMAR-600m Q5) |
   | **语义 · Claude CLI** | stores other wordings of a fact, **≥1 in another language** | capability proven directly: an English question retrieves a Chinese-only fact. Aggregate effect NOT measured — see the rule below on why this tool cannot |
 
-  With `VerificationFilters` off (how we register it) a verdict does not filter or re-sort. It sets
-  `answered` and narrows which nodes are REINFORCED — and that narrowing reaches the ordering anyway:
-  endorsing a fact the engine ranked third brings it to the top of the same page, against a measured
-  no-verdict baseline. Its benefit is therefore real but indirect, which is why same-language probes show
-  0.000 and multilingual ones show a flat −0.125 miss rate.
+  **The two judges are complements, not rungs of one ladder.** The reranker changes WHAT REACHES THE PAGE; the
+  Claude judge changes WHAT COMES FIRST. A reranker endorses a full page of its eight best every time, so the
+  answer lands on the page far more often, in whatever position the engine gives it; the Claude judge endorses
+  only what it judges to answer, so when it finds the answer that fact goes first (its top-1 and found@8 nearly
+  coincide, 132 and 133), and when it does not the page stays the engine's. Against Run 1's `content` arm on the
+  same seed and questions, both rerankers are significantly worse on top-1 (−19.2 / −17.5pp) and significantly
+  better on found@8 (+31.3 / +29.2pp) — at about 1/20 of the latency and no account quota per recall.
+
+  With `VerificationFilters` off (how we register it) a verdict REMOVES nothing — but it is not inert: under
+  Lyntai's default `VerdictCombination`, Partition, every endorsed candidate is PROMOTED ahead of the rest, in
+  the engine's own order, before the caller's limit is applied, and is reinforced. That one mechanism is behind
+  both judges' numbers. Until 2026-09-23 this paragraph said a verdict reached the ordering only THROUGH
+  reinforcement — "real but indirect", 0.000 on same-language probes — which described the topic-only judge on
+  the household's 16 facts; the judge that reads content moved same-language top-1 by +25.0pp on the fixture.
+  `Fuse` lost to partition for both judges (Claude top-1 −28.8pp; reranker found@8 −29.6 / −26.7pp), so
+  partition stays and Fuse remains a measurement knob.
 
 - **THREE RULES FOR MEASURING ANY OF THIS.** They are here because ignoring them produced three sessions
   of wrong conclusions, and each is cheap to apply.
@@ -479,6 +491,28 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   instruction was "delete this", not "beware of conflicts". **And the rule paid out**: Lyntai 3.1 closed both
   Part 94 and Part 93 (the candidate-list widening, below), and the 3.2 upgrade deleted both copies without
   an investigation, because each note already said what to do.
+  **Two are open today, and each says what ends it.**
+  **(1) `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170.** Lyntai's LLM judge
+  rendered each candidate as its headline alone, and our headline is the fact's TOPIC, so the judge decided
+  "did this answer?" from topics; the decorator shows it the content. Upstream closed the gap with
+  `LlmVerificationOptions.ContentChars`, shipping in the release after 3.2.0 — content ALONE, not "topic —
+  content" — and Part 276's own outcome names our decorator as the thing to remove. Whether the topic was worth
+  keeping was MEASURED rather than argued: `docs/judge-bench.md` Run 1 found content alone EQUIVALENT to topic —
+  content on top-1 and found@8 (2/0 pairs, p = 0.500, 95% [−2.2, +0.6]pp, inside ±3pp) with ~24% less
+  candidate text. So on that bump: set `ContentChars = JudgeSeesContentPolicy.MaxChars` where `JudgeWiring.Llm`
+  builds the verifier, and delete the class, its `GATHERLIGHT_JUDGE_INPUT` knob and the bench arms that set it
+  (`topic`, `contentonly`). Not both: with `ContentChars` above 0 upstream reads the content itself and ignores
+  the decorator's rewritten headline, so keeping it would be dead code running on every recall.
+  **(2) `JudgeScopedModelRoutingStore` ↔ NO Lyntai task yet, and that missing half is this rule's point.**
+  Lyntai's live override (`IModelRoutingStore`, which serves `llm.model.memory`) is keyed by CONSUMER alone, so
+  it cannot know which client or provider a model name was written for, and a key written for one binding is
+  read by another — after a fallback, or between a rebind and its restart (previous bullet). The app withholds
+  the key while the saved binding would annotate through a different client than the running one. What Lyntai
+  would need: a live override scoped to the client (or provider) it names — written with that scope and
+  consulted only for it. When it lands: delete `JudgeScopedModelRoutingStore` and its registration ahead of the
+  live routing, have the binding endpoint write the scoped key, and keep `e2e-p52` case 4 green — it fails with
+  either half of today's fix removed. Until the Lyntai task is filed, a release that closes the gap would do so
+  silently, and this store would keep running beside it.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
@@ -687,10 +721,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   from the models it probed. A field reporting that work happened is not evidence the work happened. It now
   counts the requests that arrived at the fake server, and fails with `requests:[] reported:[both]` — which
   is the shape of every self-reported metric in this codebase, one level down.
-  **(3) `embeddings = true` RESTRICTS a child to embeddings**, so it goes only on embedders, and the answer
-  has exactly ONE writer (`ResourceProvisioner.IsEmbeddingGguf`) — exact for what we provision, a *stated*
-  name heuristic for a GGUF the household dropped in. It briefly had two copies of a substring test in two
-  files, which is the drift this file keeps paying for.
+  **(3) `embeddings = true` RESTRICTS a child to embeddings** — and `reranking = true` restricts one to
+  `/v1/rerank` — so each goes only on its own kind, and what a GGUF IS has exactly ONE writer,
+  `ResourceProvisioner.GgufKind`: chat, embedding or reranking (`GgufCapability`). Exact for what we provision
+  (the catalogue row's `Capability`), a *stated* name heuristic for a GGUF the household dropped in — and the
+  heuristic checks "rerank" BEFORE "embed", because a reranker's name is the more specific of the two. It
+  replaced a yes/no embedder test the day a third kind arrived: a boolean has no answer for "reranker", so every
+  caller would have grown its own. It briefly had two copies of a substring test in two files, which is the
+  drift this file keeps paying for.
   Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
   (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
   already there" is not on the table. And `LlamaServerRuntime` deliberately does **not** search PATH: a
@@ -757,6 +795,63 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   model. An
   EMBEDDING model is refused as a judge by name — installed, well-formed, and unable to answer a judgement,
   which fail-open would turn into recall that quietly never improves.
+- **A reranker verifies; it never annotates.** A cross-encoder scores (query, document) pairs and never
+  generates, so it can do the half of 判断 that checks a recall and none of the half that tags a write — the
+  subject handles need a model that writes. A reranker binding is therefore TWO backends, and `JudgeWiring`
+  exists to say so: each judge source states its whole wiring (annotation client, annotation model, verifier)
+  instead of `GatherlightApp` branching on "is this a reranker", the if/else chain the source catalog replaces.
+  For a reranker, `LlamaCppSource` annotates on the default client (the Claude CLI) with
+  `MemorySources.DefaultJudgeModel`, and verifies through Lyntai's `ScoringVerificationPolicy` over an HTTP
+  provider of its own (`llamacpp-rerank`, producing scores). `Wiring` and `Register` branch on the same
+  `IsReranker` over the same context, and must: `ScoringVerificationPolicy` THROWS at construction when its
+  provider id names no registered backend. `e2e-p52` case 6 boots a server bound to a reranker and proves both
+  halves by ROUTING — a fact write makes no chat call to llama.cpp and is tagged by the CLI on `haiku`, and a
+  recall sends the query AND each candidate's CONTENT to `/v1/rerank`.
+  **`llm.model.memory` holds the ANNOTATION model, never the reranker's id.** The binding writes
+  `AnnotationModel(model)`, which for a reranker is the CLI's. Writing the id would hand it to Claude on every
+  fact write: fail-open, zero tagging, no error. `p52` case 5 calls it THE TRAP and reads the key from the
+  database, because no API response carries it. The scoped routing store (previous bullet) compares by CLIENT
+  for the same reason: a reranker and the CLI arm share the default client, so a reranker's key — the CLI's
+  model — stays right even after its runtime goes.
+  **`ChecksOnly` is STATED beside `AnnotationModel`, never inferred.** The bind toast said 「标注与核对」 for
+  every binding, which a reranker made false. The first fix DERIVED "checks only" as "the annotation model
+  differs from the bound one" — which reads any source whose `AnnotationModel` merely normalises a name (an
+  alias, a case fold) as checks-only, and the toast would then tell that household its tagging had moved to
+  Claude. It defaults to false, and `LlamaCppSource` overrides it next to `AnnotationModel`, both from
+  `IsReranker`, because the two answer one question. What the toast, the cost line and the reranker notes say
+  about the tagging half is ONE clause, `MemorySources.CliTaggingCost` — including that it spends the account,
+  which all three once left out beside a checking half saying 不消耗账号额度, so the only quota sentence a
+  household read about this binding was the reassuring one. `p52` case 5 pins it in all three.
+  **A reranker is SCREENED before it may bind**, because "it returned scores" is not "it ranks": Lyntai's own
+  rerank screen found a converted GGUF that loads, scores and ranks BACKWARDS, and a fail-open verifier turns
+  that into recall that quietly gets worse. The pair (`ScreenQuery`, `ScreenDocuments`) is built so that every
+  cheap way to pass fails: the answer is SECOND in input order, so a model echoing input order fails, and the
+  distractor shares MORE of the query than the answer does (distinct characters 1.000 against 0.667, bigrams
+  7 of 8 against 5), so ranking by overlap puts the distractor first. **The first pair was passable by
+  overlap** — its answer won on overlap (0.750 against 0.125), so a lexical model passed it — which is what a
+  screen that "works" looks like while checking nothing. It asserts ORDERING only, never a margin (a
+  household-dropped reranker may score on another scale), and every document must be scored exactly once,
+  because llama.cpp's `relevance_score` is a raw logit that can be negative and an unfilled zero could outrank
+  it. Measured on both real rerankers (`docs/self-managed-llm-runtime.md` §2026-09-23: the answer ahead by
+  4.131 and 3.400, the reversed scores failing); `p52` case 5 refuses an overlap model and a backwards one,
+  quotes a refusing server's own words, and calls a short reply unusable rather than a failed self-check.
+  **`EndorseCount` is the recall page** — `RecallFactsTool.DefaultRecallLimit`, 8, read from the tool rather
+  than restated. It is a constant because it cannot be anything else: the verifier's request carries no limit
+  (Lyntai never tells a verifier what the caller asked for), and endorsing MORE than a page replaces the
+  ranking instead of refining it — the partition's documented cost. Held by construction rather than by a
+  suite; its consequence is measured in `docs/judge-bench.md` Run 2, which also says no other limit was.
+  **Preset and warm are launch CONTRACT, like `--n-gpu-layers`.** `reranking = true` plus a 4096
+  `ctx-size`/`batch-size`/`ubatch-size` go on a reranker's section only — a cross-encoder needs the whole pair
+  in ONE physical batch — and `p51` pins `reranking = true`, both batch sizes, and that neither `embeddings`
+  nor `reranking` crosses kinds. A reranker warms through `/v1/rerank`, never the chat route: a chat warm sent
+  to a reranking child gets a **500** even though the router loads the model, so it warms AND reports failure
+  (measured, `docs/self-managed-llm-runtime.md`); `p51` counts the warm request at a fake router and asserts
+  its path.
+  **Partition leaves FIRST PLACE to the engine, which is why a reranker's gain is found@8.** Its verdict is
+  one bit per candidate over a full page, so it decides WHICH eight facts make the page and the engine decides
+  their order: found@8 +34.6 / +32.5pp, top-1 +2.9 / +4.6pp (`docs/judge-bench.md` Run 2). The scores it
+  computed are not used for ordering; whether they should be is a design question that run raises and does
+  not answer.
 - **A REBUILD SERVES BOTH 语义 ARMS, and guarding it on `_semantic` served only one.** `_semantic` is
   non-null exactly when an EMBEDDER was registered at startup; the Claude CLI rephrasing arm registers
   nothing by design, so for a household bound to it `ReindexSemanticAsync` returned 0 and did nothing —
