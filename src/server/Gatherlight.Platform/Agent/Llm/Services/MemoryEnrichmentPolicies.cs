@@ -114,9 +114,9 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
 /// which is the very case D170 cites as the reason for adding <c>ContentChars</c> at all ("an application
 /// that authors headlines hands the judge a label"). So <c>both</c> adds a label rather than a copy — though
 /// household facts often restate their own topic in the content, so it may still pay for it twice. Whether
-/// the topic earns its tokens is what judge-bench measures (<c>both</c> vs <c>content</c>), and that is the
-/// MEASURED decision this class exists to let happen — <c>dev.mjs judge-bench</c> compares this class's
-/// <c>both</c> and <c>content</c> modes: if <c>content</c> scores as well, set <c>ContentChars = MaxChars</c>
+/// the topic earns its tokens is the MEASURED decision this class exists to let happen —
+/// <c>dev.mjs judge-bench</c> compares this class's <c>both</c> and <c>content</c> modes: if <c>content</c>
+/// scores as well, set <c>ContentChars = MaxChars</c>
 /// where the LLM verifier is built and delete this class; if the topic earns its tokens, keep this class and
 /// leave <c>ContentChars</c> at 0 — with it &gt; 0, upstream reads <c>Content</c> itself and ignores this
 /// class's rewritten <c>Headline</c>, which would make this class dead code running for nothing.</para>
@@ -126,7 +126,7 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
 /// kind needs a far wider one to fill its own page). Lyntai's <c>VerificationDepth</c> then shows the judge up
 /// to 4× THAT many — so at the default limit of 8, the judge sees up to 96 candidates on a kind-less recall
 /// and up to 400 on one naming a kind. The prompt grows with that depth × line length; the bench's latency
-/// column is where the trade-off is priced, not this class.</para>
+/// and estimated judge-input columns are where the trade-off is priced, not this class.</para>
 ///
 /// <para>Topics stay the STORED headline, so <c>expand_fact</c>'s neighbour list is unchanged; only what the judge
 /// reads changes.</para></summary>

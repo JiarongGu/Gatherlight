@@ -107,6 +107,19 @@ public static class GatherlightApp
         var embeddingModel = memoryConfig.EmbeddingModel;
         var semanticOn = semanticSource is not null && !string.IsNullOrWhiteSpace(embeddingModel);
 
+        // MEASUREMENT KNOBS — read by `dev.mjs judge-bench` (docs/judge-bench.md), never settings. Each one
+        // that is active says so on the console, because the bench refuses to report an arm whose knob did
+        // not take: two arms that silently ran the same configuration would read as "no difference".
+        // Announced whenever SET, with the raw value beside what it resolved to: a typo ("contents") silently
+        // resolving to the default is exactly the "two arms ran the same configuration" failure.
+        var combinationRaw = Environment.GetEnvironmentVariable("GATHERLIGHT_VERDICT_COMBINATION");
+        var fuseVerdicts = string.Equals(combinationRaw?.Trim(), "fuse", StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(combinationRaw))
+            Console.WriteLine($"[measurement] verdict combination = {(fuseVerdicts ? "Fuse" : "Partition")} (GATHERLIGHT_VERDICT_COMBINATION={combinationRaw})");
+        var judgeInputRaw = Environment.GetEnvironmentVariable("GATHERLIGHT_JUDGE_INPUT");
+        if (!string.IsNullOrWhiteSpace(judgeInputRaw))
+            Console.WriteLine($"[measurement] judge input = {Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode} (GATHERLIGHT_JUDGE_INPUT={judgeInputRaw})");
+
         builder.Services
             .AddSingleton(options)
             // WHAT WE ACTUALLY WIRED, captured here because this is the only place that knows. The console
@@ -227,7 +240,10 @@ public static class GatherlightApp
                 // the graph's `facts/graph#<id>`. Resolution is an exact ref match, so those hits are
                 // dropped on the way out: a second embedding per fact, bought and discarded. Measured
                 // 2026-08-21 — 12 vectors for 6 facts, and paraphrase queries answering nothing.
-                .AddMemoryEngine("facts", e => e.UseGraph());
+                .AddMemoryEngine("facts", e => e.UseGraph(fuseVerdicts
+                    ? new Lyntai.Memory.GraphMemoryOptions
+                        { VerdictCombination = Lyntai.Memory.Verification.MemoryVerdictCombination.Fuse }
+                    : null));
 
                 // Recall quality is THREE independent switches, not one setting, because they cost
                 // different things and improve different things:
