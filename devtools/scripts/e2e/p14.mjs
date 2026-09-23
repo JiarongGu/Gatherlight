@@ -32,10 +32,20 @@ try {
   await fetch(`${baseA}/api/manage/cortex/model/extract`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: 'opus' }) });
   // The judge's model is BOUND with its backend (settings.json), which a memory bundle does not carry — so
   // the key must not travel alone. Binding the CLI judge writes llm.model.memory = sonnet on A.
-  await fetch(`${baseA}/api/manage/memory/layer/judge`, {
+  const judgeBind = await fetch(`${baseA}/api/manage/memory/layer/judge`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ source: 'claude-cli', model: 'sonnet' }),
   });
+  ok('(fixture) the judge bind on A succeeds', judgeBind.status === 200, `${judgeBind.status} ${await judgeBind.text()}`);
+  // Positive control for the assertion below: read A's OWN app_config, not the export, so a bind that
+  // silently no-opped (400/409 swallowed) can't make "the bundle does not carry it" pass vacuously.
+  const memKeyOnA = (() => {
+    const d = new DatabaseSync(path.join(dataA, 'state', 'gatherlight.db'), { readOnly: true });
+    try { return d.prepare("SELECT value FROM app_config WHERE key = 'llm.model.memory'").get()?.value; }
+    finally { d.close(); }
+  })();
+  ok('(fixture) A\'s live llm.model.memory is sonnet before export', memKeyOnA === 'sonnet',
+    `llm.model.memory=${JSON.stringify(memKeyOnA)}`);
 
   const exportRes = await fetch(`${baseA}/api/memory/export`);
   ok('GET /api/memory/export 200 + attachment', exportRes.status === 200 && (exportRes.headers.get('content-disposition') ?? '').includes('.json'),
@@ -88,11 +98,17 @@ try {
   const imp = await (await fetch(`${baseB}/api/memory/import`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(foreign),
   })).json();
+  // Proves the loop actually RAN over the foreign bundle's cortex keys and skipped exactly one — the
+  // count alone (imported.cortex >= 1, as the earlier re-import assertion checks) can't distinguish
+  // "skipped the foreign key" from "silently dropped everything".
+  const expectedCortexCount = Object.keys(foreign.cortex).length - 1; // every key but the foreign one
+  ok('…and the import count shows the loop skipped exactly the foreign key, nothing else',
+    imp.imported?.cortex === expectedCortexCount, `cortex=${imp.imported?.cortex} expected=${expectedCortexCount}`);
   const db = new DatabaseSync(path.join(dataB, 'state', 'gatherlight.db'), { readOnly: true });
   const memKey = db.prepare("SELECT value FROM app_config WHERE key = 'llm.model.memory'").get()?.value;
   db.close();
   ok('…and an older bundle that DOES carry it cannot write it (import skips a key cortex cannot set)',
-    imp.ok === true && memKey !== 'zzforeign-chat.gguf', `llm.model.memory=${JSON.stringify(memKey)}`);
+    imp.ok === true && memKey === undefined, `llm.model.memory=${JSON.stringify(memKey)}`);
 } catch (err) {
   fail('e2e-p14 fatal: ' + err.message);
   console.error(((srv?.log() ?? '') + (srv2?.log() ?? '')).slice(-3000));

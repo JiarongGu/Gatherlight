@@ -849,10 +849,19 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   EMBEDDING model is refused as a judge by name — installed, well-formed, and unable to answer a judgement,
   which fail-open would turn into recall that quietly never improves.
   **A memory bundle was a third writer**: it exported and imported every `llm.model.*` key, straight into
-  `app_config`, including `memory`, whose meaning depends on a `settings.json` binding the bundle does not
-  carry. It now carries a model key only if cortex can set it, exported by cortex's own list and imported
-  through `SetModel`. That is one rule for "the household's tuning", and it refuses `memory` for the same
-  reason the cortex row is gone. Proof: `e2e-p14`.
+  `app_config`, including `memory`, whose meaning depends on a `settings.json` binding — one that
+  `/api/memory/export` and the startup seed do not carry at all, so the key alone named a model for a
+  backend the target install never bound. It now carries a model key only if cortex can set it, exported by
+  cortex's own list and imported through `SetModel`. That is one rule for "the household's tuning", and it
+  refuses `memory` for the same reason the cortex row is gone. Proof: `e2e-p14`.
+  **The whole-install backup carries BOTH files, and the bundle's own filter isn't enough there.**
+  `app_config` is only MERGED (the memory bundle inside the zip is the same upsert as above) while
+  `settings.json` is copied wholesale — so a target's own `llm.model.memory`, bound before the restore,
+  survives untouched beside a freshly restored binding it can now disagree with, and the scoped routing
+  store only withholds it across a CLIENT mismatch (a saved binding sharing the running client reads it
+  straight through). `BackupService.ImportAsync` reconciles by deleting the key right after it copies
+  `settings.json` in, so the restored binding is the only answer left, before the restart as well as after
+  it. Proof: `e2e-p47`.
 - **A reranker verifies; it never annotates.** A cross-encoder scores (query, document) pairs and never
   generates, so it can do the half of 判断 that checks a recall and none of the half that tags a write — the
   subject handles need a model that writes. A reranker binding is therefore TWO backends, and `JudgeWiring`

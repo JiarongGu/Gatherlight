@@ -13,6 +13,7 @@
 //      server re-added by hand, every interactive login redone.
 import fs from 'node:fs';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
   dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until, git,
 } from './_e2e-common.mjs';
@@ -168,6 +169,11 @@ try {
   siteManifest.capabilities = { ...(siteManifest.capabilities ?? {}), enabled: ['a_promoted_capability'] };
   fs.writeFileSync(manifestPath, JSON.stringify(siteManifest, null, 2));
 
+  // Bind the SOURCE's judge so the backup's restored settings.json carries a real binding (claude-cli /
+  // sonnet) — the other half of the reconcile case below, which binds the TARGET to a different model.
+  const sourceBind = await post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'sonnet' });
+  ok('(fixture) the source\'s judge is bound before export', sourceBind.status === 200, JSON.stringify(sourceBind.body));
+
   // PACK the source repo before exporting. Without this the fixture's refs stay loose files, they ride
   // into the zip, and the restored repo works whether or not anything repairs it — the assertion below
   // then passes while proving nothing (measured: it did). A packed repo is the REAL state now, because
@@ -186,6 +192,19 @@ try {
   const before = (await rc.j('/api/manage/mcp-servers')).body ?? [];
   ok('the restore target starts with no MCP servers', (before.length ?? 0) === 0, JSON.stringify(before));
 
+  // The target already has its OWN judge bound to a DIFFERENT model than the backup carries (opus here,
+  // sonnet on the source) — the setup for the reconcile assertion after the import below.
+  const memDbPath = path.join(restoreDir, 'state', 'gatherlight.db');
+  const readMemKey = () => {
+    const d = new DatabaseSync(memDbPath, { readOnly: true });
+    try { return d.prepare("SELECT value FROM app_config WHERE key = 'llm.model.memory'").get()?.value; }
+    finally { d.close(); }
+  };
+  const targetBind = await rc.post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'opus' });
+  ok('(fixture) the restore target is bound to a judge model the backup does not carry',
+    targetBind.status === 200 && readMemKey() === 'opus',
+    `${targetBind.status} llm.model.memory=${JSON.stringify(readMemKey())}`);
+
   const imported = await fetch(`${rBase}/api/backup/import`, {
     method: 'POST', headers: { 'content-type': 'application/zip' }, body: zipBytes,
   });
@@ -193,6 +212,16 @@ try {
   ok('backup imported', imported.ok, `${imported.status} ${JSON.stringify(impBody).slice(0, 120)}`);
   ok('the import reports the MCP servers it restored', (impBody?.restored?.mcpServers ?? 0) >= 1,
     JSON.stringify(impBody?.restored));
+
+  // THE POINT (backup reconcile): settings.json is copied WHOLESALE on import, but app_config is only
+  // MERGED (the memory bundle inside the zip is the same upsert as /api/memory, and per Task 2 no longer
+  // even carries this key) — so without a reconcile the target's stale llm.model.memory (opus, bound just
+  // above) would survive untouched beside the freshly restored settings.json (claude-cli / sonnet), and
+  // the scoped routing store only withholds a saved key across a CLIENT mismatch — both are the default
+  // client here, so a same-client mismatch reads the stale key straight through. Zero enrichment, no
+  // error, either side of a restart.
+  ok('THE POINT: a restore drops the target\'s stale llm.model.memory rather than leaving it beside a restored settings.json it can contradict',
+    readMemKey() === undefined, `llm.model.memory=${JSON.stringify(readMemKey())}`);
 
   // Named for the page the AGENT wrote, never the template's welcome.json — the seeder re-creates
   // that one, so asserting on it would pass with `ui/` left out of the backup entirely.

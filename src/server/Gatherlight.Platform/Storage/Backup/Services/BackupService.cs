@@ -82,16 +82,17 @@ public sealed class BackupService : IBackupService
     private readonly DataRepo.Services.IDataRepoMaintenance _maintenance;
     private readonly IGitCliService _git;
     private readonly DataWriteLock _writeLock;
+    private readonly IAppConfigService _config;
     private readonly ILogger<BackupService> _log;
 
     public BackupService(ISiteContext data, IPlatformContext platform, IMemoryService memory, IMcpServerStore mcp,
         IEnumerable<IRecordIndex> indexes, IGitCliService git, DataWriteLock writeLock,
         Site.Seed.Services.IAppManagedFiles appManaged, Knowledge.Services.IFactIndex factIndex,
-        DataRepo.Services.IDataRepoMaintenance maintenance, ILogger<BackupService> log)
+        DataRepo.Services.IDataRepoMaintenance maintenance, IAppConfigService config, ILogger<BackupService> log)
     {
         _data = data; _platform = platform; _memory = memory; _mcp = mcp;
         _indexes = indexes; _git = git; _writeLock = writeLock; _appManaged = appManaged;
-        _factIndex = factIndex; _maintenance = maintenance; _log = log;
+        _factIndex = factIndex; _maintenance = maintenance; _config = config; _log = log;
     }
 
     public async Task ExportAsync(Stream output, CancellationToken ct = default)
@@ -225,6 +226,21 @@ public sealed class BackupService : IBackupService
                     Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                     File.Copy(src, dest, overwrite: true);
                     restored++;
+
+                    // settings.json is COPIED wholesale, but app_config is only MERGED — the memory bundle
+                    // below is an upsert, and `llm.model.memory` isn't even in it any more (MemoryService
+                    // carries a model key only if cortex can set it, and `memory` deliberately is not one).
+                    // So the target's own live key survives a restore untouched, while the file that just
+                    // landed beside it names a different binding (or none at all). A saved binding whose
+                    // client happens to match the one running reads that stale key straight through
+                    // (JudgeScopedModelRoutingStore only withholds it across a client MISMATCH) — so a
+                    // target bound to a llama.cpp chat GGUF, restored from a backup bound to claude-cli,
+                    // keeps asking the Claude CLI for the GGUF's id after the restart. Fail-open both
+                    // sides: zero enrichment, no error. Deleting it here means the restored settings.json
+                    // is the only answer left — right after the restart, and already right before it,
+                    // because the scoped store withholds a key it did not just see written for the client
+                    // that is running.
+                    _config.Delete("llm.model.memory");
                 }
             }
 

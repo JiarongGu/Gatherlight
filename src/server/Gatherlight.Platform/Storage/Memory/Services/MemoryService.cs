@@ -85,12 +85,17 @@ public sealed class MemoryService : IMemoryService
         // 记忆检索 binds the judge's model together with its BACKEND in settings.json, which this bundle does
         // not carry, so the key alone names a model for a backend the target install never bound (a GGUF id
         // handed to the Claude CLI; both memory policies fail open, so: zero enrichment, no error).
+        //
+        // ALLOW-list, not a deny-filter, and matching ImportAsync's own prefix guard below on purpose: the
+        // SELECT's SQLite `LIKE` is ASCII case-INSENSITIVE, so a stray-cased row (`LLM.Model.memory`) comes
+        // back in `cortexRows` — a case-sensitive deny-filter on `llm.model.` would then miss it entirely
+        // and let it straight through. Here it simply matches neither branch and is dropped.
         var tunable = _cortex.Models().Select(m => $"llm.model.{m.Consumer}").ToHashSet(StringComparer.Ordinal);
         foreach (var r in cortexRows)
         {
             var key = (string)r.key;
-            if (key.StartsWith("llm.model.", StringComparison.Ordinal) && !tunable.Contains(key)) continue;
-            cortex[key] = (string)r.value;
+            if (key.StartsWith("cortex.prompt.", StringComparison.Ordinal) || tunable.Contains(key))
+                cortex[key] = (string)r.value;
         }
         return new MemoryBundle
         {
