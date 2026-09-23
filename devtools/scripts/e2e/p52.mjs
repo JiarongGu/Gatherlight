@@ -667,7 +667,7 @@ try {
   const hungErr = String(hungBind.body?.error ?? '');
   const fakePort = String(fake.address().port);
   ok('THE POINT: a port that accepts and never answers refuses the bind with the HELD sentence — not 「没能启动」',
-    hungBind.status === 409 && /llama-server/.test(hungErr) && /不回应/.test(hungErr) && hungErr.includes(fakePort),
+    hungBind.status === 409 && /llama-server/.test(hungErr) && /没有像 llama\.cpp 那样回答/.test(hungErr) && hungErr.includes(fakePort),
     `${hungBind.status} ${hungErr || JSON.stringify(hungBind.body)}`);
   const spawned = spawnLines().slice(spawnsBefore);
   ok('THE POINT: and no router was spawned beside the held port', spawned.length === 0, JSON.stringify(spawned));

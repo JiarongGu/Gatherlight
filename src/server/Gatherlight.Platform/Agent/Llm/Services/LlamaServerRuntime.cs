@@ -150,6 +150,12 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// to kill our own process, and Dispose orphaned it.</summary>
     private Process? _started;
 
+    /// <summary>True from <see cref="StopOursCore"/> in a restart until the new router is ours (or the restart has
+    /// failed). In that window a probe that runs WITHOUT the lifecycle lock — the panel's — can see the dying or
+    /// starting router as HELD, and must not blame "another process" for our own restart. Read and written under
+    /// <see cref="_gate"/>.</summary>
+    private bool _restarting;
+
     /// <summary>ONE lock over start, restart and stop. Probe-then-spawn is a check-then-act on a port, and
     /// three callers can overlap (a bind on either layer, 资源's start button, the startup warm step); a restart
     /// holds the router down for seconds, which is exactly the window a concurrent "not serving → spawn" sees.
@@ -339,11 +345,13 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             using var res = await http.GetAsync($"{BaseUrl}/v1/models", ct);
             if (!res.IsSuccessStatusCode) return PortProbe.Held;
             using var doc = System.Text.Json.JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
-            var models = doc.RootElement.TryGetProperty("data", out var data)
-                ? data.EnumerateArray()
-                    .Select(e => e.TryGetProperty("id", out var id) ? id.GetString() : null)
-                    .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).ToList()
-                : (IReadOnlyList<string>)Array.Empty<string>();
+            // A JSON 200 with no `data` array is not a model list, so not a llama-server: HELD, not an empty router
+            // to adopt.
+            if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return PortProbe.Held;
+            var models = data.EnumerateArray()
+                .Select(e => e.TryGetProperty("id", out var id) ? id.GetString() : null)
+                .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).ToList();
             return new PortProbe(PortState.Answering, models);
         }
         // A probe that timed out is HELD — never an escaping cancellation. HttpClient's own 4 s timeout
@@ -372,19 +380,23 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
     /// <summary>The sentence for a HELD port, which takes precedence over every other problem: nothing else can be
     /// fixed while it stands, and 「还没有下载」 beside it would send the household to download something that could
-    /// not start anyway. Two cases, because the remedy differs. A router WE started and still hold is busy, and a
-    /// service restart ends it (Dispose kills it). Anything else is not ours to end — the same rule, and the same
-    /// remedy (任务管理器), as the refusal for an ADOPTED router in <see cref="EnsureServesAsync"/>.</summary>
+    /// not start anyway. Three cases, because the remedy differs. During OUR restart (<see cref="_restarting"/>) the
+    /// holder is our own router, dying or starting: wait. A router WE started and still hold is busy, and a service
+    /// restart ends it (Dispose kills it). Anything else is not ours to end — the same rule, and the same remedy
+    /// (任务管理器), as the refusal for an ADOPTED router in <see cref="EnsureServesAsync"/>. "Not as llama.cpp
+    /// answers" rather than "does not answer": a non-2xx or an HTML page IS an answer, just not a model list.</summary>
     private string HeldProblem()
     {
         var port = new Uri(BaseUrl).Port;
-        bool ours;
-        lock (_gate) ours = _started is { HasExited: false };
-        return ours
+        bool ours, restarting;
+        lock (_gate) { ours = _started is { HasExited: false }; restarting = _restarting; }
+        return restarting
+            ? "应用正在重启 llama.cpp,稍等几秒。"
+            : ours
             ? $"应用启动的 llama.cpp 还在运行,但端口 {port} 上这次没有回应 —— 稍后再试;一直这样的话,请重启服务。"
-            : $"llama.cpp 用的端口 {port} 被一个不回应的进程占着:它接受连接,却不回答(可能是没有正常退出的 llama-server.exe,"
-              + "也可能是别的程序)。应用不会在它旁边再启动一个,也不会替你结束它 —— 在任务管理器里结束它后再试,"
-              + "应用会重新启动 llama.cpp;或者重启电脑。";
+            : $"llama.cpp 用的端口 {port} 被另一个进程占着:它接受连接,却没有像 llama.cpp 那样回答(可能是没有正常退出的"
+              + " llama-server.exe,也可能是别的程序)。应用不会在它旁边再启动一个,也不会替你结束它 —— 在任务管理器里"
+              + "结束它后再试,应用会重新启动 llama.cpp;或者重启电脑。";
     }
 
     public async Task<LlamaServerState> ProbeAsync(bool refresh = false, CancellationToken ct = default)
@@ -619,15 +631,23 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             _log.LogInformation(
                 "llama-server: restarting our router — {Model} was added after it started; re-warming {Warm}",
                 modelId, string.Join(", ", warm));
-            StopOursCore();
-            // No `unknown` prefix here: it says the running llama.cpp must be restarted, and by now none is running.
-            if (!await WaitForPortReleaseAsync(ct))
-                return $"应用为了载入 {modelId} 停下了 llama.cpp,但旧的 llama-server 进程 {PortReleaseTimeout.TotalSeconds:0} 秒内"
-                     + $"没有让出端口 {new Uri(BaseUrl).Port},所以这次没有重新启动它,llama.cpp 现在没有在运行 —— 稍等片刻再试一次;"
-                     + "如果仍然这样,在任务管理器里结束 llama-server.exe 后重启服务。";
-            // Only now, with the port FREE, is it probed — so a router we just killed is never reported as a
-            // stranger holding the port; that case is the sentence above.
-            var restarted = await EnsureServingCoreAsync(ct);
+            // Our own restart window: a panel probe outside the lock must not blame "another process" for it.
+            // Cleared on EVERY exit — once the new router is ours, HeldProblem's "ours" case applies instead.
+            (bool Ok, string? Held) restarted;
+            lock (_gate) _restarting = true;
+            try
+            {
+                StopOursCore();
+                // No `unknown` prefix here: it says the running llama.cpp must be restarted, and by now none is running.
+                if (!await WaitForPortReleaseAsync(ct))
+                    return $"应用为了载入 {modelId} 停下了 llama.cpp,但旧的 llama-server 进程 {PortReleaseTimeout.TotalSeconds:0} 秒内"
+                         + $"没有让出端口 {new Uri(BaseUrl).Port},所以这次没有重新启动它,llama.cpp 现在没有在运行 —— 稍等片刻再试一次;"
+                         + "如果仍然这样,在任务管理器里结束 llama-server.exe 后重启服务。";
+                // Only now, with the port FREE, is it probed — so a router we just killed is never reported as a
+                // stranger holding the port; that case is the sentence above.
+                restarted = await EnsureServingCoreAsync(ct);
+            }
+            finally { lock (_gate) _restarting = false; }
             if (!restarted.Ok) return restarted.Held ?? "llama.cpp 重启后没能启动 —— 请看「日志」里的原因。";
             live = await IsServingAsync(ct);
             if (!live.Models.Contains(modelId, StringComparer.OrdinalIgnoreCase))

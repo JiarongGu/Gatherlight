@@ -811,18 +811,19 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   catch filtered on the TYPE let it out of `IsServingAsync` and `RunAsync`, and on the real binary that was a bind
   answering 500 with llama.cpp left stopped. Only the caller's TOKEN says the caller gave up (`WarmCoreAsync` had
   already learned this). But the first fix read the timeout as "not serving", and "not serving" means "start
-  one": a port that ACCEPTS and does not answer (a timeout, a non-2xx, a body that is not the model list) is
+  one": a port that ACCEPTS and gives no model list (a timeout, a non-2xx, a body without a `data` array) is
   HELD — by a hung llama-server, another program, or our own router too busy to reply — and a router spawned
   beside it cannot bind, while every sentence named the wrong cause (「没能启动」, even 「还没有下载」). Held is its
   own state: `EnsureServingCoreAsync` never spawns, and its sentence (`HeldProblem`) takes precedence in
   `Problem` and is what the bind and the start button say. And **the restart waits for the old router to let
   go of its port** before probing, at most 15 s, because `Kill`'s 5 s wait carries on either way and a dying
   router's socket most likely still accepted that re-probe — so a router we just killed is reported as not yet
-  gone, never as a stranger holding the port. Proof: `e2e-p51` and `e2e-p52` case 8a (a fake that accepts and
-  never answers `/v1/models`): the held sentence, and NO spawn attempted in the fixture's log — the no-spawn
-  check fails when a held port falls through to the spawn — plus ten real-binary restarts in the runtime doc,
-  where the wait never had to wait. **The restart branch has NO e2e coverage**: the fake router can only ever be adopted, and
-  no stub can be a real router. It was verified by hand on the real binary — a bind racing 资源's start button
+  gone, never as a stranger holding the port; and a panel probe DURING our restart, which runs outside the lock,
+  reads `_restarting` and says the app is restarting llama.cpp rather than blaming another process. Proof:
+  `e2e-p51` and `e2e-p52` case 8a (a fake that accepts and never answers `/v1/models`): the held sentence, and NO
+  spawn attempted in the fixture's log — the no-spawn check fails when a held port falls through to the spawn —
+  plus ten real-binary restarts in the runtime doc, where the wait never had to wait. **The restart branch has NO
+  e2e coverage**: the fake router can only ever be adopted, and no stub can be a real router. It was verified by hand on the real binary — a bind racing 资源's start button
   left one router and a second restart still worked; with 语义 on llama.cpp the same bind was refused with 0
   restarts.
 - **A reranker judge: capped input, and its tagging state said out loud.** One (query, document) pair past the

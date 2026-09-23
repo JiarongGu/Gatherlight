@@ -1081,7 +1081,7 @@ try {
       ? fs.readdirSync(logsDir).map((n) => fs.readFileSync(path.join(logsDir, n), 'utf8')).join('\n') : '')
       .split('\n').filter((l) => /llama-server starting|starting llama-server failed/.test(l));
     // The held sentence: names llama-server, says it does not answer, and names THIS port.
-    const isHeld = (t) => /llama-server/.test(t) && /不回应/.test(t) && t.includes(String(port));
+    const isHeld = (t) => /llama-server/.test(t) && /没有像 llama\.cpp 那样回答/.test(t) && t.includes(String(port));
     const res = path.join(dir, 'state', 'resources');
     const stubExe = path.join(res, 'llama-cpp', 'llama-server.exe');
     const stubModel = path.join(res, 'gguf', 'zzheld-chat-model.gguf');

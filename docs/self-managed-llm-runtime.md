@@ -354,12 +354,16 @@ one", and a port that ACCEPTS a connection is held by something: a hung llama-se
 router too busy to reply. A router spawned beside it cannot bind. (Whether llama-server's HTTP library would share
 the port on Windows is unmeasured, so nothing relies on it.) And every sentence named the wrong cause: 「没能启动」
 at the bind, 「还没有下载」 at the start button. **The probe now has three answers.** REFUSED means nothing listens.
-ANSWERING means a router replied with its models. HELD means the port accepted but gave no usable answer: a timeout,
-a non-2xx reply, or a body that is not the model list. `EnsureServingCoreAsync` never spawns on a held port. Its
+ANSWERING means a router replied with its models, a `data` array. HELD means the port accepted but gave no usable
+answer: a timeout, a non-2xx reply, or a body that is not the model list (a JSON 200 without a `data` array
+included). `EnsureServingCoreAsync` never spawns on a held port. Its
 sentence takes precedence in `Problem`, over 「还没有下载」 too, and the bind and the start button pass it through.
-The sentence names the port, says the process accepts connections and does not answer, and says to end it in
-任务管理器 or restart the machine. It is the adopted-router refusal's rule: not ours to end. For a router we started
-and still hold, it says to try again or restart the service. This half is drivable with a fake that accepts and
+The sentence names the port, says the process accepts connections but does not answer as llama.cpp does (a
+non-2xx or an HTML page is an answer, just not a model list), and says to end it in 任务管理器 or restart the
+machine. It is the adopted-router refusal's rule: not ours to end. For a router we started
+and still hold, it says to try again or restart the service. During our own restart, it says the app is
+restarting llama.cpp and to wait a few seconds: a panel probe that runs outside the restart's lock can otherwise see
+our dying or starting router as HELD and blame another process for it. This half is drivable with a fake that accepts and
 never answers `/v1/models`:
 - `e2e-p51`: `GET /api/manage/models/llama?refresh=true` → 200 `serving:false` with the held sentence (not
   「还没有下载」, with no binary installed), and `POST …/llama/start` → 409 with the held sentence.
