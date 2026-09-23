@@ -826,9 +826,12 @@ fingerprint, the claude version, the question-order seed and the concurrency wit
 **Decision rules (write the one that applies):**
 - If `content` beats `topic` on top-1 or found@8 in `all` → the Task 2 fix is confirmed; say by how much.
 - If `content` is WORSE than `topic` → stop and report to the owner before Part C; do not rationalise it.
-- If `contentonly` vs `content` is NOT significant (paired p ≥ 0.05 on `all`) → record that the topic prefix does not
+- If `contentonly` vs `content` is EQUIVALENT — the bench's exact 95% interval for the net top-1 difference on `all`
+  lies within ±3 pp (not merely p ≥ 0.05: a low-powered test failing to find a loss is not evidence of no loss) → record
+  that the topic prefix does not
   earn its tokens, so on the Lyntai bump that ships `ContentChars` the decorator is deleted in favour of it.
-  Otherwise record that the prefix earns its place and the decorator stays.
+  If it is significantly WORSE, the prefix earns its place and the decorator stays. If it is neither significant nor
+  equivalent, say the fixture cannot decide it and keep the decorator (removing a feature needs evidence).
 - `fuse` changes the product default ONLY as a separate, owner-approved decision, and only if it beats
   `content` (partition) with paired p < 0.05 on `all` and no set where it is significantly worse. Otherwise record it
   as insurance, per Lyntai.
@@ -1616,7 +1619,9 @@ open 资源 · Resources, download `LAMAR 600M` and `BGE Reranker v2 M3`, wait f
 
 - [ ] **Step 2: Run the reranker arms FROM RUN 1'S SEED** (no judge CLI calls: the seed is reused, so nothing is re-tagged)
 
-Run: `node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,formula2 --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M > devtools/_judge-bench-rr.txt 2>&1`
+Run: `node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,formula2 --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M --baseline=<Run 1's results-*.json>:content > devtools/_judge-bench-rr.txt 2>&1`
+(`--baseline` pairs every reranker arm against Run 1's `content` arm query by query, and refuses unless the two runs'
+formula digest, order seed, fact count and fixture hash are equal; the reranker arms are also paired with each other.)
 Expected: tables with six arms (the two 公式 arms, and partition/fuse for each reranker), no WARNING lines, and the
 startup check passing (no claude call before questions — the seed was not re-derived). Before comparing with Run 1,
 confirm the printed formula-positions DIGEST equals Run 1's: equal digests prove both runs asked the same questions of
@@ -1637,8 +1642,9 @@ style as the embedder rows (e.g. 「本应用双语测试集:首位命中 X/240,
     /// <summary>The reranker the bilingual bench measured best (docs/judge-bench.md, Run 2).</summary>
     public const string RecommendedReranker = "<the winning id>";
 ```
-If the two do NOT differ significantly (paired p ≥ 0.05 on `all`, LAMAR vs BGE from the same run), recommend the
-smaller file and say "tie" in the note — the ~1-point
+If LAMAR vs BGE (paired in the same run) is EQUIVALENT on `all` (95% net interval within ±3 pp), recommend the
+smaller file and say "tie" in the note; if neither significant nor equivalent, recommend the smaller file and say the
+fixture could not separate them — the ~1-point
 band Lyntai measured is the same shape.
 
 - [ ] **Step 5: Update dev-conventions' measured row** (Task 18's table row) with our numbers and the date.
