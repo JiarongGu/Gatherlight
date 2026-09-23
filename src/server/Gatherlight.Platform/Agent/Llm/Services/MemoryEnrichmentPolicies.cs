@@ -127,7 +127,9 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
 /// Lyntai release carrying Part 276: set <c>ContentChars = MaxChars</c> in <c>JudgeWiring.Llm</c>, and delete
 /// this class, the <c>GATHERLIGHT_JUDGE_INPUT</c> knob and the judge-bench arms that set it (<c>topic</c>,
 /// <c>contentonly</c>). Lyntai's side of the note is Part 276's own outcome, which names this decorator as the
-/// thing to remove (dev-conventions: a workaround is recorded on both sides).</para>
+/// thing to remove (dev-conventions: a workaround is recorded on both sides). Content alone has been the
+/// default since 2026-09-24; <c>both</c> stays selectable for the bench until the bump deletes this
+/// class.</para>
 ///
 /// <para><b>Cost.</b> <c>FactIndex.RankAsync</c> asks the engine for <c>min(3×limit, 100)</c> candidates when
 /// no kind is given, but a flat 100 whenever a kind IS given (a kind narrows AFTER the ranking, so a thin
@@ -150,15 +152,16 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
     public JudgeSeesContentPolicy(IMemoryVerificationPolicy inner) => _inner = inner;
 
     /// <summary>What the judge is shown, read ONCE at startup from the measurement knob
-    /// <c>GATHERLIGHT_JUDGE_INPUT</c>: <c>both</c> (default, <c>"topic — content"</c>), <c>content</c> (content
-    /// alone — identical to how Lyntai's upcoming <c>ContentChars</c> renders it below <see cref="MaxChars"/>;
-    /// above it upstream cuts at a word boundary where this class cuts hard) or <c>headline</c> (topics only,
-    /// the old behaviour). Anything else means <c>both</c>.</summary>
+    /// <c>GATHERLIGHT_JUDGE_INPUT</c>: <c>content</c> (default since 2026-09-24 — content alone, measured
+    /// equivalent to <c>both</c> with ~24% less text, docs/judge-bench.md Run 1; identical to how Lyntai's
+    /// <c>ContentChars</c> renders it below <see cref="MaxChars"/>), <c>both</c> (<c>"topic — content"</c>, the
+    /// 1.3.0 default) or <c>headline</c> (topics only, the old behaviour). Anything else means
+    /// <c>content</c>.</summary>
     public static readonly string Mode = (Environment.GetEnvironmentVariable("GATHERLIGHT_JUDGE_INPUT") ?? "").Trim().ToLowerInvariant() switch
     {
         "headline" => "headline",
-        "content" => "content",
-        _ => "both",
+        "both" => "both",
+        _ => "content",
     };
 
     /// <summary>False only when the knob asks for topics only.</summary>

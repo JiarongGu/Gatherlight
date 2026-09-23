@@ -376,8 +376,9 @@ try {
 
   // THE JUDGE SEES THE FACT, NOT ITS LABEL. Lyntai's LLM verifier renders `{n}. {Headline}`, and the fact
   // index writes each fact's TOPIC as its headline — so the judge used to decide "did this answer?" from
-  // topics alone. JudgeSeesContentPolicy hands it `topic — content`. `listing-id 4417` exists only in the
-  // content of one fact, so its presence in the notes is proof the content arrived.
+  // topics alone. JudgeSeesContentPolicy hands it the fact's content (content alone by default; `topic —
+  // content` under the bench knob). `listing-id 4417` exists only in the content of one fact, so its
+  // presence in the notes is proof the content arrived.
   ok('the judge is shown the facts’ CONTENT, not only their topics',
     shown.some((n) => n.includes('listing-id 4417')), JSON.stringify(shown));
 

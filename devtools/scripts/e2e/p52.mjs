@@ -588,10 +588,12 @@ try {
     env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_CLAUDE_CMD: `node ${signedOutStub}` },
   });
   // The judge-input knob rides along on this server (case 7b): it only affects an LLM verifier, and this one
-  // runs a reranker, so it changes nothing here except whether the logs say it is set.
+  // runs a reranker, so it changes nothing here except whether the logs say it is set. Pinned to `both` —
+  // NOT the default since 2026-09-24 — so the case is still exercising a knob that was actually SET, rather
+  // than a value that would now be there anyway.
   signedInServer = startServer({
     dataDir: signedInDir, port: SIGNED_IN_PORT,
-    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_INPUT: 'content' },
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_INPUT: 'both' },
   });
   const outBase = `http://127.0.0.1:${SIGNED_OUT_PORT}`;
   const inBase = `http://127.0.0.1:${SIGNED_IN_PORT}`;
@@ -638,7 +640,7 @@ try {
   const knobLog = fs.existsSync(logsDir)
     ? fs.readdirSync(logsDir).map((f) => fs.readFileSync(path.join(logsDir, f), 'utf8')).join('\n') : '';
   ok('a measurement knob set at startup is logged as a Warning in state/logs',
-    /WARN.*Measurement knob set: judge input = content/.test(knobLog),
+    /WARN.*Measurement knob set: judge input = both/.test(knobLog),
     knobLog.split('\n').filter((l) => /knob|measurement/i.test(l)).join(' | ') || '(nothing about the knob in state/logs)');
 
   // --- 8. a model downloaded AFTER the router started ---------------------------------------------------

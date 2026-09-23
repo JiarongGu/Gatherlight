@@ -161,13 +161,23 @@ const ARMS = {
   formula2: { label: '公式 · no verification · A/A twin', enrichment: false, env: {} },
   topic: { label: 'Claude judge · topic only', enrichment: true, judgeInput: 'headline',
     env: { GATHERLIGHT_JUDGE_INPUT: 'headline' }, knob: /judge input = headline \(/ },
-  content: { label: 'Claude judge · topic — content · partition', enrichment: true, judgeInput: 'both', env: {} },
-  content2: { label: 'Claude judge · topic — content · partition · A/A twin', enrichment: true, judgeInput: 'both', env: {} },
+  // `content` and `content2` relied on the default being `both`; content-alone became the default 2026-09-24
+  // (docs/judge-bench.md Run 1), so both now pin `both` explicitly, with the knob to prove it took.
+  content: { label: 'Claude judge · topic — content · partition', enrichment: true, judgeInput: 'both',
+    env: { GATHERLIGHT_JUDGE_INPUT: 'both' }, knob: /judge input = both \(/ },
+  content2: { label: 'Claude judge · topic — content · partition · A/A twin', enrichment: true, judgeInput: 'both',
+    env: { GATHERLIGHT_JUDGE_INPUT: 'both' }, knob: /judge input = both \(/ },
   // How Lyntai's upcoming LlmVerificationOptions.ContentChars renders a candidate: content ALONE (Part 276 / D170).
+  // Kept explicitly pinned (rather than left to the now-default) so the non-vacuity check below still confirms
+  // the knob took, instead of this arm becoming indistinguishable from one that sets nothing.
   contentonly: { label: 'Claude judge · content only · partition', enrichment: true, judgeInput: 'content',
     env: { GATHERLIGHT_JUDGE_INPUT: 'content' }, knob: /judge input = content \(/ },
+  // Two knobs: the verdict-combination knob AND the judge-input knob (pinned to `both`, since fuse is measured
+  // against the pre-flip default). `knob` here is an array — see the non-vacuity check, which requires every
+  // entry to announce itself.
   fuse: { label: 'Claude judge · topic — content · fuse', enrichment: true, judgeInput: 'both',
-    env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/ },
+    env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse', GATHERLIGHT_JUDGE_INPUT: 'both' },
+    knob: [/verdict combination = Fuse/, /judge input = both \(/] },
 };
 
 const appHead = (() => {
@@ -960,11 +970,15 @@ const live = async () => {
         throw new Error(`arm ${arm.key}: ${startupCalls} claude-cli call(s) at startup — the arm re-derived something `
           + '(e.g. a fact-index layout rebuild) and no longer starts from the seed; pass --reseed');
       const c = makeClient(arm.srv.base);
-      // NON-VACUITY: an arm whose knob or binding did not take would silently duplicate another arm.
+      // NON-VACUITY: an arm whose knob or binding did not take would silently duplicate another arm. `knob` may
+      // be one regex or an array (an arm can pin more than one env var, e.g. `fuse` pins both the verdict
+      // combination AND the judge input) — every entry must announce itself, or a second knob failing silently
+      // would go unnoticed behind the first one's success.
       const log = arm.srv.log();
       const announced = log.split(/\r?\n/).filter((l) => l.includes('[measurement]'));
-      if (arm.knob && !arm.knob.test(log)) throw new Error(`arm ${arm.key}: its knob did not announce itself`);
-      if (!arm.knob && announced.length > 0) throw new Error(`arm ${arm.key}: sets no knob, yet the server printed: ${announced.join(' | ')}`);
+      const knobs = arm.knob ? (Array.isArray(arm.knob) ? arm.knob : [arm.knob]) : [];
+      for (const k of knobs) if (!k.test(log)) throw new Error(`arm ${arm.key}: its knob did not announce itself (${k})`);
+      if (knobs.length === 0 && announced.length > 0) throw new Error(`arm ${arm.key}: sets no knob, yet the server printed: ${announced.join(' | ')}`);
       arm.migrationWarnings = (await c.getJson('/api/migration/status')).warnings ?? [];
       if (arm.reranker) {
         const judge = await judgeLayer(c);

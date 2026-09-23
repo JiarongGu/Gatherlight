@@ -511,7 +511,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   candidate text. So on that bump: set `ContentChars = JudgeSeesContentPolicy.MaxChars` where `JudgeWiring.Llm`
   builds the verifier, and delete the class, its `GATHERLIGHT_JUDGE_INPUT` knob and the bench arms that set it
   (`topic`, `contentonly`). Not both: with `ContentChars` above 0 upstream reads the content itself and ignores
-  the decorator's rewritten headline, so keeping it would be dead code running on every recall.
+  the decorator's rewritten headline, so keeping it would be dead code running on every recall. **Content alone
+  is the default since 2026-09-24** (owner-approved on the measured equivalence above), so on the bump the only
+  change is setting `ContentChars` and deleting the class, the knob and the `topic`/`contentonly` arms.
   **(2) `JudgeScopedModelRoutingStore` ↔ `docs/task-archive.md` Part 284 / D176, closed the same day it was
   filed.** Lyntai's live override (`IModelRoutingStore`, which served `llm.model.memory`) was keyed by CONSUMER
   alone, so it could not know which client or provider a model name was written for, and a key written for one
