@@ -394,8 +394,10 @@ this bench's page size. Every recall, the reranker scores every candidate and en
 engine's own order inside it** — the verdict is one bit per candidate, and the reranker's scores are not used for
 ordering. So under partition the reranker decides WHICH eight facts reach the page and the engine decides which
 of them comes FIRST. Two consequences run through every table below: `endorsed` equals `judged` in every reranker
-arm by construction (it endorses a full page each time — not a sign of anything, unlike the Claude judge's
-129/234), and the reranker's effect lands on found@8 far more than on top-1.
+arm by construction (it endorses a full page each time — not a sign of anything, unlike Run 1's Claude `content`
+arm, which reached the graph on 234 recalls, returned a verdict on 231 of them, and on 129 of those judged the
+question answered — `endorsed` counts recalls, not candidates),
+and the reranker's effect lands on found@8 far more than on top-1.
 
 ### Accuracy — the four sets and `all`
 
@@ -696,23 +698,37 @@ run.
 
 Not the bench's own output: computed from this run's saved rows and Run 1's (`results-2026-09-23T113455.224Z.json`,
 `results-2026-09-23T091740.681Z.json`), by the fact's language as `recall-questions.mjs` decides it (40 Chinese,
-16 English, 4 Japanese facts). top-1 / found@8 / n. The Chinese-fact rows of `same` and `mixed` are the
-household's case: Chinese facts, asked in Chinese or code-switched.
+16 English, 4 Japanese facts). top-1 / found@8 / n, for all twelve set × fact-language rows; their totals
+reproduce the `all` row of each arm above. The Chinese-fact rows of `same` and `mixed` are the household's case:
+Chinese facts, asked in Chinese or code-switched. The Japanese rows are four facts each, too few to read on their
+own.
 
 ```
 set · facts   公式          LAMAR · partition  BGE · partition  LAMAR · fuse  BGE · fuse  Claude content (Run 1)
 same · zh     31 / 36 / 40  30 / 37 / 40       29 / 37 / 40     30 / 35 / 40  29 / 35 / 40  37 / 37 / 40
 same · en      7 / 14 / 16   8 / 16 / 16       10 / 16 / 16      8 / 16 / 16   9 / 16 / 16  16 / 16 / 16
+same · ja      4 /  4 /  4   4 /  4 /  4        4 /  4 /  4      4 /  4 /  4   4 /  4 /  4   4 /  4 /  4
+cross · zh     0 /  0 / 40   0 / 30 / 40        0 / 30 / 40      0 /  1 / 40   0 /  3 / 40   7 /  7 / 40
+cross · en     1 /  5 / 16   1 / 15 / 16        2 / 14 / 16      1 /  7 / 16   2 /  7 / 16   4 /  4 / 16
+cross · ja     0 /  1 /  4   0 /  4 /  4        1 /  4 /  4      0 /  1 /  4   0 /  2 /  4   0 /  0 /  4
+third · zh     1 / 13 / 40   5 / 30 / 40        5 / 28 / 40      5 / 15 / 40   5 / 15 / 40  12 / 12 / 40
+third · en     0 /  4 / 16   0 / 12 / 16        1 / 11 / 16      0 /  5 / 16   2 /  4 / 16   3 /  3 / 16
+third · ja     0 /  1 /  4   0 /  3 /  4        1 /  3 /  4      0 /  2 /  4   1 /  2 /  4   1 /  1 /  4
 mixed · zh    21 / 31 / 40  23 / 39 / 40       23 / 38 / 40     22 / 33 / 40  22 / 33 / 40  32 / 33 / 40
 mixed · en    14 / 16 / 16  14 / 16 / 16       13 / 16 / 16     14 / 16 / 16  13 / 16 / 16  16 / 16 / 16
-cross · zh     0 /  0 / 40   0 / 30 / 40        0 / 30 / 40      0 /  1 / 40   0 /  3 / 40   7 /  7 / 40
-third · zh     1 / 13 / 40   5 / 30 / 40        5 / 28 / 40      5 / 15 / 40   5 / 15 / 40  12 / 12 / 40
+mixed · ja     0 /  0 /  4   1 /  2 /  4        1 /  2 /  4      1 /  2 /  4   0 /  2 /  4   0 /  0 /  4
 ```
 
-LAMAR against BGE (partition), paired on the same queries (LAMAR-only hits / BGE-only hits): `same` × Chinese
-facts, top-1 1/0 and found@8 0/0; `mixed` × Chinese facts, top-1 0/0 and found@8 1/0. On the household's case the
-two rerankers disagree on exactly two of 80 queries, both in LAMAR's favour, which no test can distinguish from
-nothing. (`same` × English facts: top-1 0/2, BGE's way.)
+LAMAR against BGE (partition), paired on the same queries (LAMAR-only hits / BGE-only hits), counted three ways
+because "Chinese questions" can mean two different selections:
+
+- **The household's case** — Chinese facts asked in Chinese or code-switched (`same` × zh + `mixed` × zh, 80
+  queries): top-1 1/0, found@8 1/0. Two disagreements, both LAMAR's.
+- **Every Chinese-worded question** — `same` × zh, `cross` × en and `third` × ja (asked in Chinese), and every
+  `mixed` question (120 queries): top-1 2/2, found@8 2/0. Six disagreements: four LAMAR's, two BGE's.
+- **All 240**: top-1 2/6 (BGE's way — e.g. `same` × English facts, 0/2), found@8 5/0 (LAMAR's way).
+
+None of these reaches the exact test on its own; see "LAMAR vs BGE" below for which way the evidence leans.
 
 ### What it says
 
@@ -744,24 +760,30 @@ nothing. (`same` × English facts: top-1 0/2, BGE's way.)
   against `content` on found@8 (LAMAR +4, p = 0.572; BGE +6, p = 0.362) and lose on top-1 like the partition
   arms.
 - **Serial latency.** One arm at a time over 12 queries, the reranker arms' median recall is **423–489 ms**
-  against **226–245 ms** for 公式 alone: a reranker verdict adds roughly 0.2–0.25 s per recall. Run 1's Claude
+  against **226–245 ms** for 公式 alone: a reranker verdict adds roughly 0.18–0.26 s per recall against either
+  公式 arm — 0.23–0.26 s under partition (474 / 489 ms), 0.18–0.21 s under fuse (423 / 432 ms). Run 1's Claude
   judge arms took **8733–11722 ms** on the same measure (content · partition 9531 ms), so a reranker recall is
   about 20× faster than a Claude-judged one and spends no account quota. The parallel means (742–746 ms against
   351–352) were contended: six arms at once, all four reranker arms sharing one llama-server router on one GPU.
-- **LAMAR vs BGE — the fixture could not separate them.** Paired in this run, partition against partition: on
-  top-1, BGE +4 (2/6, p = 0.289, net +1.7pp, 95% CI [−0.8, +4.1]pp) — not significant, and not equivalent because
-  the interval reaches past +3pp; on found@8, LAMAR +5 (BGE's net −5 = −2.1pp, 5/0, p = 0.063, [−4.0, −0.1]pp) —
-  not significant, and not equivalent because the interval reaches past −3pp. So on both measures the bench's
-  answer is **neither** — no difference and no equivalence — and the two point estimates even point opposite ways.
-  The same holds for fuse against fuse (top-1 3/5, p = 0.727, [−1.6, +3.3]pp; found@8 5/7, p = 0.774,
-  [−2.1, +3.7]pp) and in every set, none of which is significant either way. On the household's case — Chinese
-  facts asked in Chinese, and code-switched questions about them — the two disagree on two queries of 80, both
-  LAMAR's (see "By fact language"); BGE's small top-1 lead on `all` comes from elsewhere, e.g. English facts
-  asked in English (10 vs 8 of 16). Latency is a wash (474 vs 489 ms serial, partition).
-  **Recommended: `bge-reranker-v2-m3-Q5_K_M`**, by the rule declared before the run (neither significant nor
-  equivalent → the smaller file) — and the rule decided it by **1,408 bytes** (468,392,352 against 468,393,760):
-  the files are the same size for any purpose a household has. It is a tie-break, not a measured preference, and
-  a household on LAMAR gives up nothing this fixture can see.
+- **LAMAR vs BGE — no finding either way, and the two leans are NOT symmetric.** Paired in this run, partition
+  against partition. On **found@8** — the metric where a reranker's value lies — LAMAR leads **5–0** (BGE's net
+  −5 = −2.1pp, p = 0.063, 95% CI **[−4.0, −0.1]pp**): the exact test just misses 0.05 while the bench's own
+  Agresti–Min interval EXCLUDES zero. The bench's rule is the exact test, so this is not a finding — but it is a
+  lean with nothing on the other side of it. On **top-1** BGE leads 6–2 (net +1.7pp, p = 0.289, [−0.8, +4.1]pp),
+  an interval that comfortably includes zero. Neither measure is equivalent either (each interval reaches past
+  ±3pp). So the stronger of the two leans is LAMAR's, on the metric that matters more for a reranker; reading
+  them as "two point estimates pointing opposite ways" hides that. Fuse against fuse is significant neither way
+  (top-1 3/5, p = 0.727, [−1.6, +3.3]pp; found@8 5/7, p = 0.774, [−2.1, +3.7]pp), and no single set is
+  significant either way, under partition or fuse.
+  By question (see "By fact language"): on the household's case the two disagree on 2 of 80 queries, both
+  LAMAR's; across all 120 Chinese-worded questions on 6, four LAMAR's and two BGE's; BGE's top-1 lead on `all`
+  comes largely from English facts asked in English (10 vs 8 of 16). Latency is a wash (474 vs 489 ms serial,
+  partition).
+  **Recommended: `bge-reranker-v2-m3-Q5_K_M` — by the tie-break declared before the run and nothing else**
+  (neither significant nor equivalent → the smaller file), which decided it by **1,408 bytes** (468,392,352
+  against 468,393,760). The rule stands as registered: changing it after seeing which way the data leaned would be
+  worse than a tie-break that runs against the lean. But it is a tie-break, not a measured preference — found@8
+  leans the other way — and a household on LAMAR gives up nothing this fixture can show.
   `GgufCatalog.RecommendedReranker` and both reranker notes say so.
 - **Partition vs fuse, per reranker.** For LAMAR, top-1 is **equivalent** (fuse vs partition 1/0, p = 1.000,
   95% CI [−1.6, +0.7]pp, inside ±3pp) and found@8 is significantly **worse** under fuse (71/0, p < 0.001,
@@ -781,7 +803,17 @@ nothing. (`same` × English facts: top-1 0/2, BGE's way.)
 
 - One fixture (60 invented facts), one run per arm, one quantisation of each reranker (Q5_K_M), one llama.cpp
   build (`b10549`, Vulkan) on one machine's GPU. LAMAR against BGE is **unresolved**, not "equal": the bench showed
-  neither a difference nor an equivalence, and a larger or differently built fixture could separate them.
+  neither a difference nor an equivalence — with found@8 leaning LAMAR (5–0, interval excluding zero, exact test
+  just short) — and a larger or differently built fixture could separate them.
+- Every arm recalled against the seed's subject tags, which the Claude CLI wrote when the seed was made. That
+  matches a reranker household WITH a signed-in CLI, since a reranker binding still tags through it; a household
+  without one — which the binding's cost line explicitly allows (「没有已登录的 CLI 时只是不标注」) — has no subject
+  tags at all, and that configuration was not measured. Nothing here says what a reranker is worth without them.
+- Run 1's `content` rows came from app `81e3ddd` and this run's from `bc7041c`, and the equal formula digest proves
+  only that the FORMULA rows are identical: in between, `JudgeScopedModelRoutingStore` changed how the `memory`
+  consumer's model is resolved, which is the path the `content` arm's CLI calls go through — for a CLI judge saved
+  and running on the same client it passes the key through unchanged, so no difference is expected, but the arm
+  was not re-run on `bc7041c` to show it.
 - No reranker arm ran twice, so this run has no model A/A pair: nothing here shows how far a reranker arm drifts
   between identical runs. The Claude side of the cross-run comparison was also measured once — Run 1's own
   `content`/`content2` A/A differed by 2 queries — so a cross-run gap of that size is inside the noise. The

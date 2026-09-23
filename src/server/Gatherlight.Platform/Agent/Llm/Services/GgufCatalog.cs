@@ -71,12 +71,19 @@ public static class GgufCatalog
     public const string RecommendedJudge = "gemma-3-1b-it-Q4_K_M";
 
     /// <summary>The reranker the bilingual bench recommends (docs/judge-bench.md, Run 2) — by the tie rule
-    /// declared before the run, NOT by a measured difference. Paired on the same 240 questions, LAMAR and BGE
-    /// were neither significantly different nor equivalent on top-1 or on found@8, so the rule took the smaller
-    /// file — and the two files differ by 1,408 bytes. Both rows' notes say the fixture could not separate them.
-    /// Its display name carries no 推荐 (unlike <see cref="RecommendedJudge"/>'s), and the console's 推荐 badge
-    /// does not read it: either would claim a preference the measurement cannot see. Re-run
-    /// <c>dev.mjs judge-bench</c> before treating it as more.</summary>
+    /// declared before the run, and by NOTHING measured. Paired on the same 240 questions, LAMAR and BGE were
+    /// neither significantly different nor equivalent on top-1 or on found@8, so the rule took the smaller
+    /// file — and the two files differ by 1,408 bytes.
+    ///
+    /// <para><b>The leans are not symmetric, and the notes say so.</b> found@8 — the metric a reranker is FOR —
+    /// leans LAMAR 5–0 (exact p = 0.063, just short; the bench's own interval [−4.0, −0.1] pp excludes zero),
+    /// while BGE's top-1 lead is 6–2 (p = 0.289, an interval spanning zero). The rule stands as registered:
+    /// re-picking after seeing which way the data leaned would be worse than a tie-break that runs against the
+    /// lean. It is a tie-break, and <see cref="RerankerPair"/> says that where the household reads it.</para>
+    ///
+    /// <para>Its display name carries no 推荐 (unlike <see cref="RecommendedJudge"/>'s), and the console's 推荐
+    /// badge does not read it: either would claim a preference the measurement cannot see. Re-run
+    /// <c>dev.mjs judge-bench</c> before treating it as more.</para></summary>
     public const string RecommendedReranker = "bge-reranker-v2-m3-Q5_K_M";
 
     /// <summary>What every reranker row says, because it is the one thing that differs from a chat judge:
@@ -95,6 +102,27 @@ public static class GgufCatalog
         "同一测试集上,不开判断是 79/240 与 125/240(每次约 0.23 秒),Claude CLI 判断是 132/240 与 133/240"
         + "(每次约 9.5 秒):重排把答案带进前八的次数多得多,排到第一的次数却只比不开判断略多 —— "
         + "它挑哪八条上页,先后仍按原来的排序。";
+
+    /// <summary>What a reranker row's latency was measured UNDER: serial medians with the model already loaded,
+    /// on one machine's GPU, over recalls of at most 60 candidates (docs/judge-bench.md, Run 2). A reranker
+    /// scores every candidate it is shown, so a CPU-only machine — or a recall naming a kind, which can carry up
+    /// to 400 — may be much slower. A bare 「0.47 秒」 would promise that figure on any machine.</summary>
+    private const string RerankerLatencyCaveat =
+        "(模型已加载、在显卡上、每次不超过 60 条候选时测得;只有 CPU 的机器,或限定类别、候选可达 400 条的检索,"
+        + "可能慢得多)";
+
+    /// <summary>LAMAR against BGE, ONE sentence shared by both rows — the same comparison read from either side,
+    /// so the two notes cannot tell it differently. It used to say only that the fixture could not separate
+    /// them, which hid that the two leans are not symmetric: found@8, where a reranker earns its place, leans
+    /// LAMAR with nothing on the other side (5–0; exact p = 0.063, just short, while the 95% interval excludes
+    /// zero), and BGE's top-1 lead is 6–2 with an interval spanning zero. The Chinese count is the one the doc
+    /// states exactly: every Chinese-worded question, code-switched included (120 of 240) — see "By fact
+    /// language" in docs/judge-bench.md.</summary>
+    private const string RerankerPair =
+        "LAMAR 和 BGE 这个测试集没有测出差别,但两边并不对称:把答案带进前八,偏向 LAMAR —— 5 题只有 LAMAR 做到,"
+        + "反过来一题也没有(精确检验 p = 0.063,差一点够不上显著,95% 区间不含零);排第一,BGE 多 4 题"
+        + "(6 对 2,看不出差别)。120 道中文或中英混写的提问里,两者有 6 题结果不同:4 题 LAMAR 对,2 题 BGE 对。"
+        + "推荐 BGE 只是按事先定好的规则 —— 分不出时取较小的文件,而两个文件只差 1.4 KB。";
 
     public static readonly IReadOnlyList<GgufModel> Models = new[]
     {
@@ -131,18 +159,18 @@ public static class GgufCatalog
             "mradermacher/LAMAR-600m-GGUF", "cd4da764d5b17d9996710dbf0ef5ad31c9aed182",
             "LAMAR-600m.Q5_K_M.gguf",
             "ec708b20336577c63702dd8efb23060bc611933579572bf9ad47ce2eaeda546f", 468_393_760,
-            RerankerNote + "本应用双语测试集:首位命中 86/240,前八命中 208/240,每次检索约 0.47 秒。"
-            + RerankerMeasuredAgainst + "和 BGE 的差别这个测试集分不出来。"
+            RerankerNote + "本应用双语测试集:首位命中 86/240,前八命中 208/240,每次检索约 0.47 秒"
+            + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair
             + "Lyntai 在英文 LoCoMo 上实测:+9.0(完美判断是 +9.5)。"),
         new GgufModel(
             RecommendedReranker, "BGE Reranker v2 M3(Q5 · 判断 · 重排)", GgufCapability.Reranking,
             "gpustack/bge-reranker-v2-m3-GGUF", "3093af03b1a635e67b084b1d8c03c5f5e020fd05",
             "bge-reranker-v2-m3-Q5_K_M.gguf",
             "1a212007526c7083627eed92b39dd4472e90ff1374a03fb068733378220813ef", 468_392_352,
-            RerankerNote + "本应用双语测试集:首位命中 90/240,前八命中 203/240,每次检索约 0.49 秒。"
-            + RerankerMeasuredAgainst + "和 LAMAR 的差别这个测试集分不出来(公开的中文评测上它比同类更强;"
-            + "本应用的中文题上两者只有两题结果不同,都是 LAMAR 对);两个文件大小只差 1.4 KB,"
-            + "推荐它只是按「分不出时取较小的文件」。"
+            // No claim about public Chinese benchmarks: this row once said it was stronger than its peers there,
+            // naming no benchmark and no source — an attribution nobody could check is not one.
+            RerankerNote + "本应用双语测试集:首位命中 90/240,前八命中 203/240,每次检索约 0.49 秒"
+            + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair
             + "Lyntai 在英文 LoCoMo 上量过的是它的 Q8 版本(+5.5)。"),
     };
 
