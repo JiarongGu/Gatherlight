@@ -169,7 +169,7 @@ public sealed class ClaudeCliSemanticSource : IMemorySemanticSource
     /// that fails to gain phrasings must still be written. Failing the write would trade a better search
     /// for a lost fact.</para></summary>
     public static async Task<IReadOnlyList<string>> RephraseAsync(
-        Lyntai.Llm.ILlmClient llm, string? model, string fact, CancellationToken ct = default)
+        Lyntai.Inference.ITextClient llm, string? model, string fact, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(fact)) return Array.Empty<string>();
         try
@@ -189,9 +189,9 @@ public sealed class ClaudeCliSemanticSource : IMemorySemanticSource
                 + "写一行中文)—— 换一种语言提问正是这一层最主要的用途。其余各行换用词(同义词、口语"
                 + "说法),但都不要添加原文没有的信息。\n\n"
                 + fact;
-            var reply = await llm.CompleteAsync(new Lyntai.Llm.LlmRequest
+            var reply = await llm.CompleteAsync(new Lyntai.Inference.TextRequest
             {
-                Messages = new[] { new Lyntai.Llm.LlmMessage("user", prompt) },
+                Messages = new[] { new Lyntai.Inference.TextMessage("user", prompt) },
                 Model = model,
                 // Bounded: four short lines. An unbounded reply here is an unbounded amount of text going
                 // into the search index for one fact.

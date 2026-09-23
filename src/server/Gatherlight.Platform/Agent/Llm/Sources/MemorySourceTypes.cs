@@ -309,7 +309,7 @@ public sealed record MemorySourceContext(
     IClaudeCliRuntime Claude,
     ILlamaServerRuntime Llama,
     MemorySourceSettings Settings,
-    Lyntai.Llm.ILlmClient? Llm = null)
+    Lyntai.Inference.ITextClient? Llm = null)
 {
     public MemoryConfig Config => Settings.Config;
 }

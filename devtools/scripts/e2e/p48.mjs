@@ -12,6 +12,8 @@
 //      install never had, so without the rebuild recall silently falls through to FTS forever
 //   7. an UPGRADE that moves the scope rebuilds too, including for a household with no layout marker
 //      at all — the marker postdates the layout it names, so "no marker" IS the upgrade case
+//   8. …but an upgrade that moved only the VECTORS (Lyntai 3.2's collection address) does NOT rebuild an
+//      install with no embedder: nothing there reads a vector, and a rebuild would erase decay and links
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -28,10 +30,12 @@ makeTestData(restoreDir);
 const PORT = 5498;
 const RESTORE_PORT = 5499;
 const UPGRADE_PORT = 5497;
+const VECTOR_MOVE_PORT = 5495;
 
 let server = null;
 let restoreServer = null;
 let upgraded = null;
+let vectorMove = null;
 
 const remember = (c, kind, topic, content, confidence = 0.8) =>
   c.call('remember_fact', { kind, topic, content, source: `https://example.test/${encodeURIComponent(topic)}`, confidence });
@@ -411,12 +415,14 @@ try {
     subjHits.some((f) => f.topic === 'partner celebration date'),
     JSON.stringify(subjHits.map((f) => f.topic)));
 
-  // The route is REPORTED, not silently blended in. A subject hit has no measured retrievability, so
-  // printing 0.0 would claim the fact is fully decayed — a statement about the household's own memory
-  // that nothing checked. Same reason `ranked` exists.
+  // The ENGINE found it, and ranked it like any other candidate. Until Lyntai 3.1 this lookup was ours,
+  // appended after the ranking with no measurement at all — so it was flagged matched:"subject" and its
+  // retrievability withheld rather than printed as a false 0.0. Since 3.1 the engine seeds recall from the
+  // handles itself (SubjectSeedSource), so the hit carries a REAL retrievability; the app-side append is
+  // deleted, and a leftover flag here would mean it came back.
   const partnerHit = subjHits.find((f) => f.topic === 'partner celebration date');
-  ok('…and says HOW it was found, instead of reporting a retrievability it never measured',
-    partnerHit?.matched === 'subject' && partnerHit?.retrievability === undefined,
+  ok('…as an ordinary RANKED hit, with a measured retrievability (the engine subject channel, not an append)',
+    partnerHit?.matched === undefined && typeof partnerHit?.retrievability === 'number',
     JSON.stringify(partnerHit));
 
   // SELECTIVITY. A handle is not a wildcard: the other annotated fact carries a different one and must
@@ -434,8 +440,8 @@ try {
     !(spurious.result?.facts ?? []).some((f) => f.topic === 'partner celebration date'),
     JSON.stringify((spurious.result?.facts ?? []).map((f) => f.topic)));
 
-  // ADDITIVE, NEVER A REORDERING. The original ranked query must be untouched — subject hits are
-  // appended after the graph's own answer, so a fact the ranking already found keeps its place.
+  // A handle-free query is untouched: subject candidates enter the rank fusion only when the query names
+  // a handle, so an ordinary recall still leads with a graph-ranked, measured hit.
   const stillRanked = await uc.call('recall_facts', { query: 'harbour teahouse', limit: 5 });
   const stillTop = (stillRanked.result?.facts ?? [])[0];
   ok('an ordinary ranked recall is unchanged — the addition cannot displace a better hit',
@@ -443,12 +449,42 @@ try {
       && typeof stillTop?.retrievability === 'number',
     JSON.stringify({ ranked: stillRanked.result?.ranked, top: stillTop?.topic, m: stillTop?.matched }));
 
+  // --- 8. a VECTORS-ONLY layout move leaves an embedder-less graph alone ----------------------------
+  // Lyntai 3.2 changed the vector collection address, orphaning vectors written before it. That strands
+  // semantic recall — but only on an install that HAS an embedder; this fixture has none, so nothing here
+  // reads a vector and nothing was stranded. Rebuilding anyway would throw away every decay position and
+  // link for no gain. Case 7 is the positive control: an older layout DOES rebuild. The embedder branch
+  // itself is not drivable here (the suite runs with no local model), and is stated as a gap.
+  upgraded.stop();
+  upgraded = null;
+  const vdb = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'));
+  const nodeIds = () => vdb.prepare(
+    "SELECT id FROM lyntai_memory_node WHERE engine = 'facts/graph' ORDER BY id").all().map((r) => r.id).join(',');
+  const idsBefore = nodeIds();
+  vdb.prepare("UPDATE app_config SET value = '2' WHERE key = 'facts.index.layout'").run();
+  ok('(fixture) the marker names the pre-3.2 layout',
+    vdb.prepare("SELECT value FROM app_config WHERE key = 'facts.index.layout'").get()?.value === '2');
+
+  vectorMove = startServer({ dataDir, port: VECTOR_MOVE_PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+  await waitHealthy(`http://127.0.0.1:${VECTOR_MOVE_PORT}`);
+  const vc = makeClient(`http://127.0.0.1:${VECTOR_MOVE_PORT}`);
+  // Something must go through the index after boot, or "unchanged" could just mean "not run yet" — the
+  // marker moving is the proof the step ran at all.
+  const afterMove = await vc.call('recall_facts', { query: 'harbour teahouse', limit: 5 });
+  ok('the step ran: the marker moved to the current layout',
+    vdb.prepare("SELECT value FROM app_config WHERE key = 'facts.index.layout'").get()?.value === '3');
+  ok('THE POINT: with no embedder the graph was KEPT — same nodes, so decay and links survive the upgrade',
+    idsBefore.length > 0 && nodeIds() === idsBefore, `before=${idsBefore} after=${nodeIds()}`);
+  ok('…and it still ranks', afterMove.result?.ranked === 'graph', `ranked=${afterMove.result?.ranked}`);
+  vdb.close();
+
 } catch (err) {
   fail('e2e-p48 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {
   try { server?.stop(); } catch {}
   try { restoreServer?.stop(); } catch {}
   try { upgraded?.stop(); } catch {}
+  try { vectorMove?.stop(); } catch {}
 }
 
 done();

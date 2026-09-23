@@ -8,12 +8,10 @@ namespace Gatherlight.Server.Platform.Storage.Knowledge.Services;
 /// <param name="Retrievability">0..1, how far the entry has decayed. Reported to the agent so a faint
 /// fact is visibly faint rather than silently equal to a fresh one.</param>
 /// <param name="Degree">How many other facts this one is linked to.</param>
-/// <param name="BySubject">This hit came from a SUBJECT HANDLE matching the query, not from the graph's
-/// ranking — so its <paramref name="Retrievability"/> and <paramref name="Degree"/> are unknown rather than
-/// zero, and the caller must not print them as if they were measured. Same principle as <c>ranked</c> one
-/// level down: two answers arrived by different routes, and a reader who cannot tell them apart will read
-/// "0.0" as "fully decayed" instead of "we never asked".</param>
-public sealed record FactHit(string GraphRef, double Retrievability, int Degree, bool BySubject = false);
+/// <remarks>A fact found through a SUBJECT HANDLE is an ordinary hit here, carrying a real retrievability and
+/// degree: since Lyntai 3.1 the engine seeds recall from the handles itself and ranks those candidates with
+/// every other. It used to be appended app-side and flagged, because that route measured neither number.</remarks>
+public sealed record FactHit(string GraphRef, double Retrievability, int Degree);
 
 /// <summary>A fact opened up: its own text plus the headlines it is connected to.</summary>
 public sealed record FactExpansion(string GraphRef, string Headline, string? Content,
@@ -46,6 +44,10 @@ public interface IFactIndex
 {
     /// <summary>False when no memory engine is registered — callers then use FTS alone.</summary>
     bool Available { get; }
+
+    /// <summary>True when an EMBEDDER is wired, so the graph's entries carry vectors a recall reads. Asked
+    /// by a layout migration that moved only the vectors: without an embedder there is nothing to move.</summary>
+    bool Embeds { get; }
 
     /// <summary>Index one fact; returns its address, or null if the index is unavailable or refused it.</summary>
     Task<string?> IndexAsync(string kind, string topic, string content, CancellationToken ct = default);
@@ -103,7 +105,7 @@ public sealed class FactIndex : IFactIndex
     /// <summary>ONE scope for every fact, rather than the fact's own <c>kind</c>.
     ///
     /// <para>Scope looks like the natural home for <c>kind</c> and costs the feature its main path. A
-    /// vector collection is keyed <c>{member}|{task}|{scope}</c>, so kind-as-scope splits the embeddings
+    /// vector collection is keyed by member, task AND scope, so kind-as-scope splits the embeddings
     /// into one collection per kind — and a recall that names no kind searches <c>…|facts|</c>, which is
     /// empty. That is the DEFAULT <c>recall_facts</c> call: the agent rarely knows the kind, so semantic
     /// recall was answering only the rare scoped ask. Measured 2026-08-21: scoped 3/3 queries improved,
@@ -126,21 +128,6 @@ public sealed class FactIndex : IFactIndex
     /// path, which is the rare one.</para></summary>
     private const string AllFacts = "all";
 
-    /// <summary>How much of the subject vocabulary one recall reads. Bounded because it is a per-recall
-    /// read on the path the household waits on, and the handles are returned most-used first — so a cut-off
-    /// drops the rare ones, which are the least likely to be named in a query anyway.</summary>
-    private const int SubjectsScanned = 200;
-
-    /// <summary>How many matched handles one query may follow. A query naming several handles is usually a
-    /// long sentence brushing past generic ones; following all of them turns a recall into many round trips
-    /// for candidates that rank last regardless.</summary>
-    private const int SubjectsPerQuery = 4;
-
-    /// <summary>How many facts one handle may contribute. A handle used by a hundred facts says almost
-    /// nothing about which one was wanted, so it contributes a few rather than flooding the page it is only
-    /// meant to extend.</summary>
-    private const int NodesPerSubject = 5;
-
     private readonly IMemoryEngine? _engine;
     private readonly IMemoryGraphStore? _graph;
     private readonly IKnowledgeStore _store;
@@ -149,8 +136,8 @@ public sealed class FactIndex : IFactIndex
     /// <summary>Registered only when the household turned semantic recall on AND an embedder resolved, so
     /// its presence is exactly "meaning-based recall is available" — which is all this field is read for.
     /// <para>NOT written to. The vectors that answer a recall are the GRAPH member's own: it embeds every
-    /// write already, and <c>GraphMemoryOptions.SemanticSeedK</c> is what lets a recall consider those
-    /// neighbours. Writing here as well would embed each fact a second time into a collection whose hits
+    /// write already, and the semantic seed source (<c>VectorRecallWiring</c>) is what lets a recall consider
+    /// those neighbours. Writing here as well would embed each fact a second time into a collection whose hits
     /// carry a <c>facts/semantic#…</c> reference that no <c>knowledge</c> row stores — dropped on the way
     /// out by the ref match in <c>ByGraphRefsAsync</c>.</para></summary>
     private readonly ISemanticMemory? _semantic;
@@ -162,13 +149,13 @@ public sealed class FactIndex : IFactIndex
     // The CLI 语义 arm: a one-shot model call per write that stores rephrasings, for installs with no
     // local model. Both nullable — the arm is off unless a household bound it, and everything here works
     // exactly as before when they have not.
-    private readonly Lyntai.Llm.ILlmClient? _llm;
+    private readonly Lyntai.Inference.ITextClient? _llm;
     private readonly Kernel.Services.ServerConfigService? _config;
 
     public FactIndex(IMemoryEngineFactory? engines, IKnowledgeStore store,
         IMemoryGraphStore? graph = null, ILogger<FactIndex>? log = null,
         ISemanticMemory? semantic = null, IVectorStore? vectors = null,
-        Lyntai.Llm.ILlmClient? llm = null, Kernel.Services.ServerConfigService? config = null)
+        Lyntai.Inference.ITextClient? llm = null, Kernel.Services.ServerConfigService? config = null)
     {
         _llm = llm;
         _config = config;
@@ -181,6 +168,8 @@ public sealed class FactIndex : IFactIndex
     }
 
     public bool Available => _engine is not null;
+
+    public bool Embeds => _engine is not null && _semantic is not null;
 
     public async Task<string?> IndexAsync(string kind, string topic, string content, CancellationToken ct = default)
     {
@@ -262,125 +251,12 @@ public sealed class FactIndex : IFactIndex
             var hits = new List<FactHit>(recall.Items.Count);
             foreach (var i in recall.Items)
                 hits.Add(new FactHit(Encode(i.Reference), i.Retrievability, i.Degree));
-            await AppendBySubjectAsync(query, hits, ct);
             return new FactRanking(hits, recall.Answered);
         }
         catch (Exception ex)
         {
             _log?.LogWarning(ex, "fact index: recall failed; falling back to FTS");
             return FactRanking.Empty;
-        }
-    }
-
-    /// <summary>Facts whose SUBJECT HANDLE the query names, appended to the ranking.
-    ///
-    /// <para><b>Why this exists: the handles were already bought.</b> With 判断 on, every write is annotated
-    /// and the annotation's subjects — deliberately stable handles a later fact about the same entity would
-    /// produce again, "配偶", "生日", "deploy-key" — are recorded by the engine. Until this, they were read
-    /// by exactly two things: linking two facts at write time, and prompting the annotator to reuse a handle.
-    /// <b>No recall path touched them.</b> So a household who asked "配偶" got nothing from a fact whose text
-    /// says 太太, while a handle saying precisely that the fact is about their spouse sat in the store,
-    /// paid for by a model call they had already made. That is the same shape as the embedding that was
-    /// bought on every write with <c>SemanticSeedK</c> at 0 and consulted on no recall — a cost with no
-    /// matching benefit, invisible from every API response.</para>
-    ///
-    /// <para><b>Additive, never a reordering.</b> Hits are APPENDED after the graph's own answer, which
-    /// <c>ByGraphRefsAsync</c> preserves exactly, so a fact the ranking already found keeps its place and
-    /// its score. The worst this can do is lengthen a short page; it cannot displace a better hit. That
-    /// property is why it needs no tuning knob and no cost/benefit judgement at recall time — and it is a
-    /// deliberate contrast with putting handles into the FTS text, where a generic handle would compete for
-    /// bm25 relevance against the fact's own words.</para>
-    ///
-    /// <para><b>Handles are matched as SUBSTRINGS of the query, normalized through Lyntai's own rule.</b>
-    /// <c>MemorySubject.Normalize</c> is CALLED rather than restated, because the store's write applied it
-    /// and a private <c>ToLower()</c> folds differently under a Turkish culture — the same handle would then
-    /// stop matching across machines. Substring rather than token equality because the query is a sentence
-    /// and CJK has no spaces to tokenize on, which is the same reason this product's FTS uses trigram.</para>
-    ///
-    /// <para>Degrades to nothing, never throws: this runs after a ranking that already succeeded, and
-    /// failing the whole recall to protect an addition would trade a working answer for no answer.</para>
-    ///
-    /// <para><b>THIS IS A WORKAROUND FOR A LIBRARY GAP — delete it if Lyntai closes it.</b> Filed as
-    /// <c>Lyntai TASKS.md</c> <b>Part 94</b>: the engine records subjects and reads them only at write
-    /// time, so nothing but this reaches them at recall. If a release adds a subject seed to
-    /// <c>GraphMemoryOptions</c>, subject matches will arrive as ordinary ranked hits — with real
-    /// retrievability and degree, which is strictly better than what this can report — and the
-    /// <c>seen</c> dedup below will silently skip them. Nothing breaks and no row doubles; this just
-    /// becomes two redundant store queries on every recall. Recorded on BOTH sides on purpose, because a
-    /// workaround whose reason lives only in the other repository is how one feature ends up implemented
-    /// twice, each copy looking necessary to whoever reads only one of them.</para>
-    /// </summary>
-    private async Task AppendBySubjectAsync(string query, List<FactHit> hits, CancellationToken ct)
-    {
-        if (_graph is null) return;
-        try
-        {
-            var known = await _graph.KnownSubjectsAsync(GraphMember, TaskKey, AllFacts, SubjectsScanned, ct);
-            if (known.Count == 0) return;
-
-            var haystack = MemorySubject.Normalize(query);
-            if (haystack.Length == 0) return;
-
-            var seen = new HashSet<string>(hits.Select(h => h.GraphRef), StringComparer.Ordinal);
-            var used = 0;
-            foreach (var subject in known)
-            {
-                var handle = MemorySubject.Normalize(subject);
-                // A one-character handle would match a large share of every query — in CJK especially, where
-                // it is a whole word — and turn this into noise on every recall. Two is the shortest handle
-                // that can be about something.
-                if (handle.Length < 2 || !NamesHandle(haystack, handle)) continue;
-                if (++used > SubjectsPerQuery) break;
-
-                var nodes = await _graph.NodesBySubjectAsync(
-                    GraphMember, TaskKey, AllFacts, handle, NodesPerSubject, ct);
-                foreach (var node in nodes)
-                {
-                    // Built the same way Encode builds one, from the member that RECORDED the subject —
-                    // a ref addressed to any other member resolves to no row and silently shortens the page.
-                    if (seen.Add($"{GraphMember}#{node}"))
-                        hits.Add(new FactHit($"{GraphMember}#{node}", 0, 0, BySubject: true));
-                }
-            }
-            if (used > 0)
-                _log?.LogDebug("fact index: {Used} subject handle(s) in the query added candidates", used);
-        }
-        catch (Exception ex)
-        {
-            _log?.LogWarning(ex, "fact index: subject lookup failed; the ranking stands on its own");
-        }
-    }
-
-    /// <summary>Does this query NAME the handle — as opposed to merely containing its letters?
-    ///
-    /// <para>Two rules, because two writing systems answer "where does a word end" differently. A handle
-    /// with any non-ASCII character (CJK, the common case here) matches as a plain SUBSTRING: Chinese is
-    /// written without spaces, so there is no boundary to anchor to, and this is the same reason the
-    /// product's FTS uses the trigram tokenizer rather than <c>unicode61</c>.</para>
-    ///
-    /// <para>A purely ASCII handle instead needs a WORD BOUNDARY, because there substrings really do span
-    /// unrelated words — the handle <c>pairbond</c> sits inside <c>repairbonded</c>, and a short one like
-    /// <c>hr</c> inside <c>three</c>. Appending is bounded and cannot displace a better hit, so a false
-    /// positive here costs a slightly longer page rather than a wrong answer — but it still shows the
-    /// household a fact that has nothing to do with what they asked, and that is worth five lines to
-    /// avoid.</para></summary>
-    private static bool NamesHandle(string query, string handle)
-    {
-        var ascii = true;
-        foreach (var ch in handle) if (ch > 127) { ascii = false; break; }
-        if (!ascii) return query.Contains(handle, StringComparison.Ordinal);
-
-        var from = 0;
-        while (true)
-        {
-            var at = query.IndexOf(handle, from, StringComparison.Ordinal);
-            if (at < 0) return false;
-            // A letter or digit either side means the handle is part of a longer word, not the word itself.
-            var beforeOk = at == 0 || !char.IsLetterOrDigit(query[at - 1]);
-            var end = at + handle.Length;
-            var afterOk = end >= query.Length || !char.IsLetterOrDigit(query[end]);
-            if (beforeOk && afterOk) return true;
-            from = at + 1;
         }
     }
 
@@ -519,8 +395,9 @@ public sealed class FactIndex : IFactIndex
     /// store's rows, keyed by node id, and a rebuilt node takes a fresh id — so the old rows would simply
     /// stay, unreferenced and still matched against.</para>
     /// <para>Located by PREFIX rather than by rebuilding the collection name: the name is Lyntai's to
-    /// compose (<c>{engine}|{task}|{scope}</c> today), and the one part of it this app can rely on is that
-    /// it starts with the engine's own name. Best-effort — a failure here costs recall quality on the next
+    /// compose (member, task and scope — the separator changed in Lyntai 3.2, which is exactly why this
+    /// does not restate it), and the one part of it this app can rely on is that it starts with the
+    /// engine's own name — which also sweeps collections a pre-3.2 build left at the old address. Best-effort — a failure here costs recall quality on the next
     /// search, never the rebuild.</para></summary>
     private async Task DropGraphVectorsAsync(CancellationToken ct)
     {

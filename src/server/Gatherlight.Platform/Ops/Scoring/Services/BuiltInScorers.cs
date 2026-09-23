@@ -158,12 +158,12 @@ public sealed partial class CitationScorer : IScorer
 /// <summary>
 /// Base for the judges that can open the REAL artifact instead of grading only the excerpt packed into
 /// the score context. The read-only tools (<see cref="JudgeReadFileTool"/>/<see cref="JudgeListFilesTool"/>)
-/// reach these calls because <c>AddMcpToolHost</c> hosts them for the one-shot ILlmClient path — see
+/// reach these calls because <c>AddMcpToolHost</c> hosts them for the one-shot ITextClient path — see
 /// GatherlightApp. Two things have to change for that to be usable: the base rubric's "reply with JSON
 /// and nothing else", which read literally forbids calling a tool first, and a prompt hint naming the
 /// tools and this session's artifacts (a judge won't go looking for a path nobody gave it).
 /// </summary>
-public abstract class ArtifactAwareJudge(Lyntai.Llm.ILlmClient llm) : LlmScorerBase(llm)
+public abstract class ArtifactAwareJudge(Lyntai.Inference.ITextClient llm) : LlmScorerBase(llm)
 {
     // Keeps the "SCORING TASK" marker — Lyntai routes on Consumer, but the e2e claude stub keys on it.
     protected override string JudgeSystemPrompt =>
@@ -193,7 +193,7 @@ public abstract class ArtifactAwareJudge(Lyntai.Llm.ILlmClient llm) : LlmScorerB
 }
 
 /// <summary>Quality: does the plan address exactly what the user asked (on-scope)?</summary>
-public sealed class AnswerRelevancyScorer(Lyntai.Llm.ILlmClient llm)
+public sealed class AnswerRelevancyScorer(Lyntai.Inference.ITextClient llm)
     : ArtifactAwareJudge(llm), IScorer
 {
     public override string Id => "answer-relevancy";
@@ -216,7 +216,7 @@ public sealed class AnswerRelevancyScorer(Lyntai.Llm.ILlmClient llm)
 }
 
 /// <summary>Guardrail: are time-sensitive facts cited or marked TBD, not fabricated (no-fabrication)?</summary>
-public sealed class FaithfulnessScorer(Lyntai.Llm.ILlmClient llm)
+public sealed class FaithfulnessScorer(Lyntai.Inference.ITextClient llm)
     : ArtifactAwareJudge(llm), IScorer
 {
     public override string Id => "faithfulness";

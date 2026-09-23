@@ -64,7 +64,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - **Judge tools** (`Platform/Ops/Scoring/Services/JudgeTools.cs`): the LLM judges can open the
   REAL artifact instead of grading the truncated excerpt in the `ScoreContext`. They reach it
   through Lyntai's `AddMcpToolHost(new ClaudeCliMcpDialect())`, which registers an
-  `ICliToolProvisioner` — read ONLY by `ClaudeCliProvider`, i.e. the one-shot `ILlmClient` path,
+  `ICliToolProvisioner` — read ONLY by `ClaudeCliProvider`, i.e. the one-shot `ITextClient` path,
   so this affects the judges and nothing else (the agent path, `ClaudeAgentSession`, takes no
   provisioner — it reaches the app's tools through the loopback channel in the next bullet, a
   different endpoint with a different lifetime). Per call Lyntai starts a bearer-gated loopback
@@ -459,8 +459,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   reader at all** — incremented on every recall, mapped onto `KnowledgeRow`, and used by neither the ranking
   (confidence then bm25), nor `MemoryTools.Row`, nor the client, which is why the double-count was a latent
   wrong number rather than a visible one. **Resolved by giving it a reader** (`used` on each recalled row)
-  rather than by dropping a column the backup carries: it earns its place on rows matched by TEXT or by
-  SUBJECT, which carry no retrievability and so had no usage signal at all. "Read it or stop writing it" —
+  rather than by dropping a column the backup carries: it earns its place on rows matched by TEXT, which
+  carry no retrievability and so had no usage signal at all. "Read it or stop writing it" —
   and reading it was the smaller change.
 - **A WORKAROUND FOR A LYNTAI GAP IS RECORDED ON BOTH SIDES, or it becomes a duplicate feature.** We are
   review-only on Lyntai, so our fixes for its gaps live here and the request lives in its `TASKS.md`. Each
@@ -468,28 +468,29 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   what happens when it does*; the task says *an adopter already shipped a workaround, so landing this means
   telling them to remove it*. Without both, a future release closes the gap silently and the app keeps
   running its own copy — two implementations in one call path, each looking necessary to whoever reads only
-  one repository. `FactIndex.AppendBySubjectAsync` ↔ Lyntai Part 94 is the worked example, and it also shows
+  one repository. The app-side subject lookup ↔ Lyntai Part 94 is the worked example, and it also shows
   the note must state the CONSEQUENCE precisely rather than warn vaguely: there, an engine-side seed would
   not double any row (we dedup by graph ref) and would report better numbers than we can, so the honest
-  instruction is "delete this", not "beware of conflicts".
+  instruction was "delete this", not "beware of conflicts". **And the rule paid out**: Lyntai 3.1 closed both
+  Part 94 and Part 93 (the candidate-list widening, below), and the 3.2 upgrade deleted both copies without
+  an investigation, because each note already said what to do.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
   reuse a handle. **No recall path touched them**, so a household asking "配偶" got nothing from a fact whose
   text says 太太, while a handle saying exactly that sat in the store, paid for by a model call they had
-  already made. Same shape as the embedding bought on every write with `SemanticSeedK` at 0 — a cost with no
-  matching benefit, invisible from every API response. `FactIndex.AppendBySubjectAsync` closes it: handles
-  matching the query as SUBSTRINGS (the query is a sentence and CJK has no spaces — the same reason the FTS
-  is trigram), normalized by CALLING `MemorySubject.Normalize` rather than restating it, because the store's
-  write applied it and a private `ToLower()` folds `"I"` differently under a Turkish culture. **APPENDED
-  after the graph's answer, never merged into it**: `ByGraphRefsAsync` preserves rank order exactly, so this
-  can only lengthen a short page and never displace a better hit — which is why it needs no tuning knob.
-  That is also why the handles are NOT put into the FTS text, where a generic handle would compete for bm25
-  against the fact's own words. A subject hit reports `matched:"subject"` and **omits** retrievability and
-  degree — neither was measured, and printing `0.0` claims the fact is fully decayed, a statement about the
-  household's memory that nothing checked (the `ranked` principle, one level down). Proof lives in `e2e-p48`
-  and was confirmed to FAIL with the append removed — the query returns `[]`, since no fact's text contains
-  the handle. **The stub taught the same lesson twice**: its annotation branch must read only the text after
+  already made. Same shape as an embedding bought on every write and read by no recall — a cost with no
+  matching benefit, invisible from every API response. **Since Lyntai 3.1 the ENGINE closes it**: the
+  subject channel (`SubjectSeedSource`, registered by `AddMemoryEngine`) seeds a recall from handles the
+  query names — substring for a spaceless script, word boundary for a spaced one — and ranks those candidates
+  with every other, so a subject hit carries a REAL retrievability and degree. It was first closed APP-side,
+  by an append after the graph's answer that could measure neither number and therefore reported
+  `matched:"subject"` with retrievability omitted rather than a false `0.0`; that append was deleted in the
+  3.2 upgrade, as its own note instructed. The handles are still NOT put into the FTS text, where a generic
+  handle would compete for bm25 against the fact's own words. Proof lives in `e2e-p48`, whose handles appear
+  in no fact's text (so only the subject channel can find the fact) and which asserts the hit is an ordinary
+  RANKED one — a returning `matched:"subject"` would mean the app-side copy came back. **The stub taught the
+  same lesson twice**: its annotation branch must read only the text after
   the last `Fact:`, because Lyntai composes the prompt as [known subjects] + [earlier facts] + the write, so
   a whole-prompt scan hands every handle to every write. That is the p28 cross-fire exactly, one call site
   over, and it was caught by the selectivity assertion rather than in production.
@@ -529,9 +530,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - **Meaning-based fact recall is a GRAPH OPTION and ONE SCOPE — not a second engine member.** Both halves
   were got wrong first, both failed silently, and neither was visible from any API response, so the
   reasoning is on the record. (1) With an embedder + vector store registered, `UseGraph()` already embeds
-  every write — for novelty judgement and for linking entries whose text never overlaps — but
-  `GraphMemoryOptions.SemanticSeedK` **ships at 0**, "considers none, which is what every version before
-  this did". So the embedding was bought on every write and consulted on no recall. Adding a
+  every write — for novelty judgement and for linking entries whose text never overlaps — but a recall
+  consults those vectors only through a semantic seed channel, which ships OFF. So the embedding was bought
+  on every write and consulted on no recall. Through 3.0.2 that channel was `GraphMemoryOptions.SemanticSeedK`;
+  **Lyntai 3.2 made it a registered seed SOURCE** (`AddMemorySemanticSeeds`), whose constructor needs a
+  vector backend and a vector store — so the embedder arms add it themselves, beside what it reads
+  (`VectorRecallWiring`), and the Claude CLI arm, which registers neither, never does. `e2e-p52` proves it
+  by ROUTING — a recall sends its query to the embedder — and was confirmed to FAIL with the registration
+  removed (the only request that recall made was the judge's). Adding a
   `UseSemantic()` member instead looks equivalent and is not: a composite ROUTES a write to the first
   member supporting the grade, so that member's store stays empty unless something fills it — and once
   filled, its hits carry `facts/semantic#<contentHash>` while every `knowledge` row stores the graph's
@@ -554,13 +560,19 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   names none. Because scope addresses the graph, moving it strands existing entries at the old
   address — reachable only by a rebuild — so `FactIndexStep` carries a **layout marker** (`facts.index.layout`)
   and pays a one-off `RebuildAsync` on upgrade, writing the marker LAST so a crash mid-rebuild retries
-  instead of settling into the silent FTS fallback. Proof lives in `e2e-p48`, which asserts the ONE SCOPE
+  instead of settling into the silent FTS fallback. **Layout 3 is a move WE did not make**: Lyntai 3.2 changed
+  the vector collection address (U+001F separator) and orphans vectors under the old one — its changelog says
+  "a deployment re-indexes", and `IVectorStore` has no way to read a vector back out to move it. Only the
+  VECTORS moved, so 2 → 3 rebuilds only where an embedder is wired (`IFactIndex.Embeds`); an install without
+  one keeps its graph, decay and links. `e2e-p48` case 8 asserts the kept node ids and was confirmed to FAIL
+  with the rebuild forced; the embedder branch is not drivable there (no local model) — a stated gap. Proof lives in `e2e-p48`, which asserts the ONE SCOPE
   against the store (no API response shows it, and the suite runs without an embedder so it cannot see
   vectors at all) and was confirmed to FAIL against kind-as-scope. **Lyntai 3.0.2 added a wiring finding for
-  (1)** — an embedder + vector store with `SemanticSeedK` at 0 is logged at Warning when the engine factory
-  is built — so a regression that re-buys the embedding and reads none of it now announces itself instead of
-  showing up as "recall feels no different". Verified both ways on 2026-08-21: silent on the current wiring,
-  and firing by name with `SemanticSeedK` put back to 0.
+  (1)** — an embedder + vector store with no semantic seed channel is logged at Warning when the engine
+  factory is built (in 3.2: "no IMemorySeedSource declaring MemorySeedKind.Semantic") — so a regression that
+  re-buys the embedding and reads none of it announces itself instead of showing up as "recall feels no
+  different". Verified both ways again on 2026-09-23 under 3.2: silent on the current wiring, firing in
+  `p52`'s negative control.
 - **"Worse" and "costly" are reasons to DESCRIBE an option, not to remove it — and "cannot" has to mean
   cannot.** This was violated twice in one session, both times by reasoning that sounded like engineering
   judgement and was actually a decision taken away from the household.
@@ -719,15 +731,17 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   moved the judge local had the router asking Ollama for `haiku` — fail-open both sides, hence zero calls and
   no error. `POST /api/manage/memory/layer/judge` writes source and model together; the cortex row is gone.
   The policies' own `Model` stays **null** so the router still resolves per consumer.
-  **The trap:** `LlmRouterFactory.For()` narrows a
-  named client's provider POOL but reuses the same options, so a client pooled over `ollama-chat` still
-  resolved candidates from `UseDefaultCandidates("claude-cli")` — a provider absent from its own pool. Every
-  call logged `router: skipping claude-cli — no provider with this id registered` and failed, and since both
-  policies are fail-open the symptom was **zero model calls and no error**. Contained by appending the
-  backend to the GLOBAL candidate list with `claude-cli` still first (a fallback, not a re-route, reaching
-  only the one-shot `ILlmClient` consumers — never the agent path, which uses `IAgentSession` and does not
-  route). Filed upstream. **Verify this class by ROUTING, not registration**: the broken version registered
-  cleanly; the probe that caught it drives a real write + recall and reads which backend answered. An
+  **The trap (fixed upstream in Lyntai 3.1, its D87):** a named client used to narrow its provider POOL but
+  reuse the global candidates, so a client pooled over a local provider still resolved candidates from
+  `UseDefaultCandidates("claude-cli")` — a provider absent from its own pool. Every call logged `router:
+  skipping claude-cli — no provider with this id registered` and failed, and since both policies are
+  fail-open the symptom was **zero model calls and no error**. It was contained by appending each source's
+  provider to the GLOBAL list (Lyntai Part 93), which also let the default client — the scorers — fall back
+  onto a local judge model nobody chose for them. Since 3.1 a name narrows the candidates too, so the
+  widening is gone and the global list is `claude-cli` alone. **Verify this class by ROUTING, not
+  registration**: the broken version registered cleanly. `e2e-p52` counts the requests arriving at a fake
+  llama-server and asserts the judge's annotation reaches it through the named client, with the judge's
+  model. An
   EMBEDDING model is refused as a judge by name — installed, well-formed, and unable to answer a judgement,
   which fail-open would turn into recall that quietly never improves.
 - **A REBUILD SERVES BOTH 语义 ARMS, and guarding it on `_semantic` served only one.** `_semantic` is

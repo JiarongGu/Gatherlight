@@ -54,7 +54,7 @@ public sealed class MemoryRecallController : ControllerBase
     private readonly IAppConfigService _appConfig;
     private readonly IReindexStatus _reindex;
     // For a source whose work IS a model call rather than a service to connect to.
-    private readonly Lyntai.Llm.ILlmClient? _llm;
+    private readonly Lyntai.Inference.ITextClient? _llm;
     private readonly IPlatformContext _platform;
     // What the judge is RUNNING on, as opposed to what is saved — see MemoryJudgeWiring.
     private readonly MemoryJudgeWiring _judgeWiring;
@@ -68,7 +68,7 @@ public sealed class MemoryRecallController : ControllerBase
         MemoryJudgeWiring judgeWiring, IPlatformContext platform,
         ILogger<MemoryRecallController> log,
         Lyntai.Memory.ISemanticMemory? semantic = null,
-        Lyntai.Llm.ILlmClient? llm = null)
+        Lyntai.Inference.ITextClient? llm = null)
     {
         _judgeWiring = judgeWiring;
         _claude = claude;

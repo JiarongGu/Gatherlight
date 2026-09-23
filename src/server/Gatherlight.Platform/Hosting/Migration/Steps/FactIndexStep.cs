@@ -29,9 +29,19 @@ public sealed class FactIndexStep : IMigrationStep
     /// not corrupt, they are unreachable, and recall answers from the FTS floor instead — a quiet loss
     /// of ranking that nothing else in the app would report.
     /// <para>v2 (2026-08-21) put every fact in one scope so that a recall naming no kind still searches
-    /// a populated vector collection. See <c>FactIndex.AllFacts</c>.</para></summary>
+    /// a populated vector collection. See <c>FactIndex.AllFacts</c>.</para>
+    /// <para>v3 (Lyntai 3.2) is a move WE did not make: the library changed the vector collection address
+    /// from <c>{engine}|{task}|{scope}</c> to a U+001F separator, so two task/scope pairs could no longer
+    /// compose to one collection. Vectors under the old address are orphaned, not migrated — Lyntai's
+    /// changelog says "a deployment re-indexes" — and the vector store offers no way to read a vector back
+    /// out to move it. So a household with an embedder wired would get a semantic channel searching an EMPTY
+    /// collection, fail-open and therefore silently. Only the vectors moved, though: a graph read by no
+    /// embedder is still exactly where it was, which is why v2 → v3 rebuilds only when one is wired.</para></summary>
     private const string LayoutKey = "facts.index.layout";
-    private const string Layout = "2";
+    private const string Layout = "3";
+
+    /// <summary>The layout whose ENTRIES are still at the current address — only its vectors moved.</summary>
+    private const string VectorsOnlyMoved = "2";
 
     private readonly IFactIndex _index;
     private readonly IKnowledgeStore _store;
@@ -67,6 +77,16 @@ public sealed class FactIndexStep : IMigrationStep
         // non-empty graph_ref) is the evidence that entries were written under some earlier layout.
         var alreadyIndexed = (await _store.AllAsync()).Any(f => !string.IsNullOrEmpty(f.GraphRef));
         if (!alreadyIndexed) await _index.SyncAsync(ct);
+        else if (stored == VectorsOnlyMoved && !_index.Embeds)
+        {
+            // Nothing reads a vector on this install, so nothing was stranded. A rebuild here would throw
+            // away the decay positions and links the household has accumulated in exchange for nothing. If an
+            // embedder is bound LATER, binding it already asks for a re-index, which drops every collection
+            // under the graph's prefix — the orphaned old-address ones included.
+            _log?.LogInformation("fact index: layout {Stored} -> {Layout} moved only vector addresses, and no " +
+                "embedder is wired; keeping the graph as it is", stored, Layout);
+            await _index.SyncAsync(ct);
+        }
         else
         {
             _log?.LogInformation(

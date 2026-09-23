@@ -104,22 +104,12 @@ public interface IMemoryJudgeSource : IMemorySource
     Task<string?> RejectAsync(MemorySourceContext ctx, string model, CancellationToken ct = default);
 
     /// <summary>The Lyntai client name the judge runs on, or null for the default client. A name selects
-    /// BACKENDS, never permissions.</summary>
+    /// BACKENDS, never permissions.
+    /// <para>The name is the WHOLE mechanism since Lyntai 3.1 (its D87): a named client narrows the
+    /// candidate list along with the provider pool. Before that it narrowed only the pool, so each source
+    /// also had to append its provider to the GLOBAL candidate list — which let the default client reach a
+    /// backend it was never meant to. That workaround (Lyntai Part 93) is gone.</para></summary>
     string? ClientName { get; }
-
-    /// <summary>Provider ids to append to the GLOBAL candidate list, after <c>claude-cli</c>.
-    /// <para>Required because <c>LlmRouterFactory.For()</c> narrows a named client's provider POOL but
-    /// reuses the same candidates: a client pooled over a provider absent from the global list matches
-    /// nothing, and every call fails — silently, since the policies are fail-open. Empty for a source that
-    /// registers no provider of its own.</para>
-    /// <para><b>THIS IS A WORKAROUND FOR A LIBRARY GAP — narrow it back if Lyntai closes it.</b> Filed as
-    /// <c>Lyntai TASKS.md</c> <b>Part 93</b>. Widening the GLOBAL list to fix a client created to be NARROW
-    /// is the opposite of the intent: it means the default client may now reach a backend it was never
-    /// meant to, and only the <c>claude-cli</c>-first ordering keeps that a fallback rather than a
-    /// re-route. If a release derives a named client's candidates from its own pool, this property and the
-    /// spread at the <c>UseDefaultCandidates</c> call site both go, and the named client goes back to being
-    /// narrow. Recorded on both sides — see the rule in <c>.claude/rules/dev-conventions.md</c>.</para></summary>
-    IReadOnlyList<string> CandidateProviderIds { get; }
 }
 
 /// <summary>

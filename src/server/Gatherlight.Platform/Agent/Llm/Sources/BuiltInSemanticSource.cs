@@ -94,8 +94,8 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
     public bool IsConfigured(MemorySourceSettings s) =>
         OnnxEmbedder.IsPresent(ModelDir(s));
 
-    /// <summary>Register the embedder itself — no provider, no client, no URL. `AddEmbeddings` is Lyntai's
-    /// own seam for exactly this: the app owns the embedding backend, Lyntai owns the recall machinery.
+    /// <summary>Register the embedder itself — no client, no URL. It is a Lyntai PROVIDER that produces
+    /// vectors: the app owns the embedding backend, Lyntai owns the routing and the recall machinery.
     /// <para>Resolved from DI rather than constructed here so its <c>ILogger</c> is real and the session is
     /// disposed with the container — the model is 197 MB of mapped weights, which is not something to leak
     /// across a restart-in-place.</para></summary>
@@ -114,10 +114,11 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
     public void Register(LyntaiBuilder b, MemoryWiringContext ctx)
     {
         var dir = ModelDir(ctx.Settings);
-        b.Services.AddSingleton<Lyntai.Embeddings.IEmbedder>(sp =>
-            new OnnxEmbedder(dir, sp.GetService<ILogger<OnnxEmbedder>>()));
-        b.UseSqliteVectorStore()
-         .AddSemanticMemory();
+        // A PROVIDER since Lyntai 3.2, which routes every embed over whichever registered backend produces
+        // vectors. `declares` is what AddSemanticMemory reads at composition — a factory is opaque until it
+        // runs, and an undeclared vector backend is a startup failure rather than a quiet absence.
+        b.AddProvider(sp => new OnnxEmbedder(dir, sp.GetService<ILogger<OnnxEmbedder>>()), OnnxEmbedder.Declared)
+         .AddVectorRecall();
     }
 
     public Task<SourceStatus> StatusAsync(MemorySourceContext ctx, CancellationToken ct = default) =>

@@ -1,4 +1,4 @@
-using Lyntai.Embeddings;
+using Lyntai.Inference;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Microsoft.ML.Tokenizers;
@@ -38,8 +38,22 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// <see cref="InferenceSession.Run(IReadOnlyCollection{NamedOnnxValue})"/>, so one instance serves every
 /// caller.</para>
 /// </summary>
-public sealed class OnnxEmbedder : IEmbedder, IDisposable
+public sealed class OnnxEmbedder : IVectorProvider, IDisposable
 {
+    /// <summary>The router-facing id. Lyntai 3.2 made an embedder a PROVIDER (its D151/D153): recall routes
+    /// over every registered backend that produces vectors, so this one needs a name like any other.</summary>
+    public const string ProviderId = "builtin-onnx";
+
+    /// <summary>What this backend serves — text in, vectors out, one call per batch. Also passed as the
+    /// registration's <c>declares</c>, because <c>AddSemanticMemory</c> decides at COMPOSITION time whether
+    /// anything can embed, before a factory has run.</summary>
+    public static readonly ProviderCapabilities Declared = new()
+    {
+        Accepts = [ProviderKinds.Text],
+        Produces = [ProviderKinds.Vector],
+        Operations = [ProviderOperation.Complete],
+    };
+
     /// <summary>Paths inside the provisioned model directory. They are the resource's own layout, so a
     /// change here is a change to <c>ResourceProvisioner</c>'s file list too — and the external-weights
     /// file must stay BESIDE its .onnx, which is why the resource declares per-file destinations.</summary>
@@ -86,6 +100,22 @@ public sealed class OnnxEmbedder : IEmbedder, IDisposable
         return (session, tokenizer);
     }
 
+    public string Id => ProviderId;
+    public ProviderCapabilities Capabilities => Declared;
+
+    /// <summary>The routed door. <see cref="VectorRequest.Role"/> is deliberately IGNORED: this model is
+    /// prompted symmetrically, because the asymmetric task prompts measured worse (see the class remarks).
+    /// In-process, so there is no transport to report a verdict for — a throw is classified by the router,
+    /// exactly as Lyntai's own ONNX provider does it.</summary>
+    public async Task<VectorResponse> CallAsync(VectorRequest request, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var vectors = await EmbedAsync(request.Texts, ct);
+        return vectors.Count == 0 ? new VectorResponse(ProviderVerdict.Ok, []) : VectorResponse.Success(vectors);
+    }
+
+    /// <summary>Embed directly, outside the router — the bind-time probe and the benchmark door use this,
+    /// because they are measuring THIS model rather than asking whichever backend can answer.</summary>
     public Task<IReadOnlyList<float[]>> EmbedAsync(
         IReadOnlyList<string> texts, CancellationToken ct = default)
     {

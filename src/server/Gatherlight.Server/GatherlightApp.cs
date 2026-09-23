@@ -15,7 +15,6 @@ using Gatherlight.Server.Platform.Capabilities.Tools.Models;
 using Gatherlight.Server.Platform.Capabilities.Tools.Services;
 using Gatherlight.Server.Platform.Capabilities.Tools.Services.Tools;
 using Lyntai; // the shared LLM library (AddClaudeCliProvider / UseDefaultCandidates on the builder)
-using Lyntai.Memory; // GraphMemoryOptions — the fact index's semantic seeding
 
 namespace Gatherlight.Server;
 
@@ -26,16 +25,6 @@ namespace Gatherlight.Server;
 /// </summary>
 public static class GatherlightApp
 {
-    /// <summary>How many semantically-similar entries a fact recall considers on top of its lexical
-    /// matches, when the household has turned the local embedding model on. Zero — Lyntai's default —
-    /// means an embedder is paid for on every write and consulted on no recall.
-    /// <para>Sized against the over-ask in <c>FactIndex.RankAsync</c> rather than against the page the
-    /// agent asked for: seeds are CANDIDATES, ranked afterwards by the same decay/degree policy as the
-    /// lexical ones, so a seed that means nothing here simply loses. Too small and a paraphrase whose
-    /// fact sits outside the top few never enters the ranking at all.</para></summary>
-    private const int SemanticSeedK = 24;
-
-
     public static WebApplication Build(
         GatherlightServerOptions? options = null, string[]? args = null, ServerConfigService? config = null)
     {
@@ -149,7 +138,7 @@ public static class GatherlightApp
             .AddSingleton<IIcsExportService, IcsExportService>()
             .AddSingleton<IBudgetService, BudgetService>()
             .AddHostedService<PlanIndexWatcher>()
-            // Lyntai (灵台) — the shared LLM library from NuGet. LLM-judge scorers consume its ILlmClient
+            // Lyntai (灵台) — the shared LLM library from NuGet. LLM-judge scorers consume its ITextClient
             // front door + ClaudeCli provider (neutral cwd, verdict/router); the interactive two-gate, jobs,
             // and playground drive the CLI's own agent loop through its IAgentSession (via AgentRunner below).
             // AddLyntai returns IServiceCollection, so it chains; SQLite storage backs scoring persistence.
@@ -185,18 +174,12 @@ public static class GatherlightApp
                 })
                 // Live per-consumer model routing (the scorers' judge model) read from app_config each call.
                 .AddLiveModelRouting()
-                // A source's own provider has to appear here even though only the memory client uses it.
-                // A named client (AddLlmClient) narrows the PROVIDER POOL but inherits these candidates, so
-                // a client pooled over "ollama-chat" alone with candidates naming only "claude-cli" matches
-                // nothing and every call fails — silently, because both memory policies are fail-open. It
-                // showed up as ZERO router calls and `router: skipping claude-cli — no provider with this id
-                // registered`. Filed upstream; the order below is the containment.
-                //
-                // claude-cli stays FIRST, so this is a fallback rather than a re-route: the default client
-                // reaches a source's provider only when the CLI fails. That touches the one-shot ILlmClient
-                // consumers (the scorers) and not the agent path, which runs through IAgentSession and
-                // never routes.
-                .UseDefaultCandidates(["claude-cli", .. judgeSource.CandidateProviderIds])
+                // claude-cli ALONE. A local judge source reaches its provider through its own named client,
+                // which since Lyntai 3.1 narrows the candidate list as well as the provider pool (its D87).
+                // Until then this list had to be widened with each source's provider or the named client
+                // matched nothing — ZERO router calls, fail-open, no error — and the widening let the
+                // default client (the scorers) fall back onto a local judge model nobody chose for them.
+                .UseDefaultCandidates("claude-cli")
                 // Lyntai owns scoring + conversation persistence: its SQLite storage lands lyntai_score_result,
                 // lyntai_thread/lyntai_message (+ other lyntai_* tables) in the same gatherlight.db. Kept EAGER
                 // (default SchemaMigration.OnStartup → migrates synchronously here, during DI) so the lyntai_*
@@ -227,12 +210,15 @@ public static class GatherlightApp
                 // never decays, and that is not this: the household's policies and preferences live in
                 // curated markdown the CLI loads directly, so grading facts authoritative here would
                 // exempt them from the decay that is the only reason to index them.
-                // MEANING-BASED RECALL IS A GRAPH OPTION, NOT A SECOND MEMBER. With an embedder and a
+                // MEANING-BASED RECALL IS A GRAPH CHANNEL, NOT A SECOND MEMBER. With an embedder and a
                 // vector store registered (further down), the graph member already embeds every write —
                 // it uses that for novelty judgement and for linking entries whose text never overlaps.
-                // SemanticSeedK is what also lets a RECALL consider those neighbours, and it ships at 0:
-                // "considers none, which is what every version before this did". So the embedding was
-                // being paid for and then ignored at the only moment the household would notice.
+                // What lets a RECALL consider those neighbours is the semantic SEED SOURCE, which Lyntai
+                // registers nowhere by default; the embedder arms add it beside their backend
+                // (VectorRecallWiring). Without it the embedding is paid for on every write and ignored at
+                // the only moment the household would notice. The SUBJECT channel — recall through the
+                // handles 判断 annotated each write with — needs nothing here: AddMemoryEngine registers it
+                // (Lyntai 3.1+), which retired the app-side lookup FactIndex used to append.
                 //
                 // A `UseSemantic()` member instead of this looks equivalent and is not, in two ways that
                 // both fail silently. A composite routes a write to the FIRST member supporting the grade,
@@ -241,8 +227,7 @@ public static class GatherlightApp
                 // the graph's `facts/graph#<id>`. Resolution is an exact ref match, so those hits are
                 // dropped on the way out: a second embedding per fact, bought and discarded. Measured
                 // 2026-08-21 — 12 vectors for 6 facts, and paraphrase queries answering nothing.
-                .AddMemoryEngine("facts", e => e.UseGraph(
-                    semanticOn ? new GraphMemoryOptions { SemanticSeedK = SemanticSeedK } : null));
+                .AddMemoryEngine("facts", e => e.UseGraph());
 
                 // Recall quality is THREE independent switches, not one setting, because they cost
                 // different things and improve different things:
@@ -297,14 +282,14 @@ public static class GatherlightApp
                 b.Services.AddSingleton<Lyntai.Memory.Annotation.IMemoryAnnotationPolicy>(sp =>
                     new Platform.Agent.Llm.Services.SwitchableAnnotationPolicy(
                         new Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy(
-                            sp.GetRequiredService<Lyntai.Llm.ILlmClientFactory>(),
+                            sp.GetRequiredService<Lyntai.Inference.ITextClientFactory>(),
                             new Lyntai.Memory.Annotation.LlmAnnotationOptions { ClientName = judgeClient },
                             sp.GetService<ILogger<Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy>>()),
                         sp.GetRequiredService<IAppConfigService>()));
                 b.Services.AddSingleton<Lyntai.Memory.Verification.IMemoryVerificationPolicy>(sp =>
                     new Platform.Agent.Llm.Services.SwitchableVerificationPolicy(
                         new Lyntai.Memory.Verification.LlmMemoryVerificationPolicy(
-                            sp.GetRequiredService<Lyntai.Llm.ILlmClientFactory>(),
+                            sp.GetRequiredService<Lyntai.Inference.ITextClientFactory>(),
                             new Lyntai.Memory.Verification.LlmVerificationOptions { ClientName = judgeClient },
                             sp.GetService<ILogger<Lyntai.Memory.Verification.LlmMemoryVerificationPolicy>>()),
                         sp.GetRequiredService<IAppConfigService>()));
@@ -322,14 +307,14 @@ public static class GatherlightApp
                 .AddScorer<Platform.Ops.Scoring.Services.AnswerRelevancyScorer>()
                 .AddScorer<Platform.Ops.Scoring.Services.FaithfulnessScorer>()
                 // Tool-calling for the LLM judges. AddMcpToolHost registers an ICliToolProvisioner, which
-                // ONLY ClaudeCliProvider reads — i.e. the one-shot ILlmClient path, whose only consumers
+                // ONLY ClaudeCliProvider reads — i.e. the one-shot ITextClient path, whose only consumers
                 // here are the two judges above. (The agent path, ClaudeAgentSession, takes no provisioner;
                 // its MCP stays --mcp-config → this server's own /mcp.) Per call it starts a loopback
                 // Kestrel on an OS-assigned port, bearer-gated, and tears it down after — so the judges get
                 // mediated, read-only access to the artifacts they're grading without the data folder's
                 // CLAUDE.md/knowledge base being loaded, which is exactly why they run neutral-cwd.
                 // Registering ZERO ITools would make the host a no-op (the provisioner short-circuits).
-                .AddMcpToolHost(new Lyntai.Providers.ClaudeCli.ClaudeCliMcpDialect())
+                .AddMcpToolHost(new Lyntai.Providers.ClaudeCli.ClaudeCliMcpConnector())
                 .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeReadFileTool(
                     sp.GetRequiredService<Platform.Kernel.Services.ISiteContext>()))
                 .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeListFilesTool(
@@ -462,7 +447,7 @@ public static class GatherlightApp
                     // warning directly above. It binds, the panel reports it bound, and every fact was
                     // written with an empty `aka` because these two arrived as null. Caught only by an e2e
                     // case that read the column — nothing else could have.
-                    sp.GetService<Lyntai.Llm.ILlmClient>(),
+                    sp.GetService<Lyntai.Inference.ITextClient>(),
                     sp.GetService<Platform.Kernel.Services.ServerConfigService>()))
             .AddSingleton<Platform.Storage.Knowledge.Services.IProcessLog, Platform.Storage.Knowledge.Services.ProcessLog>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RememberFactTool>()

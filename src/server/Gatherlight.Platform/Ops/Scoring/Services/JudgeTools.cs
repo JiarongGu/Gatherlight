@@ -7,7 +7,7 @@ namespace Gatherlight.Server.Platform.Ops.Scoring.Services;
 
 /// <summary>
 /// The read jail shared by the judge tools. These tools are reachable ONLY from Lyntai's ephemeral MCP
-/// tool host, which <c>ClaudeCliProvider</c> stands up for the duration of a one-shot <c>ILlmClient</c>
+/// tool host, which <c>ClaudeCliProvider</c> stands up for the duration of a one-shot <c>ITextClient</c>
 /// call — in this app, the two LLM-judge scorers and nothing else. They are strictly read-only.
 ///
 /// <para>The jail deliberately mirrors the planner scope-guard's artifact subtrees

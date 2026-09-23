@@ -31,6 +31,10 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Sources;
 public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
 {
     private const string ProviderId = "llamacpp";
+    /// <summary>The embedder's OWN id. One llama-server answers both routes, but since Lyntai 3.2 each route
+    /// is its own provider (its D133: a host serving two routes is two registrations under two ids), and a
+    /// trace should name which of the two answered.</summary>
+    private const string EmbedProviderId = "llamacpp-embed";
     private const string ClientId = "memory-llamacpp";
 
     private readonly string _layer;
@@ -48,7 +52,6 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         + "实测语义检索 10 题首位命中 9 题、每次查询 0.025 秒;判断每次约 0.15–0.20 秒。";
 
     public string? ClientName => ClientId;
-    public IReadOnlyList<string> CandidateProviderIds => new[] { ProviderId };
 
     /// <summary>No address to ask for: the app chose the port and started the process. That is the whole
     /// difference from <see cref="OpenAiCompatibleSource"/>, which is the same protocol with the opposite
@@ -99,23 +102,25 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     {
         if (_layer == MemoryLayers.Semantic)
         {
-            b.AddOpenAiCompatibleEmbedder(ProviderId, o =>
+            // Keyless: a local server takes no bearer token. The generic door, because no llama preset takes
+            // `Produces`. It re-guesses the wire from the URL and would compose Ollama's native one for port
+            // 11434 — which our own port range (PortFor) never lands on.
+            b.AddHttpProvider(EmbedProviderId, o =>
              {
                  o.BaseUrl = ctx.Endpoint;
                  o.Model = ctx.Model;
-                 // Keyless, like the generic arm: a local server takes no bearer token.
+                 o.Produces = Lyntai.Inference.ProviderKinds.Vector;
              })
-             .UseSqliteVectorStore()
-             .AddSemanticMemory();
+             .AddVectorRecall();
             return;
         }
 
-        b.AddOpenAiCompatibleProvider(ProviderId, o =>
-         {
-             o.BaseUrl = ctx.Endpoint;
-             o.DefaultModel = ctx.Model;
-         })
-         .AddLlmClient(ClientId, c => c.UseProviders(ProviderId));
+        // The llama-server PRESET rather than the generic door: the wire is decided by what we know this is,
+        // never re-guessed from the URL. On our router server the model name is a SELECTOR, not a label.
+        // A named client narrows BOTH the provider pool and the candidate list since Lyntai 3.1 (its D87),
+        // so the global candidate list no longer has to be widened to include this provider.
+        b.AddLlamaProvider(ctx.Endpoint, ctx.Model, ProviderId)
+         .AddTextClient(ClientId, c => c.UseProviders(ProviderId));
     }
 
     /// <summary>Three states with three different fixes, so they are three different sentences: the runtime

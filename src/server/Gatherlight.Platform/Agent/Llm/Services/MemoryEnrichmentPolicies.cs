@@ -40,7 +40,7 @@ public static class MemoryEnrichment
 /// <summary>What the judge was actually WIRED with when the container was built — as opposed to what
 /// settings.json says now.
 ///
-/// <para>The transport is a startup registration (a provider plus a named <c>ILlmClient</c>), so between
+/// <para>The transport is a startup registration (a provider plus a named <c>ITextClient</c>), so between
 /// saving a change and restarting, the saved value and the running one disagree. The console reports both,
 /// exactly as the semantic layer reports <c>enabled</c> separately from <c>active</c>. This exists because
 /// the panel now NAMES the backend on the layer's header: a badge reading the saved setting would announce

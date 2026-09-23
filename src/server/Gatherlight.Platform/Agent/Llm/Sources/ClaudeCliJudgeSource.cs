@@ -21,8 +21,6 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
     /// <summary>Null = the default client. The CLI provider is already registered.</summary>
     public string? ClientName => null;
 
-    public IReadOnlyList<string> CandidateProviderIds => Array.Empty<string>();
-
     /// <summary>Not a URL: the CLI is a process this install spawns.</summary>
     public bool NeedsEndpoint => false;
 

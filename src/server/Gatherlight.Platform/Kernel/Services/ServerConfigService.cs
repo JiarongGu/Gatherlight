@@ -185,7 +185,7 @@ public sealed class MemoryConfig
 
     /// <summary>Which backend serves 判断 — an <c>IMemorySource.Id</c>: <c>claude-cli</c> or <c>ollama</c>.
     /// <para>Here rather than in <c>app_config</c> for the same reason the embedder is: naming the backend
-    /// registers a provider and a named <c>ILlmClient</c>, which happens while the container is being
+    /// registers a provider and a named <c>ITextClient</c>, which happens while the container is being
     /// built. The console reports a restart instead of pretending otherwise.</para></summary>
     public string? JudgeSource { get; set; }
 
