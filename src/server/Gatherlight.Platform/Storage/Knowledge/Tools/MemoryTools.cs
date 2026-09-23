@@ -64,6 +64,10 @@ public sealed class RecallFactsTool : IGatherlightTool
     private readonly IFactIndex _index;
     public RecallFactsTool(IKnowledgeStore store, IFactIndex index) => (_store, _index) = (store, index);
 
+    /// <summary>The page a recall returns when the caller names no limit. Public because a reranker verifier
+    /// endorses exactly one such page (<c>LlamaCppSource</c>) — one value, one writer.</summary>
+    public const int DefaultRecallLimit = 8;
+
     public string Name => "recall_facts";
 
     public string Description =>
@@ -77,7 +81,7 @@ public sealed class RecallFactsTool : IGatherlightTool
     public string InputSchema => ToolSchema.Of(b => b
         .Str("query", "检索词(匹配 topic 或 content)", required: true)
         .Str("kind", "限定分类(可选)")
-        .Int("limit", "最多返回条数(默认 8)"));
+        .Int("limit", $"最多返回条数(默认 {DefaultRecallLimit})"));
 
     private sealed record Args(string? Query, string? Kind, int? Limit);
 
@@ -86,7 +90,7 @@ public sealed class RecallFactsTool : IGatherlightTool
         var a = ToolArgs.Parse<Args>(args);
         var query = ToolArgs.Req(a.Query, "query");
         var kind = a.Kind;
-        var limit = Math.Clamp(a.Limit ?? 8, 1, 50);
+        var limit = Math.Clamp(a.Limit ?? DefaultRecallLimit, 1, 50);
 
         var arr = new JsonArray();
         var ranked = "fts";

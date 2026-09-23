@@ -41,9 +41,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// one host serving several routes is several registrations), named so a trace says which one answered.</summary>
     private const string RerankProviderId = "llamacpp-rerank";
 
-    /// <summary><c>recall_facts</c>' default page. Lyntai: endorsing more than a page REPLACES the ranking
-    /// instead of refining it, and the verifier is never told the caller's limit — so this is a constant.</summary>
-    private const int RerankEndorseCount = 8;
+    /// <summary><c>recall_facts</c>' default page, read from the tool that owns it. Lyntai: endorsing more
+    /// than a page REPLACES the ranking instead of refining it, and the verifier is never told the caller's
+    /// limit — so it has to be a constant, and the one constant that means "a page" is the tool's.</summary>
+    private const int RerankEndorseCount = Storage.Knowledge.Tools.RecallFactsTool.DefaultRecallLimit;
 
     /// <summary>The screen a reranker must pass before it may bind: the ANSWER is second in input order, so a
     /// model that returns input order unchanged fails as surely as one that ranks backwards. Chinese query,
