@@ -361,18 +361,19 @@ public static class GatherlightApp
                 // table — so running AFTER UseSqliteStorage is load-bearing here, not cosmetic.
                 //
                 // What each source contributes is its own business now. The CLI's Register is a no-op (its
-                // provider is already the default); Ollama's judge adds a provider plus a named client
-                // reaching ONLY it; Ollama's semantic arm adds the embedder, the vector store and the
-                // ISemanticMemory marker. An embedded runtime would add whatever it needs, with no edit
-                // here at all.
+                // provider is already the default); llama.cpp's judge adds a provider plus a named client
+                // reaching ONLY it for a chat model, or a scoring provider for a reranker; its semantic arm, and
+                // the in-process ONNX one, add an embedder and the vector recall. A new backend adds whatever it
+                // needs, with no edit here at all. (Ollama and openai-compat were backends here until
+                // 2026-08-22; both are retired ids — MemoryBackends.IsRetired.)
                 //
                 // Two properties the sources are trusted to keep, both enforced in their own files:
                 //   · LOCAL. Embedding a fact hands the household's private material to whatever embeds
                 //     it, so a cloud endpoint would ship their plans to a third party on every write.
                 //     ResolveBaseUrl refuses a non-loopback URL without an explicit opt-in and is called
                 //     HERE, so the URL we embed against is the one the panel reports.
-                //   · OPTIONAL. With 语义 unbound — or Ollama absent — recall behaves exactly as it did
-                //     before any of this existed.
+                //   · OPTIONAL. With 语义 unbound — or its model not on disk — recall behaves exactly as it
+                //     did before any of this existed.
                 //
                 // UseProviders fails loudly when an id is unregistered rather than narrowing to whatever
                 // exists — the behaviour that matters here, since the silent alternative is falling back to
@@ -396,13 +397,12 @@ public static class GatherlightApp
             // an ASSUMED machine dependency: absent on a fresh install, it died at spawn and surfaced as a
             // generic "CLI 报告错误". This is what makes it a provisioned resource with a diagnosable state.
             .AddSingleton<IClaudeCliRuntime, ClaudeCliRuntime>()
-            // The LOCAL embedder behind optional semantic recall. Never used for planning (that stays the
-            // authenticated claude CLI) and never required: with no Ollama the feature is simply absent and
-            // recall behaves as it did before it existed. Loopback-only by default — a remote embedder would
-            // send every household fact off this machine on every write.
-            // The runtime this app PROVISIONS for local models, as of 2026-08-22. Registered beside
-            // Ollama rather than replacing it: Ollama stays reachable as a HOUSEHOLD backend, and the
-            // difference is now visible in the picker (see RuntimeOrigin).
+            // The runtime this app PROVISIONS for local models (llama.cpp's llama-server, since 2026-08-22):
+            // the embedder behind optional semantic recall and a local judge. Never used for planning (that
+            // stays the authenticated claude CLI) and never required: with no runtime the layers bound to it
+            // are simply absent and recall behaves as it did before they existed. Loopback-only by default —
+            // a remote one would send every household fact off this machine on every write. It replaced
+            // Ollama, which was retired as a backend on 2026-08-22 (MemoryBackends.IsRetired).
             .AddSingleton<ILlamaServerRuntime, LlamaServerRuntime>()
             // One reindex at a time, and its progress. A singleton because the run outlives the request
             // that started it — see IReindexStatus for why that had to change.

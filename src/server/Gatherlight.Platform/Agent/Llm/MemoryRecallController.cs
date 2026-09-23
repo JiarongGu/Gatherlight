@@ -289,8 +289,10 @@ public sealed class MemoryRecallController : ControllerBase
     //
     // They are gone now because the DEPENDENCY is gone. The managed local runtime is llama.cpp — we install
     // it, start it, pin its models by sha256 and publish their measured ranking as downloadable resources.
-    // Ollama is reached, if a household runs it, through `openai-compat` by address, verified end to end
-    // (see MemoryBackends.Ollama). So the option survives and the pretence of ownership does not.
+    // Ollama itself stopped being a backend the same day, and so did `openai-compat`, the generic arm that
+    // could have reached a household's own Ollama by address: it was never tested end to end, and shipping an
+    // option we could not stand behind was worse than not offering it (see MemoryBackends.IsRetired). A
+    // layer still bound to either is SAID, never silently redirected — see RetiredNote below.
 
 
     /// <summary>A sentence for a layer whose saved backend no longer exists, or null.
@@ -332,7 +334,7 @@ public sealed class MemoryRecallController : ControllerBase
     /// <summary>The three headings a layer offers, each with its member backends nested.
     ///
     /// <para><b>The probes run CONCURRENTLY, and how long each took is logged.</b> Every source answers by
-    /// asking something outside this process — spawn the CLI, GET Ollama's tag list, GET the llama router,
+    /// asking something outside this process — spawn the CLI, GET the llama router,
     /// stat a model directory — so serialized they ADD UP, and this endpoint is what the panel blocks on
     /// before it can draw anything. Two layers × four backends × (status + models) is sixteen round trips
     /// for one screen. They are independent by construction (a backend answers about its own runtime), so
@@ -463,9 +465,9 @@ public sealed class MemoryRecallController : ControllerBase
     /// <summary>What the household actually typed for this layer's address, unresolved. Shown back to them
     /// even when it was REFUSED — a box that silently empties itself gives no way to see the typo the
     /// sentence beside it is complaining about.
-    /// <para>Keyed on the LAYER, not on the source's type: <c>OpenAiCompatibleSource</c> implements both
-    /// layer interfaces, so a type test would answer the same for both of its instances — which is exactly
-    /// the class this has to get right.</para></summary>
+    /// <para>Keyed on the LAYER, not on the source's type: a source may implement both layer interfaces (the
+    /// retired <c>openai-compat</c> did, and <see cref="LlamaCppSource"/> does), so a type test would answer the
+    /// same for both of its instances — which is exactly the class this has to get right.</para></summary>
     private static string? RawEndpoint(MemoryConfig config, string layer) =>
         layer == MemoryLayers.Semantic ? config.SemanticEndpoint : config.JudgeEndpoint;
 
@@ -737,8 +739,9 @@ public sealed class MemoryRecallController : ControllerBase
     /// wrong address, only overwrite it.</summary>
     private static string? Blank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
-    /// <summary><paramref name="Endpoint"/> is null for a backend that needs no address (the CLI, Ollama),
-    /// and is the base URL for a household-supplied OpenAI-compatible service. Sent per LAYER because the
+    /// <summary><paramref name="Endpoint"/> is null for a backend that needs no address — every backend there
+    /// is today (the CLI, llama.cpp, the in-process ONNX one). It carried the base URL of the retired
+    /// <c>openai-compat</c> arm, and stays for a future backend that needs one, sent per LAYER because the
     /// judge and the embedder may legitimately be different servers.</summary>
     public sealed record BindRequest(string? Source, string? Model, string? Endpoint = null);
     public sealed record EnabledRequest(bool Enabled);

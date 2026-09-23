@@ -10,17 +10,17 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Sources;
 /// Both recall layers on llama.cpp's <c>llama-server</c> — the runtime this app PROVISIONS and runs, as of
 /// 2026-08-22. Decision, alternatives and measurements: <c>docs/self-managed-llm-runtime.md</c>.
 ///
-/// <para><b>Why this is a separate backend when it speaks the same API as <see cref="OpenAiCompatibleSource"/>.</b>
-/// Identical wire protocol, opposite relationship. There the household runs a service and types its address;
-/// here the app downloads the runtime, starts it, chooses the port and owns the model files. That means no
-/// address to enter, a model list that comes from what WE provisioned rather than from whatever somebody
-/// happened to load, and a status sentence that can offer a fix instead of describing a symptom. It is the
-/// same reason Ollama has its own backend rather than being folded into the generic one.</para>
+/// <para><b>Why the app OWNS this runtime rather than connecting to one.</b> Until 2026-08-22 a generic
+/// OpenAI-compatible backend (<c>openai-compat</c>, now a retired id) reached a service the household ran and
+/// typed the address of — the same wire protocol, the opposite relationship. Here the app downloads the
+/// runtime, starts it, chooses the port and owns the model files: no address to enter, a model list that comes
+/// from what WE provisioned rather than from whatever somebody happened to load, and a status sentence that
+/// can offer a fix instead of describing a symptom. That backend was retired because it was never tested end
+/// to end; Ollama, retired the same day, had been half-managed (<c>MemoryBackends.IsRetired</c>).</para>
 ///
-/// <para><b>ONE class, BOTH layers, two instances</b> — the shape <see cref="OpenAiCompatibleSource"/>
-/// exists for. Here it is not merely convenient: the router genuinely serves an embedder and a chat model at
-/// the same time, from one process on one port, which is the property that made llama.cpp beat Ollama for
-/// this product in the first place.</para>
+/// <para><b>ONE class, BOTH layers, two instances.</b> Not merely convenient: the router genuinely serves an
+/// embedder and a judge model at the same time, from one process on one port, which is the property that made
+/// llama.cpp beat Ollama for this product in the first place.</para>
 ///
 /// <para><b>It reports its own models by KIND, and refuses the wrong one.</b> llama-server's
 /// <c>embeddings</c> preset restricts a child to embeddings, so a chat model offered to 语义 or an embedder
@@ -144,9 +144,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
               + "没有 CLI 那条的进程启动开销(那条实测每次检索 9–17 秒)。";
 
-    /// <summary>No address to ask for: the app chose the port and started the process. That is the whole
-    /// difference from <see cref="OpenAiCompatibleSource"/>, which is the same protocol with the opposite
-    /// ownership.</summary>
+    /// <summary>No address to ask for: the app chose the port and started the process. That was the whole
+    /// difference from the retired <c>openai-compat</c> backend — the same protocol, with the household owning
+    /// the service and typing its address.</summary>
     public bool NeedsEndpoint => false;
 
     /// <summary>Where the runtime listens — resolved from the SAME static the service uses, so the endpoint
@@ -177,13 +177,14 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         ? kind == GgufCapability.Embedding
         : kind is GgufCapability.Completion or GgufCapability.Reranking;
 
-    /// <summary>Always <c>app</c>: this backend exists BECAUSE the app provisions it. Unlike the Ollama and
-    /// CLI arms there is no per-install question to answer — a household's own llama-server is reached
-    /// through <see cref="OpenAiCompatibleSource"/> instead, which is exactly why this one never searches
-    /// PATH.</summary>
     /// <summary>Managed — we install, start and own it.</summary>
     public string Group => MemoryGroups.Managed;
 
+    /// <summary>Always <c>app</c>: this backend exists BECAUSE the app provisions it. Unlike the CLI arm there
+    /// is no per-install question to answer, and it deliberately never searches PATH: a household's own
+    /// llama-server is not a backend this app offers any more (the <c>openai-compat</c> arm that reached one by
+    /// address is retired), so finding one there would only blur "the runtime we install" with "one we found" —
+    /// the ambiguity that once let a provisioned Ollama read as a manual prerequisite.</summary>
     public RuntimeOrigin Origin(MemorySourceContext ctx) =>
         new(MemoryRuntimeOrigins.App, "应用安装并运行 —— 不需要你自己装");
 
