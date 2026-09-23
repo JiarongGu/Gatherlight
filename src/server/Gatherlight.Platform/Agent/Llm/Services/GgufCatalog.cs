@@ -118,11 +118,19 @@ public static class GgufCatalog
     /// LAMAR with nothing on the other side (5–0; exact p = 0.063, just short, while the 95% interval excludes
     /// zero), and BGE's top-1 lead is 6–2 with an interval spanning zero. The Chinese count is the one the doc
     /// states exactly: every Chinese-worded question, code-switched included (120 of 240) — see "By fact
-    /// language" in docs/judge-bench.md.</summary>
+    /// language" in docs/judge-bench.md.
+    ///
+    /// <para><b>What "6" counts, recounted 2026-09-24 from <c>results-2026-09-23T113455.224Z.json</c></b>
+    /// (partition arms, limit 8): six DISTINCT questions on which the two differ on top-1 or on found@8, and
+    /// none differs on both — top-1 on four (anniversary and pharm-24h LAMAR's, onsen and flu-shot BGE's),
+    /// found@8 on two (train-express and movie, both LAMAR's). It once said 「4 题 LAMAR 对,2 题 BGE 对」,
+    /// which is true only as a tally across the two metrics; the sentence now names the metric each count is
+    /// on.</para></summary>
     private const string RerankerPair =
         "LAMAR 和 BGE 这个测试集没有测出差别,但两边并不对称:把答案带进前八,偏向 LAMAR —— 5 题只有 LAMAR 做到,"
         + "反过来一题也没有(精确检验 p = 0.063,差一点够不上显著,95% 区间不含零);排第一,BGE 多 4 题"
-        + "(6 对 2,看不出差别)。120 道中文或中英混写的提问里,两者有 6 题结果不同:4 题 LAMAR 对,2 题 BGE 对。"
+        + "(6 对 2,看不出差别)。120 道中文或中英混写的提问里,两者只有 6 题结果不同,没有一题两项都不同:"
+        + "排第一的 4 题两边各占 2 题,带进前八的 2 题都是 LAMAR 做到。"
         + "推荐 BGE 只是按事先定好的规则 —— 分不出时取较小的文件,而两个文件只差 1.4 KB。";
 
     public static readonly IReadOnlyList<GgufModel> Models = new[]

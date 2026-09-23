@@ -725,7 +725,10 @@ because "Chinese questions" can mean two different selections:
 - **The household's case** — Chinese facts asked in Chinese or code-switched (`same` × zh + `mixed` × zh, 80
   queries): top-1 1/0, found@8 1/0. Two disagreements, both LAMAR's.
 - **Every Chinese-worded question** — `same` × zh, `cross` × en and `third` × ja (asked in Chinese), and every
-  `mixed` question (120 queries): top-1 2/2, found@8 2/0. Six disagreements: four LAMAR's, two BGE's.
+  `mixed` question (120 queries): top-1 2/2, found@8 2/0. Six disagreements: four LAMAR's, two BGE's — on six
+  DISTINCT questions, none differing on both metrics (recounted 2026-09-24: top-1 on `mixed`|anniversary and
+  `same`|pharm-24h for LAMAR, `third`|onsen and `cross`|flu-shot for BGE; found@8 on `cross`|train-express and
+  `mixed`|movie, both LAMAR's).
 - **All 240**: top-1 2/6 (BGE's way — e.g. `same` × English facts, 0/2), found@8 5/0 (LAMAR's way).
 
 None of these reaches the exact test on its own; see "LAMAR vs BGE" below for which way the evidence leans.
