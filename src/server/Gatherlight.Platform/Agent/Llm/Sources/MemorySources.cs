@@ -171,7 +171,10 @@ public static class MemorySources
         // …and the same fallback for a backend whose OWN configuration is incomplete — a typed endpoint
         // that is absent or refused. Asked of the source rather than switched on its id, so a future
         // backend with its own prerequisites needs no edit here.
-        return source.IsConfigured(s) ? source : (FindJudge(DefaultJudgeSource) ?? Judge[0]);
+        // Configured is not enough: the BOUND model has to be there. A reranker left on disk used to keep a
+        // deleted chat judge wired (see HasModel).
+        return source.IsConfigured(s) && source.HasModel(s, s.Config.JudgeModel ?? "")
+            ? source : (FindJudge(DefaultJudgeSource) ?? Judge[0]);
     }
 
     /// <summary>The model 判断 is bound to. The CLI arm has a default; the local arm cannot have one,
@@ -234,8 +237,10 @@ public static class MemorySources
             : s.Config.SemanticEnabled ? FindSemantic(MemoryBackends.Ollama) : null;
 
         // Incomplete = OFF, not "wire it and hope". Unlike 判断 there is nothing to fall back TO here: a
-        // second-best embedder would write vectors of a different width, which is worse than no layer.
-        return source is not null && source.IsConfigured(s) ? source : null;
+        // second-best embedder would write vectors of a different width, which is worse than no layer. The same
+        // goes for ANOTHER embedder merely being on disk: the bound one has to be (see HasModel).
+        return source is not null && source.IsConfigured(s) && source.HasModel(s, s.Config.EmbeddingModel!)
+            ? source : null;
     }
 }
 

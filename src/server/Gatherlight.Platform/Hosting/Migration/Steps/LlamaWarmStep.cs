@@ -51,6 +51,23 @@ public sealed class LlamaWarmStep : IMigrationStep
         var judge = MemorySources.ResolveJudge(settings);
         var semantic = MemorySources.ResolveSemantic(settings);
 
+        // A binding whose model file is gone now falls back (MemorySources.ResolveJudge/ResolveSemantic). Say so:
+        // otherwise 判断 is quietly on the CLI and 语义 quietly off, and nothing tells the household why. Before the
+        // fallback existed the warm below said it instead, with 没能载入 — for a layer still wired to the file.
+        var llamaJudge = MemorySources.FindJudge(MemoryBackends.LlamaCpp);
+        if (MemorySources.SavedIs(settings.Config, MemoryBackends.LlamaCpp) && judge.Id != MemoryBackends.LlamaCpp
+            && settings.Config.JudgeModel is { Length: > 0 } goneJudge && llamaJudge is not null
+            && !llamaJudge.HasModel(settings, goneJudge))
+            _state.AddWarning($"「判断」绑定的本机模型 {goneJudge} 已不在模型目录里 —— 这次启动判断退回 Claude CLI。"
+                + GetItBack(goneJudge));
+        var llamaSemantic = MemorySources.FindSemantic(MemoryBackends.LlamaCpp);
+        if (string.Equals(settings.Config.SemanticSource, MemoryBackends.LlamaCpp, StringComparison.OrdinalIgnoreCase)
+            && semantic?.Id != MemoryBackends.LlamaCpp
+            && settings.Config.EmbeddingModel is { Length: > 0 } goneEmbed && llamaSemantic is not null
+            && !llamaSemantic.HasModel(settings, goneEmbed))
+            _state.AddWarning($"「语义」绑定的本机模型 {goneEmbed} 已不在模型目录里 —— 这次启动语义检索不会生效。"
+                + GetItBack(goneEmbed));
+
         var judgeModel = judge.Id == MemoryBackends.LlamaCpp
             ? MemorySources.ResolveJudgeModel(settings) : null;
         var embedModel = semantic?.Id == MemoryBackends.LlamaCpp
@@ -108,4 +125,10 @@ public sealed class LlamaWarmStep : IMigrationStep
             _state.AddWarning($"「{layer}」的本机模型 {model} 没能载入 —— {loss}。");
         }
     }
+
+    /// <summary>What brings a missing model back. 资源 can re-fetch only what the catalogue pins; a GGUF the
+    /// household dropped in themselves has no row there, so sending them to 资源 for it would point at nothing.</summary>
+    private static string GetItBack(string model) =>
+        (GgufCatalog.Find(model) is not null ? "在「资源 · Resources」重新下载它" : "把这个文件放回模型目录")
+        + ",或在「记忆检索」另选一个。";
 }

@@ -36,6 +36,8 @@
 //      would load the model rather than quoting a 400 — on the 语义 bind too, and in the startup warning.
 //   9. An embedder that is WIRED but DOWN at startup: the fact index indexes nothing and leaves its layout
 //      marker, so no fact is stored without its vector, and the next start does the work.
+//  10. A BOUND model whose file is gone falls back at startup — 判断 to the CLI, 语义 off — even while another
+//      model of its kind remains on disk, and the startup warnings name the model and what happened.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -79,6 +81,8 @@ const SIGNED_OUT_PORT = 5415;
 const SIGNED_IN_PORT = 5416;
 // Case 9: one data folder booted three times — up, down, up — each on a port of its own.
 const REBUILD_PORTS = [5417, 5418, 5419];
+// Case 10: a folder whose settings name GGUFs that are no longer on disk.
+const GONE_PORT = 5420;
 
 // Case 6: a SECOND server that boots already bound to the reranker, in a data folder of its own. Its own
 // port too — never 5412/5413, which cases 1–5 used.
@@ -230,6 +234,7 @@ let rerankServer = null;
 let signedOutServer = null;
 let signedInServer = null;
 let rebuildServer = null;
+let goneServer = null;
 try {
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
   const base = `http://127.0.0.1:${PORT}`;
@@ -718,6 +723,44 @@ try {
     ok('(control) once the embedder answers, the next start rebuilds, re-embeds every fact and writes the marker',
       layout() === '3' && reEmbedded.length >= 2, JSON.stringify({ layout: layout(), reEmbedded: reEmbedded.length }));
   }
+
+  // --- 10. a BOUND model whose file is gone falls back — even while another model of its kind remains ---
+  // IsConfigured asked "is there ANY judge-kind GGUF?", never "is the BOUND one here?" — so deleting the bound
+  // chat GGUF while a reranker stayed kept 判断 wired to a model the router cannot serve (NoOpinion on every
+  // recall, silently), and another embedder kept a missing 语义 model bound. Planted, not bound: the question
+  // is what STARTUP makes of settings that name files no longer on disk.
+  const goneDir = dataDirFor('p52-gone');
+  makeTestData(goneDir);
+  const goneRes = path.join(goneDir, 'state', 'resources');
+  fs.mkdirSync(path.join(goneRes, 'llama-cpp'), { recursive: true });
+  fs.mkdirSync(path.join(goneRes, 'gguf'), { recursive: true });
+  fs.writeFileSync(path.join(goneRes, 'llama-cpp', 'llama-server.exe'), '');
+  fs.writeFileSync(path.join(goneRes, 'gguf', `${RERANK_MODEL}.gguf`), '');      // a judge-kind survivor
+  fs.writeFileSync(path.join(goneRes, 'gguf', 'zzother-embed.gguf'), '');       // an embedder survivor
+  fs.writeFileSync(path.join(goneDir, 'state', 'settings.json'), JSON.stringify({ memory: {
+    judgeSource: 'llama-cpp', judgeModel: 'zzgone-chat',
+    semanticSource: 'llama-cpp', embeddingModel: 'zzgone-embed',
+  } }, null, 2), 'utf8');
+  goneServer = startServer({ dataDir: goneDir, port: GONE_PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
+  await waitHealthy(goneServer.base);
+  const gc = makeClient(goneServer.base);
+  const goneMem = await gc.getJson('/api/manage/memory');
+  const gJudge = layerOf(goneMem, 'judge');
+  const gSem = layerOf(goneMem, 'semantic');
+  ok('THE POINT: 判断 whose bound GGUF is gone falls back to the CLI — a surviving reranker does not keep it',
+    gJudge.activeSource === 'claude-cli' && gJudge.activeModel === 'haiku',
+    JSON.stringify({ active: gJudge.activeSource, activeModel: gJudge.activeModel }));
+  ok('…and 语义 whose bound GGUF is gone is off — a surviving embedder does not keep it',
+    gSem.activeSource !== 'llama-cpp', JSON.stringify({ active: gSem.activeSource, activeModel: gSem.activeModel }));
+  // Startup warnings live on the migration status — the same read case 7's warmWarning() uses.
+  const goneWarnings = ((await (await fetch(`${goneServer.base}/api/migration/status`)).json()).warnings ?? [])
+    .map(String);
+  ok('the startup says WHICH model is gone and what happened to the layer — judge',
+    goneWarnings.some((w) => w.includes('zzgone-chat') && /Claude CLI/.test(w)), JSON.stringify(goneWarnings));
+  // Not the warm step's 没能载入: that is the sentence a layer STILL WIRED to the missing file produced — it
+  // names the model and 语义 too, so without this exclusion the check passed before the fix.
+  ok('…and 语义', goneWarnings.some((w) => w.includes('zzgone-embed') && /语义/.test(w) && !/没能载入/.test(w)),
+    JSON.stringify(goneWarnings));
 } catch (err) {
   fail('e2e-p52 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {
@@ -726,6 +769,7 @@ try {
   try { signedOutServer?.stop(); } catch {}
   try { signedInServer?.stop(); } catch {}
   try { rebuildServer?.stop(); } catch {}
+  try { goneServer?.stop(); } catch {}
   await new Promise((r) => fake.close(r));
 }
 

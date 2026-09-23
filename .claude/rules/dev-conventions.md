@@ -822,6 +822,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   arm alone and was deliberately REMEMBERED across a switch back to the CLI, so reading it unconditionally
   hands an Ollama model id to Claude — a badge reading `Claude CLI · gemma3:4b`, caught only against a real
   data folder and now pinned by `p51`'s case I on a pre-seeded legacy config.
+  **Configured is not the same as bound.** `IsConfigured` asks whether the backend can be wired at all:
+  runtime present, any model of the layer's kind. The resolvers also ask `HasModel` for the BOUND one. It is a
+  separate member because the bind endpoint asks `IsConfigured` before it saves the new model. Without it, a
+  deleted chat judge stayed wired while a reranker remained, and every recall was NoOpinion. The fallback is
+  announced at startup (`LlamaWarmStep`). Proof: `e2e-p52` case 10.
 - **ONE control writes the judge's model.** `DefaultModelByConsumer["memory"]` and cortex's live
   `llm.model.memory` were two writers and cortex won, so a household who set 记忆判断 to `haiku` and later
   moved the judge local had the router asking Ollama for `haiku` — fail-open both sides, hence zero calls and

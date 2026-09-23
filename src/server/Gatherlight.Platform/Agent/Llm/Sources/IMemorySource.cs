@@ -56,6 +56,13 @@ public interface IMemorySource
     /// the same "half-configured stays off" rule 语义 has always had for a model.</summary>
     bool IsConfigured(MemorySourceSettings s);
 
+    /// <summary>Is <paramref name="model"/> — the one this layer is BOUND to — actually there? Separate from
+    /// <see cref="IsConfigured"/> on purpose: the bind endpoint asks IsConfigured BEFORE it saves a new model, so
+    /// a model-aware IsConfigured would test the previous binding's model. The RESOLVERS ask both.
+    /// <para>True by default: the CLI's models are the account's, and the built-in embedder's IsConfigured already
+    /// checks its files. Only a backend whose models are files that can vanish answers otherwise.</para></summary>
+    bool HasModel(MemorySourceSettings s, string model) => true;
+
     /// <summary>Register whatever this source needs at startup — a provider, a named client, an embedder, a
     /// vector store. A no-op for a backend that is already registered by default.</summary>
     void Register(LyntaiBuilder b, MemoryWiringContext ctx);

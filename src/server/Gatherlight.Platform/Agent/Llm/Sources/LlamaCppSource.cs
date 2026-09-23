@@ -163,6 +163,12 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         File.Exists(ResourceProvisioner.ProvisionedLlamaServer(s.ResourcesPath))
         && ModelsOnDisk(s).Count > 0;
 
+    /// <summary>The bound GGUF is on disk AND suits this layer. <see cref="IsConfigured"/> only asks for ANY model
+    /// of the right kind — which is what the bind endpoint needs, and what kept a deleted binding wired while a
+    /// different model of its kind remained (every recall NoOpinion, silently). Proof: <c>e2e-p52</c> case 10.</summary>
+    public bool HasModel(MemorySourceSettings s, string model) =>
+        ModelsOnDisk(s).Contains(model, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>The GGUFs on disk that suit THIS layer. Ids come from
     /// <see cref="ResourceProvisioner.InstalledGgufIds"/> — the router's own rule, one writer — and the kind
     /// filter is what stops a chat model being offered to 语义 (see the class comment).</summary>
