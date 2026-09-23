@@ -163,6 +163,17 @@ public static class GatherlightApp
             // AddLyntai returns IServiceCollection, so it chains; SQLite storage backs scoring persistence.
             .AddLyntai(b =>
             {
+                // The live model routing, except the memory judge's key while it names a model for a client
+                // that is not the one annotating — after a fallback, or between a rebind and its restart.
+                // BEFORE AddLiveModelRouting below, whose TryAddSingleton then stands down.
+                b.Services.AddSingleton<Lyntai.Inference.IModelRoutingStore>(sp => new JudgeScopedModelRoutingStore(
+                    new Lyntai.Inference.KeyValueModelRoutingStore(
+                        sp.GetService<Lyntai.Storage.IKeyValueStore>(),
+                        sp.GetService<ILogger<Lyntai.Inference.KeyValueModelRoutingStore>>(),
+                        sp.GetRequiredService<LyntaiOptions>().ModelKeyPrefix),
+                    sp.GetRequiredService<ServerConfigService>(),
+                    sp.GetRequiredService<IPlatformContext>(),
+                    judgeWiring.AnnotationClient));
                 b
                 .AddClaudeCliProvider()
                 // The interactive two-gate + jobs + playground drive the CLI's own agent loop through
@@ -189,6 +200,9 @@ public static class GatherlightApp
                     // key itself whenever it binds this layer, and cortex no longer offers a second place
                     // to disagree from. The value is still a DEFAULT rather than a pin on the policy's own
                     // Model, because pinning would capture it at registration and kill the live override.
+                    // That override is itself withheld whenever it was written for a client other than the
+                    // running one (JudgeScopedModelRoutingStore) — otherwise a fallback to the CLI kept
+                    // reading a key naming the GGUF it fell back FROM.
                     o.DefaultModelByConsumer["memory"] = judgeWiring.AnnotationModel;
                 })
                 // Live per-consumer model routing (the scorers' judge model) read from app_config each call.

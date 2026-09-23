@@ -14,6 +14,10 @@
 //   3. A RECALL embeds the QUERY. Only the semantic seed channel does that, and since 3.2 it is a registered
 //      seed source rather than a graph option — so a missing registration leaves every vector bought on
 //      write and read by no recall, which no API response shows.
+//   4. When 判断 FALLS BACK to the CLI (its runtime gone), the CLI is asked for the CLI's model — not for
+//      the GGUF named by the saved judgeModel or by the live llm.model.memory the binding wrote. Read from
+//      the stub's own argv log, because a CLI asked for an unknown model is otherwise indistinguishable
+//      from one that answered badly.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -26,6 +30,10 @@ const { ok, fail, done } = makeReporter('p52');
 makeTestData(dataDir);
 
 const PORT = 5412;
+// Case 4 restarts onto the data folder; a second port, because reusing one inside a suite is its own trap.
+const RESTART_PORT = 5413;
+// Where the claude stub records each call's argv (case 4) — in this suite's own data folder.
+const argsLog = path.join(dataDir, 'stub-args.jsonl');
 const JUDGE_MODEL = 'zzroute-chat';
 // "embed" in the name is what classifies a household-supplied GGUF as an embedder
 // (ResourceProvisioner.IsEmbeddingGguf) — the same rule the real router's presets follow.
@@ -89,6 +97,8 @@ const fake = http.createServer((req, res) => {
 await new Promise((r) => fake.listen(0, '127.0.0.1', r));
 const fakeUrl = `http://127.0.0.1:${fake.address().port}`;
 
+const layerOf = (snapshot, id) => (snapshot?.layers ?? []).find((l) => l.id === id) ?? {};
+
 let server = null;
 try {
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
@@ -99,7 +109,7 @@ try {
   // NON-VACUITY: the fixture really bound both layers to llama.cpp. If either fell back (to the CLI, or
   // to off), every routing check below would fail for a reason that has nothing to do with routing.
   const mem = await c.getJson('/api/manage/memory');
-  const layer = (id) => (mem.layers ?? []).find((l) => l.id === id) ?? {};
+  const layer = (id) => layerOf(mem, id);
   ok('(fixture) 判断 is running on llama.cpp', layer('judge').activeSource === 'llama-cpp',
     JSON.stringify({ source: layer('judge').source, active: layer('judge').activeSource }));
   ok('(fixture) 语义 is running on llama.cpp', layer('semantic').activeSource === 'llama-cpp',
@@ -142,6 +152,74 @@ try {
     .filter((h) => h.path === '/v1/embeddings' && h.body.includes('zzqueryprobe'));
   ok('THE POINT: a recall embeds its query — the semantic seed channel is registered and reads the vectors',
     queryEmbeds.length > 0, JSON.stringify(hits.slice(beforeRecall).map((h) => `${h.path} ${h.model}`)));
+
+  // --- 4. a FALLBACK to the CLI asks the CLI for the CLI's model -----------------------------------
+  // The household story: a chat GGUF is bound, then the runtime goes (deleted, a failed update). 判断
+  // resolves to the CLI — and two things written for the GGUF were still being read: settings' judgeModel
+  // (the badge said "claude-cli · <gguf>", and it became DefaultModelByConsumer), and the live
+  // llm.model.memory the binding wrote, which outranks that default. Either one hands the GGUF's id to
+  // Claude; both policies are fail-open, so the symptom is zero enrichment and no error.
+  //
+  // BINDING through the endpoint, rather than planting settings, is what writes the live key.
+  const bound = await c.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: JUDGE_MODEL });
+  ok('(fixture) binding the chat GGUF succeeds, which writes llm.model.memory = that GGUF',
+    bound.status === 200, `${bound.status} ${JSON.stringify(bound.body)}`);
+
+  server.stop();
+  server = null;
+  // The replacement reads the same data folder; let the old process finish its last write.
+  await new Promise((r) => setTimeout(r, 1200));
+  fs.rmSync(path.join(resources, 'llama-cpp', 'llama-server.exe'), { force: true });
+  fs.rmSync(argsLog, { force: true });
+
+  // Its OWN port: restarting on the same one inside a suite is its own trap (a request can land on the
+  // process on its way out). Still pointed at the fake, so a stray call to llama.cpp would be SEEN.
+  server = startServer({
+    dataDir, port: RESTART_PORT,
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_STUB_ARGS_LOG: argsLog },
+  });
+  const base2 = `http://127.0.0.1:${RESTART_PORT}`;
+  await waitHealthy(base2);
+  const c2 = makeClient(base2);
+
+  const fell = layerOf(await c2.getJson('/api/manage/memory'), 'judge');
+  ok('(fixture) with the runtime gone, 判断 falls back to the CLI',
+    fell.activeSource === 'claude-cli', JSON.stringify({ source: fell.source, active: fell.activeSource }));
+  ok('THE POINT: the badge does not name the GGUF under the CLI — saved or running',
+    fell.source === 'claude-cli' && fell.model === 'haiku' && fell.activeModel === 'haiku',
+    JSON.stringify({ source: fell.source, model: fell.model, active: fell.activeSource, activeModel: fell.activeModel }));
+
+  const beforeFallback = hits.length;
+  const wrote2 = await c2.call('remember_fact', {
+    kind: 'household', topic: 'zzfallbackfact evening routine',
+    content: 'The zzfallbackfact evening walk leaves at six and loops past the library.',
+    source: 'https://example.test/zzfallback', confidence: 0.8,
+  });
+  ok('remember_fact stores the fact after the fallback', wrote2.status === 200 && wrote2.result?.ok === true,
+    JSON.stringify(wrote2.result));
+
+  const cliCalls = () => (fs.existsSync(argsLog) ? fs.readFileSync(argsLog, 'utf8') : '')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const modelOf = (call) => { const i = call.args.indexOf('--model'); return i >= 0 ? call.args[i + 1] : null; };
+  await until(() => cliCalls().some((x) => x.kind === 'annotation' && x.tail.includes('zzfallbackfact')), 60000)
+    .catch(() => {});
+  const annotated = cliCalls().filter((x) => x.kind === 'annotation' && x.tail.includes('zzfallbackfact'));
+  ok('(non-vacuity) the write\'s annotation reached the CLI', annotated.length > 0,
+    JSON.stringify(cliCalls().map((x) => `${x.kind} ${modelOf(x)}`)));
+  ok('THE POINT: the CLI is asked for the CLI\'s model — never the GGUF it fell back from',
+    annotated.length > 0 && annotated.every((x) => modelOf(x) === 'haiku'),
+    JSON.stringify(annotated.map(modelOf)));
+
+  const recalled2 = await c2.call('recall_facts', { query: 'zzfallbackfact evening walk', limit: 5 });
+  ok('recall_facts answers after the fallback', recalled2.status === 200, JSON.stringify(recalled2.result).slice(0, 200));
+  await until(() => cliCalls().some((x) => x.kind === 'verification' && x.tail.includes('zzfallbackfact')), 60000)
+    .catch(() => {});
+  const verified = cliCalls().filter((x) => x.kind === 'verification' && x.tail.includes('zzfallbackfact'));
+  ok('…and so is the recall\'s verification', verified.length > 0 && verified.every((x) => modelOf(x) === 'haiku'),
+    JSON.stringify(verified.map(modelOf)));
+  ok('nothing was sent to llama.cpp after the fallback',
+    !hits.slice(beforeFallback).some((h) => h.path === '/v1/chat/completions'),
+    JSON.stringify(hits.slice(beforeFallback).map((h) => `${h.path} ${h.model}`)));
 } catch (err) {
   fail('e2e-p52 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {

@@ -112,9 +112,7 @@ public static class MemorySources
     /// three lines.</para></summary>
     public static IMemoryJudgeSource ResolveJudge(MemorySourceSettings s)
     {
-        var id = !string.IsNullOrWhiteSpace(s.Config.JudgeSource) ? s.Config.JudgeSource
-            : string.Equals(s.Config.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase) ? "ollama"
-            : DefaultJudgeSource;
+        var id = SavedJudgeSource(s.Config) ?? DefaultJudgeSource;
 
         // A non-default source with NO model is half-configured, and the half that is missing is the one
         // with no sensible default: a machine-specific model is not something a release can guess. Falling
@@ -144,20 +142,40 @@ public static class MemorySources
     /// removed, pointing the other way, and just as silent because the policies are fail-open. It showed up
     /// as a badge reading <c>Claude CLI · gemma3:4b</c>.</para>
     ///
-    /// <para>A settings.json carrying <see cref="MemoryConfig.JudgeSource"/> was written by the binding
-    /// endpoint, which always writes source and model TOGETHER, so that pair is trustworthy. Only the
-    /// legacy shape needs the guard.</para></summary>
+    /// <para><b>The saved model belongs to the SAVED source, and only counts when that is the source that
+    /// resolved.</b> A settings.json carrying <see cref="MemoryConfig.JudgeSource"/> was written by the
+    /// binding endpoint, which always writes source and model TOGETHER — so the pair is trustworthy, but only
+    /// as a pair. When <see cref="ResolveJudge"/> falls back (the runtime was deleted, the model file is
+    /// gone), the source that runs is the CLI while the saved model is still, say, a GGUF id; reading it
+    /// anyway handed that id to Claude and put it on the badge as <c>claude-cli · &lt;gguf&gt;</c>. The
+    /// legacy trap above is the same rule with no saved source at all.</para></summary>
     public static string? ResolveJudgeModel(MemorySourceSettings s)
     {
         var source = ResolveJudge(s);
-        var paired = !string.IsNullOrWhiteSpace(s.Config.JudgeSource)
-            || string.Equals(s.Config.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase);
-        var model = paired ? s.Config.JudgeModel : null;
+        var model = SavedIs(s.Config, source.Id) ? s.Config.JudgeModel : null;
 
         return source.Id == DefaultJudgeSource
             ? (string.IsNullOrWhiteSpace(model) ? DefaultJudgeModel : model)
             : model;
     }
+
+    /// <summary>The source the settings NAME for 判断 — the binding endpoint's <see cref="MemoryConfig.JudgeSource"/>,
+    /// or the pre-2026-08-21 <c>JudgeTransport: local</c>, which meant Ollama. Null when they name none: an
+    /// install that never bound the layer, or a legacy CLI one, whose <c>JudgeModel</c> belonged to the local
+    /// arm and names nothing here.</summary>
+    public static string? SavedJudgeSource(MemoryConfig c) =>
+        !string.IsNullOrWhiteSpace(c.JudgeSource) ? c.JudgeSource
+        : string.Equals(c.JudgeTransport, "local", StringComparison.OrdinalIgnoreCase) ? MemoryBackends.Ollama
+        : null;
+
+    /// <summary>Do the settings NAME the source whose id is <paramref name="sourceId"/>? False after a
+    /// FALLBACK — and false in the window between binding another source and the restart that wires it.
+    /// Either way, what was written for the saved source (its model, and the live <c>llm.model.memory</c> the
+    /// binding wrote beside it) describes a backend that is not the one answering. Also false when nothing is
+    /// saved; a caller for whom that case means "the default" says so itself.</summary>
+    public static bool SavedIs(MemoryConfig c, string sourceId) =>
+        SavedJudgeSource(c) is { } saved
+        && string.Equals(MemoryBackends.Canonical(saved), sourceId, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Which source 语义 is bound to, or null when the layer is off — honouring the legacy
     /// <c>SemanticEnabled</c> flag the same way.

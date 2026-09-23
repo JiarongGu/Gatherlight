@@ -37,6 +37,23 @@ const chunks = [];
 for await (const c of process.stdin) chunks.push(c);
 const prompt = Buffer.concat(chunks).toString('utf8');
 
+// WHICH MODEL a call was asked for, recorded on request. A suite cannot otherwise see it: every memory
+// policy is fail-open, so a CLI asked for a model it has never heard of looks exactly like one that
+// answered badly. Opt-in (a suite names a file of its own), one JSON line per call, the prompt's tail
+// only — enough to tell an annotation from a verification and to find the suite's own marker.
+if (process.env.GATHERLIGHT_STUB_ARGS_LOG) {
+  try {
+    fs.appendFileSync(process.env.GATHERLIGHT_STUB_ARGS_LOG,
+      JSON.stringify({
+        args,
+        // Lyntai's own prompt shapes — the same tests the branches below answer on.
+        kind: prompt.includes('{"subjects"') ? 'annotation'
+          : prompt.includes('Notes:' + String.fromCharCode(10)) ? 'verification' : 'other',
+        tail: prompt.slice(-600),
+      }) + '\n', 'utf8');
+  } catch { /* a log that cannot be written must not change what the stub answers */ }
+}
+
 const NEWLINE = String.fromCharCode(10);
 const NOTES_HEAD = 'Notes:' + NEWLINE;
 const emit = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');

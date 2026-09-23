@@ -736,6 +736,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   moved the judge local had the router asking Ollama for `haiku` — fail-open both sides, hence zero calls and
   no error. `POST /api/manage/memory/layer/judge` writes source and model together; the cortex row is gone.
   The policies' own `Model` stays **null** so the router still resolves per consumer.
+  **What was written for one binding must not be read by another.** When 判断 FALLS BACK to the CLI (a chat
+  GGUF bound, then its runtime deleted), both the saved `judgeModel` and the live key still named the GGUF —
+  the badge read `claude-cli · <gguf>` and the CLI was asked for it, zero enrichment and no error. So
+  `ResolveJudgeModel` counts the saved model only when the saved source is the one that resolved, and
+  `JudgeScopedModelRoutingStore` withholds the live key while the saved binding annotates through a
+  different CLIENT than the running one (which also covers a rebind before its restart). By client, not by
+  source: a reranker and the CLI arm share the default client, and a reranker's key — the CLI's model — is
+  right even after its runtime goes. `e2e-p52` case 4 fails with either half removed.
   **The trap (fixed upstream in Lyntai 3.1, its D87):** a named client used to narrow its provider POOL but
   reuse the global candidates, so a client pooled over a local provider still resolved candidates from
   `UseDefaultCandidates("claude-cli")` — a provider absent from its own pool. Every call logged `router:
