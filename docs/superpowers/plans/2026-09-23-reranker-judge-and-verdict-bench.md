@@ -785,10 +785,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Files:** Create `docs/judge-bench.md`
 
-- [ ] **Step 1: Run** (≈960 recalls with a CLI judge call each, arms in parallel; about an hour)
+- [ ] **Step 1: Run** (≈1,200 recalls with a CLI judge call each, five judge arms in parallel, arms in parallel; about an hour)
 
-Run: `node devtools/dev.mjs judge-bench --arms=formula,topic,content,contentonly,fuse > devtools/_judge-bench-cli.txt 2>&1`
-Expected: the five tables at the end of the file. If a seed or arm error aborts, fix the cause and re-run — do not report partial tables.
+Run: `node devtools/dev.mjs judge-bench --arms=formula,formula2,topic,content,content2,contentonly,fuse > devtools/_judge-bench-cli.txt 2>&1`
+Expected: the five per-set tables, the serial-latency medians, the judge-input estimate, and NO `WARNING: arm … judge
+failed open` line. If a warning appears (rate limits on four parallel CLI arms), re-run the affected arms with
+`--reuse-seed` so they start from the same seed — do not report tables from an arm whose judge failed open.
 
 - [ ] **Step 2: Write `docs/judge-bench.md`** with the measured numbers (copy the `all` table and the four per-set tables verbatim from `devtools/_judge-bench-cli.txt`), in this structure:
 
@@ -816,14 +818,19 @@ facts incl. near-duplicate clusters; four questions each: same / cross / third l
 - Arms drift independently after the shared start; that drift is part of each arm's effect.
 ```
 
-Fill the "What it says" bullets from the numbers only. **Decision rules (write the one that applies):**
+Fill the "What it says" bullets from the numbers only. **There are two noise floors**: engine noise (`formula` vs `formula2`, usually 0 — no model in the loop) and JUDGE
+noise (`content` vs `content2`, the LLM's own run-to-run variation). A difference between two JUDGE arms counts only when
+it exceeds the judge floor on `all`; a difference vs 公式 only when it exceeds the larger of the two. Record the seed
+fingerprint, the claude version, the question-order seed and the concurrency with the tables.
+**Decision rules (write the one that applies):**
 - If `content` beats `topic` on top-1 or found@8 in `all` → the Task 2 fix is confirmed; say by how much.
 - If `content` is WORSE than `topic` → stop and report to the owner before Part C; do not rationalise it.
-- If `contentonly` is within 2 questions of `content` on `all` and faster → record that the topic prefix does not
+- If `contentonly` is within the JUDGE noise floor of `content` on `all` → record that the topic prefix does not
   earn its tokens, so on the Lyntai bump that ships `ContentChars` the decorator is deleted in favour of it.
   Otherwise record that the prefix earns its place and the decorator stays.
 - `fuse` changes the product default ONLY as a separate, owner-approved decision, and only if it beats
-  `content` (partition) in `all` without losing in any set. Otherwise record it as insurance, per Lyntai.
+  `content` (partition) on `all` by more than the judge noise floor without losing beyond it in any set. Otherwise record it
+  as insurance, per Lyntai.
 
 - [ ] **Step 3: Commit**
 
@@ -1606,13 +1613,16 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 1: Download both rerankers through the app** — start the dev server (`node devtools/dev.mjs server`),
 open 资源 · Resources, download `LAMAR 600M` and `BGE Reranker v2 M3`, wait for both rows to read 已安装. Stop the server.
 
-- [ ] **Step 2: Run the reranker arms** (free — no CLI judge calls; tagging during the seed still uses the CLI)
+- [ ] **Step 2: Run the reranker arms FROM RUN 1'S SEED** (no judge CLI calls: the seed is reused, so nothing is re-tagged)
 
-Run: `node devtools/dev.mjs judge-bench --arms=formula,content --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M > devtools/_judge-bench-rr.txt 2>&1`
-Expected: tables with six arms (`公式`, content partition, and partition/fuse for each reranker).
+Run: `node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,formula2 --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M > devtools/_judge-bench-rr.txt 2>&1`
+Expected: tables with six arms (the two 公式 arms, and partition/fuse for each reranker), no WARNING lines. Because the
+seed and the question-order seed are Run 1's, these rows are comparable with Run 1's `content` row — say so, and
+compare against it rather than re-running the Claude judge. (`--resources` defaults to `local/state/resources`, where
+资源 installed the models; the bench only reads it.)
 
 - [ ] **Step 3: Append "Run 2 — rerankers" to `docs/judge-bench.md`** — the tables verbatim, then:
-- reranker vs 公式, per set; reranker vs the Claude judge (content), per set; latency per arm;
+- reranker vs 公式, per set; reranker vs the Claude judge (Run 1's `content`, same seed), per set; serial latency;
 - LAMAR vs BGE, per set — the Chinese sets (`same` on zh facts, `mixed`) are the household's case;
 - partition vs fuse per reranker (Lyntai measured fuse = insurance: the base, no more).
 Same "What it does NOT say" section as Run 1.
@@ -1624,7 +1634,8 @@ style as the embedder rows (e.g. 「本应用双语测试集:首位命中 X/240,
     /// <summary>The reranker the bilingual bench measured best (docs/judge-bench.md, Run 2).</summary>
     public const string RecommendedReranker = "<the winning id>";
 ```
-If the two are within 2 questions on `all`, recommend the smaller file and say "tie" in the note — the ~1-point
+If the two are within the noise floor on `all` (engine floor — a reranker is deterministic; state which floor you
+used), recommend the smaller file and say "tie" in the note — the ~1-point
 band Lyntai measured is the same shape.
 
 - [ ] **Step 5: Update dev-conventions' measured row** (Task 18's table row) with our numbers and the date.
