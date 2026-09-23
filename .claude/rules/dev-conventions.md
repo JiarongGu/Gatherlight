@@ -396,7 +396,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   |---|---|---|
   | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost. On the 240-question bilingual fixture (`docs/judge-bench.md`): top-1 79/240, found@8 125/240, ~0.23 s per recall |
   | **判断 · Claude CLI** | subject handles on every write; judges which candidates answered, and promotes those to the front | **top-1 79 → 132/240 (+22.1pp, p < 0.001, 95% [+16.6, +27.2]pp), each of the four sets significant on its own; found@8 125 → 133, not a finding (p = 0.096)** — `docs/judge-bench.md` Run 1, 2026-09-23, the judge reading each fact's CONTENT. Costs **~9.5 s per recall** there (serial median; 8.7–11.7 s across Run 1's judge arms; **9–17 s** measured earlier on the household's own facts) — a CLI spawn per call. Before the content fix, on the household's own facts: +2 facts in each multilingual probe, 0 same-language |
-  | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 125 → 208 (LAMAR) / 203 (BGE) of 240 (+34.6 / +32.5pp, both p < 0.001) — cross-language 6 → 49 / 48 of 60; top-1 79 → 86 / 90 (+2.9pp p = 0.039 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 2, 2026-09-23. ~0.47–0.49 s per recall, warm, on one GPU, ≤60 candidates. LAMAR vs BGE: no finding either way — found@8 leans LAMAR 5–0 (p = 0.063, interval excluding zero); BGE is `RecommendedReranker` by the smaller-file tie-break registered before the run, and by nothing else. Lyntai, on ITS English LoCoMo corpus: +9.0 of the 9.5 evidence-hit points a perfect judge offers (LAMAR-600m Q5) |
+  | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 125 → 208 (LAMAR) / 203 (BGE) of 240 (+34.6 / +32.5pp, both p < 0.001) — cross-language 6 → 49 / 48 of 60; top-1 79 → 86 / 90 (+2.9pp p = 0.039 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 2, 2026-09-23. ~0.47–0.49 s per recall, warm, on one GPU, ≤60 candidates. LAMAR vs BGE: no finding either way — found@8 leans LAMAR 5–0 (p = 0.063, interval excluding zero); BGE is `RecommendedReranker` by the smaller-file tie-break registered before the run, and by nothing else. Lyntai, on ITS English LoCoMo corpus (`docs/memory-measurements.md` there, evidence-hit, n = 200), in ONE run — 2026-09-10, `embeddinggemma-300M` embedder, base 85.5%, a perfect judge +7.0: BGE Q8 +5.5, LAMAR Q8 +5.5, LAMAR Q5 (our file) +6.0. Its 2026-09-15 run read LAMAR Q5 at +9.0 of 9.5 over `nomic-embed-text` (base 83.0%); Lyntai's own rule is that a reranker's delta belongs to the configuration, so quote the base and embedder with it or not at all — the household notes quote neither |
   | **语义 · Claude CLI** | stores other wordings of a fact, **≥1 in another language** | capability proven directly: an English question retrieves a Chinese-only fact. Aggregate effect NOT measured — see the rule below on why this tool cannot |
 
   **The two judges are complements, not rungs of one ladder.** The reranker changes WHAT REACHES THE PAGE; the
@@ -540,8 +540,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   PROVISIONS — llama.cpp's `llama-server`, or the in-process ONNX embedder (`builtin`). It said
   "a LOCAL Ollama" until 2026-08-23, months after Ollama stopped being a backend at all: disk and
   local compute, no tokens, and nothing leaves the machine. They are independent rather
-  than tiered because they are complements — verification acts on what was retrieved (and reaches the ordering
-  indirectly, by narrowing what gets reinforced — see the 判断 bullet), while the semantic layer
+  than tiered because they are complements — verification acts on what was retrieved (Lyntai's `ApplyVerdict`
+  promotes the endorsed candidates ahead of the rest before the cut, keeping the engine's order within each
+  group, and reinforcement then follows the endorsed set — see the recall-layers table), while the semantic layer
   changes what is RETRIEVABLE AT ALL — so a household must be able to drop the token cost without losing local semantics.
   The enrichment was adopted wholesale with Lyntai 3.0 and spent that per-operation cost for months with
   no way to decline it; the default stays ON (turning it off by default would silently degrade recall on
@@ -633,8 +634,17 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the app no longer depended on it. **Two removals of the same code, one wrong and one right; the
   difference is whether the DEPENDENCY went with it, not how tidy the interface looked.**
   **The test:** if the honest sentence is "it does this less well" or "this costs more", ship the option with
-  that sentence attached and let the household weigh it. A DECLINED entry is only for a real impossibility
-  (内置 on 判断 needs an in-process chat model, which does not exist) — never for an option nobody built.
+  that sentence attached and let the household weigh it. A DECLINED entry saying "cannot" is only for a real
+  impossibility — never for an option nobody built. **The example this sentence used to give went false on
+  2026-09-23**: "内置 on 判断 needs an in-process chat model, which does not exist". A reranker verifies without
+  chatting, and Lyntai 3.2.0 ships an in-process ONNX cross-encoder (`AddOnnxProvider` producing scores, its
+  D157), so 内置 on 判断 is now exactly an option nobody built — with tagging on the CLI, like the llama.cpp
+  reranker. It was not built for a measured reason: that path reads WordPiece tokenizers only, so the one model
+  proven through it, ms-marco-MiniLM-L6-v2, is English-only (+3.0 of 9.5 on Lyntai's English LoCoMo, 2026-09-15,
+  base 83.0%, and −5.4 on multi-hop), while the multilingual rerankers need SentencePiece and run on llama.cpp
+  (`docs/superpowers/specs/2026-09-23-reranker-judge-and-verdict-bench-design.md` §Constraints). So it stays
+  unbindable, and its reason (`MemorySources.BuiltInCannotJudge`) now says "not built, and why" rather than
+  "cannot" — the honest sentence for a gap that is ours.
   A model row saying "you do not need this" is the same error in miniature: state the trade-off, and say
   when it is unmeasured. And a removed capability needs a test asserting the household can still do it —
   both removals above passed every check, because nothing asserted the ability existed (`p51` now does).
@@ -806,7 +816,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `IsReranker` over the same context, and must: `ScoringVerificationPolicy` THROWS at construction when its
   provider id names no registered backend. `e2e-p52` case 6 boots a server bound to a reranker and proves both
   halves by ROUTING — a fact write makes no chat call to llama.cpp and is tagged by the CLI on `haiku`, and a
-  recall sends the query AND each candidate's CONTENT to `/v1/rerank`.
+  recall's `/v1/rerank` request carries both the query and the written fact's CONTENT (a token only its content
+  holds, not its topic). One fact, so it proves the reranker reads content — not that every candidate is sent.
   **`llm.model.memory` holds the ANNOTATION model, never the reranker's id.** The binding writes
   `AnnotationModel(model)`, which for a reranker is the CLI's. Writing the id would hand it to Claude on every
   fact write: fail-open, zero tagging, no error. `p52` case 5 calls it THE TRAP and reads the key from the
@@ -1159,8 +1170,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   mapping those in the checker is right, because rewriting the docs to spell out the project directory
   would make them disagree with the convention stated three bullets above. Two allowlist kinds recur and
   both are legitimate: files in the DATA folder (user data, not the tree) and files in a SIBLING PROJECT
-  a note compares against. 318 references across 12 live docs; confirmed non-vacuous by planting a
-  renamed class, a dead link and a dead path.
+  a note compares against. The check prints how many references it resolved — read the count there, not
+  here: a figure quoted in this file went stale within a month. Confirmed non-vacuous by planting a renamed
+  class, a dead link and a dead path.
   **A qualified `Type.Member` is checked against the TYPE, and against its code only.** The symbol pass used
   to match the last segment anywhere in the corpus, comments included — so a method renamed on 2026-09-23
   stayed "resolved" in this file for as long as one e2e suite's COMMENT still carried its old name: the doc and

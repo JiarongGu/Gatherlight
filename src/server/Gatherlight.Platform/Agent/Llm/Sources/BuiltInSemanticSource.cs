@@ -162,4 +162,10 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
         }
         catch { return null; }
     }
+
+    /// <summary>The files were on disk (IsConfigured saw them), so no vector back means they did not LOAD —
+    /// the fix is the download, not another model: this backend offers only the one.</summary>
+    public string ProveFailed(string model) =>
+        $"{model} 没有返回向量 —— 内置嵌入模型没能加载,文件可能不完整。"
+        + "请在「资源 · Resources」面板把「内置嵌入模型」删除后重新下载。";
 }

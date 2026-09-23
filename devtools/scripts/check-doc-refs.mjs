@@ -108,8 +108,9 @@ const code = corpus.join('\n');
 //
 // A tokenizer rather than a regex, because a regex cannot tell `//` in a URL string from a comment, and
 // guessing wrong in the permissive direction is the very failure being fixed. Handled: `//` and `/* */`
-// comments; "regular", @"verbatim" and """raw""" strings (with any `$` prefix); 'c'har literals. A regular
-// string or char literal also ends at a newline, so a misread interpolation hole costs one line at most.
+// comments; "regular", @"verbatim" and """raw""" strings (with any `$` prefix, and `@""""` read as the
+// verbatim string it is); interpolation holes, whose own strings are stepped over; 'c'har literals. A regular
+// string or char literal also ends at a newline, so anything still misread costs one line at most.
 function csCode(src) {
   let out = '';
   let i = 0;
@@ -128,20 +129,40 @@ function csCode(src) {
       continue;
     }
     if (c === '"') {
+      // Verbatim when an `@` sits in the prefix just before the quote (`@"`, `$@"`, `@$"`). Decided FIRST: a
+      // raw string cannot take an `@`, and `@""""` is a verbatim string holding one quote — read as a raw
+      // opener of four quotes it swallowed the rest of the file.
+      const verbatim = src[i - 1] === '@' || (src[i - 1] === '$' && src[i - 2] === '@');
+      // Interpolated when a `$` sits in that prefix — its `{…}` holes are CODE and may hold strings of their own.
+      const interpolated = src[i - 1] === '$' || (src[i - 1] === '@' && src[i - 2] === '$');
       // Raw: three or more quotes open it, and the same run closes it.
       let q = 0;
       while (src[i + q] === '"') q++;
-      if (q >= 3) {
+      if (!verbatim && q >= 3) {
         const close = '"'.repeat(q);
         const end = src.indexOf(close, i + q);
         i = end < 0 ? n : end + q;
         out += ' ';
         continue;
       }
-      // Verbatim when an `@` sits in the prefix just before the quote (`@"`, `$@"`, `@$"`).
-      const verbatim = src[i - 1] === '@' || (src[i - 1] === '$' && src[i - 2] === '@');
       i++;
       while (i < n) {
+        // A hole: skip to its matching brace, stepping over any string inside it, so `{(x ? "a" : "b")}`
+        // cannot end the outer string early and leak "a" out as code. `{{` is a literal brace.
+        if (interpolated && src[i] === '{') {
+          if (src[i + 1] === '{') { i += 2; continue; }
+          let depth = 1;
+          i++;
+          while (i < n && depth > 0) {
+            if (src[i] === '"') {
+              i++;
+              while (i < n && src[i] !== '"' && src[i] !== '\n') i += src[i] === '\\' ? 2 : 1;
+            } else if (src[i] === '{') depth++;
+            else if (src[i] === '}') depth--;
+            i++;
+          }
+          continue;
+        }
         if (verbatim) {
           if (src[i] === '"' && src[i + 1] === '"') { i += 2; continue; }
           if (src[i] === '"') { i++; break; }

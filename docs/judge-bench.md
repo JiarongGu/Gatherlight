@@ -776,9 +776,10 @@ None of these reaches the exact test on its own; see "LAMAR vs BGE" below for wh
   (top-1 3/5, p = 0.727, [−1.6, +3.3]pp; found@8 5/7, p = 0.774, [−2.1, +3.7]pp), and no single set is
   significant either way, under partition or fuse.
   By question (see "By fact language"): on the household's case the two disagree on 2 of 80 queries, both
-  LAMAR's; across all 120 Chinese-worded questions on 6, four LAMAR's and two BGE's; BGE's top-1 lead on `all`
-  comes largely from English facts asked in English (10 vs 8 of 16). Latency is a wash (474 vs 489 ms serial,
-  partition).
+  LAMAR's; across all 120 Chinese-worded questions on 6, four LAMAR's and two BGE's. BGE's six solo top-1 wins on
+  `all` are ALL on questions about English or Japanese facts — two English facts asked in English (`same` × en,
+  10 vs 8 of 16), one each in `cross` × en, `third` × en, `cross` × ja and `third` × ja — and none on a Chinese
+  fact; LAMAR's two are `same` × zh and `mixed` × en. Latency is a wash (474 vs 489 ms serial, partition).
   **Recommended: `bge-reranker-v2-m3-Q5_K_M` — by the tie-break declared before the run and nothing else**
   (neither significant nor equivalent → the smaller file), which decided it by **1,408 bytes** (468,392,352
   against 468,393,760). The rule stands as registered: changing it after seeing which way the data leaned would be

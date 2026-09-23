@@ -138,8 +138,11 @@ public sealed class MemoryRecallController : ControllerBase
                     // judge on AND off, at 78 ms against 8,936. It was then rewritten to say the judgement
                     // does not change this recall's ordering at all — which is ALSO false, proved in p48 by
                     // driving a verdict through the stub: endorsing a fact ranked third brought it to the
-                    // top of the page. The verdict reaches the ordering through reinforcement, not through
-                    // a re-sort, but it reaches it.
+                    // top of the page. How it gets there is Lyntai's GraphMemoryEngine.ApplyVerdict: the
+                    // endorsed candidates are PROMOTED ahead of the rest before the cut, the engine's own order
+                    // kept within each group, and reinforcement follows the endorsed set. (This comment once
+                    // credited the move to reinforcement alone; reinforcement comes after, the promotion is what
+                    // moves the page.)
                     // Both measurements stand together: the judge CAN move a result, and on this corpus it
                     // moved nothing, because it endorsed what already ranked top. So the honest sentence
                     // describes what it does and declines to promise an improvement nobody has measured.
@@ -290,13 +293,16 @@ public sealed class MemoryRecallController : ControllerBase
         if (!MemoryBackends.IsRetired(savedSource)) return null;
         var was = string.Equals(savedSource, MemoryBackends.Ollama, StringComparison.OrdinalIgnoreCase)
             ? "本机 Ollama" : "自填地址的本机服务";
-        // The options named here are the picker's own labels. 语义's used to end 「或选「内置」只用公式检索」 —
-        // 内置 in its OLD meaning, the no-model group, which is 「不用模型」 now while 内置 names the in-process
-        // ONNX embedder: the advice would have bound an embedder while promising formula only.
+        // Named the way the household SEES them: the picker shows the three GROUPS (Claude CLI · 本机模型 ·
+        // 不用模型) and then MODEL names — 「内置」 is how the built-in embedder is named there and in 资源, while
+        // "llama.cpp" and "ONNX" are backend names that reach the screen only in the running-backend badge.
+        // 语义's advice used to end 「或选「内置」只用公式检索」 — 内置 in its OLD meaning, the no-model group,
+        // which is 「不用模型」 now: it would have bound an embedder while promising formula only.
         return $"这一层原来用的是「{was}」,这个版本不再连接外部服务 —— "
             + (layer == MemoryLayers.Judge
-                ? "请改选「Claude CLI」,或在「资源」面板下载 llama.cpp 的对话模型或重排模型后选「llama.cpp」。"
-                : "请改选「llama.cpp」或「ONNX」(模型在「资源」面板下载),或选「不用模型」只用公式检索。");
+                ? "请改选「Claude CLI」,或在「资源」面板下载一个对话模型或重排模型后,在「本机模型」里选它。"
+                : "请在「本机模型」里选一个嵌入模型(llama.cpp 的,或「内置」的;都在「资源」面板下载),"
+                  + "或选「不用模型」只用公式检索。");
     }
 
     /// <summary>Is the bound 语义 arm actually doing anything right now?
@@ -575,18 +581,10 @@ public sealed class MemoryRecallController : ControllerBase
             if (probe is null)
                 return StatusCode(409, new
                 {
-                    // The arms fail differently and must SAY so: a CLI that produced no phrasings is a
-                    // login-or-model problem, llama.cpp returning no vector is a wrong-model-or-runtime-down
-                    // one, and the built-in embedder returning none is its model FILES (IsConfigured already
-                    // saw them on disk, so what is left is a load that failed). One message covering all three
-                    // describes none — and this one named Ollama, a backend retired on 2026-08-22.
-                    error = source.Id == MemoryBackends.ClaudeCli
-                        ? $"{model} 没能改写出别的说法 —— 请确认 Claude CLI 已登录,或换一个模型。"
-                        : source.Id == MemoryBackends.LlamaCpp
-                            ? $"{model} 没有返回向量 —— 它可能不是嵌入模型,或本机模型运行时 llama.cpp 没能启动。"
-                                + "请换一个嵌入模型,或先在「资源 · Resources」面板确认运行时已下载。"
-                            : $"{model} 没有返回向量 —— 内置嵌入模型没能加载,文件可能不完整。"
-                                + "请在「资源 · Resources」面板把「内置嵌入模型」删除后重新下载。",
+                    // The arms fail differently and must SAY so, and the SOURCE says it — see
+                    // IMemorySemanticSource.ProveFailed. A branch on the source's id here was the if/else chain
+                    // the catalog exists to replace.
+                    error = source.ProveFailed(model!),
                 });
 
             var previous = _config.Current.Memory.EmbeddingModel;

@@ -160,6 +160,10 @@ public sealed class ClaudeCliSemanticSource : IMemorySemanticSource
             : null;
     }
 
+    /// <summary>No phrasings back is a login-or-model problem, never a missing vector.</summary>
+    public string ProveFailed(string model) =>
+        $"{model} 没能改写出别的说法 —— 请确认 Claude CLI 已登录,或换一个模型。";
+
     /// <summary>Ask for other ways to say the same thing.
     ///
     /// <para>Static and dependency-free so the WRITE path can call it without going through a source

@@ -438,4 +438,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         }
         catch { return null; }
     }
+
+    /// <summary>Semantic side: no vector back is a wrong model (a chat GGUF named by hand) or a runtime that
+    /// did not start — <see cref="ProveAsync"/> returns null for both.</summary>
+    public string ProveFailed(string model) =>
+        $"{model} 没有返回向量 —— 它可能不是嵌入模型,或本机模型运行时 llama.cpp 没能启动。"
+        + "请换一个嵌入模型,或先在「资源 · Resources」面板确认运行时已下载。";
 }

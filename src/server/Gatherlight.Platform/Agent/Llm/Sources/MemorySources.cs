@@ -50,19 +50,17 @@ public static class MemorySources
         new BuiltInSemanticSource(),
     };
 
-    /// <summary>Backends 判断 cannot run on, with the reason. Listed on the layer anyway — see
-    /// <see cref="DeclinedBackend"/> for why an impossible option is shown rather than omitted.</summary>
+    /// <summary>Backends 判断 does not run on, with the reason. Listed on the layer anyway — see
+    /// <see cref="DeclinedBackend"/> for why an unavailable option is shown rather than omitted. The one entry
+    /// is NOT impossible, only unbuilt — its reason says so (<see cref="BuiltInCannotJudge"/>).</summary>
     public static readonly IReadOnlyList<DeclinedBackend> JudgeDeclined = new[]
     {
         new DeclinedBackend(MemoryBackends.BuiltIn, "ONNX", BuiltInCannotJudge,
-            // Under 自带 alongside llama.cpp, which CAN judge — so the group is usable and this
+            // Under 本机模型 alongside llama.cpp, which CAN judge — so the group is usable and this
             // member stops being a dead choice, it is just the arm of it that does not serve here.
             MemoryGroups.Managed),
     };
 
-    /// <summary>Backends 语义 cannot run on, with the reason. <b>The built-in runtime is NO LONGER here</b> —
-    /// it shipped for this layer, so it moved from this list into <see cref="Semantic"/>. It stays declined
-    /// for 判断, which would need an in-process CHAT model (a much larger thing than an embedder).</summary>
     /// <summary>Backends 语义 cannot run on. EMPTY, and that is the point.
     ///
     /// <para>Claude used to be here with a paragraph explaining that it ships no embeddings endpoint, so the
@@ -74,20 +72,28 @@ public static class MemorySources
     /// option nobody had built.</para></summary>
     public static readonly IReadOnlyList<DeclinedBackend> SemanticDeclined = Array.Empty<DeclinedBackend>();
 
-    /// <summary>Why 内置 cannot judge. ONE layer now, not two — 内置 shipped for 语义, so this stopped being
-    /// a shared sentence and the name says which one it belongs to.
+    /// <summary>Why 内置 does not judge — and it is NOT an impossibility any more, which is what this sentence
+    /// has to say.
     ///
-    /// <para>It was rewritten because the old wording had gone false in both halves: it said no app-provided
-    /// runtime existed and that a local model meant installing Ollama yourself. As of 2026-08-22 the app
-    /// provisions llama.cpp, which sits in THIS SAME group and can judge — so the honest answer is that the
-    /// group is fine and this one arm of it is not. Pointing at the sibling matters: a household reading a
-    /// flat "not available" under 自带 would conclude the whole heading was unfinished.</para></summary>
-    // The group is 「本机模型」: it said 「内置」 from when that word named the group, and 内置 now names this
-    // very ONNX arm — so the sentence pointed a household at the one member that cannot judge.
+    /// <para><b>It used to open 「判断需要一个能对话的模型」, and this branch made that false.</b> A reranker judges
+    /// now — it VERIFIES, and tagging stays on the CLI — and Lyntai 3.2.0 ships an in-process ONNX
+    /// cross-encoder (<c>AddOnnxProvider</c> with <c>Produces = Score</c>, its D157). So an in-process verifier
+    /// for 判断 is BUILDABLE, the same shape as the llama.cpp reranker. It was not built, for a measured reason
+    /// recorded in <c>docs/superpowers/specs/2026-09-23-reranker-judge-and-verdict-bench-design.md</c>
+    /// §Constraints: that path reads WordPiece tokenizers only, so the one model proven through it
+    /// (ms-marco-MiniLM-L6-v2) is English-only — +3.0 of 9.5 on Lyntai's English LoCoMo (2026-09-15,
+    /// nomic-embed-text, base 83.0%), −5.4 on multi-hop —
+    /// while the multilingual rerankers (LAMAR, BGE) are SentencePiece, which is why they run on llama.cpp.
+    /// By dev-conventions' own rule this is "an option nobody built", so it says that and why, and does not
+    /// steer: it names where the multilingual ones run and that tagging would need the CLI either way.</para>
+    ///
+    /// <para>Earlier rewrites, still true as rules: it once said a local model meant installing Ollama
+    /// yourself (false since the app provisions llama.cpp, 2026-08-22), and it once called the group 「内置」,
+    /// the word that now names this very arm.</para></summary>
     private const string BuiltInCannotJudge =
-        "「判断」需要一个能对话的模型在应用进程里跑,这个还没做 —— ONNX 这条只做「语义」的向量。"
-        + "但「本机模型」这一组照样能用:同一组里的 llama.cpp 由应用自己安装和启动,"
-        + "下载一个对话模型或重排模型就能做判断。";
+        "「判断」也可以用重排模型来做,但「内置」这条还没做:应用内直接运行的方式目前读不了多语言重排模型的格式,"
+        + "验证过的唯一一个只懂英文。支持中文的重排模型在同一组「本机模型」里的 llama.cpp 上运行。"
+        + "无论哪种,写入事实时的主题标注都由 Claude CLI 完成。";
 
     public const string DefaultJudgeSource = "claude-cli";
 

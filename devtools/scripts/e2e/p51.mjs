@@ -350,8 +350,9 @@ try {
   // it was the plan: docs/builtin-model-runner.md predicted this exact line would have to change, so that
   // nobody could add the source without noticing the suite's claim about it had changed.
   //
-  // It stays DECLINED for 判断, which would need an in-process CHAT model — a much larger thing than an
-  // embedder, and 判断 already has two working backends.
+  // It stays DECLINED for 判断 — as an option nobody BUILT, not an impossibility: an in-process reranker
+  // could verify (Lyntai 3.2 ships one), but that path reads only English-only models today, so the
+  // multilingual rerankers run on llama.cpp (MemorySources.BuiltInCannotJudge says so to the household).
   ok('the built-in runtime is bindable on 语义 now, and still declined on 判断',
     bindable(semantic, 'builtin') === true && bindable(judge, 'builtin') === false,
     JSON.stringify({ judge: bindable(judge, 'builtin'), semantic: bindable(semantic, 'builtin') }));
@@ -415,8 +416,8 @@ try {
 
   // Unbindable is still enforced at the ENDPOINT and not merely greyed out — the button is one writer of
   // that decision and the API is another, and only one of them is a boundary. Demonstrated on a backend
-  // that is genuinely declined (内置 on 判断 would need an in-process CHAT model, which does not exist),
-  // since Claude on 语义 is now a real arm and no longer serves as the example.
+  // that is declined (内置 on 判断 — unbuilt rather than impossible since a reranker can judge, but still
+  // unbindable), since Claude on 语义 is now a real arm and no longer serves as the example.
   const bindDeclined = await post('/api/manage/memory/layer/judge',
     { source: 'builtin', model: 'haiku' });
   ok('binding a DECLINED backend is refused by the API, not merely disabled in the UI',

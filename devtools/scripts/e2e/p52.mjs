@@ -322,10 +322,13 @@ try {
     /发给 Claude/.test(rrNote) && !/仍/.test(rrNote), rrNote);
   // THE QUOTA HALF. The toast, the cost line and the model notes each said the checking is 不消耗账号额度, and
   // none said the TAGGING spends the account — so the only quota statement a household read about this
-  // binding was the reassuring one. A negative lookbehind, because the cost line's checking half says
-  // 不消耗账号额度 and a bare /账号额度/ would pass on that alone.
-  const spendsQuota = /(?<!不)消耗账号额度/;
-  ok('THE POINT: the toast says the tagging spends the account\'s quota', spendsQuota.test(rrNote), rrNote);
+  // binding was the reassuring one. Pinned as the EXACT clause (MemorySources.CliTaggingCost), not a pattern:
+  // the cost line's checking half says 不消耗账号额度, so a bare /账号额度/ passes on that alone, and even a
+  // /(?<!不)消耗/ lookbehind would pass a future 不会消耗 / 无需消耗 / 不必消耗. The whole sentence it has to say
+  // is short enough to say here.
+  const TAGGING_COST = '每条事实一次调用,消耗账号额度,事实内容会发给 Claude';
+  const spendsQuota = (text) => String(text ?? '').includes(TAGGING_COST);
+  ok('THE POINT: the toast says the tagging spends the account\'s quota', spendsQuota(rrNote), rrNote);
   ok('(control) the chat GGUF\'s toast, in case 4, still names both halves',
     /标注与核对/.test(String(bound.body?.note ?? '')), JSON.stringify(bound.body?.note));
   const rrLayer = layerOf(await c2.getJson('/api/manage/memory'), 'judge');
@@ -335,7 +338,7 @@ try {
   ok('…including that each fact\'s content is sent to Claude for tagging',
     /发给 Claude/.test(String(rrLayer.cost)), JSON.stringify(rrLayer.cost));
   ok('…and that the tagging spends the account\'s quota, beside a checking half that does not',
-    spendsQuota.test(String(rrLayer.cost)) && /不消耗账号额度/.test(String(rrLayer.cost)),
+    spendsQuota(rrLayer.cost) && /不消耗账号额度/.test(String(rrLayer.cost)),
     JSON.stringify(rrLayer.cost));
   // The third surface is the note a household reads while CHOOSING — in the picker and in 本机模型. The planted
   // rerankers are uncatalogued and so carry no note; the pinned rows come from the inventory, which lists every
@@ -344,7 +347,7 @@ try {
   const rerankNotes = (inventory.models ?? []).filter((m) => m.capability === 'reranking' && m.note);
   ok('…and every catalogued reranker\'s note says the same: content to Claude, on the account\'s quota',
     rerankNotes.length >= 2
-      && rerankNotes.every((m) => spendsQuota.test(m.note) && /发给 Claude/.test(m.note)),
+      && rerankNotes.every((m) => spendsQuota(m.note)),
     JSON.stringify(rerankNotes.map((m) => [m.id, String(m.note).slice(0, 90)])));
 
   // THE SCREEN'S OWN POINT: a model that ranks by OVERLAP is refused. The screen pair makes the distractor

@@ -170,4 +170,15 @@ public interface IMemorySemanticSource : IMemorySource
     /// surface only as recall that finds nothing, which is indistinguishable from a household that knows
     /// nothing.</para></summary>
     Task<Services.EmbedProbe?> ProveAsync(MemorySourceContext ctx, string model, CancellationToken ct = default);
+
+    /// <summary>The sentence a household reads when <see cref="ProveAsync"/> returned null for
+    /// <paramref name="model"/> — what THIS arm's failure means and what to do about it.
+    ///
+    /// <para><b>The source answers, because the arms fail differently.</b> A CLI that produced no phrasings is a
+    /// login-or-model problem; llama.cpp returning no vector is a wrong-model-or-runtime-down one; the built-in
+    /// embedder returning none is its model FILES (it was seen on disk, so what is left is a load that failed).
+    /// The bind endpoint used to hold one sentence for all of them — which named Ollama, a backend retired on
+    /// 2026-08-22 — and then an if/else over source ids, the chain the source catalog exists to replace. No
+    /// default, so a new arm cannot compile without saying how it fails.</para></summary>
+    string ProveFailed(string model);
 }

@@ -160,9 +160,14 @@ public static class GgufCatalog
             "mradermacher/LAMAR-600m-GGUF", "cd4da764d5b17d9996710dbf0ef5ad31c9aed182",
             "LAMAR-600m.Q5_K_M.gguf",
             "ec708b20336577c63702dd8efb23060bc611933579572bf9ad47ce2eaeda546f", 468_393_760,
+            // NO LoCoMo figure on either reranker row. Each once quoted Lyntai's English LoCoMo gain — this one
+            // +9.0 of 9.5 (2026-09-15, nomic-embed-text, base 83.0%), BGE's +5.5 for its Q8 (2026-09-10,
+            // embeddinggemma, base 85.5%) — so side by side they compared two different CONFIGURATIONS, and
+            // tilted toward LAMAR in a run where LAMAR Q8 exactly EQUALLED BGE Q8. Lyntai's own rule is that a
+            // reranker's delta belongs to its configuration (docs/memory-measurements.md). The household's
+            // evidence is this app's own bench; the Lyntai figures, with their bases, are in dev-conventions.
             RerankerNote + "本应用双语测试集:首位命中 86/240,前八命中 208/240,每次检索约 0.47 秒"
-            + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair
-            + "Lyntai 在英文 LoCoMo 上实测:+9.0(完美判断是 +9.5)。"),
+            + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair),
         new GgufModel(
             RecommendedReranker, "BGE Reranker v2 M3(Q5 · 判断 · 重排)", GgufCapability.Reranking,
             "gpustack/bge-reranker-v2-m3-GGUF", "3093af03b1a635e67b084b1d8c03c5f5e020fd05",
@@ -171,8 +176,7 @@ public static class GgufCatalog
             // No claim about public Chinese benchmarks: this row once said it was stronger than its peers there,
             // naming no benchmark and no source — an attribution nobody could check is not one.
             RerankerNote + "本应用双语测试集:首位命中 90/240,前八命中 203/240,每次检索约 0.49 秒"
-            + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair
-            + "Lyntai 在英文 LoCoMo 上量过的是它的 Q8 版本(+5.5)。"),
+            + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair),
     };
 
     public static GgufModel? Find(string? id) =>

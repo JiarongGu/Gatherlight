@@ -378,7 +378,9 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             // real sibling is llama.cpp's GGUF of the same model; that comparison, with both numbers, is the
             // model row's note (BuiltInSemanticSource.Catalog), not repeated here to drift.
             NeededFor: "「记忆检索 · 语义」的内置嵌入模型 —— 在应用进程里直接运行:不需要另外的运行时,"
-                + "没有常驻服务,只占约 222 MB 磁盘;仅在语义选用「本机模型 · ONNX」时需要",
+                // 「内置」, the name the household sees for this model in the picker and in 资源 — "ONNX" is
+                // a backend name that reaches the screen only in the running-backend badge.
+                + "没有常驻服务,只占约 222 MB 磁盘;仅在语义选用这个「内置」模型时需要",
             Kind: ResourceKind.Files, InstallDir: "embed-model",
             // The .onnx is the marker rather than the weights: it is the file ONNX Runtime is handed, and
             // ProvisionFilesAsync only moves the directory in once EVERY checksum passed, so the marker
