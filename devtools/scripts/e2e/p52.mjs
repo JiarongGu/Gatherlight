@@ -18,13 +18,18 @@
 //      the GGUF named by the saved judgeModel or by the live llm.model.memory the binding wrote. Read from
 //      the stub's own argv log, because a CLI asked for an unknown model is otherwise indistinguishable
 //      from one that answered badly.
-//   5. A RERANKER binding says what it moves — the checking; tagging stays on the CLI — in its toast and in
-//      the cost line beside it, where the toast used to claim both halves for every binding. The bind-time
-//      screen refuses a reranker that ranks by word OVERLAP, and one it refuses for a reason other than its
-//      ordering is told apart, quoting the server.
+//   5. A RERANKER binding says what it moves — the checking; tagging goes to the CLI — in its toast and in
+//      the cost line beside it, where the toast used to claim both halves for every binding, and it writes
+//      the CLI's model to llm.model.memory, never the reranker's id. The bind-time screen really runs against
+//      the runtime and refuses a reranker that ranks by word OVERLAP or simply BACKWARDS; one it refuses for
+//      a reason other than its ordering is told apart, quoting the server.
+//   6. A reranker AT WORK, on a server that booted bound to one: a fact write makes no chat call to
+//      llama.cpp and is tagged by the CLI on the CLI's model, and a recall sends the query AND each
+//      candidate's CONTENT to /v1/rerank.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
   dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, until,
 } from './_e2e-common.mjs';
@@ -48,9 +53,18 @@ const RERANK_MODEL = 'zzroute-rerank';
 // Scores by OVERLAP with the query — what a lexical scorer, or a cross-encoder a bad conversion reduced to
 // mean-pooled cosine, amounts to. The screen exists to refuse exactly this.
 const LEXICAL_RERANK = 'zzlexical-rerank';
+// Ranks the answer LAST — the answer-aware score negated. What Lyntai actually found in the wild: a
+// converted GGUF that loads, scores, and ranks backwards.
+const BACKWARDS_RERANK = 'zzbackwards-rerank';
 // Two that fail the screen for reasons that are NOT the ordering, so their sentences must say so.
 const BROKEN_RERANK = 'zzbroken-rerank';
 const SHORT_RERANK = 'zzshort-rerank';
+
+// Case 6: a SECOND server that boots already bound to the reranker, in a data folder of its own. Its own
+// port too — never 5412/5413, which cases 1–5 used.
+const RERANK_PORT = 5414;
+const rerankDir = dataDirFor('p52-rerank');
+const rerankArgsLog = path.join(rerankDir, 'stub-args.jsonl');
 
 // Planted, not downloaded: IsConfigured asks only that the runtime and a model of the right KIND are on
 // disk. Nothing ever executes these — the fake below is already serving on the runtime's address, and
@@ -61,8 +75,19 @@ fs.mkdirSync(path.join(resources, 'gguf'), { recursive: true });
 fs.writeFileSync(path.join(resources, 'llama-cpp', 'llama-server.exe'), '');
 fs.writeFileSync(path.join(resources, 'gguf', `${JUDGE_MODEL}.gguf`), '');
 fs.writeFileSync(path.join(resources, 'gguf', `${EMBED_MODEL}.gguf`), '');
-for (const m of [RERANK_MODEL, LEXICAL_RERANK, BROKEN_RERANK, SHORT_RERANK])
+for (const m of [RERANK_MODEL, LEXICAL_RERANK, BACKWARDS_RERANK, BROKEN_RERANK, SHORT_RERANK])
   fs.writeFileSync(path.join(resources, 'gguf', `${m}.gguf`), '');
+
+makeTestData(rerankDir);
+const rerankResources = path.join(rerankDir, 'state', 'resources');
+fs.mkdirSync(path.join(rerankResources, 'llama-cpp'), { recursive: true });
+fs.mkdirSync(path.join(rerankResources, 'gguf'), { recursive: true });
+fs.writeFileSync(path.join(rerankResources, 'llama-cpp', 'llama-server.exe'), '');
+fs.writeFileSync(path.join(rerankResources, 'gguf', `${RERANK_MODEL}.gguf`), '');
+fs.writeFileSync(path.join(rerankDir, 'state', 'settings.json'), JSON.stringify({
+  memory: { judgeSource: 'llama-cpp', judgeModel: RERANK_MODEL },
+}, null, 2), 'utf8');
+fs.rmSync(rerankArgsLog, { force: true });
 fs.writeFileSync(path.join(dataDir, 'state', 'settings.json'), JSON.stringify({
   memory: {
     judgeSource: 'llama-cpp', judgeModel: JUDGE_MODEL,
@@ -110,7 +135,10 @@ const fake = http.createServer((req, res) => {
       // The share of the query's distinct letters a document contains — overlap and nothing else.
       const queryChars = [...new Set([...String(json.query ?? '')].filter((ch) => /\p{L}/u.test(ch)))];
       const overlap = (d) => queryChars.filter((ch) => d.includes(ch)).length / (queryChars.length || 1);
-      const score = json.model === LEXICAL_RERANK ? overlap : (d) => (answers(d) ? 3.2 : -2.1);
+      const answerAware = (d) => (answers(d) ? 3.2 : -2.1);
+      const score = json.model === LEXICAL_RERANK ? overlap
+        : json.model === BACKWARDS_RERANK ? (d) => -answerAware(d)
+        : answerAware;
       const results = docs.map((d, index) => ({ index, relevance_score: score(d) }))
         .sort((a, b) => b.relevance_score - a.relevance_score);
       if (json.model === BROKEN_RERANK) {
@@ -139,6 +167,7 @@ const fakeUrl = `http://127.0.0.1:${fake.address().port}`;
 const layerOf = (snapshot, id) => (snapshot?.layers ?? []).find((l) => l.id === id) ?? {};
 
 let server = null;
+let rerankServer = null;
 try {
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
   const base = `http://127.0.0.1:${PORT}`;
@@ -265,9 +294,23 @@ try {
   // scores and never generates, so tagging stays on the CLI — and it contradicted the cost line on the same
   // panel. The runtime comes back first: binding asks the source whether it is configured.
   fs.writeFileSync(path.join(resources, 'llama-cpp', 'llama-server.exe'), '');
+  const beforeBind = hits.length;
   const rr = await c2.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: RERANK_MODEL });
   ok('(fixture) a reranker that ranks the answer first is allowed to bind',
     rr.status === 200, `${rr.status} ${JSON.stringify(rr.body)}`);
+  ok('…because the screen really ran against the runtime',
+    hits.slice(beforeBind).some((h) => h.path === '/v1/rerank' && h.model === RERANK_MODEL),
+    JSON.stringify(hits.slice(beforeBind).map((h) => `${h.path} ${h.model}`)));
+  // THE TRAP: the binding writes the ANNOTATION model to llm.model.memory, and for a reranker that is the
+  // CLI's. Writing the reranker's id there would send it to Claude on every fact write — fail-open, so no
+  // error, just no tagging. Read from the database itself: no API response carries this key.
+  const liveKey = (() => {
+    const db = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'));
+    try { return db.prepare('SELECT value FROM app_config WHERE key = ?').get('llm.model.memory')?.value ?? null; }
+    finally { db.close(); }
+  })();
+  ok('THE TRAP: llm.model.memory holds the CLI\'s model, never the reranker\'s id',
+    liveKey === 'haiku', `llm.model.memory=${JSON.stringify(liveKey)}`);
   const rrNote = String(rr.body?.note ?? '');
   ok('THE POINT: its toast says the tagging goes to the Claude CLI, on the CLI\'s model',
     /核对/.test(rrNote) && /Claude CLI/.test(rrNote) && /haiku/.test(rrNote) && !/标注与核对/.test(rrNote), rrNote);
@@ -281,6 +324,8 @@ try {
   ok('…and the cost line beside it says the same thing',
     rrLayer.model === RERANK_MODEL && /重排/.test(String(rrLayer.cost)) && /Claude CLI/.test(String(rrLayer.cost)),
     JSON.stringify({ model: rrLayer.model, cost: rrLayer.cost }));
+  ok('…including that each fact\'s content is sent to Claude for tagging',
+    /发给 Claude/.test(String(rrLayer.cost)), JSON.stringify(rrLayer.cost));
 
   // THE SCREEN'S OWN POINT: a model that ranks by OVERLAP is refused. The screen pair makes the distractor
   // repeat the question's words while the answer states the price, so overlap puts the distractor first.
@@ -293,6 +338,14 @@ try {
   ok('…and the refusal leaves the working binding in place',
     layerOf(await c2.getJson('/api/manage/memory'), 'judge').model === RERANK_MODEL,
     JSON.stringify(layerOf(await c2.getJson('/api/manage/memory'), 'judge').model));
+  // …and so is one that is simply BACKWARDS, which is what Lyntai found in the wild: a converted GGUF that
+  // loads and scores, and puts the answer last. The lexical case cannot stand in for this one — a backwards
+  // model need not overlap-rank at all.
+  const backwards = await c2.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: BACKWARDS_RERANK });
+  const backwardsErr = String(backwards.body?.error ?? '');
+  ok('THE POINT: a reranker that ranks the answer LAST fails the self-check and is refused',
+    backwards.status === 409 && /自检/.test(backwardsErr),
+    `${backwards.status} ${backwardsErr || JSON.stringify(backwards.body)}`);
 
   // A refusal carries what the SERVER said. It used to say 「看「日志」」, which pointed at nothing: the
   // screen logs nothing and llama-server's output is discarded.
@@ -306,10 +359,66 @@ try {
   const shortErr = String(short.body?.error ?? '');
   ok('a reply scoring fewer documents than it was sent is UNUSABLE — not a failed self-check',
     short.status === 409 && /无法使用/.test(shortErr) && !/自检/.test(shortErr), `${short.status} ${shortErr}`);
+
+  // --- 6. a reranker AT WORK -------------------------------------------------------------------------
+  // Case 5 proves what BINDING a reranker says and writes; this proves what a server built around one
+  // DOES. It boots already bound, so the verifier is ScoringVerificationPolicy over the llamacpp-rerank
+  // provider and annotation is the default client's — which only routing can show, because both halves are
+  // fail-open and a mis-wired one simply makes no call.
+  rerankServer = startServer({
+    dataDir: rerankDir, port: RERANK_PORT,
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_STUB_ARGS_LOG: rerankArgsLog },
+  });
+  const base3 = `http://127.0.0.1:${RERANK_PORT}`;
+  await waitHealthy(base3);
+  const c3 = makeClient(base3);
+
+  const atWork = layerOf(await c3.getJson('/api/manage/memory'), 'judge');
+  ok('(fixture) 判断 is running on llama.cpp, bound to the reranker',
+    atWork.activeSource === 'llama-cpp' && atWork.activeModel === RERANK_MODEL,
+    JSON.stringify({ active: atWork.activeSource, activeModel: atWork.activeModel }));
+
+  // Distinct tokens: the TOPIC's, the CONTENT's, and the QUERY's, each appearing nowhere else — so a rerank
+  // body carrying the content token can only have been sent the fact's content, not its topic or the query.
+  const beforeWrite6 = hits.length;
+  const wrote6 = await c3.call('remember_fact', {
+    kind: 'household', topic: 'zzreranktopic weekly swim',
+    content: 'The zzrerankcontent swim lane is booked every Thursday evening at the leisure centre.',
+    source: 'https://example.test/zzrerank', confidence: 0.8,
+  });
+  ok('remember_fact stores the fact on the reranker-bound server',
+    wrote6.status === 200 && wrote6.result?.ok === true, JSON.stringify(wrote6.result));
+
+  const calls6 = () => (fs.existsSync(rerankArgsLog) ? fs.readFileSync(rerankArgsLog, 'utf8') : '')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const modelOf6 = (call) => { const i = call.args.indexOf('--model'); return i >= 0 ? call.args[i + 1] : null; };
+  await until(() => calls6().some((x) => x.kind === 'annotation' && x.tail.includes('zzrerankcontent')), 60000)
+    .catch(() => {});
+  const tagged = calls6().filter((x) => x.kind === 'annotation' && x.tail.includes('zzrerankcontent'));
+  ok('(non-vacuity) the write was annotated at all', tagged.length > 0,
+    JSON.stringify(calls6().map((x) => `${x.kind} ${modelOf6(x)}`)));
+  ok('THE POINT: the annotation went to the CLI, on the CLI\'s model',
+    tagged.length > 0 && tagged.every((x) => modelOf6(x) === 'haiku'), JSON.stringify(tagged.map(modelOf6)));
+  ok('…and the fact write asked llama.cpp for no chat completion — a reranker cannot generate',
+    !hits.slice(beforeWrite6).some((h) => h.path === '/v1/chat/completions'),
+    JSON.stringify(hits.slice(beforeWrite6).map((h) => `${h.path} ${h.model}`)));
+
+  // The query shares ordinary words with the content, so the graph returns the fact as a candidate, and
+  // carries a token of its own; it never names the content's token.
+  const beforeRecall6 = hits.length;
+  const recalled6 = await c3.call('recall_facts', { query: 'zzrerankquery swim lane Thursday evening', limit: 5 });
+  ok('recall_facts answers on the reranker-bound server', recalled6.status === 200,
+    JSON.stringify(recalled6.result).slice(0, 200));
+  const reranked = () => hits.slice(beforeRecall6).filter((h) => h.path === '/v1/rerank' && h.model === RERANK_MODEL);
+  await until(() => reranked().length > 0, 60000).catch(() => {});
+  ok('THE POINT: the recall was verified by the reranker — the query and the fact\'s CONTENT went to /v1/rerank',
+    reranked().some((h) => h.body.includes('zzrerankquery') && h.body.includes('zzrerankcontent')),
+    JSON.stringify(hits.slice(beforeRecall6).map((h) => `${h.path} ${h.model} ${h.body.slice(0, 160)}`)));
 } catch (err) {
   fail('e2e-p52 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {
   try { server?.stop(); } catch {}
+  try { rerankServer?.stop(); } catch {}
   await new Promise((r) => fake.close(r));
 }
 
