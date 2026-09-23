@@ -107,8 +107,10 @@ public sealed class FactIndexStep : IMigrationStep
             // embedder is bound LATER, binding it already asks for a re-index, which drops every collection
             // under the graph's prefix — the orphaned old-address ones included. One bound but NOT wired (its
             // model file gone) asks for nothing, which is why the marker below then stays at this layout.
-            _log?.LogInformation("fact index: layout {Stored} -> {Layout} moved only vector addresses, and no " +
-                "embedder is wired; keeping the graph as it is", stored, Layout);
+            // No target layout named here: which one is recorded is decided below (EmbedderOwed), and naming "3"
+            // beside a later line recording "2" contradicted it.
+            _log?.LogInformation("fact index: layout {Stored} is behind only in its vector addresses, and no " +
+                "embedder is wired; keeping the graph as it is", stored);
             await _index.SyncAsync(ct);
         }
         else

@@ -771,7 +771,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (entries at the current address, vectors not) where it used to record "3". "3" told the start that had the
   embedder back that nothing was owed: it only synced, the vectors Lyntai 3.2's address change orphaned were
   never re-embedded, and semantic recall stayed empty without a word. Same rule as (2), a marker says only what
-  happened. `e2e-p52` case 10, confirmed to FAIL with the rule removed.
+  happened. An install with NO marker yet and an owed embedder therefore pays TWO rebuilds — one now, for the
+  scope move, and one when the embedder returns — because Lyntai can re-embed only by re-remembering. That is
+  the price of the vectors, not a bug. `e2e-p52` case 10, confirmed to FAIL with the rule removed.
 - **A model downloaded while OUR router runs is restarted in — within limits, each for a failure found in
   review.** The router reads its models directory and preset file ONCE (measured: `400 model not found`
   before and after the presets are rewritten, until a restart), so `LlamaServerRuntime.EnsureServesAsync`
@@ -835,8 +837,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   deleted chat judge stayed wired while a reranker remained, and every recall was NoOpinion. The bind endpoint
   asks `HasModel` of the NEW model too, so what bind accepts the resolver keeps — a model the router listed from
   llama.cpp's own cache used to bind and then fall back at the next restart. WHY a model is not there is the
-  source's clause, `WhyNotHere` (wrong kind; gone and 资源 can fetch it; gone and only the household can put it
-  back), shared by the bind refusal and the startup warning. What `LlamaWarmStep` announces is exactly a gone or
+  source's clause, `WhyNotHere` (wrong kind; not there and 资源 can fetch it; not there and only the household
+  can put it there), shared by the bind refusal and the startup warning. What `LlamaWarmStep` announces is exactly a gone or
   wrong MODEL — with what the CLI fallback costs, and for 语义 the restart and rebuild that bring it back.
   Proof: `e2e-p52` cases 10 and 10b. **Residuals, stated rather than fixed:** a missing llama.cpp RUNTIME and the
   built-in embedder's missing FILES still fall back silently at startup; and a hand-deleted file under a RUNNING

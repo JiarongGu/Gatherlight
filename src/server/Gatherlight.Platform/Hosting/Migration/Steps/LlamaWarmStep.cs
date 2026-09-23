@@ -67,14 +67,21 @@ public sealed class LlamaWarmStep : IMigrationStep
             && settings.Config.JudgeModel is { Length: > 0 } goneJudge && llamaJudge is not null
             && !llamaJudge.HasModel(settings, goneJudge))
         {
-            // WHAT THE FALLBACK COSTS: for a household that chose a local judge, this start is the first time their
-            // facts go to Claude and the account pays. The quota clause is MemorySources.CliTaggingCost — one writer,
-            // the one the reranker's cost line and bind toast carry. 判断's own switch decides whether any of it is
-            // spent now, so "消耗账号额度" is never said while nothing is being called.
-            var cli = "标注与核对都改由它完成:写入时" + MemorySources.CliTaggingCost + ";检索时每次也调用一次";
-            var cost = MemoryEnrichment.IsOn(_appConfig)
-                ? $" —— {cli}"
-                : $"(「判断」现在是关着的,暂时不会调用;打开后{cli})";
+            // WHAT THE FALLBACK COSTS, and WHAT MOVES — which depends on what was bound. A local CHAT judge did both
+            // halves on this machine, so this start is the first time the household's facts go to Claude and the
+            // account pays for them. A RERANKER only checked: its tagging was on the CLI all along, so only the
+            // checking moves, and saying 「标注与核对都改由它完成」 would misstate what changed. Asked of the source
+            // (ChecksOnly), the member the bind toast reads. The tagging clause is MemorySources.CliTaggingCost — one
+            // writer, the one the reranker's cost line and bind toast carry. 判断's own switch decides whether any of
+            // it is spent now, so "消耗账号额度" is never said while nothing is being called; with it off, what matters
+            // is what happens when it is switched on, which is both halves on the CLI whatever was bound.
+            var cliTagging = "写入时" + MemorySources.CliTaggingCost;
+            var cost = !MemoryEnrichment.IsOn(_appConfig)
+                ? $"(「判断」现在是关着的,暂时不会调用;打开后标注与核对都由它完成:{cliTagging};检索时每次也调用一次)"
+                : llamaJudge.ChecksOnly(goneJudge)
+                    ? " —— 写入时的主题标注本来就由它完成(" + MemorySources.CliTaggingCost + ");"
+                      + "现在检索时的核对也改由它完成:每次检索一次调用,同样消耗账号额度,候选事实的内容也会发给 Claude"
+                    : $" —— 标注与核对都改由它完成:{cliTagging};检索时每次也调用一次";
             _log.LogWarning("memory judge is bound to llama.cpp model {Model}, which is not one of its models on disk; " +
                 "falling back to the Claude CLI for this start", goneJudge);
             _state.AddWarning($"「判断」绑定的本机模型用不了:{llamaJudge.WhyNotHere(settings, goneJudge)}。"

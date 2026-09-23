@@ -774,8 +774,11 @@ try {
     /绑定的本机模型用不了/.test(judgeWarn) && /Claude CLI/.test(judgeWarn)
       && judgeWarn.includes(path.join('state', 'resources', 'gguf')),
     judgeWarn || JSON.stringify(goneWarnings));
-  ok('…and what that COSTS — the account, and the facts going to Claude, for the first time for a local judge',
-    /账号额度/.test(judgeWarn) && /事实内容会发给 Claude/.test(judgeWarn), judgeWarn);
+  // A CHAT judge did both halves locally, so both move — for a reranker only the checking would (ChecksOnly);
+  // that branch needs a boot of its own and is not driven here.
+  ok('…and what that COSTS — the account, and the facts going to Claude, for the first time for a local chat judge',
+    /账号额度/.test(judgeWarn) && /事实内容会发给 Claude/.test(judgeWarn) && /标注与核对都改由它完成/.test(judgeWarn),
+    judgeWarn);
   // Not the warm step's 没能载入: that is the sentence a layer STILL WIRED to the missing file produced — it
   // names the model and 语义 too, so without this exclusion the check passed before the fix.
   ok('…and for 语义: off, with a remedy that carries the restart AND the rebuild — facts written meanwhile have no vector',

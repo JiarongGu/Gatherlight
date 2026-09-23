@@ -170,9 +170,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         ModelsOnDisk(s).Contains(model, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The three ways <see cref="HasModel"/> says no, each with its own fix: the file is there but of a
-    /// kind this layer cannot use; it is gone and 资源 can fetch it again (a model the catalogue pins); or it is
-    /// gone and only the household can put it back — a GGUF they dropped in has no row in 资源, so sending them
-    /// there would point at nothing. Named as the panel names it: the catalogue's name where there is one.</summary>
+    /// kind this layer cannot use; it is not there and 资源 can fetch it (a model the catalogue pins); or it is
+    /// not there and only the household can put it there — a GGUF they dropped in has no row in 资源, so sending
+    /// them there would point at nothing, and a model llama.cpp listed from its own cache was never here at all. Named as the panel names it: the catalogue's name where there is one.</summary>
     public string WhyNotHere(MemorySourceSettings s, string model)
     {
         var known = GgufCatalog.Find(model);
@@ -183,7 +183,8 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                 : $"{shown} 是{KindName(model)},「判断」用不了 —— 判断需要一个对话模型或重排模型";
         return known is not null
             ? $"{shown} 不在模型目录里 —— 可以在「资源 · Resources」面板下载它"
-            : $"{model} 不在模型目录({ResourceProvisioner.ProvisionedGgufDir(s.ResourcesPath)})里 —— 可以把它的文件放回那里";
+            // 放到, not 放回: a model the router lists from llama.cpp's own cache was never in this folder at all.
+            : $"{model} 不在模型目录({ResourceProvisioner.ProvisionedGgufDir(s.ResourcesPath)})里 —— 可以把它的文件放到那里";
     }
 
     private static string KindName(string model) => ResourceProvisioner.GgufKind(model) switch
