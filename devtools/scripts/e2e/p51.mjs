@@ -1083,6 +1083,9 @@ try {
       /reranking\s*=\s*true/.test(sectionOf('zztest-rerank-model'))
         && /^ubatch-size\s*=\s*4096/m.test(sectionOf('zztest-rerank-model'))
         && /^batch-size\s*=\s*4096/m.test(sectionOf('zztest-rerank-model'))
+        // ctx-size too: the whole pair must fit the CONTEXT as well as the batch — a longer pair fails the
+        // entire rerank call (measured, docs/self-managed-llm-runtime.md), which RerankInputCap is sized against.
+        && /^ctx-size\s*=\s*4096/m.test(sectionOf('zztest-rerank-model'))
         && !/embeddings\s*=\s*true/.test(sectionOf('zztest-rerank-model'))
         && !/reranking\s*=\s*true/.test(sectionOf('zztest-embed-model'))
         && !/reranking\s*=\s*true/.test(sectionOf('zztest-chat-model')),
