@@ -30,6 +30,7 @@
 //      candidate's CONTENT to /v1/rerank.
 //   7. Whether a reranker's TAGGING is happening — it goes to the CLI, and a signed-out CLI means none — is
 //      said in the 判断 row, the bind toast and the startup warning, each paired with a signed-in control.
+//      7b: a measurement knob set at startup reaches state/logs, not only stdout.
 //   8. A model downloaded AFTER the router started is unknown to it (the real router reads its models
 //      directory once). A router the app did not start is not restarted for it, and the refusal says what
 //      would load the model rather than quoting a 400.
@@ -544,7 +545,12 @@ try {
     dataDir: signedOutDir, port: SIGNED_OUT_PORT,
     env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_CLAUDE_CMD: `node ${signedOutStub}` },
   });
-  signedInServer = startServer({ dataDir: signedInDir, port: SIGNED_IN_PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
+  // The judge-input knob rides along on this server (case 7b): it only affects an LLM verifier, and this one
+  // runs a reranker, so it changes nothing here except whether the logs say it is set.
+  signedInServer = startServer({
+    dataDir: signedInDir, port: SIGNED_IN_PORT,
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_INPUT: 'content' },
+  });
   const outBase = `http://127.0.0.1:${SIGNED_OUT_PORT}`;
   const inBase = `http://127.0.0.1:${SIGNED_IN_PORT}`;
   await Promise.all([waitHealthy(outBase), waitHealthy(inBase)]);
@@ -578,6 +584,16 @@ try {
     outBind.status === 200 && /还没有登录/.test(String(outBind.body?.note)), `${outBind.status} ${JSON.stringify(outBind.body?.note ?? outBind.body)}`);
   ok('(control) signed in, the toast carries no such warning',
     inBind.status === 200 && !/还没有登录/.test(String(inBind.body?.note)), `${inBind.status} ${JSON.stringify(inBind.body?.note ?? inBind.body)}`);
+
+  // --- 7b. a MEASUREMENT KNOB is visible in state/logs ----------------------------------------------------
+  // The knobs announced themselves on stdout only, which the desktop Host drops — so an install left running
+  // with a bench knob behaved unlike every other with no trace in the logs anyone reads.
+  const logsDir = path.join(signedInDir, 'state', 'logs');
+  const knobLog = fs.existsSync(logsDir)
+    ? fs.readdirSync(logsDir).map((f) => fs.readFileSync(path.join(logsDir, f), 'utf8')).join('\n') : '';
+  ok('a measurement knob set at startup is logged as a Warning in state/logs',
+    /WARN.*Measurement knob set: judge input = content/.test(knobLog),
+    knobLog.split('\n').filter((l) => /knob|measurement/i.test(l)).join(' | ') || '(nothing about the knob in state/logs)');
 
   // --- 8. a model downloaded AFTER the router started ---------------------------------------------------
   // The household's main path: a layer already runs on llama.cpp, they download a reranker, they bind it.

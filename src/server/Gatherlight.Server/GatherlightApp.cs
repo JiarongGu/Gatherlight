@@ -682,6 +682,19 @@ public static class GatherlightApp
                 "Anyone who can reach that address has full, unauthenticated access to your data and the " +
                 "claude CLI — only use this on a trusted private network.", options.BindAddress, options.Port);
 
+        // THE MEASUREMENT KNOBS again, through the LOGGER. The Console lines above are what judge-bench reads,
+        // but the desktop Host drops stdout and state/logs never saw them — so an install left running with a
+        // bench knob set (Fuse verdicts, a judge shown topics only) behaved differently from every other one
+        // with no trace anywhere a household or a developer would look. Warning, because it is not a setting.
+        if (!string.IsNullOrWhiteSpace(combinationRaw))
+            app.Logger.LogWarning(
+                "Measurement knob set: verdict combination = {Mode} (GATHERLIGHT_VERDICT_COMBINATION={Raw}) — a benchmark setting, not a household one",
+                fuseVerdicts ? "Fuse" : "Partition", combinationRaw);
+        if (!string.IsNullOrWhiteSpace(judgeInputRaw))
+            app.Logger.LogWarning(
+                "Measurement knob set: judge input = {Mode} (GATHERLIGHT_JUDGE_INPUT={Raw}) — a benchmark setting, not a household one",
+                Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode, judgeInputRaw);
+
         // Run the versioned startup migration in the background once we're listening, so /manage can
         // render the progress overlay instead of the app appearing to hang. The gate keeps /api closed
         // until it lifts. MigrationState defaults to migrating=true, so requests before this fires are
