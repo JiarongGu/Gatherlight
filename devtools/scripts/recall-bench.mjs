@@ -36,10 +36,33 @@
 //   node devtools/dev.mjs recall-bench --n=40
 //   node devtools/dev.mjs recall-bench --regen         # throw away the cached questions and rebuild
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { spawnSync } from 'node:child_process';
+// CROSS-LANGUAGE, which is the case this whole layer exists for and the one the bench could not see.
+//
+// The same-language generator below is told "use the same language as the fact" — so every probe shared a
+// script with the fact it was looking for, and the lexical floor could always reach it. Meanwhile the
+// rephrasing arm is explicitly told to store 另一种语言的常见叫法. The benchmark measured everything
+// EXCEPT the thing the layer is for, and then reported no benefit, which read as "it does not work".
+//
+// A household writing facts in Chinese and asking in English (or the reverse) shares NO tokens with the
+// stored text — no trigram, no bm25, nothing for the graph's lexical half either. That is the case where
+// stored phrasings or real vectors are the only route, and it is the normal case in a bilingual house.
+// FOUR WAYS A REAL QUESTION ARRIVES, because a household is not monolingual and this bench was.
+//
+// It used to generate ONE question per fact, told to "use the same language as the fact" — so every probe
+// shared a script with the text it was hunting and the 公式 floor could always reach it lexically. That is
+// the one case where the enrichment layers cannot show a benefit, and reporting it alone read as "they do
+// nothing". Meanwhile ClaudeCliSemanticSource is explicitly told to store 另一种语言的常见叫法.
+//
+//   same   — the fact's own language. The floor's best case; kept as the control.
+//   cross  — the other of zh/en. A flip, and still the narrow reading of "multilingual".
+//   third  — a language that is NEITHER the fact's nor English (ja). A household with Japanese or Korean
+//            material is not served by a zh<->en flip, and nothing here was testing that.
+//   mixed  — CODE-SWITCHED, the way people actually type in chat: a Chinese sentence carrying English
+//            nouns. Shares SOME tokens with the fact and some with nothing, which is the messy middle the
+//            other three all miss.
+import { QUESTION_SETS, resolveClaude, askIn } from './recall-questions.mjs';
 
 const NL = String.fromCharCode(10);
 
@@ -113,81 +136,7 @@ if (!flag('regen') && fs.existsSync(CACHE)) {
   try { cache = JSON.parse(fs.readFileSync(CACHE, 'utf8')); } catch { cache = {}; }
 }
 
-// RESOLVED, never shelled. The prompt below contains newlines, and `shell: true` concatenates arguments
-// without escaping them — the exact trap CLAUDE.md names ("ArgumentList only — never a shell"). On Windows
-// the first `where` hit can also be an extensionless bash shim that CreateProcess cannot run, so prefer
-// .cmd/.exe, the same order ClaudeCliRuntime.Locate uses.
-const resolveClaude = () => {
-  const explicit = process.env.GATHERLIGHT_CLAUDE_CMD || process.env.CLAUDE_CMD;
-  if (explicit) return explicit;
-  if (process.platform !== 'win32') return 'claude';
-  const w = spawnSync('where.exe', ['claude'], { encoding: 'utf8' });
-  const hits = (w.stdout ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
-  return hits.find((h) => /\.(cmd|exe)$/i.test(h)) ?? hits[0] ?? 'claude';
-};
 const claude = resolveClaude();
-// CROSS-LANGUAGE, which is the case this whole layer exists for and the one the bench could not see.
-//
-// The same-language generator below is told "use the same language as the fact" — so every probe shared a
-// script with the fact it was looking for, and the lexical floor could always reach it. Meanwhile the
-// rephrasing arm is explicitly told to store 另一种语言的常见叫法. The benchmark measured everything
-// EXCEPT the thing the layer is for, and then reported no benefit, which read as "it does not work".
-//
-// A household writing facts in Chinese and asking in English (or the reverse) shares NO tokens with the
-// stored text — no trigram, no bm25, nothing for the graph's lexical half either. That is the case where
-// stored phrasings or real vectors are the only route, and it is the normal case in a bilingual house.
-// FOUR WAYS A REAL QUESTION ARRIVES, because a household is not monolingual and this bench was.
-//
-// It used to generate ONE question per fact, told to "use the same language as the fact" — so every probe
-// shared a script with the text it was hunting and the 公式 floor could always reach it lexically. That is
-// the one case where the enrichment layers cannot show a benefit, and reporting it alone read as "they do
-// nothing". Meanwhile ClaudeCliSemanticSource is explicitly told to store 另一种语言的常见叫法.
-//
-//   same   — the fact's own language. The floor's best case; kept as the control.
-//   cross  — the other of zh/en. A flip, and still the narrow reading of "multilingual".
-//   third  — a language that is NEITHER the fact's nor English (ja). A household with Japanese or Korean
-//            material is not served by a zh<->en flip, and nothing here was testing that.
-//   mixed  — CODE-SWITCHED, the way people actually type in chat: a Chinese sentence carrying English
-//            nouns. Shares SOME tokens with the fact and some with nothing, which is the messy middle the
-//            other three all miss.
-const QUESTION_SETS = [
-  { key: 'same', label: '同语言', ask: (f) => `Write it in the SAME language as the fact.` },
-  { key: 'cross', label: '跨语言', ask: (f) => hasCjk(f) ? 'Write it in English.' : 'Write it in Chinese.' },
-  { key: 'third', label: '第三语言', ask: () => 'Write it in Japanese.' },
-  { key: 'mixed', label: '混合语言',
-    ask: () => 'Write it CODE-SWITCHED the way a bilingual person types in chat: a Chinese sentence that '
-      + 'keeps the key nouns in English. Do not translate everything into one language.' },
-];
-
-const hasCjk = (fact) => /[一-鿿]/.test(`${fact.topic} ${fact.content}`);
-
-const askIn = (fact, set) => {
-  const prompt =
-    'Below is one fact from a private knowledge base. Write ONE short question that this fact answers.'
-    + NL + `Language: ${set.ask(fact)}`
-    + NL + "Rules: do NOT reuse the fact's distinctive words (paraphrase); do not transliterate; ask it "
-    + 'the way a person would; output the question ALONE with no preamble, quotes or punctuation beyond '
-    + 'the question mark.' + NL + NL + `FACT: ${fact.topic} — ${fact.content}`;
-  const r = spawnSync(claude, ['-p', prompt], { encoding: 'utf8', cwd: os.tmpdir(), maxBuffer: 1 << 20 });
-  const out = (r.stdout ?? '').trim().split(NL).filter(Boolean).pop() ?? '';
-  return out.length >= 4 && out.length <= 200 ? out : null;
-};
-
-const askForQuestion = (fact) => {
-  // A NEUTRAL cwd, like every other one-shot call in this codebase: run from the data folder and the
-  // planner's whole knowledge base loads per call, which is both slow and irrelevant here.
-  const prompt =
-    'Below is one fact from a private knowledge base. Write ONE short question that this fact answers.\n'
-    + 'Rules: use the same language as the fact; do NOT reuse its distinctive words (paraphrase instead);\n'
-    + 'ask it the way a person would; output the question ALONE with no preamble, quotes or punctuation'
-    + ' beyond the question mark.\n\nFACT: '
-    + `${fact.topic} — ${fact.content}`;
-  const r = spawnSync(claude, ['-p', prompt], {
-    encoding: 'utf8', cwd: os.tmpdir(), maxBuffer: 1 << 20,
-  });
-  const out = (r.stdout ?? '').trim().split('\n').filter(Boolean).pop() ?? '';
-  return out.length >= 4 && out.length <= 200 ? out : null;
-};
 
 let generated = 0;
 for (const f of facts) {
@@ -199,7 +148,7 @@ for (const f of facts) {
   let wrote = false;
   for (const set of QUESTION_SETS) {
     if (seeded[set.key]) continue;
-    const q = askIn(f, set);
+    const q = askIn(claude, f, set);
     if (q) { seeded[set.key] = q; wrote = true; }
     process.stdout.write(`
   generating questions… fact ${generated + 1}/${facts.length} (${set.key})   `);
