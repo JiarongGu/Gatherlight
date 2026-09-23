@@ -815,7 +815,6 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             Set(p, "running", 97, "安装中…");
             var dest = ProvisionedClaude(_data.ResourcesPath);
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            var hadOurs = InstalledClaudeVersion(_data.ResourcesPath) is not null;
             try
             {
                 await ReplaceBinaryAsync(staged, dest);
@@ -823,14 +822,15 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             catch (IOException ex) when (IsHeld(ex))
             {
                 // The row shows ex.Message to the household; .NET's is English and says nothing about what to do.
-                // Which sentence is TRUE depends on the outcome: whether there was an install of ours to lose, and
-                // whether it is still (or back) in place.
+                // Which sentence is TRUE depends on what is on disk NOW: the old binary in place, a displaced copy
+                // of it waiting to be put back, or neither. The last names no button — a surviving version.txt
+                // makes the row read 「更新」, a fresh install 「下载」.
                 throw new InvalidOperationException(
                     File.Exists(dest)
                         ? "Claude CLI 的文件正被别的程序占用(可能是杀毒软件在扫描),这次没能替换 —— 已安装的版本不受影响,稍后再点「更新」。"
-                    : hadOurs
+                    : Directory.EnumerateFiles(Path.GetDirectoryName(dest)!, "claude.exe.old-*").Any()
                         ? "Claude CLI 的文件正被别的程序占用,旧版本已移到一旁、没能放回,暂时无法使用 —— 稍后再点「更新」或重启应用,会先把它放回。"
-                        : "下载好的 Claude CLI 文件正被别的程序占用(可能是杀毒软件在扫描),这次没能装上 —— 稍后再点「下载」。",
+                        : "下载好的 Claude CLI 文件正被别的程序占用(可能是杀毒软件在扫描),这次没能装上 —— 稍后再试一次。",
                     ex);
             }
             // The marker is written LAST, and only after the binary is in place: a marker naming a version

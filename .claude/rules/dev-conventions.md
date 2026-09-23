@@ -1083,10 +1083,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   failed while the 1.3.0 notes promised the opposite. The first overwrite stays a single attempt — the
   fallback covers it — and every move after it retries a sharing violation for ~7 s. If the new binary
   cannot go in, the old one is moved BACK (retried the same way), because a marker naming a missing binary
-  is an install that cannot run. **The household's sentence is chosen by the OUTCOME, three ways**:
-  `claude.exe` in place → "the installed version is unaffected"; an install of ours existed and is now
-  missing → the old copy was set aside, and 更新 or a restart puts it back; no install of ours → the
-  download did not go in, press 下载 (never "an old version was lost" to a household that had none). That
+  is an install that cannot run. **The household's sentence is chosen by what is ON DISK, three ways**:
+  `claude.exe` in place → "the installed version is unaffected"; missing but a `claude.exe.old-*` exists →
+  the old copy was set aside, and 更新 or a restart puts it back; neither → the download did not go in, try
+  again — naming no button, because a `version.txt` that outlived its binary makes the row read 更新 where
+  a first install reads 下载. The marker alone never buys the "set aside" line: it would promise a copy that
+  may not exist (say, a scanner quarantined the exe and left the marker). That
   second promise is kept by `RestoreDisplacedClaudeAsync`, which moves the newest aside back BEFORE any
   network request — so an offline click or a bad checksum cannot keep it aside — and again at boot from
   `ClaudeRuntimeStep`; the sweep skipping while `claude.exe` is missing is only a backstop. Proof: `e2e-p50`
@@ -1094,7 +1096,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing moved); H3 holds the DOWNLOAD, so the rename aside succeeds, the move in fails and only the move
   back leaves a binary (confirmed to fail with the move back removed); H4 plants the displaced state and
   makes the next download fail its checksum, and the binary is back anyway (confirmed to fail with the
-  top-of-provision restore removed); H5 is a first install with a held download, told to press 下载. The
+  top-of-provision restore removed); H5 is a first install with a held download and H5b the same with a
+  surviving `version.txt` — both told "did not go in", with no button and no "set aside". The
   holder is PowerShell with `FileShare.Read`, because Node opens files with delete-sharing and cannot
   stand in for one; H3's and H5's spin on the open, since the download is unopenable while being written,
   and assert their own marker so a missed window fails instead of passing vacuously. **Still undriven:**

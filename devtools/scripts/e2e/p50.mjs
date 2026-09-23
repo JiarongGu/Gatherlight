@@ -569,33 +569,54 @@ try {
     row.version === '9.9.11' && versionTxt() === '9.9.11', JSON.stringify({ row: row.version, marker: versionTxt() }));
   ok('…and no aside holds it any more', heldBy(payloadV3).length === 0, JSON.stringify(asides()));
 
-  // ---- H5 · a FIRST install whose download is held is told to download again — not that it lost anything --
-  // With no install of ours, "the old version was set aside" would be false, the button reads 「下载」 rather
-  // than 「更新」, and a household with its own CLI can still use it. H3's holder, on a fresh-looking install.
+  // ---- H5 · NO binary and NO displaced copy: the held download "did not go in" — and nothing more -------
+  // "The old version was set aside" would be false with no aside on disk, so that sentence is chosen by the
+  // aside EXISTING. And this one names no button: H5 looks like a first install (the row reads 「下载」),
+  // H5b keeps a version.txt that outlived its binary (the row reads 「更新」). H3's holder on the download.
+  const heldWithNothingInstalled = async (version) => {
+    const stagedN = path.join(dirF, 'state', 'resources', '.staging',
+      `claude-${version}-win32-${process.arch === 'arm64' ? 'arm64' : 'x64'}.exe`);
+    fs.rmSync(stagedN, { force: true });
+    channelVersion = version;
+    channelPayload = payloadV5;
+    published = crypto.createHash('sha256').update(payloadV5).digest('hex');
+    const h = hold(stagedN, 20000, { spin: true });
+    await h.ready;
+    await cF.post('/api/manage/resources/claude/provision');
+    const r = await until(async () => {
+      const x = await claudeRow(srv.base);
+      return x && x.state !== 'running' ? x : null;
+    });
+    const caught = fs.existsSync(h.marker);
+    h.p.kill();
+    await until(() => h.p.exitCode !== null || h.p.signalCode !== null, 15000).catch(() => {});
+    return { r, caught };
+  };
+  const saysNothingElse = (msg) => !/旧版本|放回|不受影响|「下载」|「更新」/.test(msg ?? '');
+
   for (const f of ['claude.exe', 'version.txt', ...asides()])
     fs.rmSync(path.join(path.dirname(claudeExe), f), { force: true });
-  const staged5 = path.join(dirF, 'state', 'resources', '.staging',
-    `claude-9.9.15-win32-${process.arch === 'arm64' ? 'arm64' : 'x64'}.exe`);
-  fs.rmSync(staged5, { force: true });
-  channelVersion = '9.9.15';
-  channelPayload = payloadV5;
-  published = crypto.createHash('sha256').update(payloadV5).digest('hex');
-  const firstHold = hold(staged5, 20000, { spin: true });
-  await firstHold.ready;
-  prov = await cF.post('/api/manage/resources/claude/provision');
-  row = await until(async () => {
-    const r = await claudeRow(srv.base);
-    return r && r.state !== 'running' ? r : null;
-  });
+  const h5 = await heldWithNothingInstalled('9.9.15');
   ok('(setup) the holder caught the first download — without it this case proves nothing',
-    fs.existsSync(firstHold.marker), JSON.stringify(row));
-  ok('THE POINT: a held first install says it did not go in, and to press 「下载」 again',
-    row.state === 'error' && /没能装上/.test(row.message ?? '') && /「下载」/.test(row.message ?? ''),
-    JSON.stringify(row));
-  ok('…and never that an old version was lost, set aside or left unaffected',
-    !/旧版本|放回|不受影响/.test(row.message ?? ''), row.message);
-  // H5 leaves no install behind; nothing after it uses this fixture — the server stops next.
-  firstHold.p.kill();
+    h5.caught, JSON.stringify(h5.r));
+  ok('THE POINT: a held first install says it did not go in, and to try again',
+    h5.r.state === 'error' && /没能装上/.test(h5.r.message ?? '') && /再试/.test(h5.r.message ?? ''),
+    JSON.stringify(h5.r));
+  ok('…naming no button, and never that an old version was lost, set aside or left unaffected',
+    saysNothingElse(h5.r.message), h5.r.message);
+
+  // H5b · the same, but version.txt SURVIVED its binary: the marker alone must not buy the "set aside" line.
+  fs.writeFileSync(path.join(path.dirname(claudeExe), 'version.txt'), '9.9.11');
+  for (const f of ['claude.exe', ...asides()])
+    fs.rmSync(path.join(path.dirname(claudeExe), f), { force: true });
+  const h5b = await heldWithNothingInstalled('9.9.16');
+  ok('(setup) H5b: the holder caught the download, with the old version.txt still there',
+    h5b.caught && versionTxt() === '9.9.11', JSON.stringify(h5b.r));
+  ok('H5b: a marker with no binary and no aside still gets "did not go in"',
+    h5b.r.state === 'error' && /没能装上/.test(h5b.r.message ?? ''), JSON.stringify(h5b.r));
+  ok('…and not the "set aside" sentence, which would promise a copy that does not exist',
+    saysNothingElse(h5b.r.message), h5b.r.message);
+  // H5/H5b leave no install behind; nothing after them uses this fixture — the server stops next.
   release.close();
   srv.stop(); srv = undefined;
 
