@@ -1077,12 +1077,20 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   under a REALLY running binary (a copy of node.exe, since a fake payload cannot run) and failed with that
   exact message before the fix; it asserts the displaced copy BY NAME when checking the next sweep,
   because a freshly written exe is briefly held (AV) and may legitimately be set aside once more.
-  **And a HELD file is transient** (a scanner, or our own `auth status` probe spawned from the exe on the
-  panel's last poll). The rename aside gave up on it at once, so an update under load failed while the 1.3.0
-  notes promised the opposite. Both moves now retry a sharing violation for ~7 s. If the new binary cannot go
-  in, the old one is moved BACK, because a marker naming a missing binary is an install that cannot run.
-  Proof: `e2e-p50` case H2. The holder is PowerShell with `FileShare.Read`, because Node opens files with
-  delete-sharing and cannot stand in for one. Proof
+  **And a HELD file is transient.** The suspect is a scanner reading the fresh exe, possibly prompted by our
+  own `auth status` probe spawning it — not the spawn itself, which maps the image WITH delete-sharing (that
+  is why case H can rename a running exe). The rename aside gave up on it at once, so an update under load
+  failed while the 1.3.0 notes promised the opposite. Every move now retries a sharing violation for ~7 s. If
+  the new binary cannot go in, the old one is moved BACK (retried the same way), because a marker naming a
+  missing binary is an install that cannot run; and the household's sentence is chosen by the OUTCOME —
+  "the installed version is unaffected" only while `claude.exe` is really there, otherwise that the old copy
+  was set aside and the next 更新 puts it back, which the next install's sweep does before deleting any aside.
+  Proof: `e2e-p50` case H2 holds `dest` (waited out; and past the budget, failing at the rename aside with
+  nothing moved) and H3 holds the DOWNLOAD, so the rename aside succeeds, the move in fails and only the
+  move back leaves a binary — confirmed to fail with the move back removed. The holder is PowerShell with
+  `FileShare.Read`, because Node opens files with delete-sharing and cannot stand in for one; H3's spins on
+  the open, since the download is unopenable while being written, and asserts its own marker so a missed
+  window fails instead of passing vacuously. The sweep's put-back has no e2e. Proof
   also lives in `e2e-p50`'s tampered-download denial, paired with the same bytes installing under the
   right checksum, and case A asserts the app boots ANYWAY.
   **The login SPAWN is tested too, and the reason it briefly was not is worth keeping.** It was recorded as

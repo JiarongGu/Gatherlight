@@ -618,7 +618,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         catch (Exception ex)
         {
             Set(p, "error", p.Percent, ex.Message);
-            _log.LogWarning("Resource provision failed: {Id}: {Msg}", spec.Id, ex.Message);
+            _log.LogWarning(ex, "Resource provision failed: {Id}: {Msg}", spec.Id, ex.Message);
         }
         finally { lock (p) p.Running = false; }
     }
@@ -812,8 +812,10 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             catch (IOException ex) when (IsHeld(ex))
             {
                 // The row shows ex.Message to the household; .NET's is English and says nothing about what to do.
-                throw new InvalidOperationException(
-                    "Claude CLI 的文件正被别的程序占用(可能是杀毒软件在扫描),这次没能替换 —— 已安装的版本不受影响,稍后再点「更新」。", ex);
+                // Which sentence is TRUE depends on whether the old binary is still (or back) in place.
+                throw new InvalidOperationException(File.Exists(dest)
+                    ? "Claude CLI 的文件正被别的程序占用(可能是杀毒软件在扫描),这次没能替换 —— 已安装的版本不受影响,稍后再点「更新」。"
+                    : "Claude CLI 的文件正被别的程序占用,旧版本已移到一旁、没能放回,暂时无法使用 —— 稍后再点「更新」,会先把它放回。", ex);
             }
             // The marker is written LAST, and only after the binary is in place: a marker naming a version
             // that is not on disk would make the panel report an install that cannot run.
@@ -848,18 +850,32 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// latter for months, so the fallback never ran in the one case it exists for and an update during a
     /// chat failed with "Access to the path is denied" (measured, and pinned by <c>e2e-p50</c> case H,
     /// which updates under a really running binary). A sharing violation is the IOException half.</para>
-    /// <para><b>A HELD file is transient, and the rename aside used to give up on it at once.</b> A scanner
-    /// reading a fresh exe, or our own <c>auth status</c> probe spawned from it on the panel's last poll, opens
-    /// it without FILE_SHARE_DELETE — and the rename fails with a sharing violation for as long as that lasts.
-    /// That failed an update under load (p50 case H, 2026-09-24) while the release notes promised updates no
-    /// longer fail in use. So both moves retry a sharing violation for a few seconds, and if the new binary
-    /// cannot be moved in, the old one is moved BACK: a version marker naming a binary that is not on disk is
-    /// an install that cannot run. Proof: <c>e2e-p50</c> case H2.</para></summary>
+    /// <para><b>A HELD file is transient, and the rename aside used to give up on it at once.</b> Something
+    /// that opens the file without FILE_SHARE_DELETE — suspected: a scanner reading the fresh exe, possibly
+    /// prompted by our own <c>auth status</c> probe spawning it (the spawn itself maps the image WITH delete
+    /// sharing, which is why case H can rename a running exe) — makes a move fail with a sharing violation for
+    /// as long as it lasts. That failed an update under load (p50 case H, 2026-09-24) while the release notes
+    /// promised updates no longer fail in use. So every move here retries a sharing violation for a few
+    /// seconds, and if the new binary cannot be moved in, the old one is moved BACK: a version marker naming a
+    /// binary that is not on disk is an install that cannot run. Proof: <c>e2e-p50</c> case H2 (a held
+    /// <c>dest</c>, waited out) and H3 (a held download, rolled back).</para>
+    /// <para>If even the move back fails, the old copy is the newest aside and <c>dest</c> is missing — so the
+    /// next install PUTS IT BACK before sweeping, instead of deleting the only copy. No e2e drives this.</para></summary>
     private static async Task ReplaceBinaryAsync(string staged, string dest)
     {
-        // Sweep any earlier displaced copy first — this is the only thing that ever deletes them.
-        foreach (var stale in Directory.EnumerateFiles(Path.GetDirectoryName(dest)!, "claude.exe.old-*"))
-            try { File.Delete(stale); } catch { /* still running or locked; next time */ }
+        var dir = Path.GetDirectoryName(dest)!;
+        if (!File.Exists(dest))
+        {
+            var newest = Directory.EnumerateFiles(dir, "claude.exe.old-*")
+                .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+            if (newest is not null)
+                try { File.Move(newest, dest); } catch { /* still held; left for the next install, not swept */ }
+        }
+        // Sweep any earlier displaced copy — this is the only thing that ever deletes them. Never while dest
+        // is missing: an aside is then the only copy there is.
+        if (File.Exists(dest))
+            foreach (var stale in Directory.EnumerateFiles(dir, "claude.exe.old-*"))
+                try { File.Delete(stale); } catch { /* still running or locked; next time */ }
 
         try
         {
@@ -867,6 +883,13 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             return;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* fall back below */ }
+
+        if (!File.Exists(dest))
+        {
+            // Nothing to set aside (a first install), so what failed above can only be the download being held.
+            await RetryWhileHeldAsync(() => File.Move(staged, dest));
+            return;
+        }
 
         var aside = $"{dest}.old-{Guid.NewGuid():N}";
         await RetryWhileHeldAsync(() => File.Move(dest, aside));   // permitted even while the image is loaded
@@ -876,7 +899,8 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         }
         catch
         {
-            try { File.Move(aside, dest); } catch { /* nothing more to try; the error below says what failed */ }
+            try { await RetryWhileHeldAsync(() => File.Move(aside, dest)); }
+            catch { /* the caller reads File.Exists(dest) to say which way this went */ }
             throw;
         }
     }
@@ -885,7 +909,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// in a way that forbids this operation, which is transient by nature.</summary>
     internal static bool IsHeld(Exception ex) => ex is IOException io && (io.HResult & 0xFFFF) is 32 or 33;
 
-    /// <summary>~7 s in all — long enough for a scan or a probe, short enough that the panel's progress row
+    /// <summary>~7 s per move — long enough for a scan or a probe, short enough that the panel's progress row
     /// never looks hung.</summary>
     private static readonly int[] HeldRetryMs = [200, 400, 800, 1600, 2000, 2000];
 

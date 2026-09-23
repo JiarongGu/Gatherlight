@@ -130,6 +130,9 @@ const serveRelease = (versionOf, payloadOf, sum) => new Promise((resolve) => {
 });
 
 let srv;
+// File holders spawned by case H2/H3, killed in `finally` so a throwing wait cannot leave a PowerShell
+// holding a handle inside the fixture directory.
+const holders = [];
 try {
   // ---- A · no CLI anywhere: the app must still COME UP ------------------------------------------
   const dirA = freshDir('a');
@@ -433,25 +436,38 @@ try {
     row.state === 'ready' && displaced.length > 0 && !displaced.some((f) => left.includes(f)),
     JSON.stringify({ state: row.state, displaced, left }));
 
-  // ---- H2 · the file is HELD (a scanner, or our own probe) while the update replaces it -----------
+  // ---- H2 · the file is HELD (a scanner, possibly prompted by our own probe) while the update replaces it
   // Node opens files with FILE_SHARE_DELETE, so it cannot stand in for the holder; PowerShell's
   // [IO.File]::Open(..., FileShare.Read) denies rename exactly as a scanner does. The marker proves the
-  // hold is real before the update starts — without it the case could pass by racing the holder.
-  const hold = (ms) => {
-    const marker = path.join(dirF, `_hold-${ms}.txt`);
+  // hold is real before the update starts — without it the case could pass by racing the holder. With
+  // `spin`, the holder retries the open until it succeeds and `ready` means "spinning": H3 has to catch a
+  // file that cannot be opened at all while it is being written.
+  const hold = (file, ms, { spin = false } = {}) => {
+    const tag = `${path.basename(file)}-${ms}`;
+    const marker = path.join(dirF, `_hold-${tag}.txt`);
+    const spinning = path.join(dirF, `_spin-${tag}.txt`);
     fs.rmSync(marker, { force: true });
-    const ps = `$f=[IO.File]::Open('${claudeExe}','Open','Read','Read'); Set-Content -LiteralPath '${marker}' 'held'; `
-      + `Start-Sleep -Milliseconds ${ms}; $f.Close()`;
+    fs.rmSync(spinning, { force: true });
+    const open = `[IO.File]::Open('${file}','Open','Read','Read')`;
+    const ps = (spin
+      ? `Set-Content -LiteralPath '${spinning}' 'spinning'; while ($true) { try { $f=${open}; break } catch { } }; `
+      : `$f=${open}; `)
+      + `Set-Content -LiteralPath '${marker}' 'held'; Start-Sleep -Milliseconds ${ms}; $f.Close()`;
     const p = spawn('powershell', ['-NoProfile', '-Command', ps], { stdio: 'ignore' });
-    return { p, ready: until(() => fs.existsSync(marker), 15000) };
+    holders.push(p);
+    return { p, marker, ready: until(() => fs.existsSync(spin ? spinning : marker), 15000) };
   };
+  const asides = () => fs.readdirSync(path.dirname(claudeExe)).filter((f) => f.startsWith('claude.exe.old-'));
+  const versionTxt = () =>
+    fs.readFileSync(path.join(dirF, 'state', 'resources', 'claude', 'version.txt'), 'utf8').trim();
   const payloadV3 = Buffer.from('#!/fake claude cli payload v3\n' + 'z'.repeat(4096));
   channelVersion = '9.9.11';
   channelPayload = payloadV3;
   published = crypto.createHash('sha256').update(payloadV3).digest('hex');
   await until(async () => (await claudeRow(srv.base))?.available === '9.9.11', 30000).catch(() => {});
 
-  const brief = hold(1500);
+  const asideBefore = asides();
+  const brief = hold(claudeExe, 3000);
   await brief.ready;
   prov = await cF.post('/api/manage/resources/claude/provision');
   row = await until(async () => {
@@ -461,6 +477,11 @@ try {
   ok('THE POINT: an update over a briefly HELD file waits it out and lands',
     row.state === 'ready' && row.version === '9.9.11'
       && Buffer.compare(fs.readFileSync(claudeExe), payloadV3) === 0, JSON.stringify(row));
+  // ANTI-VACUITY: had the hold ended before the install got there, the plain overwrite would have landed and
+  // the case would prove nothing. A NEW aside copy means the overwrite really hit the hold and the fallback
+  // waited it out.
+  ok('…through the fallback: the overwrite hit the hold and a NEW copy was set aside',
+    asides().some((f) => !asideBefore.includes(f)), JSON.stringify({ before: asideBefore, after: asides() }));
   await until(() => brief.p.exitCode !== null, 15000).catch(() => {});
 
   const payloadV4 = Buffer.from('#!/fake claude cli payload v4\n' + 'w'.repeat(4096));
@@ -468,7 +489,7 @@ try {
   channelPayload = payloadV4;
   published = crypto.createHash('sha256').update(payloadV4).digest('hex');
   await until(async () => (await claudeRow(srv.base))?.available === '9.9.12', 30000).catch(() => {});
-  const long = hold(20000);
+  const long = hold(claudeExe, 20000);
   await long.ready;
   prov = await cF.post('/api/manage/resources/claude/provision');
   row = await until(async () => {
@@ -480,7 +501,47 @@ try {
     JSON.stringify(row));
   ok('…and the installed binary is untouched — still v3, still there',
     fs.existsSync(claudeExe) && Buffer.compare(fs.readFileSync(claudeExe), payloadV3) === 0);
+  ok('…and so is the version it reports', row.version === '9.9.11' && versionTxt() === '9.9.11',
+    JSON.stringify({ row: row.version, marker: versionTxt() }));
   long.p.kill();
+  await until(() => long.p.exitCode !== null || long.p.signalCode !== null, 15000).catch(() => {});
+
+  // ---- H3 · the DOWNLOAD is held, so the new binary cannot go in: the old one must come BACK ----------
+  // The one path H2 cannot reach. H2 holds dest, so its long case fails at the rename aside and nothing
+  // ever moves. Holding the STAGED file instead lets the rename aside succeed and the move in fail — the
+  // moment the install has no claude.exe at all, which only the move back repairs. The holder cannot open
+  // the download while it is being written (File.Create shares nothing), so it spins on the open and
+  // catches the file between the writer letting go and the move. The sha256 pass reads with FileShare.Read,
+  // which the hold is compatible with; the large payload is what keeps that window open. The holder's
+  // marker is asserted, so a missed window reads as a failure rather than a vacuous pass.
+  const staged = path.join(dirF, 'state', 'resources', '.staging',
+    `claude-9.9.13-win32-${process.arch === 'arm64' ? 'arm64' : 'x64'}.exe`);
+  fs.rmSync(staged, { force: true });
+  const payloadV5 = Buffer.alloc(64 * 1024 * 1024, 'v');
+  channelVersion = '9.9.13';
+  channelPayload = payloadV5;
+  published = crypto.createHash('sha256').update(payloadV5).digest('hex');
+  await until(async () => (await claudeRow(srv.base))?.available === '9.9.13', 30000).catch(() => {});
+  const onDownload = hold(staged, 20000, { spin: true });
+  await onDownload.ready;
+  prov = await cF.post('/api/manage/resources/claude/provision');
+  row = await until(async () => {
+    const r = await claudeRow(srv.base);
+    return r && r.state !== 'running' ? r : null;
+  });
+  ok('(setup) the holder caught the download — without it this case proves nothing',
+    fs.existsSync(onDownload.marker), JSON.stringify(row));
+  ok('THE POINT: a new binary that cannot go in fails with the "unaffected" sentence',
+    row.state === 'error' && /不受影响/.test(row.message ?? ''), JSON.stringify(row));
+  ok('…and the sentence is TRUE: the old binary was moved back — v3, in place',
+    fs.existsSync(claudeExe) && Buffer.compare(fs.readFileSync(claudeExe), payloadV3) === 0,
+    JSON.stringify({ exists: fs.existsSync(claudeExe), asides: asides() }));
+  ok('…the version it reports has not moved',
+    row.version === '9.9.11' && versionTxt() === '9.9.11', JSON.stringify({ row: row.version, marker: versionTxt() }));
+  ok('…and no displaced copy of the old binary is left behind', !asides().some((f) =>
+    Buffer.compare(fs.readFileSync(path.join(path.dirname(claudeExe), f)), payloadV3) === 0),
+  JSON.stringify(asides()));
+  onDownload.p.kill();
   release.close();
   srv.stop(); srv = undefined;
 
@@ -562,5 +623,6 @@ try {
   console.error(srv?.log?.().slice(-3000) ?? '');
 } finally {
   try { srv?.stop(); } catch { /* best effort */ }
+  for (const h of holders) { try { h.kill(); } catch { /* best effort */ } }
 }
 done();
