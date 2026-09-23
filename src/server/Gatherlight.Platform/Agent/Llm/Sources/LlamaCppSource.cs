@@ -70,12 +70,12 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// reranker→CLI-model rule is written once.
     ///
     /// <para><b>This and <see cref="Register"/> must agree on the kind, and they do by construction</b>: both
-    /// branch on the same <c>ResourceProvisioner.GgufKind(ctx.Model)</c> over the same context. That matters
+    /// branch on the same <see cref="IsReranker"/>(<c>ctx.Model</c>) over the same context. That matters
     /// because <c>ScoringVerificationPolicy</c> THROWS at construction when its <c>ProviderId</c> names no
     /// registered backend — so the verifier below is only ever built when Register added
     /// <see cref="RerankProviderId"/>, and the chat branch never references it.</para></summary>
     public JudgeWiring Wiring(MemoryWiringContext ctx) =>
-        ResourceProvisioner.GgufKind(ctx.Model) != GgufCapability.Reranking
+        !IsReranker(ctx.Model)
             ? JudgeWiring.Llm(ClientId, AnnotationModel(ctx.Model))
             // Verification by the reranker; annotation by the default client on the CLI's default model.
             : new JudgeWiring(null, AnnotationModel(ctx.Model), sp =>
@@ -89,10 +89,15 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// <summary>A reranker's id must never reach the CLI, which would be asked for a model it has never heard
     /// of — so a reranker binding annotates on the CLI's default judge model.</summary>
     public string AnnotationModel(string model) =>
-        ResourceProvisioner.GgufKind(model) == GgufCapability.Reranking ? MemorySources.DefaultJudgeModel : model;
+        IsReranker(model) ? MemorySources.DefaultJudgeModel : model;
+
+    /// <summary>The one question every reranker branch in this class asks, answered by the single writer of a
+    /// GGUF's kind.</summary>
+    private static bool IsReranker(string model) =>
+        ResourceProvisioner.GgufKind(model) == GgufCapability.Reranking;
 
     public string Cost(string? model) =>
-        model is not null && ResourceProvisioner.GgufKind(model) == GgufCapability.Reranking
+        model is not null && IsReranker(model)
             // BOTH halves, because they cost different things — and the second sentence is the one a household
             // relies on: their facts DO leave the machine, for tagging.
             ? "检索时的判断由本机重排模型完成:不消耗账号额度,不联网。"
@@ -169,10 +174,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             return;
         }
 
-        // Branches on the SAME GgufKind(ctx.Model) as Wiring, over the same context — which is what guarantees
+        // Branches on the SAME IsReranker(ctx.Model) as Wiring, over the same context — which is what guarantees
         // the verifier Wiring builds names a provider registered here (ScoringVerificationPolicy throws on one
         // it cannot find).
-        if (ResourceProvisioner.GgufKind(ctx.Model) == GgufCapability.Reranking)
+        if (IsReranker(ctx.Model))
         {
             // A reranker only SCORES. Annotation stays on the default client (the Claude CLI) — see Wiring.
             // The generic door, because no llama preset takes `Produces`; a Score registration is never
@@ -215,7 +220,8 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             return new SourceStatus(false,
                 _layer == MemoryLayers.Semantic
                     ? "运行时已就绪,但还没有嵌入模型 —— 在「资源 · Resources」面板下载一个。"
-                    : "运行时已就绪,但还没有对话模型 —— 在「资源 · Resources」面板下载一个。",
+                    // Either kind can judge: a chat model does both halves, a reranker the checking.
+                    : "运行时已就绪,但还没有对话模型或重排模型 —— 在「资源 · Resources」面板下载一个。",
                 GgufCatalog.ResourceIdFor(_layer == MemoryLayers.Semantic
                     ? GgufCatalog.RecommendedEmbedder
                     : GgufCatalog.RecommendedJudge));
@@ -252,14 +258,13 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// model does its job: a chat model must answer, a reranker must pass <see cref="ScreenRerankerAsync"/>.</summary>
     public async Task<string?> RejectAsync(MemorySourceContext ctx, string model, CancellationToken ct = default)
     {
-        var kind = ResourceProvisioner.GgufKind(model);
-        if (kind == GgufCapability.Embedding)
+        if (ResourceProvisioner.GgufKind(model) == GgufCapability.Embedding)
             return $"{model} 是嵌入模型,不能用来做判断 —— 判断需要一个对话模型或重排模型。";
 
         // Then PROVE it: installed is not usable, and a judge that cannot answer fails open, i.e. silently.
         if (!await ctx.Llama.EnsureServingAsync(ct))
             return "llama.cpp 没能启动 —— 请看「日志」里的原因。";
-        if (kind == GgufCapability.Reranking) return await ScreenRerankerAsync(ctx, model, ct);
+        if (IsReranker(model)) return await ScreenRerankerAsync(ctx, model, ct);
         return await ctx.Llama.WarmAsync(model, GgufCapability.Completion, ct)
             ? null
             : $"{model} 没能在 llama.cpp 上回答 —— 换一个模型,或看「日志」。";

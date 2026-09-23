@@ -18,6 +18,8 @@
 //      the GGUF named by the saved judgeModel or by the live llm.model.memory the binding wrote. Read from
 //      the stub's own argv log, because a CLI asked for an unknown model is otherwise indistinguishable
 //      from one that answered badly.
+//   5. A RERANKER binding says what it moves — the checking; tagging stays on the CLI — in its toast and in
+//      the cost line beside it, where the toast used to claim both halves for every binding.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -38,6 +40,9 @@ const JUDGE_MODEL = 'zzroute-chat';
 // "embed" in the name is what classifies a household-supplied GGUF as an embedder
 // (ResourceProvisioner.IsEmbeddingGguf) — the same rule the real router's presets follow.
 const EMBED_MODEL = 'zzroute-embed';
+// "rerank" in the name is what classifies a household-supplied GGUF as a reranker (the same rule, checked
+// before "embed").
+const RERANK_MODEL = 'zzroute-rerank';
 
 // Planted, not downloaded: IsConfigured asks only that the runtime and a model of the right KIND are on
 // disk. Nothing ever executes these — the fake below is already serving on the runtime's address, and
@@ -48,6 +53,7 @@ fs.mkdirSync(path.join(resources, 'gguf'), { recursive: true });
 fs.writeFileSync(path.join(resources, 'llama-cpp', 'llama-server.exe'), '');
 fs.writeFileSync(path.join(resources, 'gguf', `${JUDGE_MODEL}.gguf`), '');
 fs.writeFileSync(path.join(resources, 'gguf', `${EMBED_MODEL}.gguf`), '');
+fs.writeFileSync(path.join(resources, 'gguf', `${RERANK_MODEL}.gguf`), '');
 fs.writeFileSync(path.join(dataDir, 'state', 'settings.json'), JSON.stringify({
   memory: {
     judgeSource: 'llama-cpp', judgeModel: JUDGE_MODEL,
@@ -82,6 +88,20 @@ const fake = http.createServer((req, res) => {
         object: 'list', model: json.model,
         data: inputs.map((t, index) => ({ object: 'embedding', index, embedding: vectorFor(String(t)) })),
         usage: { prompt_tokens: 1, total_tokens: 1 },
+      });
+      return;
+    }
+    if (req.url === '/v1/rerank') {
+      // ANSWER-AWARE, deliberately not lexical: a document that states the price or time the question asks
+      // for outranks one that only shares its words. The bind-time screen exists to refuse a model that
+      // ranks by overlap, so a fake that did would be refused too — and should be. Negative logits for the
+      // non-answer, because a real cross-encoder's are, and the screen must not treat an unset zero as one.
+      const docs = Array.isArray(json.documents) ? json.documents.map(String) : [];
+      const answers = (d) => /[0-9]|[一二两三四五六七八九十百千]+\s*(元|块|点|分钟)/.test(d);
+      send({
+        model: json.model,
+        results: docs.map((d, index) => ({ index, relevance_score: answers(d) ? 3.2 : -2.1 }))
+          .sort((a, b) => b.relevance_score - a.relevance_score),
       });
       return;
     }
@@ -220,6 +240,24 @@ try {
   ok('nothing was sent to llama.cpp after the fallback',
     !hits.slice(beforeFallback).some((h) => h.path === '/v1/chat/completions'),
     JSON.stringify(hits.slice(beforeFallback).map((h) => `${h.path} ${h.model}`)));
+
+  // --- 5. a RERANKER binding says what it moves: the checking, not the tagging ----------------------
+  // The bind toast said 「标注与核对将由这个后端完成」 for every binding. For a reranker that is false — it
+  // scores and never generates, so tagging stays on the CLI — and it contradicted the cost line on the same
+  // panel. The runtime comes back first: binding asks the source whether it is configured.
+  fs.writeFileSync(path.join(resources, 'llama-cpp', 'llama-server.exe'), '');
+  const rr = await c2.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: RERANK_MODEL });
+  ok('(fixture) a reranker that ranks the answer first is allowed to bind',
+    rr.status === 200, `${rr.status} ${JSON.stringify(rr.body)}`);
+  const rrNote = String(rr.body?.note ?? '');
+  ok('THE POINT: its toast says the tagging stays on the Claude CLI, on the CLI\'s model',
+    /核对/.test(rrNote) && /Claude CLI/.test(rrNote) && /haiku/.test(rrNote) && !/标注与核对/.test(rrNote), rrNote);
+  ok('(control) the chat GGUF\'s toast, in case 4, still names both halves',
+    /标注与核对/.test(String(bound.body?.note ?? '')), JSON.stringify(bound.body?.note));
+  const rrLayer = layerOf(await c2.getJson('/api/manage/memory'), 'judge');
+  ok('…and the cost line beside it says the same thing',
+    rrLayer.model === RERANK_MODEL && /重排/.test(String(rrLayer.cost)) && /Claude CLI/.test(String(rrLayer.cost)),
+    JSON.stringify({ model: rrLayer.model, cost: rrLayer.cost }));
 } catch (err) {
   fail('e2e-p52 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {

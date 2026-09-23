@@ -21,8 +21,8 @@ namespace Gatherlight.Server.Platform.Hosting.Migration.Steps;
 /// So this reads the same binding the wiring reads, and does nothing at all when neither layer names
 /// llama.cpp.</para>
 ///
-/// <para><b>Never essential, and never throws.</b> Recall degrades to the 公式 floor if the runtime will
-/// not start — a real loss, and still not a reason to hold the boot on a model load. The failure is logged
+/// <para><b>Never essential, and never throws.</b> Recall loses what runs here if the runtime will not
+/// start — a real loss, and still not a reason to hold the boot on a model load. The failure is logged
 /// and surfaced as a migration warning; the 资源 panel and 记忆检索 both stay reachable, which is what makes
 /// the remedy one click away rather than behind the thing that is broken.</para>
 /// </summary>
@@ -61,26 +61,36 @@ public sealed class LlamaWarmStep : IMigrationStep
             return;
         }
 
+        // WHAT IS LOST, per layer — asked of the source, because for a reranker it is only half of 判断: the
+        // checking runs here, the tagging never did. "Falls back to 公式" was true of a chat judge and false
+        // of a reranker, whose tagging carries on through the CLI while llama.cpp is down.
+        var judgeLoss = judgeModel is null ? null
+            : judge.ChecksOnly(judgeModel)
+                ? "「判断」检索时的核对这次启动不会生效(写入时的主题标注照常由 Claude CLI 完成)"
+                : "「判断」这次启动不会生效";
+        var embedLoss = embedModel is null ? null : "「语义」这次启动不会生效";
+
         if (!await _llama.EnsureServingAsync(ct))
         {
             var problem = (await _llama.ProbeAsync(refresh: true, ct)).Problem ?? "未能启动。";
             _log.LogWarning("llama-server did not start: {Problem}", problem);
-            _state.AddWarning($"本机模型运行时(llama.cpp)没能启动:{problem} 记忆检索会退回到「公式」这一层。");
+            _state.AddWarning($"本机模型运行时(llama.cpp)没能启动:{problem} "
+                + string.Join(";", new[] { embedLoss, judgeLoss }.Where(x => x is not null)) + "。");
             return;
         }
 
         // Warm each bound model. A failure here is per-model: one layer can be usable while the other is
         // not, and reporting them together would hide which.
-        foreach (var (model, layer) in new[]
+        foreach (var (model, layer, loss) in new[]
                  {
-                     (embedModel, "语义"),
-                     (judgeModel, "判断"),
+                     (embedModel, "语义", embedLoss),
+                     (judgeModel, "判断", judgeLoss),
                  })
         {
             if (string.IsNullOrWhiteSpace(model)) continue;
             if (await _llama.WarmAsync(model!, ResourceProvisioner.GgufKind(model!), ct)) continue;
             _log.LogWarning("warming {Layer} model {Model} failed", layer, model);
-            _state.AddWarning($"「{layer}」的本机模型 {model} 没能载入 —— 这一层这次启动不会生效。");
+            _state.AddWarning($"「{layer}」的本机模型 {model} 没能载入 —— {loss}。");
         }
     }
 }
