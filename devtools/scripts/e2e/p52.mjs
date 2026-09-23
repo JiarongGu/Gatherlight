@@ -18,6 +18,7 @@
 //      the GGUF named by the saved judgeModel or by the live llm.model.memory the binding wrote. Read from
 //      the stub's own argv log, because a CLI asked for an unknown model is otherwise indistinguishable
 //      from one that answered badly.
+//      4b: the positive control — a key written for the RUNNING client (the CLI rebound to sonnet) is read.
 //   5. A RERANKER binding says what it moves — the checking; tagging goes to the CLI and spends the account —
 //      in its toast, in the cost line beside it and in the catalogued rerankers' notes, where the toast used
 //      to claim both halves for every binding and none of the three said the tagging uses quota; and it writes
@@ -332,6 +333,26 @@ try {
   ok('nothing was sent to llama.cpp after the fallback',
     !hits.slice(beforeFallback).some((h) => h.path === '/v1/chat/completions'),
     JSON.stringify(hits.slice(beforeFallback).map((h) => `${h.path} ${h.model}`)));
+
+  // --- 4b. …and the key PASSES THROUGH when it was written for the client that is running ---------------
+  // Every check above has the store withhold llm.model.memory, and every annotation lands on the default
+  // haiku — which a store that ALWAYS withheld the key would pass too. So: on this server, whose judge runs on
+  // the CLI, bind the CLI judge to sonnet. Same client, so the key must be read, and the very next annotation
+  // — before any restart — asks for sonnet.
+  const toSonnet = await c2.post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'sonnet' });
+  ok('(fixture) the CLI judge binds to sonnet', toSonnet.status === 200, `${toSonnet.status} ${JSON.stringify(toSonnet.body)}`);
+  const wrotePass = await c2.call('remember_fact', {
+    kind: 'household', topic: 'zzpassfact garden routine',
+    content: 'The zzpassfact garden is watered every Sunday morning before the market.',
+    source: 'https://example.test/zzpass', confidence: 0.8,
+  });
+  ok('remember_fact stores the fact after the rebind', wrotePass.status === 200 && wrotePass.result?.ok === true,
+    JSON.stringify(wrotePass.result));
+  await until(() => cliCalls().some((x) => x.kind === 'annotation' && x.tail.includes('zzpassfact')), 60000)
+    .catch(() => {});
+  const passed = cliCalls().filter((x) => x.kind === 'annotation' && x.tail.includes('zzpassfact'));
+  ok('THE POINT: a key written for the running client is read — the annotation asks for sonnet, not the default',
+    passed.length > 0 && passed.every((x) => modelOf(x) === 'sonnet'), JSON.stringify(passed.map(modelOf)));
 
   // --- 5. a RERANKER binding says what it moves: the checking, not the tagging ----------------------
   // The bind toast said 「标注与核对将由这个后端完成」 for every binding. For a reranker that is false — it
