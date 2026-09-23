@@ -428,6 +428,12 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         }
     }
 
+    /// <summary>Semantic side: the runtime's own sentence when it cannot serve the model at all — see
+    /// <see cref="ILlamaServerRuntime.EnsureServesAsync"/>. Its refusals name their cure; the proof below could
+    /// only say "no vector".</summary>
+    public Task<string?> WhyNotAsync(MemorySourceContext ctx, string model, CancellationToken ct = default) =>
+        ctx.Llama.EnsureServesAsync(model, ct);
+
     /// <summary>Semantic side: PROVE it embeds and report the width, exactly as the other arms do. This also
     /// front-loads the model load, so the first fact the household writes does not pay the 17 s.</summary>
     public async Task<EmbedProbe?> ProveAsync(MemorySourceContext ctx, string model, CancellationToken ct = default)

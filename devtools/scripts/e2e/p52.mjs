@@ -33,7 +33,7 @@
 //      7b: a measurement knob set at startup reaches state/logs, not only stdout.
 //   8. A model downloaded AFTER the router started is unknown to it (the real router reads its models
 //      directory once). A router the app did not start is not restarted for it, and the refusal says what
-//      would load the model rather than quoting a 400.
+//      would load the model rather than quoting a 400 — on the 语义 bind too, and in the startup warning.
 //   9. An embedder that is WIRED but DOWN at startup: the fact index indexes nothing and leaves its layout
 //      marker, so no fact is stored without its vector, and the next start does the work.
 import fs from 'node:fs';
@@ -71,6 +71,7 @@ const BROKEN_RERANK = 'zzbroken-rerank';
 const SHORT_RERANK = 'zzshort-rerank';
 // Case 8: downloaded after the router started, so the router does not list it.
 const LATE_RERANK = 'zzlate-rerank';
+const LATE_EMBED = 'zzlate-embed';
 // Case 7: two servers bound at boot to a reranker the router does NOT list — so the startup warm fails and the
 // warning has to say what happens to tagging — one with a signed-OUT CLI, one signed in as the control.
 const TAGGING_RERANK = 'zztagging-rerank';
@@ -423,6 +424,9 @@ try {
   const judgeManaged = String(groupOf(rrLayer, 'managed').description ?? '');
   ok('…and so does the 本机模型 group sentence on 判断: a reranker\'s tagging goes to Claude',
     /重排/.test(judgeManaged) && /发给 Claude/.test(judgeManaged), judgeManaged);
+  // …and it claims measurement only where there is some: the chat models' judging never was measured.
+  ok("…and does not claim every model on 判断 was measured — the chat models' judging was not",
+    !/都实测排过名/.test(judgeManaged) && /还没有按模型实测/.test(judgeManaged), judgeManaged);
   // What the 判断 picker SHOWS for each model: it listed raw file ids, so a reranker and a chat model read
   // alike although binding one moves only the checking. A catalogued model shows the catalogue's name (which
   // says 重排); a household-dropped one keeps its raw id with its kind marked.
@@ -602,6 +606,10 @@ try {
   const inWarn = await warmWarning(inBase);
   ok('THE POINT: the startup warning does not say tagging carries on when the CLI is signed out',
     /登录/.test(outWarn) && !/照常/.test(outWarn), outWarn || '(no warning naming the model)');
+  // The warm fails here because the router — adopted — does not list the model, and the runtime knows what would
+  // load it. That sentence used to reach only the log; the warning said just 没能载入.
+  ok('…and the warning carries what would load the model — the process to end — not only 没能载入',
+    /llama-server/.test(inWarn) && /重启/.test(inWarn), inWarn || '(no warning naming the model)');
   ok('(control) signed in, the same warning says tagging carries on through the CLI',
     /照常由 Claude CLI/.test(inWarn) && !/登录/.test(inWarn), inWarn || '(no warning naming the model)');
 
@@ -638,6 +646,14 @@ try {
   const lateAgain = await c3.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: LATE_RERANK });
   ok('(control) the same model binds once the router lists it',
     lateAgain.status === 200, `${lateAgain.status} ${JSON.stringify(lateAgain.body)}`);
+  // …and on 语义 too. Its bind asks for a PROOF (one embed), which can only say "no vector" — so the runtime's
+  // own refusal reached the household as the generic sentence, naming neither the process nor the cure.
+  fs.writeFileSync(path.join(rerankResources, 'gguf', `${LATE_EMBED}.gguf`), '');
+  const lateSem = await c3.post('/api/manage/memory/layer/semantic', { source: 'llama-cpp', model: LATE_EMBED });
+  const lateSemErr = String(lateSem.body?.error ?? '');
+  ok('THE POINT: the 语义 bind carries the same sentence — not the generic "no vector" one',
+    lateSem.status === 409 && /重启/.test(lateSemErr) && /llama-server/.test(lateSemErr) && !/没有返回向量/.test(lateSemErr),
+    `${lateSem.status} ${lateSemErr || JSON.stringify(lateSem.body)}`);
 
   // --- 9. an embedder that is wired but DOWN at startup: nothing is indexed, and the marker waits ------------
   // Lyntai's engine stores a fact whose write-time embed FAILED without its vector, and the fact gets its graph

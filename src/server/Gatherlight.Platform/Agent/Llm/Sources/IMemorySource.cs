@@ -164,6 +164,14 @@ public interface IMemoryJudgeSource : IMemorySource
 /// </summary>
 public interface IMemorySemanticSource : IMemorySource
 {
+    /// <summary>A refusal BEFORE the proof, in the source's own words — null when there is none, which is the
+    /// default. It exists because <see cref="ProveAsync"/> answers only "a vector or not": llama.cpp refusing to
+    /// serve a model it does not list (a router we adopted, which the household must end; one we may not restart
+    /// right now) came back as the generic "no vector" sentence, which names neither cause nor fix. Asked
+    /// first; the proof runs only when this has nothing to say.</summary>
+    Task<string?> WhyNotAsync(MemorySourceContext ctx, string model, CancellationToken ct = default) =>
+        Task.FromResult<string?>(null);
+
     /// <summary>PROVE the model embeds before a setting is saved, and report the vector width it returned.
     /// <para>Being installed is not being usable, and the width decides whether a switch invalidates every
     /// stored vector. Null = it produced no vector, so nothing is saved — otherwise the failure would

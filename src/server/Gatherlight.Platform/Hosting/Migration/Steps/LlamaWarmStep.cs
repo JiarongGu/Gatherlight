@@ -94,6 +94,15 @@ public sealed class LlamaWarmStep : IMigrationStep
                  })
         {
             if (string.IsNullOrWhiteSpace(model)) continue;
+            // The runtime's own sentence when it cannot serve the model at all — an ADOPTED router that never
+            // listed it names the process to end. It used to reach only the log, and the warning said just
+            // 没能载入, which gives the household nothing to do.
+            if (await _llama.EnsureServesAsync(model!, ct) is { } unserved)
+            {
+                _log.LogWarning("warming {Layer} model {Model} skipped: {Why}", layer, model, unserved);
+                _state.AddWarning($"「{layer}」的本机模型 {model} 没能载入:{unserved.TrimEnd('。')} —— {loss}。");
+                continue;
+            }
             if (await _llama.WarmAsync(model!, ResourceProvisioner.GgufKind(model!), ct)) continue;
             _log.LogWarning("warming {Layer} model {Model} failed", layer, model);
             _state.AddWarning($"「{layer}」的本机模型 {model} 没能载入 —— {loss}。");

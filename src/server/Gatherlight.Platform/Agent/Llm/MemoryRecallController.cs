@@ -595,6 +595,9 @@ public sealed class MemoryRecallController : ControllerBase
 
             // PROVE it embeds before saving. Installed is not usable, and the failure would surface only as
             // recall that finds nothing — indistinguishable from a household that knows nothing.
+            // The source's own refusal first — it can name the cause and the cure, where a failed proof can only
+            // say "no vector".
+            if (await source.WhyNotAsync(ctx, model!) is { } why) return StatusCode(409, new { error = why });
             var probe = await source.ProveAsync(ctx, model!);
             if (probe is null)
                 return StatusCode(409, new
