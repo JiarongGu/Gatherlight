@@ -343,9 +343,12 @@ public sealed class ModelsController : ControllerBase
     ///
     /// <para>Warms OUR models only — the router also lists whatever sits in the machine's llama.cpp/Hugging
     /// Face cache (four unrelated chat models, seen on a real machine), and loading those into the GPU is
-    /// not ours to do: under `--models-max` it evicts the ones this app needs. Same rule the restart
-    /// re-warm already applies (<see cref="ILlamaServerRuntime.EnsureServesAsync"/>), here for the other
-    /// caller.</para></summary>
+    /// not ours to do: under `--models-max` it evicts the ones this app needs. "Ours" = a GGUF in the app's
+    /// models folder (<see cref="Services.ResourceProvisioner.InstalledGgufIds"/>), the same OWNERSHIP filter
+    /// the restart re-warm applies (<see cref="ILlamaServerRuntime.EnsureServesAsync"/>). Only that filter is
+    /// shared: the re-warm is also limited to what was loaded and capped below `--models-max`, while this
+    /// warms every GGUF of ours — so with more of them on disk than the router holds, it can still evict a
+    /// BOUND model with an unbound one of our own. Known, and not fixed here.</para></summary>
     [HttpPost("api/manage/models/llama/start")]
     public async Task<IActionResult> LlamaStart()
     {
@@ -356,10 +359,7 @@ public sealed class ModelsController : ControllerBase
             });
 
         var state = await _llama.ProbeAsync(refresh: true);
-        // Warm OUR models only — the files 资源 provisioned. The real router also lists the machine's llama.cpp /
-        // Hugging Face cache (four unrelated chat models on one real machine); loading those is not ours to do, and
-        // under --models-max it evicts the ones this app needs. Same rule as the restart re-warm, one writer:
-        // ResourceProvisioner.InstalledGgufIds. Proof: e2e-p51.
+        // OUR models only (see the summary). Proof: e2e-p51.
         var ours = Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath);
         var warmed = new List<string>();
         foreach (var m in state.Models.Where(m => ours.Contains(m, StringComparer.OrdinalIgnoreCase)))

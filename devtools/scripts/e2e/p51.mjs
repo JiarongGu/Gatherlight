@@ -1027,9 +1027,9 @@ try {
 
       // THE POINT of this case: the real router also lists the machine's own llama.cpp/Hugging Face cache
       // (four unrelated chat models, seen on a real restart) beside ours, and loading those is not ours to
-      // do — under --models-max it would evict the model this app actually needs. Same rule as the restart
-      // re-warm (LlamaServerRuntime.EnsureServesAsync), applied to this second caller.
-      ok('THE POINT: a model the router lists but we did not provision is NOT warmed',
+      // do — under --models-max it would evict the model this app actually needs. The same OWNERSHIP
+      // filter as the restart re-warm (LlamaServerRuntime.EnsureServesAsync), applied to this second caller.
+      ok('THE POINT: a model the router lists that is not in our models folder is NOT warmed',
         !hits.some((h) => h.body.includes('zzcache-chat-model'))
           && !(started.body?.warmed ?? []).includes('zzcache-chat-model'),
         JSON.stringify({ requests: hits.map((h) => `${h.path} ${h.body.slice(0, 60)}`), reported: started.body?.warmed }));
