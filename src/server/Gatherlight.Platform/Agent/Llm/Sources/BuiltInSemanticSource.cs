@@ -132,8 +132,10 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
             // The fix is a download, and it names the resource so the panel can point at the row rather
             // than at the panel.
             : new SourceStatus(false,
-                "内置嵌入模型还没有下载 —— 在「资源 · Resources」面板下载「内置嵌入模型」(约 222 MB),"
-                + "之后这一层就不再需要 Ollama。", ResourceId));
+                // What the download buys, said against nothing that no longer exists: it used to end with
+                // "after which this layer no longer needs Ollama", a backend retired since 2026-08-22.
+                "内置嵌入模型还没有下载 —— 在「资源 · Resources」面板下载「内置嵌入模型」(约 222 MB);"
+                + "它在应用内运行,不需要另外下载或启动运行时。", ResourceId));
 
     public Task<IReadOnlyList<ModelOption>> ModelsAsync(
         MemorySourceContext ctx, CancellationToken ct = default) =>

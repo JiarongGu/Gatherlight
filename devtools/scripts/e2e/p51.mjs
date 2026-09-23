@@ -753,6 +753,20 @@ try {
   ok('no model note compares with a retired option',
     (withPlanted.models ?? []).some((m) => m.note) && staleNotes.length === 0,
     JSON.stringify(staleNotes.map((m) => [m.id, m.note])));
+  // …nor any other SENTENCE the memory panel returns: a status reason is read at the same moment as a note,
+  // and one still promised the built-in model would free the layer from Ollama after the notes were fixed.
+  // `retired` is exempt — naming the retired backend is that field's whole job.
+  const panelStrings = [];
+  const collect = (v, key) => {
+    if (key === 'retired') return;
+    if (typeof v === 'string') panelStrings.push(v);
+    else if (Array.isArray(v)) v.forEach((x) => collect(x, key));
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) collect(x, k);
+  };
+  collect(await getJson('/api/manage/memory'));
+  const stalePanel = panelStrings.filter((t) => /Ollama|「本机」/.test(t));
+  ok('no sentence in the memory panel names a retired option',
+    panelStrings.length > 0 && stalePanel.length === 0, JSON.stringify(stalePanel));
   fs.rmSync(path.join(ggufDir, 'household-dropped-this-in.gguf'), { force: true });
   // The BUILT-IN model is a row in that same list rather than a card of its own — and it is deletable, so
   // its 222 MB is reclaimable. It used to offer 重新下载 where every other row offered 删除.

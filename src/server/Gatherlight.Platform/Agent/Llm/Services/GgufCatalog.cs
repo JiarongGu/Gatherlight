@@ -69,7 +69,8 @@ public static class GgufCatalog
     /// <summary>What every reranker row says, because it is the one thing that differs from a chat judge:
     /// only HALF of 判断 moves.</summary>
     private const string RerankerNote =
-        "判断用的重排模型:检索时的判断在本机完成;写入事实时的主题标注仍由 Claude CLI 完成(每条事实一次调用)。";
+        "判断用的重排模型:检索时的判断在本机完成;写入事实时的主题标注由 Claude CLI 完成(每条事实一次调用,"
+        + "事实内容会发给 Claude)。";
 
     public static readonly IReadOnlyList<GgufModel> Models = new[]
     {

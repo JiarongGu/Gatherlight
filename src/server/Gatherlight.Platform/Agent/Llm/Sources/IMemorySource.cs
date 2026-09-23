@@ -112,14 +112,18 @@ public interface IMemoryJudgeSource : IMemorySource
     /// every implementation builds its wiring FROM this rather than restating the rule.</summary>
     string AnnotationModel(string model);
 
-    /// <summary>Does <paramref name="model"/>, bound here, do only the CHECKING at recall? True when annotation
-    /// runs on a different model (<see cref="AnnotationModel"/>) — a reranker, which scores and never
-    /// generates, so tagging stays on the default client (the Claude CLI).
+    /// <summary>Does <paramref name="model"/>, bound here, do only the CHECKING at recall, while annotation runs
+    /// on another model entirely (<see cref="AnnotationModel"/>) — a reranker, which scores and never
+    /// generates, so tagging goes to the default client (the Claude CLI)? The binding toast and the startup
+    /// warnings are built on it; they used to say "annotation and checking" for every binding, which a
+    /// reranker binding made false.
     ///
-    /// <para>DERIVED rather than declared, so a sentence built on it — the binding toast, a startup warning —
-    /// cannot disagree with the wiring. Those sentences used to say "annotation and checking" for every
-    /// binding, which a reranker binding made false.</para></summary>
-    bool ChecksOnly(string model) => !string.Equals(AnnotationModel(model), model, StringComparison.Ordinal);
+    /// <para><b>STATED, never inferred.</b> It was once derived as <c>AnnotationModel(model) != model</c>,
+    /// which reads a source whose AnnotationModel merely NORMALISES a name — an alias, a case fold — as
+    /// checks-only, and the toast would then tell that household its tagging moved to Claude. Default false;
+    /// a source that overrides it does so BESIDE its <see cref="AnnotationModel"/>, because the two answer one
+    /// question and must agree.</para></summary>
+    bool ChecksOnly(string model) => false;
 
     /// <summary>The layer's cost line for this source bound to <paramref name="model"/>. It describes the BOUND
     /// arm (dev-conventions: a layer's cost line describes the bound arm), which is why the source owns it: an arm

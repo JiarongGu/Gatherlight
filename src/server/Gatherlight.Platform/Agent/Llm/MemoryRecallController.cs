@@ -515,9 +515,11 @@ public sealed class MemoryRecallController : ControllerBase
                 ok = true, layer, source = source.Id, model, restartRequired = true,
                 // What the binding MOVES, asked of the source: a reranker takes over only the checking, and
                 // saying "标注与核对" for it told the household the opposite of the cost line beside it.
+                // No 仍 ("still"), and the content leaving the machine is SAID: a household moving here from a
+                // local chat judge is sending facts to Claude for the first time, and this is where they learn it.
                 note = source.ChecksOnly(model!)
-                    ? $"设置已保存。重启服务后,检索时的核对将由这个模型完成;写入事实时的主题标注仍由 Claude CLI"
-                      + $"({source.AnnotationModel(model!)})完成。"
+                    ? $"设置已保存。重启服务后,检索时的核对将由这个模型完成;写入事实时的主题标注由 Claude CLI"
+                      + $"({source.AnnotationModel(model!)})完成 —— 每条事实的内容会发给 Claude。"
                     : "设置已保存。重启服务后,标注与核对将由这个后端完成。",
             });
         }

@@ -269,8 +269,12 @@ try {
   ok('(fixture) a reranker that ranks the answer first is allowed to bind',
     rr.status === 200, `${rr.status} ${JSON.stringify(rr.body)}`);
   const rrNote = String(rr.body?.note ?? '');
-  ok('THE POINT: its toast says the tagging stays on the Claude CLI, on the CLI\'s model',
+  ok('THE POINT: its toast says the tagging goes to the Claude CLI, on the CLI\'s model',
     /核对/.test(rrNote) && /Claude CLI/.test(rrNote) && /haiku/.test(rrNote) && !/标注与核对/.test(rrNote), rrNote);
+  // Not "STILL on the CLI": this household came from a local CHAT judge, so its facts start leaving the
+  // machine with this binding — and the toast is where it finds out.
+  ok('…and says the facts\' content is sent to Claude, without calling that "still"',
+    /发给 Claude/.test(rrNote) && !/仍/.test(rrNote), rrNote);
   ok('(control) the chat GGUF\'s toast, in case 4, still names both halves',
     /标注与核对/.test(String(bound.body?.note ?? '')), JSON.stringify(bound.body?.note));
   const rrLayer = layerOf(await c2.getJson('/api/manage/memory'), 'judge');

@@ -115,6 +115,11 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public string AnnotationModel(string model) =>
         IsReranker(model) ? MemorySources.DefaultJudgeModel : model;
 
+    /// <summary>Side by side with <see cref="AnnotationModel"/> on purpose: both answer "does this model only
+    /// check?", and if they disagreed the toast would describe one wiring while <see cref="Wiring"/> built the
+    /// other. Both ask <see cref="IsReranker"/>.</summary>
+    public bool ChecksOnly(string model) => IsReranker(model);
+
     /// <summary>The one question every reranker branch in this class asks, answered by the single writer of a
     /// GGUF's kind.</summary>
     private static bool IsReranker(string model) =>
@@ -125,7 +130,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // BOTH halves, because they cost different things — and the second sentence is the one a household
             // relies on: their facts DO leave the machine, for tagging.
             ? "检索时的判断由本机重排模型完成:不消耗账号额度,不联网。"
-              + "写入事实时的主题标注仍由 Claude CLI 完成 —— 每条事实一次调用,事实内容会发给 Claude;"
+              // No 仍 ("still"): for a household moving from a local CHAT judge, tagging moves to Claude for
+              // the FIRST time with this binding, and "still" would hide exactly that.
+              + "写入事实时的主题标注由 Claude CLI 完成 —— 每条事实一次调用,事实内容会发给 Claude;"
               + "没有已登录的 CLI 时只是不标注,检索时的判断照常。"
             : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
               + "没有 CLI 那条的进程启动开销(那条实测每次检索 9–17 秒)。";
