@@ -58,6 +58,11 @@ public interface ILlamaServerRuntime
     /// <summary>Make sure the router is answering, starting it only if the port is silent.</summary>
     Task<bool> EnsureServingAsync(CancellationToken ct = default);
 
+    /// <summary>Make sure the router is answering AND knows <paramref name="modelId"/> — null when it does,
+    /// otherwise the sentence a household reads. A model downloaded after OUR router started restarts it; one
+    /// the router already lists never does. See the implementation for why.</summary>
+    Task<string?> EnsureServesAsync(string modelId, CancellationToken ct = default);
+
     /// <summary>Force a model to load NOW, so the first real request does not pay for it. Returns false if
     /// it could not be loaded.</summary>
     Task<bool> WarmAsync(string modelId, GgufCapability kind, CancellationToken ct = default);
@@ -430,11 +435,102 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         }
     }
 
+    /// <summary>Serialises the restart below, so two callers that both find a new model unknown cause ONE
+    /// restart — the second re-checks under the lock and finds it known.</summary>
+    private readonly SemaphoreSlim _restart = new(1, 1);
+
+    /// <summary>
+    /// The router, answering and knowing <paramref name="modelId"/>.
+    ///
+    /// <para><b>Why "answering" is not enough — measured 2026-09-23 against the real llama-server
+    /// (<c>docs/self-managed-llm-runtime.md</c>).</b> The router reads <c>--models-dir</c> and its preset file
+    /// ONCE, at start. A GGUF dropped in afterwards is not listed by <c>/v1/models</c>, and a request naming it
+    /// gets <c>400 model '…' not found</c> — before AND after the preset file is rewritten, until the router is
+    /// restarted. So the household's main path — 语义 already running on llama.cpp, a reranker downloaded
+    /// from 资源, then bound — reached a router that had never heard of the model and was refused, with nothing
+    /// saying that a restart was the cure.</para>
+    ///
+    /// <para><b>Restart OURS, only when it lacks the model.</b> A restart drops every warm model (the next
+    /// request pays the load again: seconds for a reranker, 17 s for a 1B chat model), so a model the router
+    /// already lists never triggers one, and what was loaded is re-warmed in the background. A router we did
+    /// NOT start — an orphan of an earlier run we adopted, or a household's own — is not ours to kill
+    /// (<see cref="Dispose"/> keeps the same rule), and an app restart would only adopt it again; so the
+    /// household is told, in a sentence naming the process, what would load the model.</para>
+    /// </summary>
+    public async Task<string?> EnsureServesAsync(string modelId, CancellationToken ct = default)
+    {
+        if (!await EnsureServingAsync(ct)) return "llama.cpp 没能启动 —— 请看「日志」里的原因。";
+        if (Knows(await IsServingAsync(ct), modelId)) return null;
+
+        await _restart.WaitAsync(ct);
+        try
+        {
+            if (Knows(await IsServingAsync(ct), modelId)) return null;
+            if (!LocalGgufIds().Contains(modelId, StringComparer.OrdinalIgnoreCase))
+                return $"{modelId} 不在模型目录里 —— 在「资源 · Resources」面板下载它。";
+
+            bool ours;
+            lock (_gate) ours = _started is { HasExited: false };
+            if (!ours)
+                return $"{modelId} 是在 llama.cpp 启动之后才下载的,正在运行的 llama.cpp 要重启才会载入它。"
+                     + "这个 llama.cpp 进程不是应用这次启动的(可能是上次异常退出后留下的),应用不会替你结束它 —— "
+                     + "在任务管理器里结束 llama-server.exe 后再试,应用会重新启动它。";
+
+            var warm = await LoadedModelsAsync(ct);
+            _log.LogInformation(
+                "llama-server: restarting our router — {Model} was added after it started; re-warming {Warm}",
+                modelId, string.Join(", ", warm));
+            StopOurs();
+            if (!await EnsureServingAsync(ct)) return "llama.cpp 重启后没能启动 —— 请看「日志」里的原因。";
+            // The caller warms or screens the model it asked for; what was warm before is warmed again here,
+            // off the request path, so the other layer's next call does not stall.
+            foreach (var m in warm.Where(m => !string.Equals(m, modelId, StringComparison.OrdinalIgnoreCase)))
+                _ = WarmAsync(m, ResourceProvisioner.GgufKind(m), CancellationToken.None);
+            return Knows(await IsServingAsync(ct), modelId)
+                ? null
+                : $"llama.cpp 重启后仍然没有列出 {modelId} —— 请看「日志」里的原因。";
+        }
+        finally { _restart.Release(); }
+    }
+
+    private static bool Knows((bool Serving, IReadOnlyList<string> Models) state, string modelId) =>
+        state.Serving && state.Models.Contains(modelId, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The models the router currently holds LOADED — <c>status.value == "loaded"</c> in its
+    /// <c>/v1/models</c>. Empty when it says nothing about status (an older build, or not our router).</summary>
+    private async Task<IReadOnlyList<string>> LoadedModelsAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var http = _http.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(4);
+            using var doc = System.Text.Json.JsonDocument.Parse(await http.GetStringAsync($"{BaseUrl}/v1/models", ct));
+            if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return Array.Empty<string>();
+            return data.EnumerateArray()
+                .Where(e => e.TryGetProperty("status", out var s) && s.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && s.TryGetProperty("value", out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
+                    && v.GetString() == "loaded"
+                    && e.TryGetProperty("id", out var id) && id.ValueKind == System.Text.Json.JsonValueKind.String)
+                .Select(e => e.GetProperty("id").GetString()!)
+                .ToList();
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            _log.LogDebug("llama-server: reading loaded models failed: {Msg}", ex.Message);
+            return Array.Empty<string>();
+        }
+    }
+
     private static readonly TimeSpan WarmTimeout = TimeSpan.FromMinutes(3);
 
     public async Task<bool> WarmAsync(string modelId, GgufCapability kind, CancellationToken ct = default)
     {
-        if (!await EnsureServingAsync(ct)) return false;
+        if (await EnsureServesAsync(modelId, ct) is { } why)
+        {
+            _log.LogWarning("warming {Model} skipped: {Why}", modelId, why);
+            return false;
+        }
         try
         {
             using var http = _http.CreateClient();
@@ -587,7 +683,12 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// returns without spawning anything, verified 2026-08-22 (two processes before and after a restart, not
     /// four). So the failure mode is an idle router holding VRAM until the app comes back or the machine
     /// reboots, not a pile of them.</para></summary>
-    public void Dispose()
+    public void Dispose() => StopOurs();
+
+    /// <summary>Stop the router WE started, children and all; a no-op for one we adopted. Shared by
+    /// <see cref="Dispose"/> and the restart in <see cref="EnsureServesAsync"/>, which is why the live state is
+    /// invalidated here too: a cached "serving" must not outlive the process it describes.</summary>
+    private void StopOurs()
     {
         Process? proc;
         lock (_gate) { proc = _started; _started = null; }
@@ -602,5 +703,6 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         }
         catch (Exception ex) { _log.LogDebug("stopping llama-server: {Msg}", ex.Message); }
         finally { proc.Dispose(); }
+        Invalidate();
     }
 }

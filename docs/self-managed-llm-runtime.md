@@ -258,3 +258,17 @@ distinct query characters 1.000 against 0.667, character bigrams 7 of 8 against 
 scores reversed (a backwards GGUF). The pair it replaced could not tell: overlap ranked its answer first (0.750
 against 0.125), so a lexical model passed it. Cold ~4.8 s (the model load), warm 25–33 ms. The screen asserts
 ORDERING only — the spreads are these two models' scales, and a household-dropped reranker may score on another.
+
+**A model downloaded while the router runs is UNKNOWN to it until a restart** (same build, measured 2026-09-23).
+Router started with only LAMAR-600m in `--models-dir` and its preset section, then bge-reranker-v2-m3 hardlinked
+in: `/v1/models` still listed only LAMAR; `/v1/rerank` naming bge answered **400** `model
+'bge-reranker-v2-m3-Q5_K_M' not found` in 3 ms; after rewriting the preset file with a bge section, still **400**,
+still unlisted. The router reads its models directory and preset file once, at start. After a restart (router
+answering in 2.1 s) both were listed and bge reranked (index 1 first, 5.163 vs 1.759). So
+`LlamaServerRuntime.EnsureServesAsync` restarts OUR router when a bind or warm names a model it does not list —
+never for one it lists, since a restart drops every warm model — and re-warms what was loaded, in the background.
+Verified through the app on the real binary: 判断 booted on LAMAR (router ours, warmed 6.7 s), bge dropped in,
+binding bge restarted the router (1.3 s from the decision to "starting … with 2 model(s)"), the screen passed and
+the bind returned 200 in 9.2 s, and LAMAR was warm again 5.9 s later. A router we ADOPTED (an orphan of an earlier
+run, or the household's own) is not ours to kill and an app restart would only adopt it again, so there the bind is
+refused with a sentence saying the llama-server process must be ended for the model to load.

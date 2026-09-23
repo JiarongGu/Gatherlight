@@ -27,6 +27,9 @@
 //   6. A reranker AT WORK, on a server that booted bound to one: a fact write makes no chat call to
 //      llama.cpp and is tagged by the CLI on the CLI's model, and a recall sends the query AND each
 //      candidate's CONTENT to /v1/rerank.
+//   8. A model downloaded AFTER the router started is unknown to it (the real router reads its models
+//      directory once). A router the app did not start is not restarted for it, and the refusal says what
+//      would load the model rather than quoting a 400.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -60,6 +63,8 @@ const BACKWARDS_RERANK = 'zzbackwards-rerank';
 // Two that fail the screen for reasons that are NOT the ordering, so their sentences must say so.
 const BROKEN_RERANK = 'zzbroken-rerank';
 const SHORT_RERANK = 'zzshort-rerank';
+// Case 8: downloaded after the router started, so the router does not list it.
+const LATE_RERANK = 'zzlate-rerank';
 
 // Case 6: a SECOND server that boots already bound to the reranker, in a data folder of its own. Its own
 // port too — never 5412/5413, which cases 1–5 used.
@@ -105,10 +110,14 @@ const vectorFor = (text) => {
 };
 
 const hits = [];
+// What the fake router LISTS — like the real one, fixed at its start: llama-server reads --models-dir once,
+// so a GGUF dropped in later is unknown to it until a restart (measured, docs/self-managed-llm-runtime.md).
+// Case 8 plants a model outside this set to be exactly that; adding it later stands in for the restart.
+const served = new Set([JUDGE_MODEL, EMBED_MODEL, RERANK_MODEL, LEXICAL_RERANK, BACKWARDS_RERANK, BROKEN_RERANK, SHORT_RERANK]);
 const fake = http.createServer((req, res) => {
   const send = (obj) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
   if (req.method === 'GET' && req.url === '/v1/models') {
-    send({ object: 'list', data: [{ id: JUDGE_MODEL }, { id: EMBED_MODEL }] });
+    send({ object: 'list', data: [...served].map((id) => ({ id })) });
     return;
   }
   let body = '';
@@ -447,6 +456,23 @@ try {
   ok('THE POINT: the recall was verified by the reranker — the query and the fact\'s CONTENT went to /v1/rerank',
     reranked().some((h) => h.body.includes('zzrerankquery') && h.body.includes('zzrerankcontent')),
     JSON.stringify(hits.slice(beforeRecall6).map((h) => `${h.path} ${h.model} ${h.body.slice(0, 160)}`)));
+
+  // --- 8. a model downloaded AFTER the router started ---------------------------------------------------
+  // The household's main path: a layer already runs on llama.cpp, they download a reranker, they bind it.
+  // The real router reads its models directory once, so it answers `400 model not found` for the newcomer —
+  // measured, and rewriting its preset file does not help; only a restart does. The app restarts a router it
+  // STARTED; this one it ADOPTED (the fake was already answering), and killing a process it did not start is
+  // not its to do — so the refusal has to say what would load the model, not quote a 400.
+  fs.writeFileSync(path.join(rerankResources, 'gguf', `${LATE_RERANK}.gguf`), '');
+  const late = await c3.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: LATE_RERANK });
+  const lateErr = String(late.body?.error ?? '');
+  ok('THE POINT: a model the running router does not know is refused with what would load it — a restart',
+    late.status === 409 && /重启/.test(lateErr) && /llama-server/.test(lateErr), `${late.status} ${lateErr || JSON.stringify(late.body)}`);
+  // …and once the router knows it (the real one would after its restart), the same bind goes through.
+  served.add(LATE_RERANK);
+  const lateAgain = await c3.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: LATE_RERANK });
+  ok('(control) the same model binds once the router lists it',
+    lateAgain.status === 200, `${lateAgain.status} ${JSON.stringify(lateAgain.body)}`);
 } catch (err) {
   fail('e2e-p52 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {

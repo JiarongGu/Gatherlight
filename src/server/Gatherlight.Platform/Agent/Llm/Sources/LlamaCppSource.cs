@@ -299,8 +299,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             return $"{model} 是嵌入模型,不能用来做判断 —— 判断需要一个对话模型或重排模型。";
 
         // Then PROVE it: installed is not usable, and a judge that cannot answer fails open, i.e. silently.
-        if (!await ctx.Llama.EnsureServingAsync(ct))
-            return "llama.cpp 没能启动 —— 请看「日志」里的原因。";
+        // SERVES, not serving: a model downloaded after the router started is unknown to it until a restart,
+        // and the runtime either restarts its own router or says what would (EnsureServesAsync).
+        if (await ctx.Llama.EnsureServesAsync(model, ct) is { } unserved) return unserved;
         if (IsReranker(model)) return await ScreenRerankerAsync(ctx, model, ct);
         return await ctx.Llama.WarmAsync(model, GgufCapability.Completion, ct)
             ? null
@@ -418,7 +419,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// front-loads the model load, so the first fact the household writes does not pay the 17 s.</summary>
     public async Task<EmbedProbe?> ProveAsync(MemorySourceContext ctx, string model, CancellationToken ct = default)
     {
-        if (!await ctx.Llama.EnsureServingAsync(ct)) return null;
+        if (await ctx.Llama.EnsureServesAsync(model, ct) is not null) return null;
         var url = LlamaServerRuntime.ResolveBaseUrl(ctx.Settings.ResourcesPath);
         try
         {
