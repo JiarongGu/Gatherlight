@@ -55,7 +55,23 @@ public sealed class AgentRunner : IAgentRunner
         try
         {
             // Lyntai's fold owns the stream loop + terminal handling; we only bridge each event to the app.
-            result = await _session.RunAsync(options, onEvent: e => Map(e, emit, tracker, options), ct);
+            //
+            // ONE session announcement per run. Lyntai 3.2's stream reader yields SessionStarted for EVERY
+            // `system` event carrying a session_id, and claude 2.1.28x emits `system/thinking_tokens`
+            // progress events that carry one — so a thinking turn produced a stored, invisible "system"
+            // row per progress tick. The session id cannot change inside a run, so the first one is the
+            // whole fact. WORKAROUND FOR A LYNTAI GAP (filed in its TASKS.md): once the reader yields
+            // SessionStarted only for `system/init`, delete this guard — nothing else here depends on it.
+            var sessionAnnounced = false;
+            result = await _session.RunAsync(options, onEvent: e =>
+            {
+                if (e is SessionStarted)
+                {
+                    if (sessionAnnounced) return;
+                    sessionAnnounced = true;
+                }
+                Map(e, emit, tracker, options);
+            }, ct);
         }
         catch (OperationCanceledException)
         {

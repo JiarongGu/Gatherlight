@@ -43,6 +43,11 @@ const emit = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
 const sessionId = `stub-${Date.now().toString(36)}`;
 
 emit({ type: 'system', subtype: 'init', session_id: sessionId });
+// What claude 2.1.28x really emits next on a thinking turn: `system` PROGRESS events that also carry the
+// session id. Emitted here so every suite runs against the real stream shape — Lyntai's reader yields a
+// SessionStarted for each of them, which AgentRunner must collapse to one (p43 counts them).
+emit({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 12, estimated_tokens_delta: 12, session_id: sessionId });
+emit({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 30, estimated_tokens_delta: 18, session_id: sessionId });
 
 if (prompt.includes('SLOW')) {
   await new Promise((r) => setTimeout(r, 8000));

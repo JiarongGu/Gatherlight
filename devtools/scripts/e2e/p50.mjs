@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { dataDirFor, makeReporter, startServer, until, makeClient } from './_e2e-common.mjs';
 
 const { ok, fail, done } = makeReporter('p50');
@@ -101,16 +102,20 @@ const claudeRow = async (base) => {
 };
 
 /** Serve a fake release channel: /latest, /<v>/manifest.json, /<v>/win32-x64/claude.exe.
- *  The checksum is read per REQUEST (`sum()`), so one channel can publish a wrong sum and then the right
- *  one. That is what lets the denial and its positive control share a server — and it avoids restarting
- *  the app on the same port, which raced under fleet load: `settled()` and the provision POST landed on
- *  the still-dying first server while the new one bound the port and only ever saw the GET polling. */
-const serveRelease = (version, payload, sum) => new Promise((resolve) => {
+ *  Everything is read per REQUEST (`version()`, `payload()`, `sum()`), so one channel can publish a wrong
+ *  sum and then the right one, and later move to a NEWER version. That is what lets the denial, its
+ *  positive control and the update share a server — and it avoids restarting the app on the same port,
+ *  which raced under fleet load: `settled()` and the provision POST landed on the still-dying first server
+ *  while the new one bound the port and only ever saw the GET polling. It also has to be ONE channel for a
+ *  second reason: the app reads GATHERLIGHT_CLAUDE_URL from its own environment, fixed at start. */
+const serveRelease = (versionOf, payloadOf, sum) => new Promise((resolve) => {
   const srv = http.createServer((req, res) => {
     const send = (body, type) => {
       res.writeHead(200, { 'content-type': type, 'content-length': body.length });
       res.end(body);
     };
+    const version = versionOf();
+    const payload = payloadOf();
     if (req.url === '/latest') return send(Buffer.from(version), 'text/plain');
     if (req.url === `/${version}/manifest.json`)
       return send(Buffer.from(JSON.stringify({ platforms: { 'win32-x64': { checksum: sum() }, 'win32-arm64': { checksum: sum() } } })), 'application/json');
@@ -284,7 +289,9 @@ try {
   const dirF = freshDir('f');
   // One channel, one app instance. `published` is what the manifest currently claims the sha256 is.
   let published = wrongSum;
-  const release = await serveRelease('9.9.9', payload, () => published);
+  let channelVersion = '9.9.9';
+  let channelPayload = payload;
+  const release = await serveRelease(() => channelVersion, () => channelPayload, () => published);
   srv = startServer({
     dataDir: dirF, port: PORT_PROVISION,
     env: { ...claudeless, GATHERLIGHT_CLAUDE_URL: release.url },
@@ -320,7 +327,6 @@ try {
     // burning the full 180s timeout on a suite that looks merely slow.
     return r.state === 'error' && String(r.message ?? '') !== rejected ? r : null;
   });
-  release.close();
   ok('the verified download installs', row.state === 'ready', JSON.stringify(row));
   ok('into the DATA folder, so it survives app updates',
     fs.existsSync(path.join(dirF, 'state', 'resources', 'claude', 'claude.exe')));
@@ -362,6 +368,71 @@ try {
     claudeOrigin?.kind === 'app', JSON.stringify(claudeOrigin));
   ok('\u2026by having FOUND our copy, not by offering to download one',
     /\u4e0d\u9700\u8981\u4f60\u81ea\u5df1\u88c5/.test(String(claudeOrigin?.text ?? '')), JSON.stringify(claudeOrigin));
+
+  // ---- H · an UPDATE lands while the installed CLI is RUNNING -------------------------------------
+  //
+  // The vendor moves the CLI, so a copy we installed must follow — and an update is exactly when a copy
+  // may be mid-chat. Windows will not OVERWRITE a loaded image; it will RENAME one, which is what
+  // ReplaceBinary falls back to. Until this case existed, nothing drove an update at all (only a first
+  // install), and the fallback was dead code: overwriting a running exe raises UnauthorizedAccessException,
+  // which is not an IOException, so the rename never ran and the update failed with "access denied".
+  //
+  // The running image has to be REAL, so the installed file is swapped for a copy of this very node.exe
+  // and started. The marker still says 9.9.9, which is all the update decision reads.
+  const claudeExe = path.join(dirF, 'state', 'resources', 'claude', 'claude.exe');
+  fs.copyFileSync(process.execPath, claudeExe);
+  const running = spawn(claudeExe, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore' });
+  await until(() => running.pid !== undefined && running.exitCode === null, 10000);
+
+  const payloadV2 = Buffer.from('#!/fake claude cli payload v2\n' + 'y'.repeat(4096));
+  channelVersion = '9.9.10';
+  channelPayload = payloadV2;
+  published = crypto.createHash('sha256').update(payloadV2).digest('hex');
+
+  // Opening the panel is what checks for a newer CLI (detached), so poll the row until it knows.
+  const offered = await until(async () => {
+    const r = await claudeRow(srv.base);
+    return r?.available === '9.9.10' ? r : null;
+  }, 30000).catch(() => null);
+  ok('the panel OFFERS the update: installed 9.9.9, available 9.9.10',
+    offered?.version === '9.9.9' && offered?.available === '9.9.10', JSON.stringify(offered));
+
+  prov = await cF.post('/api/manage/resources/claude/provision');
+  ok('(setup) the update starts', prov.status === 202, String(prov.status));
+  row = await until(async () => {
+    const r = await claudeRow(srv.base);
+    if (!r) return null;
+    if (r.state === 'ready' && r.version === '9.9.10') return r;
+    return r.state === 'error' ? r : null;
+  });
+  ok('THE POINT: the update installs while the old binary is running',
+    row.state === 'ready' && row.version === '9.9.10', JSON.stringify(row));
+  ok('the new bytes are in place', fs.existsSync(claudeExe)
+    && Buffer.compare(fs.readFileSync(claudeExe), payloadV2) === 0);
+  ok('…and the running copy was moved ASIDE rather than killed',
+    running.exitCode === null
+      && fs.readdirSync(path.dirname(claudeExe)).some((f) => f.startsWith('claude.exe.old-')),
+    JSON.stringify({ exit: running.exitCode, files: fs.readdirSync(path.dirname(claudeExe)) }));
+  ok('and the panel no longer offers an update', row.available === row.version, JSON.stringify(row));
+
+  // The displaced copy is deleted by the NEXT install's sweep, once nothing holds it. Positive control
+  // that the aside file is not simply leaked forever. Asserted BY NAME: that install may legitimately set
+  // aside a copy of its own — a freshly written exe is briefly held (an AV scan, the app's own probe), the
+  // fallback handles that like any lock, and its sweep is then the next install's job. The property is
+  // that THIS copy, the one that was running, does not survive the sweep after it exits.
+  const displaced = fs.readdirSync(path.dirname(claudeExe)).filter((f) => f.startsWith('claude.exe.old-'));
+  running.kill();
+  await until(() => running.exitCode !== null || running.signalCode !== null, 10000);
+  prov = await cF.post('/api/manage/resources/claude/provision');
+  row = await until(async () => {
+    const r = await claudeRow(srv.base);
+    return r && r.state !== 'running' ? r : null;
+  });
+  const left = fs.readdirSync(path.dirname(claudeExe));
+  ok('once the old copy exits, the next install sweeps it away',
+    row.state === 'ready' && displaced.length > 0 && !displaced.some((f) => left.includes(f)),
+    JSON.stringify({ state: row.state, displaced, left }));
+  release.close();
   srv.stop(); srv = undefined;
 
   // --- G · the login button spawns the RESOLVED binary -------------------------------------------

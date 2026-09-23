@@ -70,6 +70,13 @@ try {
   ok('transcript comes back', Array.isArray(t?.events) && t.events.length > 0, JSON.stringify(t)?.slice(0, 160));
   ok('events are in the SSE wire shape (every one has a kind)',
     (t?.events ?? []).every((e) => typeof e.kind === 'string'));
+  // ONE session announcement per agent run. claude 2.1.28x sends `system/thinking_tokens` progress events
+  // carrying the session id (the stub does too), and Lyntai's reader turns each into a SessionStarted —
+  // without AgentRunner's guard every progress tick became a stored, invisible "system" row.
+  const systems = (t?.events ?? []).filter((e) => e.kind === 'system');
+  ok('each agent run is announced ONCE, however many system events the CLI sends',
+    systems.length > 0 && systems.length === new Set(systems.map((e) => e.sessionId)).size,
+    JSON.stringify(systems.map((e) => e.sessionId)));
   // S3a made a turn's content richer — the block must survive the round trip, tree intact.
   const block = (t?.events ?? []).find((e) => e.kind === 'ui-block' && e.data?.status === 'ready');
   ok('a stored ui-block round-trips with its tree', block?.data?.node?.type === 'Card',

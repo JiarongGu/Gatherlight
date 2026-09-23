@@ -243,7 +243,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - Tests stub the CLI via `GATHERLIGHT_CLAUDE_CMD` (see devtools/scripts/claude-stub.mjs). **The stub must
   answer `auth status --json`** — it short-circuits before the stdin drain. Without that the probe reads
   its stream-json as garbage, every suite boots with a spurious "not logged in" warning, and the
-  diagnosis rewrites the failed-turn messages other suites assert on.
+  diagnosis rewrites the failed-turn messages other suites assert on. **It also emits what claude 2.1.28x
+  really sends** — `system/thinking_tokens` progress events carrying the session id — because Lyntai 3.2's
+  reader turns each into a `SessionStarted`, and without `AgentRunner`'s once-per-run guard every tick was a
+  stored `system` row (`e2e-p43` counts them; Lyntai Part 272 is the upstream fix, after which the guard
+  goes). A stub that only speaks the stream shape of a year ago keeps every suite green against a CLI
+  nobody runs any more.
 
 ## Security / remote access (`Platform/Hosting/Security`)
 
@@ -908,8 +913,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   installed**: a household on a machine-wide CLI has no marker of ours and must never be offered an
   "update" that would silently replace their own install. `ReplaceBinary` tolerates a running image
   (Windows refuses to overwrite a loaded exe, and an update is exactly when one may be mid-chat) by
-  renaming the old copy aside. Proof lives in `e2e-p50`, whose tampered-download denial is paired with
-  the same bytes installing under the right checksum, and whose case A asserts the app boots ANYWAY.
+  renaming the old copy aside. **That fallback was DEAD CODE until 2026-09-23**: it caught `IOException`,
+  and overwriting a running image is ACCESS DENIED, which .NET raises as `UnauthorizedAccessException` — so
+  every update during a chat failed with "Access to the path is denied" while the comment promised the
+  opposite. Nothing drove an UPDATE, only a first install. `e2e-p50` case H now updates 9.9.9 → 9.9.10
+  under a REALLY running binary (a copy of node.exe, since a fake payload cannot run) and failed with that
+  exact message before the fix; it asserts the displaced copy BY NAME when checking the next sweep,
+  because a freshly written exe is briefly held (AV) and may legitimately be set aside once more. Proof
+  also lives in `e2e-p50`'s tampered-download denial, paired with the same bytes installing under the
+  right checksum, and case A asserts the app boots ANYWAY.
   **The login SPAWN is tested too, and the reason it briefly was not is worth keeping.** It was recorded as
   untestable because succeeding opens an interactive console — true of `claude auth login`, which waits for
   a human in a browser and never returns, and false of the thing a suite actually runs. Case G points

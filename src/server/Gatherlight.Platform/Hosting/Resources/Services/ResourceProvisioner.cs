@@ -829,7 +829,12 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// <summary>Move the verified binary into place, tolerating a copy that is CURRENTLY RUNNING. Windows
     /// refuses to overwrite a loaded image, and an update is exactly when one may be mid-chat — so fall
     /// back to renaming the old file aside (which Windows does allow) and let the next sweep delete it.
-    /// Failing the whole install because a turn was in flight would make updates unreliable by design.</summary>
+    /// Failing the whole install because a turn was in flight would make updates unreliable by design.
+    /// <para><b>A running image refuses the overwrite with ACCESS DENIED</b>, which .NET raises as
+    /// <see cref="UnauthorizedAccessException"/> — NOT an <see cref="IOException"/>. This caught only the
+    /// latter for months, so the fallback never ran in the one case it exists for and an update during a
+    /// chat failed with "Access to the path is denied" (measured, and pinned by <c>e2e-p50</c> case H,
+    /// which updates under a really running binary). A sharing violation is the IOException half.</para></summary>
     private static void ReplaceBinary(string staged, string dest)
     {
         // Sweep any earlier displaced copy first — this is the only thing that ever deletes them.
@@ -840,7 +845,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         {
             File.Move(staged, dest, overwrite: true);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             var aside = $"{dest}.old-{Guid.NewGuid():N}";
             File.Move(dest, aside);                  // permitted even while the image is loaded
