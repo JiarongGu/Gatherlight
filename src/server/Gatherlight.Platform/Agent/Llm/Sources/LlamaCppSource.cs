@@ -37,6 +37,20 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     private const string EmbedProviderId = "llamacpp-embed";
     private const string ClientId = "memory-llamacpp";
 
+    /// <summary>The reranker's own provider id — a third registration against the same router (Lyntai D133:
+    /// one host serving several routes is several registrations), named so a trace says which one answered.</summary>
+    private const string RerankProviderId = "llamacpp-rerank";
+
+    /// <summary><c>recall_facts</c>' default page. Lyntai: endorsing more than a page REPLACES the ranking
+    /// instead of refining it, and the verifier is never told the caller's limit — so this is a constant.</summary>
+    private const int RerankEndorseCount = 8;
+
+    /// <summary>The screen a reranker must pass before it may bind: the ANSWER is second in input order, so a
+    /// model that returns input order unchanged fails as surely as one that ranks backwards. Chinese query,
+    /// Chinese documents — the household's own case.</summary>
+    private const string ScreenQuery = "市场周末几点开门?";
+    private static readonly string[] ScreenDocuments = ["图书馆周一闭馆。", "东门市场周六周日早上七点开门。"];
+
     private readonly string _layer;
 
     /// <summary>One instance per layer. Which one this is decides what it offers and how it registers —
@@ -51,13 +65,41 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         + "判断与语义共用同一个进程、各用自己的模型,所以两层都开也只有一个常驻服务。"
         + "实测语义检索 10 题首位命中 9 题、每次查询 0.025 秒;判断每次约 0.15–0.20 秒。";
 
-    public JudgeWiring Wiring(MemoryWiringContext ctx) => JudgeWiring.Llm(ClientId, AnnotationModel(ctx.Model));
+    /// <summary>A chat model does both halves on our router. A RERANKER only scores, so it verifies and the
+    /// default client (the Claude CLI) annotates — on <see cref="AnnotationModel"/>, which is where the
+    /// reranker→CLI-model rule is written once.
+    ///
+    /// <para><b>This and <see cref="Register"/> must agree on the kind, and they do by construction</b>: both
+    /// branch on the same <c>ResourceProvisioner.GgufKind(ctx.Model)</c> over the same context. That matters
+    /// because <c>ScoringVerificationPolicy</c> THROWS at construction when its <c>ProviderId</c> names no
+    /// registered backend — so the verifier below is only ever built when Register added
+    /// <see cref="RerankProviderId"/>, and the chat branch never references it.</para></summary>
+    public JudgeWiring Wiring(MemoryWiringContext ctx) =>
+        ResourceProvisioner.GgufKind(ctx.Model) != GgufCapability.Reranking
+            ? JudgeWiring.Llm(ClientId, AnnotationModel(ctx.Model))
+            // Verification by the reranker; annotation by the default client on the CLI's default model.
+            : new JudgeWiring(null, AnnotationModel(ctx.Model), sp =>
+                new Lyntai.Memory.Verification.ScoringVerificationPolicy(
+                    sp.GetServices<Lyntai.Inference.IModelProvider>(),
+                    new Lyntai.Memory.Verification.ScoringVerificationOptions
+                        { ProviderId = RerankProviderId, EndorseCount = RerankEndorseCount },
+                    sp.GetService<ILogger<Lyntai.Memory.Verification.ScoringVerificationPolicy>>(),
+                    sp.GetService<Lyntai.Inference.IProviderRouterFactory>()));
 
-    public string AnnotationModel(string model) => model;
+    /// <summary>A reranker's id must never reach the CLI, which would be asked for a model it has never heard
+    /// of — so a reranker binding annotates on the CLI's default judge model.</summary>
+    public string AnnotationModel(string model) =>
+        ResourceProvisioner.GgufKind(model) == GgufCapability.Reranking ? MemorySources.DefaultJudgeModel : model;
 
     public string Cost(string? model) =>
-        "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
-        + "没有 CLI 那条的进程启动开销(那条实测每次检索 9–17 秒)。";
+        model is not null && ResourceProvisioner.GgufKind(model) == GgufCapability.Reranking
+            // BOTH halves, because they cost different things — and the second sentence is the one a household
+            // relies on: their facts DO leave the machine, for tagging.
+            ? "检索时的判断由本机重排模型完成:不消耗账号额度,不联网。"
+              + "写入事实时的主题标注仍由 Claude CLI 完成 —— 每条事实一次调用,事实内容会发给 Claude;"
+              + "没有已登录的 CLI 时只是不标注,检索时的判断照常。"
+            : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
+              + "没有 CLI 那条的进程启动开销(那条实测每次检索 9–17 秒)。";
 
     /// <summary>No address to ask for: the app chose the port and started the process. That is the whole
     /// difference from <see cref="OpenAiCompatibleSource"/>, which is the same protocol with the opposite
@@ -127,6 +169,23 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             return;
         }
 
+        // Branches on the SAME GgufKind(ctx.Model) as Wiring, over the same context — which is what guarantees
+        // the verifier Wiring builds names a provider registered here (ScoringVerificationPolicy throws on one
+        // it cannot find).
+        if (ResourceProvisioner.GgufKind(ctx.Model) == GgufCapability.Reranking)
+        {
+            // A reranker only SCORES. Annotation stays on the default client (the Claude CLI) — see Wiring.
+            // The generic door, because no llama preset takes `Produces`; a Score registration is never
+            // re-routed to Ollama's native wire whatever the port. It composes `{Endpoint}/v1/rerank`.
+            b.AddHttpProvider(RerankProviderId, o =>
+            {
+                o.BaseUrl = ctx.Endpoint;
+                o.Model = ctx.Model;
+                o.Produces = Lyntai.Inference.ProviderKinds.Score;
+            });
+            return;
+        }
+
         // The llama-server PRESET rather than the generic door: the wire is decided by what we know this is,
         // never re-guessed from the URL. On our router server the model name is a SELECTOR, not a label.
         // A named client narrows BOTH the provider pool and the candidate list since Lyntai 3.1 (its D87),
@@ -182,23 +241,69 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                 // The measurement travels with the MODEL, from the catalogue that pinned it — not compared
                 // against one hardcoded id here, which would silently stop reporting the moment a second
                 // measured model was added.
-                Measured: GgufCatalog.Find(id)?.Measured))
+                Measured: GgufCatalog.Find(id)?.Measured,
+                // The catalogue's own row text for a model we pinned; nothing for one the household dropped
+                // in, rather than a sentence invented about a file nobody measured.
+                Note: GgufCatalog.Find(id)?.Note))
             .ToList());
 
     /// <summary>Judge side: refuse an embedder by NAME before any call. Cheap and certain — we downloaded
-    /// these files, so unlike the generic arm we know what they are without asking the server.</summary>
+    /// these files, so unlike the generic arm we know what they are without asking the server. Then prove the
+    /// model does its job: a chat model must answer, a reranker must pass <see cref="ScreenRerankerAsync"/>.</summary>
     public async Task<string?> RejectAsync(MemorySourceContext ctx, string model, CancellationToken ct = default)
     {
-        if (ResourceProvisioner.GgufKind(model) == GgufCapability.Embedding)
-            return $"{model} 是嵌入模型,不能用来做判断 —— 判断需要一个对话模型。";
+        var kind = ResourceProvisioner.GgufKind(model);
+        if (kind == GgufCapability.Embedding)
+            return $"{model} 是嵌入模型,不能用来做判断 —— 判断需要一个对话模型或重排模型。";
 
-        // Then PROVE it, for the same reason every other arm does: installed is not usable, and a judge that
-        // cannot answer fails open, i.e. silently.
+        // Then PROVE it: installed is not usable, and a judge that cannot answer fails open, i.e. silently.
         if (!await ctx.Llama.EnsureServingAsync(ct))
             return "llama.cpp 没能启动 —— 请看「日志」里的原因。";
+        if (kind == GgufCapability.Reranking) return await ScreenRerankerAsync(ctx, model, ct);
         return await ctx.Llama.WarmAsync(model, GgufCapability.Completion, ct)
             ? null
             : $"{model} 没能在 llama.cpp 上回答 —— 换一个模型,或看「日志」。";
+    }
+
+    /// <summary>A reranker must put the ANSWER first before it may bind. "It returned scores" is not enough:
+    /// Lyntai found a converted model that ranked backwards while passing a looser check, and a fail-open
+    /// verifier would turn that into recall that quietly gets worse.
+    ///
+    /// <para>Every document must be scored exactly once. llama.cpp's <c>relevance_score</c> is a raw logit and
+    /// can be NEGATIVE, so an unfilled slot's default zero could outrank a real score and pass the screen —
+    /// the same reason Lyntai's own rerank transport refuses a partial answer.</para></summary>
+    private static async Task<string?> ScreenRerankerAsync(MemorySourceContext ctx, string model, CancellationToken ct)
+    {
+        var url = LlamaServerRuntime.ResolveBaseUrl(ctx.Settings.ResourcesPath);
+        try
+        {
+            // Generous: this call also pays the model load (measured in docs/self-managed-llm-runtime.md).
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
+            using var content = new StringContent(
+                JsonSerializer.Serialize(new { model, query = ScreenQuery, documents = ScreenDocuments, top_n = ScreenDocuments.Length }),
+                new UTF8Encoding(false), "application/json");
+            using var resp = await http.PostAsync($"{url}/v1/rerank", content, ct);
+            if (!resp.IsSuccessStatusCode) return $"{model} 没能在 llama.cpp 上完成重排(HTTP {(int)resp.StatusCode})—— 看「日志」。";
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var scores = new double[ScreenDocuments.Length];
+            var seen = new bool[ScreenDocuments.Length];
+            foreach (var r in doc.RootElement.GetProperty("results").EnumerateArray())
+            {
+                var i = r.GetProperty("index").GetInt32();
+                var s = r.GetProperty("relevance_score").GetDouble();
+                if (i < 0 || i >= scores.Length || seen[i] || double.IsNaN(s) || double.IsInfinity(s))
+                    return $"{model} 返回的重排结果无法使用。";
+                scores[i] = s;
+                seen[i] = true;
+            }
+            return Array.TrueForAll(seen, x => x) && scores[1] > scores[0]
+                ? null
+                : $"{model} 没有通过重排自检:答案没有排在前面 —— 这个模型文件可能转换有问题,换一个。";
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return $"{model} 没能在 llama.cpp 上完成重排 —— {ex.Message}";
+        }
     }
 
     /// <summary>Semantic side: PROVE it embeds and report the width, exactly as the other arms do. This also
