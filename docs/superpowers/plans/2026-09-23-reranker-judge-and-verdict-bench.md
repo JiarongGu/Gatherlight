@@ -818,18 +818,19 @@ facts incl. near-duplicate clusters; four questions each: same / cross / third l
 - Arms drift independently after the shared start; that drift is part of each arm's effect.
 ```
 
-Fill the "What it says" bullets from the numbers only. **There are two noise floors**: engine noise (`formula` vs `formula2`, usually 0 — no model in the loop) and JUDGE
-noise (`content` vs `content2`, the LLM's own run-to-run variation). A difference between two JUDGE arms counts only when
-it exceeds the judge floor on `all`; a difference vs 公式 only when it exceeds the larger of the two. Record the seed
+Fill the "What it says" bullets from the numbers only. **A difference is a finding only when the PAIRED test says so**: every arm answers the same queries, so the bench
+prints McNemar (exact binomial) per arm vs `content` and vs `formula`, on top-1 and found@8. A finding needs paired
+p < 0.05 on `all` AND the same direction in the per-set tables. The A/A pairs (`formula`/`formula2`, `content`/`content2`)
+are the sanity check: each must show p ≥ 0.05, otherwise the run is suspect — say so and do not draw conclusions. Record the seed
 fingerprint, the claude version, the question-order seed and the concurrency with the tables.
 **Decision rules (write the one that applies):**
 - If `content` beats `topic` on top-1 or found@8 in `all` → the Task 2 fix is confirmed; say by how much.
 - If `content` is WORSE than `topic` → stop and report to the owner before Part C; do not rationalise it.
-- If `contentonly` is within the JUDGE noise floor of `content` on `all` → record that the topic prefix does not
+- If `contentonly` vs `content` is NOT significant (paired p ≥ 0.05 on `all`) → record that the topic prefix does not
   earn its tokens, so on the Lyntai bump that ships `ContentChars` the decorator is deleted in favour of it.
   Otherwise record that the prefix earns its place and the decorator stays.
 - `fuse` changes the product default ONLY as a separate, owner-approved decision, and only if it beats
-  `content` (partition) on `all` by more than the judge noise floor without losing beyond it in any set. Otherwise record it
+  `content` (partition) with paired p < 0.05 on `all` and no set where it is significantly worse. Otherwise record it
   as insurance, per Lyntai.
 
 - [ ] **Step 3: Commit**
@@ -1616,9 +1617,11 @@ open 资源 · Resources, download `LAMAR 600M` and `BGE Reranker v2 M3`, wait f
 - [ ] **Step 2: Run the reranker arms FROM RUN 1'S SEED** (no judge CLI calls: the seed is reused, so nothing is re-tagged)
 
 Run: `node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,formula2 --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M > devtools/_judge-bench-rr.txt 2>&1`
-Expected: tables with six arms (the two 公式 arms, and partition/fuse for each reranker), no WARNING lines. Because the
-seed and the question-order seed are Run 1's, these rows are comparable with Run 1's `content` row — say so, and
-compare against it rather than re-running the Claude judge. (`--resources` defaults to `local/state/resources`, where
+Expected: tables with six arms (the two 公式 arms, and partition/fuse for each reranker), no WARNING lines, and the
+startup check passing (no claude call before questions — the seed was not re-derived). Before comparing with Run 1,
+confirm the printed formula-positions DIGEST equals Run 1's: equal digests prove both runs asked the same questions of
+the same starting graph, which is what makes these rows comparable with Run 1's `content` row. If they differ, do not
+compare across runs — re-run the Claude `content` arm in this run instead (`--arms=formula,formula2,content`). (`--resources` defaults to `local/state/resources`, where
 资源 installed the models; the bench only reads it.)
 
 - [ ] **Step 3: Append "Run 2 — rerankers" to `docs/judge-bench.md`** — the tables verbatim, then:
@@ -1634,8 +1637,8 @@ style as the embedder rows (e.g. 「本应用双语测试集:首位命中 X/240,
     /// <summary>The reranker the bilingual bench measured best (docs/judge-bench.md, Run 2).</summary>
     public const string RecommendedReranker = "<the winning id>";
 ```
-If the two are within the noise floor on `all` (engine floor — a reranker is deterministic; state which floor you
-used), recommend the smaller file and say "tie" in the note — the ~1-point
+If the two do NOT differ significantly (paired p ≥ 0.05 on `all`, LAMAR vs BGE from the same run), recommend the
+smaller file and say "tie" in the note — the ~1-point
 band Lyntai measured is the same shape.
 
 - [ ] **Step 5: Update dev-conventions' measured row** (Task 18's table row) with our numbers and the date.
