@@ -205,12 +205,10 @@ public sealed class ModelsController : ControllerBase
             var installed = onDisk.Contains(id, StringComparer.OrdinalIgnoreCase);
             // Definitive from the catalogue for anything we pinned; the name heuristic — one writer, the
             // same one the router's presets use — only for a file the household supplied.
-            var embedding = known is not null
-                ? known.Capability == GgufCapability.Embedding
-                : Services.ResourceProvisioner.IsEmbeddingGguf(id);
+            var kind = known?.Capability ?? Services.ResourceProvisioner.GgufKind(id);
             yield return new ModelRowView(
                 id, known?.Name ?? id, MemoryBackends.LlamaCpp,
-                embedding ? "embedding" : "completion",
+                kind switch { GgufCapability.Embedding => "embedding", GgufCapability.Reranking => "reranking", _ => "completion" },
                 installed ? SizeOnDisk(dir, id, known?.ApproxBytes ?? 0) : known?.ApproxBytes ?? 0,
                 installed, GgufInUse(id, mem, judgeModel), known?.Note ?? "",
                 known?.Measured is { } k
@@ -357,7 +355,7 @@ public sealed class ModelsController : ControllerBase
         {
             // Same single writer the preset generator uses — a second copy of this test here is how the
             // preset and the warm-up would come to disagree about what a model is.
-            if (await _llama.WarmAsync(m, Services.ResourceProvisioner.IsEmbeddingGguf(m))) warmed.Add(m);
+            if (await _llama.WarmAsync(m, Services.ResourceProvisioner.GgufKind(m) == GgufCapability.Embedding)) warmed.Add(m);
         }
         return Ok(new { ok = true, warmed, models = state.Models, devices = state.Devices });
     }

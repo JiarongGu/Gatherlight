@@ -26,7 +26,7 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Sources;
 /// <c>embeddings</c> preset restricts a child to embeddings, so a chat model offered to 语义 or an embedder
 /// offered to 判断 would fail at the first real call — and both memory policies are fail-open, so that
 /// surfaces as recall which quietly never improves rather than as an error. The kind comes from
-/// <see cref="ResourceProvisioner.IsEmbeddingGguf"/>, the single writer of that rule.</para>
+/// <see cref="ResourceProvisioner.GgufKind"/>, the single writer of that rule.</para>
 /// </summary>
 public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
 {
@@ -77,8 +77,14 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// filter is what stops a chat model being offered to 语义 (see the class comment).</summary>
     private List<string> ModelsOnDisk(MemorySourceSettings s) =>
         ResourceProvisioner.InstalledGgufIds(s.ResourcesPath)
-            .Where(id => ResourceProvisioner.IsEmbeddingGguf(id) == (_layer == MemoryLayers.Semantic))
+            .Where(id => ServesLayer(ResourceProvisioner.GgufKind(id)))
             .ToList();
+
+    /// <summary>Which kinds this layer can use: 语义 embeds; 判断 either converses (a chat judge) or scores
+    /// pairs (a reranker verifies, the CLI tags).</summary>
+    private bool ServesLayer(GgufCapability kind) => _layer == MemoryLayers.Semantic
+        ? kind == GgufCapability.Embedding
+        : kind is GgufCapability.Completion or GgufCapability.Reranking;
 
     /// <summary>Always <c>app</c>: this backend exists BECAUSE the app provisions it. Unlike the Ollama and
     /// CLI arms there is no per-install question to answer — a household's own llama-server is reached
@@ -177,7 +183,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// these files, so unlike the generic arm we know what they are without asking the server.</summary>
     public async Task<string?> RejectAsync(MemorySourceContext ctx, string model, CancellationToken ct = default)
     {
-        if (ResourceProvisioner.IsEmbeddingGguf(model))
+        if (ResourceProvisioner.GgufKind(model) == GgufCapability.Embedding)
             return $"{model} 是嵌入模型,不能用来做判断 —— 判断需要一个对话模型。";
 
         // Then PROVE it, for the same reason every other arm does: installed is not usable, and a judge that

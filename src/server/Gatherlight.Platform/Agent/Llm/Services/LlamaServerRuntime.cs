@@ -90,7 +90,7 @@ public interface ILlamaServerRuntime
 /// <para><b>Embedding models need <c>embeddings = true</c> and chat models must not have it</b> — the flag
 /// restricts a child to embeddings and disables chat, so a mislabelled embedder would serve chat requests
 /// that can never succeed and a mislabelled chat model would refuse to talk. The answer comes from
-/// <see cref="ResourceProvisioner.IsEmbeddingGguf"/> — exact for what we provision, a stated name
+/// <see cref="ResourceProvisioner.GgufKind"/> — exact for what we provision, a stated name
 /// heuristic for a GGUF the household dropped in themselves, and ONE writer either way.</para>
 /// </summary>
 public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
@@ -193,11 +193,6 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     private IReadOnlyList<string> LocalGgufIds() =>
         ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath);
 
-    /// <summary>Which models are EMBEDDERS — delegated, never re-derived. See
-    /// <see cref="ResourceProvisioner.IsEmbeddingGguf"/> for why this has exactly one writer.</summary>
-    private static bool IsEmbeddingModel(string modelId) =>
-        ResourceProvisioner.IsEmbeddingGguf(modelId);
-
     /// <summary>Write the router's preset file. Regenerated on every start rather than kept, because it is
     /// derived state: the models on disk are the truth, and a stale section naming a deleted GGUF is a
     /// child that fails to spawn.</summary>
@@ -214,7 +209,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             sb.AppendLine($"[{m}]");
             sb.AppendLine($"n-gpu-layers = {GpuLayers}");
             // `embeddings` RESTRICTS a child to embedding-only. Right for an embedder, fatal for a judge.
-            if (IsEmbeddingModel(m)) sb.AppendLine("embeddings = true");
+            if (ResourceProvisioner.GgufKind(m) == GgufCapability.Embedding) sb.AppendLine("embeddings = true");
         }
         File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
         return path;

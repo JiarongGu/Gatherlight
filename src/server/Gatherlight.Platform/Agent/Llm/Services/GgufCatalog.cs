@@ -1,12 +1,15 @@
 namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 
-/// <summary>What a GGUF is FOR. llama-server's <c>embeddings</c> preset restricts a child to embeddings, so
-/// this is not a label — it decides how the model is launched, and a wrong value makes the model refuse
-/// every call it is asked to serve.</summary>
+/// <summary>What a GGUF is FOR. llama-server's <c>embeddings</c> and <c>reranking</c> presets each restrict a
+/// child to one API, so this is not a label — it decides how the model is launched, and a wrong value makes
+/// the model refuse every call it is asked to serve.</summary>
 public enum GgufCapability
 {
     Embedding,
     Completion,
+    /// <summary>A cross-encoder: scores (query, document) pairs, never generates. Served with
+    /// <c>reranking = true</c>, which RESTRICTS its child to <c>/v1/rerank</c>.</summary>
+    Reranking,
 }
 
 /// <summary>One downloadable GGUF for the app-provisioned llama.cpp runtime.</summary>
@@ -63,6 +66,11 @@ public static class GgufCatalog
     /// of every recall and a judge that is slow is a judge a household turns off.</summary>
     public const string RecommendedJudge = "gemma-3-1b-it-Q4_K_M";
 
+    /// <summary>What every reranker row says, because it is the one thing that differs from a chat judge:
+    /// only HALF of 判断 moves.</summary>
+    private const string RerankerNote =
+        "判断用的重排模型:检索时的判断在本机完成;写入事实时的主题标注仍由 Claude CLI 完成(每条事实一次调用)。";
+
     public static readonly IReadOnlyList<GgufModel> Models = new[]
     {
         new GgufModel(
@@ -88,6 +96,19 @@ public static class GgufCatalog
             "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863", 2_489_757_856,
             "同样用于判断,参数量是上一个的四倍,占用也是 —— 判断质量可能更好,但没有实测数据支持这句话;"
             + "显存不够时它会明显更慢。"),
+
+        new GgufModel(
+            "LAMAR-600m.Q5_K_M", "LAMAR 600M(Q5 · 判断 · 重排)", GgufCapability.Reranking,
+            "mradermacher/LAMAR-600m-GGUF", "cd4da764d5b17d9996710dbf0ef5ad31c9aed182",
+            "LAMAR-600m.Q5_K_M.gguf",
+            "ec708b20336577c63702dd8efb23060bc611933579572bf9ad47ce2eaeda546f", 468_393_760,
+            RerankerNote + "Lyntai 在英文 LoCoMo 上实测:+9.0(完美判断是 +9.5);本应用的双语数据尚未实测。"),
+        new GgufModel(
+            "bge-reranker-v2-m3-Q5_K_M", "BGE Reranker v2 M3(Q5 · 判断 · 重排)", GgufCapability.Reranking,
+            "gpustack/bge-reranker-v2-m3-GGUF", "3093af03b1a635e67b084b1d8c03c5f5e020fd05",
+            "bge-reranker-v2-m3-Q5_K_M.gguf",
+            "1a212007526c7083627eed92b39dd4472e90ff1374a03fb068733378220813ef", 468_392_352,
+            RerankerNote + "中文评测上比同类更强;Lyntai 量过的是它的 Q8 版本(+5.5),这个 Q5 版本与本应用的双语数据均尚未实测。"),
     };
 
     public static GgufModel? Find(string? id) =>

@@ -293,23 +293,21 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         catch (IOException) { return Array.Empty<string>(); }
     }
 
-    /// <summary>Is this GGUF an EMBEDDER? Asked here because this is the only place that knows what the app
-    /// provisioned, and the answer must have exactly one writer: llama-server's <c>embeddings</c> flag
-    /// RESTRICTS a child to embeddings, so getting it wrong makes a judge refuse to talk or an embedder
-    /// serve chat requests that can never succeed. It was briefly answered in two places with two copies of
-    /// a substring test, which is the drift this codebase keeps paying for.
+    /// <summary>What a GGUF IS — the ONE writer of that answer. llama-server's <c>embeddings</c> and
+    /// <c>reranking</c> presets each RESTRICT a child to one API, so a wrong answer makes a judge refuse to talk,
+    /// an embedder serve chat it cannot, or a reranker never be asked.
     ///
-    /// <para><b>Exact match on what we ship; a NAME HEURISTIC for anything else, and that is stated rather
-    /// than hidden.</b> A household may drop their own GGUF into the folder — the router will serve it, and
-    /// we have no manifest for it. Guessing from the filename is then the only option available, so it is
-    /// used deliberately and only there. Provisioning a second embedder means adding it to this list, not
-    /// relying on its name.</para></summary>
-    public static bool IsEmbeddingGguf(string modelId) =>
+    /// <para><b>Exact for what we ship; a NAME HEURISTIC for anything else, stated rather than hidden.</b> A
+    /// household may drop its own GGUF into the folder and we have no manifest for it. "rerank" is checked
+    /// before "embed" because a reranker's name is the more specific of the two.</para></summary>
+    public static Agent.Llm.Services.GgufCapability GgufKind(string modelId) =>
         Agent.Llm.Services.GgufCatalog.Find(modelId) is { } known
-            // Catalogued: we downloaded it, so the capability is a fact, not an inference.
-            ? known.Capability == Agent.Llm.Services.GgufCapability.Embedding
-            // Household-supplied file: no manifest, so the name is all there is.
-            : modelId.Contains("embed", StringComparison.OrdinalIgnoreCase);
+            ? known.Capability
+            : modelId.Contains("rerank", StringComparison.OrdinalIgnoreCase)
+                ? Agent.Llm.Services.GgufCapability.Reranking
+                : modelId.Contains("embed", StringComparison.OrdinalIgnoreCase)
+                    ? Agent.Llm.Services.GgufCapability.Embedding
+                    : Agent.Llm.Services.GgufCapability.Completion;
 
     /// <summary>The 内置 embedder's model, pinned by COMMIT rather than by <c>main</c> — a branch ref would
     /// let the bytes change under a checksum that then stops matching, which reads as a corrupt download.
