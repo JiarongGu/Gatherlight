@@ -7,16 +7,26 @@
 // questions in the SAME order from the SAME starting graph. Each arm's own drift is part of its effect.
 //
 // THE SEED is kept OUTSIDE the work dir (devtools/_judge-bench-seed/: `data/` + `seed.json`), because seeding
-// costs ~60 real annotation calls. `--reuse-seed` starts from it again, and refuses if the fixture changed
-// since (seed.json carries the fixture's sha256, the CLI version that annotated it, and the id map). The seed
-// DB is CHECKPOINTED (wal_checkpoint TRUNCATE) once its server has exited, so every arm starts from a
-// single-file database rather than whatever the killed server left in its WAL — and whatever the seed server
-// left uncommitted in the seed's own data repo is committed, so an arm's startup warnings are its own.
+// costs ~60 real annotation calls. It is VERIFIED, not trusted:
+//   - `--reuse-seed` refuses a seed made from a different fixture (seed.json carries its sha256, the CLI version
+//     that annotated it, the app's git HEAD and version, and the id map), and prints what made it.
+//   - A seed is never replaced by accident: with one present, a plain run refuses; `--reseed` replaces it.
+//   - The seed DB is CHECKPOINTED (wal_checkpoint TRUNCATE) once its server has exited, so every arm starts from
+//     a single-file database, and whatever the seed server left uncommitted in the seed's own data repo is
+//     committed, so an arm's startup warnings are its own.
+//   - Every arm must start WITHOUT a claude-cli call: one at startup means the arm re-derived something (a
+//     fact-index layout rebuild, say) and no longer starts from the seed, so the run aborts naming the arm.
+//   - The formula arm's per-query positions are DIGESTED; two runs whose formula digests match started from
+//     equivalent state, which is the precondition for comparing anything ACROSS runs.
 //
 // WHAT MAKES A NUMBER TRUSTWORTHY HERE, each one a way this bench could otherwise lie:
-//   - A FAILED recall is an ERROR, never a miss: it is counted apart and kept out of top-1/found/MRR. An arm
-//     whose judge fails open (judged < 90% of its graph recalls) or errors (> 2% of queries) gets a loud
-//     WARNING, and the claude-cli router's Ok/failed lines are counted from each arm's own log folder.
+//   - A FAILED recall is an ERROR, never a miss: it is counted apart and kept out of top-1/found/MRR.
+//   - A FAILED JUDGE must not look like a working (or fast) one. The product fails open, so the bench is loud:
+//     a WARNING when an LLM judge gave no verdict on > 2% of its graph recalls, when a RERANKER gave none on
+//     any (a reranker abstains only on a fault), when any claude-cli call failed (counted from each arm's own
+//     log folder, accuracy pass and latency pass separately), or when > 2% of queries errored. A judge arm's
+//     serial latency counts only recalls that carried a verdict — a failed-open recall is fast and would
+//     otherwise make the judge look cheap.
 //   - Every arm PINS both measurement knobs (blank = unset), a knob-less arm must print no `[measurement]`
 //     line, and the 判断 switch is read BACK after it is set — so no arm silently duplicates another.
 //   - The questions are SHUFFLED with a seeded PRNG (mulberry32, --seed) and a fact's four questions are
@@ -24,17 +34,20 @@
 //     near-duplicates sit next to each other in file order, and the shuffle is what separates them.)
 //   - `公式 · no verification` is the baseline and it is NOT "判断 off": the seed's CLI-written subject tags
 //     are in every arm, so Δ against it is the value of the recall-time VERDICT only.
-//   - TWO NOISE FLOORS, from A/A twins that run an identical configuration: `formula2` beside `formula` (ENGINE
-//     noise — no model in the loop, so it is ~0 by construction and cannot bound a judge) and `content2` beside
-//     `content` (JUDGE noise — the LLM's verdicts vary run to run). A difference between judge arms is read
-//     against the judge floor; a difference vs 公式 against the larger of the two.
 //   - Accuracy is measured with every arm running in PARALLEL (so ms there is contended); LATENCY is then
 //     measured SERIALLY, one arm at a time over the first --latency-sample queries. That pass recalls again
 //     and so mutates each arm's graph — it runs after every accuracy row is recorded, so it cannot touch them.
 //
-// OUTPUT. Rows stream to devtools/_judge-bench/rows.jsonl as they complete (a crash keeps what was measured);
-// the report goes to a TIMESTAMPED results-<iso>.json, and earlier results files are never deleted.
-// Unknown flags are REJECTED, so a typo cannot launch a full-cost run with the defaults.
+// HOW TO READ IT. Every arm answers the same queries, so arms are compared PAIRED, per query: McNemar's exact
+// test on top-1 hits and on found@8 hits, against `content` and against `formula` when they ran. A difference
+// is a FINDING when its paired p < 0.05 AND its direction agrees across the question sets. The A/A twins —
+// `formula2` beside `formula` (no model in the loop) and `content2` beside `content` (the LLM's verdicts vary
+// run to run) — are the SANITY CHECK that the test stays quiet on no effect: an A/A pair must show p ≥ 0.05,
+// and if it does not, the run is suspect (it is flagged as a WARNING).
+//
+// OUTPUT. Rows stream to devtools/_judge-bench/rows-<iso>.jsonl as they complete (a crash keeps what was
+// measured); the report goes to results-<iso>.json. Neither is ever deleted or truncated by a later run.
+// Unknown flags and duplicate arms are REJECTED, so a typo cannot launch a full-cost run with the defaults.
 //
 // PRIVACY. The fixture is invented and committed; this touches no household data. Reranker arms READ the
 // llama.cpp binary and GGUFs from --resources (default local/state/resources) and nothing else there.
@@ -43,7 +56,8 @@
 //   node devtools/dev.mjs judge-bench                     # formula, formula2, topic, content, content2, contentonly, fuse
 //   node devtools/dev.mjs judge-bench --arms=formula,content --n=20 --reuse-seed
 //   node devtools/dev.mjs judge-bench --arms=formula --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M
-// Flags: --arms= --rerankers= --n= --port-base= --llama-port= --resources= --seed= --latency-sample= --reuse-seed
+// Flags: --arms= --rerankers= --n= --port-base= --llama-port= --resources= --seed= --latency-sample=
+//        --reuse-seed | --reseed
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -54,7 +68,7 @@ import { resolveClaude, QUESTION_SETS } from './recall-questions.mjs';
 
 // ---- flags: known ones only ------------------------------------------------------------------------------
 const VALUED = ['arms', 'rerankers', 'n', 'port-base', 'llama-port', 'resources', 'seed', 'latency-sample'];
-const BOOLEAN = ['reuse-seed'];
+const BOOLEAN = ['reuse-seed', 'reseed'];
 const die = (msg) => { console.error(`judge-bench: ${msg}`); process.exit(2); };
 const KNOWN = `known flags: ${[...VALUED.map((k) => `--${k}=…`), ...BOOLEAN.map((k) => `--${k}`)].join(' ')}`;
 const opts = {};
@@ -76,6 +90,12 @@ const int = (name, dflt, min) => {
   if (!Number.isInteger(v) || v < min) die(`--${name} must be an integer ≥ ${min}, got '${arg(name)}'`);
   return v;
 };
+const list = (name, dflt) => {
+  const xs = arg(name, dflt).split(',').filter(Boolean);
+  const dup = xs.find((x, i) => xs.indexOf(x) !== i);
+  if (dup) die(`--${name}: '${dup}' is listed twice — each runs once (an A/A twin is the way to repeat an arm)`);
+  return xs;
+};
 
 const FIXTURE_PATH = path.join(repo, 'devtools', 'fixtures', 'recall-bilingual.json');
 const FIXTURE_BYTES = fs.readFileSync(FIXTURE_PATH);
@@ -87,12 +107,14 @@ const LLAMA_PORT = int('llama-port', 5660, 1);
 const ORDER_SEED = int('seed', 12345, 0);
 const LATENCY_SAMPLE = int('latency-sample', 12, 0);
 const REUSE_SEED = opts['reuse-seed'] === true;
+const RESEED = opts.reseed === true;
 const WORK = path.join(repo, 'devtools', '_judge-bench');
 const SEED_ROOT = path.join(repo, 'devtools', '_judge-bench-seed');
 const SEED_DATA = path.join(SEED_ROOT, 'data');
 const SEED_META = path.join(SEED_ROOT, 'seed.json');
 const RESOURCES = path.resolve(arg('resources', path.join(repo, 'local', 'state', 'resources')));
 const RUN_AT = new Date().toISOString();
+const RUN_STAMP = RUN_AT.replace(/:/g, '');
 
 // A deterministic stride sample, so --n=20 covers every cluster rather than the first twenty rows.
 const all = FIXTURE.facts.filter((f) => f.questions);
@@ -116,11 +138,11 @@ const ARMS = {
   fuse: { label: 'Claude judge · topic — content · fuse', enrichment: true, judgeInput: 'both',
     env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/ },
 };
-const arms = arg('arms', 'formula,formula2,topic,content,content2,contentonly,fuse').split(',').filter(Boolean).map((k) => {
+const arms = list('arms', 'formula,formula2,topic,content,content2,contentonly,fuse').map((k) => {
   if (!ARMS[k]) die(`unknown arm '${k}' — one of ${Object.keys(ARMS).join(', ')}`);
   return { key: k, ...ARMS[k] };
 });
-const rerankers = arg('rerankers', '').split(',').filter(Boolean);
+const rerankers = list('rerankers', '');
 for (const m of rerankers) {
   arms.push({ key: `rr:${m}`, label: `reranker ${m} · partition`, enrichment: true, env: {}, reranker: m });
   arms.push({ key: `rrf:${m}`, label: `reranker ${m} · fuse`, enrichment: true,
@@ -129,10 +151,37 @@ for (const m of rerankers) {
 if (arms.length === 0) die('no arms selected');
 for (const a of arms) a.pinned = { ...PINNED, ...a.env };
 
+// ---- the seed decision, before anything is started or deleted ------------------------------------------------
+if (REUSE_SEED && RESEED) die('--reuse-seed and --reseed contradict each other — pick one');
+let seedMeta = null;
+if (REUSE_SEED) {
+  if (!fs.existsSync(SEED_META) || !fs.existsSync(SEED_DATA)) die(`--reuse-seed: no seed at ${SEED_ROOT} — run once without it`);
+  seedMeta = JSON.parse(fs.readFileSync(SEED_META, 'utf8'));
+  if (seedMeta.fixtureHash !== FIXTURE_HASH)
+    die(`--reuse-seed: the fixture changed since the seed was made (${seedMeta.fixtureHash.slice(0, 12)} → ${FIXTURE_HASH.slice(0, 12)}) — pass --reseed`);
+} else if (!RESEED && fs.existsSync(SEED_ROOT) && fs.readdirSync(SEED_ROOT).length > 0) {
+  const when = fs.existsSync(SEED_META) ? JSON.parse(fs.readFileSync(SEED_META, 'utf8')).createdAt : 'an interrupted seeding (no seed.json)';
+  die(`a seed exists from ${when}; pass --reuse-seed to use it or --reseed to replace it`);
+}
+
 const claude = resolveClaude();
+// shell:false always. A .cmd cannot be spawned directly (Node refuses since the batch-file CVE fix), so it goes
+// through cmd.exe explicitly; anything that still yields no version is recorded as unknown WITH the reason.
 const claudeVersion = (() => {
-  const r = spawnSync(claude, ['--version'], { encoding: 'utf8' });
-  return (r.stdout ?? '').trim() || `unknown (${r.error?.code ?? `exit ${r.status}`})`;
+  const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(claude);
+  const r = viaCmd
+    ? spawnSync('cmd.exe', ['/d', '/s', '/c', `""${claude}" --version"`], { encoding: 'utf8', shell: false, windowsVerbatimArguments: true })
+    : spawnSync(claude, ['--version'], { encoding: 'utf8', shell: false });
+  const out = (r.stdout ?? '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean).pop();
+  if (r.status === 0 && out) return out;
+  return `unknown (${r.error ? (r.error.code ?? r.error.message) : `exit ${r.status}`} running ${viaCmd ? 'cmd.exe /c ' : ''}${claude} --version)`;
+})();
+const appHead = (() => {
+  try { return git(repo, 'rev-parse', '--short', 'HEAD').trim(); } catch (e) { return `unknown (${String(e.message).split('\n')[0]})`; }
+})();
+const appVersion = (() => {
+  const m = /<VersionPrefix>([^<]+)<\/VersionPrefix>/.exec(fs.readFileSync(path.join(repo, 'src', 'Directory.Build.props'), 'utf8'));
+  return m ? m[1].trim() : 'unknown (no <VersionPrefix> in src/Directory.Build.props)';
 })();
 
 // ---- helpers ------------------------------------------------------------------------------------------------
@@ -155,6 +204,21 @@ const median = (xs) => {
   if (xs.length === 0) return null;
   const s = [...xs].sort((a, b) => a - b);
   return s.length % 2 ? s[(s.length - 1) / 2] : Math.round((s[s.length / 2 - 1] + s[s.length / 2]) / 2);
+};
+
+// McNemar, exact: of the b + c DISCORDANT queries, is a b/c split this uneven plausible under a fair coin?
+// Two-sided binomial p = min(1, 2 · Σ_{k ≤ min(b,c)} C(b+c, k) · 0.5^(b+c)), summed in LOG space so a few
+// hundred discordant pairs cannot underflow or overflow.
+const mcnemarP = (b, c) => {
+  const n = b + c;
+  if (n === 0) return 1;
+  let logTerm = -n * Math.LN2;
+  let sum = Math.exp(logTerm);
+  for (let k = 0; k < Math.min(b, c); k++) {
+    logTerm += Math.log((n - k) / (k + 1));
+    sum += Math.exp(logTerm);
+  }
+  return Math.min(1, 2 * sum);
 };
 
 const readLogs = (dataDir) => {
@@ -202,6 +266,10 @@ const checkpoint = async (dataDir) => {
   if (fs.existsSync(wal) && fs.statSync(wal).size > 0) throw new Error(`checkpoint left a non-empty WAL at ${wal}`);
 };
 
+// Which query each row is and where the target landed — the fingerprint of an arm's answers, in query order.
+const positionsDigest = (rows) => crypto.createHash('sha256')
+  .update(rows.map((r) => `${r.fact}/${r.set}:${r.error === null ? r.pos : 'error'}`).join('\n')).digest('hex').slice(0, 12);
+
 const servers = [];
 let router = null;
 const stopRouter = () => {
@@ -219,26 +287,25 @@ const stopAll = () => {
 };
 
 try {
-  // ---- 0. per-run cleanup: arm folders and the row stream only; earlier results-*.json are kept ---------------
+  // ---- 0. per-run cleanup: the arm folders only; earlier rows-*.jsonl and results-*.json are kept ------------
   fs.mkdirSync(WORK, { recursive: true });
   for (const e of fs.readdirSync(WORK)) if (/^arm-\d+$/.test(e)) fs.rmSync(path.join(WORK, e), { recursive: true, force: true });
-  const ROWS = path.join(WORK, 'rows.jsonl');
-  fs.writeFileSync(ROWS, '');
+  const ROWS = path.join(WORK, `rows-${RUN_STAMP}.jsonl`);
   const emit = (row) => fs.appendFileSync(ROWS, JSON.stringify({ run: RUN_AT, ...row }) + '\n');
 
   // ---- 1. seed ONE folder (real CLI, so annotation writes subject tags) — or reuse the last one ----------------
-  let seedMeta;
-  if (REUSE_SEED) {
-    if (!fs.existsSync(SEED_META) || !fs.existsSync(SEED_DATA)) throw new Error(`--reuse-seed: no seed at ${SEED_ROOT} — run once without it`);
-    seedMeta = JSON.parse(fs.readFileSync(SEED_META, 'utf8'));
-    if (seedMeta.fixtureHash !== FIXTURE_HASH)
-      throw new Error(`--reuse-seed: the fixture changed since the seed was made (${seedMeta.fixtureHash.slice(0, 12)} → ${FIXTURE_HASH.slice(0, 12)}) — re-seed`);
-    console.log(`  reusing seed from ${seedMeta.createdAt} (annotated by ${seedMeta.claudeVersion})`);
+  if (seedMeta) {
+    const madeBy = seedMeta.appHead ? `${seedMeta.appHead} v${seedMeta.appVersion}` : 'unrecorded (the seed predates the field)';
+    console.log(`  reusing seed from ${seedMeta.createdAt}: annotated by ${seedMeta.claudeVersion ?? 'unrecorded'},`
+      + ` made by app ${madeBy} — now running app ${appHead} v${appVersion}`);
     settleSeedRepo(SEED_DATA);
     await checkpoint(SEED_DATA);
   } else {
     fs.rmSync(SEED_ROOT, { recursive: true, force: true });
-    makeTestData(SEED_DATA);
+    const made = makeTestData(SEED_DATA);
+    if (made.status !== 0) throw new Error(`make-test-data exited ${made.status ?? made.error?.message}`);
+    for (const rel of ['state/settings.json', 'household/people.md'])
+      if (!fs.existsSync(path.join(SEED_DATA, rel))) throw new Error(`make-test-data left no ${rel} in ${SEED_DATA}`);
     const seed = startServer({ dataDir: SEED_DATA, port: PORT_BASE, env: { GATHERLIGHT_CLAUDE_CMD: claude, ...PINNED } });
     servers.push(seed);
     await waitHealthy(seed.base);
@@ -258,7 +325,7 @@ try {
     await until(async () => { try { await fetch(`${seed.base}/api/health`); return false; } catch { return true; } }, 60000);
     settleSeedRepo(SEED_DATA);
     await checkpoint(SEED_DATA);
-    seedMeta = { idOf: ids, fixtureHash: FIXTURE_HASH, claudeVersion, createdAt: new Date().toISOString() };
+    seedMeta = { idOf: ids, fixtureHash: FIXTURE_HASH, claudeVersion, appHead, appVersion, createdAt: new Date().toISOString() };
     fs.writeFileSync(SEED_META, JSON.stringify(seedMeta, null, 2));
   }
   const idOf = new Map(Object.entries(seedMeta.idOf));
@@ -313,6 +380,13 @@ try {
   }
   for (const arm of arms) {
     await waitHealthy(arm.srv.base);
+    // THE SEED IS WHAT THE ARM STARTS FROM, or the comparison is void: a claude call before any query means
+    // startup re-derived something (a fact-index layout rebuild re-remembers every fact) from a changed app.
+    arm.routerStartup = routerOutcomes(arm.dir);
+    const startupCalls = arm.routerStartup.ok + arm.routerStartup.failed;
+    if (startupCalls > 0)
+      throw new Error(`arm ${arm.key}: ${startupCalls} claude-cli call(s) at startup — the arm re-derived something `
+        + '(e.g. a fact-index layout rebuild) and no longer starts from the seed; pass --reseed');
     const c = makeClient(arm.srv.base);
     // NON-VACUITY: an arm whose knob or binding did not take would silently duplicate another arm.
     const log = arm.srv.log();
@@ -381,6 +455,8 @@ try {
   for (const arm of arms) arm.routerAccuracy = routerOutcomes(arm.dir);
 
   // ---- 5. serial latency: one arm at a time, nothing else querying (mutates state — accuracy is already in) ---
+  // A judge arm's median counts only recalls that carried a verdict when graph-ranked: a failed-open recall
+  // skips the judge, is fast, and would make a broken judge look cheap.
   const sample = queries.slice(0, Math.min(LATENCY_SAMPLE, queries.length));
   for (const arm of arms) {
     const c = makeClient(arm.srv.base);
@@ -390,8 +466,13 @@ try {
       arm.latencyRows.push(row);
       emit(row);
     }
-    arm.serialMedian = median(arm.latencyRows.filter((r) => r.error === null).map((r) => r.ms));
+    const ok = arm.latencyRows.filter((r) => r.error === null);
+    arm.latencyUnjudged = arm.enrichment ? ok.filter((r) => r.ranked === 'graph' && r.answered === null).length : 0;
+    arm.latencyGraph = ok.filter((r) => r.ranked === 'graph').length;
+    arm.latencyErrors = arm.latencyRows.length - ok.length;
+    arm.serialMedian = median(ok.filter((r) => !arm.enrichment || r.ranked !== 'graph' || r.answered !== null).map((r) => r.ms));
     arm.routerTotal = routerOutcomes(arm.dir);
+    arm.positionsDigest = positionsDigest(arm.rows);
   }
 
   // ---- 6. report — numbers and ids only ---------------------------------------------------------------------
@@ -410,35 +491,61 @@ try {
       ms: Math.round(ok.reduce((a, r) => a + r.ms, 0) / Math.max(1, ok.length)),
     };
   };
+  const SETS = [...QUESTION_SETS.map((s) => s.key), 'all'];
   const inSet = (set) => (r) => set === 'all' || r.set === set;
   // Counts when both sides answered the same number of queries; otherwise rates, since errors changed n.
   const delta = (s, b) => (s.n === b.n
     ? `${signed(s.top1 - b.top1)} / ${signed(s.found - b.found)} / ${signed(s.mrr - b.mrr, 3)}`
     : `${signed(100 * (s.top1 / Math.max(1, s.n) - b.top1 / Math.max(1, b.n)), 1)}pp / `
       + `${signed(100 * (s.found / Math.max(1, s.n) - b.found / Math.max(1, b.n)), 1)}pp / ${signed(s.mrr - b.mrr, 3)} (rates: n differs)`);
+  // PAIRED, per query: both arms answered query `seq`, neither errored. b = base hit & arm miss; c = the reverse.
+  const HITS = { top1: (r) => r.pos === 0, found: (r) => r.pos >= 0 };
+  const paired = (arm, baseArm, set) => {
+    const baseBySeq = new Map(baseArm.rows.map((r) => [r.seq, r]));
+    const out = { pairs: 0 };
+    for (const k of Object.keys(HITS)) out[k] = { b: 0, c: 0 };
+    for (const r of arm.rows.filter(inSet(set))) {
+      const q = baseBySeq.get(r.seq);
+      if (!q || r.error !== null || q.error !== null) continue;
+      out.pairs++;
+      for (const [k, hit] of Object.entries(HITS)) {
+        if (hit(q) && !hit(r)) out[k].b++;
+        if (!hit(q) && hit(r)) out[k].c++;
+      }
+    }
+    for (const k of Object.keys(HITS)) out[k].p = mcnemarP(out[k].b, out[k].c);
+    return out;
+  };
 
   const base = arms.find((a) => a.key === 'formula');
   const LABEL_W = Math.max(dw('arm'), ...arms.map((a) => dw(a.label))) + 2;
   const COLS = [['n', 5], ['err', 5], ['graph', 7], ['judged', 8], ['endorsed', 10], ['top-1', 10], ['found@8', 10], ['MRR', 8], ['ms (parallel)', 15]];
   const report = {
     fixture: 'devtools/fixtures/recall-bilingual.json', fixtureHash: FIXTURE_HASH, facts: N, limit: LIMIT, at: RUN_AT,
-    claudeVersion,
-    seedFolder: { fixtureHash: seedMeta.fixtureHash, createdAt: seedMeta.createdAt, claudeVersion: seedMeta.claudeVersion, reused: REUSE_SEED },
+    claudeVersion, appHead, appVersion,
+    seedFolder: {
+      fixtureHash: seedMeta.fixtureHash, createdAt: seedMeta.createdAt, claudeVersion: seedMeta.claudeVersion,
+      appHead: seedMeta.appHead ?? null, appVersion: seedMeta.appVersion ?? null, reused: REUSE_SEED,
+    },
     order: { seed: ORDER_SEED, queries: queries.length, adjacentSameFact },
     concurrency: arms.length,
     latencySample: sample.length,
+    formulaDigest: base ? { digest: base.positionsDigest, queries: queries.length, orderSeed: ORDER_SEED, facts: N } : null,
     arms: arms.map((a) => ({
       key: a.key, label: a.label, enrichment: a.enrichment, judgeInput: a.judgeInput ?? null, reranker: a.reranker ?? null,
       knobs: a.pinned, judgeOn: a.judgeOn, judgeSource: a.judgeSource, judgeModel: a.judgeModel,
-      migrationWarnings: a.migrationWarnings, router: { accuracy: a.routerAccuracy, total: a.routerTotal },
-      latency: { parallelMean: stat(a.rows).ms, serialMedian: a.serialMedian },
+      migrationWarnings: a.migrationWarnings,
+      router: { startup: a.routerStartup, accuracy: a.routerAccuracy, total: a.routerTotal },
+      latency: { parallelMean: stat(a.rows).ms, serialMedian: a.serialMedian, graphRanked: a.latencyGraph, unjudged: a.latencyUnjudged, errors: a.latencyErrors },
+      positionsDigest: a.positionsDigest,
     })),
     sets: {},
+    paired: {},
     warnings: [],
   };
   console.log(`\n${facts.length} facts × ${QUESTION_SETS.length} sets = ${queries.length} queries per arm, order seed ${ORDER_SEED}`
     + ` (${adjacentSameFact} same-fact adjacencies left), ${arms.length} arms in parallel`);
-  for (const set of [...QUESTION_SETS.map((s) => s.key), 'all']) {
+  for (const set of SETS) {
     console.log(`\n== ${set} ==`);
     console.log(pad('arm', LABEL_W) + COLS.map(([h, w]) => pad(h, w)).join('') + 'Δ vs 公式 (top-1 / found / MRR)');
     report.sets[set] = {};
@@ -451,12 +558,43 @@ try {
     }
   }
 
-  // THE NOISE FLOORS. Two arms with the identical configuration from the identical snapshot: whatever separates
-  // them is run-level noise. The ENGINE pair has no model in the loop, so its floor is ~0 by construction and
-  // says nothing about how much a judge's verdicts wander between runs — that is what the JUDGE pair measures.
+  // THE PAIRED TEST. A finding needs p < 0.05 AND the same direction in every question set that moved; the
+  // `finding` column applies both rules, so a single lucky set cannot carry a verdict on its own.
+  const pv = (p) => (p >= 0.9995 ? '1.000' : p < 0.001 ? '<0.001' : p.toFixed(3));
+  const signOf = (x) => Math.sign(x.c - x.b);
+  for (const baseKey of ['content', 'formula']) {
+    const baseArm = arms.find((a) => a.key === baseKey);
+    const others = arms.filter((a) => a !== baseArm);
+    if (!baseArm || others.length === 0) continue;
+    report.paired[baseKey] = {};
+    console.log(`\nPAIRED vs ${baseKey} — McNemar exact per query; b = ${baseKey} hit & arm miss, c = ${baseKey} miss & arm hit`);
+    console.log(pad('arm', LABEL_W) + pad('set', 8) + pad('pairs', 7) + pad('top-1 b/c', 11) + pad('p', 8)
+      + pad('found@8 b/c', 13) + pad('p', 8) + 'finding (p<0.05 & sets agree)');
+    for (const arm of others) {
+      const bySet = Object.fromEntries(SETS.map((s) => [s, paired(arm, baseArm, s)]));
+      const finding = {};
+      for (const k of Object.keys(HITS)) {
+        const dir = signOf(bySet.all[k]);
+        const agree = dir !== 0 && QUESTION_SETS.every((s) => [0, dir].includes(signOf(bySet[s.key][k])));
+        finding[k] = { significant: bySet.all[k].p < 0.05, agree, finding: bySet.all[k].p < 0.05 && agree, direction: dir };
+      }
+      report.paired[baseKey][arm.key] = { ...bySet, finding };
+      for (const set of ['all', ...QUESTION_SETS.map((s) => s.key)]) {
+        const x = bySet[set];
+        const verdict = set !== 'all' ? '' : Object.keys(HITS).map((k) =>
+          `${k === 'top1' ? 'top-1' : 'found'} ${finding[k].finding ? (finding[k].direction > 0 ? 'YES (arm better)' : 'YES (arm worse)') : 'no'}`).join(' · ');
+        console.log(pad(set === 'all' ? arm.label : '', LABEL_W) + pad(set, 8) + pad(x.pairs, 7)
+          + pad(`${x.top1.b}/${x.top1.c}`, 11) + pad(pv(x.top1.p), 8) + pad(`${x.found.b}/${x.found.c}`, 13) + pad(pv(x.found.p), 8) + verdict);
+      }
+    }
+  }
+
+  // THE A/A SANITY CHECK. Each twin ran the identical configuration from the identical snapshot, so the paired
+  // test must stay quiet on it. The engine pair has no model in the loop and should match exactly; the judge
+  // pair shows how far an LLM's verdicts wander between two runs of the same thing.
   const FLOORS = [
-    { kind: 'engine', a: 'formula', b: 'formula2', what: 'engine noise — no model in the loop' },
-    { kind: 'judge', a: 'content', b: 'content2', what: "judge noise — the LLM's verdicts vary run to run" },
+    { kind: 'engine', a: 'formula', b: 'formula2', what: 'engine — no model in the loop' },
+    { kind: 'judge', a: 'content', b: 'content2', what: "judge — the LLM's verdicts vary run to run" },
   ];
   report.noiseFloor = { engine: null, judge: null };
   let floors = 0;
@@ -464,27 +602,38 @@ try {
     const a = arms.find((x) => x.key === f.a), b = arms.find((x) => x.key === f.b);
     if (!a || !b) continue;
     if (floors++ === 0) {
-      console.log('\nA/A NOISE FLOORS — each pair ran the identical configuration from the identical snapshot.');
-      console.log('Differences between JUDGE arms are compared against the judge-noise floor; differences vs 公式 against the larger of the two.');
+      console.log('\nA/A SANITY CHECK — each pair ran the identical configuration from the identical snapshot, so every p must');
+      console.log('stay ≥ 0.05; if one does not, the paired test is seeing something that is not there and the run is suspect.');
     }
-    console.log(`\n${f.a} vs ${f.b} (${f.what}):`);
+    console.log(`\n${f.a} vs ${f.b} (${f.what}):   Δ top-1 / found / MRR   ·   paired p (top-1, found@8)`);
     report.noiseFloor[f.kind] = { arms: [f.a, f.b], sets: {} };
-    for (const set of [...QUESTION_SETS.map((s) => s.key), 'all']) {
+    for (const set of SETS) {
       const sa = stat(a.rows.filter(inSet(set))), sb = stat(b.rows.filter(inSet(set)));
-      report.noiseFloor[f.kind].sets[set] = { top1: sb.top1 - sa.top1, found: sb.found - sa.found, mrr: sb.mrr - sa.mrr, sameN: sa.n === sb.n };
-      console.log(`  ${pad(set, 7)} ${delta(sb, sa)}`);
+      const p = paired(b, a, set);
+      report.noiseFloor[f.kind].sets[set] = {
+        top1: sb.top1 - sa.top1, found: sb.found - sa.found, mrr: sb.mrr - sa.mrr, sameN: sa.n === sb.n,
+        pTop1: p.top1.p, pFound: p.found.p,
+      };
+      console.log(`  ${pad(set, 7)} ${pad(delta(sb, sa), 26)} ·   p ${pv(p.top1.p)}, ${pv(p.found.p)}`);
+      for (const k of Object.keys(HITS))
+        if (p[k].p < 0.05) report.warnings.push(`A/A pair ${f.a}/${f.b} — paired p ${pv(p[k].p)} on ${set} (${k === 'top1' ? 'top-1' : 'found@8'}): the run is suspect`);
     }
   }
   if (!report.noiseFloor.judge && arms.some((a) => a.enrichment))
-    console.log('\njudge-noise floor: NOT measured this run (add content,content2) — judge-vs-judge differences have no bound.');
+    console.log('\njudge A/A: NOT run (add content,content2) — nothing shows how far the judge wanders between identical runs.');
 
-  console.log(`\nlatency (ms) — parallel: mean over the accuracy pass, ${arms.length} arm(s) at once;`
-    + ` serial median: one arm at a time, first ${sample.length} queries`);
-  console.log(pad('arm', LABEL_W) + pad('ms (parallel)', 15) + pad('ms (serial median)', 20) + pad('claude-cli ok/failed', 22) + 'judge');
+  if (base) console.log(`\nformula positions digest: ${base.positionsDigest} (${queries.length} queries, ${N} facts, order seed ${ORDER_SEED})`
+    + ' — equal digests across runs mean identical formula rows, the precondition for comparing runs');
+
+  console.log(`\nlatency (ms) — parallel: mean over the accuracy pass, ${arms.length} arm(s) at once; serial median: one arm at a time,`
+    + ` first ${sample.length} queries, judge arms counting only recalls that carried a verdict`);
+  console.log(pad('arm', LABEL_W) + pad('ms (parallel)', 15) + pad('ms (serial median)', 20)
+    + pad('cli ok/failed (accuracy)', 26) + pad('cli ok/failed (total)', 23) + 'judge');
   for (const arm of arms) {
-    const r = arm.routerAccuracy;
+    const ra = arm.routerAccuracy, rt = arm.routerTotal;
     console.log(pad(arm.label, LABEL_W) + pad(stat(arm.rows).ms, 15) + pad(arm.serialMedian ?? '—', 20)
-      + pad(`${r.ok}/${r.failed}`, 22) + `${arm.judgeOn ? 'on' : 'off'} · ${arm.judgeSource ?? '—'} · ${arm.judgeModel ?? '—'}`);
+      + pad(`${ra.ok}/${ra.failed}`, 26) + pad(`${rt.ok}/${rt.failed}`, 23)
+      + `${arm.judgeOn ? 'on' : 'off'} · ${arm.judgeSource ?? '—'} · ${arm.judgeModel ?? '—'}`);
   }
   for (const arm of arms)
     if (arm.migrationWarnings.length > 0) console.log(`  startup warnings in ${arm.key}: ${arm.migrationWarnings.join(' | ')}`);
@@ -509,21 +658,32 @@ try {
   for (const arm of arms) {
     const s = stat(arm.rows);
     if (s.errors > 0.02 * s.queries) report.warnings.push(`arm ${arm.key} — ${s.errors}/${s.queries} queries errored`);
-    if (arm.enrichment && s.judged < 0.9 * s.graph)
+    if (arm.reranker && s.judged < s.graph)
+      report.warnings.push(`arm ${arm.key} — reranker gave no verdict on ${s.graph - s.judged}/${s.graph} graph recalls (a reranker abstains only on a fault)`);
+    else if (arm.enrichment && !arm.reranker && s.judged < 0.98 * s.graph)
       report.warnings.push(`arm ${arm.key} — judge failed open on ${s.graph - s.judged}/${s.graph} graph recalls`);
+    if (arm.routerAccuracy.failed > 0)
+      report.warnings.push(`arm ${arm.key} — ${arm.routerAccuracy.failed} claude-cli call(s) failed during the accuracy pass`);
+    if (arm.routerTotal.failed > arm.routerAccuracy.failed)
+      report.warnings.push(`arm ${arm.key} — ${arm.routerTotal.failed - arm.routerAccuracy.failed} claude-cli call(s) failed during the latency pass`);
+    if (arm.latencyUnjudged > 0)
+      report.warnings.push(`arm ${arm.key} — ${arm.latencyUnjudged}/${arm.latencyGraph} graph-ranked latency recalls carried no verdict (left out of its serial median)`);
+    if (arm.latencyErrors > 0)
+      report.warnings.push(`arm ${arm.key} — ${arm.latencyErrors}/${arm.latencyRows.length} latency recalls errored (left out of its serial median)`);
   }
   if (report.warnings.length > 0) {
     console.log('');
     for (const w of report.warnings) console.log(`WARNING: ${w}`);
   }
 
-  const out = path.join(WORK, `results-${RUN_AT.replace(/:/g, '')}.json`);
+  const out = path.join(WORK, `results-${RUN_STAMP}.json`);
   fs.writeFileSync(out, JSON.stringify({
     ...report,
     rows: Object.fromEntries(arms.map((a) => [a.key, a.rows])),
     latencyRows: Object.fromEntries(arms.map((a) => [a.key, a.latencyRows])),
   }, null, 2));
-  console.log(`\nraw rows: ${out}`);
+  console.log(`\nrow stream: ${ROWS}`);
+  console.log(`raw rows: ${out}`);
 } finally {
   stopAll();
 }
