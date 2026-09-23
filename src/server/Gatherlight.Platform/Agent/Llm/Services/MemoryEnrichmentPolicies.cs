@@ -46,7 +46,7 @@ public static class MemoryEnrichment
 /// the panel now NAMES the backend on the layer's header: a badge reading the saved setting would announce
 /// a model that is not doing the work, which is the class of defect — a label asserting something the code
 /// is not doing — that the surrounding rename is fixing.</para></summary>
-/// <param name="Transport">The bound source's id — <c>claude-cli</c> or <c>ollama</c>. Deliberately the
+/// <param name="Transport">The bound source's id — <c>claude-cli</c> or <c>llama-cpp</c>. Deliberately the
 /// same vocabulary the SAVED setting is reported in: two vocabularies for one comparison can never come
 /// out equal, which reads on screen as a restart that is permanently owed.</param>
 /// <param name="Model">The model in effect on it.</param>
@@ -105,41 +105,70 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
 /// <see cref="MemoryVerificationCandidate.Content"/> and left the choice of text to the POLICY; its reranker
 /// policy reads content, its LLM policy has no option to.</para>
 ///
-/// <para><b>A WORKAROUND FOR A LYNTAI GAP — delete it when the gap closes.</b> Filed as Lyntai TASKS.md
-/// <b>Part 274</b> (a policy-level opt-in on <c>LlmVerificationOptions</c> to read <c>Content ?? Headline</c>).
-/// When that ships, set the option where the LLM verifier is built and delete this class: the option would
-/// render the same text, so keeping both would only double the content.</para>
+/// <para><b>UPSTREAM SHIPPED PART OF THIS, AND IT DOES NOT REPLACE THE CLASS OUTRIGHT.</b> Lyntai
+/// <c>docs/task-archive.md</c> Part 276 (decision D170) added <c>LlmVerificationOptions.ContentChars</c>
+/// (default 0), shipping in the release AFTER 3.2.0 — the one this app currently consumes. It renders the
+/// candidate's content ALONE, not <c>"topic — content"</c>: D170 rejected the combined shape because it
+/// doubles tokens when the headline is engine-derived (which ours is — the fact index writes the topic as
+/// the headline, so <c>ContentChars</c> and this class's <c>both</c> mode are paying for the topic twice).
+/// So adopting it is a MEASURED decision, not a mechanical swap — <c>dev.mjs judge-bench</c> compares this
+/// class's <c>both</c> and <c>content</c> modes: if <c>content</c> scores as well, set
+/// <c>ContentChars = MaxChars</c> where the LLM verifier is built and delete this class; if the topic prefix
+/// earns its tokens, keep this class and leave <c>ContentChars</c> at 0 — with it &gt; 0, upstream reads
+/// <c>Content</c> itself and ignores this class's rewritten <c>Headline</c>, which would make this class
+/// dead code running for nothing.</para>
+///
+/// <para><b>Cost.</b> The judge is shown several times the recall's limit — Lyntai's
+/// <c>VerificationDepth</c> defaults to 4×, and the fact index asks for up to 3× the page — so the prompt
+/// grows with depth × line length; the bench's latency column is where that trade-off is priced, not this
+/// class.</para>
 ///
 /// <para>Topics stay the STORED headline, so <c>expand_fact</c>'s neighbour list is unchanged; only what the judge
-/// reads changes. <c>GATHERLIGHT_JUDGE_INPUT=headline</c> turns it off — a measurement knob for
-/// <c>dev.mjs judge-bench</c>, not a setting.</para></summary>
+/// reads changes.</para></summary>
 public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 {
-    /// <summary>The most one candidate may contribute. Facts are short; the cap exists so one pathological
-    /// fact cannot multiply the cost of every recall that surfaces it.</summary>
+    /// <summary>The most one candidate's rendered line may run, before the truncation mark. Facts are
+    /// short; the cap exists so one pathological fact cannot multiply the cost of every recall that surfaces
+    /// it. The line actually sent is at most <see cref="MaxChars"/> characters plus the ellipsis.</summary>
     public const int MaxChars = 400;
 
     private readonly IMemoryVerificationPolicy _inner;
 
     public JudgeSeesContentPolicy(IMemoryVerificationPolicy inner) => _inner = inner;
 
-    /// <summary>False only under the measurement knob.</summary>
-    public static bool Enabled => !string.Equals(
-        Environment.GetEnvironmentVariable("GATHERLIGHT_JUDGE_INPUT"), "headline", StringComparison.OrdinalIgnoreCase);
+    /// <summary>What the judge is shown, read ONCE at startup from the measurement knob
+    /// <c>GATHERLIGHT_JUDGE_INPUT</c>: <c>both</c> (default, <c>"topic — content"</c>), <c>content</c> (content
+    /// alone — how Lyntai's upcoming <c>ContentChars</c> renders it) or <c>headline</c> (topics only, the old
+    /// behaviour). Anything else means <c>both</c>.</summary>
+    public static readonly string Mode = (Environment.GetEnvironmentVariable("GATHERLIGHT_JUDGE_INPUT") ?? "").Trim().ToLowerInvariant() switch
+    {
+        "headline" => "headline",
+        "content" => "content",
+        _ => "both",
+    };
+
+    /// <summary>False only when the knob asks for topics only.</summary>
+    public static bool Enabled => Mode != "headline";
 
     public Task<MemoryVerification> VerifyAsync(MemoryVerificationRequest request, CancellationToken ct = default)
         => _inner.VerifyAsync(request with
         {
-            Candidates = [.. request.Candidates.Select(c => c.Content is { Length: > 0 } content
-                ? c with { Headline = Line($"{c.Headline} — {content}") }
+            Candidates = [.. request.Candidates.Select(c => !string.IsNullOrWhiteSpace(c.Content)
+                ? c with { Headline = Line(Mode == "content" ? c.Content! : $"{c.Headline} — {c.Content}") }
                 : c)],
         }, ct);
 
     /// <summary>ONE line, bounded. The judge's prompt is a numbered list, so a newline inside an entry would
-    /// start a line the judge reads as another note — the same shape Lyntai's D166 fixed for recalled memory.</summary>
-    internal static string Line(string text)
+    /// start a line the judge reads as another note — the same shape Lyntai's D166 fixed for recalled memory.
+    /// <see cref="string.ReplaceLineEndings(string)"/> replaces every line terminator (CR, LF, CRLF, NEL
+    /// U+0085, LS U+2028, PS U+2029, FF) with a space in one pass, covering wording no plain <c>\r</c>/<c>\n</c>
+    /// split would catch. Truncation never splits a surrogate pair.</summary>
+    private static string Line(string text)
     {
-        var flat = string.Join(' ', text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)).Trim();
-        return flat.Length <= MaxChars ? flat : flat[..MaxChars] + "…";
+        var flat = text.ReplaceLineEndings(" ").Trim();
+        if (flat.Length <= MaxChars) return flat;
+        var cut = MaxChars;
+        if (char.IsHighSurrogate(flat[cut - 1])) cut--;
+        return flat[..cut] + "…";
     }
 }

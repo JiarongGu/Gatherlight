@@ -378,15 +378,16 @@ try {
   // index writes each fact's TOPIC as its headline — so the judge used to decide "did this answer?" from
   // topics alone. JudgeSeesContentPolicy hands it `topic — content`. `listing-id 4417` exists only in the
   // content of one fact, so its presence in the notes is proof the content arrived.
-  ok('the judge is shown each fact’s CONTENT, not only its topic',
+  ok('the judge is shown the facts’ CONTENT, not only their topics',
     shown.some((n) => n.includes('listing-id 4417')), JSON.stringify(shown));
 
   ok('THE POINT: the endorsed candidate was NOT top of the pre-verdict ranking',
     shown[shown.length - 1] !== shown[0], JSON.stringify(shown));
 
-  // A note is now `topic — content`, so the endorsed note is matched by the topic it starts with.
+  // The endorsed note carries the fact's content in every rendering (topic — content, or content alone),
+  // so it is matched by the content of the page's top row.
   ok('...and it comes back at the top of the page',
-    !!verdictPage[0]?.topic && String(shown[shown.length - 1] ?? '').startsWith(`${verdictPage[0].topic} — `),
+    !!verdictPage[0]?.content && String(shown[shown.length - 1] ?? '').includes(verdictPage[0].content),
     JSON.stringify({ endorsed: shown[shown.length - 1], page: verdictPage.map((f) => f.topic) }));
 
   // ---- SUBJECT HANDLES ARE SEARCHABLE ----------------------------------------------------------
