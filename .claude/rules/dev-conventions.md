@@ -492,11 +492,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Part 94 and Part 93 (the candidate-list widening, below), and the 3.2 upgrade deleted both copies without
   an investigation, because each note already said what to do.
   **The failure runs the other way too, and is this rule's negative example**: `AgentRunner`'s tool-call bridge
-  carried a note claiming `ClaudeToolCalls.FilePathOf` read only `file_path`, filed as a Lyntai gap, when the
-  shipped 3.2.0 class already read `file_path` → `notebook_path` → `path` in that order — closed since
-  `docs/task-archive.md` Part 11 (item G1), whose own outcome says the item was stale on both halves — so the
-  note kept a duplicate of shipped library code in the call path until it was checked against Lyntai's source
-  on 2026-09-24 and deleted.
+  carried a note claiming `ClaudeToolCalls.FilePathOf` read only `file_path`, filed as a Lyntai gap — but the
+  shipped 3.2.0 class already read `file_path` → `notebook_path` → `path` in that order, shipped as G1 in
+  `0.29.3`. `docs/task-archive.md` Part 11 only FILES the request and carries no outcome text of its own; the
+  "stale on both halves" quote belongs to a DIFFERENT item, Part 25's "agent-event contract" (2026-08-05). The
+  note kept a duplicate of shipped library code in the TRACKER's call path until it was checked against
+  Lyntai's source on 2026-09-24 and switched to `FilePathOf` there — `ToolDetail`'s OWN copy of the same
+  fallback chain stays, because it takes a parsed `JsonElement` for a UI label, not the `ToolCall` `FilePathOf`
+  takes, so only one of the two copies is gone.
   **Three are open today, and each says what ends it.**
   **(1) `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170.** Lyntai's LLM judge
   rendered each candidate as its headline alone, and our headline is the fact's TOPIC, so the judge decided
@@ -515,25 +518,48 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   binding was read by another — after a fallback, or between a rebind and its restart (previous bullet). The app
   withholds the key while the saved binding would annotate through a different client than the running one.
   D176 retires `GetModelOverrideAsync`: a live override is now a ROUTE, provider AND model together —
-  `GetRouteAsync`, value `provider:model[, …]` — and a route naming a provider THIS CONTAINER has not registered
-  is ignored, with a warning, while the given candidates serve. That is exactly the two situations this class
-  exists for: after a fallback, `GatherlightApp` registers the FALLBACK-RESOLVED source (the CLI; see
-  `ResolveJudge`), so a stale route still naming the old runtime is never a registered provider this session;
-  between a rebind and its restart, the newly-bound provider is equally unregistered until the restart wires it.
-  So — provided the binding endpoint writes the route as `provider:model` rather than a bare model, which it has
-  to on the bump anyway — D176's own per-call check already does this class's job for both scenarios.
-  (`claude-cli` is registered unconditionally, so a route naming it is never held back this way — correct, since
-  the CLI needs no restart to become servable.) On the bump: this class stops COMPILING (`GetModelOverrideAsync`
-  is gone); `GatherlightApp.cs` ~173/~190 break too (`ModelKeyPrefix` → `RouteKeyPrefix`); every
-  `llm.model.<consumer>` key becomes a route, `llm.route.<consumer>` = `provider:model[, …]` — cortex's
-  chat/extract/scorer keys and the memory binding's own writer (`MemoryRecallController.cs` ~550) alike — with a
-  migration for what is already stored, since an old bare-model value under the retired prefix reads as inert
-  under the new one (D176's own rule for its `lyntai.model.` predecessor). `MemoryService.cs` ~154's `SetModel`
-  import and `BackupService.cs` ~242's delete of `llm.model.memory` touch the same keys and need the same
-  rename. Once the route write carries the provider: delete `JudgeScopedModelRoutingStore` and its registration
-  ahead of the live routing, have the binding endpoint write the route directly, and confirm `e2e-p52` case 4 —
-  which fails TODAY with either half of this class's own fix removed; case 4b is a POSITIVE control, catching a
-  store that withholds UNCONDITIONALLY — still passes on the route mechanism alone before deleting this class.
+  `GetRouteAsync`, value `provider:model[, …]` — and a route naming a provider THIS ROUTER does not hold is
+  ignored, with a warning, while the given candidates serve: `TextRouter.LiveRouteAsync` checks its OWN
+  `_byId`, built from the providers THAT router was constructed with, never every provider the container knows.
+  That is exactly the two situations this class exists for: after a fallback, `GatherlightApp` registers the
+  FALLBACK-RESOLVED source (the CLI; see `ResolveJudge`), so a stale route still naming the old runtime names a
+  provider no router built this session holds; between a rebind and its restart, the newly-bound provider is
+  equally unheld until the restart wires it. **The reverse direction holds too, for a reason "`claude-cli` is
+  always registered" gets wrong** — that is true of the DEFAULT client's router and false of the one a
+  chat-GGUF judge actually calls through: its annotation runs on its OWN named client, `memory-llamacpp`
+  (`LlamaCppSource.ClientId`), whose router is narrowed to exactly `llamacpp` (`UseProviders(ProviderId)` —
+  Lyntai builds one `TextRouter` PER named client, holding only its declared ids; only the default client's
+  router holds every registered provider). So while that GGUF runs and the household rebinds to the CLI without
+  restarting, a stale `claude-cli:…` route is checked against `memory-llamacpp`'s router too — which does not
+  hold `claude-cli` either — so it is held back there as well, and the RUNNING GGUF keeps annotating: the
+  correct, safe outcome, and what makes the redundancy argument hold in BOTH directions. Two caveats: the
+  argument depends on the judge's chat provider id, `llamacpp`, staying distinct from the embedder's
+  (`llamacpp-embed`) and the reranker's (`llamacpp-rerank`) — `LlamaCppSource.Register` gives each its OWN id
+  (Lyntai D133), so a stale route naming one is never mistaken for a live registration of another; and the
+  held-back path LOGS a warning on every call while the stale route stands, where this class's own withholding
+  is completely silent — replacing it trades silence for a warning per call, not for a worse outcome. On the
+  bump: this class stops COMPILING (`GetModelOverrideAsync` is gone); `GatherlightApp.cs` ~173/~190 break too
+  (`ModelKeyPrefix` → `RouteKeyPrefix`). Only the TWO consumers Lyntai's router actually resolves move to a
+  route, `llm.route.scorer` and `llm.route.memory` — `scorer` (`BuiltInScorers.cs` ~203, "no explicit Model =
+  Lyntai routes") and `memory` (this class) are the only ones that ever reach `IModelRoutingStore`.
+  `llm.model.chat`/`extract`/`validate` must NOT become routes: the app reads each ITSELF and feeds
+  `ClaudeAgentOptions.Model` — the agent CLI's `--model` — directly, never through Lyntai routing (`chat`:
+  `ChatSessionService.cs` ~497, `UnattendedRunService.cs` ~112, `PlaygroundService.cs` ~78, `ZhikuMigrator.cs`
+  ~166; `extract`: `ExtractTool.cs` ~65; `validate`: `ClaudeValidateService.cs` ~55) — migrating them leaves the
+  reader finding nothing (silent fallback to a default model) or hands `provider:model` straight to `--model`.
+  A migration moves what is already stored for `scorer`/`memory` only, and `MemoryService.cs`'s export/import
+  (~154, the memory bundle's `SetModel` import over `_cortex.Models()`'s tunable-consumer list) has to SPLIT the
+  same way — `chat`/`extract`/`validate` keep `llm.model.<consumer>` in the bundle, `scorer` alone becomes
+  `llm.route.scorer` (`memory` already never travels in it — `ExportAsync`'s own comment says why). D176's own
+  warn-once for a leftover key covers only ITS `lyntai.model.` prefix (`IModelRoutingStore.cs` ~37-47, a
+  Lyntai-namespaced constant, not our configured one) — our `llm.model.` namespace gets no such warning, so this
+  migration has no safety net if a key is missed. `MemoryRecallController.cs` ~550 and `BackupService.cs` ~242's
+  delete both move from `llm.model.memory` to `llm.route.memory`. Once the route write carries the provider:
+  delete `JudgeScopedModelRoutingStore` and its registration ahead of the live routing, have the binding
+  endpoint write the route directly, and confirm `e2e-p52` case 4 — which fails TODAY with either half of
+  today's fix removed (this class, and `MemorySources.ResolveJudgeModel`'s saved-source rule) — still passes on
+  the route mechanism alone; case 4b is a POSITIVE control, catching a store that withholds UNCONDITIONALLY, and
+  stays green either way.
   **(3) `IFactIndex.EmbedderReadyAsync` ↔ `docs/task-archive.md` Part 285 / D175 — and D175 says REPLACE it, not
   keep it.** A failed write-time embed is silent — Lyntai's graph engine catches it, stores the fact anyway
   WITHOUT its vector, and gives it a graph reference regardless, so no back-fill ever returns to it (measured: a
@@ -542,16 +568,25 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Its deferred trigger is "a consumer that must decide BEFORE writing anything" — but this method's only caller,
   `FactIndexStep`, guards exactly `SyncAsync` and the layout `RebuildAsync`: the rebuild/back-fill case D175
   puts on the `Ran` side, not the deferred one. So the honest instruction is not "keep restating the filter
-  until Lyntai ships a probe" — it is: on the bump, replace the pre-flight probe with `Ran`-based detection. A
-  re-remember whose `Ran` lacks the vector tier means THAT write kept no vector; `FactIndexStep` then records no
-  layout marker and the next start retries, exactly as it does today — the app's one `RememberAsync` call site
-  (`FactIndex.cs`'s `IndexAsync`, `Encode(reference)`) needs `.Reference` added, since `MemoryWriteResult` has no
-  implicit conversion to the `MemoryRef` `Encode` takes (a caller that merely DISCARDS the result compiles
-  unchanged — this one does not). `EmbedderReadyAsync` and the routing it restates are deleted then, and
-  `e2e-p52` case 9 — the embedder-down/no-marker-written assertion — has to keep passing against the new
-  mechanism. (A genuinely different argument for a real pre-flight — skipping the cost of walking every fact
-  when the whole batch will fail anyway — is not what D175's deferred trigger names, and would need its OWN
-  Lyntai item if it turns out to matter.)
+  until Lyntai ships a probe" — it is: on the bump, replace the pre-flight probe with `Ran`-based detection, in
+  TWO halves. (1) REBUILD: a re-remember whose `Ran` lacks the vector tier means THAT write kept no vector;
+  `FactIndexStep` records no layout marker and the next start retries, exactly as it does today. (2) BACK-FILL,
+  which (1) alone does not cover: `SyncAsync` writes NO marker at all — it back-fills whatever row has an empty
+  `graph_ref` — so on the steady-state path the only thing that makes a vector-less write retryable is
+  `IndexAsync` itself: it must return null, leaving `graph_ref` unset, when an embedder `Embeds` but this
+  write's `Ran` lacks `Lyntai.Memory.MemorySources.Similarity` (a different type from this app's own
+  `MemorySources` catalog in `Agent/Llm/Sources/MemorySources.cs` — "on a write it reports CONTRIBUTION: this
+  write's vector was indexed"). Without (2), a write during a transient embedder outage keeps its vector-less
+  ref forever and `SyncAsync` never revisits it — the ORIGINAL bug this probe exists to prevent, which only
+  today's all-or-nothing pre-flight check (skip the whole batch, not one row) currently avoids. The app's one
+  `RememberAsync` call site (`FactIndex.cs`'s `IndexAsync`, `Encode(reference)`) needs `.Reference` added
+  regardless, since `MemoryWriteResult` has no implicit conversion to the `MemoryRef` `Encode` takes (a caller
+  that merely DISCARDS the result compiles unchanged — this one does not). Only with BOTH halves does
+  `EmbedderReadyAsync` and the routing it restates get deleted, and `e2e-p52` case 9 — the
+  embedder-down/no-marker-written assertion — has to keep passing against the new mechanism. (A genuinely
+  different argument for a real pre-flight — skipping the cost of walking every fact when the whole batch will
+  fail anyway — is not what D175's deferred trigger names, and would need its OWN Lyntai item if it turns out
+  to matter.)
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to

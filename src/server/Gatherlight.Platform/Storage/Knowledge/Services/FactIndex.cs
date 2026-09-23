@@ -63,13 +63,25 @@ public interface IFactIndex
     /// caller, <c>FactIndexStep</c>, guards exactly <see cref="SyncAsync"/> and the layout
     /// <see cref="RebuildAsync"/>: the rebuild/back-fill case D175 puts on the <c>Ran</c> side, not the
     /// deferred one. So the honest instruction is NOT "keep restating the filter until Lyntai ships a probe" —
-    /// it is: on the bump, replace this pre-flight probe with <c>Ran</c>-based detection. A re-remember whose
-    /// <c>Ran</c> lacks the vector tier means THAT write kept no vector; <c>FactIndexStep</c> then records no
-    /// layout marker and the next start retries, exactly as it does today — the app's one
-    /// <c>RememberAsync</c> call site, <see cref="IndexAsync"/>'s <c>Encode(reference)</c>, needs
-    /// <c>.Reference</c> added (<c>Encode</c> takes a <c>MemoryRef</c>; <c>MemoryWriteResult</c> has no
-    /// implicit conversion to it — a caller that merely DISCARDS the result compiles unchanged, but this one
-    /// does not). This method and the routing it restates below are deleted then, and <c>e2e-p52</c> case 9 —
+    /// it is: on the bump, replace this pre-flight probe with <c>Ran</c>-based detection, and that has TWO
+    /// halves, not one. (1) The REBUILD half: a re-remember whose <c>Ran</c> lacks the vector tier means THAT
+    /// write kept no vector; <c>FactIndexStep</c> then records no layout marker and the next start retries,
+    /// exactly as it does today. (2) The BACK-FILL half, which the rebuild half alone does not cover:
+    /// <see cref="SyncAsync"/> writes NO marker at all — it back-fills whatever row has an empty
+    /// <c>graph_ref</c> — so on <c>FactIndexStep</c>'s steady-state path (<c>stored == Layout</c>, or
+    /// <c>!alreadyIndexed</c>) the only thing that makes a vector-less write retryable is <see cref="IndexAsync"/>
+    /// itself: it must return null — leaving <c>graph_ref</c> UNSET, the same as today's "index nothing" —
+    /// when an embedder <see cref="Embeds"/> but this write's <c>Ran</c> lacks
+    /// <c>Lyntai.Memory.MemorySources.Similarity</c> (a different type from this app's own <c>MemorySources</c>
+    /// catalog in <c>Agent/Llm/Sources/MemorySources.cs</c> — "on a write it reports CONTRIBUTION: this write's
+    /// vector was indexed"). Without (2), a write during a transient embedder outage keeps its (vector-less)
+    /// ref forever and <see cref="SyncAsync"/>'s own filter — rows with an EMPTY ref — never revisits it; that
+    /// is the ORIGINAL bug this probe exists to prevent, and only today's ALL-OR-NOTHING pre-flight check
+    /// (skip the whole batch rather than one row) currently avoids it. The app's one <c>RememberAsync</c> call
+    /// site, <see cref="IndexAsync"/>'s <c>Encode(reference)</c>, needs <c>.Reference</c> added regardless
+    /// (<c>Encode</c> takes a <c>MemoryRef</c>; <c>MemoryWriteResult</c> has no implicit conversion to it — a
+    /// caller that merely DISCARDS the result compiles unchanged, but this one does not). Only with BOTH
+    /// halves does this method (and the routing it restates below) get deleted, and <c>e2e-p52</c> case 9 —
     /// the embedder-down/no-marker-written assertion — has to keep passing against the new mechanism. (A
     /// genuinely different argument for a real pre-flight — skipping the cost of walking every fact when the
     /// whole batch will fail anyway — is not what D175's deferred trigger names, and would need its OWN
