@@ -355,7 +355,7 @@ public sealed class ModelsController : ControllerBase
         {
             // Same single writer the preset generator uses — a second copy of this test here is how the
             // preset and the warm-up would come to disagree about what a model is.
-            if (await _llama.WarmAsync(m, Services.ResourceProvisioner.GgufKind(m) == GgufCapability.Embedding)) warmed.Add(m);
+            if (await _llama.WarmAsync(m, Services.ResourceProvisioner.GgufKind(m))) warmed.Add(m);
         }
         return Ok(new { ok = true, warmed, models = state.Models, devices = state.Devices });
     }

@@ -190,7 +190,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         // cannot answer fails open, i.e. silently.
         if (!await ctx.Llama.EnsureServingAsync(ct))
             return "llama.cpp 没能启动 —— 请看「日志」里的原因。";
-        return await ctx.Llama.WarmAsync(model, isEmbedding: false, ct)
+        return await ctx.Llama.WarmAsync(model, GgufCapability.Completion, ct)
             ? null
             : $"{model} 没能在 llama.cpp 上回答 —— 换一个模型,或看「日志」。";
     }

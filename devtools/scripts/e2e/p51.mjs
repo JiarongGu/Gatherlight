@@ -957,7 +957,7 @@ try {
         res.writeHead(200, { 'content-type': 'application/json' });
         // The router REPORTS which models it holds, and the start endpoint warms exactly those. One
         // embedder and one chat model, because the two take different warm calls.
-        res.end(JSON.stringify({ data: [{ id: 'zzwarm-embed-model' }, { id: 'zzwarm-chat-model' }] }));
+        res.end(JSON.stringify({ data: [{ id: 'zzwarm-embed-model' }, { id: 'zzwarm-chat-model' }, { id: 'zzwarm-rerank-model' }] }));
         return;
       }
       let body = '';
@@ -990,7 +990,7 @@ try {
       // endpoint still built that list from the models it had probed. A field reporting that work
       // happened is not evidence the work happened; that is this whole session in one assertion.
       ok('every model the router reports is warmed, not just started',
-        hits.length === 2 && (started.body?.warmed ?? []).length === 2,
+        hits.length === 3 && (started.body?.warmed ?? []).length === 3,
         JSON.stringify({ requests: hits.map((h) => h.path), reported: started.body?.warmed }));
 
       // The two warm calls are NOT the same request, and sending an embedder a chat completion (or the
@@ -1003,6 +1003,10 @@ try {
       ok('a CHAT model is warmed through /v1/chat/completions',
         chatHit?.path === '/v1/chat/completions' && chatHit.body.includes('"messages"'),
         JSON.stringify(chatHit));
+      const rerankHit = hits.find((h) => h.body.includes('zzwarm-rerank-model'));
+      ok('a RERANKER is warmed through /v1/rerank',
+        rerankHit?.path === '/v1/rerank' && rerankHit.body.includes('"documents"'),
+        JSON.stringify(rerankHit));
     } finally {
       await new Promise((r) => fake.close(r));
     }
@@ -1028,6 +1032,9 @@ try {
     // ONLY — it RESTRICTS a child to embedding, which is right for an embedder and fatal for a judge.
     fs.writeFileSync(path.join(ggufDir, 'zztest-embed-model.gguf'), 'x');
     fs.writeFileSync(path.join(ggufDir, 'zztest-chat-model.gguf'), 'x');
+    // A RERANKER is the third kind: `reranking = true` restricts its child to /v1/rerank, and a cross-encoder
+    // needs the whole (query, document) pair in ONE physical batch, so the batch sizes are contract too.
+    fs.writeFileSync(path.join(ggufDir, 'zztest-rerank-model.gguf'), 'x');
 
     await post('/api/manage/models/llama/start');   // spawn fails; presets are written first
 
@@ -1050,6 +1057,16 @@ try {
       /embeddings\s*=\s*true/.test(sectionOf('zztest-embed-model'))
         && !/embeddings\s*=\s*true/.test(sectionOf('zztest-chat-model')),
       JSON.stringify({ embed: sectionOf('zztest-embed-model'), chat: sectionOf('zztest-chat-model') }));
+
+    ok('a RERANKER gets reranking = true and a whole-pair batch — and nothing else does',
+      /reranking\s*=\s*true/.test(sectionOf('zztest-rerank-model'))
+        && /^ubatch-size\s*=\s*4096/m.test(sectionOf('zztest-rerank-model'))
+        && /^batch-size\s*=\s*4096/m.test(sectionOf('zztest-rerank-model'))
+        && !/embeddings\s*=\s*true/.test(sectionOf('zztest-rerank-model'))
+        && !/reranking\s*=\s*true/.test(sectionOf('zztest-embed-model'))
+        && !/reranking\s*=\s*true/.test(sectionOf('zztest-chat-model')),
+      JSON.stringify({ rerank: sectionOf('zztest-rerank-model'), embed: sectionOf('zztest-embed-model'),
+        chat: sectionOf('zztest-chat-model') }));
 
     // Planted files removed: later runs of this fixture assert on llama.cpp being ABSENT, and a stub
     // left behind would make those pass or fail for a reason that is not theirs.

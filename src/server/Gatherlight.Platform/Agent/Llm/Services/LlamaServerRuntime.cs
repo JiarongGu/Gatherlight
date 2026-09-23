@@ -60,7 +60,7 @@ public interface ILlamaServerRuntime
 
     /// <summary>Force a model to load NOW, so the first real request does not pay for it. Returns false if
     /// it could not be loaded.</summary>
-    Task<bool> WarmAsync(string modelId, bool isEmbedding, CancellationToken ct = default);
+    Task<bool> WarmAsync(string modelId, GgufCapability kind, CancellationToken ct = default);
 
     void Invalidate();
 }
@@ -112,6 +112,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <summary>All layers offloaded. llama.cpp clamps to what the model has, so "99" is the idiom for
     /// "as many as will fit" rather than a number anyone tuned.</summary>
     private const int GpuLayers = 99;
+
+    /// <summary>A cross-encoder scores (query, document) as ONE sequence, which must fit one physical batch;
+    /// 4096 is how Lyntai's own harness runs the same reranker files. Launch CONTRACT, like GpuLayers.</summary>
+    private const int RerankBatch = 4096;
 
     private readonly IPlatformContext _platform;
     private readonly ILogger<LlamaServerRuntime> _log;
@@ -208,8 +212,20 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             sb.AppendLine();
             sb.AppendLine($"[{m}]");
             sb.AppendLine($"n-gpu-layers = {GpuLayers}");
-            // `embeddings` RESTRICTS a child to embedding-only. Right for an embedder, fatal for a judge.
-            if (ResourceProvisioner.GgufKind(m) == GgufCapability.Embedding) sb.AppendLine("embeddings = true");
+            switch (ResourceProvisioner.GgufKind(m))
+            {
+                // `embeddings` RESTRICTS a child to embedding-only. Right for an embedder, fatal for a judge.
+                case GgufCapability.Embedding:
+                    sb.AppendLine("embeddings = true");
+                    break;
+                // `reranking` restricts it to /v1/rerank, and the pair must fit one batch — see RerankBatch.
+                case GgufCapability.Reranking:
+                    sb.AppendLine("reranking = true");
+                    sb.AppendLine($"ctx-size = {RerankBatch}");
+                    sb.AppendLine($"batch-size = {RerankBatch}");
+                    sb.AppendLine($"ubatch-size = {RerankBatch}");
+                    break;
+            }
         }
         File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
         return path;
@@ -414,7 +430,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         }
     }
 
-    public async Task<bool> WarmAsync(string modelId, bool isEmbedding, CancellationToken ct = default)
+    public async Task<bool> WarmAsync(string modelId, GgufCapability kind, CancellationToken ct = default)
     {
         if (!await EnsureServingAsync(ct)) return false;
         try
@@ -424,11 +440,17 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             // larger judge will be worse. Timing out here would leave the child loading anyway, so the only
             // thing a short timeout buys is a wrong answer.
             http.Timeout = TimeSpan.FromMinutes(3);
-            var (path, body) = isEmbedding
-                ? ("/v1/embeddings",
-                   $"{{\"model\":\"{modelId}\",\"input\":[\"warm\"]}}")
-                : ("/v1/chat/completions",
-                   $"{{\"model\":\"{modelId}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hi\"}}],\"max_tokens\":1}}");
+            // THREE call shapes, because each preset restricts its child to ONE API: an embedder answers only
+            // /v1/embeddings, a reranker only /v1/rerank, and a judge the chat route.
+            var (path, body) = kind switch
+            {
+                GgufCapability.Embedding => ("/v1/embeddings",
+                    $"{{\"model\":\"{modelId}\",\"input\":[\"warm\"]}}"),
+                GgufCapability.Reranking => ("/v1/rerank",
+                    $"{{\"model\":\"{modelId}\",\"query\":\"warm\",\"documents\":[\"warm\"],\"top_n\":1}}"),
+                _ => ("/v1/chat/completions",
+                    $"{{\"model\":\"{modelId}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hi\"}}],\"max_tokens\":1}}"),
+            };
             var started = Stopwatch.StartNew();
             using var content = new StringContent(body, new UTF8Encoding(false), "application/json");
             using var res = await http.PostAsync($"{BaseUrl}{path}", content, ct);

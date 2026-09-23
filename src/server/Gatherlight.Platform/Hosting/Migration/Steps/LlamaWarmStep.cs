@@ -1,6 +1,7 @@
 using Gatherlight.Server.Platform.Agent.Llm.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Sources;
 using Gatherlight.Server.Platform.Hosting.Migration.Services;
+using Gatherlight.Server.Platform.Hosting.Resources.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
 
 namespace Gatherlight.Server.Platform.Hosting.Migration.Steps;
@@ -70,14 +71,14 @@ public sealed class LlamaWarmStep : IMigrationStep
 
         // Warm each bound model. A failure here is per-model: one layer can be usable while the other is
         // not, and reporting them together would hide which.
-        foreach (var (model, isEmbedding, layer) in new[]
+        foreach (var (model, layer) in new[]
                  {
-                     (embedModel, true, "语义"),
-                     (judgeModel, false, "判断"),
+                     (embedModel, "语义"),
+                     (judgeModel, "判断"),
                  })
         {
             if (string.IsNullOrWhiteSpace(model)) continue;
-            if (await _llama.WarmAsync(model!, isEmbedding, ct)) continue;
+            if (await _llama.WarmAsync(model!, ResourceProvisioner.GgufKind(model!), ct)) continue;
             _log.LogWarning("warming {Layer} model {Model} failed", layer, model);
             _state.AddWarning($"「{layer}」的本机模型 {model} 没能载入 —— 这一层这次启动不会生效。");
         }
