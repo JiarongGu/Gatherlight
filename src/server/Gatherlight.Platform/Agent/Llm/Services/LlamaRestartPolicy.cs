@@ -4,18 +4,19 @@ using Lyntai.Inference;
 
 namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 
-/// <summary>Would restarting OUR llama-server right now lose anything? Asked by
+/// <summary>May the app restart OUR llama-server right now? Asked by
 /// <see cref="LlamaServerRuntime.EnsureServesAsync"/> before it restarts the router to load a model it does not
 /// list.</summary>
 public interface ILlamaRestartPolicy
 {
-    /// <summary>Null when a restart loses nothing; otherwise the sentence saying why not and what to do
-    /// instead.</summary>
+    /// <summary>Null when the app may restart the router now; otherwise the sentence saying why not and what to
+    /// do instead.</summary>
     string? WhyNotNow();
 }
 
 /// <summary>
-/// Refuses a router restart while anything would WRITE through it.
+/// Refuses a router restart while anything would WRITE through it — and while a binding that would is saved and
+/// waiting for the service restart that wires it.
 ///
 /// <para><b>Why a restart is not harmless.</b> For the seconds the router is down every call to it fails, and
 /// what fails at WRITE time is lost for good. Lyntai's graph engine catches a failed write-time embed and stores
@@ -23,10 +24,19 @@ public interface ILlamaRestartPolicy
 /// links"); the fact gets its graph reference, so nothing ever back-fills it. Annotation is fail-open the same
 /// way: a fact written while a CHAT judge's router is down is stored without subject tags, permanently.</para>
 ///
-/// <para>So a restart is refused while 语义 embeds through llama.cpp, while 判断 ANNOTATES through it (a chat
-/// model — a reranker only verifies, and its tagging runs on the CLI), each RUNNING or merely SAVED (a restart of
-/// the app is owed anyway), and while a reindex runs. What is left when none holds is a reranker judge's
-/// verification, which fails open to "no opinion" for the few seconds it is down — nothing written, nothing
+/// <para><b>Refused because a restart LOSES something</b>, each with a sentence in the present tense: while 语义
+/// RUNS on llama.cpp (its provider is registered), while 判断 RUNS on a llama.cpp chat model and its switch is on
+/// (a reranker only verifies, and its tagging runs on the CLI; with 判断 switched off the <c>Switchable*</c>
+/// policies make no call at all), and while a reindex runs. The switch is read now, so it could be turned on
+/// during the 2–3 s the router is down — a gap of one click in a few seconds, not worth a lock.</para>
+///
+/// <para><b>Refused because a service restart is OWED anyway</b>, and saying only that: a binding to llama.cpp that
+/// is SAVED but not what runs — a rebind waiting for its restart, or a model that was missing when the container
+/// was built. Restarting the router then loses nothing, so these sentences carry no loss clause; they refuse
+/// because the service restart would load the new model too, and one restart is better than two.</para>
+///
+/// <para>What is left when none holds is a reranker judge's verification, or a chat judge switched off —
+/// verification fails open to "no opinion" for the few seconds the router is down; nothing written, nothing
 /// lost.</para>
 ///
 /// <para>No e2e drives this: the restart branch needs a router the app STARTED, and every fake router is
@@ -39,35 +49,49 @@ public sealed class LlamaRestartPolicy : ILlamaRestartPolicy
     private readonly IReindexStatus _reindex;
     private readonly IEnumerable<IModelProvider> _providers;
     private readonly MemoryJudgeWiring _runningJudge;
+    private readonly IAppConfigService _appConfig;
 
     public LlamaRestartPolicy(ServerConfigService config, IPlatformContext platform, IReindexStatus reindex,
-        IEnumerable<IModelProvider> providers, MemoryJudgeWiring runningJudge)
+        IEnumerable<IModelProvider> providers, MemoryJudgeWiring runningJudge, IAppConfigService appConfig)
     {
         _config = config;
         _platform = platform;
         _reindex = reindex;
         _providers = providers;
         _runningJudge = runningJudge;
+        _appConfig = appConfig;
     }
 
     public string? WhyNotNow()
     {
-        var settings = new MemorySourceSettings(_config.Current.Memory, _platform.ResourcesPath);
-
-        var embedsHere =
-            _providers.Any(p => string.Equals(p.Id, LlamaCppSource.EmbedProviderId, StringComparison.OrdinalIgnoreCase))
-            || MemorySources.ResolveSemantic(settings)?.Id == MemoryBackends.LlamaCpp;
-        if (embedsHere)
+        // --- a restart would LOSE something ------------------------------------------------------------------
+        if (_providers.Any(p => string.Equals(p.Id, LlamaCppSource.EmbedProviderId, StringComparison.OrdinalIgnoreCase)))
             return "「语义」正在用这个 llama.cpp 做嵌入:重启它的那几秒里写入的事实会永久丢掉向量,所以应用不会自动重启它"
                 + " —— 请重启服务,新模型会随 llama.cpp 一起载入。";
 
-        if (AnnotatesHere(_runningJudge.Transport, _runningJudge.Model)
-            || AnnotatesHere(MemorySources.ResolveJudge(settings).Id, MemorySources.ResolveJudgeModel(settings)))
+        if (MemoryEnrichment.IsOn(_appConfig) && AnnotatesHere(_runningJudge.Transport, _runningJudge.Model))
             return "「判断」正在用这个 llama.cpp 的对话模型给写入的事实做主题标注:重启它的那几秒里写入的事实会永久没有标注,"
                 + "所以应用不会自动重启它 —— 请重启服务,新模型会随 llama.cpp 一起载入。";
 
         if (_reindex.Current.Running)
             return "现在正在重建语义索引:这时重启 llama.cpp 会让正在重建的事实丢掉向量 —— 等重建完成后再试,或重启服务。";
+
+        // --- a service restart is OWED anyway --------------------------------------------------------------
+        // The running checks above failed, so a saved 语义 on llama.cpp is not what runs.
+        var settings = new MemorySourceSettings(_config.Current.Memory, _platform.ResourcesPath);
+        if (MemorySources.ResolveSemantic(settings)?.Id == MemoryBackends.LlamaCpp)
+            return "「语义」已改用这个 llama.cpp 做嵌入,要重启服务才会生效 —— 请现在重启服务,新模型会随 llama.cpp 一起载入。";
+
+        // Only when the saved judge is NOT the running one: the running one with its switch off loses nothing, and
+        // calling it "已改用" would be false.
+        var savedJudge = MemorySources.ResolveJudge(settings).Id;
+        var savedModel = MemorySources.ResolveJudgeModel(settings);
+        var savedIsRunning =
+            string.Equals(savedJudge, _runningJudge.Transport, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(savedModel, _runningJudge.Model, StringComparison.OrdinalIgnoreCase);
+        if (!savedIsRunning && AnnotatesHere(savedJudge, savedModel))
+            return "「判断」已改用这个 llama.cpp 的对话模型,要重启服务才会生效 —— 请现在重启服务,新模型会随 llama.cpp 一起载入。";
+
         return null;
     }
 

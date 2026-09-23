@@ -317,14 +317,27 @@ Then bge-reranker-v2-m3 was hardlinked in and 判断 bound to it, while a fact w
   fact written before and after the bind was tagged. The remaining run (the first of the three) returned **500**
   after 9.6 s. The restart killed the router, then the re-probe's `GET /v1/models` hit its 4 s
   `HttpClient.Timeout`. `IsServingAsync` lets EVERY `OperationCanceledException` through, the timeout's included,
-  so the exception escaped the bind and NO router was left running. The next fact's annotation was refused. That
-  is a separate defect, and this change does not fix it: the policy now keeps a chat judge off that path, but a
-  reranker judge's restart can still meet it.
+  so the exception escaped the bind and NO router was left running. The next fact's annotation was refused. The
+  timing points at a cause, LIKELY rather than proven: 9.6 s is ~0.6 s of lead-in, plus `Kill`'s 5 s
+  `WaitForExit` (whose result is ignored), plus the 4 s timeout — so the dying router most likely had not exited
+  within 5 s, and its socket still accepted the re-probe's connection and never answered. That is a separate
+  defect, and this change does not fix it: the policy now keeps a chat judge off that path, but a reranker
+  judge's restart can still meet it.
 - **After the fix: 409 in 31 ms**, saying 「…「判断」正在用这个 llama.cpp 的对话模型给写入的事实做主题标注:重启它的那几秒里写入的事实会永久没有标注,所以应用不会自动重启它 —— 请重启服务,新模型会随 llama.cpp 一起载入。」
   There were **0** restarts and 0 spawns in `state/logs`, the router PID was the same before and after, and the
   port accepted connections throughout. The facts written during and after the bind were annotated through
-  llama.cpp (subjects stored), so 「正在…做主题标注」 describes what was actually happening. `settings.json` was
-  unchanged.
+  llama.cpp (subjects stored), so in the configuration tested — 判断 switched on, the chat judge RUNNING —
+  「正在…做主题标注」 describes what was actually happening. `settings.json` was unchanged.
+- **The two cases where that sentence would be false** now get a different answer (same build, same setup).
+  **判断 switched OFF** (the live `memory.enrichment.enabled`) with the chat judge running: the `Switchable*`
+  policies make no call, so a restart loses nothing and the bind is not refused — **200** in 9.6 s after one
+  restart, the port refusing connections for 2.3 s. The 36 facts written meanwhile made no router call at all.
+  **A chat judge SAVED but not running** (a reranker at startup, then 判断 bound to the chat model, which the router
+  already listed — 200 in 4.1 s, no restart): the new-model bind is still refused, because a service restart is
+  owed anyway, but in the right tense and with no loss clause — **409** in 18 ms, 「…「判断」已改用这个 llama.cpp
+  的对话模型,要重启服务才会生效 —— 请现在重启服务,新模型会随 llama.cpp 一起载入。」, 0 restarts, the router PID
+  unchanged. 语义 got the same split (「「语义」已改用这个 llama.cpp 做嵌入,要重启服务才会生效 —— …」 when saved
+  but not running), verified by reading the code only.
 - **Control, after the fix.** 判断 was bound to LAMAR (a reranker) at startup, then the same bind returned **200** in
   10.4 s after one restart. The port refused connections for 2.8 s, bge warmed in 5.7 s, and LAMAR re-warmed 5.3 s
   later. All 21 facts written meanwhile were annotated by the CLI, and none touched llama.cpp. A reranker judge's

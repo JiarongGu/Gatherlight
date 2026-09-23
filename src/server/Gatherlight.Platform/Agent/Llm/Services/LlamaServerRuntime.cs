@@ -498,9 +498,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <item><b>Loses nothing</b> — <see cref="ILlamaRestartPolicy"/>. While the router is down every call to
     /// it fails, and a fact written then is stored WITHOUT its vector — or, under a chat judge, its subject tags —
     /// permanently and silently (the engine catches a failed write-time embed; annotation fails open). So it is
-    /// refused while 语义 embeds through this router, while 判断 annotates through it (a chat model), or while a
-    /// reindex runs, with a sentence saying so. What remains is a reranker judge's verification, which fails
-    /// open.</item>
+    /// refused while 语义 embeds through this router, while 判断 annotates through it (a chat model, switched on),
+    /// or while a reindex runs, with a sentence saying so — and, saying only that a service restart is owed,
+    /// while such a binding is saved but not yet running. What remains is a reranker judge's verification, or a
+    /// chat judge switched off; verification fails open.</item>
     /// </list>
     /// <para>After a restart the requested model is warmed HERE, before returning, so the caller's own screen
     /// or proof is not a second concurrent load; what was warm before is then re-warmed ONE AT A TIME, off the

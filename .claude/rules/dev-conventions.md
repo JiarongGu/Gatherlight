@@ -795,11 +795,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (`ILlamaRestartPolicy`) — the restart window is exactly the failed-embed case above, so the bind says to
   restart the service instead. A chat judge's annotation is lost the same way a vector is: fail-open, at write
   time, for good. Verified on the real binary (the runtime doc), because no fake can be a router we started.
-  Start, restart and stop hold ONE lock: probe-then-spawn is a check-then-act on a port, and a concurrent
-  spawn during a restart once made the live router look adopted, because `_started` was set before the process answered — it is set only
-  after, now, and `Dispose` marks the runtime disposed before taking the lock so nothing spawns after it. After
-  a restart the requested model is warmed before returning and the rest re-warmed one at a time (llama.cpp
-  loads concurrently badly), only if ours — the real router also lists the machine's llama.cpp cache.
+  "Annotates" means RUNNING with 判断 switched on: switched off, the chat judge makes no call and the restart
+  goes ahead. A binding that is only SAVED loses nothing either, and is refused anyway because the service
+  restart it is owed loads the new model too — in its own sentence (「已改用…要重启服务才会生效」), never the
+  running one's loss clause, which would be false. Start, restart and stop hold ONE lock: probe-then-spawn is a
+  check-then-act on a port, and a concurrent spawn during a restart once made the live router look adopted,
+  because `_started` was set before the process answered — it is set only after, now, and `Dispose` marks the
+  runtime disposed before taking the lock so nothing spawns after it. After a restart the requested model is
+  warmed before returning and the rest re-warmed one at a time (llama.cpp loads concurrently badly), only if
+  ours — the real router also lists the machine's llama.cpp cache.
   **The restart branch has NO e2e coverage**: the fake router can only ever be adopted, and no stub can be a
   real router. It was verified by hand on the real binary — a bind racing 资源's start button left one router
   and a second restart still worked; with 语义 on llama.cpp the same bind was refused with 0 restarts.
