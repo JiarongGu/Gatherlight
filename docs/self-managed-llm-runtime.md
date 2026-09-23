@@ -342,19 +342,36 @@ Then bge-reranker-v2-m3 was hardlinked in and 判断 bound to it, while a fact w
   later. All 21 facts written meanwhile were annotated by the CLI, and none touched llama.cpp. A reranker judge's
   router carries only verification, which fails open for those seconds and writes nothing.
 
-### 2026-09-24 — a probe timeout is "not serving", and a restart waits for the old port
+### 2026-09-24 — a port that accepts and never answers is HELD, and a restart waits for the old port
 
 The 500 above had two halves. **The escaping timeout** is fixed in code: `IsServingAsync` and `RunAsync` now tell
-the caller's cancellation apart by its TOKEN, as `WarmCoreAsync` and the reranker screen already did. So a
-`/v1/models` that does not answer within 4 s reads as not serving, and `RunAsync` kills a child that outlives its
-15 s. The start poll now runs to a 20 s deadline instead of forty polls, and a slow probe no longer lands in its
-catch-all, which killed a router that was still starting. This half is drivable: a fake that accepts and never
-answers `/v1/models` gives `GET /api/manage/models/llama?refresh=true` → 200 `serving:false`,
-`POST …/llama/start` → 409 with a sentence (`e2e-p51`), and the judge bind → 409 with a sentence (`e2e-p52` case
-8a). All three were confirmed to return **500** with the old filter restored.
+the caller's cancellation apart by its TOKEN, as `WarmCoreAsync` and the reranker screen already did, and
+`RunAsync` kills a child that outlives its 15 s. The start poll now runs to a 20 s deadline instead of forty polls,
+so a slow probe no longer lands in its catch-all, which killed a router that was still starting.
+
+The first version of that fix read the timeout as "not serving", which was wrong too. "Not serving" means "start
+one", and a port that ACCEPTS a connection is held by something: a hung llama-server, another program, or our own
+router too busy to reply. A router spawned beside it cannot bind. (Whether llama-server's HTTP library would share
+the port on Windows is unmeasured, so nothing relies on it.) And every sentence named the wrong cause: 「没能启动」
+at the bind, 「还没有下载」 at the start button. **The probe now has three answers.** REFUSED means nothing listens.
+ANSWERING means a router replied with its models. HELD means the port accepted but gave no usable answer: a timeout,
+a non-2xx reply, or a body that is not the model list. `EnsureServingCoreAsync` never spawns on a held port. Its
+sentence takes precedence in `Problem`, over 「还没有下载」 too, and the bind and the start button pass it through.
+The sentence names the port, says the process accepts connections and does not answer, and says to end it in
+任务管理器 or restart the machine. It is the adopted-router refusal's rule: not ours to end. For a router we started
+and still hold, it says to try again or restart the service. This half is drivable with a fake that accepts and
+never answers `/v1/models`:
+- `e2e-p51`: `GET /api/manage/models/llama?refresh=true` → 200 `serving:false` with the held sentence (not
+  「还没有下载」, with no binary installed), and `POST …/llama/start` → 409 with the held sentence.
+- `e2e-p52` case 8a: the judge bind → 409 with the held sentence.
+
+Both suites also assert that NO spawn was attempted: no `llama-server starting` or `starting llama-server failed`
+line in the fixture's log. With the old filter restored, all three calls returned **500**. With a held port let fall
+through to the spawn, the no-spawn check failed in both suites, and p52's bind said 「没能启动」.
 
 **The dying router** is not drivable by a fake. After `StopOursCore` a restart now polls the port until nothing
-accepts, for at most 15 s. When it never frees, the bind says so (the old process kept the port, llama.cpp is not
+accepts, for at most 15 s, and only then probes. So a router we just killed is reported as not yet gone, never as a
+stranger holding the port. When it never frees, the bind says so (the old process kept the port, llama.cpp is not
 running, try again or end `llama-server.exe` and restart the service) instead of probing a router that is
 dying. `Kill` now logs when its 5 s `WaitForExit` runs out. Ten restarts on the real binary, same build and harness:
 five with a reranker judge at startup, and five with the chat judge running and 判断 switched off, so a chat

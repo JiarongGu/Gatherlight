@@ -11,6 +11,9 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// <param name="Devices">What <c>--list-devices</c> reported. Present even when nothing is serving,
 /// because "will this use the GPU" is answerable from the binary alone and is the question behind the
 /// whole runtime choice.</param>
+/// <param name="Held">Something ACCEPTS connections on our port and does not answer — a hung llama-server, another
+/// program, or our own router too busy to reply. Not serving, and not free either: nothing may be spawned beside it,
+/// and <paramref name="Problem"/> says so ahead of anything else.</param>
 public sealed record LlamaServerState(
     string BaseUrl,
     bool Installed,
@@ -20,7 +23,8 @@ public sealed record LlamaServerState(
     IReadOnlyList<string> Models,
     IReadOnlyList<string> Devices,
     bool GpuLikely,
-    string? Problem);
+    string? Problem,
+    bool Held = false);
 
 public interface ILlamaServerRuntime
 {
@@ -266,12 +270,6 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
     public LlamaServerState? Cached { get { lock (_gate) return _cached; } }
 
-    /// <summary>Is the router answering? The CHEAP half of a probe — one HTTP GET, no child processes.
-    ///
-    /// <para>Split out because the startup poll used <c>ProbeAsync(refresh: true)</c> in a 40-iteration
-    /// loop, and a full probe shells out to <c>--version</c> and <c>--list-devices</c>. That was up to 80
-    /// process spawns while waiting 20 s for a server to come up — wasteful, and slow enough to make the
-    /// wait it was measuring longer than the thing it was waiting for.</para></summary>
     /// <summary>Is anything accepting connections on our port, answered within a bounded time?
     ///
     /// <para>A raw TCP connect rather than a shorter <c>HttpClient</c> timeout, because the cost being
@@ -310,7 +308,20 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         }
     }
 
-    private async Task<(bool Serving, IReadOnlyList<string> Models)> IsServingAsync(CancellationToken ct)
+    /// <summary>What is on our port — the CHEAP half of a probe: one connect and one HTTP GET, no child processes.
+    ///
+    /// <para><b>THREE answers, because two of them used to be one.</b> REFUSED: nothing listens, so a router may
+    /// be started. ANSWERING: a router replied to <c>/v1/models</c>, with its models. HELD: something ACCEPTED the
+    /// connection and gave no usable answer — a timeout, a non-2xx reply, a body that is not the model list.
+    /// A held port is not free: it belongs to a hung llama-server, another program, or a router of ours too busy
+    /// to reply. Reading it as "not serving" made the app spawn a second router BESIDE it, which cannot bind the
+    /// port (or, if llama-server's HTTP library shares it on Windows — unmeasured — would split requests between
+    /// two routers without anyone knowing), and every sentence then named the wrong cause.</para>
+    ///
+    /// <para>Split from <see cref="ProbeAsync"/> because the startup poll used <c>ProbeAsync(refresh: true)</c>
+    /// in a 40-iteration loop, and a full probe shells out to <c>--version</c> and <c>--list-devices</c> — up to
+    /// 80 process spawns while waiting for a server to come up.</para></summary>
+    private async Task<PortProbe> IsServingAsync(CancellationToken ct)
     {
         // A CLOSED loopback port is not free to ask about. Measured on 2026-08-22: a refused connect to
         // 127.0.0.1 costs 2.016 s on this platform — the OS retransmits before it gives up, and
@@ -319,23 +330,23 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         // no layer bound to llama.cpp — i.e. the default. A server we started is on loopback and answers in
         // single-digit milliseconds, so anything slower than this gate is not a slow server, it is no
         // server; failing the gate is the same answer as a refused GET, arrived at 10× sooner.
-        if (!await CanConnectAsync(ct)) return (false, Array.Empty<string>());
+        if (!await CanConnectAsync(ct)) return PortProbe.Refused;
 
         try
         {
             using var http = _http.CreateClient();
             http.Timeout = TimeSpan.FromSeconds(4);
             using var res = await http.GetAsync($"{BaseUrl}/v1/models", ct);
-            if (!res.IsSuccessStatusCode) return (false, Array.Empty<string>());
+            if (!res.IsSuccessStatusCode) return PortProbe.Held;
             using var doc = System.Text.Json.JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
             var models = doc.RootElement.TryGetProperty("data", out var data)
                 ? data.EnumerateArray()
                     .Select(e => e.TryGetProperty("id", out var id) ? id.GetString() : null)
                     .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).ToList()
                 : (IReadOnlyList<string>)Array.Empty<string>();
-            return (true, models);
+            return new PortProbe(PortState.Answering, models);
         }
-        // A probe that timed out is NOT SERVING — never an escaping cancellation. HttpClient's own 4 s timeout
+        // A probe that timed out is HELD — never an escaping cancellation. HttpClient's own 4 s timeout
         // arrives as a TaskCanceledException, so the filter used to be the exception's TYPE and let it through:
         // a router that accepted the connection and never answered (one dying from a restart, measured on the
         // real binary) turned the bind into a bare 500 and left llama.cpp stopped. Only the caller's TOKEN tells
@@ -344,8 +355,36 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         {
             _log.LogDebug("llama-server: /v1/models did not answer: {Msg}",
                 ex is OperationCanceledException ? "no answer within 4 s" : ex.Message);
-            return (false, Array.Empty<string>());
+            return PortProbe.Held;
         }
+    }
+
+    private enum PortState { Refused, Answering, Held }
+
+    /// <summary>One probe of our port — see <see cref="IsServingAsync"/>.</summary>
+    private readonly record struct PortProbe(PortState State, IReadOnlyList<string> Models)
+    {
+        public static readonly PortProbe Refused = new(PortState.Refused, Array.Empty<string>());
+        public static readonly PortProbe Held = new(PortState.Held, Array.Empty<string>());
+        public bool Serving => State == PortState.Answering;
+        public bool IsHeld => State == PortState.Held;
+    }
+
+    /// <summary>The sentence for a HELD port, which takes precedence over every other problem: nothing else can be
+    /// fixed while it stands, and 「还没有下载」 beside it would send the household to download something that could
+    /// not start anyway. Two cases, because the remedy differs. A router WE started and still hold is busy, and a
+    /// service restart ends it (Dispose kills it). Anything else is not ours to end — the same rule, and the same
+    /// remedy (任务管理器), as the refusal for an ADOPTED router in <see cref="EnsureServesAsync"/>.</summary>
+    private string HeldProblem()
+    {
+        var port = new Uri(BaseUrl).Port;
+        bool ours;
+        lock (_gate) ours = _started is { HasExited: false };
+        return ours
+            ? $"应用启动的 llama.cpp 还在运行,但端口 {port} 上这次没有回应 —— 稍后再试;一直这样的话,请重启服务。"
+            : $"llama.cpp 用的端口 {port} 被一个不回应的进程占着:它接受连接,却不回答(可能是没有正常退出的 llama-server.exe,"
+              + "也可能是别的程序)。应用不会在它旁边再启动一个,也不会替你结束它 —— 在任务管理器里结束它后再试,"
+              + "应用会重新启动 llama.cpp;或者重启电脑。";
     }
 
     public async Task<LlamaServerState> ProbeAsync(bool refresh = false, CancellationToken ct = default)
@@ -370,9 +409,11 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             ? (null, (IReadOnlyList<string>)Array.Empty<string>())
             : await BinaryFactsAsync(exe, ct);
 
-        var (serving, models) = await IsServingAsync(ct);
+        var probe = await IsServingAsync(ct);
+        var (serving, models) = (probe.Serving, probe.Models);
 
-        var problem = exe is null
+        var problem = probe.IsHeld ? HeldProblem()
+            : exe is null
             ? "还没有下载 —— 在「资源 · Resources」面板下载「本机模型运行时 · llama.cpp」(约 35 MB)。"
             : LocalGgufIds().Count == 0
                 ? "运行时已就绪,但还没有任何模型 —— 在「资源 · Resources」面板下载一个。"
@@ -385,7 +426,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             // A Vulkan device the binary can actually see. Reported rather than guessed, unlike the
             // GpuLikely elsewhere in this codebase, because --list-devices answers it exactly.
             devices.Any(d => d.StartsWith("Vulkan", StringComparison.OrdinalIgnoreCase)),
-            problem);
+            problem,
+            probe.IsHeld);
 
         // Only the FULL state is cached: a Live one has empty Version/Devices by design, and letting it
         // populate this would serve 资源 a blank build number that looks like a failed install.
@@ -396,19 +438,34 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     public async Task<bool> EnsureServingAsync(CancellationToken ct = default)
     {
         await _lifecycle.WaitAsync(ct);
-        try { return await EnsureServingCoreAsync(ct); }
+        try { return (await EnsureServingCoreAsync(ct)).Ok; }
         finally { _lifecycle.Release(); }
     }
 
     /// <summary>Probe, and spawn only if the port is silent. Callers hold <see cref="_lifecycle"/> — the public
-    /// door takes it, and the restart in <see cref="EnsureServesAsync"/> calls this while holding it already.</summary>
-    private async Task<bool> EnsureServingCoreAsync(CancellationToken ct)
+    /// door takes it, and the restart in <see cref="EnsureServesAsync"/> calls this while holding it already.
+    /// <para><c>Held</c> is the probe's sentence when the port is HELD, so a caller can pass the real cause on
+    /// instead of 「没能启动」.</para></summary>
+    private async Task<(bool Ok, string? Held)> EnsureServingCoreAsync(CancellationToken ct)
     {
-        if (_disposed) return false;
+        if (_disposed) return (false, null);
         var state = await ProbeAsync(refresh: true, ct);
         // Something already answers. It might be ours from a previous start, or a household's own on this
         // port — either way we do not start a second one.
-        if (state.Serving) return true;
+        if (state.Serving) return (true, null);
+        // Something HOLDS the port and does not answer. Never spawn beside it — see IsServingAsync.
+        if (state.Held)
+        {
+            _log.LogWarning("llama-server not started: port {Port} accepts connections but does not answer",
+                new Uri(BaseUrl).Port);
+            return (false, state.Problem);
+        }
+        return (await SpawnAsync(state, ct), null);
+    }
+
+    /// <summary>Start a router on a port the probe found SILENT, and wait for it to answer.</summary>
+    private async Task<bool> SpawnAsync(LlamaServerState state, CancellationToken ct)
+    {
         if (state.Executable is null) return false;
 
         var models = LocalGgufIds();
@@ -517,10 +574,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <item><b>Loses nothing</b> — <see cref="ILlamaRestartPolicy"/>. While the router is down every call to
     /// it fails, and a fact written then is stored WITHOUT its vector — or, under a chat judge, its subject tags —
     /// permanently and silently (the engine catches a failed write-time embed; annotation fails open). So it is
-    /// refused while 语义 embeds through this router, while 判断 annotates through it (a chat model, switched on),
-    /// or while a reindex runs, with a sentence saying so — and, saying only that a service restart is owed,
-    /// while such a binding is saved but not yet running. What remains is a reranker judge's verification, or a
-    /// chat judge switched off; verification fails open.</item>
+    /// refused while 语义 embeds through this router or 判断 annotates through it (a chat model, switched on) —
+    /// which covers every reindex that reaches llama.cpp — with a sentence saying so; and, saying only that a
+    /// service restart is owed, while such a binding is saved but not yet running. What remains is a reranker
+    /// judge's verification, or a chat judge switched off; verification fails open.</item>
     /// </list>
     /// <para><b>The restart waits for the old router to let go of its port</b> before it spawns the new one
     /// (<see cref="WaitForPortReleaseAsync"/>). A bind once came back 500 with llama.cpp left stopped: the probe's
@@ -535,7 +592,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         await _lifecycle.WaitAsync(ct);
         try
         {
-            if (!await EnsureServingCoreAsync(ct)) return "llama.cpp 没能启动 —— 请看「日志」里的原因。";
+            var start = await EnsureServingCoreAsync(ct);
+            if (!start.Ok) return start.Held ?? "llama.cpp 没能启动 —— 请看「日志」里的原因。";
             var live = await IsServingAsync(ct);
             if (!live.Serving) return "llama.cpp 正在运行,但这次没有及时回应 —— 稍后再试。";
             if (live.Models.Contains(modelId, StringComparer.OrdinalIgnoreCase)) return null;
@@ -562,11 +620,15 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 "llama-server: restarting our router — {Model} was added after it started; re-warming {Warm}",
                 modelId, string.Join(", ", warm));
             StopOursCore();
+            // No `unknown` prefix here: it says the running llama.cpp must be restarted, and by now none is running.
             if (!await WaitForPortReleaseAsync(ct))
-                return unknown + $"应用已经停下 llama.cpp 准备重启,但旧的 llama-server 进程 {PortReleaseTimeout.TotalSeconds:0} 秒内"
-                     + "没有让出它的端口,所以这次没有重新启动它,llama.cpp 现在没有在运行 —— 稍等片刻再试一次;"
+                return $"应用为了载入 {modelId} 停下了 llama.cpp,但旧的 llama-server 进程 {PortReleaseTimeout.TotalSeconds:0} 秒内"
+                     + $"没有让出端口 {new Uri(BaseUrl).Port},所以这次没有重新启动它,llama.cpp 现在没有在运行 —— 稍等片刻再试一次;"
                      + "如果仍然这样,在任务管理器里结束 llama-server.exe 后重启服务。";
-            if (!await EnsureServingCoreAsync(ct)) return "llama.cpp 重启后没能启动 —— 请看「日志」里的原因。";
+            // Only now, with the port FREE, is it probed — so a router we just killed is never reported as a
+            // stranger holding the port; that case is the sentence above.
+            var restarted = await EnsureServingCoreAsync(ct);
+            if (!restarted.Ok) return restarted.Held ?? "llama.cpp 重启后没能启动 —— 请看「日志」里的原因。";
             live = await IsServingAsync(ct);
             if (!live.Models.Contains(modelId, StringComparer.OrdinalIgnoreCase))
                 return $"llama.cpp 重启后仍然没有列出 {modelId} —— 请看「日志」里的原因。";

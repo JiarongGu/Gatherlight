@@ -27,8 +27,17 @@ public interface ILlamaRestartPolicy
 /// <para><b>Refused because a restart LOSES something</b>, each with a sentence in the present tense: while 语义
 /// RUNS on llama.cpp (its provider is registered), while 判断 RUNS on a llama.cpp chat model and its switch is on
 /// (a reranker only verifies, and its tagging runs on the CLI; with 判断 switched off the <c>Switchable*</c>
-/// policies make no call at all), and while a reindex runs. The switch is read now, so it could be turned on
-/// during the 2–3 s the router is down — a gap of one click in a few seconds, not worth a lock.</para>
+/// policies make no call at all). The switch is read now, so it could be turned on during the 2–3 s the router is
+/// down — a gap of one click in a few seconds, not worth a lock.</para>
+///
+/// <para><b>A reindex needs no check of its own</b>, and had one that was false. <c>ReindexSemanticAsync</c> takes
+/// one of two paths: with no embedder registered (the Claude CLI arm) it runs <c>ExpandEachAsync</c>, whose
+/// rephrasing goes through the DEFAULT text client, which is the CLI alone; otherwise it runs <c>RebuildAsync</c>,
+/// which re-remembers every fact — embedding through the registered embedder (llama.cpp only when its provider is
+/// registered: the 语义 check) and annotating through the judge (llama.cpp only for a running chat judge with the
+/// switch on: the 判断 check). So every reindex that touches llama.cpp was already refused above, and one that
+/// does not — 语义 on the built-in embedder or the CLI, no chat judge — was refused with 「会让正在重建的事实丢掉
+/// 向量」, which it would not.</para>
 ///
 /// <para><b>Refused because a service restart is OWED anyway</b>, and saying only that: a binding to llama.cpp that
 /// is SAVED but not what runs — a rebind waiting for its restart, or a model that was missing when the container
@@ -46,17 +55,15 @@ public sealed class LlamaRestartPolicy : ILlamaRestartPolicy
 {
     private readonly ServerConfigService _config;
     private readonly IPlatformContext _platform;
-    private readonly IReindexStatus _reindex;
     private readonly IEnumerable<IModelProvider> _providers;
     private readonly MemoryJudgeWiring _runningJudge;
     private readonly IAppConfigService _appConfig;
 
-    public LlamaRestartPolicy(ServerConfigService config, IPlatformContext platform, IReindexStatus reindex,
+    public LlamaRestartPolicy(ServerConfigService config, IPlatformContext platform,
         IEnumerable<IModelProvider> providers, MemoryJudgeWiring runningJudge, IAppConfigService appConfig)
     {
         _config = config;
         _platform = platform;
-        _reindex = reindex;
         _providers = providers;
         _runningJudge = runningJudge;
         _appConfig = appConfig;
@@ -72,9 +79,6 @@ public sealed class LlamaRestartPolicy : ILlamaRestartPolicy
         if (MemoryEnrichment.IsOn(_appConfig) && AnnotatesHere(_runningJudge.Transport, _runningJudge.Model))
             return "「判断」正在用这个 llama.cpp 的对话模型给写入的事实做主题标注:重启它的那几秒里写入的事实会永久没有标注,"
                 + "所以应用不会自动重启它 —— 请重启服务,新模型会随 llama.cpp 一起载入。";
-
-        if (_reindex.Current.Running)
-            return "现在正在重建语义索引:这时重启 llama.cpp 会让正在重建的事实丢掉向量 —— 等重建完成后再试,或重启服务。";
 
         // --- a service restart is OWED anyway --------------------------------------------------------------
         // The running checks above failed, so a saved 语义 on llama.cpp is not what runs.

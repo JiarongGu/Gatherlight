@@ -791,10 +791,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   listed" restarted a healthy router on two slow probes; **never an ADOPTED router** (an orphan of an earlier
   run, or the household's own) — not ours to kill, and an app restart would only adopt it again, so the bind
   and the startup warning name the process to end (`e2e-p52` case 8, on both layers, and case 7's warning);
-  **never while 语义 embeds through it, 判断 annotates through it (a chat model), or a reindex runs**
-  (`ILlamaRestartPolicy`) — the restart window is exactly the failed-embed case above, so the bind says to
-  restart the service instead. A chat judge's annotation is lost the same way a vector is: fail-open, at write
-  time, for good. Verified on the real binary (the runtime doc), because no fake can be a router we started.
+  **never while 语义 embeds through it or 判断 annotates through it (a chat model)** (`ILlamaRestartPolicy`) —
+  the restart window is exactly the failed-embed case above, so the bind says to restart the service instead.
+  A reindex needs no check of its own: it reaches llama.cpp only through those two (the CLI arm's rephrasing is
+  on the default client, the CLI), and the separate reindex check it had refused, with a sentence about lost
+  vectors, reindexes that touch no llama.cpp at all. A chat judge's annotation is lost the same way a vector
+  is: fail-open, at write time, for good. Verified on the real binary (the runtime doc), because no fake can be a router we started.
   "Annotates" means RUNNING with 判断 switched on: switched off, the chat judge makes no call and the restart
   goes ahead. A binding that is only SAVED loses nothing either, and is refused anyway because the service
   restart it is owed loads the new model too — in its own sentence (「已改用…要重启服务才会生效」), never the
@@ -804,14 +806,22 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   runtime disposed before taking the lock so nothing spawns after it. After a restart the requested model is
   warmed before returning and the rest re-warmed one at a time (llama.cpp loads concurrently badly), only if
   ours — the real router also lists the machine's llama.cpp cache.
-  **A probe timeout is "not serving", never an escaping cancellation**: HttpClient's timeout arrives as a
-  `TaskCanceledException`, so a catch filtered on the TYPE let it out of `IsServingAsync` and `RunAsync`. On the
-  real binary that was a bind answering 500 with llama.cpp left stopped. Only the caller's TOKEN says the caller
-  gave up (`WarmCoreAsync` had already learned this). And **the restart waits for the old router to let go of its
-  port** before spawning, at most 15 s, because `Kill`'s 5 s wait carries on either way, and a dying router's
-  socket most likely still accepted that re-probe. Proof: `e2e-p51` and `e2e-p52` case 8a (a fake that never
-  answers `/v1/models`; both fail with the old filter), plus ten real-binary restarts in the runtime doc, where the
-  wait never had to wait. **The restart branch has NO e2e coverage**: the fake router can only ever be adopted, and
+  **The probe has THREE answers — refused, answering, HELD — and a held port is never spawned beside.** A
+  probe timeout is never an escaping cancellation: HttpClient's timeout arrives as a `TaskCanceledException`, so a
+  catch filtered on the TYPE let it out of `IsServingAsync` and `RunAsync`, and on the real binary that was a bind
+  answering 500 with llama.cpp left stopped. Only the caller's TOKEN says the caller gave up (`WarmCoreAsync` had
+  already learned this). But the first fix read the timeout as "not serving", and "not serving" means "start
+  one": a port that ACCEPTS and does not answer (a timeout, a non-2xx, a body that is not the model list) is
+  HELD — by a hung llama-server, another program, or our own router too busy to reply — and a router spawned
+  beside it cannot bind, while every sentence named the wrong cause (「没能启动」, even 「还没有下载」). Held is its
+  own state: `EnsureServingCoreAsync` never spawns, and its sentence (`HeldProblem`) takes precedence in
+  `Problem` and is what the bind and the start button say. And **the restart waits for the old router to let
+  go of its port** before probing, at most 15 s, because `Kill`'s 5 s wait carries on either way and a dying
+  router's socket most likely still accepted that re-probe — so a router we just killed is reported as not yet
+  gone, never as a stranger holding the port. Proof: `e2e-p51` and `e2e-p52` case 8a (a fake that accepts and
+  never answers `/v1/models`): the held sentence, and NO spawn attempted in the fixture's log — the no-spawn
+  check fails when a held port falls through to the spawn — plus ten real-binary restarts in the runtime doc,
+  where the wait never had to wait. **The restart branch has NO e2e coverage**: the fake router can only ever be adopted, and
   no stub can be a real router. It was verified by hand on the real binary — a bind racing 资源's start button
   left one router and a second restart still worked; with 语义 on llama.cpp the same bind was refused with 0
   restarts.

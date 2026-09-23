@@ -1057,35 +1057,64 @@ try {
     }
   }
 
-  // ---- A ROUTER THAT ACCEPTS AND NEVER ANSWERS IS "NOT SERVING", NOT A 500 --------------------------
+  // ---- A PORT THAT ACCEPTS AND NEVER ANSWERS IS HELD: NAMED, NEVER SPAWNED BESIDE ---------------------
   //
   // The probe's `GET /v1/models` has a 4 s HttpClient timeout, which arrives as a TaskCanceledException — and
   // the catch filtered on the exception's TYPE, so it escaped. On the real binary that was a bind returning
   // 500 with llama.cpp left stopped, most likely a dying router whose socket still accepted the re-probe.
-  // Only the caller's token says the CALLER gave up. Same port as the adoption fake above: something is there,
-  // it just never answers.
+  // The first fix read the timeout as "not serving", and "not serving" means "start one": the app then spawned a
+  // router BESIDE a process that holds the port, and said 「没能启动」 or 「还没有下载」. A port that accepts and
+  // does not answer is HELD — its own state, its own sentence, and no spawn. Same port as the adoption fake above.
   {
     const u = new URL(String(llamaCold.baseUrl));
+    const port = Number(u.port);
     let asked = 0;
     const hung = http.createServer((req) => {
       if (req.url === '/v1/models') asked++;
       // Never answered; the server's own timeout is what ends each request.
     });
-    await new Promise((r) => hung.listen(Number(u.port), '127.0.0.1', r));
+    await new Promise((r) => hung.listen(port, '127.0.0.1', r));
+    // What the runtime logs when it TRIES to start a router: "llama-server starting: …" once the process exists,
+    // "starting llama-server failed: …" when it could not even be started (this stub is not a real binary).
+    const logsDir = path.join(dir, 'state', 'logs');
+    const spawnLines = () => (fs.existsSync(logsDir)
+      ? fs.readdirSync(logsDir).map((n) => fs.readFileSync(path.join(logsDir, n), 'utf8')).join('\n') : '')
+      .split('\n').filter((l) => /llama-server starting|starting llama-server failed/.test(l));
+    // The held sentence: names llama-server, says it does not answer, and names THIS port.
+    const isHeld = (t) => /llama-server/.test(t) && /不回应/.test(t) && t.includes(String(port));
+    const res = path.join(dir, 'state', 'resources');
+    const stubExe = path.join(res, 'llama-cpp', 'llama-server.exe');
+    const stubModel = path.join(res, 'gguf', 'zzheld-chat-model.gguf');
     try {
+      // No binary installed yet — so the held sentence has to WIN over 「还没有下载」.
       const probe = await fetch(`${srv.base}/api/manage/models/llama?refresh=true`);
       const probeBody = await probe.json().catch(() => null);
-      ok('THE POINT: a router that never answers /v1/models is reported NOT serving, not a 500',
-        probe.status === 200 && probeBody?.serving === false,
-        `${probe.status} ${JSON.stringify(probeBody ? { serving: probeBody.serving, problem: probeBody.problem } : null)}`);
-      const start = await post('/api/manage/models/llama/start');
-      ok('…and starting against it is refused with a sentence, not a 500',
-        start.status === 409 && String(start.body?.error ?? '').length > 0,
-        `${start.status} ${JSON.stringify(start.body)}`);
-      ok('(anti-vacuity) the hung router really was asked for /v1/models', asked > 0, `GET /v1/models seen ${asked} time(s)`);
+      const problem = String(probeBody?.problem ?? '');
+      ok('THE POINT: a port that accepts and never answers is HELD — not serving, and the sentence names it',
+        probe.status === 200 && probeBody?.serving === false && isHeld(problem),
+        `${probe.status} ${JSON.stringify(probeBody ? { serving: probeBody.serving, problem } : null)}`);
+      ok('…and that sentence wins over 「还没有下载」, which would send the household to fetch what could not start',
+        !/还没有下载/.test(problem), problem);
+
+      // Now a binary and a model that WOULD be started — the start must still not spawn beside the held port.
+      fs.mkdirSync(path.dirname(stubExe), { recursive: true });
+      fs.mkdirSync(path.dirname(stubModel), { recursive: true });
+      fs.writeFileSync(stubExe, 'not a real binary');
+      fs.writeFileSync(stubModel, 'x');
+      const spawnsBefore = spawnLines().length;
+      const started = await post('/api/manage/models/llama/start');
+      await new Promise((r) => setTimeout(r, 500));
+      const error = String(started.body?.error ?? '');
+      ok('…starting against it is refused with THAT sentence — not 「没能启动」, not a 500',
+        started.status === 409 && isHeld(error), `${started.status} ${JSON.stringify(started.body)}`);
+      const spawned = spawnLines().slice(spawnsBefore);
+      ok('THE POINT: and no router was spawned beside it', spawned.length === 0, JSON.stringify(spawned));
+      ok('(anti-vacuity) the held port really was asked for /v1/models', asked > 0, `GET /v1/models seen ${asked} time(s)`);
     } finally {
       hung.closeAllConnections();
       await new Promise((r) => hung.close(r));
+      // Leave the folder as the next block expects it: it plants its own binary and models.
+      for (const p of [stubExe, stubModel, path.join(res, 'gguf', 'presets.ini')]) fs.rmSync(p, { force: true });
     }
   }
 

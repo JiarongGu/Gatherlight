@@ -648,17 +648,30 @@ try {
   // STARTED; this one it ADOPTED (the fake was already answering), and killing a process it did not start is
   // not its to do — so the refusal has to say what would load the model, not quote a 400.
   fs.writeFileSync(path.join(rerankResources, 'gguf', `${LATE_RERANK}.gguf`), '');
-  // 8a. …while the router ACCEPTS and never answers /v1/models. The probe's 4 s HttpClient timeout arrives as a
+  // 8a. …while the port ACCEPTS and never answers /v1/models. The probe's 4 s HttpClient timeout arrives as a
   // TaskCanceledException, and the catch filtered on the exception's TYPE, so it escaped as a bare 500 — on the
-  // real binary with llama.cpp left stopped. A timeout is "not serving"; only the caller's token is the caller.
+  // real binary with llama.cpp left stopped. Reading it as "not serving" instead made the app spawn a router
+  // BESIDE whatever holds the port and say 「没能启动」. The port is HELD: its own sentence, and no spawn.
+  // What the runtime logs when it TRIES to start a router: "llama-server starting: …" once the process exists,
+  // "starting llama-server failed: …" when it could not even be started (this fixture's binary is an empty file).
+  const rerankLogs = path.join(rerankDir, 'state', 'logs');
+  const spawnLines = () => (fs.existsSync(rerankLogs)
+    ? fs.readdirSync(rerankLogs).map((n) => fs.readFileSync(path.join(rerankLogs, n), 'utf8')).join('\n') : '')
+    .split('\n').filter((l) => /llama-server starting|starting llama-server failed/.test(l));
+  const spawnsBefore = spawnLines().length;
   hangModels = true;
   let hungBind;
   try { hungBind = await c3.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: LATE_RERANK }); }
   finally { hangModels = false; }
+  await new Promise((r) => setTimeout(r, 500));
   const hungErr = String(hungBind.body?.error ?? '');
-  ok('THE POINT: a router that never answers /v1/models refuses the bind with a sentence, not a 500',
-    hungBind.status === 409 && hungErr.length > 0, `${hungBind.status} ${hungErr || JSON.stringify(hungBind.body)}`);
-  ok('(anti-vacuity) the hung router really was asked for /v1/models', modelsHung > 0, `GET /v1/models hung ${modelsHung} time(s)`);
+  const fakePort = String(fake.address().port);
+  ok('THE POINT: a port that accepts and never answers refuses the bind with the HELD sentence — not 「没能启动」',
+    hungBind.status === 409 && /llama-server/.test(hungErr) && /不回应/.test(hungErr) && hungErr.includes(fakePort),
+    `${hungBind.status} ${hungErr || JSON.stringify(hungBind.body)}`);
+  const spawned = spawnLines().slice(spawnsBefore);
+  ok('THE POINT: and no router was spawned beside the held port', spawned.length === 0, JSON.stringify(spawned));
+  ok('(anti-vacuity) the held port really was asked for /v1/models', modelsHung > 0, `GET /v1/models hung ${modelsHung} time(s)`);
   const late = await c3.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: LATE_RERANK });
   const lateErr = String(late.body?.error ?? '');
   ok('THE POINT: a model the running router does not know is refused with what would load it — a restart',
