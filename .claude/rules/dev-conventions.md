@@ -804,9 +804,17 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   runtime disposed before taking the lock so nothing spawns after it. After a restart the requested model is
   warmed before returning and the rest re-warmed one at a time (llama.cpp loads concurrently badly), only if
   ours — the real router also lists the machine's llama.cpp cache.
-  **The restart branch has NO e2e coverage**: the fake router can only ever be adopted, and no stub can be a
-  real router. It was verified by hand on the real binary — a bind racing 资源's start button left one router
-  and a second restart still worked; with 语义 on llama.cpp the same bind was refused with 0 restarts.
+  **A probe timeout is "not serving", never an escaping cancellation**: HttpClient's timeout arrives as a
+  `TaskCanceledException`, so a catch filtered on the TYPE let it out of `IsServingAsync` and `RunAsync`. On the
+  real binary that was a bind answering 500 with llama.cpp left stopped. Only the caller's TOKEN says the caller
+  gave up (`WarmCoreAsync` had already learned this). And **the restart waits for the old router to let go of its
+  port** before spawning, at most 15 s, because `Kill`'s 5 s wait carries on either way, and a dying router's
+  socket most likely still accepted that re-probe. Proof: `e2e-p51` and `e2e-p52` case 8a (a fake that never
+  answers `/v1/models`; both fail with the old filter), plus ten real-binary restarts in the runtime doc, where the
+  wait never had to wait. **The restart branch has NO e2e coverage**: the fake router can only ever be adopted, and
+  no stub can be a real router. It was verified by hand on the real binary — a bind racing 资源's start button
+  left one router and a second restart still worked; with 语义 on llama.cpp the same bind was refused with 0
+  restarts.
 - **A reranker judge: capped input, and its tagging state said out loud.** One (query, document) pair past the
   router's 4096-token batch fails the WHOLE `/v1/rerank` call (measured: ~6,000 Chinese characters ≈ 4,960
   tokens → 500, the short document beside it unscored too; the limit is per pair — 96 long documents in one call

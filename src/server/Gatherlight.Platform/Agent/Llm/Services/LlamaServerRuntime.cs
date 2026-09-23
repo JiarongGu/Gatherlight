@@ -123,6 +123,14 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// 4096 is how Lyntai's own harness runs the same reranker files. Launch CONTRACT, like GpuLayers.</summary>
     private const int RerankBatch = 4096;
 
+    /// <summary>How long a freshly spawned router has to answer before it is killed as never-ours.</summary>
+    private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>How long a restart waits for the router it killed to let go of the port. In ten measured restarts
+    /// the port was already free when the kill returned; the cap is for the case that made a restart fail — see
+    /// <see cref="WaitForPortReleaseAsync"/>.</summary>
+    private static readonly TimeSpan PortReleaseTimeout = TimeSpan.FromSeconds(15);
+
     private readonly IPlatformContext _platform;
     private readonly ILogger<LlamaServerRuntime> _log;
     private readonly IHttpClientFactory _http;
@@ -327,8 +335,15 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 : (IReadOnlyList<string>)Array.Empty<string>();
             return (true, models);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // A probe that timed out is NOT SERVING — never an escaping cancellation. HttpClient's own 4 s timeout
+        // arrives as a TaskCanceledException, so the filter used to be the exception's TYPE and let it through:
+        // a router that accepted the connection and never answered (one dying from a restart, measured on the
+        // real binary) turned the bind into a bare 500 and left llama.cpp stopped. Only the caller's TOKEN tells
+        // its cancellation apart — the rule WarmCoreAsync and the reranker screen already follow.
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
+            _log.LogDebug("llama-server: /v1/models did not answer: {Msg}",
+                ex is OperationCanceledException ? "no answer within 4 s" : ex.Message);
             return (false, Array.Empty<string>());
         }
     }
@@ -441,7 +456,11 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
             // The ROUTER answers as soon as it is up; children come later, on demand. So this waits for the
             // router only, and warming is a separate, per-model step.
-            for (var i = 0; i < 40; i++)
+            // A DEADLINE, not a count of polls: one probe can take its whole 4 s (and reports "not serving" now,
+            // rather than throwing into the catch below, which killed a router that was merely still starting),
+            // so forty polls could have been three minutes. Twenty seconds of wall clock, however the polls fall.
+            var waiting = Stopwatch.StartNew();
+            while (waiting.Elapsed < StartTimeout)
             {
                 if (proc.HasExited)
                 {
@@ -465,7 +484,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 }
                 await Task.Delay(500, ct);
             }
-            _log.LogWarning("llama-server did not answer on {Url} within 20s", BaseUrl);
+            _log.LogWarning("llama-server did not answer on {Url} within {Seconds}s", BaseUrl, StartTimeout.TotalSeconds);
             // Never answered, so never ours — and not left running either, holding the port and the GPU.
             Kill(proc);
             return false;
@@ -503,6 +522,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// while such a binding is saved but not yet running. What remains is a reranker judge's verification, or a
     /// chat judge switched off; verification fails open.</item>
     /// </list>
+    /// <para><b>The restart waits for the old router to let go of its port</b> before it spawns the new one
+    /// (<see cref="WaitForPortReleaseAsync"/>). A bind once came back 500 with llama.cpp left stopped: the probe's
+    /// timeout escaped, most likely because the kill's 5 s wait ran out and the dying router's socket still
+    /// accepted the re-probe (<c>docs/self-managed-llm-runtime.md</c> §2026-09-23).</para>
     /// <para>After a restart the requested model is warmed HERE, before returning, so the caller's own screen
     /// or proof is not a second concurrent load; what was warm before is then re-warmed ONE AT A TIME, off the
     /// request path — llama.cpp loads concurrently badly (its #20137), and <c>--models-max</c> is 2.</para>
@@ -539,6 +562,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 "llama-server: restarting our router — {Model} was added after it started; re-warming {Warm}",
                 modelId, string.Join(", ", warm));
             StopOursCore();
+            if (!await WaitForPortReleaseAsync(ct))
+                return unknown + $"应用已经停下 llama.cpp 准备重启,但旧的 llama-server 进程 {PortReleaseTimeout.TotalSeconds:0} 秒内"
+                     + "没有让出它的端口,所以这次没有重新启动它,llama.cpp 现在没有在运行 —— 稍等片刻再试一次;"
+                     + "如果仍然这样,在任务管理器里结束 llama-server.exe 后重启服务。";
             if (!await EnsureServingCoreAsync(ct)) return "llama.cpp 重启后没能启动 —— 请看「日志」里的原因。";
             live = await IsServingAsync(ct);
             if (!live.Models.Contains(modelId, StringComparer.OrdinalIgnoreCase))
@@ -709,6 +736,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
     private async Task<string?> RunAsync(string exe, string arg, CancellationToken ct)
     {
+        Process? p = null;
         try
         {
             var psi = new ProcessStartInfo(exe)
@@ -718,7 +746,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 WorkingDirectory = Path.GetDirectoryName(exe)!,
             };
             psi.ArgumentList.Add(arg);
-            using var p = Process.Start(psi);
+            p = Process.Start(psi);
             if (p is null) return null;
             // Both streams: llama-server writes its banner to stderr on some builds and stdout on others.
             var outT = p.StandardOutput.ReadToEndAsync(ct);
@@ -728,10 +756,22 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             await p.WaitForExitAsync(timeout.Token);
             return (await outT) + "\n" + (await errT);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // Our own 15 s timeout is "no answer", not the caller's cancellation — told apart by the caller's TOKEN,
+        // as in IsServingAsync. Filtering on the type let it escape, out of a probe, as a 500.
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            _log.LogDebug("llama-server {Arg} failed: {Msg}", arg, ex.Message);
+            _log.LogDebug("llama-server {Arg} failed: {Msg}", arg,
+                ex is OperationCanceledException ? "no answer within 15 s" : ex.Message);
             return null;
+        }
+        finally
+        {
+            // A child that did not finish — timed out, or its caller gave up — is not left running.
+            if (p is not null)
+            {
+                try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* already gone */ }
+                p.Dispose();
+            }
         }
     }
 
@@ -775,6 +815,36 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         Invalidate();
     }
 
+    /// <summary>After <see cref="StopOursCore"/> on a restart: poll until nothing accepts on our port, at most
+    /// <see cref="PortReleaseTimeout"/>. False when it never freed — the caller then says so instead of
+    /// spawning a router that cannot bind, or probing one that is dying.
+    ///
+    /// <para><b>Why the kill is not enough.</b> <see cref="Kill"/> waits 5 s for the process and carries on
+    /// either way. A router that has not exited may still hold its listening socket, which ACCEPTS a connection
+    /// and never answers — the likely reading of a bind that, on the real binary, waited 5 s + 4 s and returned
+    /// 500 with no router left running, before a probe timeout read as "not serving". Normally the port is free
+    /// by the time the kill returns (ten restarts on the real binary: never waited, 0.8–2.7 s after the decision
+    /// to restart).</para></summary>
+    private async Task<bool> WaitForPortReleaseAsync(CancellationToken ct)
+    {
+        var waited = Stopwatch.StartNew();
+        var polls = 0;
+        while (await CanConnectAsync(ct))
+        {
+            if (waited.Elapsed >= PortReleaseTimeout)
+            {
+                _log.LogWarning("llama-server: port {Port} still accepted connections {Ms}ms after our router was stopped",
+                    new Uri(BaseUrl).Port, waited.ElapsedMilliseconds);
+                return false;
+            }
+            polls++;
+            await Task.Delay(200, ct);
+        }
+        _log.LogInformation("llama-server: port {Port} free {Ms}ms after the stop ({Polls} poll(s) waited)",
+            new Uri(BaseUrl).Port, waited.ElapsedMilliseconds, polls);
+        return true;
+    }
+
     /// <summary>Kill a router process tree and wait briefly for it — the children hold GPU memory.</summary>
     private void Kill(Process proc)
     {
@@ -783,7 +853,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             if (!proc.HasExited)
             {
                 proc.Kill(entireProcessTree: true);
-                proc.WaitForExit(5000);
+                // Said, because the caller carries on regardless: a router that outlives this may still hold
+                // the port, which is what WaitForPortReleaseAsync then waits out.
+                if (!proc.WaitForExit(5000))
+                    _log.LogWarning("llama-server (pid {Pid}) had not exited 5 s after it was killed", proc.Id);
             }
         }
         catch (Exception ex) { _log.LogDebug("stopping llama-server: {Msg}", ex.Message); }

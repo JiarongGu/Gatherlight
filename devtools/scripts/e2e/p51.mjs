@@ -1057,6 +1057,38 @@ try {
     }
   }
 
+  // ---- A ROUTER THAT ACCEPTS AND NEVER ANSWERS IS "NOT SERVING", NOT A 500 --------------------------
+  //
+  // The probe's `GET /v1/models` has a 4 s HttpClient timeout, which arrives as a TaskCanceledException — and
+  // the catch filtered on the exception's TYPE, so it escaped. On the real binary that was a bind returning
+  // 500 with llama.cpp left stopped, most likely a dying router whose socket still accepted the re-probe.
+  // Only the caller's token says the CALLER gave up. Same port as the adoption fake above: something is there,
+  // it just never answers.
+  {
+    const u = new URL(String(llamaCold.baseUrl));
+    let asked = 0;
+    const hung = http.createServer((req) => {
+      if (req.url === '/v1/models') asked++;
+      // Never answered; the server's own timeout is what ends each request.
+    });
+    await new Promise((r) => hung.listen(Number(u.port), '127.0.0.1', r));
+    try {
+      const probe = await fetch(`${srv.base}/api/manage/models/llama?refresh=true`);
+      const probeBody = await probe.json().catch(() => null);
+      ok('THE POINT: a router that never answers /v1/models is reported NOT serving, not a 500',
+        probe.status === 200 && probeBody?.serving === false,
+        `${probe.status} ${JSON.stringify(probeBody ? { serving: probeBody.serving, problem: probeBody.problem } : null)}`);
+      const start = await post('/api/manage/models/llama/start');
+      ok('…and starting against it is refused with a sentence, not a 500',
+        start.status === 409 && String(start.body?.error ?? '').length > 0,
+        `${start.status} ${JSON.stringify(start.body)}`);
+      ok('(anti-vacuity) the hung router really was asked for /v1/models', asked > 0, `GET /v1/models seen ${asked} time(s)`);
+    } finally {
+      hung.closeAllConnections();
+      await new Promise((r) => hung.close(r));
+    }
+  }
+
   // ---- THE LLAMA LAUNCH CONTRACT IS WRITTEN DOWN, NOT ASSUMED --------------------------------
   //
   // `--n-gpu-layers` is the one setting whose absence is invisible: llama-server silently runs on the

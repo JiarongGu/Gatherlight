@@ -162,10 +162,14 @@ const hits = [];
 // so a GGUF dropped in later is unknown to it until a restart (measured, docs/self-managed-llm-runtime.md).
 // Case 8 plants a model outside this set to be exactly that; adding it later stands in for the restart.
 let refuseEmbeddings = false;
+// Case 8a: a router that ACCEPTS and never answers /v1/models — counted, so the case can prove it was asked.
+let hangModels = false;
+let modelsHung = 0;
 const served = new Set([JUDGE_MODEL, EMBED_MODEL, RERANK_MODEL, LEXICAL_RERANK, BACKWARDS_RERANK, BROKEN_RERANK, SHORT_RERANK]);
 const fake = http.createServer((req, res) => {
   const send = (obj) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
   if (req.method === 'GET' && req.url === '/v1/models') {
+    if (hangModels) { modelsHung++; return; }   // never answered; the server's own timeout ends it
     send({ object: 'list', data: [...served].map((id) => ({ id })) });
     return;
   }
@@ -644,6 +648,17 @@ try {
   // STARTED; this one it ADOPTED (the fake was already answering), and killing a process it did not start is
   // not its to do — so the refusal has to say what would load the model, not quote a 400.
   fs.writeFileSync(path.join(rerankResources, 'gguf', `${LATE_RERANK}.gguf`), '');
+  // 8a. …while the router ACCEPTS and never answers /v1/models. The probe's 4 s HttpClient timeout arrives as a
+  // TaskCanceledException, and the catch filtered on the exception's TYPE, so it escaped as a bare 500 — on the
+  // real binary with llama.cpp left stopped. A timeout is "not serving"; only the caller's token is the caller.
+  hangModels = true;
+  let hungBind;
+  try { hungBind = await c3.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: LATE_RERANK }); }
+  finally { hangModels = false; }
+  const hungErr = String(hungBind.body?.error ?? '');
+  ok('THE POINT: a router that never answers /v1/models refuses the bind with a sentence, not a 500',
+    hungBind.status === 409 && hungErr.length > 0, `${hungBind.status} ${hungErr || JSON.stringify(hungBind.body)}`);
+  ok('(anti-vacuity) the hung router really was asked for /v1/models', modelsHung > 0, `GET /v1/models hung ${modelsHung} time(s)`);
   const late = await c3.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: LATE_RERANK });
   const lateErr = String(late.body?.error ?? '');
   ok('THE POINT: a model the running router does not know is refused with what would load it — a restart',
@@ -852,6 +867,7 @@ try {
   try { signedInServer?.stop(); } catch {}
   try { rebuildServer?.stop(); } catch {}
   try { goneServer?.stop(); } catch {}
+  fake.closeAllConnections();
   await new Promise((r) => fake.close(r));
 }
 

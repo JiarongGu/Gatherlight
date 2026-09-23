@@ -321,8 +321,7 @@ Then bge-reranker-v2-m3 was hardlinked in and 判断 bound to it, while a fact w
   timing points at a cause, LIKELY rather than proven: 9.6 s is ~0.6 s of lead-in, plus `Kill`'s 5 s
   `WaitForExit` (whose result is ignored), plus the 4 s timeout — so the dying router most likely had not exited
   within 5 s, and its socket still accepted the re-probe's connection and never answered. That is a separate
-  defect, and this change does not fix it: the policy now keeps a chat judge off that path, but a reranker
-  judge's restart can still meet it.
+  defect, fixed separately (the next sub-heading).
 - **After the fix: 409 in 31 ms**, saying 「…「判断」正在用这个 llama.cpp 的对话模型给写入的事实做主题标注:重启它的那几秒里写入的事实会永久没有标注,所以应用不会自动重启它 —— 请重启服务,新模型会随 llama.cpp 一起载入。」
   There were **0** restarts and 0 spawns in `state/logs`, the router PID was the same before and after, and the
   port accepted connections throughout. The facts written during and after the bind were annotated through
@@ -342,3 +341,25 @@ Then bge-reranker-v2-m3 was hardlinked in and 判断 bound to it, while a fact w
   10.4 s after one restart. The port refused connections for 2.8 s, bge warmed in 5.7 s, and LAMAR re-warmed 5.3 s
   later. All 21 facts written meanwhile were annotated by the CLI, and none touched llama.cpp. A reranker judge's
   router carries only verification, which fails open for those seconds and writes nothing.
+
+### 2026-09-24 — a probe timeout is "not serving", and a restart waits for the old port
+
+The 500 above had two halves. **The escaping timeout** is fixed in code: `IsServingAsync` and `RunAsync` now tell
+the caller's cancellation apart by its TOKEN, as `WarmCoreAsync` and the reranker screen already did. So a
+`/v1/models` that does not answer within 4 s reads as not serving, and `RunAsync` kills a child that outlives its
+15 s. The start poll now runs to a 20 s deadline instead of forty polls, and a slow probe no longer lands in its
+catch-all, which killed a router that was still starting. This half is drivable: a fake that accepts and never
+answers `/v1/models` gives `GET /api/manage/models/llama?refresh=true` → 200 `serving:false`,
+`POST …/llama/start` → 409 with a sentence (`e2e-p51`), and the judge bind → 409 with a sentence (`e2e-p52` case
+8a). All three were confirmed to return **500** with the old filter restored.
+
+**The dying router** is not drivable by a fake. After `StopOursCore` a restart now polls the port until nothing
+accepts, for at most 15 s. When it never frees, the bind says so (the old process kept the port, llama.cpp is not
+running, try again or end `llama-server.exe` and restart the service) instead of probing a router that is
+dying. `Kill` now logs when its 5 s `WaitForExit` runs out. Ten restarts on the real binary, same build and harness:
+five with a reranker judge at startup, and five with the chat judge running and 判断 switched off, so a chat
+model was loaded as in the run that failed. **All ten returned 200**, in 9.1–15.8 s. The port was free on the first
+check every time (0 polls waited), 0.8–2.7 s after the restart decision, and no kill ran out its 5 s. So the
+wait is unexercised here: the 500 came in 1 of the 15 restarts driven on this machine for this work, and
+not in these ten. The slower runs were slower loads (bge warm in 8.6–9.7 s) and a port that refused
+connections for up to 5.0 s, not waits.
