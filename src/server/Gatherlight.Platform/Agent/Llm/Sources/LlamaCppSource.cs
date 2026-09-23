@@ -50,6 +50,8 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// Chinese documents — the household's own case.</summary>
     private const string ScreenQuery = "市场周末几点开门?";
     private static readonly string[] ScreenDocuments = ["图书馆周一闭馆。", "东门市场周六周日早上七点开门。"];
+    /// <summary>Which of <see cref="ScreenDocuments"/> answers <see cref="ScreenQuery"/>.</summary>
+    private const int ScreenAnswer = 1;
 
     private readonly string _layer;
 
@@ -276,38 +278,104 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     ///
     /// <para>Every document must be scored exactly once. llama.cpp's <c>relevance_score</c> is a raw logit and
     /// can be NEGATIVE, so an unfilled slot's default zero could outrank a real score and pass the screen —
-    /// the same reason Lyntai's own rerank transport refuses a partial answer.</para></summary>
+    /// the same reason Lyntai's own rerank transport refuses a partial answer.</para>
+    ///
+    /// <para><b>Every failure is a sentence, and a sentence that can be acted on.</b> Nothing here is logged
+    /// and llama-server's own output is discarded, so pointing at 「日志」 pointed at nothing: a refusal carries
+    /// the server's own words instead. A timeout is a sentence too — <c>HttpClient.Timeout</c> arrives as a
+    /// cancellation, and only the caller's TOKEN tells the two apart; filtering on the exception's type let
+    /// it escape as a bare 500.</para></summary>
     private static async Task<string?> ScreenRerankerAsync(MemorySourceContext ctx, string model, CancellationToken ct)
     {
         var url = LlamaServerRuntime.ResolveBaseUrl(ctx.Settings.ResourcesPath);
+        bool succeeded;
+        int status;
+        string body;
         try
         {
-            // Generous: this call also pays the model load (measured in docs/self-managed-llm-runtime.md).
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
+            using var http = new HttpClient { Timeout = ScreenTimeout };
             using var content = new StringContent(
                 JsonSerializer.Serialize(new { model, query = ScreenQuery, documents = ScreenDocuments, top_n = ScreenDocuments.Length }),
                 new UTF8Encoding(false), "application/json");
             using var resp = await http.PostAsync($"{url}/v1/rerank", content, ct);
-            if (!resp.IsSuccessStatusCode) return $"{model} 没能在 llama.cpp 上完成重排(HTTP {(int)resp.StatusCode})—— 看「日志」。";
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            (succeeded, status) = (resp.IsSuccessStatusCode, (int)resp.StatusCode);
+            body = await resp.Content.ReadAsStringAsync(ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            return ex is OperationCanceledException
+                ? $"{model} 在 {ScreenTimeout.TotalMinutes:0} 分钟内没有完成重排 —— 模型可能太大,或 llama.cpp 没有响应;换一个模型再试。"
+                : $"{model} 没能在 llama.cpp 上完成重排:{ex.Message}";
+        }
+
+        if (!succeeded) return $"{model} 没能在 llama.cpp 上完成重排(HTTP {status}):{Detail(body)}";
+        if (ScreenScores(body) is not { } scores) return $"{model} 返回的重排结果无法使用:{Detail(body)}";
+
+        // ORDERING, never a margin: a household-dropped reranker may score on another scale, so the answer
+        // strictly first is every model's assertion while a threshold would be one model's.
+        return scores.Where((_, i) => i != ScreenAnswer).All(s => s < scores[ScreenAnswer])
+            ? null
+            : $"{model} 没有通过重排自检:答案没有排在前面 —— 这个模型文件可能转换有问题,换一个。";
+    }
+
+    /// <summary>Generous: the screen also pays the model load (measured in docs/self-managed-llm-runtime.md).</summary>
+    private static readonly TimeSpan ScreenTimeout = TimeSpan.FromMinutes(3);
+
+    /// <summary>The screen's scores in INPUT order, or null for anything unusable — invalid JSON, a missing or
+    /// mistyped field, an index outside the batch or seen twice, a non-finite score, or FEWER results than
+    /// documents. Reads <c>relevance_score</c> or <c>score</c>, as Lyntai's rerank transport does, so the
+    /// screen accepts exactly the replies the verifier will be able to read.</summary>
+    private static double[]? ScreenScores(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("results", out var results)
+                || results.ValueKind != JsonValueKind.Array) return null;
+
             var scores = new double[ScreenDocuments.Length];
             var seen = new bool[ScreenDocuments.Length];
-            foreach (var r in doc.RootElement.GetProperty("results").EnumerateArray())
+            foreach (var r in results.EnumerateArray())
             {
-                var i = r.GetProperty("index").GetInt32();
-                var s = r.GetProperty("relevance_score").GetDouble();
-                if (i < 0 || i >= scores.Length || seen[i] || double.IsNaN(s) || double.IsInfinity(s))
-                    return $"{model} 返回的重排结果无法使用。";
-                scores[i] = s;
-                seen[i] = true;
+                if (r.ValueKind != JsonValueKind.Object
+                    || !r.TryGetProperty("index", out var i) || i.ValueKind != JsonValueKind.Number
+                    || !i.TryGetInt32(out var index) || index < 0 || index >= scores.Length || seen[index])
+                    return null;
+                if ((!r.TryGetProperty("relevance_score", out var s) || s.ValueKind != JsonValueKind.Number)
+                    && (!r.TryGetProperty("score", out s) || s.ValueKind != JsonValueKind.Number))
+                    return null;
+                var value = s.GetDouble();
+                if (!double.IsFinite(value)) return null;
+                scores[index] = value;
+                seen[index] = true;
             }
-            return Array.TrueForAll(seen, x => x) && scores[1] > scores[0]
-                ? null
-                : $"{model} 没有通过重排自检:答案没有排在前面 —— 这个模型文件可能转换有问题,换一个。";
+            return Array.TrueForAll(seen, x => x) ? scores : null;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>What the server SAID, for a sentence the household can act on: llama-server's
+    /// <c>error.message</c> when it sent one, otherwise the head of the body.</summary>
+    private static string Detail(string body)
+    {
+        try
         {
-            return $"{model} 没能在 llama.cpp 上完成重排 —— {ex.Message}";
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("error", out var e))
+            {
+                if (e.ValueKind == JsonValueKind.Object && e.TryGetProperty("message", out var m)
+                    && m.ValueKind == JsonValueKind.String) return Head(m.GetString()!);
+                if (e.ValueKind == JsonValueKind.String) return Head(e.GetString()!);
+            }
+        }
+        catch (JsonException) { /* not JSON: the raw head below is the best there is */ }
+        return string.IsNullOrWhiteSpace(body) ? "没有返回任何内容" : Head(body);
+
+        static string Head(string s)
+        {
+            s = s.Trim().ReplaceLineEndings(" ");
+            return s.Length <= 160 ? s : s[..160] + "…";
         }
     }
 

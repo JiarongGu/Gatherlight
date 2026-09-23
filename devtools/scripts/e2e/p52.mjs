@@ -19,7 +19,8 @@
 //      the stub's own argv log, because a CLI asked for an unknown model is otherwise indistinguishable
 //      from one that answered badly.
 //   5. A RERANKER binding says what it moves — the checking; tagging stays on the CLI — in its toast and in
-//      the cost line beside it, where the toast used to claim both halves for every binding.
+//      the cost line beside it, where the toast used to claim both halves for every binding. And a reranker
+//      the screen refuses for a reason other than its ORDERING is told apart, quoting the server.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -43,6 +44,9 @@ const EMBED_MODEL = 'zzroute-embed';
 // "rerank" in the name is what classifies a household-supplied GGUF as a reranker (the same rule, checked
 // before "embed").
 const RERANK_MODEL = 'zzroute-rerank';
+// Two that fail the screen for reasons that are NOT the ordering, so their sentences must say so.
+const BROKEN_RERANK = 'zzbroken-rerank';
+const SHORT_RERANK = 'zzshort-rerank';
 
 // Planted, not downloaded: IsConfigured asks only that the runtime and a model of the right KIND are on
 // disk. Nothing ever executes these — the fake below is already serving on the runtime's address, and
@@ -53,7 +57,8 @@ fs.mkdirSync(path.join(resources, 'gguf'), { recursive: true });
 fs.writeFileSync(path.join(resources, 'llama-cpp', 'llama-server.exe'), '');
 fs.writeFileSync(path.join(resources, 'gguf', `${JUDGE_MODEL}.gguf`), '');
 fs.writeFileSync(path.join(resources, 'gguf', `${EMBED_MODEL}.gguf`), '');
-fs.writeFileSync(path.join(resources, 'gguf', `${RERANK_MODEL}.gguf`), '');
+for (const m of [RERANK_MODEL, BROKEN_RERANK, SHORT_RERANK])
+  fs.writeFileSync(path.join(resources, 'gguf', `${m}.gguf`), '');
 fs.writeFileSync(path.join(dataDir, 'state', 'settings.json'), JSON.stringify({
   memory: {
     judgeSource: 'llama-cpp', judgeModel: JUDGE_MODEL,
@@ -98,11 +103,17 @@ const fake = http.createServer((req, res) => {
       // non-answer, because a real cross-encoder's are, and the screen must not treat an unset zero as one.
       const docs = Array.isArray(json.documents) ? json.documents.map(String) : [];
       const answers = (d) => /[0-9]|[一二两三四五六七八九十百千]+\s*(元|块|点|分钟)/.test(d);
-      send({
-        model: json.model,
-        results: docs.map((d, index) => ({ index, relevance_score: answers(d) ? 3.2 : -2.1 }))
-          .sort((a, b) => b.relevance_score - a.relevance_score),
-      });
+      const results = docs.map((d, index) => ({ index, relevance_score: answers(d) ? 3.2 : -2.1 }))
+        .sort((a, b) => b.relevance_score - a.relevance_score);
+      if (json.model === BROKEN_RERANK) {
+        // llama-server's own refusal shape, so the screen has something of the server's to quote.
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { code: 400, message: 'zzllamasaid the model failed to load', type: 'invalid_request_error' } }));
+        return;
+      }
+      // One result for two documents: the ANSWER alone, ranked first. Unusable — not a failed ordering.
+      if (json.model === SHORT_RERANK) { send({ model: json.model, results: results.slice(0, 1) }); return; }
+      send({ model: json.model, results });
       return;
     }
     // Chat: an answer no policy can parse. Both are fail-open, so this proves the call was MADE without
@@ -258,6 +269,19 @@ try {
   ok('…and the cost line beside it says the same thing',
     rrLayer.model === RERANK_MODEL && /重排/.test(String(rrLayer.cost)) && /Claude CLI/.test(String(rrLayer.cost)),
     JSON.stringify({ model: rrLayer.model, cost: rrLayer.cost }));
+
+  // A refusal carries what the SERVER said. It used to say 「看「日志」」, which pointed at nothing: the
+  // screen logs nothing and llama-server's output is discarded.
+  const broken = await c2.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: BROKEN_RERANK });
+  const brokenErr = String(broken.body?.error ?? '');
+  ok('a reranker the server refuses is refused, quoting the server\'s own message',
+    broken.status === 409 && brokenErr.includes('zzllamasaid') && !brokenErr.includes('日志'),
+    `${broken.status} ${brokenErr}`);
+  // Fewer results than documents is an unusable reply, not a model that ranked the answer last.
+  const short = await c2.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: SHORT_RERANK });
+  const shortErr = String(short.body?.error ?? '');
+  ok('a reply scoring fewer documents than it was sent is UNUSABLE — not a failed self-check',
+    short.status === 409 && /无法使用/.test(shortErr) && !/自检/.test(shortErr), `${short.status} ${shortErr}`);
 } catch (err) {
   fail('e2e-p52 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {

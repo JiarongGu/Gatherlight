@@ -430,6 +430,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         }
     }
 
+    private static readonly TimeSpan WarmTimeout = TimeSpan.FromMinutes(3);
+
     public async Task<bool> WarmAsync(string modelId, GgufCapability kind, CancellationToken ct = default)
     {
         if (!await EnsureServingAsync(ct)) return false;
@@ -439,7 +441,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             // Generous, because this is the call that PAYS the load — measured at 17.3 s for a 1B q4, and a
             // larger judge will be worse. Timing out here would leave the child loading anyway, so the only
             // thing a short timeout buys is a wrong answer.
-            http.Timeout = TimeSpan.FromMinutes(3);
+            http.Timeout = WarmTimeout;
             // THREE call shapes, because each preset restricts its child to ONE API: an embedder answers only
             // /v1/embeddings, a reranker only /v1/rerank, and a judge the chat route.
             var (path, body) = kind switch
@@ -462,9 +464,13 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             _log.LogInformation("llama-server model {Model} warm in {Ms}ms", modelId, started.ElapsedMilliseconds);
             return true;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // The CALLER's cancellation is told apart by its token, never by the exception's type: HttpClient's own
+        // timeout arrives as a TaskCanceledException too, and letting that escape turned a slow model load into
+        // a bare 500 on the binding endpoint instead of the refusal sentence its caller writes.
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            _log.LogWarning("warming {Model} failed: {Msg}", modelId, ex.Message);
+            _log.LogWarning("warming {Model} failed: {Msg}", modelId,
+                ex is OperationCanceledException ? $"no answer within {WarmTimeout}" : ex.Message);
             return false;
         }
     }
