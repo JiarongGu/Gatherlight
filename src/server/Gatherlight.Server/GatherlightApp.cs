@@ -100,6 +100,12 @@ public static class GatherlightApp
         var judgeSource = Platform.Agent.Llm.Sources.MemorySources.ResolveJudge(memorySettings);
         var judgeModel = Platform.Agent.Llm.Sources.MemorySources.ResolveJudgeModel(memorySettings)
             ?? Platform.Agent.Llm.Sources.MemorySources.DefaultJudgeModel;
+        // What 判断 is made of for the bound model — the source decides (see JudgeWiring). Computed before the
+        // container exists because DefaultModelByConsumer below needs the ANNOTATION model, which for a
+        // reranker is not the bound one.
+        var judgeCtx = new Platform.Agent.Llm.Sources.MemoryWiringContext(
+            judgeModel, judgeSource.Endpoint(memorySettings) ?? "", memorySettings);
+        var judgeWiring = judgeSource.Wiring(judgeCtx);
 
         // A bound source with no model has nothing to embed WITH, so a half-configured install stays off
         // rather than failing at the first fact write.
@@ -183,7 +189,7 @@ public static class GatherlightApp
                     // key itself whenever it binds this layer, and cortex no longer offers a second place
                     // to disagree from. The value is still a DEFAULT rather than a pin on the policy's own
                     // Model, because pinning would capture it at registration and kill the live override.
-                    o.DefaultModelByConsumer["memory"] = judgeModel;
+                    o.DefaultModelByConsumer["memory"] = judgeWiring.AnnotationModel;
                 })
                 // Live per-consumer model routing (the scorers' judge model) read from app_config each call.
                 .AddLiveModelRouting()
@@ -294,27 +300,16 @@ public static class GatherlightApp
                 // permissions — and the SOURCE owns which name that is (null for the CLI arm, which then
                 // uses the default client). Model stays null on both policies so the router resolves it per
                 // consumer; see DefaultModelByConsumer above.
-                var judgeClient = judgeSource.ClientName;
                 b.Services.AddSingleton<Lyntai.Memory.Annotation.IMemoryAnnotationPolicy>(sp =>
                     new Platform.Agent.Llm.Services.SwitchableAnnotationPolicy(
                         new Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy(
                             sp.GetRequiredService<Lyntai.Inference.ITextClientFactory>(),
-                            new Lyntai.Memory.Annotation.LlmAnnotationOptions { ClientName = judgeClient },
+                            new Lyntai.Memory.Annotation.LlmAnnotationOptions { ClientName = judgeWiring.AnnotationClient },
                             sp.GetService<ILogger<Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy>>()),
                         sp.GetRequiredService<IAppConfigService>()));
                 b.Services.AddSingleton<Lyntai.Memory.Verification.IMemoryVerificationPolicy>(sp =>
-                {
-                    Lyntai.Memory.Verification.IMemoryVerificationPolicy llm =
-                        new Lyntai.Memory.Verification.LlmMemoryVerificationPolicy(
-                            sp.GetRequiredService<Lyntai.Inference.ITextClientFactory>(),
-                            new Lyntai.Memory.Verification.LlmVerificationOptions { ClientName = judgeClient },
-                            sp.GetService<ILogger<Lyntai.Memory.Verification.LlmMemoryVerificationPolicy>>());
-                    // The judge reads `topic — content`, not the topic headline — see JudgeSeesContentPolicy.
-                    if (Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Enabled)
-                        llm = new Platform.Agent.Llm.Services.JudgeSeesContentPolicy(llm);
-                    return new Platform.Agent.Llm.Services.SwitchableVerificationPolicy(
-                        llm, sp.GetRequiredService<IAppConfigService>());
-                });
+                    new Platform.Agent.Llm.Services.SwitchableVerificationPolicy(
+                        judgeWiring.Verifier(sp), sp.GetRequiredService<IAppConfigService>()));
                 // Still called: their TryAdd now stands down, but calling them keeps any future
                 // side-effect of those registrations rather than silently missing it.
                 b.AddMemoryAnnotation().AddMemoryVerification();
@@ -368,8 +363,7 @@ public static class GatherlightApp
                 // naming a client was meant to prevent.
                 // Each source resolves its OWN endpoint, so this call site does not know (and must not
                 // decide) whether a backend is a daemon on a port, a household-typed URL, or a process.
-                judgeSource.Register(b, new Platform.Agent.Llm.Sources.MemoryWiringContext(
-                    judgeModel, judgeSource.Endpoint(memorySettings) ?? "", memorySettings));
+                judgeSource.Register(b, judgeCtx);
 
                 if (semanticOn)
                     semanticSource!.Register(b, new Platform.Agent.Llm.Sources.MemoryWiringContext(

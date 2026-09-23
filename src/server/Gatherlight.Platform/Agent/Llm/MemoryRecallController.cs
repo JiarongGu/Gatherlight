@@ -160,13 +160,7 @@ public sealed class MemoryRecallController : ControllerBase
                     // OUR number, so unlike the weighting note below it needs no attribution.
                     // The local arm avoids the spawn; its own latency is deliberately NOT quoted, because
                     // nobody has measured it here and a plausible figure is the thing this panel refuses.
-                    cost = boundJudge.Id == MemorySources.DefaultJudgeSource
-                        ? "每次记录事实与每次检索各消耗一次 Claude CLI 调用(使用已登录的账号)。"
-                          + "实测每次检索 9–17 秒(五次测量,多数在 15 秒上下)—— 每次调用都要启动一次 CLI 进程;"
-                          + "只用「公式」时是 0.07–0.09 秒。"
-                          + "换成本机模型可以省掉这次进程启动。"
-                        : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
-                          + "没有 CLI 那条的进程启动开销(那条实测每次检索 9–17 秒)。",
+                    cost = boundJudge.Cost(MemorySources.ResolveJudgeModel(Settings())),
                     source = boundJudge.Id, model = MemorySources.ResolveJudgeModel(Settings()),
                     activeSource = _judgeWiring.Transport, activeModel = _judgeWiring.Model,
                     groups = judgeGroups,
@@ -510,7 +504,8 @@ public sealed class MemoryRecallController : ControllerBase
             // ONE key names the model. Cortex used to offer a second, and its value OVERRODE this one —
             // which is how "haiku" got handed to an Ollama that had never heard of it, silently, because
             // both memory policies are fail-open.
-            _appConfig.Set("llm.model.memory", model!);
+            // The ANNOTATION model — for a reranker that is the CLI's, never the reranker's id (JudgeWiring).
+            _appConfig.Set("llm.model.memory", source.AnnotationModel(model!));
             _log.LogInformation("memory judge bound to {Source}/{Model}", source.Id, model);
 
             return Ok(new
