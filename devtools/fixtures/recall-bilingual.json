@@ -1,0 +1,731 @@
+{
+  "generatedBy": "devtools/scripts/judge-bench-fixture.mjs",
+  "sets": [
+    "same",
+    "cross",
+    "third",
+    "mixed"
+  ],
+  "facts": [
+    {
+      "id": "mkt-east",
+      "kind": "venue",
+      "topic": "东门农贸市场营业时间",
+      "content": "东门农贸市场每周六、周日早上七点开门,中午十二点收摊,周一到周五不开。",
+      "questions": {
+        "same": "东门那个菜市场周末几点开门、几点收摊,平时工作日营业吗?",
+        "cross": "What time does the East Gate farmers market open and close on weekends, and is it open on weekdays?",
+        "third": "東門の市場は週末何時から何時まで開いていて、平日は営業していますか?",
+        "mixed": "东门那个 farmers market 周末几点 open、几点 close,weekday 有没有营业啊?"
+      }
+    },
+    {
+      "id": "mkt-west",
+      "kind": "venue",
+      "topic": "西街夜市营业时间",
+      "content": "西街夜市只在周五和周六晚上营业,从傍晚六点开到十一点。",
+      "questions": {
+        "same": "西街那边晚上摆摊的集市一般几点开、几点收,是不是每天晚上都有?",
+        "cross": "Which days of the week and what hours is the West Street night market open?",
+        "third": "西通りのナイトマーケットは何曜日の何時から何時までやっていますか?",
+        "mixed": "西街那个night market一般是周几营业啊,几点open几点close?"
+      }
+    },
+    {
+      "id": "mkt-harbor",
+      "kind": "venue",
+      "topic": "Harbor fish market hours",
+      "content": "The harbor fish market opens at 5 a.m. on weekdays and is closed on Sundays.",
+      "questions": {
+        "same": "What time does the seafood market down at the docks open on weekdays, and does it open on Sundays?",
+        "cross": "海港鱼市平时几点开门?周日营业吗?",
+        "third": "漁港の魚市場は平日何時に開店しますか?日曜日は休みですか?",
+        "mixed": "harbor那个fish market工作日几点open啊,Sunday是不是closed?"
+      }
+    },
+    {
+      "id": "museum-adult",
+      "kind": "price",
+      "topic": "市立博物馆成人票价",
+      "content": "市立博物馆成人门票现在是六十元,2026年7月起执行。",
+      "questions": {
+        "same": "咱们市里那家博物馆,现在大人进去参观要多少钱?",
+        "cross": "How much does an adult ticket to the city museum cost now?",
+        "third": "市の博物館の大人の入場料は今いくらですか?",
+        "mixed": "市里那个博物馆的adult ticket现在涨到多少钱了?"
+      }
+    },
+    {
+      "id": "museum-adult-old",
+      "kind": "price",
+      "topic": "市立博物馆旧票价",
+      "content": "2026年7月之前,市立博物馆成人门票是四十五元,这个价格已经不用了。",
+      "questions": {
+        "same": "市里那家博物馆调价以前,大人的门票卖多少钱一张?",
+        "cross": "What was the adult admission fee at the city museum before it was changed in 2026?",
+        "third": "市の博物館の大人の入場料は、変更前はいくらだったの?",
+        "mixed": "市里博物馆之前那个adult ticket price是多少钱啊,涨价前的?"
+      }
+    },
+    {
+      "id": "museum-child",
+      "kind": "price",
+      "topic": "市立博物馆儿童票",
+      "content": "身高一米二以下的儿童进市立博物馆免费,一米二到一米四半价。",
+      "questions": {
+        "same": "市里那家博物馆小朋友进去怎么收费?多高以下免费,多高算半价?",
+        "cross": "What are the height requirements for free and half-price children's tickets at the city museum?",
+        "third": "市の博物館の子供料金は、身長何センチまで無料で、何センチから半額ですか?",
+        "mixed": "市里博物馆的children ticket是怎么算的?身高多少可以free entry,多少是half price?"
+      }
+    },
+    {
+      "id": "lib-weekday",
+      "kind": "venue",
+      "topic": "Riverside Library weekday hours",
+      "content": "Riverside Library is open 9 a.m. to 8 p.m. Monday through Friday.",
+      "questions": {
+        "same": "What time does the library by the river open and close Monday to Friday?",
+        "cross": "河畔图书馆周一到周五几点开门几点关门?",
+        "third": "川沿いの図書館は平日何時から何時まで開いていますか?",
+        "mixed": "河边那个library周一到周五的open hours是几点到几点?"
+      }
+    },
+    {
+      "id": "lib-weekend",
+      "kind": "venue",
+      "topic": "Riverside Library weekend hours",
+      "content": "On Saturdays Riverside Library closes early at 4 p.m., and it is closed all day Sunday.",
+      "questions": {
+        "same": "What time does the library by the river shut its doors on Saturdays, and is it open at all on Sundays?",
+        "cross": "河滨图书馆周六几点提前打烊,周日是不是全天不开门?",
+        "third": "川沿いの図書館は土曜日は何時に閉まりますか、また日曜日は休館ですか?",
+        "mixed": "河边那个library是不是Saturday会提前close啊,Sunday是不是整天都不开?"
+      }
+    },
+    {
+      "id": "pool-north",
+      "kind": "venue",
+      "topic": "北区游泳馆休息日",
+      "content": "北区游泳馆每周二闭馆做水质消毒,其他日子早上六点开门。",
+      "questions": {
+        "same": "城北那家游泳馆星期几不开放,平时几点开门?",
+        "cross": "Which day is the North District swimming pool closed, and what time does it open on other days?",
+        "third": "北区プールの休館日は何曜日で、他の日は何時に開きますか?",
+        "mixed": "北区swimming pool每周几是closed day,平时早上几点open?"
+      }
+    },
+    {
+      "id": "pool-south",
+      "kind": "venue",
+      "topic": "南湖露天泳池开放时间",
+      "content": "南湖游泳馆是露天泳池,只在六月到九月开放,每天下午一点到晚上八点。",
+      "questions": {
+        "same": "南湖那边户外的游泳池一年里哪几个月开放,每天几点到几点能进去游?",
+        "cross": "During which months and what daily hours can you swim at the South Lake pool?",
+        "third": "南湖プールはどの季節に営業していて、毎日何時から何時まで利用できますか?",
+        "mixed": "南湖那个swimming pool是不是只在summer才open啊,每天几点到几点算business hours?"
+      }
+    },
+    {
+      "id": "pharm-24h",
+      "kind": "venue",
+      "topic": "二十四小时药店",
+      "content": "火车站旁边的健民药房二十四小时营业,半夜也能买到退烧药。",
+      "questions": {
+        "same": "车站附近哪家药店是通宵开着的,大半夜发烧了能去那儿买药吗?",
+        "cross": "Is there a pharmacy near the train station that stays open through the night where I could grab something for a fever at midnight?",
+        "third": "駅のそばで夜通し開いている薬局はありますか?真夜中でも解熱剤を買えますか?",
+        "mixed": "车站附近有没有那种通宵开着的pharmacy啊,大半夜发烧了能买到medicine吗?"
+      }
+    },
+    {
+      "id": "pharm-local",
+      "kind": "venue",
+      "topic": "小区门口药店",
+      "content": "小区门口的药店晚上九点就关门,周日下午不营业。",
+      "questions": {
+        "same": "我们住的地方大门旁边那家药店,晚上几点关门?周日下午开不开?",
+        "cross": "What time does the pharmacy near my apartment complex close at night, and is it open on Sunday afternoons?",
+        "third": "近所のマンション入口にある薬局は夜何時に閉まりますか、日曜の午後はやっていますか?",
+        "mixed": "我们小区大门边那个pharmacy晚上几点close啊,Sunday下午会不会开门?"
+      }
+    },
+    {
+      "id": "passport",
+      "kind": "household",
+      "topic": "护照有效期",
+      "content": "家长A的护照2027年3月到期,出国前要确认剩余有效期超过六个月。",
+      "questions": {
+        "same": "家长A的护照大概是哪年哪月过期,出发去国外之前要不要确认一下离失效还剩超过半年?",
+        "cross": "When does Parent A's passport actually expire, and do we need to make sure more than six months are left on it before traveling internationally?",
+        "third": "親Aのパスポートはいつ切れる予定で、海外に出発する前に残りの期限が半年以上あるか確認しておくべきですか?",
+        "mixed": "家长A的passport什么时候expire啊,出国前是不是得double check一下还有没有超过6个月的validity?"
+      }
+    },
+    {
+      "id": "visa",
+      "kind": "household",
+      "topic": "日本签证有效期",
+      "content": "家长B的日本多次往返签证有效期到2028年1月,每次停留不超过三十天。",
+      "questions": {
+        "same": "家长B的日本签证能用到什么时候,每次入境最多可以待多久?",
+        "cross": "Until when is Parent B's Japan visa valid, and how long can each stay last?",
+        "third": "親Bの日本ビザはいつまで有効で、一回の滞在は最大何日までですか?",
+        "mixed": "家长B的Japan visa能用到什么时候,每次入境最多能stay几天啊?"
+      }
+    },
+    {
+      "id": "id-card",
+      "kind": "household",
+      "topic": "孩子身份证换领",
+      "content": "孩子的身份证明年五月到期,需要本人去派出所拍照换领。",
+      "questions": {
+        "same": "孩子的证件什么时候到期?去换新的时候本人要不要亲自到场?",
+        "cross": "When does my child's ID document expire, and do I need to take them in person to get a new photo taken for it?",
+        "third": "子供の身分証はいつ期限が切れますか?更新には本人が行く必要がありますか?",
+        "mixed": "孩子的ID什么时候expire啊,renew的时候是不是得带他本人去police station拍个photo?"
+      }
+    },
+    {
+      "id": "school-pickup",
+      "kind": "schedule",
+      "topic": "放学接孩子时间",
+      "content": "小学周一到周四下午三点半放学,周五提前到两点四十。",
+      "questions": {
+        "same": "小学生平时下午几点放学,周五是不是会提前一些?",
+        "cross": "What time does elementary school end for pickup on regular days, and is Friday earlier?",
+        "third": "小学校の下校時刻は普段何時で、金曜日だけ早く終わりますか?",
+        "mixed": "问一下,elementary school 平时下午几点放学接娃,Friday 是不是会提前?"
+      }
+    },
+    {
+      "id": "school-dropoff",
+      "kind": "schedule",
+      "topic": "早上送孩子时间",
+      "content": "早上七点四十之前必须送到校门口,迟到要登记。",
+      "questions": {
+        "same": "孩子每天早晨最晚几点前必须到学校门口,超过这个点算不算迟到还要登记?",
+        "cross": "By what time in the morning does my child need to arrive at school before it's marked as being late and logged?",
+        "third": "朝、子供は何時までに学校の門に着かないと遅刻として記録されてしまいますか?",
+        "mixed": "早上送娃最晚几点得到school门口啊,迟了是不是要register登记?"
+      }
+    },
+    {
+      "id": "school-lunch",
+      "kind": "price",
+      "topic": "School lunch payment",
+      "content": "School lunch is paid monthly through the parents' app, 280 yuan per month.",
+      "questions": {
+        "same": "How do we pay for the kids' school meals, and how much is it each month?",
+        "cross": "校餐费是通过什么方式支付的,每个月多少钱?",
+        "third": "給食費は毎月いくらで、どうやって支払いますか?",
+        "mixed": "学校的lunch费用怎么pay,一个月要多少钱?"
+      }
+    },
+    {
+      "id": "allergy-peanut",
+      "kind": "health",
+      "topic": "花生过敏",
+      "content": "小的那个孩子对花生严重过敏,外出吃饭要提前告诉店家,随身带肾上腺素笔。",
+      "questions": {
+        "same": "家里两个孩子中比较小的那个,是不是对某样食物特别敏感,出门吃饭前需要先跟餐厅打招呼吗?",
+        "cross": "Does the younger child have a serious food allergy that means we need to warn restaurants ahead of time and carry emergency medication?",
+        "third": "下の子は特定の食べ物に強く反応する体質で、外食のときはお店に前もって伝えたり、いざという時の注射薬を持ち歩いたりする必要がありますか?",
+        "mixed": "那个比较小的kid是不是对某种food有很严重的allergy,去restaurant之前要不要提前打招呼,身上还得带着急救用的injection笔?"
+      }
+    },
+    {
+      "id": "allergy-shellfish",
+      "kind": "health",
+      "topic": "Shellfish allergy",
+      "content": "One grandparent is allergic to shellfish — shrimp and crab cause hives, but fish is fine.",
+      "questions": {
+        "same": "Which grandparent breaks out in a rash after eating crustaceans, even though other seafood doesn't bother them?",
+        "cross": "家里哪位祖父母吃甲壳类海鲜会起疹子,但吃其他海鲜没事?",
+        "third": "祖父母の中で、甲殻類の海鮮を食べると発疹が出るけれど、他の魚介類なら平気なのは誰ですか?",
+        "mixed": "家里哪个grandparent对shellfish过敏,吃shrimp和crab会起hives,但吃fish没问题?"
+      }
+    },
+    {
+      "id": "car-insurance",
+      "kind": "household",
+      "topic": "车险续保",
+      "content": "家里的车险每年十月十五号到期,去年是在线上续的,保费四千二。",
+      "questions": {
+        "same": "家里那辆车的保险每年到期日是几号?去年是怎么办理的,花了多少钱?",
+        "cross": "When does our family's car insurance come up for renewal each year, how was it handled last time, and what did it cost?",
+        "third": "我が家の車の保険は毎年いつ更新時期で、去年はどうやって手続きして、いくらかかった?",
+        "mixed": "家里的car insurance每年到期日是哪天啊?去年是怎么renew的,premium花了多少?"
+      }
+    },
+    {
+      "id": "car-inspection",
+      "kind": "household",
+      "topic": "车辆年检",
+      "content": "车辆年检是每两年一次,下一次在2027年6月之前办完。",
+      "questions": {
+        "same": "车子多久要去验一次车?下次最晚得在什么时候之前弄好?",
+        "cross": "How often does the vehicle need to pass inspection, and by when is the next one due?",
+        "third": "車検はどのくらいの頻度で受ける必要がありますか?次回はいつまでに終わらせればいいですか?",
+        "mixed": "咱这车的年检是每隔几年办一次啊,下次的deadline是什么时候?"
+      }
+    },
+    {
+      "id": "rest-noodle",
+      "kind": "venue",
+      "topic": "老街面馆",
+      "content": "老街面馆周一休息,牛肉面二十八元一碗,晚上八点以后不接新客。",
+      "questions": {
+        "same": "老街那家面馆哪天不开门?牛肉面一碗卖多少钱?晚上几点以后就不再接待新顾客了?",
+        "cross": "Which day is Old Street Noodle House closed, how much does a bowl of beef noodles cost there, and after what time in the evening do they stop seating new customers?",
+        "third": "古い通りにある麺屋の定休日はいつですか、牛肉麺は一杯いくらですか、夜何時以降は新しいお客さんを受け付けなくなりますか?",
+        "mixed": "老街那家noodle shop是每周哪天closed啊,beef noodles一碗多少钱,晚上几点以后就不accept new customers了?"
+      }
+    },
+    {
+      "id": "rest-noodle2",
+      "kind": "venue",
+      "topic": "新街面馆",
+      "content": "新街面馆全年无休,招牌是番茄鸡蛋面,可以提前电话订座。",
+      "questions": {
+        "same": "新街那家面馆是不是一年到头都不关门,他们家最有名的是哪种口味的面,能不能提前打电话订位子?",
+        "cross": "Does the New Street noodle shop stay open every single day of the year, what's their most famous noodle dish, and can you call ahead to reserve a table?",
+        "third": "新しい通りの麺屋は一年中休まず営業していますか、一番人気の麺料理は何で、事前に電話で席を予約できますか?",
+        "mixed": "新街那家noodle shop是不是天天都open、不放假的,他们的signature noodle dish是什么口味,能不能先call过去reserve个位?"
+      }
+    },
+    {
+      "id": "rest-sushi",
+      "kind": "venue",
+      "topic": "駅前の寿司屋",
+      "content": "駅前の寿司屋は水曜日が定休日で、ランチは十一時半から二時まで。",
+      "questions": {
+        "same": "駅の前にあるお寿司屋さん、休みの曜日とお昼に営業している時間を教えてもらえますか?",
+        "cross": "Which day is the sushi place by the station closed, and what hours does it serve lunch?",
+        "third": "駅のすぐそばのお寿司屋さんは何曜日がお休みで、昼の営業時間帯はいつからいつまでですか?",
+        "mixed": "那家车站前面的sushi店是哪天closed的,还有lunch time是几点到几点?"
+      }
+    },
+    {
+      "id": "train-express",
+      "kind": "travel",
+      "topic": "Express train fare to the coast",
+      "content": "The express train to the coast costs 120 yuan one way and takes 55 minutes.",
+      "questions": {
+        "same": "What's a single ticket on the fast train to the seaside, and how long is the ride?",
+        "cross": "去海边的快车单程票价是多少,坐车要花多长时间?",
+        "third": "海辺行きの急行列車の片道運賃はいくらで、所要時間はどのくらいですか?",
+        "mixed": "去海边那趟express train,一趟票价多少钱,大概坐多久能到?"
+      }
+    },
+    {
+      "id": "train-local",
+      "kind": "travel",
+      "topic": "Local train fare to the coast",
+      "content": "The local train to the coast is only 35 yuan but takes two and a half hours with many stops.",
+      "questions": {
+        "same": "How much is the slow stopping train to the seaside, and how long does the journey take?",
+        "cross": "去海边的慢车票价是多少,要坐多久啊?",
+        "third": "海辺までの普通列車の運賃はいくらで、どのくらい時間がかかりますか?",
+        "mixed": "去海边那趟local train票价多少,得坐多长时间啊?"
+      }
+    },
+    {
+      "id": "hotel-lake",
+      "kind": "policy",
+      "topic": "湖边酒店取消政策",
+      "content": "湖边酒店入住前三天可以免费取消,之后取消扣一晚房费。",
+      "questions": {
+        "same": "湖旁边那家酒店,提前多少天退订不用付钱?",
+        "cross": "What is the cancellation policy for Lakeside Hotel?",
+        "third": "湖畔のホテルは、いつからキャンセル料がかかりますか?",
+        "mixed": "Lakeside Hotel的cancellation policy是怎样的,几天前cancel不收费?"
+      }
+    },
+    {
+      "id": "hotel-mountain",
+      "kind": "policy",
+      "topic": "山顶民宿取消政策",
+      "content": "山顶民宿订了就不能退,但可以免费改期一次。",
+      "questions": {
+        "same": "山上那家客栈订完以后还能取消吗?",
+        "cross": "Can I get a refund if I cancel my mountaintop guesthouse booking, or only reschedule it?",
+        "third": "山頂の民宿は予約後にキャンセルできますか、それとも日程変更しかできませんか?",
+        "mixed": "山顶那家民宿的booking订了之后是不是不能cancel,只能免费reschedule一次?"
+      }
+    },
+    {
+      "id": "trash-day",
+      "kind": "schedule",
+      "topic": "垃圾分类投放时间",
+      "content": "可回收垃圾每周三早上收,厨余垃圾每天晚上七点到九点投放。",
+      "questions": {
+        "same": "废品类垃圾要星期几早上拿到楼下,剩菜剩饭又该在晚饭后什么时间段倒掉?",
+        "cross": "What day and time should recyclable trash be set out, and during which evening hours can food scraps be discarded?",
+        "third": "リサイクルごみは何曜日の朝に出せばいいですか?生ごみは毎晩何時から何時までの間に捨てればいいですか?",
+        "mixed": "recyclables 是不是要等到星期三早上才能拿出去,food waste 又该卡在晚上几点到几点之间倒掉?"
+      }
+    },
+    {
+      "id": "dentist",
+      "kind": "health",
+      "topic": "牙齿矫正复诊",
+      "content": "大孩子的牙齿矫正每六周复诊一次,下次在十一月八号上午。",
+      "questions": {
+        "same": "大孩子的牙套多久要复查一次,下一次预约是哪天上午?",
+        "cross": "How often does the older kid go back for his braces checkup, and when's the next appointment?",
+        "third": "上の子の歯列矯正の通院間隔はどのくらいで、次回はいつですか?",
+        "mixed": "大孩子的braces多久要回去check一次,next appointment是几号?"
+      }
+    },
+    {
+      "id": "piano",
+      "kind": "schedule",
+      "topic": "钢琴课",
+      "content": "钢琴课每周六下午两点,一节课一百八十元,请假要提前一天说。",
+      "questions": {
+        "same": "弹钢琴的课一般在星期几、几点上,一节多少钱,要是不能去得提前多久跟老师说?",
+        "cross": "What day and time are the piano lessons, how much is each session, and how far in advance do I need to cancel?",
+        "third": "ピアノのレッスンは何曜日の何時にあって、1回いくらで、休むときはどのくらい前に連絡すればいいですか?",
+        "mixed": "piano lesson一般是星期几几点上,一节课多少钱,要cancel的话得提前几天跟老师说?"
+      }
+    },
+    {
+      "id": "swim-class",
+      "kind": "schedule",
+      "topic": "Swimming lessons",
+      "content": "The kids' swimming lessons run on Tuesday evenings and the term costs 1,200 yuan.",
+      "questions": {
+        "same": "What night do the kids have their swim class, and what does a term of it cost?",
+        "cross": "孩子们的游泳课是星期几上的?这学期学费多少钱?",
+        "third": "子供たちの水泳教室は何曜日にありますか?今学期の授業料はいくらですか?",
+        "mixed": "孩子的swimming lessons是哪天晚上的,这个term的费用是多少钱?"
+      }
+    },
+    {
+      "id": "gym",
+      "kind": "policy",
+      "topic": "Gym membership renewal",
+      "content": "The gym membership renews automatically every January; cancel before December 20 to avoid the charge.",
+      "questions": {
+        "same": "When does my fitness club subscription roll over each year, and what's the last day I can cancel without paying?",
+        "cross": "健身房会员卡是什么时候自动续费的?要在几号之前取消才能避免扣费?",
+        "third": "ジムの会員は自動的にいつ更新されますか?料金が発生しないようにするには何日までに解約すればいいですか?",
+        "mixed": "我的gym membership是automatically renew的对吧,得在12月几号之前cancel才能避免被charge啊?"
+      }
+    },
+    {
+      "id": "vet",
+      "kind": "health",
+      "topic": "猫咪疫苗",
+      "content": "家里的猫每年三月打一次三联疫苗,狂犬疫苗是九月。",
+      "questions": {
+        "same": "家里的猫每年要打哪些预防针,分别安排在什么时候?",
+        "cross": "What vaccinations does our cat get every year, and in which months are they scheduled?",
+        "third": "うちの猫は毎年どんな予防接種を受けていて、それぞれいつ行いますか?",
+        "mixed": "家里猫的vaccine schedule是怎样的,rabies那一针一般是几月打?"
+      }
+    },
+    {
+      "id": "cat-food",
+      "kind": "household",
+      "topic": "猫粮口味",
+      "content": "家里的猫只吃鸡肉味的干粮,换牌子会拉肚子。",
+      "questions": {
+        "same": "我们家猫能吃什么口味的猫粮?换别的牌子会怎么样?",
+        "cross": "What flavor of dry food will our cat eat, and what happens if we switch brands?",
+        "third": "うちの猫はどんな味のドライフードなら食べますか?ブランドを変えるとどうなりますか?",
+        "mixed": "我家猫能吃什么flavor的dry food啊,换个brand会不会有问题?"
+      }
+    },
+    {
+      "id": "plant",
+      "kind": "household",
+      "topic": "阳台柠檬树浇水",
+      "content": "阳台的柠檬树夏天每两天浇一次水,冬天一周一次。",
+      "questions": {
+        "same": "露台上养的柠檬树,不同季节大概隔多久要浇一次水?",
+        "cross": "How often should the lemon tree on the balcony be watered in summer versus winter?",
+        "third": "ベランダのレモンの木は季節によってどのくらいの頻度で水やりが必要ですか?",
+        "mixed": "我balcony上那棵lemon tree,summer跟winter分别要隔多久water一次啊?"
+      }
+    },
+    {
+      "id": "power-bill",
+      "kind": "household",
+      "topic": "电费缴纳",
+      "content": "电费每月二十号自动扣款,绑定的是工资卡。",
+      "questions": {
+        "same": "电费每月固定在哪天从卡里划走,用的是我哪张卡?",
+        "cross": "What day of the month does my electricity bill get paid automatically, and which card does it draw from?",
+        "third": "電気代は毎月何日に自動的に支払われ、どのカードから引き落とされますか?",
+        "mixed": "电费是不是每个月固定从我的 salary card 里 auto-deduct,大概是哪一天?"
+      }
+    },
+    {
+      "id": "water-bill",
+      "kind": "household",
+      "topic": "水费",
+      "content": "水费两个月收一次,上次交的是一百一十元。",
+      "questions": {
+        "same": "水费大概多久缴一次,最近一次缴了多少钱?",
+        "cross": "How often does the water bill get charged, and how much was the last payment?",
+        "third": "水道料金はどのくらいの間隔で請求され、前回はいくら支払いましたか?",
+        "mixed": "水费是每隔几个月charge一次的,上次payment交了多少钱?"
+      }
+    },
+    {
+      "id": "gas-bill",
+      "kind": "household",
+      "topic": "燃气费",
+      "content": "燃气费每三个月抄一次表,上次交的是二百四十元。",
+      "questions": {
+        "same": "家里用气的账单大概多久结算查看一次,最近一次缴纳的金额是多少?",
+        "cross": "How often is the gas meter checked, and how much was the last payment?",
+        "third": "ガスの検針はどのくらいの頻度で行われ、前回の支払い額はいくらでしたか?",
+        "mixed": "我们家的 gas meter 大概多久 read 一次,上次 payment 交了多少钱?"
+      }
+    },
+    {
+      "id": "internet",
+      "kind": "household",
+      "topic": "Home internet plan",
+      "content": "The home internet plan is 500 Mbps and the contract ends in April 2027.",
+      "questions": {
+        "same": "How fast is our broadband at home, and when does the agreement run out?",
+        "cross": "家里的宽带套餐速率是多少,合同什么时候到期?",
+        "third": "自宅のインターネットプランの速度は何Mbpsで、契約はいつ終了しますか?",
+        "mixed": "咱家的home internet套餐是多少Mbps,contract到什么时候到期啊?"
+      }
+    },
+    {
+      "id": "parking",
+      "kind": "price",
+      "topic": "小区停车",
+      "content": "小区地下车位月租三百元,访客车只能停两个小时。",
+      "questions": {
+        "same": "小区地库车位每月要交多少钱,外来车辆临时停放最多允许多久?",
+        "cross": "How much does a monthly underground parking spot cost in the residential compound, and what's the maximum time a visitor's car is allowed to park there?",
+        "third": "団地の地下駐車場の月極料金はいくらで、来客用の車は最大何時間駐車できますか?",
+        "mixed": "我们小区的underground parking一个月租金多少钱,visitor的车最多能停几个hour?"
+      }
+    },
+    {
+      "id": "bike",
+      "kind": "price",
+      "topic": "共享单车月卡",
+      "content": "共享单车月卡十五元,每次骑行前两小时免费。",
+      "questions": {
+        "same": "街边扫码骑的自行车,包月要多少钱?每次骑多久以内不收钱?",
+        "cross": "How much does a bike-share monthly pass cost, and how many hours of each ride are free before charges start?",
+        "third": "シェア自転車の月額パスはいくらで、1回の利用で何時間まで無料なの?",
+        "mixed": "扫码骑的那种bike办monthly pass多少钱啊,每次ride前几个小时是free的?"
+      }
+    },
+    {
+      "id": "airport",
+      "kind": "travel",
+      "topic": "Getting to the airport",
+      "content": "A taxi to the airport takes about 50 minutes and costs around 150 yuan; the airport bus is 30 yuan.",
+      "questions": {
+        "same": "How long does a cab ride to the terminal take, and how does the fare compare to taking the shuttle?",
+        "cross": "打车到机场要花多长时间、多少钱?乘坐机场巴士又要多少钱?",
+        "third": "空港までタクシーで行くとどのくらい時間とお金がかかりますか?リムジンバスの料金はいくらですか?",
+        "mixed": "坐taxi去机场大概要多久,车费多少钱啊?那个airport bus票价又是多少?"
+      }
+    },
+    {
+      "id": "hospital",
+      "kind": "health",
+      "topic": "儿科专家号",
+      "content": "儿童医院的专家号每天早上八点在手机上放号,几分钟就会抢完。",
+      "questions": {
+        "same": "儿科的名医号每天几点能在app上抢,是不是一会儿就没了?",
+        "cross": "What time do pediatric specialist appointment slots at children's hospitals open up on the app each morning, and how quickly do they get booked up?",
+        "third": "小児病院の専門医の予約は毎朝何時にアプリで公開され、どれくらい早く埋まってしまいますか?",
+        "mixed": "儿童医院的pediatric specialist appointment slot一般几点在手机app上放出来啊,是不是几分钟就被人约满了?"
+      }
+    },
+    {
+      "id": "bank",
+      "kind": "venue",
+      "topic": "银行周末营业",
+      "content": "附近的银行支行周末只开半天,上午九点到十二点。",
+      "questions": {
+        "same": "附近那家银行周六周日几点开门,开到几点?",
+        "cross": "What are the weekend hours for the nearby bank branch?",
+        "third": "近所の銀行支店の週末の営業時間は何時から何時までですか?",
+        "mixed": "附近的bank branch周末营业时间是几点到几点啊?"
+      }
+    },
+    {
+      "id": "post",
+      "kind": "venue",
+      "topic": "Elm Street post office",
+      "content": "The post office on Elm Street handles international parcels only on weekday mornings.",
+      "questions": {
+        "same": "When does the local post office take packages going overseas?",
+        "cross": "Elm街邮局什么时候可以寄国际包裹?",
+        "third": "エルム通りの郵便局はいつ国際小包を受け付けていますか?",
+        "mixed": "我们这边那个post office什么时候能寄overseas的parcel啊?"
+      }
+    },
+    {
+      "id": "grandma-bday",
+      "kind": "household",
+      "topic": "长辈生日",
+      "content": "家里长辈的生日是农历八月初三,每年要提前订好蛋糕。",
+      "questions": {
+        "same": "家中老人家的诞辰是阴历几月初几,每年是不是得提前把甜点准备好?",
+        "cross": "What lunar calendar date is the family elder's birthday on, and what needs to be arranged ahead of time every year?",
+        "third": "家族の年長者の誕生日は旧暦で何月何日ですか?毎年前もって何を用意しておく必要がありますか?",
+        "mixed": "家里长辈的birthday是lunar calendar哪天呀,每年要提前准备什么?"
+      }
+    },
+    {
+      "id": "anniversary",
+      "kind": "household",
+      "topic": "Wedding anniversary",
+      "content": "The wedding anniversary is on May 20th, and the tradition is dinner by the river.",
+      "questions": {
+        "same": "What day is our marriage anniversary, and how do we usually mark it?",
+        "cross": "结婚纪念日是几月几号?通常有什么庆祝的传统安排?",
+        "third": "結婚記念日は何月何日ですか?どんな習慣でお祝いしますか?",
+        "mixed": "我们的 wedding anniversary 是哪天呀,一般会有什么 tradition 来庆祝?"
+      }
+    },
+    {
+      "id": "hotpot",
+      "kind": "venue",
+      "topic": "火锅店排队",
+      "content": "周末去那家火锅店要提前在小程序取号,一般要等一个小时。",
+      "questions": {
+        "same": "周六周日去吃那家火锅要等多久,得先在手机上拿号吗?",
+        "cross": "How long is the wait at that hotpot place on weekends, and do I need to grab a number in advance?",
+        "third": "週末にあの火鍋のお店に行くとどれくらい待ちますか?事前に整理券を取っておくべきですか?",
+        "mixed": "周末去吃那家火锅要不要提前在mini program上取个号,大概wait多久啊?"
+      }
+    },
+    {
+      "id": "onsen",
+      "kind": "travel",
+      "topic": "温泉旅館の予約",
+      "content": "温泉旅館は二ヶ月前から予約でき、夕食付きプランは一人二万円。",
+      "questions": {
+        "same": "温泉宿の予約はどのくらい前の時期から入れられますか?また、夕飯が付く宿泊コースだと一人あたりの料金はいくらになりますか?",
+        "cross": "How many months in advance can you reserve a room at a hot spring inn, and how much per person does the package with dinner cost?",
+        "third": "温泉宿に泊まるなら、何か月前から申し込めますか?夕食がセットになったプランの一人分の値段はどれくらいですか?",
+        "mixed": "温泉ryokan大概可以提前几个月开始book房间啊?附dinner的plan一个人大概要多少钱?"
+      }
+    },
+    {
+      "id": "ramen",
+      "kind": "venue",
+      "topic": "近所のラーメン屋",
+      "content": "近所のラーメン屋は深夜二時まで営業していて、替え玉は無料。",
+      "questions": {
+        "same": "家の近くのラーメン店って何時まで開いてる?あと替え玉って追加料金かかる?",
+        "cross": "How late is the ramen shop near me open, and is the extra noodle serving free?",
+        "third": "この辺のラーメン屋さんは夜何時までやっていますか?麺のおかわりはお金がかかりますか?",
+        "mixed": "我家附近那家ramen店营业到几点啊,refill的noodles是不是free的?"
+      }
+    },
+    {
+      "id": "konbini",
+      "kind": "household",
+      "topic": "コンビニでの荷物受け取り",
+      "content": "コンビニで荷物を受け取るときは、アプリのバーコードを見せればいい。",
+      "questions": {
+        "same": "コンビニで宅配便を引き取るとき、店員さんに何を見せればいいですか?",
+        "cross": "What do I need to show to pick up a package at a convenience store?",
+        "third": "コンビニ留めにした小包を取りに行く時は、何を提示すればいいですか?",
+        "mixed": "去convenience store取package的时候要出示什么啊?"
+      }
+    },
+    {
+      "id": "summer-camp",
+      "kind": "schedule",
+      "topic": "夏令营报名",
+      "content": "夏令营每年四月一号开始报名,名额满了就截止,费用三千八。",
+      "questions": {
+        "same": "夏令营一般从几月份开始可以申请,什么情况下会停止接收,费用大概要多少钱?",
+        "cross": "When does summer camp registration open each year, under what condition does it close, and roughly how much does it cost?",
+        "third": "サマーキャンプの申し込みは毎年いつから始まり、定員に達したらどうなりますか。料金はいくらですか。",
+        "mixed": "summer camp一般几月份开始能申请啊,是不是满员了就直接cutoff,大概多少tuition/fee?"
+      }
+    },
+    {
+      "id": "flu-shot",
+      "kind": "health",
+      "topic": "Flu vaccine",
+      "content": "Everyone in the family gets a flu shot in October at the community clinic, free for children.",
+      "questions": {
+        "same": "Where and when do we all get our yearly influenza vaccination, and do the kids have to pay?",
+        "cross": "全家每年十月去哪里打流感疫苗?小孩子打是免费的吗?",
+        "third": "家族は毎年10月にどこでインフルエンザの予防接種を受けますか?子供は無料ですか?",
+        "mixed": "我们家每年10月打flu shot是去哪个clinic啊,小孩子是不是free的?"
+      }
+    },
+    {
+      "id": "ski",
+      "kind": "travel",
+      "topic": "滑雪场租雪具",
+      "content": "滑雪场的雪具可以现场租,一天一百五十元,儿童教练要提前一周预约。",
+      "questions": {
+        "same": "滑雪场的装备现场能借到吗?一天大概要花多少钱,给孩子请教练需要提前多久预订?",
+        "cross": "Can ski gear be rented on site at the resort, what's the daily cost, and how far ahead do I need to arrange a kids' instructor?",
+        "third": "スキー場では現地で用具を借りられますか?1日の料金はどれくらいで、子供向けインストラクターは何日前に予約すればいいですか?",
+        "mixed": "滑雪场的ski equipment是不是可以on-site rent啊,一天大概多少钱,给孩子约instructor是不是得提前挺久book?"
+      }
+    },
+    {
+      "id": "zoo",
+      "kind": "price",
+      "topic": "Zoo tickets",
+      "content": "Zoo tickets are cheaper when bought online the day before — 80 yuan instead of 100.",
+      "questions": {
+        "same": "How much do we save on admission to the animal park by booking on the internet a day early?",
+        "cross": "动物园门票提前一天网上购买多少钱一张?",
+        "third": "動物園のチケットは前日にオンラインで買うといくらになりますか?",
+        "mixed": "动物园的ticket提前一天online买是不是能省钱,大概多少钱?"
+      }
+    },
+    {
+      "id": "laundry",
+      "kind": "price",
+      "topic": "楼下干洗店",
+      "content": "楼下的干洗店洗一件大衣三十五元,三天后取。",
+      "questions": {
+        "same": "楼下那家洗衣店送洗一件外套多少钱,要等几天才能拿?",
+        "cross": "How much does the dry cleaner downstairs charge to clean a coat, and how many days until it's ready for pickup?",
+        "third": "階下のクリーニング店でコートを洗うといくらで、何日後に受け取れますか?",
+        "mixed": "楼下那家dry cleaner洗一件coat多少钱,几天后能pick up?"
+      }
+    },
+    {
+      "id": "babysitter",
+      "kind": "price",
+      "topic": "Babysitter rates",
+      "content": "The babysitter charges 50 yuan an hour and needs to be booked two days ahead.",
+      "questions": {
+        "same": "What's the sitter's hourly rate, and how far ahead do we need to reserve her?",
+        "cross": "保姆每小时收费多少钱?需要提前几天预约她?",
+        "third": "ベビーシッターの時給はいくらで、何日前に予約すればいいですか?",
+        "mixed": "babysitter一小时多少钱啊,要提前几天book她?"
+      }
+    },
+    {
+      "id": "movie",
+      "kind": "price",
+      "topic": "电影院会员日",
+      "content": "商场里的电影院每周二是会员日,票价半价。",
+      "questions": {
+        "same": "商场里那家电影院,一周中哪天买票能便宜一半?",
+        "cross": "Which day of the week does the mall's cinema sell tickets at half off?",
+        "third": "モール内の映画館は何曜日にチケットが半額になりますか?",
+        "mixed": "商场那个cinema一般周几的ticket能便宜一半啊?"
+      }
+    }
+  ]
+}

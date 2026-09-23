@@ -36,8 +36,8 @@ export const resolveClaude = () => {
 
 // A NEUTRAL cwd, like every one-shot call in this codebase: run from a data folder and the planner's whole
 // knowledge base loads per call.
-const run = (claude, prompt) =>
-  spawnSync(claude, ['-p', prompt], { encoding: 'utf8', cwd: os.tmpdir(), maxBuffer: 1 << 20 });
+const run = (claude, prompt, model) =>
+  spawnSync(claude, [...(model ? ['--model', model] : []), '-p', prompt], { encoding: 'utf8', cwd: os.tmpdir(), maxBuffer: 1 << 20 });
 
 /** One question in one set's language, or null. */
 export const askIn = (claude, fact, set) => {
@@ -52,7 +52,7 @@ export const askIn = (claude, fact, set) => {
 };
 
 /** All four questions in ONE call, as { same, cross, third, mixed }, or null. */
-export const askAll = (claude, fact) => {
+export const askAll = (claude, fact, model) => {
   const prompt =
     'Below is one fact from a private knowledge base. Write FOUR short questions this fact answers, one per key:'
     + NL + QUESTION_SETS.map((s) => `- "${s.key}": ${s.ask(fact)}`).join(NL)
@@ -60,7 +60,7 @@ export const askAll = (claude, fact) => {
     + 'way a person would.'
     + NL + 'Output ONLY a JSON object with exactly those four keys, each a string.'
     + NL + NL + `FACT: ${fact.topic} — ${fact.content}`;
-  const text = run(claude, prompt).stdout ?? '';
+  const text = run(claude, prompt, model).stdout ?? '';
   // Deliberately GREEDY: spans a fenced or prose-wrapped object. If the model emits two objects the splice
   // fails JSON.parse and returns null — fails closed — where a lazy match would risk cutting inside a value
   // that itself contains `}`.
