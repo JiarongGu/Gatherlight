@@ -53,6 +53,14 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
 
     public string? ClientName => ClientId;
 
+    public JudgeWiring Wiring(MemoryWiringContext ctx) => JudgeWiring.Llm(ClientId, ctx.Model);
+
+    public string AnnotationModel(string model) => model;
+
+    public string Cost(string? model) =>
+        "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
+        + "没有 CLI 那条的进程启动开销(那条实测每次检索 9–17 秒)。";
+
     /// <summary>No address to ask for: the app chose the port and started the process. That is the whole
     /// difference from <see cref="OpenAiCompatibleSource"/>, which is the same protocol with the opposite
     /// ownership.</summary>

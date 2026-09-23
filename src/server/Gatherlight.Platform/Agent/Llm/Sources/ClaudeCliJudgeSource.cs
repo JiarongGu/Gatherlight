@@ -21,6 +21,16 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
     /// <summary>Null = the default client. The CLI provider is already registered.</summary>
     public string? ClientName => null;
 
+    public JudgeWiring Wiring(MemoryWiringContext ctx) => JudgeWiring.Llm(null, ctx.Model);
+
+    public string AnnotationModel(string model) => model;
+
+    public string Cost(string? model) =>
+        "每次记录事实与每次检索各消耗一次 Claude CLI 调用(使用已登录的账号)。"
+        + "实测每次检索 9–17 秒(五次测量,多数在 15 秒上下)—— 每次调用都要启动一次 CLI 进程;"
+        + "只用「公式」时是 0.07–0.09 秒。"
+        + "换成本机模型可以省掉这次进程启动。";
+
     /// <summary>Not a URL: the CLI is a process this install spawns.</summary>
     public bool NeedsEndpoint => false;
 
