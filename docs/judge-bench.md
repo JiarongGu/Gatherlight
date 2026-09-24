@@ -2137,3 +2137,586 @@ worse, the conservative direction for a rule whose output is "viable to offer".
   provided the digests match. It is the same model, input and seed; the only change is a preset key shown above not to
   change the rendered prompt. That pair is therefore the nearest thing to a chat-judge A/A this data has. BGE is paired
   with Run 4's BGE the same way.
+
+## Run 5 — newer small chat models as 判断 (2026-09-24, llama.cpp b10549; claude never called) — STOPPED EARLY
+
+**Command**, exactly as registered:
+
+```
+node devtools/dev.mjs judge-bench --reuse-seed --arms=formula \
+  --chat-judges=gemma-3-1b-it-Q4_K_M,Qwen3-0.6B-Q8_0,gemma-3-270m-it-Q8_0,Qwen3.5-0.8B-Q8_0 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M \
+  --resources=devtools/_rr-res --port-base=5620 --llama-port=5640 > devtools/_judge-bench-lc5.txt 2>&1
+```
+
+The design above was committed as `d3058a1` before anything ran, and the run's app HEAD is that commit (v1.3.0).
+That HEAD includes round 2's Tasks G (`70a573d`) and H (`cc8a61b`); the server binary was built from them, and the bench
+builds nothing. Neither task touches a chat section of the preset. H's per-model reranker window applies only to the
+catalogued mMiniLM row: BGE declares no window, so it is still launched at 4096 and capped at 1,000 characters, as in Run 4.
+
+**Seed**: Run 1's, reused (created 2026-09-23T08:55:21.396Z, annotated by claude `2.1.280 (Claude Code)`, fixture sha256
+`9680443e206495ca8bcd067f80f4705cff5e31a365504fbac438413002ecf555`). Order seed **12345** (240 queries, 0 same-fact
+adjacencies), **11 arms in parallel**.
+
+**The run was STOPPED by hand ~49 minutes in, during the accuracy pass** (first row 03:49:15Z, last row 04:38:16Z). It
+never reached the serial latency pass, and it never saved a results file. Every table below was recovered from its row
+stream with the bench's own recovery (`--report-only=<rows-*.jsonl>`), which confirmed order seed 12345 by regenerating
+the query order and calls no model. The stop was not about the models' answers. The instrument had stopped measuring
+judges; see "Why it stopped" below.
+
+**Every pre-registered guard held**:
+
+- **The formula digest** is **`f661eb6a056e`**, equal to Runs 1–4.
+- **Startup.** Every local arm passed the bench's startup checks: 判断 read back `llama-cpp · <its id>`, there were no
+  startup warnings, and no claude-cli call was made. **No arm called the CLI at any point.** That was recounted from each
+  arm's preserved log (0 in all eleven). The recovery could not map `arm-N` folders itself, so each folder was matched
+  to its arm by its `settings.json` binding and its knob announcement, which is configuration order.
+- **Thinking was off**, checked three ways:
+  - `presets.ini` carries `reasoning = off` in all four chat sections;
+  - the router log shows `--reasoning off` in every chat child's spawn arguments;
+  - the median completion length per task was 11 tokens for Qwen3-0.6B (274 tasks) and 12 for Qwen3.5-0.8B (467).
+    The bound was 50.
+- **Kind and residency.** Each of the five models spawned exactly once and was never unloaded or evicted.
+- **Memory.** The GPU never ran out: 10,361–10,626 MiB used, 1,370–1,635 MiB free, sampled four times.
+
+**What finished:**
+
+| arm | accuracy rows | status |
+|---|---|---|
+| `formula` | 240/240 | complete |
+| `rr:` / `rrf:` BGE (reference) | 240/240 each | complete |
+| `lc:` / `lcb:` gemma-3-1b (control) | 240/240 each | complete |
+| `lc:` / `lcb:` **Qwen3.5-0.8B** | 240/240 each | complete |
+| `lc:` / `lcb:` **Qwen3-0.6B** | 150 / 142 | **INCOMPLETE — not readable under the rule** |
+| `lc:` / `lcb:` **gemma-3-270m** | 115 / 159 | **INCOMPLETE — not readable under the rule** |
+
+The two incomplete candidates are **not** given a decision-rule outcome. The rule is defined on all 240 paired queries,
+and reading a series that stopped where it did would be optional stopping. Their partial numbers appear further down,
+labelled as descriptive only.
+
+### Why it stopped
+
+1. **Small chat judges run away, and llama-server keeps generating for a request nobody is waiting for.** The verifier
+   sends no `max_tokens`. Past the app's 2-minute provider timeout the call is abandoned, but the slot keeps decoding
+   until the model stops on its own or the context is full.
+   - gemma-3-270m's task 136 started 47 s into its child's life and was still generating nine and a half minutes later.
+   - All four chat models did this. When the run was stopped, three tasks per child were still generating: Qwen3-0.6B
+     at 3,076–4,820 tokens, Qwen3.5-0.8B at 3,579–4,649, gemma-3-270m at 1,205–6,700. One Qwen3 reply that did finish
+     ran 3,816 tokens over 1,592 s.
+2. **A child's 32,768-token context is SHARED by its four slots** (`kv_unified`). When a runaway filled it, every
+   request in flight on that child failed with `Context size has been exceeded`: 16 gemma-3-270m tasks, three of them
+   live requests the arms logged as failed calls.
+3. **The runaways starved the GPU for every arm.** Utilisation was 94–96%. Median prompt throughput during the run was
+   472–1,280 tokens/s per chat child, against 1,855–15,591 with all five resident and idle before the design, and up to
+   17,157 alone. The Qwen3 child ended with three of its four slots held by abandoned runaways, decoding at ~2.4
+   tokens/s. Every new Qwen3 verification then hit the timeout: the last 10 of `lc:Qwen3`'s 150 rows and 9 of the last 10
+   of `lcb:`'s.
+4. **A verification timeout does NOT fail open to the engine's page. The whole recall degrades to FTS.** All 48 recalls
+   that took ≥ 110 s (120.0–120.2 s) came back `ranked: fts` with no verdict. Each arm's log carries exactly as many
+   `fact index: recall failed; falling back to FTS` warnings as it has such rows. The stack runs
+   `TaskCanceledException` → `LlmMemoryVerificationPolicy.VerifyAsync` → `GraphMemoryEngine.RecallAsync` →
+   `FactIndex.RankAsync`.
+
+Carried on, the run would have spent one to three more hours measuring the starvation of the Qwen3 and gemma-3-270m
+arms, not their verdicts. So it was stopped, and the configuration was not changed mid-run. The product runs ONE judge
+child, so this pile-up across models is the bench's own making. The three behaviours underneath it are the product's
+(see "Product findings").
+
+**The timeouts inside the complete arms**: 1 (`lc:gemma-1b`), 2 (`lcb:gemma-1b`), 3 (`lc:Qwen3.5`), 1 (`lcb:Qwen3.5`).
+Each is counted as it happened, an FTS page, as the rule's "paired within this run" requires. A post-hoc check, not
+pre-registered, drops the 44 queries that timed out in ANY chat arm:
+
+- Qwen3.5's outcome under the rule is unchanged. `lc:` is not significantly worse on either metric (top-1 22/25,
+  p = 0.771; found@8 10/24, p = 0.024, arm better).
+- The control's top-1 loss holds (37/4, p < 0.001). Its found@8 loss is no longer significant (13/6, p = 0.167).
+
+### The headline — the complete arms
+
+`lc:` = content alone, the shipped input. Paired against `formula` on `all`; b = `formula` hit & arm miss.
+
+| arm | coverage (judged/graph) | top-1 (of 240) | top-1 vs 公式 | found@8 (of 240) | found@8 vs 公式 |
+|---|---|---|---|---|---|
+| 公式 (base) | — | 79 | — | 125 | — |
+| BGE, partition (reference) | 234/234 | 91 | 3/15, p = 0.008, **+5.0pp** | 204 | 0/79, p < 0.001, **+32.9pp** |
+| gemma-3-1b `lc:` (control) | 183/233 (78.5%) | 36 | 47/4, p < 0.001, **−17.9pp** | 113 | 18/6, p = 0.023, **−5.0pp** |
+| gemma-3-1b `lcb:` | 193/232 (83.2%) | 45 | 41/7, p < 0.001, **−14.2pp** | 116 | 12/3, p = 0.035, **−3.8pp** |
+| **Qwen3.5-0.8B `lc:`** | **223/231 (96.5%)** | **85** | **28/34, p = 0.526, +2.5pp, [−3.9, +8.9]** | **138** | **16/29, p = 0.072, +5.4pp, [−0.1, +10.8]** |
+| Qwen3.5-0.8B `lcb:` | 229/233 (98.3%) | 83 | 25/29, p = 0.683, +1.7pp, [−4.3, +7.7] | 127 | 16/18, p = 0.864, +0.8pp, [−4.0, +5.6] |
+
+### Accuracy — the four sets and `all` (as printed; every arm, the incomplete ones included)
+
+The `ms (parallel)` column is **not latency**: it was measured under the starvation described above. Rows for the two
+incomplete candidates cover only the queries they reached. Their Δ is printed as rates because n differs, and like the
+rest of their numbers it is descriptive only.
+
+```
+== same ==
+arm                                                      n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)               60   0    60     0       0         42/60     54/60     0.769   302
+reranker bge-reranker-v2-m3-Q5_K_M · partition           60   0    60     60      60        43/60     57/60     0.808   1189           +1 / +3 / +0.039
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                60   0    60     60      60        42/60     55/60     0.790   1225           +0 / +1 / +0.021
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  60   0    60     47      47        23/60     52/60     0.525   3319           -19 / -2 / -0.243
+local chat judge gemma-3-1b-it-Q4_K_M · content only     60   0    59     47      47        21/60     46/60     0.468   5846           -21 / -8 / -0.301
+local chat judge Qwen3.5-0.8B-Q8_0 · topic — content     60   0    60     59      51        35/60     51/60     0.668   5881           -7 / -3 / -0.100
+local chat judge Qwen3.5-0.8B-Q8_0 · content only        60   0    60     58      56        35/60     49/60     0.650   9035           -7 / -5 / -0.118
+local chat judge gemma-3-270m-it-Q8_0 · topic — content  50   0    47     42      39        26/50     40/50     0.608   20263          -18.0pp / -10.0pp / -0.160 (rates: n differs)
+local chat judge gemma-3-270m-it-Q8_0 · content only     43   0    40     37      36        20/43     34/43     0.557   18385          -23.5pp / -10.9pp / -0.211 (rates: n differs)
+local chat judge Qwen3-0.6B-Q8_0 · content only          50   0    49     49      49        35/50     46/50     0.792   11075          +0.0pp / +2.0pp / +0.023 (rates: n differs)
+local chat judge Qwen3-0.6B-Q8_0 · topic — content       49   0    47     47      47        34/49     44/49     0.770   14003          -0.6pp / -0.2pp / +0.001 (rates: n differs)
+
+== cross ==
+arm                                                      n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)               60   0    60     0       0         1/60      6/60      0.042   382
+reranker bge-reranker-v2-m3-Q5_K_M · partition           60   0    60     60      60        3/60      48/60     0.221   1832           +2 / +42 / +0.179
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                60   0    60     60      60        2/60      12/60     0.069   1756           +1 / +6 / +0.027
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  60   0    58     44      44        1/60      7/60      0.051   9327           +0 / +1 / +0.009
+local chat judge gemma-3-1b-it-Q4_K_M · content only     60   0    60     42      42        0/60      5/60      0.017   5636           -1 / -1 / -0.025
+local chat judge Qwen3.5-0.8B-Q8_0 · topic — content     60   0    59     59      51        5/60      16/60     0.145   9637           +4 / +10 / +0.103
+local chat judge Qwen3.5-0.8B-Q8_0 · content only        60   0    59     57      50        13/60     26/60     0.279   12742          +12 / +20 / +0.237
+local chat judge gemma-3-270m-it-Q8_0 · topic — content  33   0    32     30      30        0/33      2/33      0.015   16526          -1.7pp / -3.9pp / -0.027 (rates: n differs)
+local chat judge gemma-3-270m-it-Q8_0 · content only     24   0    21     19      18        2/24      4/24      0.113   30399          +6.7pp / +6.7pp / +0.071 (rates: n differs)
+local chat judge Qwen3-0.6B-Q8_0 · content only          30   0    27     27      27        2/30      7/30      0.133   22505          +5.0pp / +13.3pp / +0.092 (rates: n differs)
+local chat judge Qwen3-0.6B-Q8_0 · topic — content       28   0    27     27      27        4/28      8/28      0.202   16224          +12.6pp / +18.6pp / +0.160 (rates: n differs)
+
+== third ==
+arm                                                      n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)               60   0    55     0       0         1/60      18/60     0.119   337
+reranker bge-reranker-v2-m3-Q5_K_M · partition           60   0    55     55      55        8/60      43/60     0.301   1495           +7 / +25 / +0.182
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                60   0    55     55      55        8/60      20/60     0.205   1477           +7 / +2 / +0.086
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  60   0    55     48      48        4/60      14/60     0.102   3476           +3 / -4 / -0.018
+local chat judge gemma-3-1b-it-Q4_K_M · content only     60   0    55     42      42        3/60      15/60     0.101   3856           +2 / -3 / -0.018
+local chat judge Qwen3.5-0.8B-Q8_0 · topic — content     60   0    55     52      47        12/60     15/60     0.210   4399           +11 / -3 / +0.091
+local chat judge Qwen3.5-0.8B-Q8_0 · content only        60   0    55     52      42        6/60      20/60     0.186   8515           +5 / +2 / +0.067
+local chat judge gemma-3-270m-it-Q8_0 · topic — content  44   0    40     37      37        0/44      14/44     0.087   14375          -1.7pp / +1.8pp / -0.032 (rates: n differs)
+local chat judge gemma-3-270m-it-Q8_0 · content only     30   0    25     25      24        0/30      10/30     0.095   22718          -1.7pp / +3.3pp / -0.024 (rates: n differs)
+local chat judge Qwen3-0.6B-Q8_0 · content only          41   0    36     36      36        10/41     18/41     0.329   17465          +22.7pp / +13.9pp / +0.210 (rates: n differs)
+local chat judge Qwen3-0.6B-Q8_0 · topic — content       39   0    31     30      30        5/39      11/39     0.184   25369          +11.2pp / -1.8pp / +0.064 (rates: n differs)
+
+== mixed ==
+arm                                                      n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)               60   0    59     0       0         35/60     47/60     0.657   360
+reranker bge-reranker-v2-m3-Q5_K_M · partition           60   0    59     59      59        37/60     56/60     0.720   1684           +2 / +9 / +0.063
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                60   0    59     59      59        35/60     51/60     0.681   1782           +0 / +4 / +0.024
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  60   0    59     54      54        17/60     43/60     0.383   4827           -18 / -4 / -0.274
+local chat judge gemma-3-1b-it-Q4_K_M · content only     60   0    59     52      52        12/60     47/60     0.355   4945           -23 / +0 / -0.302
+local chat judge Qwen3.5-0.8B-Q8_0 · topic — content     60   0    59     59      57        31/60     45/60     0.591   8427           -4 / -2 / -0.066
+local chat judge Qwen3.5-0.8B-Q8_0 · content only        60   0    57     56      54        31/60     43/60     0.573   15824          -4 / -4 / -0.084
+local chat judge gemma-3-270m-it-Q8_0 · topic — content  32   0    28     27      27        15/32     23/32     0.552   19931          -11.5pp / -6.5pp / -0.105 (rates: n differs)
+local chat judge gemma-3-270m-it-Q8_0 · content only     18   0    15     13      12        5/18      11/18     0.421   34335          -30.6pp / -17.2pp / -0.236 (rates: n differs)
+local chat judge Qwen3-0.6B-Q8_0 · content only          29   0    23     23      23        15/29     19/29     0.570   32879          -6.6pp / -12.8pp / -0.087 (rates: n differs)
+local chat judge Qwen3-0.6B-Q8_0 · topic — content       26   0    22     22      22        15/26     19/26     0.647   26233          -0.6pp / -5.3pp / -0.010 (rates: n differs)
+
+== all ==
+arm                                                      n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)               240  0    234    0       0         79/240    125/240   0.397   346
+reranker bge-reranker-v2-m3-Q5_K_M · partition           240  0    234    234     234       91/240    204/240   0.512   1550           +12 / +79 / +0.116
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                240  0    234    234     234       87/240    138/240   0.436   1560           +8 / +13 / +0.039
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  240  0    232    193     193       45/240    116/240   0.265   5237           -34 / -9 / -0.132
+local chat judge gemma-3-1b-it-Q4_K_M · content only     240  0    233    183     183       36/240    113/240   0.235   5071           -43 / -12 / -0.162
+local chat judge Qwen3.5-0.8B-Q8_0 · topic — content     240  0    233    229     206       83/240    127/240   0.404   7086           +4 / +2 / +0.007
+local chat judge Qwen3.5-0.8B-Q8_0 · content only        240  0    231    223     202       85/240    138/240   0.422   11529          +6 / +13 / +0.025
+local chat judge gemma-3-270m-it-Q8_0 · topic — content  159  0    147    136     133       41/159    79/159    0.330   17791          -7.1pp / -2.4pp / -0.067 (rates: n differs)
+local chat judge gemma-3-270m-it-Q8_0 · content only     115  0    101    94      90        27/115    59/115    0.323   24519          -9.4pp / -0.8pp / -0.074 (rates: n differs)
+local chat judge Qwen3-0.6B-Q8_0 · content only          150  0    135    135     135       62/150    90/150    0.491   19323          +8.4pp / +7.9pp / +0.094 (rates: n differs)
+local chat judge Qwen3-0.6B-Q8_0 · topic — content       142  0    127    126     126       58/142    82/142    0.474   19802          +7.9pp / +5.7pp / +0.078 (rates: n differs)
+```
+
+### Paired vs `formula` — the complete arms
+
+`b` = formula hit & arm miss, `c` = formula miss & arm hit.
+
+```
+  top-1:
+  arm                                                      set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  reranker bge-reranker-v2-m3-Q5_K_M · partition           all     240    3/15     0.008   +12 (+5.0pp)     [+1.5, +8.4]pp      no          YES (arm better)
+                                                           same    60     2/3      1.000   +1 (+1.7pp)      [-6.1, +9.3]pp      —
+                                                           cross   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —
+                                                           third   60     0/7      0.016   +7 (+11.7pp)     [+2.8, +19.8]pp     —
+                                                           mixed   60     1/3      0.625   +2 (+3.3pp)      [-3.8, +10.2]pp     —
+  reranker bge-reranker-v2-m3-Q5_K_M · fuse                all     240    3/11     0.057   +8 (+3.3pp)      [+0.2, +6.4]pp      no          no
+                                                           same    60     2/2      1.000   +0 (+0.0pp)      [-7.1, +7.1]pp      —
+                                                           cross   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+                                                           third   60     0/7      0.016   +7 (+11.7pp)     [+2.8, +19.8]pp     —
+                                                           mixed   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —
+  local chat judge gemma-3-1b-it-Q4_K_M · topic — content  all     240    41/7     <0.001  -34 (-14.2pp)    [-19.4, -8.7]pp     no          YES (arm worse)
+                                                           same    60     20/1     <0.001  -19 (-31.7pp)    [-43.4, -17.9]pp    —
+                                                           cross   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —
+                                                           third   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+                                                           mixed   60     20/2     <0.001  -18 (-30.0pp)    [-42.4, -15.7]pp    —
+  local chat judge gemma-3-1b-it-Q4_K_M · content only     all     240    47/4     <0.001  -43 (-17.9pp)    [-23.2, -12.4]pp    no          YES (arm worse)
+                                                           same    60     22/1     <0.001  -21 (-35.0pp)    [-46.9, -20.9]pp    —
+                                                           cross   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —
+                                                           third   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —
+                                                           mixed   60     24/1     <0.001  -23 (-38.3pp)    [-50.3, -23.9]pp    —
+  local chat judge Qwen3.5-0.8B-Q8_0 · topic — content     all     240    25/29    0.683   +4 (+1.7pp)      [-4.3, +7.7]pp      no          no
+                                                           same    60     10/3     0.092   -7 (-11.7pp)     [-22.8, +0.2]pp     —
+                                                           cross   60     1/5      0.219   +4 (+6.7pp)      [-1.8, +14.7]pp     —
+                                                           third   60     1/12     0.003   +11 (+18.3pp)    [+6.8, +28.7]pp     —
+                                                           mixed   60     13/9     0.523   -4 (-6.7pp)      [-21.5, +8.6]pp     —
+  local chat judge Qwen3.5-0.8B-Q8_0 · content only        all     240    28/34    0.526   +6 (+2.5pp)      [-3.9, +8.9]pp      no          no
+                                                           same    60     13/6     0.167   -7 (-11.7pp)     [-25.1, +2.6]pp     —
+                                                           cross   60     0/12     <0.001  +12 (+20.0pp)    [+9.0, +29.7]pp     —
+                                                           third   60     1/6      0.125   +5 (+8.3pp)      [-0.6, +16.8]pp     —
+                                                           mixed   60     14/10    0.541   -4 (-6.7pp)      [-22.2, +9.3]pp     —
+  found@8:
+  arm                                                      set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  reranker bge-reranker-v2-m3-Q5_K_M · partition           all     240    0/79     <0.001  +79 (+32.9pp)    [+26.7, +38.6]pp    no          YES (arm better)
+                                                           same    60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+                                                           cross   60     0/42     <0.001  +42 (+70.0pp)    [+55.7, +79.8]pp    —
+                                                           third   60     0/25     <0.001  +25 (+41.7pp)    [+27.7, +52.9]pp    —
+                                                           mixed   60     0/9      0.004   +9 (+15.0pp)     [+5.2, +23.8]pp     —
+  reranker bge-reranker-v2-m3-Q5_K_M · fuse                all     240    5/18     0.011   +13 (+5.4pp)     [+1.5, +9.3]pp      no          YES (arm better)
+                                                           same    60     2/3      1.000   +1 (+1.7pp)      [-6.1, +9.3]pp      —
+                                                           cross   60     1/7      0.070   +6 (+10.0pp)     [+0.5, +18.9]pp     —
+                                                           third   60     2/4      0.688   +2 (+3.3pp)      [-5.1, +11.6]pp     —
+                                                           mixed   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —
+  local chat judge gemma-3-1b-it-Q4_K_M · topic — content  all     240    12/3     0.035   -9 (-3.8pp)      [-6.9, -0.5]pp      no          YES (arm worse)
+                                                           same    60     3/1      0.625   -2 (-3.3pp)      [-10.2, +3.8]pp     —
+                                                           cross   60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —
+                                                           third   60     4/0      0.125   -4 (-6.7pp)      [-13.3, +0.4]pp     —
+                                                           mixed   60     4/0      0.125   -4 (-6.7pp)      [-13.3, +0.4]pp     —
+  local chat judge gemma-3-1b-it-Q4_K_M · content only     all     240    18/6     0.023   -12 (-5.0pp)     [-9.0, -1.0]pp      no          YES (arm worse)
+                                                           same    60     9/1      0.021   -8 (-13.3pp)     [-22.9, -2.9]pp     —
+                                                           cross   60     2/1      1.000   -1 (-1.7pp)      [-7.9, +4.7]pp      —
+                                                           third   60     5/2      0.453   -3 (-5.0pp)      [-13.7, +4.0]pp     —
+                                                           mixed   60     2/2      1.000   +0 (+0.0pp)      [-7.1, +7.1]pp      —
+  local chat judge Qwen3.5-0.8B-Q8_0 · topic — content     all     240    16/18    0.864   +2 (+0.8pp)      [-4.0, +5.6]pp      no          no
+                                                           same    60     6/3      0.508   -3 (-5.0pp)      [-14.8, +5.1]pp     —
+                                                           cross   60     3/13     0.021   +10 (+16.7pp)    [+3.7, +28.5]pp     —
+                                                           third   60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —
+                                                           mixed   60     4/2      0.688   -2 (-3.3pp)      [-11.6, +5.1]pp     —
+  local chat judge Qwen3.5-0.8B-Q8_0 · content only        all     240    16/29    0.072   +13 (+5.4pp)     [-0.1, +10.8]pp     no          no
+                                                           same    60     7/2      0.180   -5 (-8.3pp)      [-17.9, +1.7]pp     —
+                                                           cross   60     1/21     <0.001  +20 (+33.3pp)    [+19.4, +45.1]pp    —
+                                                           third   60     3/5      0.727   +2 (+3.3pp)      [-6.2, +12.7]pp     —
+                                                           mixed   60     5/1      0.219   -4 (-6.7pp)      [-14.7, +1.8]pp     —
+```
+
+### Paired — against BGE, against the control, and `lc` against `lcb` (the complete arms)
+
+Each local chat judge against BGE under partition; b = BGE hit & chat-judge miss.
+
+```
+  top-1:
+  arm                                                       set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  lcb:gemma-3-1b-it-Q4_K_M vs rr:bge-reranker-v2-m3-Q5_K_M  all     240    54/8     <0.001  -46 (-19.2pp)    [-25.0, -13.0]pp    no          YES (arm worse)
+                                                            same    60     22/2     <0.001  -20 (-33.3pp)    [-45.9, -18.6]pp    —
+                                                            cross   60     3/1      0.625   -2 (-3.3pp)      [-10.2, +3.8]pp     —
+                                                            third   60     7/3      0.344   -4 (-6.7pp)      [-16.8, +3.9]pp     —
+                                                            mixed   60     22/2     <0.001  -20 (-33.3pp)    [-45.9, -18.6]pp    —
+  lc:gemma-3-1b-it-Q4_K_M vs rr:bge-reranker-v2-m3-Q5_K_M   all     240    60/5     <0.001  -55 (-22.9pp)    [-28.7, -16.8]pp    no          YES (arm worse)
+                                                            same    60     23/1     <0.001  -22 (-36.7pp)    [-48.6, -22.4]pp    —
+                                                            cross   60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —
+                                                            third   60     7/2      0.180   -5 (-8.3pp)      [-17.9, +1.7]pp     —
+                                                            mixed   60     27/2     <0.001  -25 (-41.7pp)    [-54.4, -26.2]pp    —
+  lcb:Qwen3.5-0.8B-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M     all     240    31/23    0.341   -8 (-3.3pp)      [-9.3, +2.7]pp      no          no
+                                                            same    60     11/3     0.057   -8 (-13.3pp)     [-24.7, -1.1]pp     —
+                                                            cross   60     2/4      0.688   +2 (+3.3pp)      [-5.1, +11.6]pp     —
+                                                            third   60     4/8      0.388   +4 (+6.7pp)      [-4.8, +17.7]pp     —
+                                                            mixed   60     14/8     0.286   -6 (-10.0pp)     [-24.6, +5.3]pp     —
+  lc:Qwen3.5-0.8B-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M      all     240    34/28    0.526   -6 (-2.5pp)      [-8.9, +3.9]pp      no          no
+                                                            same    60     13/5     0.096   -8 (-13.3pp)     [-26.3, +0.5]pp     —
+                                                            cross   60     1/11     0.006   +10 (+16.7pp)    [+5.5, +26.8]pp     —
+                                                            third   60     5/3      0.727   -2 (-3.3pp)      [-12.7, +6.2]pp     —
+                                                            mixed   60     15/9     0.307   -6 (-10.0pp)     [-25.3, +5.9]pp     —
+  found@8:
+  arm                                                       set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  lcb:gemma-3-1b-it-Q4_K_M vs rr:bge-reranker-v2-m3-Q5_K_M  all     240    88/0     <0.001  -88 (-36.7pp)    [-42.5, -30.2]pp    no          YES (arm worse)
+                                                            same    60     5/0      0.063   -5 (-8.3pp)      [-15.5, -0.6]pp     —
+                                                            cross   60     41/0     <0.001  -41 (-68.3pp)    [-78.3, -53.9]pp    —
+                                                            third   60     29/0     <0.001  -29 (-48.3pp)    [-59.6, -34.0]pp    —
+                                                            mixed   60     13/0     <0.001  -13 (-21.7pp)    [-31.6, -10.4]pp    —
+  lc:gemma-3-1b-it-Q4_K_M vs rr:bge-reranker-v2-m3-Q5_K_M   all     240    91/0     <0.001  -91 (-37.9pp)    [-43.8, -31.4]pp    no          YES (arm worse)
+                                                            same    60     11/0     <0.001  -11 (-18.3pp)    [-27.8, -7.7]pp     —
+                                                            cross   60     43/0     <0.001  -43 (-71.7pp)    [-81.3, -57.5]pp    —
+                                                            third   60     28/0     <0.001  -28 (-46.7pp)    [-57.9, -32.4]pp    —
+                                                            mixed   60     9/0      0.004   -9 (-15.0pp)     [-23.8, -5.2]pp     —
+  lcb:Qwen3.5-0.8B-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M     all     240    79/2     <0.001  -77 (-32.1pp)    [-38.0, -25.7]pp    no          YES (arm worse)
+                                                            same    60     6/0      0.031   -6 (-10.0pp)     [-17.7, -1.7]pp     —
+                                                            cross   60     33/1     <0.001  -32 (-53.3pp)    [-65.2, -38.0]pp    —
+                                                            third   60     28/0     <0.001  -28 (-46.7pp)    [-57.9, -32.4]pp    —
+                                                            mixed   60     12/1     0.003   -11 (-18.3pp)    [-28.7, -6.8]pp     —
+  lc:Qwen3.5-0.8B-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M      all     240    67/1     <0.001  -66 (-27.5pp)    [-33.1, -21.5]pp    no          YES (arm worse)
+                                                            same    60     8/0      0.008   -8 (-13.3pp)     [-21.8, -4.0]pp     —
+                                                            cross   60     23/1     <0.001  -22 (-36.7pp)    [-48.6, -22.4]pp    —
+                                                            third   60     23/0     <0.001  -23 (-38.3pp)    [-49.5, -24.7]pp    —
+                                                            mixed   60     13/0     <0.001  -13 (-21.7pp)    [-31.6, -10.4]pp    —
+```
+
+Every complete chat judge against the other, same input; b = the control (gemma-3-1b) hit & Qwen3.5 miss.
+
+```
+  top-1:
+  arm                                                   set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  lc:Qwen3.5-0.8B-Q8_0 vs lc:gemma-3-1b-it-Q4_K_M       all     240    12/61    <0.001  +49 (+20.4pp)    [+13.8, +26.7]pp    no          YES (arm better)
+                                                        same    60     5/19     0.007   +14 (+23.3pp)    [+7.8, +37.4]pp     —
+                                                        cross   60     0/13     <0.001  +13 (+21.7pp)    [+10.4, +31.6]pp    —
+                                                        third   60     2/5      0.453   +3 (+5.0pp)      [-4.0, +13.7]pp     —
+                                                        mixed   60     5/24     <0.001  +19 (+31.7pp)    [+15.1, +46.2]pp    —
+  lcb:Qwen3.5-0.8B-Q8_0 vs lcb:gemma-3-1b-it-Q4_K_M     all     240    16/54    <0.001  +38 (+15.8pp)    [+9.2, +22.2]pp     no          YES (arm better)
+                                                        same    60     7/19     0.029   +12 (+20.0pp)    [+3.7, +35.1]pp     —
+                                                        cross   60     1/5      0.219   +4 (+6.7pp)      [-1.8, +14.7]pp     —
+                                                        third   60     1/9      0.021   +8 (+13.3pp)     [+2.9, +22.9]pp     —
+                                                        mixed   60     7/21     0.013   +14 (+23.3pp)    [+6.5, +38.6]pp     —
+  found@8:
+  arm                                                   set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  lc:Qwen3.5-0.8B-Q8_0 vs lc:gemma-3-1b-it-Q4_K_M       all     240    13/38    <0.001  +25 (+10.4pp)    [+4.6, +16.0]pp     no          YES (arm better)
+                                                        same    60     4/7      0.549   +3 (+5.0pp)      [-6.0, +15.7]pp     —
+                                                        cross   60     0/21     <0.001  +21 (+35.0pp)    [+21.7, +46.1]pp    —
+                                                        third   60     2/7      0.180   +5 (+8.3pp)      [-1.7, +17.9]pp     —
+                                                        mixed   60     7/3      0.344   -4 (-6.7pp)      [-16.8, +3.9]pp     —
+  lcb:Qwen3.5-0.8B-Q8_0 vs lcb:gemma-3-1b-it-Q4_K_M     all     240    12/23    0.090   +11 (+4.6pp)     [-0.3, +9.4]pp      no          no
+                                                        same    60     5/4      1.000   -1 (-1.7pp)      [-11.6, +8.4]pp     —
+                                                        cross   60     3/12     0.035   +9 (+15.0pp)     [+2.4, +26.6]pp     —
+                                                        third   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+                                                        mixed   60     4/6      0.754   +2 (+3.3pp)      [-7.2, +13.7]pp     —
+```
+
+Content only (`lc`) against `topic — content` (`lcb`) per model, Run 3's question; b = `lcb` hit & `lc` miss.
+
+```
+  top-1:
+  arm                                                  set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  lc:gemma-3-1b-it-Q4_K_M vs lcb:gemma-3-1b-it-Q4_K_M  all     240    25/16    0.211   -9 (-3.8pp)      [-8.9, +1.5]pp      no          no
+                                                       same    60     9/7      0.804   -2 (-3.3pp)      [-16.2, +9.8]pp     —
+                                                       cross   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —
+                                                       third   60     2/1      1.000   -1 (-1.7pp)      [-7.9, +4.7]pp      —
+                                                       mixed   60     13/8     0.383   -5 (-8.3pp)      [-22.8, +6.6]pp     —
+  lc:Qwen3.5-0.8B-Q8_0 vs lcb:Qwen3.5-0.8B-Q8_0        all     240    33/35    0.904   +2 (+0.8pp)      [-5.9, +7.6]pp      no          no
+                                                       same    60     11/11    1.000   +0 (+0.0pp)      [-15.2, +15.2]pp    —
+                                                       cross   60     4/12     0.077   +8 (+13.3pp)     [+0.3, +25.5]pp     —
+                                                       third   60     7/1      0.070   -6 (-10.0pp)     [-18.9, -0.5]pp     —
+                                                       mixed   60     11/11    1.000   +0 (+0.0pp)      [-15.2, +15.2]pp    —
+  found@8:
+  arm                                                  set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  lc:gemma-3-1b-it-Q4_K_M vs lcb:gemma-3-1b-it-Q4_K_M  all     240    13/10    0.678   -3 (-1.3pp)      [-5.2, +2.7]pp      no          no
+                                                       same    60     7/1      0.070   -6 (-10.0pp)     [-18.9, -0.5]pp     —
+                                                       cross   60     3/1      0.625   -2 (-3.3pp)      [-10.2, +3.8]pp     —
+                                                       third   60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —
+                                                       mixed   60     2/6      0.289   +4 (+6.7pp)      [-2.9, +15.8]pp     —
+  lc:Qwen3.5-0.8B-Q8_0 vs lcb:Qwen3.5-0.8B-Q8_0        all     240    21/32    0.169   +11 (+4.6pp)     [-1.4, +10.5]pp     no          no
+                                                       same    60     6/4      0.754   -2 (-3.3pp)      [-13.7, +7.2]pp     —
+                                                       cross   60     7/17     0.064   +10 (+16.7pp)    [+0.8, +31.4]pp     —
+                                                       third   60     1/6      0.125   +5 (+8.3pp)      [-0.6, +16.8]pp     —
+                                                       mixed   60     7/5      0.774   -2 (-3.3pp)      [-14.6, +8.1]pp     —
+```
+
+### Across runs (context, not the decision)
+
+Re-analysis only; no model was called. Digest, order seed, fact count and fixture all match, so the bench accepted each
+pairing. `b` = the earlier run's arm hit & this run's miss.
+
+The control against Run 3's `lc:gemma-3-1b-it-Q4_K_M`: the same model, input and seed, differing only by
+`reasoning = off`, which the design showed renders a byte-identical prompt. This is the nearest thing to a chat-judge
+A/A this data has.
+
+```
+  top-1:
+  arm                                                      set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  local chat judge gemma-3-1b-it-Q4_K_M · content only     all     240    11/14    0.690   +3 (+1.3pp)      [-2.9, +5.4]pp      no          no
+  found@8:
+  arm                                                      set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  local chat judge gemma-3-1b-it-Q4_K_M · content only     all     240    7/9      0.804   +2 (+0.8pp)      [-2.5, +4.2]pp      no          no
+```
+
+BGE against Run 4's BGE:
+
+```
+  top-1:
+  arm                                                      set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  reranker bge-reranker-v2-m3-Q5_K_M · partition           all     240    1/2      1.000   +1 (+0.4pp)      [-1.2, +2.0]pp      YES         no
+  found@8:
+  arm                                                      set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  reranker bge-reranker-v2-m3-Q5_K_M · partition           all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+```
+
+- **The control reproduced Run 3**: 36 / 113 against Run 3's 33 / 111. There is no significant difference on either
+  metric. It is not equivalent, though: the top-1 interval reaches +5.4pp. Run to run, this sampling 1B judge moved
+  **25** discordant queries on top-1 and **16** on found@8. That is the noise floor a chat-judge gap here should be
+  read against. Run 1's Claude A/A differed by 2.
+- **BGE reproduced Runs 2 and 4**: 91 / 204, equivalent to Run 4's on both metrics (top-1 1/2; found@8 0/0).
+
+### Secondary, pre-registered, outside the rule — only the recalls that carried a verdict
+
+Paired against `formula` on each arm's judged recalls (`devtools/_lc5-screen/judged-only.mjs`, scratch; it reproduces
+Run 3's post-hoc split exactly from Run 3's file).
+
+| arm | judged | top-1 b/c, p, net | found@8 b/c, p, net |
+|---|---|---|---|
+| gemma-3-1b `lc:` | 183 | 45/4, p < 0.001, −22.4pp | 14/6, p = 0.115, −4.4pp |
+| gemma-3-1b `lcb:` | 193 | 41/7, p < 0.001, −17.6pp | 11/3, p = 0.057, −4.1pp |
+| Qwen3.5-0.8B `lc:` | 223 | 27/34, p = 0.443, +3.1pp | 15/28, p = 0.066, +5.8pp, [+0.0, +11.5] |
+| Qwen3.5-0.8B `lcb:` | 229 | 25/29, p = 0.683, +1.7pp | 15/18, p = 0.728, +1.3pp |
+| *Qwen3-0.6B `lc:` (INCOMPLETE, descriptive)* | *135* | *4/22, p < 0.001, +13.3pp* | *2/14, p = 0.004, +8.9pp* |
+| *Qwen3-0.6B `lcb:` (INCOMPLETE, descriptive)* | *126* | *5/22, p = 0.002, +13.5pp* | *2/14, p = 0.004, +9.5pp* |
+| *gemma-3-270m `lc:` (INCOMPLETE, descriptive)* | *94* | *9/0, p = 0.004, −9.6pp* | *5/2, p = 0.453, −3.2pp* |
+| *gemma-3-270m `lcb:` (INCOMPLETE, descriptive)* | *136* | *9/1, p = 0.021, −5.9pp* | *6/3, p = 0.508, −2.2pp* |
+
+### INCOMPLETE — Qwen3-0.6B and gemma-3-270m (descriptive only; NOT readable under the rule)
+
+These series stopped at 150 / 142 (Qwen3) and 115 / 159 (gemma-3-270m) of 240 queries. Their tails are dominated by
+timeouts (FTS pages), and their sets are unbalanced: Qwen3 `lc:` reached 50 `same`, 30 `cross`, 41 `third` and 29
+`mixed`. No outcome is recorded for either. The printed paired rows against `formula`, on the queries each reached:
+
+```
+  top-1:
+  arm                                                      set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  local chat judge gemma-3-270m-it-Q8_0 · topic — content  all     159    11/2     0.022   -9 (-5.7pp)      [-10.1, -1.1]pp     no          YES (arm worse)
+  local chat judge gemma-3-270m-it-Q8_0 · content only     all     115    11/2     0.022   -9 (-7.8pp)      [-13.8, -1.6]pp     no          YES (arm worse)
+  local chat judge Qwen3-0.6B-Q8_0 · content only          all     150    8/22     0.016   +14 (+9.3pp)     [+2.2, +16.2]pp     no          YES (arm better)
+  local chat judge Qwen3-0.6B-Q8_0 · topic — content       all     142    8/22     0.016   +14 (+9.9pp)     [+2.3, +17.1]pp     no          YES (arm better)
+  found@8:
+  arm                                                      set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  local chat judge gemma-3-270m-it-Q8_0 · topic — content  all     159    11/3     0.057   -8 (-5.0pp)      [-9.6, -0.3]pp      no          no
+  local chat judge gemma-3-270m-it-Q8_0 · content only     all     115    9/4      0.267   -5 (-4.3pp)      [-10.5, +1.9]pp     no          no
+  local chat judge Qwen3-0.6B-Q8_0 · content only          all     150    7/15     0.134   +8 (+5.3pp)      [-0.9, +11.4]pp     no          no
+  local chat judge Qwen3-0.6B-Q8_0 · topic — content       all     142    9/14     0.405   +5 (+3.5pp)      [-3.2, +10.1]pp     no          no
+```
+
+Against BGE, on the same queries:
+
+```
+  top-1:
+  arm                                                       set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  lcb:gemma-3-270m-it-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M  all     159    19/2     <0.001  -17 (-10.7pp)    [-16.0, -5.1]pp     no          YES (arm worse)
+                                                            same    50     8/1      0.039   -7 (-14.0pp)     [-24.8, -2.1]pp     —
+                                                            cross   33     2/0      0.500   -2 (-6.1pp)      [-15.2, +3.8]pp     —
+                                                            third   44     5/0      0.063   -5 (-11.4pp)     [-20.8, -0.9]pp     —
+                                                            mixed   32     4/1      0.375   -3 (-9.4pp)      [-22.6, +5.0]pp     —
+  lc:gemma-3-270m-it-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M   all     115    14/2     0.004   -12 (-10.4pp)    [-16.9, -3.6]pp     no          YES (arm worse)
+                                                            same    43     9/0      0.004   -9 (-20.9pp)     [-32.5, -7.5]pp     —
+                                                            cross   24     0/2      0.500   +2 (+8.3pp)      [-5.0, +20.4]pp     —
+                                                            third   30     3/0      0.250   -3 (-10.0pp)     [-21.2, +2.4]pp     —
+                                                            mixed   18     2/0      0.500   -2 (-11.1pp)     [-26.4, +6.4]pp     —
+  lc:Qwen3-0.6B-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M        all     150    12/18    0.362   +6 (+4.0pp)      [-3.2, +11.1]pp     no          no
+                                                            same    50     4/6      0.754   +2 (+4.0pp)      [-8.6, +16.3]pp     —
+                                                            cross   30     2/2      1.000   +0 (+0.0pp)      [-13.7, +13.7]pp    —
+                                                            third   41     1/6      0.125   +5 (+12.2pp)     [-0.8, +24.0]pp     —
+                                                            mixed   29     5/4      1.000   -1 (-3.4pp)      [-23.2, +16.7]pp    —
+  lcb:Qwen3-0.6B-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M       all     142    9/16     0.230   +7 (+4.9pp)      [-2.0, +11.8]pp     no          no
+                                                            same    49     5/7      0.774   +2 (+4.1pp)      [-9.9, +17.7]pp     —
+                                                            cross   28     0/3      0.250   +3 (+10.7pp)     [-2.6, +22.6]pp     —
+                                                            third   39     3/3      1.000   +0 (+0.0pp)      [-12.6, +12.6]pp    —
+                                                            mixed   26     1/3      0.625   +2 (+7.7pp)      [-8.3, +22.6]pp     —
+  found@8:
+  arm                                                       set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  lcb:gemma-3-270m-it-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M  all     159    47/0     <0.001  -47 (-29.6pp)    [-36.3, -22.1]pp    no          YES (arm worse)
+                                                            same    50     7/0      0.016   -7 (-14.0pp)     [-23.5, -3.4]pp     —
+                                                            cross   33     20/0     <0.001  -20 (-60.6pp)    [-74.5, -39.8]pp    —
+                                                            third   44     15/0     <0.001  -15 (-34.1pp)    [-46.8, -18.4]pp    —
+                                                            mixed   32     5/0      0.063   -5 (-15.6pp)     [-27.9, -1.5]pp     —
+  lc:gemma-3-270m-it-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M   all     115    29/1     <0.001  -28 (-24.3pp)    [-32.2, -15.7]pp    no          YES (arm worse)
+                                                            same    43     7/0      0.016   -7 (-16.3pp)     [-27.0, -4.1]pp     —
+                                                            cross   24     11/1     0.006   -10 (-41.7pp)    [-61.3, -15.7]pp    —
+                                                            third   30     8/0      0.008   -8 (-26.7pp)     [-41.2, -8.8]pp     —
+                                                            mixed   18     3/0      0.250   -3 (-16.7pp)     [-33.5, +3.5]pp     —
+  lc:Qwen3-0.6B-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M        all     150    28/0     <0.001  -28 (-18.7pp)    [-24.7, -12.1]pp    no          YES (arm worse)
+                                                            same    50     1/0      1.000   -1 (-2.0pp)      [-7.2, +3.4]pp      —
+                                                            cross   30     13/0     <0.001  -13 (-43.3pp)    [-58.7, -22.5]pp    —
+                                                            third   41     8/0      0.008   -8 (-19.5pp)     [-31.1, -6.1]pp     —
+                                                            mixed   29     6/0      0.031   -6 (-20.7pp)     [-34.6, -4.1]pp     —
+  lcb:Qwen3-0.6B-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M       all     142    31/2     <0.001  -29 (-20.4pp)    [-27.4, -12.9]pp    no          YES (arm worse)
+                                                            same    49     2/0      0.500   -2 (-4.1pp)      [-10.5, +2.6]pp     —
+                                                            cross   28     11/1     0.006   -10 (-35.7pp)    [-53.6, -13.0]pp    —
+                                                            third   39     14/0     <0.001  -14 (-35.9pp)    [-49.4, -18.9]pp    —
+                                                            mixed   26     4/1      0.375   -3 (-11.5pp)     [-27.4, +6.0]pp     —
+```
+
+Read as a hint for the re-run and nothing more:
+
+- Qwen3-0.6B's partial numbers lean the OTHER way from Run 3's Gemma. On what it reached it is ahead of `formula` on
+  top-1, and on its judged recalls it is ahead on both metrics.
+- gemma-3-270m's lean the same way as the 1B's: behind on top-1.
+
+### Latency
+
+**No clean latency pass ran.** The serial pass comes after the accuracy pass, and the run was stopped first. The
+parallel means in the tables were measured under the starvation above, and they are not a latency figure for any model.
+The only latency evidence for these models is the design's screen, one model per server and warm, thinking off:
+Qwen3-0.6B 53–250 ms and Qwen3.5-0.8B 114–353 ms per verdict; gemma-3-270m from 195 ms up to its runaways.
+
+### Product findings (for the owner; nothing here was changed)
+
+1. **llama-server does not cancel an abandoned request.** On b10549 a non-streaming chat request whose client has gone
+   away keeps its slot decoding until the model stops or the context is full. The app's 2-minute provider timeout
+   therefore bounds how long a recall WAITS, not how long the GPU is busy. A judge that runs away holds a slot and GPU
+   time long after the recall has moved on.
+2. **The chat preset has no generation cap.** `WritePresets` writes nothing but `n-gpu-layers` for a chat model, and the
+   verifier sends no `max_tokens`. So one runaway can grow until it fills the child's context, which its four slots
+   share. When it does, it fails every request in flight on that child. A verdict is a short JSON array, and the
+   design's screen measured 6–21 tokens for the Qwens with thinking off.
+3. **A verification timeout degrades the whole recall to FTS, instead of failing open to the engine's page.** The
+   verifier's contract is that a failed judgement leaves the ranking alone. Here the cancellation propagated out of
+   `VerifyAsync`, the graph recall failed, and `FactIndex` fell back to its FTS page: 48 of 48 timed-out recalls,
+   `ranked: fts`, no verdict. So a slow judge costs the household the graph's ranking too, and that is exactly when it
+   is slowest.
+
+The design's own follow-up still stands: write `reasoning = off` into every chat section.
+
+### The decision rule, applied
+
+- **Qwen3.5-0.8B (833,592,096 B): VIABLE to offer for 判断.** Its `lc:` arm is not significantly worse than `formula` on
+  either metric, and coverage is **96.5%** (223/231), so it is not "mostly inert".
+  - top-1: **no significant difference** (28/34, p = 0.526, +2.5pp). The run cannot rule out a loss of up to 3.9pp.
+  - found@8: **no significant difference** (16/29, p = 0.072, +5.4pp). The interval [−0.1, +10.8]pp only just reaches
+    below zero.
+  - `lcb:` passes the rule too (top-1 p = 0.683, found@8 p = 0.864).
+  - This run's caveat: 3 of its 240 recalls timed out and are counted as FTS pages. With them and every other
+    timed-out query excluded, the outcome is unchanged (see above).
+- **Against BGE, the reference: significantly worse on found@8.** 67/1, p < 0.001, **−27.5pp**. top-1 shows no
+  significant difference (34/28, p = 0.526).
+- **Against the Run 3 control: significantly better on both metrics.** top-1 12/61, **+20.4pp**; found@8 13/38,
+  **+10.4pp**; both p < 0.001.
+- **gemma-3-1b (the control) would not be viable.** It is significantly worse than `formula` on both metrics, as in Run 3.
+- **Qwen3-0.6B (639,446,688 B) and gemma-3-270m-it (291,545,600 B): NO OUTCOME.** Their series are incomplete (see
+  above). The re-run is a separate task.
+
+### What it says
+
+- **A newer small chat model does not have to repeat Run 3's harm.** On the same seed and questions, Qwen3.5-0.8B
+  judges like a model reading the notes: no significant cost against no judge, and a large, significant lead over Gemma
+  1B.
+  - It is SELECTIVE. It endorsed nothing on 21 of its 223 verdicts (`endorsed` 202), where the 1B endorsed something on
+    every verdict it gave.
+  - Its effect is uneven across the sets. `cross` gains a lot: top-1 0/12, +20.0pp; found@8 1/21, +33.3pp; both
+    p < 0.001. `same` and `mixed`, where 公式 already puts the answer first most of the time, lean the other way:
+    top-1 13/6 and 14/10, neither significant on its own. A per-set pattern read after the fact is not a finding. It
+    matters to a household whose facts are Chinese and asked in Chinese or code-switched, which lives mostly in `same`
+    and `mixed`.
+- **It is no substitute for the reranker.** BGE puts the answer on the page on 204 of 240 queries; Qwen3.5 does on 138.
+  BGE got there as a reranker under partition, which changes what reaches the page, and costs ~0.45 s warm (Runs 2 and 4).
+- **Beside the other judges on this seed** (digest `f661eb6a056e`; quoted from the tables, not paired here), top-1 /
+  found@8 of 240:
+
+  | judge | top-1 / found@8 |
+  |---|---|
+  | 公式 | 79 / 125 |
+  | Claude judge (Run 1 `content`) | 132 / 133 |
+  | BGE (this run) | 91 / 204 |
+  | Qwen3.5-0.8B `lc:` | 85 / 138 |
+  | gemma-3-1b `lc:` | 36 / 113 |
+
+  Qwen3.5 is the first LOCAL chat judge measured here that does not lose to having none.
+- **The runaway is the practical risk, and it is every chat model's.** All four ran away in this run. In a household's
+  one-judge install that does not starve other models, but it does hold the GPU (finding 1). It fills the child's
+  shared context (finding 2). And a recall that meets the timeout loses its graph ranking (finding 3).
+
+### What it does NOT say
+
+- **Nothing about Qwen3-0.6B or gemma-3-270m** under the rule. Their partial rows are not a result.
+- **Nothing about latency.** No serial pass ran.
+- **Thinking was off by a preset key the product does not yet write.** As shipped, both Qwens would think (see the
+  design).
+- **One fixture, one run, one machine**, with five models resident under the bench's `--models-max 5`. The product holds
+  at most two, and one judge child.
+- **Sampling noise is large for a chat judge.** The control moved 25 discordant top-1 queries between two identical
+  configurations. No A/A twin of Qwen3.5 ran.
+- **Recall only.** A chat judge also annotates every fact write. Every arm here recalled over subject tags the Claude
+  CLI wrote when the seed was made, and a household on a local chat judge would have tags that model wrote.
+- **No embedder.** 语义 was off, as in Runs 1–4. Candidates came from the graph and FTS trigram alone.
+- **The timeouts inside the complete arms** (1–3 each) are counted as the product would have served them: FTS pages.
+
+**Evidence, local only.** `devtools/_lc5-evidence/` is gitignored, so it exists only on the machine that ran this. It
+holds the router log, `presets.ini`, the row stream, the bench's own output, the recovered re-analysis, both cross-run
+re-analyses, the post-hoc fallback check, and every arm's logs and `settings.json`. The screen and analysis scripts
+sit in `devtools/_lc5-screen/`, also untracked.
