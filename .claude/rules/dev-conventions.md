@@ -502,7 +502,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Lyntai's source on 2026-09-24 and switched to `FilePathOf` there — `ToolDetail`'s OWN copy of the same
   fallback chain stays, because it takes a parsed `JsonElement` for a UI label, not the `ToolCall` `FilePathOf`
   takes, so only one of the two copies is gone.
-  **Four are open today, and each says what ends it.**
+  **Five are open today, and each says what ends it.**
   **(1) `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170.** Lyntai's LLM judge
   rendered each candidate as its headline alone, and our headline is the fact's TOPIC, so the judge decided
   "did this answer?" from topics; the decorator shows it the content. Upstream closed the gap with
@@ -621,6 +621,20 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   flag and its check — nothing else in the bridge depends on it — and keep `e2e-p43` green: it counts the stored
   `system` rows against a stub that really emits those progress events, so it fails if the upstream fix did not
   land (the stub bullet under *LLM / process spawning* records the stub's half).
+  **(5) `reasoning = off` on every CHAT preset section ↔ Lyntai `TASKS.md` Part 288, "the OpenAI-shaped wire drops
+  `TextReasoning.Suppress`".** Both memory seams ask for no reasoning, and Lyntai 3.2.0's OpenAI-shaped payload
+  (`OpenAiPayload.Build`) never reads the field while its Ollama payload maps it to `think: false` — so against
+  llama-server's default `--reasoning auto`, a thinking-capable template thinks on every verification and
+  annotation: Qwen3-0.6B at 1.3–7.5 s per verdict, Qwen3.5-0.8B at 17.5 s and then past a 300 s timeout
+  (`docs/judge-bench.md`, Run 5's screen). `LlamaServerRuntime.WritePresets` writes `reasoning = off` on every chat
+  section, which the router passes to the child as `--reasoning off` (read back from the child's argv on the real
+  binary, 2026-09-24); it is byte-neutral for Gemma 3, whose template has nothing to turn off. NOT
+  `reasoning-budget = 0`, which leaves the template thinking and puts the reasoning in the content (4 of 6 replies
+  unparseable). Part 288's own text names this preset and says the adopter should be told when it ships. **On that
+  bump**: delete the `reasoning = off` line and p51's assertion of it, and re-check a Qwen judge's reply length on
+  the real binary — the wire's field has to do what the preset did. The `n-predict` cap beside it is NOT part of
+  this workaround and stays: it is our own launch contract (`LlamaServerRuntime.ChatMaxTokens` — the memory seams
+  send no `max_tokens`, and the router does not stop a child's generation when the app abandons a request).
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
@@ -894,6 +908,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   replaced a yes/no embedder test the day a third kind arrived: a boolean has no answer for "reranker", so every
   caller would have grown its own. It briefly had two copies of a substring test in two files, which is the
   drift this file keeps paying for.
+  **(4) A CHAT section launches with `reasoning = off` and `n-predict = 512`** (2026-09-24), and nothing else does.
+  Both fail silently: a thinking-capable template thinks on every judgement (the first key is open workaround (5)
+  in the Lyntai list above), and a small model's runaway fills its whole context — Run 5's screen saw gemma-3-270m
+  reach 31,073 tokens in 154 s. 512 holds every legitimate reply measured on the small models' own tokenizers (a
+  whole page's verdict 19 tokens, four subject handles ≤ 26, a verdict naming all 96 candidates of a kind-less
+  recall 282) and cuts only a verdict endorsing ~170+ candidates, which Lyntai calls the judge's failure signal and
+  which then parses as NoOpinion. On the real binary the capped runaway stopped at 512 tokens in 2.4 s. `p51` pins
+  both keys on chat sections and their absence on embedder and reranker sections; both confirmed to FAIL when
+  broken.
   Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
   (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
   already there" is not on the table. And `LlamaServerRuntime` deliberately does **not** search PATH: a

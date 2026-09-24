@@ -1397,6 +1397,22 @@ try {
       !/ctx-size/.test(sectionOf('zztest-chat-model')) && !/ctx-size/.test(sectionOf('zztest-embed-model')),
       JSON.stringify({ chat: sectionOf('zztest-chat-model'), embed: sectionOf('zztest-embed-model') }));
 
+    // A CHAT child launches with thinking OFF and a generation cap. Without the first, a thinking-capable template
+    // thinks on every judgement (Lyntai's OpenAI-shaped wire drops TextReasoning.Suppress — its TASKS.md Part 288;
+    // measured 1.3–17.5 s per verdict and past a 300 s timeout, docs/judge-bench.md Run 5's screen); without the
+    // second a small model's runaway fills its whole context. Both SILENT: no error, only seconds. Verified in the
+    // child's own argv on the real binary (--reasoning off --n-predict 512).
+    ok('THE POINT: a chat section launches with thinking OFF and a 512-token generation cap — and still offloaded',
+      /^reasoning\s*=\s*off\s*$/m.test(sectionOf('zztest-chat-model'))
+        && /^n-predict\s*=\s*512\s*$/m.test(sectionOf('zztest-chat-model'))
+        && /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf('zztest-chat-model')),
+      JSON.stringify({ chat: sectionOf('zztest-chat-model') }));
+    // …and ONLY there: an embedder or a reranker never generates, and a key its child does not need is a key whose
+    // meaning for that kind nobody measured.
+    ok('…and ONLY a chat section: no embedder or reranker carries either key',
+      ['zztest-embed-model', 'zztest-rerank-model', WINDOWED].every((id) => !/reasoning|n-predict/.test(sectionOf(id))),
+      JSON.stringify(Object.fromEntries(['zztest-embed-model', 'zztest-rerank-model', WINDOWED].map((id) => [id, sectionOf(id)]))));
+
     ok('embeddings = true goes on the EMBEDDER and nowhere else',
       /embeddings\s*=\s*true/.test(sectionOf('zztest-embed-model'))
         && !/embeddings\s*=\s*true/.test(sectionOf('zztest-chat-model')),

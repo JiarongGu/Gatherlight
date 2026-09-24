@@ -107,6 +107,11 @@ public interface ILlamaServerRuntime
 /// that can never succeed and a mislabelled chat model would refuse to talk. The answer comes from
 /// <see cref="ResourceProvisioner.GgufKind"/> — exact for what we provision, a stated name
 /// heuristic for a GGUF the household dropped in themselves, and ONE writer either way.</para>
+///
+/// <para><b>Chat models launch with thinking OFF and a generation cap</b> (<c>reasoning = off</c>,
+/// <c>n-predict</c> — chat sections only). Both fail SILENTLY without it: a thinking-capable template thinks on every
+/// judgement, and a small model's runaway fills its whole context; neither is an error, both are seconds on the path
+/// of every recall and write. See <see cref="WritePresets"/> and <see cref="ChatMaxTokens"/>.</para>
 /// </summary>
 public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 {
@@ -133,6 +138,30 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// only: a reranker whose catalogue row declares a window (<see cref="GgufCatalog.DeclaredWindow"/>) is launched
     /// with that one.</summary>
     private const int RerankBatch = 4096;
+
+    /// <summary>The most a CHAT child generates for one request — written as <c>n-predict</c>, which llama-server
+    /// uses as the default for a request naming no <c>max_tokens</c> and as the ceiling for one that does. Lyntai's
+    /// memory seams send none, so without it a small model's runaway reply fills the child's whole context (Run 5's
+    /// screen: gemma-3-270m to 31,073 tokens in 154 s) — and the router does not stop a child's generation when the
+    /// app gives up on the request, so the waste outlives the timeout.
+    ///
+    /// <para><b>Why 512.</b> The longest LEGITIMATE output of either seam, measured with <c>/tokenize</c> on the three
+    /// small chat models' own tokenizers (Qwen3-0.6B, Qwen3.5-0.8B, gemma-3-1b; 2026-09-24): a verdict naming a whole
+    /// page of 8 is 19 tokens, the annotator's four subject handles 18–26 (31–40 at twice its accepted maximum), and a
+    /// verdict naming EVERY candidate a kind-less recall can show (96) is 282 — 385–388 pretty-printed in a code
+    /// fence. 512 holds all of those with room. What it cuts is a verdict endorsing more than ~170 candidates, which
+    /// only a kind-filtered recall (up to 400; 1,495 tokens to name them all) can reach — and Lyntai names "endorses a
+    /// large fraction of what it sees" as the judge's FAILURE signal, because partition then replaces the page. A cut
+    /// reply fails to parse and is NoOpinion: the engine's page stands, which is the better outcome there anyway.
+    /// Run 5's screen measured the replies actually given, with thinking off: 6–21 tokens.</para>
+    ///
+    /// <para><b>What it bounds a runaway to: cap ÷ decode rate.</b> Measured on the real binary under the preset this
+    /// file generates (2026-09-24, llama.cpp b10549, Qwen3-0.6B-Q8_0 on one laptop GPU): a prompt asking for every
+    /// number to 100,000 stopped at exactly 512 completion tokens, <c>finish_reason: length</c>, in 2.4 s (229 tokens/s
+    /// decode). A CPU-only machine decodes several times slower, and pays that many times more — still bounded. The
+    /// same router answered a verification-shaped request (Lyntai's verifier prompt, 60 fixture notes, 1,632 prompt
+    /// tokens) in 93–276 ms with 13–19 completion tokens and no reasoning at all.</para></summary>
+    private const int ChatMaxTokens = 512;
 
     /// <summary>How long a freshly spawned router has to answer before it is killed as never-ours.</summary>
     private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(20);
@@ -275,6 +304,25 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 // `embeddings` RESTRICTS a child to embedding-only. Right for an embedder, fatal for a judge.
                 case GgufCapability.Embedding:
                     sb.AppendLine("embeddings = true");
+                    break;
+                // A CHAT child — the only kind that generates — launches with thinking OFF and a generation cap.
+                //
+                // `reasoning = off` IS A WORKAROUND FOR A LYNTAI GAP, recorded on both sides (dev-conventions: open
+                // workaround (5)). Both memory seams ask for no reasoning (TextReasoning.Suppress), and Lyntai 3.2.0's
+                // OpenAI-shaped payload drops the field — Lyntai TASKS.md Part 288, "the OpenAI-shaped wire drops
+                // TextReasoning.Suppress". llama-server's default `--reasoning auto` then opens a thinking block for any
+                // template that supports one: Qwen3-0.6B thought on every call (1.3–7.5 s), Qwen3.5-0.8B for 17.5 s and
+                // then past a 300 s client timeout (docs/judge-bench.md, Run 5's screen). The router passes this key to
+                // the child as `--reasoning off`; the template then renders its pre-closed think block, and replies ran
+                // 6–21 tokens. For a template with nothing to turn off (Gemma 3) the rendered prompt is byte-identical.
+                // NOT `reasoning-budget = 0`: the template stays in thinking mode, the model writes its reasoning into
+                // the content, and 4 of 6 replies did not parse. KEEP THIS LINE UNTIL PART 288 CLOSES — Lyntai will
+                // tell the adopter when the wire carries Suppress; then this line goes, and p51's assertion with it.
+                //
+                // `n-predict` is our own launch contract, not a workaround — see ChatMaxTokens.
+                case GgufCapability.Completion:
+                    sb.AppendLine("reasoning = off");
+                    sb.AppendLine($"n-predict = {ChatMaxTokens}");
                     break;
                 // `reranking` restricts it to /v1/rerank, and the pair must fit one batch — see RerankBatch. A row
                 // that DECLARES a smaller window gets that instead (GgufCatalog.DeclaredWindow — the read
