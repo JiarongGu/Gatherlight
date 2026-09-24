@@ -1133,3 +1133,237 @@ bar, so both arms carry the warning. No other warning fired, and none about the 
   prices a longer candidate list for a 1B model.
 - "No significant difference" is not "content alone is as good". The run did not show content alone worse; it did
   not show it equivalent either.
+
+## Run 4 — smaller rerankers (design)
+
+Written and committed BEFORE the run; the results section that follows names this commit. The screen below ran
+first, because its results decide which arms exist.
+
+**The question.** Run 2 found both catalogued rerankers, ~468 MB each, a large found@8 gain over 公式 (+34.6 /
++32.5pp). Run 3 found a 1B local CHAT judge worse than no judge. **Does a SMALLER multilingual reranker keep Run 2's
+gain on this zh/en fixture?** Measurement and screening only: no product code or catalogue row changes here, and
+whether to offer a model is the owner's decision after the results.
+
+**Candidates.** From a survey by the Lyntai session, which recorded no checksums; every file below was fetched here and
+hashed over the downloaded bytes, and each sha256 equals the repo's own LFS sha256 (and, for the two controls, the
+`GgufCatalog` pin). All sit flat in `devtools/_rr-res/gguf/<id>.gguf`, the scratch folder Runs 2–3 used.
+
+| id in this run | role | uploader / repo @ commit | upstream file | bytes | sha256 |
+|---|---|---|---|---|---|
+| `bge-reranker-v2-m3-Q5_K_M` | control (`RecommendedReranker`) | `gpustack/bge-reranker-v2-m3-GGUF` @ `3093af03b1a635e67b084b1d8c03c5f5e020fd05` | `bge-reranker-v2-m3-Q5_K_M.gguf` | 468,392,352 | `1a212007526c7083627eed92b39dd4472e90ff1374a03fb068733378220813ef` |
+| `LAMAR-600m.Q5_K_M` | control | `mradermacher/LAMAR-600m-GGUF` @ `cd4da764d5b17d9996710dbf0ef5ad31c9aed182` | `LAMAR-600m.Q5_K_M.gguf` | 468,393,760 | `ec708b20336577c63702dd8efb23060bc611933579572bf9ad47ce2eaeda546f` |
+| `mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0` | candidate (b) | `keisuke-miyako/mmarco-mMiniLMv2-L12-H384-v1-gguf-q8_0` @ `2b37d162c88e0aeb8a1b4acb2d50f0e5ade16fd5` | `mmarco-mMiniLMv2-L12-H384-v1-Q8_0.gguf` | 132,584,000 | `91d70301828ba735c22eda56adb649f48975f371337e8c8b046326b885e26eed` |
+| `xVITA-Rerank-300M-zhTW-Q8_0` | candidate (c) | `xCloudinfo/xVITA-Rerank-300M-zhTW-GGUF` @ `dde8353a0c48b9283b6b81fe73730cc4724fd517` | `xVITA-Rerank-300M-zhTW-Q8_0.gguf` | 332,894,432 | `f894c75201a42073ab71c678a21b56b74a9fa16dee31069e51ece7b50faf9ef1` |
+| `Qwen3-Reranker-0.6B-Q6_K` | reference (d), NOT a size reduction | `Voodisss/Qwen3-Reranker-0.6B-GGUF-llama_cpp` @ `eb9ad47d4e53c2a6abd6158b505f1539d1c5650c` | `Qwen3-Reranker-0.6B-Q6_K.gguf` | 494,879,136 | `5916ab2926388177a0a7b6eedfd909d214a29592ce35153a7d9ff86c08e4b99e` |
+
+- **(b)** is the Q8_0 of `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` whose size the survey quoted (132,584,000 B); the
+  same uploader's Q4_K_M is 124,925,504 B (`8423df36771089765e2163e93c79ef6b4afdd9117cb76c6df073b5a6f6bdfc52`), not used.
+  Of the other Hugging Face GGUFs under that name, `mono-of-pg`'s converts the BASE encoder
+  (`mMiniLMv2-L12-H384-distilled-from-XLMR-Large`, no ranking head) and `Gramscii-IT`'s is an F16 (242,628,704 B).
+  **It is renamed**: the upstream filename carries no "rerank", and the app types an uncatalogued GGUF by NAME
+  (`ResourceProvisioner.GgufKind`: "rerank" → reranker, otherwise chat), so under its own name the app would wire it
+  as a CHAT judge. That is a hazard for a household dropping the file in, which a catalogue row would remove; this run
+  does not measure it.
+- **(d)** Voodisss's file is byte-identical to `zhiqian99/Qwen3-Reranker-0.6B-GGUF-llama_cpp`'s (same LFS sha256,
+  repo @ `3639495043fbaf457e6808417a56d6e2d010f7cb`). `mradermacher`'s Q6_K (494,877,024 B, `a68c0e45…`) was not used:
+  that is the conversion missing `cls.output.weight` (llama.cpp #16407). At 494,879,136 B, (d) is LARGER than either
+  control, and it runs as a reference only.
+
+### The screen (2026-09-24, before this design)
+
+Each model ran on its own `llama-server`: llama.cpp **b10549**, commit `b2e5e9b28`, published 2026-08-21, Vulkan x64,
+the build the product pins. It got the flags the product's preset gives a reranking child: `--reranking`, `-ngl 99`,
+and `--ctx-size`/`--batch-size`/`--ubatch-size 4096`. Each had its own port, was killed by PID, and its port was
+re-checked free. The instrument is `devtools/_rr-screen/screen.mjs` (scratch, untracked; its JSON sits beside it).
+
+**Headers**, read from each file before it was served:
+
+| model | `general.architecture` | `tokenizer.ggml.token_type_count` | context_length | tensors | head / pooler tensors as present | tokenizer |
+|---|---|---|---|---|---|---|
+| BGE | `bert` | 1 | 8192 | 393 | `cls.weight` [1024,1024], `cls.bias`, `cls.output.weight` [1024], `cls.output.bias` [1] | `t5` (SentencePiece unigram), 250,002 |
+| LAMAR | `bert` | 1 | 8192 | 393 | as BGE | `t5`, 250,002 |
+| mMiniLM | `bert` | 1 | **512** | 201 | `cls.weight` [384,384], `cls.bias` [384], `cls.output.weight` [384], `cls.output.bias` [1] | `t5`, 250,002 |
+| xVITA | `modern-bert` | absent (no token-type tensor at all) | 8192 | 138 | `cls.weight` [768,768], `cls.norm.weight` [768], `cls.output.weight` [768], `cls.output.bias` [1] | `llama` (SentencePiece, Gemma vocab), 256,000 |
+| Qwen3 | `qwen3` | absent | 40960 | 311 | `cls.output.weight` [1024,2], labels `yes`/`no`; rerank template present | `gpt2` (`qwen2` pre-tokenizer), 151,669 |
+
+llama.cpp's converter types an XLM-RoBERTa model `bert`. `token_type_count = 1` is what marks the three XLM-R files
+(BGE, LAMAR, mMiniLM) as RoBERTa-family, which puts them outside llama.cpp #21729: that bug zeroes segment ids and so
+degrades a two-segment BERT cross-encoder. No file has a `pooler` tensor. `pooling_type` is absent from the three
+`bert` files and from xVITA's (the server's `--reranking` sets rank pooling), and is 4 (rank) in Qwen3's.
+
+**Screen results.** Two pairs were scored.
+
+- **(i)** is the app's own pair, `LlamaCppSource.ScreenQuery` / `ScreenDocuments`. The answer is SECOND in input
+  order, and the distractor shares more of the query. It is asserted exactly as `ScreenRerankerAsync` asserts it: the
+  answer strictly ahead.
+- **(ii)** is the model-card pair of `cross-encoder/ms-marco-MiniLM-L6-v2`: "How many people live in Berlin?", sent
+  with its query, in the card's wording (`Berlin had a population …`). The published scores are
+  `[8.607138, -4.320078]`, a spread of 12.9272. ORDER is asserted; the values are reported.
+
+Scores are each model's first call; every pair was sent three times.
+
+| model | loads on b10549 | served context per slot | (i) [distractor, answer] | (i) | (ii) [relevant, on-topic] | spread · ours / 12.9272 | (ii) | max drift, 3 calls |
+|---|---|---|---|---|---|---|---|---|
+| BGE | yes | 4096 | 1.758777, 5.162949 (+3.404171) | pass | 5.783929, −8.213037 | 13.996965 · 1.083 | pass | 0.0055 |
+| LAMAR | yes | 4096 | 3.532229, 7.663852 (+4.131623) | pass | 6.158854, −7.706760 | 13.865614 · 1.073 | pass | 0.0069 |
+| mMiniLM | yes | **512** | −2.525820, 9.292150 (+11.817970) | pass | 10.712934, −4.176289 | 14.889222 · 1.152 | pass | 0.0073 |
+| xVITA | yes | 4096 | 10.018924, 7.419926 (**−2.598998**) | **FAIL** | 3.385730, −5.605216 | 8.990946 · 0.696 | pass | 0.0115 |
+| Qwen3 | yes | 4096 | 0.999039, 0.999779 (+0.000740) | pass | 0.998495, 0.001490 | 0.997005 in probability, not a logit | pass | 0 |
+
+- (i) gave identical scores on all three calls for every model. The Berlin pair was also ordered for every model in
+  the brief's wording (`Berlin has a population …`).
+- **Qwen3's scores are PROBABILITIES**, because llama.cpp takes the softmax of the `yes`/`no` head. A spread measured
+  against a logit reference therefore means nothing, and a "collapsed spread" rule would misfire on it. In logit
+  terms its (i) margin is 8.415 − 6.946 = 1.469 and its Berlin spread 13.005. Its (i) margin of 0.00074 is saturated
+  near 1.0.
+- **xVITA stops here: it fails (i).** It ranks the distractor that repeats the question above the answer that states
+  the price, identically on all three calls. The product's bind screen asserts exactly this ordering, so binding it
+  would be refused with 「没有通过重排自检:答案没有排在前面」. That is the sentence `ScreenRerankerAsync` returns, derived
+  from the code, not driven through the app. Three diagnostics were run, and none changes the verdict:
+  - The same pair in Traditional characters (it is a zh-TW model) fails too: 10.727221 vs 7.127617.
+  - With the answer placed FIRST in input order, the scores are unchanged (7.419926 vs 10.018924), so it is not echoing
+    input order.
+  - Its own model card's example comes out ordered: −7.756561 vs 2.153190.
+
+  It loads and it serves, but on the one pair built to catch it, it prefers lexical overlap. `modern-bert` does load
+  on b10549, so the model card's "2026-08 or later" requirement holds.
+- **Supplementary, not a gate**: Lyntai's four-document Apollo fixture. The answer came first for all five models.
+  The unrelated document came last for BGE, LAMAR and Qwen3, but not for mMiniLM (bread −9.229800, just above the
+  lunar eclipse at −9.697894) nor for xVITA (bread −7.305520, above both on-topic distractors).
+
+**The 512-token question.** It concerns mMiniLM only; the other four serve 4096-token slots.
+
+llama.cpp serves mMiniLM with 512-token slots whatever the preset asks. It logs
+`n_ctx_seq (4096) > n_ctx_train (512) -- possible training context overflow`, then `n_ctx_slot = 512`. So the
+product's reranker preset LOADS it unchanged. A pair is formatted as query + document + 4 special tokens; that count
+was read back from the server's own figure in its refusal. Measured on the served model with `/tokenize`:
+
+- **Over-long input.** 1,360 Chinese characters (1,041 tokens), sent beside a short document, got
+  `400 input (1052 tokens) is larger than the max context size (512 tokens). skipping`. The WHOLE call was refused
+  and the short document went unscored too, which the fail-open verifier turns into no verdict.
+- **The shipped cap.** `RerankInputCap.MaxChars` allows 1,000 characters; of common Chinese that is 770 tokens, and
+  the pair got `400 input (781 tokens) is larger than the max context size (512 tokens). skipping`. With the screen's
+  7-token query, at most 650 characters of that text fit. **So at the shipped cap, this model would refuse every
+  recall that surfaces a long fact.** English is about 4× cheaper: 1,000 characters is 238 tokens.
+- **This fixture.** The longest fact is 101 characters / 29 tokens, the longest question 164 characters / 39 tokens,
+  and the longest pair 72 tokens. **0 of 14,400** question × fact pairs exceed 512. The seed database holds exactly
+  the 60 fixture facts (content ≤ 101 characters, topic ≤ 31).
+- **On this tokenizer, characters bound tokens.** On every string tested, tokens ≤ UTF-16 units + 1 (the +1 is a
+  leading `▁`). The test covered:
+  - 20 adversarial strings: rare CJK inside and outside the BMP, emoji sequences, kana, hangul, Arabic, Devanagari,
+    Thai, Cyrillic, spaced letters, spaced CJK, digits, full-width characters, punctuation, whitespace runs,
+    code-switched text, zero-width and combining marks, and control characters;
+  - every prefix of eight of them;
+  - all 300 fixture strings.
+
+  So a CHARACTER cap is a hard bound for this model family, not an estimate. That holds for SentencePiece without byte
+  fallback, and would NOT transfer to a byte-level tokenizer.
+
+### Fitted input — requested for this run, and not in it
+
+After the screen, the owner allowed the input design itself to change. A candidate whose only problem is the 512-token
+context is not to be rejected for it; it is to be measured with its input FITTED to the model. The request had two
+parts:
+
+- a measurement knob in `RerankInputCap`, `GATHERLIGHT_RERANK_INPUT_CAP=<chars>`, announced like the other judge knobs
+  and pinned blank in the bench;
+- fitted-cap arms for mMiniLM, and for both controls at the same cap.
+
+**The product-code change was not permitted in this session, so no fitted-cap arm runs.** It would not have changed a
+single input on this fixture, which is why the question is still answerable:
+
+- **The fitted cap would have been 400 characters.** 512 − 4 special tokens − 39 (the fixture's longest question) −
+  1 (the prefix bound above) leaves 468. Rounding down to 400 leaves room for a query of up to 107 tokens.
+- **No candidate here is long enough to be cut.** Every candidate this run can show a reranker is ≤ 101 characters,
+  so any cap ≥ 101 cuts nothing. A fitted-cap arm would have been sent byte-identical documents to the shipped-cap arm
+  of the same model.
+  - **For mMiniLM, the shipped-cap arm IS its fitted-input arm on this fixture.**
+  - For BGE and LAMAR, capped arms would have been identical-input twins: a run-to-run noise check, not a measure of
+    what the cap costs.
+- **What a cap COSTS needs facts longer than it.** This fixture has none, and a long-fact fixture needs a reseed:
+  Claude annotation calls, which is quota this run may not spend. That is a stated gap, not a result.
+
+### Arms, command and configuration
+
+```
+node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M,LAMAR-600m.Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0,Qwen3-Reranker-0.6B-Q6_K \
+  --resources=devtools/_rr-res --port-base=5620 --llama-port=5660 > devtools/_judge-bench-rr4.txt 2>&1
+```
+
+Ten arms run in ONE run, so every comparison is paired within it:
+
+- `formula`, and its engine A/A twin `formula2`;
+- a partition (`rr:`) arm and a fuse (`rrf:`) arm per reranker.
+
+xVITA does not run, because it failed (i). No Claude arm runs, and the seed is the one Runs 1–3 used, reused. The bench
+is unchanged. It writes the product's reranker preset for every reranker, mMiniLM included; the screen showed that
+llama.cpp accepts that preset for mMiniLM and serves it at 512.
+
+**Every arm's configuration.** It is stated because a reranker's gain does not transfer without the configuration it
+was measured in.
+
+- **Base:** this run's `formula` arm, i.e. 公式 with no verification, over the seed's CLI-written subject tags. In
+  Runs 1–3 that arm read 79/240 top-1 and 125/240 found@8. Every Δ in the results is taken against THIS run's row.
+- **Embedder: none.** 语义 is unbound (the seed's `settings.json` has no memory section). There is therefore no vector
+  store and no semantic seed channel, and candidates come from the graph and FTS trigram alone.
+- **`EndorseCount` = 8** (`RecallFactsTool.DefaultRecallLimit`). That is also the page size (`limit 8`).
+- **Candidates:** at most 60 per recall, since the corpus holds 60 facts.
+- **Input and combination:** each reranker sees the candidates through `RerankInputCap` at the shipped 1,000
+  characters, under partition (`rr:`) or fuse (`rrf:`).
+
+**Measured**, as in Run 2:
+
+- per set and on `all`: top-1, found@8, MRR, `judged`/`graph` and `endorsed`;
+- the serial median latency (12 queries, counting only recalls that carried a verdict), and the parallel mean;
+- claude-cli calls per arm;
+- for every reranker, against `formula` and against every other reranker: the paired McNemar exact p and the
+  Agresti–Min 95% interval.
+
+### Decision rule
+
+A candidate is **viable for the owner to consider** when all three of these hold:
+
+1. **It screens correctly.** It loads on b10549 and passes (i) and (ii). This is already applied: mMiniLM and Qwen3
+   pass, xVITA does not.
+2. **No call fails on this fixture.** `judged` must equal `graph` in every set, in both of its arms. A reranker abstains
+   only on a fault, and the bench warns on any abstention.
+   - Every abstention is traced to its cause in the arm's log and the router log. One caused by over-long input
+     disqualifies, and so does any other failure.
+   - mMiniLM is judged at its fitted input, which on this fixture is its shipped-cap arm (see above). Its failure at
+     the SHIPPED cap on long facts is an integration requirement the results will state, not a disqualification.
+3. **found@8 is NOT significantly worse than BGE.** The comparison is partition against partition, on `all`, within
+   this run. The candidate fails this rule if and only if the exact McNemar p < 0.05 AND c − b < 0, where
+   b = `rr:bge-reranker-v2-m3-Q5_K_M` hit & candidate miss. The bench's per-set veto does not rescue a candidate.
+
+For a viable candidate, the found@8 result against BGE is recorded as exactly one of these:
+
+- **equivalent**: the 95% interval on `all` lies inside ±3pp;
+- **no significant difference**: neither worse nor equivalent. "Not significantly worse" is not "equivalent", so the
+  interval's lower bound is quoted as the loss the run cannot rule out;
+- **significantly better**.
+
+Reported beside it, outside the rule: top-1 against BGE, both metrics against `formula` and against LAMAR, serial and
+parallel latency, and exact bytes.
+
+- **"Keeps Run 2's gain"** is how the question words it. It means: the candidate is viable, AND its partition arm's
+  found@8 is a finding over `formula` in this run (p < 0.05, better).
+- **Multiplicity.** Each candidate is tested against BGE at 0.05, with no correction. That errs towards calling a
+  candidate worse, which is the conservative direction for a rule whose output is "worth considering".
+- **Qwen3 is a reference.** The rule is applied to it for completeness, but a model larger than both controls cannot
+  answer a question about smaller ones.
+
+**Guards**, checked before any candidate is read:
+
+- **The formula digest.** The `formula` positions digest must equal **`f661eb6a056e`**, as in Runs 1–3. If it does
+  not, the within-run pairing still stands, but no number here may be set beside another run's.
+- **The engine A/A pair.** `formula` against `formula2` must be quiet on `all` (p ≥ 0.05), or the run is suspect.
+- **Every reranker arm's startup.** Each must read back 判断 running `llama-cpp · <its id>`, raise no startup warning,
+  and make no claude-cli call. The bench enforces the first two at startup and warns on the third.
+- **Kind.** Both uncatalogued ids contain "rerank", so the app types them as rerankers. The router log must show each
+  model served. A model wrongly typed as chat would abstain on every recall and so fail rule 2.
+- **Can the instrument express the 512 failure? No.** With 0 of 14,400 pairs over 512 tokens, a clean mMiniLM row says
+  nothing about long facts. That evidence comes from the screen, never from this run.
+- **No reranker A/A pair.** The bench runs each model once per list. As context outside the decision, a re-analysis
+  pairs this run's BGE with Run 2's (the same configuration and seed, and the same digest if the guard holds). That is
+  the nearest thing to a model A/A this data has.
