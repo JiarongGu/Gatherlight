@@ -161,12 +161,23 @@ public static class GgufCatalog
     /// <para><b>What happens on a SLOW machine</b> (2026-09-24): the per-call window count was tuned on that GPU, so a
     /// chunked call is now sized by the speed this process measures (<see cref="RerankPace"/>) to fit half the 60-second
     /// verification deadline — fewer windows per long candidate, down to one, the cut, whose cost Run 6 measured (an answer
-    /// past the first window is not read). The clause says exactly that, and 尽量 rather than a promise, for two reasons
-    /// it now states (review, 2026-09-25): the pace starts from the GPU figure after every launch and learns only from the
-    /// calls it times, so the first recall after a launch that has too many long facts to read can still run to the full
-    /// minute and come back unjudged — the verification cut there is NoOpinion, the engine's own order — and none of it
-    /// has run on a CPU-only machine (「这一点还没有在只有 CPU 的机器上实测过」). "Can still", not "will": slow short-fact
-    /// recalls before it may already have taught the pace (<see cref="RerankPace"/>'s rules).</para>
+    /// past the first window is not read). The clause says exactly that, and 尽量 rather than a promise, for the reasons
+    /// it now states (review, 2026-09-25), each what the code does:
+    /// <list type="bullet">
+    /// <item>The pace starts from the GPU figure after every launch and learns only from the calls it times, so the first
+    /// recall after a launch that has too many long facts to read can still run to the full minute and come back unjudged
+    /// (the verification cut there is NoOpinion, the engine's own order). "Can still", not "will": slow recalls big enough
+    /// to measure may already have taught the pace.</item>
+    /// <item>A cut proves only a lower bound, so after one past the budget every recall with a long fact reads ONE window
+    /// per fact until one comes back in time, and that answer sets the pace (<see cref="RerankPace.AfterCut"/>). The clause
+    /// said nothing about this at first — worse, halving from the bound, as the pace then did, a machine 30× slower
+    /// waited the minute four times running; one window per fact makes that one wait wherever one window each can finish
+    /// in time.</item>
+    /// <item>Where even one window per fact cannot finish in time, every such recall waits the minute and comes back
+    /// unjudged — no sizing can fix it, since fewer windows than candidates would leave one unscored — and the clause says
+    /// so rather than implying the pace always catches up.</item>
+    /// <item>None of it has run on a CPU-only machine (「这一点还没有在只有 CPU 的机器上实测过」).</item>
+    /// </list></para>
     ///
     /// <para><b>Mixed recalls are unmeasured, for every reranker</b>: Runs 6 and 6c showed each reranker recalls where every
     /// candidate was long or every one was short, and a long note's best window has up to five chances to score high where a
@@ -178,7 +189,9 @@ public static class GgufCatalog
         + "BGE 与 LAMAR 每次检索约 3.2 秒,mMiniLMv2 约 1.2 秒。"
         + "在只有 CPU 等较慢的机器上,应用会按实测的速度让长事实少分几段来读(最少只读开头一段,那时写在后面的答案就读不到),"
         + "尽量让判断在它最多等待的一分钟内做完 —— 但每次启动后它都先按显卡上的速度估计,所以启动后头一次要读的长事实太多时,"
-        + "仍可能等满一分钟、那次检索按没有判断时的顺序返回;这一点还没有在只有 CPU 的机器上实测过。"
+        + "仍可能等满一分钟、那次检索按没有判断时的顺序返回;之后遇到长事实的检索会先每条只读开头一段,"
+        + "等有一次在时限内做完、测出这台机器的速度,再按测出的速度分段。一次要读的事实多到每条只读开头一段也来不及时,"
+        + "这类检索每次都会等满一分钟、按没有判断时的顺序返回。这一点还没有在只有 CPU 的机器上实测过。"
         + "长短事实混在一起的检索还没有量过"
         + "(长事实取几段里最高的一段,得高分的机会比只有一段的短事实多))";
 
@@ -337,7 +350,8 @@ public static class GgufCatalog
         // p = 0.180, 95% [−4.6, +0.5]pp), and against LAMAR a measured loss (9/0, p = 0.004) — both said.
         // THAT PARITY IS A SHORT-FACT RESULT, so the note says 「(事实都很短时)」 on it (review, 2026-09-25). On Run 6c's
         // 60 long notes, both read in windows, the same pairing is a loss: found@8 182 against BGE's 201 of 240 (33/14,
-        // p = 0.008, 95% [−13.4, −2.3]pp), mostly past 1,000 characters (38 against 51 of 60, 17/4, p = 0.007); top-1 79
+        // p = 0.008, 95% [−13.4, −2.3]pp), mostly past 1,000 characters (38 against 51 of 60, 17/4 — one of 16 position cells,
+        // so the note quotes it without a p and calls it descriptive: 「按位置拆开的数字只作描述」); top-1 79
         // against 87 (22/14, p = 0.243). It is a POST-HOC descriptive pairing — computed from the saved rows with
         // `--report-only`, not registered before the run — and the note says so (「测完后另算的比较」);
         // docs/judge-bench.md Run 6c has the table.
@@ -388,8 +402,8 @@ public static class GgufCatalog
             + "(240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页),答案在笔记末尾时,只读开头的旧做法把答案带进前八"
             + "只有 4/60,比不开判断(29/60)还差;分段读之后是 44/60。答案在开头时两种做法没有显著差别(52/60 与 50/60)。"
             + "在同一批长笔记上、两者都分段读时(测完后另算的比较),它把答案带进前八显著少于 BGE:182/240 对 201/240,"
-            + "33 题只有 BGE 做到、14 题只有它做到(p = 0.008),差距主要在答案写在 1,000 字以后的笔记(38/60 对 51/60,"
-            + "p = 0.007);排第一是 79/240 对 87/240,没有显著差别。"
+            + "33 题只有 BGE 做到、14 题只有它做到(p = 0.008),差距主要在答案写在 1,000 字以后的笔记"
+            + "(38/60 对 51/60;按位置拆开的数字只作描述);排第一是 79/240 对 87/240,没有显著差别。"
             + "5 段也读不完的事实(1,265–2,530 字以上,提问越长、每段越短)还没有量过:段与段之间会有读不到的部分,"
             + "事实越长读不到的越多 —— 长到 5 段总长的两倍时,约一半读不到。"
             + "许可:模型卡写的是 Apache-2.0(下载用的 GGUF 仓库没有写明许可),但训练它用的 MS MARCO 数据只许非商业使用。",

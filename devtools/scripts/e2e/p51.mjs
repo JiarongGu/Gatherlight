@@ -1291,11 +1291,20 @@ try {
         rerankerNotes.every(([, n]) => /每次启动后它都先按显卡上的速度估计/.test(n) && /仍可能等满一分钟/.test(n)
           && /按没有判断时的顺序返回/.test(n) && /这一点还没有在只有 CPU 的机器上实测过/.test(n)),
         JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('尽量'), n.indexOf('尽量') + 120)])));
+      // A cut proves only a lower bound, so after one the pace reads ONE window per long fact until a recall answers in
+      // time (RerankPace.AfterCut) — and where even that cannot finish, every such recall waits the minute. The clause
+      // said neither until review (2026-09-25), and the pace then halved from the bound into repeated cuts.
+      ok('…and says what follows a cut — one window per long fact until a recall finishes in time — and that too many facts wait the minute every time',
+        rerankerNotes.every(([, n]) => /之后遇到长事实的检索会先每条只读开头一段/.test(n) && /等有一次在时限内做完、测出这台机器的速度/.test(n)
+          && /一次要读的事实多到每条只读开头一段也来不及时,这类检索每次都会等满一分钟/.test(n)),
+        JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('之后遇到'), n.indexOf('之后遇到') + 140)])));
       // mMiniLMv2's parity with BGE is a SHORT-fact result: on Run 6c's long notes, both read in windows, it brought the
       // answer onto the page significantly less often (182 against 201 of 240, 33/14, p = 0.008) — post hoc, and said so.
       ok('…and mMiniLMv2\'s parity with BGE is qualified as short-fact, beside the long-note loss with its p and that it was computed afterwards',
         /没有测出显著差别\(事实都很短时\)/.test(String(mini?.note)) && /182\/240 对 201\/240/.test(String(mini?.note))
-          && /p = 0\.008/.test(String(mini?.note)) && /38\/60 对 51\/60/.test(String(mini?.note)) && /p = 0\.007/.test(String(mini?.note))
+          && /p = 0\.008/.test(String(mini?.note)) && /38\/60 对 51\/60/.test(String(mini?.note))
+          // The position cell is one of 16 and descriptive, so it carries no p (review, 2026-09-25).
+          && !/p = 0\.007/.test(String(mini?.note)) && /按位置拆开的数字只作描述/.test(String(mini?.note))
           && /测完后另算的比较/.test(String(mini?.note)),
         String(mini?.note));
 

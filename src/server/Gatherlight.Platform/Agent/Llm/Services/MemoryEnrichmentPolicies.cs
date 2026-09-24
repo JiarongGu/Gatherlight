@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Lyntai.Memory.Annotation;
@@ -391,14 +392,16 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// 4,096-token batch the preset launches such a reranker with (<see cref="LlamaServerRuntime.RerankBatch"/>). It used to
 /// stay uncut, argued from recall queries being short; but the agent writes them, one pair past the batch refuses the
 /// WHOLE call, and the verifier is fail-open, so a long enough question would silently leave every recall it made
-/// unjudged. With the cap a pair is at most 2,045 + 1,000 characters, and on the tokenizer family these rerankers use (a
-/// text NFKC leaves unchanged costs at most one token per character plus one — the NFKC paragraph's measurement; BGE
-/// and LAMAR tokenized Run 6c's windows alike, 857 and 858 tokens for the largest task) that is ~3,050 of the 4,096
-/// tokens: a hard bound for such text, with ~1,000 tokens left for what it does not cover. Compatibility characters
-/// stay a stated limit here, since the text is not normalised: at the costliest rate measured (㌚, 6 tokens) the
-/// question and a candidate together would need ~680 of them before the pair could overflow — possible in principle,
-/// not guarded; so does a household-dropped model with a greedier tokenizer. The cap changes no question any bench run
-/// has asked: the fixtures' longest is 164 characters.</para>
+/// unjudged. <b>The question is COUNTED after NFKC and SENT as written</b> (<see cref="CapCountedNfkc"/>) — counted as
+/// the declared path counts it, because the tokenizer normalises before it counts, and left un-normalised because
+/// nothing else on this path is. So on the tokenizer family these rerankers use (a text costs at most one token per
+/// NFKC character plus one — the NFKC paragraph's measurement; BGE and LAMAR tokenized Run 6c's windows alike, 857 and
+/// 858 tokens for the largest task) the question costs at most 2,046 tokens whatever it contains, and a pair of an
+/// ordinary 1,000-character candidate beside it ~3,050 of the 4,096: a hard bound. The CANDIDATE stays counted raw, so
+/// compatibility characters there are the stated limit: each ㌚ costs 6 tokens where an ordinary character costs one, so
+/// ~210 of them in one window overflow the pair beside a question at the cap, ~610 beside a short one — possible in
+/// principle, not guarded; so is a household-dropped model with a greedier tokenizer. The cap changes no question any
+/// bench run has asked: the fixtures' longest is 164 characters.</para>
 ///
 /// <para><b>A CUT WAS NOT BETTER FOR THE CUT FACT ITSELF — measured, so a long candidate is scored in windows</b>
 /// (<c>docs/judge-bench.md</c> Runs 6 and 6c, 2026-09-24). This class used to cut every candidate to the budget and
@@ -488,13 +491,13 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
     public const int UndeclaredQueryMaxChars = (LlamaServerRuntime.RerankBatch - PairOverheadTokens) / 2;
 
     /// <summary>The query as it will be sent, and how many characters each candidate may then run — for one call.
-    /// Without a usable window: the query cut to <see cref="UndeclaredQueryMaxChars"/>, not normalised, and
+    /// Without a usable window: the query cut to <see cref="UndeclaredQueryMaxChars"/> counted after NFKC, sent as written, and
     /// <see cref="MaxChars"/>. With one: the query NFKC-normalised and cut to half the budget, and each candidate given
     /// what the query left — counted, like the query, on its normalised text (<see cref="Prepare"/>) — so every pair
     /// fits; see the class comment for why a character count of the normalised text bounds the tokens.</summary>
     public static (string Query, int PerCandidate) Fit(string query, int? window)
     {
-        if (UsableWindow(window) is not { } tokens) return (Cap(query, UndeclaredQueryMaxChars), MaxChars);
+        if (UsableWindow(window) is not { } tokens) return (CapCountedNfkc(query, UndeclaredQueryMaxChars), MaxChars);
         var fitted = Cap(Prepare(query, tokens), (tokens - PairOverheadTokens) / 2);
         return (fitted, PerCandidate(fitted, tokens));
     }
@@ -627,6 +630,41 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
             sb.Append(char.IsSurrogate(c) ? '\uFFFD' : c);
         }
         return sb.ToString();
+    }
+
+    /// <summary>The longest head of <paramref name="text"/> whose length COUNTED AFTER NFKC is at most
+    /// <paramref name="max"/>, the text itself kept as written — the undeclared-window question's cap (see the class
+    /// comment). Counted one text element at a time and summed, as Lyntai's D177 counts: never below the NFKC length of
+    /// the whole, since composing across elements only shortens it, so the head's NFKC length is at most the sum. A text
+    /// already in NFKC and within the bound is returned as it came.</summary>
+    public static string CapCountedNfkc(string text, int max)
+    {
+        if (max <= 0) return "";
+        if (text.Length <= max && IsNfkc(text)) return text;
+        var counted = 0;
+        var end = 0;
+        var elements = StringInfo.GetTextElementEnumerator(text);
+        while (elements.MoveNext())
+        {
+            var element = elements.GetTextElement();
+            counted += NfkcLength(element);
+            if (counted > max) break;
+            end = elements.ElementIndex + element.Length;
+        }
+        return text[..end];
+    }
+
+    private static bool IsNfkc(string text)
+    {
+        try { return text.IsNormalized(NormalizationForm.FormKC); }
+        catch (ArgumentException) { return false; }
+    }
+
+    // A lone surrogate makes Normalize throw; it is one unit, as Prepare's U+FFFD would be.
+    private static int NfkcLength(string element)
+    {
+        try { return element.Normalize(NormalizationForm.FormKC).Length; }
+        catch (ArgumentException) { return element.Length; }
     }
 
     /// <summary>At most <paramref name="max"/> UTF-16 units, never splitting a surrogate pair (so a cut can land one

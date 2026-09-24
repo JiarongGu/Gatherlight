@@ -291,7 +291,8 @@ right for this GPU, so it is a ceiling: below it, `RerankPace` times each rerank
 token, each character counted at the rate measured above for its script — 0.83 for CJK, 0.25 for English — so a pace
 learned on English does not under-predict Chinese) and a chunked call carries only the windows it predicts will be
 scored within half the 60 s verification deadline — fewer per long candidate on a slower machine, down to one, the
-cut. Not yet run on a CPU-only machine.
+cut; after a call the deadline cut, which proves only a lower bound, one per candidate until a call answers and times
+the machine. Not yet run on a CPU-only machine.
 
 **An upgrade stripped every vector from an install on 语义 · llama.cpp — reproduced, then fixed** (same build,
 2026-09-24). Lyntai's graph engine does not fail a write whose embed fails: `GraphMemoryEngine.SearchAsync` logs

@@ -667,7 +667,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   library policy — "fitting a call to a latency budget is a policy for the deployment that measured it". So D177 now
   does what our budget does under a declared window — and ours is query-aware ONLY there: for BGE and LAMAR, which
   declare none, `RerankInputCap.PerCandidate` is 1,000 characters whatever the query (the query itself is capped at
-  2,045 characters since 2026-09-25, half the 4,096-token batch). **What remains ours**: consecutive windows overlap by
+  2,045 characters counted after NFKC since 2026-09-25, half the 4,096-token batch). **What remains ours**: consecutive windows overlap by
   AT LEAST a quarter (settable in D177 as an `Overlap` of 0.25, where it is an upper bound — the next piece restarts at
   the earliest sentence end or space inside it, else where the last one ended); under a declared window we SEND the
   NFKC text, where D177 counts NFKC and sends the original (the tokenizer normalises either way — identical token ids
@@ -1119,8 +1119,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   dropped in) the QUESTION is capped too, at 2,045 characters — half the pair budget of that 4,096-token batch, the
   declared-window rule applied to it (`RerankInputCap.UndeclaredQueryMaxChars`, reading `LlamaServerRuntime.RerankBatch`).
   It went uncut until 2026-09-25, argued from recall queries being short; the agent writes them, and one long enough
-  would have refused every call it was in, silently. `e2e-p52` case 6c sends 2,812 characters and asserts 2,045, the
-  question's head; confirmed to FAIL without the cap.
+  would have refused every call it was in, silently. The question is COUNTED after NFKC (`RerankInputCap.CapCountedNfkc`,
+  per text element as D177 counts) and SENT as written, because the tokenizer normalises before it counts — so it costs
+  at most 2,046 tokens whatever it contains. A CANDIDATE on that path stays counted raw: ~210 ㌚ in one window overflow
+  the pair beside a question at the cap, ~610 beside a short one — the stated limit. `e2e-p52` case 6c sends 2,812
+  characters and asserts 2,045, the question's head, and a question of 1,000 ㌚ (5,020 after NFKC) cut by its NFKC
+  length; each confirmed to FAIL without its half.
   **A CUT IS WORSE THAN NO JUDGE for the note it cuts, so a long candidate is scored in windows** (2026-09-24,
   `docs/judge-bench.md` Runs 6 and 6c). The bound used to be a cut, argued as "better than a refused call" — true for
   the recall's OTHER candidates, false for the cut one: under partition the reranker endorses its eight best and
@@ -1147,23 +1151,34 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   rate — 0.83 from U+2E80 up, 0.25 below, one writer (`RerankPace.Tokens`) shared by the timing and the sizing — and
   gives each long candidate only the windows that fit half the deadline, down to one, the cut. It counted CHARACTERS
   until review (2026-09-25), which let a pace learned on English under-predict Chinese by ~3.3×, past the margin.
-  **Its rules, each a judgement stated as one**: a call a deadline cut off raises it at once to what that call proved; a
-  slower ANSWERED call is believed at once only on a repeat (the call before it slow too, or cut off) — alone it moves
-  the estimate halfway in log space, because one outlier (a model reloading, a moment of contention) would otherwise
-  cut every long note of the next recalls to its first window; a faster call lowers it halfway, but only a CHUNKED one —
-  a pass-through call (every document one window) may raise it and never lowers it, since short pairs cost less per
-  token and a household of short facts pulled the estimate down on every recall; a failed answer teaches nothing.
-  Seeded with the GPU figure, so on that GPU nothing changes. The household note says what a slow machine does, that
-  the first recall after a launch with too many long facts can still wait the full minute and come back unjudged, and
-  that none of it is measured on a CPU-only machine — and so are the per-script rates beyond English and CJK, and
-  whether rerank time follows tokens at all off a GPU. Proof: `e2e-p52` 6e (the deadline knob at 12 s, a fake answering
-  in 1.6 ms per pair token: all 5 windows, all 5 again — the lone slow call not believed — then 4, and still 4 after a
-  fast short-only recall), 6f (6 s, 1.8 ms: the first recall cut at the deadline and unjudged, the next 2 windows and a
-  verdict — the cut-off path), 6g (12 s, 3 ms: a pace learned on an English note sizes a Chinese one by its tokens —
-  fewer windows and a verdict, where per-character counting sends all 5 and is cut). Each was confirmed to FAIL with
-  its own rule removed, and only its own assertion. The bench cannot see the pace in its tables, so judge-bench counts
-  the pace's Information line in every arm's log and VOIDS a run in which it fired (`docs/judge-bench.md`, "The bench
-  and the pace").
+  **Its rules, each a judgement stated as one** (reviewed twice on 2026-09-25; `RerankPace`'s comment has the reasons):
+  a call too SMALL to measure — its scoring, at the current estimate, under 4 × the 50 ms overhead allowance, ~4,000
+  tokens at the seed — teaches nothing, because a 33-token call taking 150 ms read 60× the seed and a 17 s model reload
+  on a 30-token call 565 ms per token; a slower ANSWERED call is believed at once on a repeat (the last call that taught
+  anything slow too — answered slower, or cut having proved it slow — and the flag stays set, so a third in a row is
+  believed too), and alone moves the estimate halfway in log space and at most ×4; a faster call lowers it halfway,
+  arithmetically — a single fast call can at most halve it, so a misleading one under-predicts the next by at most the
+  2× the margin covers — and only a CHUNKED one: a pass-through call may raise it, never lower it; a failed answer
+  teaches nothing. **A CUT PROVES ONLY A LOWER BOUND**, and sizing by it was the second review's finding: the next call
+  was sized to half the cut one, and was cut again whenever the first's true time was over twice the deadline — a
+  machine 30× slower waited the minute four times running (612 → 306 → 153 → 76 s). So a cancellation teaches only if
+  the call had already run longer than predicted (a user's stop proves nothing), and one past the budget puts the pace
+  AFTER CUT: every chunked call sends ONE window per candidate until one answers, and that answer is believed whole —
+  one minute-wait wherever one window each can finish in time, and a wait on every such recall where it cannot, which
+  no sizing can fix. Seeded with the GPU figure, so on that GPU nothing changes. The household note says what a slow
+  machine does, that the first recall after a launch with too many long facts can still wait the full minute, what
+  follows a cut, that too many facts wait the minute every time, and that none of it is measured on a CPU-only machine
+  — and so are the per-script rates beyond English and CJK, whether rerank time follows tokens at all off a GPU, and
+  whether llama-server stops scoring a batch whose request was cancelled. Proof, `e2e-p52`: 6e (the deadline knob 12 s,
+  a fake at 1.6 ms per pair token: all 5 windows, all 5 again — the lone slow call not believed — then 4; still 4 after
+  a fast pass-through big enough to teach, and still 4 after a 3.3 s call of 33 tokens, which the floor ignores), 6f
+  (6 s, 4 ms: the first recall ~17 s true, cut and unjudged; the next ONE window and a verdict, one "no verdict" line
+  in the log), 6g (16 s, 2.2 ms: a pace learned on four English notes sizes two Chinese ones by their tokens — fewer
+  windows and a verdict, where per-character counting sends all 10 and is cut). Each was confirmed to FAIL with its own
+  rule removed — the floor, the after-cut rule, the lone-raise damping, the pass-through no-lower, the script weights —
+  and only its own assertion. The bench cannot see the pace in its tables, so judge-bench counts the pace's Information
+  line in every arm's log and VOIDS a run in which it fired, and refuses a VOID run as a `--baseline`
+  (`docs/judge-bench.md`, "The bench and the pace").
   `GATHERLIGHT_RERANK_CHUNKING=off` (`RerankChunking`) is KEPT as a measurement knob so the bench can reproduce the cut
   Runs 2–6 measured; judge-bench's `rr`/`rrf` arms pin it off and `rrk` on. **Two traps met measuring it**: llama.cpp's
   scores drift in the third decimal between identical calls, so an A/B that must be byte-identical needs identical

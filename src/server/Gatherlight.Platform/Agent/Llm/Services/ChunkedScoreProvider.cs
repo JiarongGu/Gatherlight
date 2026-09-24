@@ -71,7 +71,8 @@ public static class RerankChunking
 /// went 2.0 → 3.2 s on BGE and 0.5 → 1.2 s on mMiniLMv2, on one GPU. Short candidates cost nothing extra. A call carries at
 /// most <see cref="RerankInputCap.MaxWindowsPerCall"/> windows — a COUNT tuned on that GPU — and, below it, only as many as
 /// <see cref="RerankPace"/> predicts will be scored within half the verification deadline on THIS machine: fewer windows
-/// per candidate on a slow one, down to one, which is the cut.</para>
+/// per candidate on a slow one, down to one, which is the cut — and one, after a call the deadline cut, until a call
+/// answers (<see cref="RerankPace.AfterCut"/>).</para>
 ///
 /// <para><b>A WORKAROUND FOR A LYNTAI GAP, recorded on both sides</b> (dev-conventions: open workaround (6)). Lyntai has
 /// closed the gap upstream — <c>docs/task-archive.md</c> Part 287 / D177, with Part 289 closed into it; committed and NOT
@@ -133,10 +134,19 @@ public sealed class ChunkedScoreProvider : IScoreProvider
             return await TimedAsync(request, RerankPace.Call.PassThrough, ct).ConfigureAwait(false);
 
         // As many windows per document as the call can carry: MaxWindows, lowered — the same for every document — past
-        // the per-call ceiling, or past what this machine scores within the time budget, down to one: the cut.
+        // the per-call ceiling, or past what this machine scores within the time budget, down to one: the cut. After a
+        // call the deadline cut, ONE — until an answered call has timed the machine (RerankPace.AfterCut).
         var byCount = RerankInputCap.WindowsPerDocument(request.Documents, size);
-        var perDocument = RerankInputCap.WindowsPerDocument(request.Documents, size, request.Query, _pace.PairTokenBudget());
-        if (perDocument < byCount)
+        var afterCut = _pace.AfterCut;
+        var perDocument = afterCut ? 1
+            : RerankInputCap.WindowsPerDocument(request.Documents, size, request.Query, _pace.PairTokenBudget());
+        // PARSED ELSEWHERE — keep "window(s) per long candidate instead of" in both messages: judge-bench's PACE_LINE counts
+        // it (a bench run in which it appears is VOID) and e2e-p52 cases 6e and 6f assert it.
+        if (perDocument < byCount && afterCut)
+            _log?.LogInformation(
+                "{Id}: {Windows} window(s) per long candidate instead of {ByCount}, until a call answers in time — the last was cut at the verification deadline, which says only that this machine is slower than {Pace:0.###} ms per 1,000 pair tokens",
+                Id, perDocument, byCount, _pace.MsPerToken * 1000);
+        else if (perDocument < byCount)
             _log?.LogInformation(
                 "{Id}: {Windows} window(s) per long candidate instead of {ByCount}, so the call fits ~{Budget:0.#} s at the {Pace:0.###} ms per 1,000 pair tokens (counted by script) measured here",
                 Id, perDocument, byCount, _pace.Budget.TotalSeconds, _pace.MsPerToken * 1000);
@@ -202,41 +212,62 @@ public sealed class ChunkedScoreProvider : IScoreProvider
 /// <c>docs/self-managed-llm-runtime.md</c>), so a per-character pace learned on English under-predicted the same number
 /// of Chinese characters by ~3.3× — more than the half-deadline margin covers. So each character is counted as the
 /// tokens its script costs (<see cref="Tokens"/>, the ONE writer both the timing and the sizing use), from the text alone,
-/// with no <c>/tokenize</c> round trip. <see cref="CallOverheadMs"/> is taken off each call first, so a call of two short
-/// facts, nearly all round trip, does not read as a slow machine.</para>
+/// with no <c>/tokenize</c> round trip. <see cref="CallOverheadMs"/> is taken off each call first.</para>
 ///
-/// <para><b>How it moves</b> — every rule chosen so that believing a slow machine wrongly costs a few windows on a few
-/// recalls, while disbelieving one costs a minute's wait and no verdict:
+/// <para><b>How it moves</b> — each rule a judgement, stated as one, and each chosen so that believing a slow machine
+/// wrongly costs a few windows on a few recalls while disbelieving one costs a minute's wait and no verdict:
 /// <list type="bullet">
 /// <item>Seeded with the GPU measurement (<see cref="SeedMsPerToken"/>), at which the time budget allows more than the
 /// ceiling for a question of up to ~500 characters beside dense Chinese windows — so until a call has been timed,
 /// nothing changes from the fixed cap on that GPU.</item>
-/// <item><b>A call a deadline cut off</b> raises it at once to at least what that call proved — the time it ran, over what
-/// it sent: it has already cost its verdict.</item>
-/// <item><b>A slower call that answered</b> is believed at once when the call before it was slow too (answered slower
-/// than the estimate, or cut off). ALONE, it moves the estimate only halfway in log space — to the geometric mean of the
-/// two — and waits for a second: a single outlier (a model reloading after the router evicted it, another program on
-/// the GPU for a moment) would otherwise read a fast machine as a slow one, and one 100× outlier on a short call can be
-/// enough to cut every long note of the next recalls to its first window. This is a judgement, not a measurement: its
-/// cost on a genuinely slow machine is that a call answered past the budget is repeated once at the same size — inside
-/// the deadline, since it answered — before the pace believes it.</item>
-/// <item><b>A faster call</b> moves the estimate halfway toward it — but only a CHUNKED call. A pass-through call (every
-/// document fit one window) may RAISE the estimate and never lowers it: short pairs cost less per token than long ones
-/// (attention grows faster than length) and a short call is mostly round trip, so a household of short facts would
-/// otherwise pull the estimate DOWN on every recall, below what a long note's windows really cost.</item>
+/// <item><b>A call too SMALL to measure teaches nothing</b> — neither the estimate nor the repeat flag below: one whose
+/// scoring, at the current estimate, would take under <see cref="MinSignalFactor"/> × <see cref="CallOverheadMs"/>. Its
+/// time is then mostly round trip, queueing, or a stall, and dividing it by a few dozen tokens reads any of those as a
+/// slow machine: a 33-token call taking 150 ms read 3 ms per token, 60× the seed, and a 17 s model reload on a 30-token
+/// call 565. Relative to the ESTIMATE, not a fixed token count, so that on the GPU (the seed) only calls of ~4,000
+/// tokens teach — where an unmodelled delay the size of the allowance moves the rate by at most a quarter, inside the
+/// ~1.47× the seed's budget leaves above the count ceiling, so jitter there cannot make the pace fire — while on a
+/// machine already measured slow, where scoring dominates any call, smaller calls do.</item>
+/// <item><b>A slower call that answered</b> is believed at once when the call before it that taught anything was slow
+/// too (answered slower than the estimate, or cut off having proved it slow) — and the flag stays set, so a third slow
+/// call in a row is believed as well. ALONE, it moves the estimate halfway in log space — the geometric mean of the two
+/// — and never more than ×<see cref="MaxLoneRaise"/>, because one outlier (a model reloading, a moment of contention)
+/// would otherwise cut every long note of the next recalls to its first window.</item>
+/// <item><b>A faster call</b> moves the estimate halfway toward it, arithmetically, so a single fast call can at most
+/// halve it: if that call was the misleading one, the next is under-predicted by at most 2×, which the half-deadline
+/// margin covers. Halving in log space would recover faster from a large false raise, and could drop a true slow
+/// estimate ~10× on one fast call — so the ×4 cap on a lone raise bounds the false raises instead. Only a CHUNKED call
+/// lowers it: a pass-through call (every document one window) may raise the estimate and never lowers it, since short
+/// pairs cost less per token than long ones (attention grows faster than length).</item>
+/// <item><b>A call the deadline CUT</b> (the caller's token cancelled — <see cref="AtLeast"/>) teaches only if it ran
+/// longer than the estimate predicted: then it raises the estimate to that lower bound and sets the repeat flag. A
+/// cancellation earlier than that — a user's stop, an abandoned request — proves nothing and changes nothing. A lower
+/// bound is not enough to SIZE by: halving from it, each cut call's successor is cut again whenever the first one's true
+/// time was over twice the deadline, so a machine 30× slower would wait the minute four times running. So a cut past
+/// <see cref="Budget"/> puts the pace <see cref="AfterCut"/>: every chunked call sends ONE window per candidate — the
+/// fewest that scores them all — until one ANSWERS, and that answer is believed whole, in either direction and whatever
+/// its size, since it is the measurement the lower bound was missing. On a machine where even one window per candidate
+/// is too slow for a recall that big, that recall is cut every time: no sizing can fix it, since fewer windows than
+/// candidates would leave one unscored.</item>
 /// <item>A failed answer teaches nothing. It lives as long as the process — each launch re-seeds it at the GPU figure —
-/// and there is one per verifier, so one per reranker.</item>
+/// and there is one per verifier, so one per reranker. <b>Concurrency</b>: two recalls contending for one child each
+/// time the other's scoring too, so both read slower than the machine is, and the second is believed as a repeat — it
+/// errs toward fewer windows, until a later uncontended chunked call lowers it halfway.</item>
 /// </list></para>
 ///
 /// <para><b>Unmeasured</b>: it has not run on a CPU-only machine, so how many recalls it takes to settle there, and how
 /// far a long window's cost outruns a rate learned from short facts, are not known. The two token rates are two
-/// measurements on the XLM-R tokenizer family: every character from U+2E80 up (CJK, kana, Hangul, full-width forms, both
-/// halves of a surrogate pair) is counted at the CJK rate, the worst measured — emoji measured ~0.48, rare CJK less — and
-/// every character below it at the English one, which leaves other scripts (Cyrillic, Greek, Arabic, Thai, Devanagari…)
-/// counted like English, unmeasured. That rerank time is proportional to tokens is itself an assumption the GPU figures
-/// fit, not a measured law. The transient rule's halfway-in-log-space step is a judgement. <c>e2e-p52</c> case 6e drives
-/// the answered path with a fake router that answers in time proportional to the pair characters it is sent — a lone
-/// slow call not believed, the second believed — and case 6f the cut-off path.</para></summary>
+/// measurements on the XLM-R tokenizer family: every UTF-16 unit from U+2E80 up (CJK, kana, Hangul syllables, full-width
+/// forms, both halves of a surrogate pair) is counted at the CJK rate, the worst measured — emoji measured ~0.48, rare
+/// CJK less — and every unit below it at the English one. That leaves counted like English, and unmeasured: other
+/// scripts (Cyrillic, Greek, Arabic, Thai, Devanagari…), Hangul conjoining Jamo (U+1100–11FF) and the BMP symbols and
+/// emoji of U+2600–27BF, all below U+2E80. That rerank time is proportional to tokens is itself an assumption the GPU
+/// figures fit, not a measured law. Whether a real llama-server stops scoring a batch whose request was cancelled is
+/// unmeasured too: if it does not, the next call queues behind it and reads slower than the machine is. The floor's
+/// factor, the log-space step and its cap are judgements. <c>e2e-p52</c> case 6e drives the answered path with a fake
+/// router that answers in time proportional to the pair TOKENS it is sent — a lone slow call not believed, the second
+/// believed, a fast pass-through not lowering it, a slow small call teaching nothing — case 6f the cut path (a first
+/// call ~2.8× past the deadline, then one window and a verdict), and case 6g the per-script count.</para></summary>
 public sealed class RerankPace
 {
     /// <summary>Tokens per UTF-16 unit of CJK text — the worst rate measured on the real router (4,089 Chinese characters
@@ -247,7 +278,8 @@ public sealed class RerankPace
     public const double OtherTokensPerChar = 0.25;
 
     /// <summary>The first code unit counted at the CJK rate: U+2E80, CJK Radicals Supplement. Everything from it up —
-    /// ideographs, kana, Hangul syllables, full-width forms, and both halves of a surrogate pair — is counted as CJK.</summary>
+    /// ideographs, kana, Hangul syllables, full-width forms, and both halves of a surrogate pair — is counted as CJK;
+    /// everything below it (Hangul conjoining Jamo and the U+2600–27BF symbols included) as English.</summary>
     public const char CjkFrom = '⺀';
 
     /// <summary>The GPU measurement the fixed ceiling was tuned on: 480 windows of 1,000 dense Chinese characters in
@@ -258,6 +290,13 @@ public sealed class RerankPace
     /// measurement. The two-document bind screen ran in 25–33 ms warm on the real router (<c>LlamaCppSource</c>), so 50 ms
     /// is an allowance above it.</summary>
     public const double CallOverheadMs = 50;
+
+    /// <summary>A call teaches only when its scoring, at the current estimate, would take at least this many times
+    /// <see cref="CallOverheadMs"/> — ~4,000 tokens at the seed. See the class comment.</summary>
+    public const double MinSignalFactor = 4;
+
+    /// <summary>The most a LONE slower call may multiply the estimate by. See the class comment.</summary>
+    public const double MaxLoneRaise = 4;
 
     /// <summary>A floor, so a run of calls faster than the allowance cannot drive the estimate to zero and the budget to
     /// infinity — the per-call ceiling then decides, as it did before this class.</summary>
@@ -275,9 +314,11 @@ public sealed class RerankPace
 
     private readonly object _gate = new();
     private double _msPerToken;
-    // The last call that taught anything was SLOW — answered slower than the estimate, or cut off — so the next slower
-    // answer is a repeat and is believed at once.
+    // The last call that taught anything was SLOW — answered slower than the estimate, or cut off having proved it slow —
+    // so the next slower answer is a repeat and is believed at once. Stays set across a believed repeat.
     private bool _slowBefore;
+    // A call was cut past the budget, so the estimate is only a lower bound: one window per candidate until an answer.
+    private bool _afterCut;
 
     /// <param name="budget">How long one call may be predicted to take — half the verification deadline.</param>
     /// <param name="seedMsPerToken">The estimate before any call is timed.</param>
@@ -293,6 +334,10 @@ public sealed class RerankPace
     /// <summary>The current estimate, in milliseconds per pair token.</summary>
     public double MsPerToken { get { lock (_gate) return _msPerToken; } }
 
+    /// <summary>True from a call cut past <see cref="Budget"/> until a chunked call answers: the estimate is then only a
+    /// lower bound, and <see cref="ChunkedScoreProvider"/> sends one window per candidate.</summary>
+    public bool AfterCut { get { lock (_gate) return _afterCut; } }
+
     /// <summary>How many pair tokens one call may carry within <see cref="Budget"/> at the current estimate.</summary>
     public double PairTokenBudget()
     {
@@ -307,11 +352,20 @@ public sealed class RerankPace
         var observed = Rate(elapsed, pairTokens);
         lock (_gate)
         {
+            if (_afterCut && kind == Call.Chunked)
+            {
+                // The measurement a cut was missing: believed whole, in either direction, whatever its size.
+                _slowBefore = observed > _msPerToken;
+                _msPerToken = observed;
+                _afterCut = false;
+                return;
+            }
+            if (TooSmall(pairTokens)) return;
             if (observed > _msPerToken)
             {
-                // Slower: believed at once on a repeat; alone, halfway in log space, and remembered.
-                _msPerToken = _slowBefore ? observed : Math.Sqrt(_msPerToken * observed);
-                _slowBefore = !_slowBefore;
+                // Slower: believed at once on a repeat; alone, halfway in log space and at most ×MaxLoneRaise.
+                _msPerToken = _slowBefore ? observed : Math.Min(Math.Sqrt(_msPerToken * observed), MaxLoneRaise * _msPerToken);
+                _slowBefore = true;
                 return;
             }
             _slowBefore = false;
@@ -326,10 +380,16 @@ public sealed class RerankPace
         var observed = Rate(elapsed, pairTokens);
         lock (_gate)
         {
-            if (observed > _msPerToken) _msPerToken = observed;
+            // Cancelled before it was due to finish, or too small to say anything: proves nothing.
+            if (TooSmall(pairTokens) || observed <= _msPerToken) return;
+            _msPerToken = observed;
             _slowBefore = true;
+            if (elapsed > Budget) _afterCut = true;
         }
     }
+
+    // Under the lock.
+    private bool TooSmall(double pairTokens) => pairTokens * _msPerToken < MinSignalFactor * CallOverheadMs;
 
     private static double Rate(TimeSpan elapsed, double pairTokens) =>
         Math.Max(MinMsPerToken, (elapsed.TotalMilliseconds - CallOverheadMs) / pairTokens);

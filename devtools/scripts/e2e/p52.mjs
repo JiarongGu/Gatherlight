@@ -41,9 +41,10 @@
 //      TAIL window makes a full page of 8 among 11, which fails under the cut, a first-window mapping and a mapping
 //      off by one window. 6e–6g: the time a rerank call is sized to (RerankPace, half the verification deadline). 6e:
 //      a lone slow call is not believed at once, a second is, and a long note is then read in FEWER windows; a fast
-//      short-only call does not pull the estimate back down. 6f: a call the deadline CUT teaches the pace too — the
-//      next recall reads fewer windows and gets its verdict. 6g: a pace learned on English sizes a Chinese note by
-//      its tokens, not its characters.
+//      pass-through call does not pull the estimate back down, and a slow call too small to measure teaches nothing.
+//      6f: after a call the deadline CUT — its true time ~2.8× the deadline — the next recall reads one window per
+//      candidate and gets its verdict, rather than halving from a lower bound into a second cut. 6g: a pace learned on
+//      English sizes a Chinese note by its tokens, not its characters. 6c also cuts a long question, counted by NFKC.
 //   7. Whether a reranker's TAGGING is happening — it goes to the CLI, and a signed-out CLI means none — is
 //      said in the 判断 row, the bind toast and the startup warning, each paired with a signed-in control.
 //      7b: a measurement knob set at startup reaches state/logs, not only stdout.
@@ -936,6 +937,24 @@ try {
   ok('THE POINT: beside a reranker declaring no window, a long QUESTION is cut to 2,045 characters — its head kept',
     hugeBodies().length > 0 && hugeBodies().every((b) => String(b.query).length <= 2045 && hugeQuery.startsWith(String(b.query))),
     JSON.stringify(hugeBodies().map((b) => String(b.query ?? '').length)));
+  // …and the question is COUNTED after NFKC, as the tokenizer counts it, and SENT as written. ㌚ is one character that
+  // normalises to five (ミリバール), so a question of ~1,000 of them is ~5,000 characters to the tokenizer: counted raw it
+  // passes the 2,045 cap whole, counted after NFKC it is cut to a head whose normalised length fits. Confirmed to FAIL
+  // with the raw count (the whole 1,020-character question sent, 5,020 after NFKC).
+  const compatQ = 'zzcompatq 天文社楼顶气温记录 ' + '㌚'.repeat(1000);
+  const beforeCompatQ = hits.length;
+  await cUnwin.call('recall_facts', { query: compatQ, limit: 5 });
+  const compatQBodies = () => hits.slice(beforeCompatQ)
+    .filter((h) => h.path === '/v1/rerank' && h.model === UNWINDOWED_RERANK && h.body.includes('zzcompatq'))
+    .map((h) => { try { return JSON.parse(h.body); } catch { return null; } })
+    .filter(Boolean);
+  await until(() => compatQBodies().length > 0, 60000).catch(() => {});
+  ok('THE POINT: …and a question dense in compatibility characters is cut by its NFKC length — sent as written, its head kept',
+    compatQBodies().length > 0 && nfkc(compatQ).length > 2045 && compatQBodies().every((b) => {
+      const q = String(b.query ?? '');
+      return nfkc(q).length <= 2045 && compatQ.startsWith(q) && q.includes('㌚');
+    }),
+    JSON.stringify(compatQBodies().map((b) => ({ raw: String(b.query ?? '').length, nfkc: nfkc(String(b.query ?? '')).length }))));
   windowedServer.stop(); windowedServer = null;
   unwindowedServer.stop(); unwindowedServer = null;
 
@@ -946,14 +965,23 @@ try {
   // PAIR token (counted from the characters by script), and gives a long candidate only the windows its budget — half
   // the verification deadline — predicts this machine can score. Here the deadline knob is 12 s (a 6 s budget) and the
   // fake answers in 1.6 ms per pair token. The long note is Chinese: five 1,000-character windows are ~4,230 pair tokens,
-  // ~6.8 s — over the budget, 5 s inside the deadline (a margin wide enough for a loaded fleet; it was 2.4 s).
+  // ~6.8 s — over the budget, 5 s inside the deadline. At the seed that call is just big enough to teach (its scoring
+  // predicted at ~212 ms, the floor 200 — RerankPace.MinSignalFactor).
   //   1. Before anything was timed, the GPU seed sizes it: all 5 windows, answered — the pace sees a slow call.
-  //   2. A LONE slow call is not believed at once (it could be a model reloading): it moves the estimate halfway in log
-  //      space, which still allows all 5 windows. Believing it at once would already give fewer — confirmed to FAIL so.
+  //   2. A LONE slow call is not believed at once (it could be a model reloading): the estimate moves halfway in log
+  //      space, at most ×4, which still allows all 5 windows. Believing it at once gives fewer — confirmed to FAIL so.
   //   3. The second slow call in a row is believed: fewer windows, head and tail still read, still a verdict.
-  //   4. A fast recall of a SHORT fact alone — a pass-through call — may raise the estimate but never lowers it, so…
-  //   5. …the long note is still read in fewer windows. Letting that fast short call pull the estimate halfway down
-  //      would give all 5 again — confirmed to FAIL so.
+  //   4. A fast PASS-THROUGH recall (a ~900-character fact, one window) big enough to teach — it may raise the estimate
+  //      but never lowers it, so…
+  //   5. …the long note is still read in fewer windows. Letting that call pull the estimate halfway down gives all 5
+  //      again — confirmed to FAIL so.
+  //   6. A SLOW recall of a SHORT fact alone (~33 pair tokens, ~3.3 s): too small to measure, so it teaches nothing — its
+  //      time would be mostly overhead or a stall on any real machine, and ~98 ms per token read from it is a phantom.
+  //   7. The long note is still read in fewer windows, not cut to its first. Without the floor that one call raises the
+  //      estimate ×4 at least and the long note gets 1 window — confirmed to FAIL so.
+  // Steps 5 and 7 assert "fewer than 5, at least 2", so a loaded fleet that makes the fake's calls read a little slower
+  // moves them between 4 and 3 windows without failing; the floor makes step 6 a strict no-op, and step 4's call is far
+  // from the "slower" line (it would need ~1.3 s against a fake that answers at once).
   paceServer = startServer({
     dataDir: paceDir, port: PACE_PORT,
     env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '12' },
@@ -966,15 +994,18 @@ try {
     paceJudge.activeSource === 'llama-cpp' && paceJudge.activeModel === SLOW_RERANK,
     JSON.stringify({ active: paceJudge.activeSource, activeModel: paceJudge.activeModel }));
   const paceLong = 'zzpacehead 读书会每月第一个周六在图书馆见面。' + '读书会的书单与讨论记录。'.repeat(330) + ' zzpacetail';
+  // Words shared with neither the long note nor each other, so each recall below is exactly the call it describes.
+  const paceMid = 'zzpacemid The chess tournament schedule: ' + 'rounds start at nine, bring a clock and a notation sheet. '.repeat(15);
   const paceShort = 'zzpaceshort The swimming lesson moved to Tuesday afternoons at the leisure pool.';
-  for (const [topic, content] of [['zzpacetopic 读书会', paceLong], ['zzpaceshorttopic swimming lesson', paceShort]]) {
+  for (const [topic, content, name] of [['zzpacetopic 读书会', paceLong, 'long note'],
+    ['zzpacemidtopic chess tournament', paceMid, 'one-window fact'], ['zzpaceshorttopic swimming lesson', paceShort, 'short fact']]) {
     const wrote = await cPace.call('remember_fact', {
       kind: 'household', topic, content, source: 'https://example.test/zzpace', confidence: 0.8,
     });
-    ok(`(fixture) the ${content === paceLong ? 'long note' : 'short fact'} is stored`,
-      wrote.status === 200 && wrote.result?.ok === true, JSON.stringify(wrote.result));
+    ok(`(fixture) the ${name} is stored`, wrote.status === 200 && wrote.result?.ok === true, JSON.stringify(wrote.result));
   }
   const paceQuery = 'zzpacequery 读书会每月第一个周六在图书馆见面';
+  const midQuery = 'zzpacemidquery chess tournament rounds clock notation';
   const shortQuery = 'zzpaceshortquery swimming lesson Tuesday leisure pool';
   // Each recall's own requests: from where it started to where it returned (a cut-off request is recorded on arrival).
   const rerankDocs = (span, token) => hits.slice(span.from, span.to)
@@ -993,16 +1024,25 @@ try {
     const result = await cl.call('recall_facts', { query, limit: 5 });
     return { from, to: hits.length, result, ms: Date.now() - started };
   };
+  // A recall whose only candidate is `fact`, sent whole: a pass-through call — no window of the long note.
+  const passThrough = (span, token, fact) => {
+    const docs = rerankDocs(span, token);
+    return docs.includes(fact) && !docs.some((d) => d !== fact && paceLong.includes(d));
+  };
   slowMsPerToken = 1.6;
   const p1 = await timedRecall(cPace, paceQuery);
   const p2 = await timedRecall(cPace, paceQuery);
   const p3 = await timedRecall(cPace, paceQuery);
   slowMsPerToken = 0;
-  const p4 = await timedRecall(cPace, shortQuery);
+  const p4 = await timedRecall(cPace, midQuery);
   slowMsPerToken = 1.6;
   const p5 = await timedRecall(cPace, paceQuery);
+  slowMsPerToken = 100;
+  const p6 = await timedRecall(cPace, shortQuery);
+  slowMsPerToken = 1.6;
+  const p7 = await timedRecall(cPace, paceQuery);
   slowMsPerToken = 0;
-  const [w1, w2, w3, w5] = [p1, p2, p3, p5].map(paceWindows);
+  const [w1, w2, w3, w5, w7] = [p1, p2, p3, p5, p7].map(paceWindows);
   const at = (p) => `${verdictShape(p.result)} in ${p.ms} ms`;
   ok('(non-vacuity) before anything was timed, the long note went as all 5 windows — and that slow call still came back as a verdict',
     w1.length === 5 && judgedPage(p1.result), `${windowShape(w1)} ${at(p1)}`);
@@ -1013,12 +1053,16 @@ try {
     `first ${windowShape(w1)} · second ${windowShape(w2)} · third ${windowShape(w3)}`);
   // A verdict, not a speed-up: the time is printed, never asserted — two recalls a second apart differ by noise too.
   ok('…and that recall is still a verdict', judgedPage(p3.result), at(p3));
-  const shortDocs = rerankDocs(p4, 'zzpaceshortquery');
-  ok('(non-vacuity) the short-fact recall was a fast PASS-THROUGH call — the short fact sent whole, no window of the long note — and a verdict',
-    shortDocs.includes(paceShort) && !shortDocs.some((d) => d !== paceShort && paceLong.includes(d)) && judgedPage(p4.result),
-    `${JSON.stringify(shortDocs.map((d) => d.slice(0, 24)))} ${at(p4)}`);
-  ok('THE POINT: a fast pass-through call does NOT pull the estimate back down — the long note is still read in fewer windows',
+  ok('(non-vacuity) the one-window recall was a fast PASS-THROUGH call — the fact sent whole, no window of the long note — and a verdict',
+    passThrough(p4, 'zzpacemidquery', paceMid) && judgedPage(p4.result),
+    `${JSON.stringify(rerankDocs(p4, 'zzpacemidquery').map((d) => d.slice(0, 24)))} ${at(p4)}`);
+  ok('THE POINT: a fast pass-through call big enough to teach does NOT pull the estimate back down — the long note is still read in fewer windows',
     w5.length >= 2 && w5.length < 5 && judgedPage(p5.result), `${windowShape(w5)} ${at(p5)}`);
+  ok('(non-vacuity) the short-fact recall was a SLOW pass-through call — the short fact alone — and a verdict',
+    passThrough(p6, 'zzpaceshortquery', paceShort) && p6.ms >= 3000 && judgedPage(p6.result),
+    `${JSON.stringify(rerankDocs(p6, 'zzpaceshortquery').map((d) => d.slice(0, 24)))} ${at(p6)}`);
+  ok('THE POINT: a slow call too SMALL to measure teaches nothing — the long note is still read in fewer windows, not cut to its first',
+    w7.length >= 2 && w7.length < 5 && judgedPage(p7.result), `${windowShape(w7)} ${at(p7)}`);
   const logOf = (dir) => {
     const logs = path.join(dir, 'state', 'logs');
     return fs.existsSync(logs) ? fs.readdirSync(logs).map((n) => fs.readFileSync(path.join(logs, n), 'utf8')).join('\n') : '';
@@ -1029,14 +1073,16 @@ try {
     paceLog().split('\n').filter((l) => /per long candidate/.test(l)).slice(-2).join(' | ') || '(no such line)');
   paceServer.stop(); paceServer = null;
 
-  // --- 6f. a call the DEADLINE CUT teaches the pace too -------------------------------------------------------------
+  // --- 6f. after a call the DEADLINE CUT, one window per candidate until a call answers ------------------------------
   // On a machine slow enough, the first long-note recall (sized by the GPU seed) outlasts the verification deadline and
-  // comes back unjudged after the full wait — RerankPace.AtLeast is what stops that repeating: the cut call ran at least
-  // that long for what it sent, and the estimate is raised at once. Here the deadline knob is 6 s (a 3 s budget) and the
-  // fake answers in 1.8 ms per pair token: all 5 windows would take ~7.6 s, so the first recall is cut at 6 s and is
-  // NoOpinion (`answered` absent — Lyntai sets it only when a verdict was judged). The bound it teaches sizes the next
-  // recall to 2 windows, ~3.0 s, 3 s inside the deadline: fewer windows, and a verdict. Confirmed to FAIL with AtLeast
-  // disabled (the second recall is sized by the seed again, 5 windows, cut again).
+  // comes back unjudged after the full wait. The cut proves only a LOWER bound on this machine's pace: sized to it, the
+  // next call is half as big, and is cut again whenever the first one's true time was over twice the deadline — a
+  // machine 30× slower would wait the minute four times running. So after a cut past the budget RerankPace is AfterCut:
+  // ONE window per candidate — the fewest that scores them all — until a call answers, and that answer is believed whole.
+  // Here the deadline knob is 6 s (a 3 s budget) and the fake answers in 4 ms per pair token: all 5 windows would take
+  // ~17 s, 2.8× the deadline, so the first recall is cut at 6 s and is NoOpinion (`answered` absent — Lyntai sets it only
+  // when a verdict was judged). The next reads ONE window, ~3.4 s, and gets its verdict. Sized by the lower bound instead,
+  // it reads 2, ~6.8 s, and is cut again — confirmed to FAIL so (and with AtLeast disabled altogether, 5 again).
   cutoffServer = startServer({
     dataDir: cutoffDir, port: CUTOFF_PORT,
     env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '6' },
@@ -1057,40 +1103,45 @@ try {
   const cutQuery = 'zzcutquery 摄影社每月最后一个周日去湿地公园拍鸟';
   const cutWindows = (span) => windowsOf(span, 'zzcutquery', cutLong);
   const cutShape = (list) => shapeOf(list, 'zzcuthead', 'zzcuttail');
-  slowMsPerToken = 1.8;
+  slowMsPerToken = 4;
   const cut1 = await timedRecall(cCut, cutQuery);
   const cut2 = await timedRecall(cCut, cutQuery);
   slowMsPerToken = 0;
+  // A window cut from the note, or the head alone: with one window per candidate the note goes as its first 1,000.
   const [cw1, cw2] = [cut1, cut2].map(cutWindows);
   const cutPage = (r) => r.status === 200 && r.result?.ranked === 'graph' && r.result?.answered === undefined
     && (r.result?.facts ?? []).some((f) => String(f.content ?? '').includes('zzcuthead'));
-  ok('(non-vacuity) the first recall sent all 5 windows and the deadline CUT it — the engine\'s page, no verdict',
+  ok('(non-vacuity) the first recall sent all 5 windows and the deadline CUT it — the engine\'s page, no verdict — its true time ~2.8× the deadline',
     cw1.length === 5 && cutPage(cut1.result), `${cutShape(cw1)} ${at(cut1)}`);
-  ok('THE POINT: the cut call taught the pace — the next recall reads the long note in FEWER windows and gets its verdict',
-    cw2.length >= 1 && cw2.length < 5 && judgedPage(cut2.result), `${cutShape(cw2)} ${at(cut2)}`);
-  ok('…and the log says the verification was cut at the deadline',
-    /gave no verdict within 6 s/.test(logOf(cutoffDir)),
-    logOf(cutoffDir).split('\n').filter((l) => /verdict within|per long candidate/.test(l)).slice(-3).join(' | ') || '(no such line)');
+  ok('THE POINT: after the cut, the next recall reads ONE window per candidate — and comes back within the deadline with its verdict',
+    cw2.length === 1 && cw2[0].includes('zzcuthead') && judgedPage(cut2.result), `${cutShape(cw2)} ${at(cut2)}`);
+  const cutLog = logOf(cutoffDir);
+  ok('…and the log says why — one window until a call answers in time — and names ONE cut, not two',
+    /1 window\(s\) per long candidate instead of 5, until a call answers in time/.test(cutLog)
+      && (cutLog.match(/gave no verdict within 6 s/g) ?? []).length === 1,
+    cutLog.split('\n').filter((l) => /verdict within|per long candidate/.test(l)).slice(-3).join(' | ') || '(no such line)');
   cutoffServer.stop(); cutoffServer = null;
 
   // --- 6g. a pace learned on ENGLISH sizes a CHINESE note by its tokens -----------------------------------------------
   // A cross-encoder's cost follows tokens, and a character of Chinese is ~0.83 tokens where one of English is ~0.25
   // (measured). A pace per CHARACTER learned on English therefore under-predicts the same number of Chinese characters
-  // by ~3.3× — more than the half-deadline margin. Here (the deadline knob 12 s, a 6 s budget; the fake at 3 ms per pair
-  // token) two recalls of a long ENGLISH note teach the pace (~3.9 s each, all 5 windows); then a long CHINESE note is
-  // recalled. Counted by script, its 5 windows are ~12.7 s, so it gets fewer, ~5 s, and a verdict. Counted per character,
-  // the English rate predicts ~3.8 s, all 5 windows go, and the call is cut at 12 s — confirmed to FAIL so.
+  // by ~3.3× — more than the half-deadline margin. Here (the deadline knob 16 s, an 8 s budget; the fake at 2.2 ms per
+  // pair token) two recalls of FOUR long English notes teach the pace — ~5,270 pair tokens, so big enough to teach at the
+  // seed, ~11.6 s each, all 5 windows of each note; then two long CHINESE notes are recalled. Counted by script, their
+  // 10 windows are ~18.6 s, so each is read in fewer and the call comes back with a verdict. Counted per character, the
+  // English rate predicts ~5.6 s, all 10 windows go, and the call is cut at 16 s — confirmed to FAIL so.
   scriptServer = startServer({
     dataDir: scriptDir, port: SCRIPT_PORT,
-    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '12' },
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '16' },
   });
   const scriptBase = `http://127.0.0.1:${SCRIPT_PORT}`;
   await waitHealthy(scriptBase);
   const cScript = makeClient(scriptBase);
-  const enLong = 'zzenhead The chess club meets on Wednesday evenings in the community hall. '
-    + 'The chess club keeps a list of openings and the notes of every game. '.repeat(58) + ' zzentail';
-  const zhLong = 'zzzhhead 合唱团每周四晚上在社区礼堂排练。' + '合唱团的曲目单与排练记录。'.repeat(310) + ' zzzhtail';
-  // The Chinese note is written only after the English recalls, so it cannot be a candidate of theirs.
+  const enNotes = [1, 2, 3, 4].map((i) => `zzen${i}head The chess club meets on Wednesday evenings in the community hall. `
+    + 'The chess club keeps a list of openings and the notes of every game. '.repeat(58) + ` zzen${i}tail`);
+  const zhA = 'zzzhAhead 合唱团每周四晚上在社区礼堂排练。' + '合唱团的曲目单与排练记录。'.repeat(310) + ' zzzhAtail';
+  const zhB = 'zzzhBhead 合唱团每周四晚上在社区礼堂排练。' + '合唱团的演出安排与服装清单。'.repeat(288) + ' zzzhBtail';
+  // The Chinese notes are written only after the English recalls, so they cannot be candidates of theirs.
   const writeNote = async (topic, content, name) => {
     const wrote = await cScript.call('remember_fact', {
       kind: 'household', topic, content, source: 'https://example.test/zzscript', confidence: 0.8,
@@ -1099,22 +1150,25 @@ try {
   };
   const enQuery = 'zzenquery chess club Wednesday evenings community hall';
   const zhQuery = 'zzzhquery 合唱团每周四晚上在社区礼堂排练';
-  await writeNote('zzentopic chess club', enLong, 'English');
-  slowMsPerToken = 3;
+  for (const [i, note] of enNotes.entries()) await writeNote(`zzen${i + 1}topic chess club`, note, `English #${i + 1}`);
+  slowMsPerToken = 2.2;
   const e1 = await timedRecall(cScript, enQuery);
   const e2 = await timedRecall(cScript, enQuery);
   slowMsPerToken = 0;
-  await writeNote('zzzhtopic 合唱团', zhLong, 'Chinese');
-  slowMsPerToken = 3;
+  await writeNote('zzzhAtopic 合唱团', zhA, 'Chinese A');
+  await writeNote('zzzhBtopic 合唱团', zhB, 'Chinese B');
+  slowMsPerToken = 2.2;
   const z1 = await timedRecall(cScript, zhQuery);
   slowMsPerToken = 0;
-  const [ew1, ew2] = [e1, e2].map((p) => windowsOf(p, 'zzenquery', enLong));
-  const zw1 = windowsOf(z1, 'zzzhquery', zhLong);
-  ok('(non-vacuity) the English note was read in all 5 windows, twice, each a verdict — the pace learned from English',
-    ew1.length === 5 && ew2.length === 5 && judgedPage(e1.result) && judgedPage(e2.result),
-    `${shapeOf(ew1, 'zzenhead', 'zzentail')} ${at(e1)} · ${shapeOf(ew2, 'zzenhead', 'zzentail')} ${at(e2)}`);
-  ok('THE POINT: the Chinese note, the same length in characters, is read in FEWER windows — sized by its tokens — and gets its verdict',
-    zw1.length >= 1 && zw1.length < 5 && judgedPage(z1.result), `${shapeOf(zw1, 'zzzhhead', 'zzzhtail')} ${at(z1)}`);
+  const enWindows = (span) => rerankDocs(span, 'zzenquery').filter((d) => d.length > 100 && enNotes.some((n) => n.includes(d) && d !== n));
+  const [ew1, ew2] = [e1, e2].map(enWindows);
+  const [zaw, zbw] = [zhA, zhB].map((n) => windowsOf(z1, 'zzzhquery', n));
+  ok('(non-vacuity) the four English notes were read in all 5 windows each (20), twice, each a verdict — the pace learned from English',
+    ew1.length === 20 && ew2.length === 20 && judgedPage(e1.result) && judgedPage(e2.result),
+    `${ew1.length} · ${ew2.length} windows; ${at(e1)} · ${at(e2)}`);
+  ok('THE POINT: the Chinese notes, as long in characters, are read in FEWER windows each — sized by their tokens — and the recall gets its verdict',
+    zaw.length >= 1 && zaw.length < 5 && zbw.length >= 1 && zbw.length < 5 && judgedPage(z1.result),
+    `A ${shapeOf(zaw, 'zzzhAhead', 'zzzhAtail')} · B ${shapeOf(zbw, 'zzzhBhead', 'zzzhBtail')} ${at(z1)}`);
   scriptServer.stop(); scriptServer = null;
 
   // --- 7. whether a reranker's TAGGING is happening, said where it is decided ---------------------------

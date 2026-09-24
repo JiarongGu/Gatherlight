@@ -4578,9 +4578,11 @@ one).
     the windows it predicts will be scored in half the 60 s verification deadline — fewer per long candidate on a slow
     machine, down to one, the cut. Seeded with this GPU's figure, so on it nothing changes. Unmeasured on a CPU-only
     machine; `e2e-p52` case 6e drives it with a fake that answers in time proportional to what it is sent. (Reviewed
-    again 2026-09-25: it now counts pair TOKENS by script rather than characters, needs a slow call twice before
-    believing it, and is never lowered by a short-fact call — `RerankPace`'s comment; and the bench guards against it,
-    "The bench and the pace" at the end of this file.)
+    twice more on 2026-09-25: it now counts pair TOKENS by script rather than characters, ignores a call too small to
+    measure, needs a slow call twice before believing it (alone, at most ×4), is never lowered by a pass-through call,
+    and after a call the deadline cut reads ONE window per candidate until a call answers — a cut is only a lower
+    bound, and halving from it repeated the cut; `RerankPace`'s comment. The bench guards against it: "The bench and
+    the pace" at the end of this file.)
   - **The tests now check what came BACK.** Cases 6b and 6c assert the recall carried a verdict (a fault in the windowing
     is fail-open, and those cases stayed green under a provider that threw), and case 6d puts a long note whose only
     rewarded text is in its tail window among 11 candidates for a page of 8. It is on the page only when that window's
@@ -5286,8 +5288,11 @@ configuration differ in their windows too.
 **The guard.** After both passes, judge-bench counts the pace's Information line — `window(s) per long candidate
 instead of` — in every arm's `state/logs`, saves the counts in the results file (`rerankPace`, only when a reranker
 ran), and the analysis VOIDS a run in which any count is above 0: a WARNING per arm, a `VOID:` banner after the
-warnings, exit 1, the rows still saved. `--report-only` applies the same judgement to a saved run; a run saved before
-the guard carries no counts and re-analyses exactly as it did.
+warnings, exit 1, the rows still saved. `--report-only` applies the same judgement to a saved run, and `--baseline`
+refuses a VOID run; a run saved before the guard carries no counts and re-analyses exactly as it did. Every selected arm
+runs in parallel, so the remedy for a VOID run is a GPU with nothing else on it, or the arms split across runs (fewer
+`--arms`, `--rerankers` or `--rerank-arms` each), each paired only within itself. The pace's own Information line —
+both of its forms, the time-sized one and the one after a cut — carries the phrase the guard counts.
 
 **Why a guard, not a pinned no-pace mode.** A knob that disables the pace would make every arm deterministic again, but
 it would measure a configuration no household runs, and it would be one more measurement knob every arm must pin and

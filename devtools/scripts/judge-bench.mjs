@@ -672,6 +672,10 @@ const checkBaseline = (run, baseRun, armKey) => {
   const problems = [];
   const arm = baseRun.arms.find((a) => a.key === armKey);
   if (!arm) problems.push(`the baseline run has no arm '${armKey}' (it has ${baseRun.arms.map((a) => a.key).join(', ')})`);
+  // A VOID run (the header's pace guard) is no baseline either: what its arms sent depended on that machine's timing.
+  const paceFired = Object.entries(baseRun.meta.rerankPace ?? {}).filter(([, n]) => n > 0);
+  if (paceFired.length)
+    problems.push(`the baseline run is VOID — RerankPace sized rerank calls in ${paceFired.map(([k, n]) => `${k} (${n})`).join(', ')}`);
   const short = (h) => (h ? h.slice(0, 12) : 'unrecorded');
   if (!run.meta.fixtureHash || run.meta.fixtureHash !== baseRun.meta.fixtureHash)
     problems.push(`fixtureHash ${short(run.meta.fixtureHash)} ≠ baseline ${short(baseRun.meta.fixtureHash)}`);
@@ -1254,7 +1258,9 @@ const analyse = (run, { baseline = null } = {}) => {
   }
   if (paceVoid) {
     console.log(`\nVOID: RerankPace changed what an arm sent — ${paceVoid}. Paired arms no longer differ only in their `
-      + 'configuration, so no table above may be read. Re-run on an idle machine, or with fewer arms in parallel.');
+      + 'configuration, so no table above may be read. Every selected arm runs in parallel on one GPU, so re-run with '
+      + 'nothing else on it, or split the arms across runs (fewer --arms, --rerankers or --rerank-arms per run) and pair '
+      + 'within each run only.');
     process.exitCode = 1;
   }
   return out;
