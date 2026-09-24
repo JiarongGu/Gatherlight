@@ -396,7 +396,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   |---|---|---|
   | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost. On the 240-question bilingual fixture (`docs/judge-bench.md`): top-1 79/240, found@8 125/240, ~0.23 s per recall |
   | **判断 · Claude CLI** | subject handles on every write; judges which candidates answered, and promotes those to the front | **top-1 79 → 130/240 (+21.3pp, p < 0.001, 95% [+15.9, +26.3]pp), each of the four sets significant on its own; found@8 125 → 131, not a finding (p = 0.210)** — `docs/judge-bench.md` Run 1, 2026-09-23, its `contentonly` arm: the judge reading each fact's CONTENT alone, the input that ships since 2026-09-24. Its `content` arm — topic — content, the 1.3.0 input — read top-1 132 (+22.1pp, [+16.6, +27.2]pp) and found@8 133 (p = 0.096), and the two were measured equivalent. Costs **~8.7 s per recall** there (serial median; ~9.5 s for topic — content; 8.7–11.7 s across Run 1's judge arms; **9–17 s** measured earlier on the household's own facts) — a CLI spawn per call. Before the content fix, on the household's own facts: +2 facts in each multilingual probe, 0 same-language |
-  | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 125 → 208 (LAMAR) / 203 (BGE) of 240 (+34.6 / +32.5pp, both p < 0.001) — cross-language 6 → 49 / 48 of 60; top-1 79 → 86 / 90 (+2.9pp p = 0.039 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 2, 2026-09-23. ~0.47–0.49 s per recall, warm, on one GPU, ≤60 candidates. LAMAR vs BGE: no finding either way — found@8 leans LAMAR 5–0 (p = 0.063, interval excluding zero); BGE is `RecommendedReranker` by the smaller-file tie-break registered before the run, and by nothing else. Lyntai, on ITS English LoCoMo corpus (`docs/memory-measurements.md` there, evidence-hit, n = 200), in ONE run — 2026-09-10, `embeddinggemma-300M` embedder, base 85.5%, a perfect judge +7.0: BGE Q8 +5.5, LAMAR Q8 +5.5, LAMAR Q5 (our file) +6.0. Its 2026-09-15 run read LAMAR Q5 at +9.0 of 9.5 over `nomic-embed-text` (base 83.0%); Lyntai's own rule is that a reranker's delta belongs to the configuration, so quote the base and embedder with it or not at all — the household notes quote neither |
+  | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 125 → 208 (LAMAR) / 203 (BGE) of 240 (+34.6 / +32.5pp, both p < 0.001) — cross-language 6 → 49 / 48 of 60; top-1 79 → 86 / 90 (+2.9pp p = 0.039 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 2, 2026-09-23. ~0.47–0.49 s per recall, warm, on one GPU, ≤60 candidates. **mMiniLMv2** (133 MB, `docs/judge-bench.md` Run 4, 2026-09-24, same fixture, 语义 off, page of 8): found@8 125 → 199 (+30.8pp) and top-1 79 → 99 (+8.3pp), both p < 0.001; against the SAME run's BGE (204) no significant difference and not equivalent (7/2, p = 0.180, [−4.6, +0.5]pp), against LAMAR (208) a measured loss (9/0, p = 0.004); ~0.31 s per recall against the run's formula 0.24 s, measured under a 4096 launch (the product launches it at its declared 512; the rerank call was re-measured under both, no difference). LAMAR vs BGE: no finding either way — found@8 leans LAMAR 5–0 (p = 0.063, interval excluding zero); BGE is `RecommendedReranker` by the smaller-file tie-break registered before the run, and by nothing else. Lyntai, on ITS English LoCoMo corpus (`docs/memory-measurements.md` there, evidence-hit, n = 200), in ONE run — 2026-09-10, `embeddinggemma-300M` embedder, base 85.5%, a perfect judge +7.0: BGE Q8 +5.5, LAMAR Q8 +5.5, LAMAR Q5 (our file) +6.0. Its 2026-09-15 run read LAMAR Q5 at +9.0 of 9.5 over `nomic-embed-text` (base 83.0%); Lyntai's own rule is that a reranker's delta belongs to the configuration, so quote the base and embedder with it or not at all — the household notes quote neither |
+  | **判断 · llama.cpp chat model** | BOTH halves locally — subject handles on every write, and judges which candidates answered (partition, like the Claude judge); no account quota | Same 240-question fixture, 语义 off, content-only judge input, one chat model per run beside 公式 (and BGE in Run 5b). **Gemma 3 1B is WORSE than no judge**: top-1 79 → 33 (−19.2pp, p < 0.001), found@8 125 → 111 (−5.8pp, p = 0.003) — `docs/judge-bench.md` Run 3, 2026-09-24; verdict coverage 202/234. **Qwen3 0.6B is BETTER on both**: top-1 79 → 110 (+12.9pp, p < 0.001), found@8 125 → 148 (+9.6pp, p < 0.001) — Run 5b, 2026-09-24, thinking off and the 512-token cap as the product launches it (context uncapped in that run; the 16,384 cap is far above any fixture prompt); coverage 226/234. Adds ~0.18 s (Gemma: 403 ms against the run's formula 219) and ~0.16 s (Qwen3: 381 against 220) per recall, serial medians, warm, one GPU. The TAGS either writes are unmeasured — the fixture's were written by the Claude CLI. Qwen3's child and the router took +2,472 MiB of GPU memory at the chat context cap, +5,175 MiB uncapped (launch item (5)) |
   | **语义 · Claude CLI** | stores other wordings of a fact, **≥1 in another language** | capability proven directly: an English question retrieves a Chinese-only fact. Aggregate effect NOT measured — see the rule below on why this tool cannot |
 
   **The two judges are complements, not rungs of one ladder.** The reranker changes WHAT REACHES THE PAGE; the
@@ -407,7 +408,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   engine's. Against Run 1's `content` arm — topic — content, the 1.3.0 input; Run 2 was paired with that arm,
   not with the content-only one that ships since, which Run 1 found equivalent to it — on the same seed and
   questions, both rerankers are significantly worse on top-1 (−19.2 / −17.5pp) and significantly better on
-  found@8 (+31.3 / +29.2pp) — at about 1/20 of the latency and no account quota per recall.
+  found@8 (+31.3 / +29.2pp) — at about 1/20 of the latency and no account quota per recall. **A local chat judge
+  complements the reranker the SAME way** (`docs/judge-bench.md` Run 5b, one run, same fixture): Qwen3 0.6B ranks the
+  answer first more often than BGE (110 against 90, +8.3pp, p = 0.002) and gets it onto the page far less often (148
+  against 203, −22.9pp) — it endorses what it judges to answer, as the Claude judge does, while the reranker endorses a
+  full page. Which is why the owner kept BGE as 判断's local default (2026-09-24): Qwen3 is offered, not recommended.
 
   With `VerificationFilters` off (how we register it) a verdict REMOVES nothing — but it is not inert: under
   Lyntai's default `VerdictCombination`, Partition, every endorsed candidate is PROMOTED ahead of the rest, in
@@ -1131,15 +1136,25 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   FTS", the token's "The operation was canceled." rather than `HttpClient.Timeout`'s message, 120 s after the last
   answer). `VerificationDeadlinePolicy` gives every verifier half the tool's deadline and turns its own expiry —
   the caller's token still live — into NoOpinion, so the engine's page stands; a real caller cancellation still
-  propagates. Annotation deliberately has none: there the tool's deadline fails the index, `graph_ref` is left empty
+  propagates. Its 60 s rests on recalls of at most 60 candidates (the bench fixture's, the household's 16 facts): a CLI
+  verification shown up to 400 — a recall naming a kind, or asking for 34 or more — is unmeasured, and a verdict that
+  would have arrived between 60 and 120 s is now dropped as NoOpinion where it used to be delivered.
+  Annotation deliberately has none: there the tool's deadline fails the index, `graph_ref` is left empty
   and the startup back-fill re-indexes the fact WITH subjects, where a deadline would index it permanently without
   them. **That was true of a NEW fact only until 2026-09-24**: an EDIT (same kind+topic) kept the ref to its previous
   content's node — `RememberFactTool` wrote the ref only when it was non-null, and `LearnAsync` updated the content
   without touching it — and the back-fill revisits only EMPTY refs, so the new content and its subjects stayed out of
   the graph until a rebuild. The memory import had the same hole without any failure, since it never indexes. Now the
   tool writes the null and `LearnAsync` clears the ref of a row whose content CHANGED; `e2e-p48` case 9 hangs the
-  annotation of an edit, edits a second fact by import, and asserts both refs empty and both facts re-indexed with
-  their new content at the next start (the edited one with its subject). The test
+  annotation of an edit, edits a second fact by import, and asserts neither ref still names its previous content's
+  node and both facts are re-indexed with their new content at the next start (the edited one with its subject).
+  **The import no longer waits for that start** (2026-09-24): `POST /api/memory/import` starts a DETACHED, serialised
+  back-fill (`DetachedFactBackfill` → `SyncAsync`, never a rebuild — decay and links survive), and so does the startup
+  seed, which runs after `FactIndexStep` and used to leave its facts keyword-only for a whole life. Not bound to the
+  request, not persisted: the rows are the state, and a run cut short leaves empty refs the next start finishes. Not
+  added to `MemoryService.ImportAsync` itself, because the backup import rebuilds inline and a back-fill racing that
+  rebuild would remember facts twice. `e2e-p14` imports an edit and a new fact and sees both indexed with their new
+  content in the same life, and a seeded install's fact likewise; both confirmed to FAIL with the call removed. The test
   knob `GATHERLIGHT_JUDGE_DEADLINE_SECONDS` can only shorten it. `e2e-p52` case 3b hangs the chat judge and asserts
   a graph-ranked page in seconds; with the policy removed it gets `ranked: fts` after 120 s.
 - **A recall layer's BACKEND is a SOURCE, and a source serves a layer by existing.** One interface per layer

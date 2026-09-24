@@ -495,6 +495,8 @@ public static class GatherlightApp
                     // embedder that is wired and down makes every write store its fact WITHOUT a vector.
                     sp.GetServices<Lyntai.Inference.IModelProvider>(),
                     sp.GetService<Lyntai.Inference.IProviderRouterFactory>()))
+            // The import endpoint's and the seed step's back-fill, detached and serialised — see DetachedFactBackfill.
+            .AddSingleton<Platform.Storage.Knowledge.Services.DetachedFactBackfill>()
             .AddSingleton<Platform.Storage.Knowledge.Services.IProcessLog, Platform.Storage.Knowledge.Services.ProcessLog>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RememberFactTool>()
             .AddSingleton<IGatherlightTool, Platform.Storage.Knowledge.Tools.RecallFactsTool>()

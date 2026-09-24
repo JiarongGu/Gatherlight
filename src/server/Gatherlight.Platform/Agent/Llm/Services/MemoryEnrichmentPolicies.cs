@@ -124,7 +124,10 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
 /// GGUF, a reranker — because the clock problem is the tool's, not any one judge's. 60 s is ~3.5× the slowest
 /// measured Claude CLI judge (9–17 s per recall on the household's own facts; serial medians 8.7–11.7 s in Run 1), and
 /// far beyond a local chat judge with thinking off (0.1–0.3 s per verdict on the real binary), whose runaway the
-/// generation cap bounds to seconds (<c>LlamaServerRuntime.ChatMaxTokens</c>).</para>
+/// generation cap bounds to seconds (<c>LlamaServerRuntime.ChatMaxTokens</c>). <b>That basis is recalls of at most 60
+/// candidates</b> — the bench fixture's, and the household's 16 facts: a CLI verification shown up to 400 (a recall
+/// naming a kind, or asking for 34 or more) is UNMEASURED, and a verdict that would have arrived between 60 and 120 s is
+/// now dropped as NoOpinion, where before this policy it was delivered.</para>
 ///
 /// <para><b>Annotation is deliberately NOT given one.</b> On the write path the same tool deadline fails the graph
 /// index (<c>FactIndex.IndexAsync</c> returns null) and the row's <c>graph_ref</c> is left EMPTY — for a new fact

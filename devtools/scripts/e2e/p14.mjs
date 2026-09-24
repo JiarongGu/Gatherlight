@@ -74,6 +74,48 @@ try {
   const aLibAfter = await getJsonA('/api/library');
   ok('re-import does not duplicate', aLibAfter.items.filter((i) => i.key === 'export-temple').length === 1);
 
+  // AN IMPORT'S FACTS ARE INDEXED WITHOUT A RESTART. The import writes through LearnAsync and never indexes: a NEW fact
+  // has no graph ref, and an EDITED one (same kind + topic) has its ref cleared — the graph dedups by content hash, so
+  // the old ref names a node holding the previous text. Until the next start's back-fill those were found by keyword
+  // only. The endpoint now starts that back-fill itself, detached (DetachedFactBackfill), so poll: the response does
+  // not wait for it.
+  const factRow = (dataDir, topic) => {
+    const d = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'), { readOnly: true });
+    try {
+      const row = d.prepare("SELECT content, COALESCE(graph_ref, '') AS ref FROM knowledge WHERE topic = ?").get(topic);
+      if (!row) return null;
+      const id = Number(String(row.ref).split('#').pop());
+      const node = row.ref
+        ? d.prepare("SELECT content FROM lyntai_memory_node WHERE engine = 'facts/graph' AND id = ?").get(id)?.content ?? null
+        : null;
+      return { content: row.content, ref: row.ref, node };
+    } finally { d.close(); }
+  };
+  const templeBefore = factRow(dataA, 'Export Temple official');
+  ok('(fixture) the fact written through the tool was indexed on the way in', !!templeBefore?.ref, JSON.stringify(templeBefore));
+  const templeV2 = 'https://example.org/temple verified again, now open until 18:00';
+  const editImport = await fetch(`${baseA}/api/memory/import`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ gatherlightMemory: 1, knowledge: [
+      { kind: 'venue-url', topic: 'Export Temple official', content: templeV2, source: 'https://example.org/temple', confidence: 0.95 },
+      { kind: 'venue-url', topic: 'Import Shrine official', content: 'https://example.org/shrine verified', source: 'https://example.org/shrine', confidence: 0.9 },
+    ] }),
+  });
+  ok('(fixture) the import of an edit and a new fact succeeds', editImport.status === 200, `${editImport.status}`);
+  let templeAfter = null, shrineAfter = null;
+  try {
+    await until(() => {
+      templeAfter = factRow(dataA, 'Export Temple official');
+      shrineAfter = factRow(dataA, 'Import Shrine official');
+      return templeAfter?.node === templeV2 && shrineAfter?.node === 'https://example.org/shrine verified';
+    }, 60000, 500);
+  } catch { /* reported below */ }
+  ok('THE POINT: an EDITED fact from an import is indexed with its NEW content, in the same life — no restart',
+    !!templeAfter?.ref && templeAfter.ref !== templeBefore?.ref && templeAfter.node === templeV2,
+    JSON.stringify({ before: templeBefore, after: templeAfter }));
+  ok('…and so is a NEW fact from the import', !!shrineAfter?.ref && shrineAfter.node === 'https://example.org/shrine verified',
+    JSON.stringify(shrineAfter));
+
   srv.stop(); srv = null;
   await new Promise((r) => setTimeout(r, 1500));
 
@@ -91,6 +133,14 @@ try {
   const recalled = await callB('recall_facts', { query: 'Export Temple' });
   ok('seeded knowledge fact recallable on B', (recalled.result.facts ?? []).some((f) => f.topic.includes('Export Temple')),
     JSON.stringify((recalled.result.facts ?? []).length));
+  // …and INDEXED in this life. The seed step runs after the startup back-fill (FactIndexStep), so a seeded fact used to
+  // wait for the NEXT start to leave keyword-only recall; the step now starts the same detached back-fill as the import.
+  let seededRow = null;
+  try {
+    await until(() => (seededRow = factRow(dataB, 'Export Temple official'))?.node === 'https://example.org/temple verified', 60000, 500);
+  } catch { /* reported below */ }
+  ok('THE POINT: a SEEDED fact is indexed in the life that seeded it — no second start needed',
+    !!seededRow?.ref && seededRow.node === 'https://example.org/temple verified', JSON.stringify(seededRow));
 
   const bCortex = await getJsonB('/api/manage/cortex');
   ok('seeded cortex override survived transfer', bCortex.models.find((m) => m.consumer === 'extract')?.effective === 'opus',

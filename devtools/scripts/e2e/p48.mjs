@@ -581,8 +581,13 @@ try {
   const museumEdited = rowOf('museum hours');
   ok('(fixture) the memory import edited the fact in place',
     imported2.status === 200 && museumEdited?.content === museumV2, `${imported2.status} ${JSON.stringify(museumEdited)}`);
+  // No longer "the ref is EMPTY": the import endpoint now starts a detached back-fill (DetachedFactBackfill; e2e-p14
+  // asserts it indexes an import's facts without a restart), so the ref may already name the NEW content's node — or,
+  // here, still be empty, the back-fill being queued behind the ferry fact's hung annotation. Either way it must never
+  // name the PREVIOUS content's node, which is the hole this case exists for.
   ok('THE POINT: an edit by the memory import leaves no ref to the previous content\'s node either',
-    museumEdited?.ref === '', JSON.stringify({ before: museumBefore?.ref, after: museumEdited?.ref }));
+    !!museumBefore?.ref && museumEdited?.ref !== museumBefore.ref,
+    JSON.stringify({ before: museumBefore?.ref, after: museumEdited?.ref }));
 
   // …AND THE NEXT START INDEXES THE NEW CONTENT. A new port (see case 7), and no hang marker: the same fact now
   // annotates. The layout marker is current, so this start only back-fills.

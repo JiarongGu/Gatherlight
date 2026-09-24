@@ -87,15 +87,20 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public string Description =>
         "适合:大多数情况 —— 应用自己装好、自己启动,不用填地址,模型在「资源 · Resources」面板下载。"
         + "判断与语义共用同一个进程、各用自己的模型,所以两层都开也只有一个常驻服务。"
-        + "实测语义检索 10 题首位命中 9 题、每次查询 0.025 秒;判断用对话模型时每次约 0.15–0.20 秒,"
-        // Per call for a chat judge (docs/self-managed-llm-runtime.md); for a reranker the ADDED cost per
-        // recall under partition — the comparable figure, not the whole recall the model notes quote, which
-        // includes the formula's own ~0.23 s. The range spans the catalogued rerankers: mMiniLMv2 +0.08 s (Run 4:
-        // 313 ms against the formula's 237), BGE and LAMAR +0.21–0.26 s (Runs 2 and 4). mMiniLMv2's figure was taken
-        // under Run 4's 4096 launch, and the product launches it at its declared 512 — so the rerank CALL was
-        // re-measured under both (60 fixture facts per call: median 75–79 ms at 4096, 76 ms at 512; the mMiniLMv2
-        // row's comment in GgufCatalog has the setup). No difference beyond noise, so +0.08 s stands.
-        + "用重排模型时每次检索多约 0.08–0.26 秒,看是哪个模型(都是模型已加载后的实测)。";
+        + "实测语义检索 10 题首位命中 9 题、每次查询 0.025 秒;判断用对话模型时每次检索多约 0.16–0.18 秒"
+        + "(Gemma 3 1B、Qwen3 0.6B),"
+        // BOTH judge figures are the ADDED cost per RECALL — the judge arm's serial median minus the SAME run's formula
+        // median on the 240-question fixture, model warm, one GPU — so the two halves of this sentence compare like with
+        // like, and neither is the whole recall the model notes quote (which includes the formula's own ~0.22 s). Chat:
+        // Gemma 3 1B +0.18 s (Run 3: 403 ms against 219), Qwen3 0.6B +0.16 s (Run 5b: 381 against 220), content-only
+        // input, thinking off. This said 「每次约 0.15–0.20 秒」 until 2026-09-24: a per-CALL figure for the 1B (seven warm
+        // calls of an 8-token reply, docs/self-managed-llm-runtime.md, 2026-08-22 — before any chat section launched with
+        // thinking off), beside a per-recall added one. Rerankers: the range spans the catalogued ones —
+        // mMiniLMv2 +0.08 s (Run 4: 313 ms against the formula's 237), BGE and LAMAR +0.21–0.26 s (Runs 2 and 4).
+        // mMiniLMv2's figure was taken under Run 4's 4096 launch, and the product launches it at its declared 512 — so the
+        // rerank CALL was re-measured under both (60 fixture facts per call: median 75–79 ms at 4096, 76 ms at 512; the
+        // mMiniLMv2 row's comment in GgufCatalog has the setup). No difference beyond noise, so +0.08 s stands.
+        + "用重排模型时多约 0.08–0.26 秒,看是哪个模型(都是模型已加载后的实测)。";
 
     /// <summary>A chat model does both halves on our router. A RERANKER only scores, so it verifies and the
     /// default client (the Claude CLI) annotates — on <see cref="AnnotationModel"/>, which is where the
