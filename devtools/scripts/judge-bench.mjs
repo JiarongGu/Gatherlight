@@ -27,6 +27,10 @@
 //     log folder, accuracy pass and latency pass separately), or when > 2% of queries errored. A judge arm's
 //     serial latency counts only recalls that carried a verdict — a failed-open recall is fast and would
 //     otherwise make the judge look cheap.
+//   - A LOCAL arm must not reach the CLI. A local chat judge annotates AND verifies on llama.cpp, a reranker
+//     annotates on the CLI only when a fact is WRITTEN, and the formula arm runs no judge — and a reused seed
+//     writes nothing. So any claude-cli call from one of those arms is a WARNING (it is also spent quota), and a
+//     chat-judge arm whose llama.cpp chat calls (`router: llamacpp`) never succeeded is one too.
 //   - Every arm PINS both measurement knobs (blank = unset), a knob-less arm must print no `[measurement]`
 //     line, and the 判断 switch is read BACK after it is set — so no arm silently duplicates another.
 //   - The questions are SHUFFLED with a seeded PRNG (mulberry32, --seed) and a fact's four questions are
@@ -67,16 +71,24 @@
 // measured); the report goes to results-<iso>.json. Neither is ever deleted or truncated by a later run.
 // Unknown flags and duplicate arms are REJECTED, so a typo cannot launch a full-cost run with the defaults.
 //
-// PRIVACY. The fixture is invented and committed; this touches no household data. Reranker arms READ the
-// llama.cpp binary and GGUFs from --resources (default local/state/resources) and nothing else there.
+// LOCAL-MODEL ARMS. `--rerankers=<m,…>` adds `rr:<m>` (partition) and `rrf:<m>` (fuse) per reranker;
+// `--chat-judges=<m,…>` adds `lc:<m>` (content alone — the shipped default, no knob) and `lcb:<m>`
+// (`GATHERLIGHT_JUDGE_INPUT=both`, "topic — content") per llama.cpp CHAT model, paired against each other — the
+// question docs/judge-bench.md Run 3 asks — as well as against `formula`. All of them share ONE real router,
+// launched with the preset section the product writes for each model's kind (see presetSection).
+//
+// PRIVACY. The fixture is invented and committed; this touches no household data. Local-model arms READ the
+// llama.cpp binary and GGUFs from --resources and nothing else there. Its default is local/state/resources —
+// a household's data folder — so pass --resources=<a scratch folder> unless reading that one is intended.
 //
 // Usage:
 //   node devtools/dev.mjs judge-bench                     # formula, formula2, topic, content, content2, contentonly, fuse
 //   node devtools/dev.mjs judge-bench --arms=formula,content --n=20 --reuse-seed
 //   node devtools/dev.mjs judge-bench --arms=formula --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M
+//   node devtools/dev.mjs judge-bench --reuse-seed --arms=formula --chat-judges=gemma-3-1b-it-Q4_K_M --resources=devtools/_rr-res
 //   node devtools/dev.mjs judge-bench --report-only=devtools/_judge-bench/results-<iso>.json [--baseline=…]
 //   node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,rr… --baseline=devtools/_judge-bench/results-<iso>.json:content
-// Flags: --arms= --rerankers= --n= --port-base= --llama-port= --resources= --seed= --latency-sample=
+// Flags: --arms= --rerankers= --chat-judges= --n= --port-base= --llama-port= --resources= --seed= --latency-sample=
 //        --reuse-seed | --reseed   --report-only=<results.json | rows-*.jsonl>   --baseline=<results.json>:<arm>
 import fs from 'node:fs';
 import path from 'node:path';
@@ -87,7 +99,7 @@ import { makeTestData, startServer, waitHealthy, makeClient, until, repo, git } 
 import { resolveClaude, QUESTION_SETS } from './recall-questions.mjs';
 
 // ---- flags: known ones only ------------------------------------------------------------------------------
-const VALUED = ['arms', 'rerankers', 'n', 'port-base', 'llama-port', 'resources', 'seed', 'latency-sample', 'report-only', 'baseline'];
+const VALUED = ['arms', 'rerankers', 'chat-judges', 'n', 'port-base', 'llama-port', 'resources', 'seed', 'latency-sample', 'report-only', 'baseline'];
 const BOOLEAN = ['reuse-seed', 'reseed'];
 const die = (msg) => { console.error(`judge-bench: ${msg}`); process.exit(2); };
 const KNOWN = `known flags: ${[...VALUED.map((k) => `--${k}=…`), ...BOOLEAN.map((k) => `--${k}`)].join(' ')}`;
@@ -251,14 +263,19 @@ const readLogs = (dataDir) => {
   if (!fs.existsSync(dir)) return '';
   return fs.readdirSync(dir).filter((f) => f.endsWith('.log')).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
 };
-const routerOutcomes = (dataDir) => {
+// Lyntai's TextRouter logs one `router: <provider> (model …) → <verdict>` line per attempt. `claude-cli` is the
+// CLI; `llamacpp` is LlamaCppSource's CHAT provider (its embedder and reranker register as `llamacpp-embed` and
+// `llamacpp-rerank`, which the trailing space keeps out of this count).
+const routerOutcomes = (dataDir, provider = 'claude-cli') => {
   let ok = 0, failed = 0;
+  const okRe = new RegExp(`router: ${provider} .*→ Ok`), failRe = new RegExp(`router: ${provider} .*→ (?!Ok)`);
   for (const line of readLogs(dataDir).split('\n')) {
-    if (/router: claude-cli .*→ Ok/.test(line)) ok++;
-    else if (/router: claude-cli .*→ (?!Ok)/.test(line)) failed++;
+    if (okRe.test(line)) ok++;
+    else if (failRe.test(line)) failed++;
   }
   return { ok, failed };
 };
+const LLAMA_CHAT_PROVIDER = 'llamacpp';
 const judgeLayer = async (c) => ((await c.getJson('/api/manage/memory')).layers ?? []).find((l) => l.id === 'judge');
 
 // The fixture's data repo gains a generated plans/INDEX.md on first boot, AFTER its initial commits, so every
@@ -307,17 +324,20 @@ const loadRun = (json, source) => {
   const cfg = Array.isArray(json.arms) ? json.arms : Object.keys(json.rows).map((key) => ({ key }));
   if (!Array.isArray(json.arms)) notes.push('no arm configuration saved — labels and enrichment taken from the current arm table');
   const arms = cfg.map((a) => {
-    const known = ARMS[a.key] ?? {};
+    // The arm table, or what a local-model key's own shape says (`rr:`/`rrf:`/`lc:`/`lcb:`).
+    const known = ARMS[a.key] ?? armConfigFor(a.key);
     return {
       key: a.key,
       label: a.label ?? known.label ?? a.key,
       enrichment: a.enrichment ?? known.enrichment ?? Boolean(a.reranker),
       judgeInput: a.judgeInput ?? known.judgeInput ?? null,
-      reranker: a.reranker ?? null,
+      reranker: a.reranker ?? known.reranker ?? null,
+      chatJudge: a.chatJudge ?? known.chatJudge ?? null,
       knobs: a.knobs ?? null,
       judgeOn: a.judgeOn ?? null, judgeSource: a.judgeSource ?? null, judgeModel: a.judgeModel ?? null,
       migrationWarnings: a.migrationWarnings ?? null,
       router: a.router ?? null,
+      localRouter: a.localRouter ?? null,
       rows: (json.rows[a.key] ?? []).filter((r) => (r.pass ?? 'accuracy') === 'accuracy'),
       latencyRows: json.latencyRows?.[a.key] ?? null,
     };
@@ -511,6 +531,16 @@ const analyse = (run, { baseline = null } = {}) => {
     for (let j = i + 1; j < rr.length; j++)
       rrComps.push({ key: `${rr[j].key} vs ${rr[i].key}`, label: `${rr[j].key} vs ${rr[i].key}`, arm: rr[j], base: rr[i] });
   if (rrComps.length > 0) out.paired.rerankers = printPaired('PAIRED — every reranker against every other; b = right-hand hit & left-hand miss', rrComps);
+  // THE LOCAL CHAT JUDGE'S QUESTION (docs/judge-bench.md Run 3): content alone (`lc:`, the shipped default) against
+  // "topic — content" (`lcb:`), per model. Paired by KEY, so a saved or recovered run pairs the same way.
+  const chatKey = (a) => /^(lcb?):(.+)$/.exec(a.key);
+  const cjComps = [];
+  for (const lc of arms.filter((a) => chatKey(a)?.[1] === 'lc')) {
+    const lcb = arms.find((a) => a.key === `lcb:${chatKey(lc)[2]}`);
+    if (lcb) cjComps.push({ key: `${lc.key} vs ${lcb.key}`, label: `${lc.key} vs ${lcb.key}`, arm: lc, base: lcb });
+  }
+  if (cjComps.length > 0) out.paired.chatJudges = printPaired('PAIRED — each local chat judge, content only (lc) against topic — content (lcb);'
+    + ' b = lcb hit & lc miss, c = the reverse', cjComps);
   if (baseline) {
     const { problems, arm: bArm } = checkBaseline(run, baseline.run, baseline.arm);
     out.crossRun = { baseline: { file: rel(baseline.file), arm: baseline.arm, at: baseline.run.meta.at }, refused: problems.length ? problems : null, paired: null };
@@ -574,6 +604,18 @@ const analyse = (run, { baseline = null } = {}) => {
   }
   for (const arm of arms)
     if (arm.migrationWarnings?.length > 0) console.log(`  startup warnings in ${arm.key}: ${arm.migrationWarnings.join(' | ')}`);
+  const chatArms = arms.filter((a) => a.chatJudge);
+  if (chatArms.length > 0) {
+    // The counts are cumulative from boot (they are read from the arm's log folder), so each pass is a difference.
+    console.log(`\nllama.cpp chat calls (router: ${LLAMA_CHAT_PROVIDER}) — ok/failed per pass; a local chat judge's verdicts arrive through these`);
+    const r = (x) => (x ? `${x.ok}/${x.failed}` : 'unrecorded');
+    const minus = (x, y) => (x && y ? { ok: x.ok - y.ok, failed: x.failed - y.failed } : null);
+    console.log(pad('arm', LABEL_W) + pad('startup', 12) + pad('accuracy pass', 16) + 'latency pass');
+    for (const arm of chatArms) {
+      const l = arm.localRouter;
+      console.log(pad(arm.label, LABEL_W) + pad(r(l?.startup), 12) + pad(r(minus(l?.accuracy, l?.startup)), 16) + r(minus(l?.total, l?.accuracy)));
+    }
+  }
 
   // WHAT THE JUDGE IS SHOWN PER RECALL — latency alone cannot price it (on the CLI arm a 9–17 s spawn dominates
   // and the cost is quota). Estimated from the fixture: the judge sees min(4 × min(3 × limit, 100), corpus)
@@ -614,6 +656,19 @@ const analyse = (run, { baseline = null } = {}) => {
       out.warnings.push(`arm ${arm.key} — ${arm.router.total.failed - arm.router.accuracy.failed} claude-cli call(s) failed during the latency pass`);
     if (arm.router?.total && !arm.router?.accuracy && arm.router.total.failed > 0)
       out.warnings.push(`arm ${arm.key} — ${arm.router.total.failed} claude-cli call(s) failed over the run (which pass is not recoverable)`);
+    // A LOCAL arm reaching the CLI at query time: a chat judge annotates and verifies on llama.cpp, a reranker
+    // annotates on the CLI only when a fact is written, the formula arm judges nothing — and a reused seed writes
+    // nothing. Any call here is unexplained, and it is account quota spent by an arm meant to spend none.
+    const local = arm.chatJudge || arm.reranker || arm.enrichment === false;
+    const cliCalls = arm.router?.total ?? arm.router?.accuracy;
+    if (local && cliCalls && cliCalls.ok + cliCalls.failed > 0)
+      out.warnings.push(`arm ${arm.key} — ${cliCalls.ok + cliCalls.failed} claude-cli call(s) from an arm whose judge is local or off: nothing it did should reach the CLI`);
+    if (arm.chatJudge && arm.localRouter?.accuracy) {
+      const acc = { ok: arm.localRouter.accuracy.ok - (arm.localRouter.startup?.ok ?? 0),
+        failed: arm.localRouter.accuracy.failed - (arm.localRouter.startup?.failed ?? 0) };
+      if (acc.ok === 0) out.warnings.push(`arm ${arm.key} — no llama.cpp chat call succeeded during the accuracy pass: this judge never judged`);
+      if (acc.failed > 0) out.warnings.push(`arm ${arm.key} — ${acc.failed} llama.cpp chat call(s) failed during the accuracy pass`);
+    }
     if (l.unjudged > 0)
       out.warnings.push(`arm ${arm.key} — ${l.unjudged}/${l.graphRanked} graph-ranked latency recalls carried no verdict (left out of its serial median)`);
     if (l.errors > 0)
@@ -665,12 +720,17 @@ const queryOrder = (facts, seed) => {
   }
   return { queries, adjacentSameFact: queries.filter((x, i) => i > 0 && x.fact === queries[i - 1].fact).length };
 };
-/** What an arm key means, when nothing else recorded it: the arm table, or a reranker key's own shape. */
+/** What an arm key means, when nothing else recorded it: the arm table, or a local-model key's own shape —
+ *  `rr:`/`rrf:` a reranker under partition/fuse, `lc:`/`lcb:` a llama.cpp chat judge reading content alone (the
+ *  shipped default) or "topic — content". ONE writer: the live run builds those arms from this too. */
 const armConfigFor = (key) => {
-  if (ARMS[key]) return { label: ARMS[key].label, enrichment: ARMS[key].enrichment, judgeInput: ARMS[key].judgeInput ?? null, reranker: null };
+  if (ARMS[key]) return { label: ARMS[key].label, enrichment: ARMS[key].enrichment, judgeInput: ARMS[key].judgeInput ?? null, reranker: null, chatJudge: null };
   const m = /^(rrf?):(.+)$/.exec(key);
-  if (m) return { label: `reranker ${m[2]} · ${m[1] === 'rrf' ? 'fuse' : 'partition'}`, enrichment: true, judgeInput: null, reranker: m[2] };
-  return { label: key, enrichment: null, judgeInput: null, reranker: null };
+  if (m) return { label: `reranker ${m[2]} · ${m[1] === 'rrf' ? 'fuse' : 'partition'}`, enrichment: true, judgeInput: null, reranker: m[2], chatJudge: null };
+  const c = /^(lcb?):(.+)$/.exec(key);
+  if (c) return { label: `local chat judge ${c[2]} · ${c[1] === 'lcb' ? 'topic — content' : 'content only'}`, enrichment: true,
+    judgeInput: c[1] === 'lcb' ? 'both' : 'content', reranker: null, chatJudge: c[2] };
+  return { label: key, enrichment: null, judgeInput: null, reranker: null, chatJudge: null };
 };
 
 // =============================================================================================================
@@ -808,10 +868,21 @@ const live = async () => {
   });
   const rerankers = list('rerankers', '');
   for (const m of rerankers) {
-    arms.push({ key: `rr:${m}`, label: `reranker ${m} · partition`, enrichment: true, env: {}, reranker: m });
-    arms.push({ key: `rrf:${m}`, label: `reranker ${m} · fuse`, enrichment: true,
-      env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/, reranker: m });
+    arms.push({ key: `rr:${m}`, ...armConfigFor(`rr:${m}`), env: {} });
+    arms.push({ key: `rrf:${m}`, ...armConfigFor(`rrf:${m}`),
+      env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/ });
   }
+  // A llama.cpp CHAT judge, both ways it can be shown a candidate. `lc` sets NO knob — it is the shipped default,
+  // so the knob-less check below proves nothing leaked in — and `lcb` must announce the one it sets.
+  const chatJudges = list('chat-judges', '');
+  const both = chatJudges.find((m) => rerankers.includes(m));
+  if (both) die(`'${both}' is in both --rerankers and --chat-judges — a GGUF is one kind, and the router's preset gives it one`);
+  for (const m of chatJudges) {
+    arms.push({ key: `lc:${m}`, ...armConfigFor(`lc:${m}`), env: {} });
+    arms.push({ key: `lcb:${m}`, ...armConfigFor(`lcb:${m}`), env: { GATHERLIGHT_JUDGE_INPUT: 'both' }, knob: /judge input = both \(/ });
+  }
+  // The model a local-model arm binds 判断 to, whichever kind it is.
+  for (const a of arms) a.llamaModel = a.reranker ?? a.chatJudge ?? null;
   if (arms.length === 0) die('no arms selected');
   for (const a of arms) a.pinned = { ...PINNED, ...a.env };
 
@@ -916,10 +987,11 @@ const live = async () => {
     const idOf = new Map(Object.entries(seedMeta.idOf));
     for (const f of facts) if (!idOf.has(f.id)) throw new Error(`seed has no id for fact ${f.id}`);
 
-    // ---- 2. the reranker arms share ONE real router, started here -------------------------------------------
+    // ---- 2. the local-model arms share ONE real router, started here -----------------------------------------
     // Each arm's own resources get EMPTY stand-ins for the runtime and the model, which is all IsConfigured asks;
     // the arm then ADOPTS this router at GATHERLIGHT_LLAMACPP_URL (EnsureServingAsync probes before it spawns).
-    if (rerankers.length > 0) {
+    const llamaModels = [...rerankers, ...chatJudges];
+    if (llamaModels.length > 0) {
       const exe = path.join(RESOURCES, 'llama-cpp', 'llama-server.exe');
       const gguf = path.join(RESOURCES, 'gguf');
       if (!fs.existsSync(exe)) throw new Error(`no llama-server at ${exe} — download llama.cpp in 资源 first`);
@@ -928,13 +1000,22 @@ const live = async () => {
       const installed = (m) => fs.existsSync(path.join(gguf, `${m}.gguf`))
         || (fs.existsSync(path.join(gguf, m)) && fs.statSync(path.join(gguf, m)).isDirectory()
           && fs.readdirSync(path.join(gguf, m)).some((f) => f.toLowerCase().endsWith('.gguf')));
-      for (const m of rerankers)
+      for (const m of llamaModels)
         if (!installed(m)) throw new Error(`${m} is in neither ${gguf}/${m}.gguf nor ${gguf}/${m}/*.gguf — download it in 资源 first`);
+      // THE PRODUCT'S PRESET, per kind — LlamaServerRuntime.WritePresets, mirrored line for line, because a bench
+      // that launches a model differently measures a product we do not ship. Every kind gets n-gpu-layers (launch
+      // CONTRACT: without it the CPU runs the model, silently ~30× slower); a reranker adds `reranking` and the
+      // 4096 ctx/batch/ubatch (a pair must fit one batch); a CHAT model gets NOTHING else — no ctx-size, and never
+      // `embeddings` or `reranking`, either of which restricts the child to one route and refuses chat.
+      const presetSection = (m, kind) => [`[${m}]`, 'n-gpu-layers = 99',
+        ...(kind === 'reranking' ? ['reranking = true', 'ctx-size = 4096', 'batch-size = 4096', 'ubatch-size = 4096'] : []),
+        ''].join('\n');
       const preset = path.join(WORK, 'presets.ini');
-      fs.writeFileSync(preset, rerankers.map((m) =>
-        `[${m}]\nn-gpu-layers = 99\nreranking = true\nctx-size = 4096\nbatch-size = 4096\nubatch-size = 4096\n`).join('\n'));
+      fs.writeFileSync(preset, [...rerankers.map((m) => presetSection(m, 'reranking')),
+        ...chatJudges.map((m) => presetSection(m, 'chat'))].join('\n'));
       const logFd = fs.openSync(path.join(WORK, 'router.log'), 'w');
-      router = spawn(exe, ['--models-dir', gguf, '--models-preset', preset, '--models-max', String(Math.max(2, rerankers.length)),
+      // --models-max holds every model the arms bind at once, so no arm's model is evicted by another's mid-run.
+      router = spawn(exe, ['--models-dir', gguf, '--models-preset', preset, '--models-max', String(Math.max(2, llamaModels.length)),
         '--host', '127.0.0.1', '--port', String(LLAMA_PORT)], { cwd: path.dirname(exe), stdio: ['ignore', logFd, logFd] });
       fs.closeSync(logFd);
       await until(async () => (await fetch(`http://127.0.0.1:${LLAMA_PORT}/v1/models`)).ok, 60000);
@@ -946,16 +1027,17 @@ const live = async () => {
       fs.cpSync(SEED_DATA, arm.dir, { recursive: true });
       fs.rmSync(path.join(arm.dir, 'state', 'logs'), { recursive: true, force: true });
       const env = { GATHERLIGHT_CLAUDE_CMD: claude, ...arm.pinned };
-      if (arm.reranker) {
+      if (arm.llamaModel) {
         const res = path.join(arm.dir, 'state', 'resources');
         fs.mkdirSync(path.join(res, 'llama-cpp'), { recursive: true });
         fs.mkdirSync(path.join(res, 'gguf'), { recursive: true });
         fs.writeFileSync(path.join(res, 'llama-cpp', 'llama-server.exe'), '');
         // Flat is enough here: InstalledGgufIds names a flat file by its stem, the same id as the nested layout.
-        fs.writeFileSync(path.join(res, 'gguf', `${arm.reranker}.gguf`), '');
+        // The stem is also what GgufKind reads, so a catalogued id gets its catalogued kind — chat or reranker.
+        fs.writeFileSync(path.join(res, 'gguf', `${arm.llamaModel}.gguf`), '');
         const settingsPath = path.join(arm.dir, 'state', 'settings.json');
         const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
-        settings.memory = { ...(settings.memory ?? {}), judgeSource: 'llama-cpp', judgeModel: arm.reranker };
+        settings.memory = { ...(settings.memory ?? {}), judgeSource: 'llama-cpp', judgeModel: arm.llamaModel };
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
         env.GATHERLIGHT_LLAMACPP_URL = `http://127.0.0.1:${LLAMA_PORT}`;
       }
@@ -968,6 +1050,7 @@ const live = async () => {
       // THE SEED IS WHAT THE ARM STARTS FROM, or the comparison is void: a claude call before any query means
       // startup re-derived something (a fact-index layout rebuild re-remembers every fact) from a changed app.
       arm.routerStartup = routerOutcomes(arm.dir);
+      if (arm.chatJudge) arm.localStartup = routerOutcomes(arm.dir, LLAMA_CHAT_PROVIDER);
       const startupCalls = arm.routerStartup.ok + arm.routerStartup.failed;
       if (startupCalls > 0)
         throw new Error(`arm ${arm.key}: ${startupCalls} claude-cli call(s) at startup — the arm re-derived something `
@@ -983,10 +1066,10 @@ const live = async () => {
       for (const k of knobs) if (!k.test(log)) throw new Error(`arm ${arm.key}: its knob did not announce itself (${k})`);
       if (knobs.length === 0 && announced.length > 0) throw new Error(`arm ${arm.key}: sets no knob, yet the server printed: ${announced.join(' | ')}`);
       arm.migrationWarnings = (await c.getJson('/api/migration/status')).warnings ?? [];
-      if (arm.reranker) {
+      if (arm.llamaModel) {
         const judge = await judgeLayer(c);
-        if (judge?.activeSource !== 'llama-cpp' || judge?.activeModel !== arm.reranker)
-          throw new Error(`arm ${arm.key}: judge is running ${judge?.activeSource} · ${judge?.activeModel}, not llama-cpp · ${arm.reranker}`);
+        if (judge?.activeSource !== 'llama-cpp' || judge?.activeModel !== arm.llamaModel)
+          throw new Error(`arm ${arm.key}: judge is running ${judge?.activeSource} · ${judge?.activeModel}, not llama-cpp · ${arm.llamaModel}`);
         if (/warming 判断 model .* failed/.test(readLogs(arm.dir) + log)) throw new Error(`arm ${arm.key}: warming the 判断 model failed (see ${arm.dir}/state/logs)`);
         if (arm.migrationWarnings.length > 0) throw new Error(`arm ${arm.key}: startup warnings: ${arm.migrationWarnings.join(' | ')}`);
       }
@@ -1029,7 +1112,10 @@ const live = async () => {
         emit(row);
       }
     }));
-    for (const arm of arms) arm.routerAccuracy = routerOutcomes(arm.dir);
+    for (const arm of arms) {
+      arm.routerAccuracy = routerOutcomes(arm.dir);
+      if (arm.chatJudge) arm.localAccuracy = routerOutcomes(arm.dir, LLAMA_CHAT_PROVIDER);
+    }
 
     // ---- 5. serial latency: one arm at a time, nothing else querying (mutates state — accuracy is already in) -
     const sample = queries.slice(0, Math.min(LATENCY_SAMPLE, queries.length));
@@ -1042,6 +1128,7 @@ const live = async () => {
         emit(row);
       }
       arm.routerTotal = routerOutcomes(arm.dir);
+      if (arm.chatJudge) arm.localTotal = routerOutcomes(arm.dir, LLAMA_CHAT_PROVIDER);
     }
 
     // ---- 6. SAVE the run, THEN analyse exactly what was saved — the path --report-only takes later -----------
@@ -1060,9 +1147,11 @@ const live = async () => {
       latencySample: sample.length,
       arms: arms.map((a) => ({
         key: a.key, label: a.label, enrichment: a.enrichment, judgeInput: a.judgeInput ?? null, reranker: a.reranker ?? null,
+        chatJudge: a.chatJudge ?? null,
         knobs: a.pinned, judgeOn: a.judgeOn, judgeSource: a.judgeSource, judgeModel: a.judgeModel,
         migrationWarnings: a.migrationWarnings,
         router: { startup: a.routerStartup, accuracy: a.routerAccuracy, total: a.routerTotal },
+        ...(a.chatJudge ? { localRouter: { startup: a.localStartup, accuracy: a.localAccuracy, total: a.localTotal } } : {}),
       })),
       rows: Object.fromEntries(arms.map((a) => [a.key, a.rows])),
       latencyRows: Object.fromEntries(arms.map((a) => [a.key, a.latencyRows])),
