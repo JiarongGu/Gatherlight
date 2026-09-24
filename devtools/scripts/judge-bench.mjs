@@ -875,19 +875,37 @@ const analyse = (run, { baseline = null } = {}) => {
     out.rerankSent = {};
     console.log(`\nrerank calls, accuracy pass (--rerank-memo ${meta.rerankProxy.memo ? 'on' : 'off'}) — documents are WINDOWS on a chunked arm;`
       + ' "shared" = answered from an identical body already sent');
-    console.log(pad('arm', LABEL_W) + pad('calls', 8) + pad('shared', 8) + pad('docs/call (mean)', 18) + pad('docs/call (max)', 17) + 'longest doc (chars)');
+    console.log(pad('arm', LABEL_W) + pad('calls', 8) + pad('shared', 8) + pad('docs/call (mean)', 18) + pad('docs/call (max)', 17)
+      + pad('longest doc (chars)', 21) + 'forwarded · retried · failed (whole run)');
     for (const arm of arms.filter((a) => a.rows.some((r) => r.rerank))) {
       const calls = arm.rows.filter((r) => r.rerank && r.rerank.calls > 0);
       const docs = calls.map((r) => r.rerank.documents / r.rerank.calls);
+      const p = meta.rerankProxy.arms?.[arm.key] ?? {};
       const x = {
-        calls: calls.reduce((a, r) => a + r.rerank.calls, 0), shared: meta.rerankProxy.arms?.[arm.key]?.memoHits ?? null,
+        calls: calls.reduce((a, r) => a + r.rerank.calls, 0), shared: p.memoHits ?? null,
         docsMean: docs.length ? docs.reduce((a, b) => a + b, 0) / docs.length : null,
         docsMax: docs.length ? Math.max(...docs) : null, longest: calls.reduce((m, r) => Math.max(m, r.rerank.maxChars), 0),
+        forwarded: p.forwarded ?? null, retried: p.retried ?? null, errors: p.errors ?? null,
       };
       out.rerankSent[arm.key] = x;
       console.log(pad(arm.label, LABEL_W) + pad(x.calls, 8) + pad(x.shared ?? '—', 8) + pad(x.docsMean === null ? '—' : x.docsMean.toFixed(1), 18)
-        + pad(x.docsMax ?? '—', 17) + x.longest);
+        + pad(x.docsMax ?? '—', 17) + pad(x.longest, 21)
+        + (x.forwarded === null ? 'unrecorded' : `${x.forwarded} · ${x.retried} · ${x.errors}`));
+      // A request the proxy failed to deliver reads to the arm as a 502 — no verdict — and says nothing about the judge.
+      if (x.errors > 0) out.warnings.push(`arm ${arm.key} — the rerank proxy failed to deliver ${x.errors} request(s): those recalls carry no verdict for a reason that is the bench's, not the judge's`);
     }
+    // Every forward must have reached the router (the reconciliation the live run saved).
+    const seen = meta.rerankProxy.routerProxied;
+    if (seen && !seen.error) {
+      out.rerankReconciled = {};
+      for (const model of [...new Set(arms.filter((a) => a.reranker && meta.rerankProxy.arms?.[a.key]).map((a) => a.reranker))]) {
+        const sent = arms.filter((a) => a.reranker === model).reduce((s, a) => s + (meta.rerankProxy.arms[a.key]?.forwarded ?? 0), 0);
+        out.rerankReconciled[model] = { forwarded: sent, routerSaw: seen[model] ?? 0 };
+        console.log(`  ${pad(model, LABEL_W - 2)}forwarded ${sent} rerank requests, the router proxied ${seen[model] ?? 0} to this model's child`);
+        if (sent !== (seen[model] ?? 0))
+          out.warnings.push(`${model} — the proxies forwarded ${sent} rerank requests and the router saw ${seen[model] ?? 0}: some request never reached the model`);
+      }
+    } else if (seen?.error) out.notes.push(`router log not reconciled: ${seen.error}`);
   }
   const chatArms = arms.filter((a) => a.chatJudge);
   if (chatArms.length > 0) {
@@ -1429,21 +1447,38 @@ const live = async () => {
       const ans = f.answer?.text ?? f.content;
       for (const q of Object.values(f.questions ?? {})) { answerOf.set(q, ans); answerOf.set(q.normalize('NFKC'), ans); }
     }
+    // A FRESH connection per forward. Node's default agent keeps sockets alive, and a socket the router has just closed
+    // for idleness gets reused: the request dies before the router sees it, and the arm reads a 502 as no verdict. That
+    // happened ONCE in each of Run 6b's two runs — each an abstention the router log shows it never received — and the
+    // pre-registered coverage guard then left the rule unread. So no socket is reused, a forward that fails before any
+    // response (the router never answered) is retried once, a failed forward is never memoised, and every failure is
+    // counted on the arm and warned on.
+    const upstream = new http.Agent({ keepAlive: false });
     const startProxy = () => new Promise((resolve) => {
-      const state = { phase: 'startup', seq: null, records: new Map(), requests: 0, memoHits: 0 };
-      const forward = (req, body) => new Promise((ok, fail) => {
+      const state = { phase: 'startup', seq: null, records: new Map(), requests: 0, memoHits: 0, forwarded: 0, retried: 0, errors: 0 };
+      const once = (req, body) => new Promise((ok, fail) => {
         const up = http.request({
-          host: '127.0.0.1', port: LLAMA_PORT, method: req.method, path: req.url,
-          headers: { ...req.headers, host: `127.0.0.1:${LLAMA_PORT}`, 'content-length': body.length },
+          host: '127.0.0.1', port: LLAMA_PORT, method: req.method, path: req.url, agent: upstream,
+          headers: { ...req.headers, host: `127.0.0.1:${LLAMA_PORT}`, 'content-length': body.length, connection: 'close' },
         }, (r) => {
           const out = [];
           r.on('data', (c) => out.push(c));
           r.on('end', () => ok({ status: r.statusCode, headers: r.headers, body: Buffer.concat(out) }));
-          r.on('error', fail);
+          r.on('error', (e) => fail(Object.assign(e, { answered: true })));
         });
         up.on('error', fail);
         up.end(body);
       });
+      // `forwarded` counts /v1/rerank forwards only — every one the router must then log as proxied to its model's child,
+      // which is how a lost request is found (Run 6b).
+      const forward = async (req, body) => {
+        if (req.url === '/v1/rerank') state.forwarded++;
+        try { return await once(req, body); } catch (e) {
+          if (e.answered) { state.errors++; throw e; }
+          state.retried++;
+          try { return await once(req, body); } catch (e2) { state.errors++; throw e2; }
+        }
+      };
       const server = http.createServer((req, res) => {
         const chunks = [];
         req.on('data', (c) => chunks.push(c));
@@ -1466,7 +1501,7 @@ const live = async () => {
               state.records.get(state.seq).push(rec);
               if (MEMO) {
                 if (memo.has(hash)) state.memoHits++;
-                else memo.set(hash, forward(req, body));
+                else memo.set(hash, forward(req, body).catch((e) => { memo.delete(hash); throw e; }));
                 reply = await memo.get(hash);
               } else reply = await forward(req, body);
             } else reply = await forward(req, body);
@@ -1480,6 +1515,10 @@ const live = async () => {
           }
         });
       });
+      // The inbound hop too: the arm's HttpClient pools its connection to this proxy, so the proxy must not close an idle
+      // one first (Node's default is 5 s).
+      server.keepAliveTimeout = 10 * 60 * 1000;
+      server.headersTimeout = server.keepAliveTimeout + 1000;
       server.listen(0, '127.0.0.1', () => resolve({ server, state, port: server.address().port }));
     });
     /** What the proxy saw for one query of one arm, for its row — or nothing, for an arm with no proxy. */
@@ -1615,6 +1654,30 @@ const live = async () => {
       if (arm.chatJudge) arm.localTotal = routerOutcomes(arm.dir, LLAMA_CHAT_PROVIDER);
     }
 
+    // RECONCILE what the proxies forwarded with what the router received: every /v1/rerank forward must appear in the
+    // router's log as a request proxied to that model's child. Run 6b found its two abstentions exactly this way — a
+    // request recorded by the proxy that the router never saw. Read once the count stops moving (the router logs through
+    // a queue), with the router still up, because a forced kill can lose what is still queued.
+    let routerProxied = null;
+    if (arms.some((a) => a.proxy) && router) {
+      const count = () => {
+        const proxied = {};
+        for (const m of fs.readFileSync(path.join(WORK, 'router.log'), 'utf8').matchAll(/proxying request to model (\S+) on/g))
+          proxied[m[1]] = (proxied[m[1]] ?? 0) + 1;
+        return proxied;
+      };
+      try {
+        let last = null;
+        for (let i = 0; i < 20; i++) {
+          await new Promise((r) => setTimeout(r, 1000));
+          const now = count();
+          if (JSON.stringify(now) === JSON.stringify(last)) break;
+          last = now;
+        }
+        routerProxied = last;
+      } catch (e) { routerProxied = { error: String(e?.message ?? e) }; }
+    }
+
     // ---- 6. SAVE the run, THEN analyse exactly what was saved — the path --report-only takes later -----------
     // Saving first is what makes an analysis bug cheap: the rows of an hour-long run are on disk before a single
     // table is computed, so a throw below costs a re-analysis, not a re-run.
@@ -1642,7 +1705,13 @@ const live = async () => {
       ...(arms.some((a) => a.proxy) ? {
         rerankProxy: {
           memo: MEMO,
-          arms: Object.fromEntries(arms.filter((a) => a.proxy).map((a) => [a.key, { requests: a.proxy.state.requests, memoHits: a.proxy.state.memoHits }])),
+          arms: Object.fromEntries(arms.filter((a) => a.proxy).map((a) => [a.key, {
+            requests: a.proxy.state.requests, memoHits: a.proxy.state.memoHits,
+            // Every forward to the router, all passes and startup included; retried = a connection-level failure retried
+            // once; errors = a forward that still failed, which the arm read as a 502.
+            forwarded: a.proxy.state.forwarded, retried: a.proxy.state.retried, errors: a.proxy.state.errors,
+          }])),
+          routerProxied,
         },
       } : {}),
       rows: Object.fromEntries(arms.map((a) => [a.key, a.rows])),
