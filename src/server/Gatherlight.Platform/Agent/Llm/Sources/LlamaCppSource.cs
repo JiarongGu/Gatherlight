@@ -117,15 +117,37 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // Verification by the reranker; annotation by the default client on the CLI's default model.
             // CAPPED: one pair past the model's window fails the whole rerank call — see RerankInputCap. The window
             // is the one the catalogue row DECLARES (the same read the preset makes), never a branch on the id; a
-            // model with none keeps the 1,000-character cap.
-            : new JudgeWiring(null, AnnotationModel(ctx.Model), sp => new RerankInputCap(
-                new Lyntai.Memory.Verification.ScoringVerificationPolicy(
-                    sp.GetServices<Lyntai.Inference.IModelProvider>(),
-                    new Lyntai.Memory.Verification.ScoringVerificationOptions
-                        { ProviderId = RerankProviderId, EndorseCount = RerankEndorseCount },
-                    sp.GetService<ILogger<Lyntai.Memory.Verification.ScoringVerificationPolicy>>(),
-                    sp.GetService<Lyntai.Inference.IProviderRouterFactory>()),
-                GgufCatalog.DeclaredWindow(ctx.Model)));
+            // model with none keeps the 1,000-character cap. CHUNKED when RerankChunking is on: the reranker's own
+            // provider is wrapped so a long candidate is scored in windows of that same budget (ChunkedScoreProvider),
+            // and the cap then prepares candidates without cutting them.
+            : new JudgeWiring(null, AnnotationModel(ctx.Model), sp =>
+            {
+                var window = GgufCatalog.DeclaredWindow(ctx.Model);
+                var chunked = RerankChunking.On;
+                return new RerankInputCap(
+                    new Lyntai.Memory.Verification.ScoringVerificationPolicy(
+                        RerankProviders(sp, window, chunked),
+                        new Lyntai.Memory.Verification.ScoringVerificationOptions
+                            { ProviderId = RerankProviderId, EndorseCount = RerankEndorseCount },
+                        sp.GetService<ILogger<Lyntai.Memory.Verification.ScoringVerificationPolicy>>(),
+                        sp.GetService<Lyntai.Inference.IProviderRouterFactory>()),
+                    window, chunked);
+            });
+
+    /// <summary>The providers the reranker's verifier chooses from — every registered one, with the reranker's own
+    /// (<see cref="RerankProviderId"/>) wrapped in a <see cref="ChunkedScoreProvider"/> when chunking is on. Wrapped HERE,
+    /// where the verifier is built, and registered nowhere: the wrapper is part of how this judge scores, not a backend
+    /// anything else may route to.</summary>
+    private static IEnumerable<Lyntai.Inference.IModelProvider> RerankProviders(IServiceProvider sp, int? window, bool chunked)
+    {
+        var all = sp.GetServices<Lyntai.Inference.IModelProvider>();
+        if (!chunked) return all;
+        var log = sp.GetService<ILogger<ChunkedScoreProvider>>();
+        return [.. all.Select(p => p is Lyntai.Inference.IScoreProvider score
+            && string.Equals(p.Id, RerankProviderId, StringComparison.OrdinalIgnoreCase)
+                ? new ChunkedScoreProvider(score, window, log)
+                : p)];
+    }
 
     /// <summary>A reranker's id must never reach the CLI, which would be asked for a model it has never heard
     /// of — so a reranker binding annotates on the CLI's default judge model.</summary>

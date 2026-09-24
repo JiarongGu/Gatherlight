@@ -398,15 +398,33 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
     /// special tokens llama.cpp wraps an XLM-RoBERTa pair in, plus at most one leading <c>▁</c> for each text.</summary>
     public const int PairOverheadTokens = 6;
 
+    /// <summary>The most WINDOWS one candidate is scored in when chunking is on (<see cref="Windows"/>). Five windows of
+    /// a quarter's overlap read a candidate WHOLE up to four window-lengths — 4,000 characters at the 1,000-character
+    /// cap, 1,012–1,960 for mMiniLMv2's fitted budgets — and past that they are spread evenly from its first character
+    /// to its last, so its start, its end and three points between are always read. A cap, because the whole call
+    /// costs what every window costs: a recall showing the reranker 96 long candidates sends up to 480 pairs.</summary>
+    public const int MaxWindows = 5;
+
+    /// <summary>Consecutive windows overlap by at least this fraction of a window (1/<see cref="OverlapDivisor"/>) while
+    /// the candidate needs no more than <see cref="MaxWindows"/>, so any span up to a quarter of a window — a sentence,
+    /// which is what a household fact's answer is — lies whole inside at least one window instead of being cut in two.
+    /// </summary>
+    public const int OverlapDivisor = 4;
+
     private readonly IMemoryVerificationPolicy _inner;
     private readonly int? _window;
+    private readonly bool _chunked;
 
     /// <param name="window">The model's DECLARED token window (<see cref="GgufCatalog.DeclaredWindow"/>), or null
     /// for none — which keeps the 1,000-character cap and leaves the query alone.</param>
-    public RerankInputCap(IMemoryVerificationPolicy inner, int? window = null)
+    /// <param name="chunked">True when a <see cref="ChunkedScoreProvider"/> scores each candidate in windows: the
+    /// candidates are then prepared (NFKC under a window) but NOT cut here, because the windows are cut from the whole
+    /// text downstream. The query is fitted exactly as without it.</param>
+    public RerankInputCap(IMemoryVerificationPolicy inner, int? window = null, bool chunked = false)
     {
         _inner = inner;
         _window = window;
+        _chunked = chunked;
     }
 
     /// <summary>Both the content and the headline, because the scoring policy reads the content and falls back
@@ -415,13 +433,14 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
     public Task<MemoryVerification> VerifyAsync(MemoryVerificationRequest request, CancellationToken ct = default)
     {
         var (query, perCandidate) = Fit(request.Query, _window);
+        var cut = _chunked ? int.MaxValue : perCandidate;
         return _inner.VerifyAsync(request with
         {
             Query = query,
             Candidates = [.. request.Candidates.Select(c => c with
             {
-                Headline = Cap(Prepare(c.Headline, _window), perCandidate),
-                Content = c.Content is null ? null : Cap(Prepare(c.Content, _window), perCandidate),
+                Headline = Cap(Prepare(c.Headline, _window), cut),
+                Content = c.Content is null ? null : Cap(Prepare(c.Content, _window), cut),
             })],
         }, ct);
     }
@@ -434,9 +453,72 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
     public static (string Query, int PerCandidate) Fit(string query, int? window)
     {
         if (UsableWindow(window) is not { } tokens) return (query, MaxChars);
-        var budget = tokens - PairOverheadTokens;
-        var fitted = Cap(Prepare(query, tokens), budget / 2);
-        return (fitted, Math.Min(MaxChars, budget - fitted.Length));
+        var fitted = Cap(Prepare(query, tokens), (tokens - PairOverheadTokens) / 2);
+        return (fitted, PerCandidate(fitted, tokens));
+    }
+
+    /// <summary>How many characters each candidate may run beside a query that is ALREADY fitted — the second half of
+    /// <see cref="Fit"/>, split out so the windows a <see cref="ChunkedScoreProvider"/> cuts downstream (it sees only the
+    /// fitted query) are exactly the budget the cut uses: one writer for both.</summary>
+    public static int PerCandidate(string fittedQuery, int? window) =>
+        UsableWindow(window) is { } tokens
+            ? Math.Min(MaxChars, tokens - PairOverheadTokens - fittedQuery.Length)
+            : MaxChars;
+
+    /// <summary>The most windows ONE rerank call may carry — <see cref="MaxWindows"/> for each of the 96 candidates a recall
+    /// at the default page shows the verifier (4 × min(3 × 8, 100), Lyntai's verification depth over
+    /// <c>FactIndex.RankAsync</c>'s over-ask). A larger recall — one naming a kind, or asking for 34 or more, shows up to
+    /// 400 — gets fewer windows per candidate instead (<see cref="WindowsPerDocument"/>), down to one: today's cut. Measured
+    /// on the real llama-server (b10549, one GPU, dense Chinese windows, <c>docs/judge-bench.md</c> Run 6b): 480 full
+    /// 1,000-character windows took ~20 s on BGE and LAMAR, and 2,000 took 77–79 s — past the 60-second verification
+    /// deadline, so without this cap such a recall would wait a minute and then go unverified.</summary>
+    public const int MaxWindowsPerCall = 480;
+
+    /// <summary>How many windows each document of one call may use: <see cref="MaxWindows"/>, lowered — the same for
+    /// every document — until the call's windows fit <see cref="MaxWindowsPerCall"/>, never below one.</summary>
+    public static int WindowsPerDocument(IReadOnlyList<string> documents, int size)
+    {
+        var needed = documents.Select(d => WindowsNeeded(d.Length, size)).ToList();
+        var k = MaxWindows;
+        while (k > 1 && needed.Sum(n => Math.Min(n, k)) > MaxWindowsPerCall) k--;
+        return k;
+    }
+
+    /// <summary>How many windows a text of <paramref name="length"/> needs to be read whole with the minimum overlap —
+    /// before any cap.</summary>
+    private static int WindowsNeeded(int length, int size)
+    {
+        if (size <= 0 || length <= size) return 1;
+        var stride = Math.Max(1, size - size / OverlapDivisor);
+        return 1 + (length - size + stride - 1) / stride;
+    }
+
+    /// <summary>A candidate as the WINDOWS a chunked reranker scores it in: the text itself when it fits in one
+    /// (<paramref name="size"/> characters or fewer — so a short fact is sent exactly as without chunking), otherwise
+    /// windows of <paramref name="size"/> characters, the first at its start and the last at its END, spaced evenly
+    /// between. While the text needs at most <paramref name="maxWindows"/> (a stride of three quarters of a window), the
+    /// spacing is at most that stride, so consecutive windows overlap by at least a quarter; past it,
+    /// <paramref name="maxWindows"/> windows are spread over the whole text and the stretches between them go unread.
+    /// With <paramref name="maxWindows"/> = 1 it is the cut: the text's first <paramref name="size"/> characters.
+    /// Windows never split a surrogate pair (a boundary moves inward by one unit instead), so a window can run one
+    /// short of <paramref name="size"/>, never over.</summary>
+    public static IReadOnlyList<string> Windows(string text, int size, int maxWindows = MaxWindows)
+    {
+        if (size <= 0) return [""];
+        if (text.Length <= size) return [text];
+        var n = Math.Clamp(WindowsNeeded(text.Length, size), 1, Math.Max(1, maxWindows));
+        if (n == 1) return [Cap(text, size)];
+        var span = text.Length - size;                       // where the last window starts
+        var windows = new string[n];
+        for (var i = 0; i < n; i++)
+        {
+            var start = (int)((long)i * span / (n - 1));     // 0 … span, the last exactly at the tail
+            if (start > 0 && char.IsLowSurrogate(text[start]) && char.IsHighSurrogate(text[start - 1])) start++;
+            var end = Math.Min(text.Length, start + size);
+            if (end < text.Length && char.IsHighSurrogate(text[end - 1]) && char.IsLowSurrogate(text[end])) end--;
+            windows[i] = text[start..end];
+        }
+        return windows;
     }
 
     /// <summary>A declared window, or null when it cannot hold even a pair's overhead — the ONE rule

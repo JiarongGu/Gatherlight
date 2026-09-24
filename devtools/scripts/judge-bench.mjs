@@ -95,6 +95,19 @@
 // got its own graph node holding exactly its note. Every table gains a BY POSITION block. `--seed-only` builds (or,
 // with --reuse-seed, re-verifies) the seed and stops before any arm starts.
 //
+// CHUNKED RERANKING (docs/judge-bench.md Run 6b). `--rerank-arms=` picks which arms each `--rerankers=` model gets:
+// `rr` (partition), `rrf` (fuse) and `rrk` (partition with GATHERLIGHT_RERANK_CHUNKING=on — each long candidate scored
+// in windows, its best window's score kept; ChunkedScoreProvider). The default stays `rr,rrf`, so Runs 2–6 re-launch as
+// they ran. Every arm pins that knob blank, so `rr` runs the product default and `rrk` must announce itself.
+// `--claude-stub` points every server at the e2e claude STUB on ANY fixture (the long fixture always does), refusing a
+// Claude-judge arm, so a reranker-only run on the bilingual seed cannot spend quota even by accident.
+// `--rerank-memo` puts a small proxy in front of the router for each local-model arm: during the ACCURACY pass an
+// identical /v1/rerank request body gets the identical response — the first one computed — whichever arm sent it, and
+// every request's body hash, document count and whether the target's answer text was among the documents is recorded on
+// the row. llama.cpp's scores drift in the third decimal between identical calls (Run 4's screen), which can flip a
+// candidate at the page boundary; the memo removes that noise BETWEEN arms, so two arms that send the same bytes get the
+// same verdicts, and an arm that sends different bytes shows it. The serial latency pass is never memoised.
+//
 // Usage:
 //   node devtools/dev.mjs judge-bench                     # formula, formula2, topic, content, content2, contentonly, fuse
 //   node devtools/dev.mjs judge-bench --arms=formula,content --n=20 --reuse-seed
@@ -104,12 +117,14 @@
 //   node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,rr… --baseline=devtools/_judge-bench/results-<iso>.json:content
 //   node devtools/dev.mjs judge-bench --fixture=long --seed-only --resources=devtools/_rr-res
 //   node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 --rerankers=… --resources=devtools/_rr-res
-// Flags: --arms= --rerankers= --chat-judges= --n= --port-base= --llama-port= --resources= --seed= --latency-sample=
-//        --fixture=bilingual|long   --reuse-seed | --reseed   --seed-only
+//   node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 --rerankers=… --rerank-arms=rr,rrk --rerank-memo --resources=devtools/_rr-res
+// Flags: --arms= --rerankers= --rerank-arms=rr,rrf,rrk --chat-judges= --n= --port-base= --llama-port= --resources= --seed=
+//        --latency-sample=   --fixture=bilingual|long   --reuse-seed | --reseed   --seed-only   --claude-stub   --rerank-memo
 //        --report-only=<results.json | rows-*.jsonl>   --baseline=<results.json>:<arm>
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { makeTestData, startServer, waitHealthy, makeClient, until, repo, git, claudeStubCmd } from './e2e/_e2e-common.mjs';
@@ -117,8 +132,8 @@ import { resolveClaude, QUESTION_SETS } from './recall-questions.mjs';
 import { expectedLongBytes, POSITIONS } from './judge-bench-long-fixture.mjs';
 
 // ---- flags: known ones only ------------------------------------------------------------------------------
-const VALUED = ['arms', 'rerankers', 'chat-judges', 'n', 'port-base', 'llama-port', 'resources', 'seed', 'latency-sample', 'report-only', 'baseline', 'fixture'];
-const BOOLEAN = ['reuse-seed', 'reseed', 'seed-only'];
+const VALUED = ['arms', 'rerankers', 'rerank-arms', 'chat-judges', 'n', 'port-base', 'llama-port', 'resources', 'seed', 'latency-sample', 'report-only', 'baseline', 'fixture'];
+const BOOLEAN = ['reuse-seed', 'reseed', 'seed-only', 'claude-stub', 'rerank-memo'];
 const die = (msg) => { console.error(`judge-bench: ${msg}`); process.exit(2); };
 const KNOWN = `known flags: ${[...VALUED.map((k) => `--${k}=…`), ...BOOLEAN.map((k) => `--${k}`)].join(' ')}`;
 const opts = {};
@@ -208,7 +223,17 @@ const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
 // full list is JudgeSeesContentPolicy's class comment, "ON THE BUMP"; after it, `both` cannot be reproduced.
 // GATHERLIGHT_JUDGE_DEADLINE_SECONDS (VerificationDeadlinePolicy's test knob) is pinned blank for the same reason, so
 // every arm runs the product's default verification deadline; startup below refuses an arm that announces it.
-const PINNED = { GATHERLIGHT_JUDGE_INPUT: '', GATHERLIGHT_VERDICT_COMBINATION: '', GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '' };
+// GATHERLIGHT_RERANK_CHUNKING (RerankChunking, Run 6b) is pinned blank the same way: `rr` then runs the product default
+// and `rrk` sets it on, announcing it or the arm is refused.
+const PINNED = { GATHERLIGHT_JUDGE_INPUT: '', GATHERLIGHT_VERDICT_COMBINATION: '', GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '',
+  GATHERLIGHT_RERANK_CHUNKING: '' };
+/** Which arms each `--rerankers=` model gets, and what each pins. `rr` pins nothing (the product default), `rrf` fuse,
+ *  `rrk` chunking on. ONE writer: the live run builds reranker arms from this and armConfigFor labels them from it. */
+const RERANK_ARM_KINDS = {
+  rr: { suffix: 'partition', env: {}, knob: null },
+  rrf: { suffix: 'fuse', env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/ },
+  rrk: { suffix: 'partition · chunked', env: { GATHERLIGHT_RERANK_CHUNKING: 'on' }, knob: /rerank chunking = on \(/ },
+};
 // THE PRODUCT'S LAUNCH NUMBERS, restated here because the bench writes its own router preset — and GUARDED against the
 // C# they restate (mirrorGuard, below, before anything starts), because a bench that launches a model differently
 // measures a product we do not ship.
@@ -443,6 +468,8 @@ const loadRun = (json, source) => {
       // The fixture a run used, and where each fact's answer sat in its note (the long fixture; null before it).
       fixture: json.fixture ?? null,
       positions: json.positions ?? null,
+      // `--rerank-memo`'s proxy (Run 6b): whether identical rerank bodies shared a response, and what each arm sent.
+      rerankProxy: json.rerankProxy ?? null,
     },
     arms,
     notes,
@@ -562,6 +589,43 @@ const printPaired = (title, comps) => {
   return Object.fromEntries(results.map(({ c, bySet, finding }) => [c.key, { ...bySet, finding }]));
 };
 
+/** Each reranker run both unchunked (`rr:`) and chunked (`rrk:`) in one run — Run 6b's pairs, by key, so a saved run
+ *  pairs the same way. */
+const chunkingPairs = (arms) => arms.filter((a) => /^rr:/.test(a.key))
+  .map((rr) => ({ model: rr.key.slice(3), rr, rrk: arms.find((a) => a.key === `rrk:${rr.key.slice(3)}`) }))
+  .filter((p) => p.rrk);
+
+/** Are two arms' rows the SAME, query by query? Everything a row records about the recall's outcome — the target's
+ *  position, the verdict flag, graph or FTS, how many rows came back, the whole page in order — and, when the memo proxy
+ *  ran, the hash of every /v1/rerank body sent. Run 6b's rule (c) asks this of chunked against unchunked on short facts,
+ *  where every candidate is one window and nothing may differ. */
+const identityOf = (arm, base) => {
+  const bySeq = new Map(base.rows.map((r) => [r.seq, r]));
+  const differ = { pos: 0, answered: 0, ranked: 0, returned: 0, error: 0, page: 0, rerankBody: 0 };
+  let pairs = 0, pageCompared = 0, bodyCompared = 0;
+  const seqs = [];
+  for (const r of arm.rows) {
+    const q = bySeq.get(r.seq);
+    if (!q) continue;
+    pairs++;
+    let d = false;
+    for (const k of ['pos', 'answered', 'ranked', 'returned']) if (r[k] !== q[k]) { differ[k]++; d = true; }
+    if ((r.error === null) !== (q.error === null)) { differ.error++; d = true; }
+    if (r.page && q.page) {
+      pageCompared++;
+      if (JSON.stringify(r.page) !== JSON.stringify(q.page)) { differ.page++; d = true; }
+    }
+    if (r.rerank && q.rerank) {
+      bodyCompared++;
+      if (r.rerank.hash !== q.rerank.hash) { differ.rerankBody++; d = true; }
+    }
+    if (d) seqs.push(r.seq);
+  }
+  const complete = pairs > 0 && pairs === arm.rows.length && pairs === base.rows.length;
+  return { pairs, complete, pageCompared, bodyCompared, differ, differingQueries: seqs.length, firstDiffering: seqs.slice(0, 12),
+    identical: complete && seqs.length === 0 };
+};
+
 /** THE LONG FIXTURE'S QUESTION (docs/judge-bench.md Run 6): what each arm does to a fact by WHERE its answer sits in
  *  its note. All four question sets pooled per position (4 × 15 facts = 60 queries); for every arm, accuracy and
  *  coverage; then paired, each arm against `formula` and every reranker against every other, per position. Equivalence
@@ -615,6 +679,28 @@ const printByPosition = (run) => {
       rrComps.push({ key: `${rr[j].key} vs ${rr[i].key}`, label: `${rr[j].key} vs ${rr[i].key}`, arm: rr[j], base: rr[i] });
   if (rrComps.length) out.paired.rerankers = table('BY POSITION, PAIRED — every reranker against every other; b = right-hand hit'
     + ' & left-hand miss, c = the reverse', rrComps);
+  // Run 6b: each reranker chunked against itself unchunked — the pairs its rule reads, printed on their own.
+  const ck = chunkingPairs(arms);
+  if (ck.length) out.paired.chunking = table('BY POSITION, PAIRED — chunked (rrk) against unchunked (rr), per reranker; b = rr hit'
+    + ' & rrk miss, c = the reverse', ck.map((p) => ({ key: `${p.rrk.key} vs ${p.rr.key}`, label: `${p.rrk.key} vs ${p.rr.key}`, arm: p.rrk, base: p.rr })));
+  // What the reranker was actually SHOWN (the memo proxy's record): of the recalls that made a rerank call, in how many
+  // was the target's answer text among the documents? A cut arm cannot see an answer past its cut; a chunked arm sees it
+  // whenever the target is a candidate at all.
+  const proxied = arms.filter((a) => a.rows.some((r) => r.rerank));
+  if (proxied.length) {
+    out.answerSent = {};
+    console.log('\nBY POSITION — recalls whose rerank call carried the target\'s ANSWER TEXT / recalls that made a rerank call');
+    console.log(pad('arm', W) + groups.map((p) => pad(p, 22)).join(''));
+    for (const arm of proxied) {
+      const cells = groups.map((p) => {
+        const rows = arm.rows.filter(at(p)).filter((r) => r.rerank && r.rerank.calls > 0);
+        const sent = rows.filter((r) => r.rerank.answerSent === true).length;
+        out.answerSent[p] = { ...(out.answerSent[p] ?? {}), [arm.key]: { sent, calls: rows.length } };
+        return pad(`${sent} / ${rows.length}`, 22);
+      });
+      console.log(pad(arm.label, W) + cells.join(''));
+    }
+  }
   return out;
 };
 
@@ -671,6 +757,25 @@ const analyse = (run, { baseline = null } = {}) => {
     for (let j = i + 1; j < rr.length; j++)
       rrComps.push({ key: `${rr[j].key} vs ${rr[i].key}`, label: `${rr[j].key} vs ${rr[i].key}`, arm: rr[j], base: rr[i] });
   if (rrComps.length > 0) out.paired.rerankers = printPaired('PAIRED — every reranker against every other; b = right-hand hit & left-hand miss', rrComps);
+  // RUN 6b: each reranker chunked (`rrk:`) against itself unchunked (`rr:`), query by query — identical or not, and
+  // what differed. On short facts every candidate is one window, so the rule requires IDENTICAL; on long ones this only
+  // says how much chunking moved (the paired tests above and BY POSITION say which way).
+  const ckPairs = chunkingPairs(arms);
+  if (ckPairs.length > 0) {
+    out.chunkingIdentity = {};
+    console.log('\nCHUNKED vs UNCHUNKED — is every query\'s row identical? (position · verdict flag · graph/FTS · rows returned ·'
+      + ' the whole page · every rerank body sent)');
+    console.log('  ' + pad('model', 46) + pad('pairs', 7) + pad('differ', 8) + pad('pos/ans/rank/ret/err/page/body', 32)
+      + pad('pages · bodies compared', 25) + 'identical');
+    for (const p of ckPairs) {
+      const x = identityOf(p.rrk, p.rr);
+      out.chunkingIdentity[p.model] = x;
+      const d = x.differ;
+      console.log('  ' + pad(p.model, 46) + pad(x.pairs, 7) + pad(x.differingQueries, 8)
+        + pad(`${d.pos}/${d.answered}/${d.ranked}/${d.returned}/${d.error}/${d.page}/${d.rerankBody}`, 32)
+        + pad(`${x.pageCompared} · ${x.bodyCompared}`, 25) + (x.identical ? 'YES' : `no${x.firstDiffering.length ? ` (first: seq ${x.firstDiffering.join(', ')})` : ''}`));
+    }
+  }
   // THE LOCAL CHAT JUDGE'S QUESTION (docs/judge-bench.md Run 3): content alone (`lc:`, the shipped default) against
   // "topic — content" (`lcb:`), per model. Paired by KEY, so a saved or recovered run pairs the same way.
   const chatKey = (a) => /^(lcb?):(.+)$/.exec(a.key);
@@ -764,6 +869,26 @@ const analyse = (run, { baseline = null } = {}) => {
   }
   for (const arm of arms)
     if (arm.migrationWarnings?.length > 0) console.log(`  startup warnings in ${arm.key}: ${arm.migrationWarnings.join(' | ')}`);
+  // The memo proxy's record (Run 6b): what each arm SENT the reranker in the accuracy pass — calls, documents per call
+  // (a chunked arm's documents are windows) and the longest document — and how many calls shared a response.
+  if (meta.rerankProxy) {
+    out.rerankSent = {};
+    console.log(`\nrerank calls, accuracy pass (--rerank-memo ${meta.rerankProxy.memo ? 'on' : 'off'}) — documents are WINDOWS on a chunked arm;`
+      + ' "shared" = answered from an identical body already sent');
+    console.log(pad('arm', LABEL_W) + pad('calls', 8) + pad('shared', 8) + pad('docs/call (mean)', 18) + pad('docs/call (max)', 17) + 'longest doc (chars)');
+    for (const arm of arms.filter((a) => a.rows.some((r) => r.rerank))) {
+      const calls = arm.rows.filter((r) => r.rerank && r.rerank.calls > 0);
+      const docs = calls.map((r) => r.rerank.documents / r.rerank.calls);
+      const x = {
+        calls: calls.reduce((a, r) => a + r.rerank.calls, 0), shared: meta.rerankProxy.arms?.[arm.key]?.memoHits ?? null,
+        docsMean: docs.length ? docs.reduce((a, b) => a + b, 0) / docs.length : null,
+        docsMax: docs.length ? Math.max(...docs) : null, longest: calls.reduce((m, r) => Math.max(m, r.rerank.maxChars), 0),
+      };
+      out.rerankSent[arm.key] = x;
+      console.log(pad(arm.label, LABEL_W) + pad(x.calls, 8) + pad(x.shared ?? '—', 8) + pad(x.docsMean === null ? '—' : x.docsMean.toFixed(1), 18)
+        + pad(x.docsMax ?? '—', 17) + x.longest);
+    }
+  }
   const chatArms = arms.filter((a) => a.chatJudge);
   if (chatArms.length > 0) {
     // The counts are cumulative from boot (they are read from the arm's log folder), so each pass is a difference.
@@ -907,12 +1032,12 @@ const queryOrder = (facts, seed) => {
   return { queries, adjacentSameFact: queries.filter((x, i) => i > 0 && x.fact === queries[i - 1].fact).length };
 };
 /** What an arm key means, when nothing else recorded it: the arm table, or a local-model key's own shape —
- *  `rr:`/`rrf:` a reranker under partition/fuse, `lc:`/`lcb:` a llama.cpp chat judge reading content alone (the
+ *  `rr:`/`rrf:`/`rrk:` a reranker under partition/fuse/partition-chunked, `lc:`/`lcb:` a llama.cpp chat judge reading content alone (the
  *  shipped default) or "topic — content". ONE writer: the live run builds those arms from this too. */
 const armConfigFor = (key) => {
   if (ARMS[key]) return { label: ARMS[key].label, enrichment: ARMS[key].enrichment, judgeInput: ARMS[key].judgeInput ?? null, reranker: null, chatJudge: null };
-  const m = /^(rrf?):(.+)$/.exec(key);
-  if (m) return { label: `reranker ${m[2]} · ${m[1] === 'rrf' ? 'fuse' : 'partition'}`, enrichment: true, judgeInput: null, reranker: m[2], chatJudge: null };
+  const m = /^(rr[fk]?):(.+)$/.exec(key);
+  if (m) return { label: `reranker ${m[2]} · ${RERANK_ARM_KINDS[m[1]].suffix}`, enrichment: true, judgeInput: null, reranker: m[2], chatJudge: null };
   const c = /^(lcb?):(.+)$/.exec(key);
   if (c) return { label: `local chat judge ${c[2]} · ${c[1] === 'lcb' ? 'topic — content' : 'content only'}`, enrichment: true,
     judgeInput: c[1] === 'lcb' ? 'both' : 'content', reranker: null, chatJudge: c[2] };
@@ -1055,11 +1180,13 @@ const live = async () => {
     return { key: k, ...ARMS[k] };
   });
   const rerankers = list('rerankers', '');
-  for (const m of rerankers) {
-    arms.push({ key: `rr:${m}`, ...armConfigFor(`rr:${m}`), env: {} });
-    arms.push({ key: `rrf:${m}`, ...armConfigFor(`rrf:${m}`),
-      env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/ });
-  }
+  const rerankKinds = list('rerank-arms', 'rr,rrf');
+  for (const k of rerankKinds) if (!RERANK_ARM_KINDS[k]) die(`--rerank-arms: unknown kind '${k}' — one of ${Object.keys(RERANK_ARM_KINDS).join(', ')}`);
+  for (const m of rerankers)
+    for (const k of rerankKinds) {
+      const kind = RERANK_ARM_KINDS[k];
+      arms.push({ key: `${k}:${m}`, ...armConfigFor(`${k}:${m}`), env: { ...kind.env }, ...(kind.knob ? { knob: kind.knob } : {}) });
+    }
   // A llama.cpp CHAT judge, both ways it can be shown a candidate. `lc` sets NO knob — it is the shipped default,
   // so the knob-less check below proves nothing leaked in — and `lcb` must announce the one it sets.
   const chatJudges = list('chat-judges', '');
@@ -1107,14 +1234,16 @@ const live = async () => {
   // THE LONG FIXTURE NEVER REACHES A REAL CLI: its seed is written with 判断 off and its arms are formula, rerankers or
   // local chat judges, none of which should call the CLI — so every server it starts is pointed at the e2e stub, and an
   // unexpected call is then counted (router lines) without spending quota. A Claude-judge arm would measure the stub.
-  if (LONG) {
+  // `--claude-stub` asks the same of the bilingual fixture, for a run with no Claude-judge arm (Run 6b's short guard).
+  const STUB = LONG || opts['claude-stub'] === true;
+  if (STUB) {
     const cliArms = arms.filter((a) => ARMS[a.key]?.enrichment);
-    if (cliArms.length) die(`--fixture=long runs against the claude stub, so a Claude-judge arm would measure the stub — drop ${cliArms.map((a) => a.key).join(', ')}`);
+    if (cliArms.length) die(`${LONG ? '--fixture=long' : '--claude-stub'} runs against the claude stub, so a Claude-judge arm would measure the stub — drop ${cliArms.map((a) => a.key).join(', ')}`);
   }
-  const claude = LONG ? claudeStubCmd : resolveClaude();
+  const claude = STUB ? claudeStubCmd : resolveClaude();
   // shell:false always. A .cmd cannot be spawned directly (Node refuses since the batch-file CVE fix), so it goes
   // through cmd.exe explicitly; anything that still yields no version is recorded as unknown WITH the reason.
-  const claudeVersion = LONG ? 'none — the e2e claude stub (devtools/scripts/claude-stub.mjs), never a real CLI' : (() => {
+  const claudeVersion = STUB ? 'none — the e2e claude stub (devtools/scripts/claude-stub.mjs), never a real CLI' : (() => {
     const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(claude);
     const r = viaCmd
       ? spawnSync('cmd.exe', ['/d', '/s', '/c', `""${claude}" --version"`], { encoding: 'utf8', shell: false, windowsVerbatimArguments: true })
@@ -1137,6 +1266,7 @@ const live = async () => {
   };
   const stopAll = () => {
     for (const s of servers) try { s.stop(); } catch { /* best effort */ }
+    for (const a of arms) if (a.proxy) try { a.proxy.server.closeAllConnections(); a.proxy.server.close(); } catch { /* best effort */ }
     stopRouter();
   };
 
@@ -1286,6 +1416,85 @@ const live = async () => {
       await until(async () => (await fetch(`http://127.0.0.1:${LLAMA_PORT}/v1/models`)).ok, 60000);
     }
 
+    // ---- 2b. `--rerank-memo`: one proxy per local-model arm, in front of the router --------------------------
+    // Everything passes through untouched, except a /v1/rerank POST during the ACCURACY pass: its body is hashed and
+    // recorded against the query in flight (with its document count, its longest document and whether the target's
+    // answer text was among the documents), and identical bodies — from ANY arm — share the first response computed.
+    // Bodies name the model, so two models never share one. The latency pass is never memoised: it is where time is
+    // measured.
+    const MEMO = opts['rerank-memo'] === true;
+    const memo = new Map();
+    const answerOf = new Map();
+    for (const f of FIXTURE.facts) {
+      const ans = f.answer?.text ?? f.content;
+      for (const q of Object.values(f.questions ?? {})) { answerOf.set(q, ans); answerOf.set(q.normalize('NFKC'), ans); }
+    }
+    const startProxy = () => new Promise((resolve) => {
+      const state = { phase: 'startup', seq: null, records: new Map(), requests: 0, memoHits: 0 };
+      const forward = (req, body) => new Promise((ok, fail) => {
+        const up = http.request({
+          host: '127.0.0.1', port: LLAMA_PORT, method: req.method, path: req.url,
+          headers: { ...req.headers, host: `127.0.0.1:${LLAMA_PORT}`, 'content-length': body.length },
+        }, (r) => {
+          const out = [];
+          r.on('data', (c) => out.push(c));
+          r.on('end', () => ok({ status: r.statusCode, headers: r.headers, body: Buffer.concat(out) }));
+          r.on('error', fail);
+        });
+        up.on('error', fail);
+        up.end(body);
+      });
+      const server = http.createServer((req, res) => {
+        const chunks = [];
+        req.on('data', (c) => chunks.push(c));
+        req.on('end', async () => {
+          const body = Buffer.concat(chunks);
+          try {
+            let reply;
+            if (req.method === 'POST' && req.url === '/v1/rerank' && state.phase === 'accuracy') {
+              const hash = crypto.createHash('sha256').update(body).digest('hex');
+              let parsed = {};
+              try { parsed = JSON.parse(body.toString('utf8')); } catch { /* recorded as unparsed */ }
+              const docs = Array.isArray(parsed.documents) ? parsed.documents.map(String) : [];
+              const ans = answerOf.get(String(parsed.query ?? ''));
+              const rec = {
+                hash: hash.slice(0, 16), documents: docs.length, maxChars: docs.reduce((m, d) => Math.max(m, d.length), 0),
+                answerSent: ans === undefined ? null : docs.some((d) => d.includes(ans) || d.includes(ans.normalize('NFKC'))),
+              };
+              state.requests++;
+              if (!state.records.has(state.seq)) state.records.set(state.seq, []);
+              state.records.get(state.seq).push(rec);
+              if (MEMO) {
+                if (memo.has(hash)) state.memoHits++;
+                else memo.set(hash, forward(req, body));
+                reply = await memo.get(hash);
+              } else reply = await forward(req, body);
+            } else reply = await forward(req, body);
+            const headers = { ...reply.headers, 'content-length': reply.body.length };
+            delete headers['transfer-encoding'];
+            res.writeHead(reply.status, headers);
+            res.end(reply.body);
+          } catch (e) {
+            res.writeHead(502, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: { code: 502, message: `judge-bench proxy: ${e?.message ?? e}` } }));
+          }
+        });
+      });
+      server.listen(0, '127.0.0.1', () => resolve({ server, state, port: server.address().port }));
+    });
+    /** What the proxy saw for one query of one arm, for its row — or nothing, for an arm with no proxy. */
+    const rerankOf = (arm, seq) => {
+      if (!arm.proxy) return {};
+      const recs = arm.proxy.state.records.get(seq) ?? [];
+      return {
+        rerank: {
+          calls: recs.length, hash: recs.map((r) => r.hash).join('+'),
+          documents: recs.reduce((a, r) => a + r.documents, 0), maxChars: recs.reduce((m, r) => Math.max(m, r.maxChars), 0),
+          answerSent: recs.length === 0 || recs.every((r) => r.answerSent === null) ? null : recs.some((r) => r.answerSent === true),
+        },
+      };
+    };
+
     // ---- 3. one snapshot + one server per arm ----------------------------------------------------------------
     for (const [i, arm] of arms.entries()) {
       arm.dir = path.join(WORK, `arm-${i}`);
@@ -1304,7 +1513,8 @@ const live = async () => {
         const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
         settings.memory = { ...(settings.memory ?? {}), judgeSource: 'llama-cpp', judgeModel: arm.llamaModel };
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-        env.GATHERLIGHT_LLAMACPP_URL = `http://127.0.0.1:${LLAMA_PORT}`;
+        if (MEMO) arm.proxy = await startProxy();
+        env.GATHERLIGHT_LLAMACPP_URL = `http://127.0.0.1:${arm.proxy ? arm.proxy.port : LLAMA_PORT}`;
       }
       arm.port = PORT_BASE + 1 + i;
       arm.srv = startServer({ dataDir: arm.dir, port: arm.port, env });
@@ -1365,21 +1575,27 @@ const live = async () => {
           status: r.status, ranked: r.result.ranked ?? null, returned: ids.length,
           answered: typeof r.result.answered === 'boolean' ? r.result.answered : null,
           error: null, pos: ids.indexOf(idOf.get(x.fact)), ms,
+          // The whole page, in order — the fingerprint two arms must share to have given the same verdicts (Run 6b).
+          page: ids,
         };
       } catch (e) {
         return { status: null, ranked: null, returned: null, answered: null, error: String(e?.message ?? e), pos: null, ms: Date.now() - t0 };
       }
     };
 
+    for (const arm of arms) if (arm.proxy) arm.proxy.state.phase = 'accuracy';
     await Promise.all(arms.map(async (arm) => {
       const c = makeClient(arm.srv.base);
       arm.rows = [];
       for (const [seq, x] of queries.entries()) {
-        const row = { arm: arm.key, pass: 'accuracy', seq, ...x, ...(await recall(c, x)) };
+        if (arm.proxy) arm.proxy.state.seq = seq;
+        const result = await recall(c, x);
+        const row = { arm: arm.key, pass: 'accuracy', seq, ...x, ...result, ...rerankOf(arm, seq) };
         arm.rows.push(row);
         emit(row);
       }
     }));
+    for (const arm of arms) if (arm.proxy) arm.proxy.state.phase = 'latency';
     for (const arm of arms) {
       arm.routerAccuracy = routerOutcomes(arm.dir);
       if (arm.chatJudge) arm.localAccuracy = routerOutcomes(arm.dir, LLAMA_CHAT_PROVIDER);
@@ -1423,6 +1639,12 @@ const live = async () => {
         router: { startup: a.routerStartup, accuracy: a.routerAccuracy, total: a.routerTotal },
         ...(a.chatJudge ? { localRouter: { startup: a.localStartup, accuracy: a.localAccuracy, total: a.localTotal } } : {}),
       })),
+      ...(arms.some((a) => a.proxy) ? {
+        rerankProxy: {
+          memo: MEMO,
+          arms: Object.fromEntries(arms.filter((a) => a.proxy).map((a) => [a.key, { requests: a.proxy.state.requests, memoHits: a.proxy.state.memoHits }])),
+        },
+      } : {}),
       rows: Object.fromEntries(arms.map((a) => [a.key, a.rows])),
       latencyRows: Object.fromEntries(arms.map((a) => [a.key, a.latencyRows])),
     };

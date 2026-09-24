@@ -125,6 +125,10 @@ public static class GatherlightApp
         var judgeInputRaw = Environment.GetEnvironmentVariable("GATHERLIGHT_JUDGE_INPUT");
         if (!string.IsNullOrWhiteSpace(judgeInputRaw))
             Console.WriteLine($"[measurement] judge input = {Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode} (GATHERLIGHT_JUDGE_INPUT={judgeInputRaw})");
+        var chunkingRaw = Platform.Agent.Llm.Services.RerankChunking.Raw;
+        if (!string.IsNullOrWhiteSpace(chunkingRaw))
+            Console.WriteLine($"[measurement] rerank chunking = {(Platform.Agent.Llm.Services.RerankChunking.On ? "on" : "off")} "
+                + $"({Platform.Agent.Llm.Services.RerankChunking.KnobName}={chunkingRaw})");
 
         builder.Services
             .AddSingleton(options)
@@ -712,6 +716,11 @@ public static class GatherlightApp
             app.Logger.LogWarning(
                 "Measurement knob set: judge input = {Mode} (GATHERLIGHT_JUDGE_INPUT={Raw}) — a benchmark setting, not a household one",
                 Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode, judgeInputRaw);
+        if (!string.IsNullOrWhiteSpace(chunkingRaw))
+            app.Logger.LogWarning(
+                "Measurement knob set: rerank chunking = {Mode} ({Knob}={Raw}) — a benchmark setting, not a household one",
+                Platform.Agent.Llm.Services.RerankChunking.On ? "on" : "off",
+                Platform.Agent.Llm.Services.RerankChunking.KnobName, chunkingRaw);
         // Same reason, for the test knob that SHORTENS the verification deadline (it cannot lengthen it).
         var deadlineRaw = Environment.GetEnvironmentVariable(Platform.Agent.Llm.Services.VerificationDeadlinePolicy.KnobName);
         if (!string.IsNullOrWhiteSpace(deadlineRaw))
