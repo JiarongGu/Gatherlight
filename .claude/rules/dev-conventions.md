@@ -745,11 +745,17 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `llm.model.validate`, so a cortex row is not a second writer of anything. Proof lives in `e2e-p16`
   (listed + settable + round-trips) and `e2e-p14` (a bundle carrying `llm.model.validate` imports it, now
   that `validate` is tunable and travels in the bundle — see the `JudgeScopedModelRoutingStore` class doc's
-  D176 bump note for what stays true on the Lyntai bump). **A stated gap:** no suite drives a validate PASS —
-  it runs only when a committed diff touches `.claude/`, and every suite that puts files there plants them on
-  disk instead of committing them through a turn — so nothing asserts the `--model` the spawned CLI receives
-  for this consumer. The value is proven to reach the key `ClaudeValidateService` reads; the key-to-argv step
-  is the same `ClaudeAgentOptions.Model` plumbing `chat` and `extract` use, and is unasserted for `validate`.
+  D176 bump note for what stays true on the Lyntai bump). **The key-to-ARGV step is asserted too**, by a
+  real validate pass in `e2e-p16` (cases V1/V2). It was a stated gap for a round: the pass runs only when the
+  diff at the gate touches `.claude/`, and every suite with files there PLANTED them on disk rather than
+  writing them through a turn, so no suite ever reached one. `KBEDITTEST` makes the stub's execute turn
+  write a skill file, the stub answers the validation prompt with `VALIDATION_OK` and echoes the model it
+  was handed, and its args log (`GATHERLIGHT_STUB_ARGS_LOG`) classifies each spawn by PromptHarness's phase
+  header — the assertion has to name WHICH spawn, because with `validate=haiku` the scorers and the memory
+  judge also run on haiku. V1 sets `validate=haiku` with `chat=opus`: the validation spawn gets `--model
+  haiku` while plan and execute get `--model opus` (the positive control). V2 clears the row: no `--model`
+  at all, not the chat row's value. Confirmed non-vacuous by expecting a wrong value in each case (the model
+  not passed in V1, chat's in V2): both fail.
 - **Meaning-based fact recall is a GRAPH OPTION and ONE SCOPE — not a second engine member.** Both halves
   were got wrong first, both failed silently, and neither was visible from any API response, so the
   reasoning is on the record. (1) With an embedder + vector store registered, `UseGraph()` already embeds

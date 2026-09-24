@@ -1,12 +1,22 @@
 #!/usr/bin/env node
 // e2e P16 — cortex tuning surface. Read the prompt-template + model-routing registry, override
-// with placeholder validation, prove a runtime override reaches the spawned CLI, and reset.
+// with placeholder validation, prove a runtime override reaches the spawned CLI, and reset. Ends with a
+// real 智库 validation pass, asserting the validate row's model reaches THAT spawn's argv.
+import fs from 'node:fs';
+import path from 'node:path';
 import { dataDirFor, claudeStubCmd, makeReporter, makeTestData, startServer, waitHealthy, makeClient } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p16');
 const { ok, fail, done } = makeReporter('p16');
 makeTestData(dataDir);
-const srv = startServer({ dataDir, port: 5398, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+// Every stub spawn appends {args, kind, tail} here (claude-stub.mjs) — the only place a suite can see the
+// --model a spawned CLI actually received. Under state/, after makeTestData, so the agent's workspace
+// never lists it.
+const argsLog = path.join(dataDir, 'state', 'stub-args.jsonl');
+const srv = startServer({
+  dataDir, port: 5398,
+  env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ARGS_LOG: argsLog },
+});
 const { j, post, put, del, waitPhase } = makeClient(srv.base);
 
 const getCortex = async () => (await j('/api/manage/cortex')).body;
@@ -92,6 +102,75 @@ try {
   await put('/api/manage/cortex/model/validate', { value: '' });
   c = await getCortex();
   ok('empty validate model value clears override', model(c, 'validate')?.overridden === false && model(c, 'validate')?.override === null);
+
+  // --- a real 智库 VALIDATION PASS: the validate row reaches the spawned CLI's --model ---------------
+  // The rows above prove the value reaches the KEY; this proves the key reaches the ARGV. The pass runs only
+  // when the diff at the gate touches .claude/ (ChatSessionService.PresentDiffAsync), so KBEDITTEST makes the
+  // stub's execute turn write a skill file there. The CHAT row is set to a different model on purpose: the
+  // plan and execute spawns are then a positive control — they must carry chat's model, never validate's —
+  // and the assertions have to name WHICH spawn they read (the stub classifies each by its phase header),
+  // because "some spawn carried --model haiku" would be satisfied by the wrong one: V1's commit starts the
+  // auto-scorers, which run on haiku too and were seen landing between V2's plan and execute spawns.
+  const KB_FILE = '.claude/skills/zz-validate-e2e/SKILL.md';
+  const calls = () => (fs.existsSync(argsLog) ? fs.readFileSync(argsLog, 'utf8') : '')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const modelOf = (call) => { const i = call.args.indexOf('--model'); return i >= 0 ? call.args[i + 1] : null; };
+  const summary = (xs) => JSON.stringify(xs.map((x) => `${x.kind}:${modelOf(x) ?? '(none)'}`));
+  // One whole two-gate turn. Returns the review the gate showed and the turn's OWN two-gate spawns: sliced
+  // from where the log stood when the turn began, and filtered by kind, since the auto-scorers of an earlier
+  // commit append their own lines concurrently.
+  const kbTurn = async (message, decision) => {
+    const from = calls().length;
+    const started = await post('/api/chat', { message });
+    if (started.status !== 200) throw new Error(`chat start ${started.status} ${JSON.stringify(started.body)}`);
+    const id = started.body.id;
+    await waitPhase(id, 'awaiting-plan-approval');
+    await post(`/api/chat/${id}/plan/approve`);
+    const review = (await waitPhase(id, 'awaiting-diff-approval')).review;
+    const spawns = calls().slice(from).filter((x) => ['plan', 'execute', 'validate'].includes(x.kind));
+    await post(`/api/chat/${id}/diff/${decision}`);
+    await waitPhase(id, decision === 'approve' ? 'committed' : 'rejected');
+    return { review, spawns };
+  };
+
+  const setChat = await put('/api/manage/cortex/model/chat', { value: 'opus' });
+  const setValidate = await put('/api/manage/cortex/model/validate', { value: 'haiku' });
+  ok('(fixture) chat=opus and validate=haiku set', setChat.status === 200 && setValidate.status === 200);
+
+  // Case V1 — validate=haiku: the validation spawn receives --model haiku.
+  const v1 = await kbTurn('KBEDITTEST 把这条经验写进智库', 'approve');
+  ok('V1 (fixture) the diff at the gate touches .claude/, so a validation pass ran',
+    v1.review?.hasClaudeInfra === true && (v1.review?.files ?? []).some((f) => f.path === KB_FILE && f.isClaudeInfra),
+    JSON.stringify((v1.review?.files ?? []).map((f) => f.path)));
+  ok('V1 the server parsed the STUB\'s verdict — ok, and the report names the model that spawn was handed',
+    v1.review?.validation?.ok === true && (v1.review?.validation?.report ?? '').includes('model=haiku'),
+    JSON.stringify(v1.review?.validation));
+  const v1Validate = v1.spawns.filter((x) => x.kind === 'validate');
+  ok('V1 exactly one validation spawn, and its diff is the .claude/ file',
+    v1Validate.length === 1 && v1Validate[0].tail.includes(KB_FILE), summary(v1.spawns));
+  ok('V1 THE POINT: the validation spawn receives --model haiku (the validate row)',
+    v1Validate.length === 1 && modelOf(v1Validate[0]) === 'haiku', summary(v1.spawns));
+  const v1Chat = v1.spawns.filter((x) => x.kind === 'plan' || x.kind === 'execute');
+  ok('V1 positive control: the plan and execute spawns carry the CHAT row (opus), not validate\'s',
+    v1Chat.some((x) => x.kind === 'plan') && v1Chat.some((x) => x.kind === 'execute')
+      && v1Chat.every((x) => modelOf(x) === 'opus'), summary(v1.spawns));
+
+  // Case V2 — the validate row cleared: no --model at all (the CLI's own default), while chat keeps opus.
+  // This is also what a validate spawn looks like when the service passes no model, which is why V1's
+  // "--model haiku" cannot pass by accident; and the pass must not inherit the chat row in its place.
+  const cleared = await put('/api/manage/cortex/model/validate', { value: '' });
+  ok('(fixture) validate row cleared', cleared.status === 200);
+  const v2 = await kbTurn('KBEDITTEST 再更新一次智库', 'reject');
+  const v2Validate = v2.spawns.filter((x) => x.kind === 'validate');
+  ok('V2 (fixture) a second validation pass ran', v2Validate.length === 1, summary(v2.spawns));
+  ok('V2 THE POINT: with the row cleared the validation spawn gets NO --model (not haiku, not chat\'s opus)',
+    v2Validate.length === 1 && !v2Validate[0].args.includes('--model'), summary(v2.spawns));
+  ok('V2 …and the parsed report agrees (cli-default)',
+    (v2.review?.validation?.report ?? '').includes('model=cli-default'), JSON.stringify(v2.review?.validation));
+  ok('V2 positive control: plan and execute still carry opus',
+    v2.spawns.filter((x) => x.kind !== 'validate').length >= 2
+      && v2.spawns.filter((x) => x.kind !== 'validate').every((x) => modelOf(x) === 'opus'), summary(v2.spawns));
+  await put('/api/manage/cortex/model/chat', { value: '' });
 } catch (err) {
   fail('e2e-p16 fatal: ' + err.message);
   console.error(srv.log().slice(-3000));

@@ -41,14 +41,23 @@ const prompt = Buffer.concat(chunks).toString('utf8');
 // policy is fail-open, so a CLI asked for a model it has never heard of looks exactly like one that
 // answered badly. Opt-in (a suite names a file of its own), one JSON line per call, the prompt's tail
 // only — enough to tell an annotation from a verification and to find the suite's own marker.
+//
+// The two-gate spawns are classified too, by PromptHarness's own phase headers: several consumers each
+// read their own model key (chat → plan/execute, validate → the .claude/ validation pass), so a suite
+// asserting a model has to be able to name WHICH spawn it is looking at — "some call carried --model x"
+// is satisfied by the wrong one. The validation header is tested first because that prompt embeds a diff,
+// and a diff can contain anything.
 if (process.env.GATHERLIGHT_STUB_ARGS_LOG) {
   try {
     fs.appendFileSync(process.env.GATHERLIGHT_STUB_ARGS_LOG,
       JSON.stringify({
         args,
         // Lyntai's own prompt shapes — the same tests the branches below answer on.
-        kind: prompt.includes('{"subjects"') ? 'annotation'
-          : prompt.includes('Notes:' + String.fromCharCode(10)) ? 'verification' : 'other',
+        kind: prompt.includes('CURRENT PHASE: VALIDATION') ? 'validate'
+          : prompt.includes('{"subjects"') ? 'annotation'
+          : prompt.includes('Notes:' + String.fromCharCode(10)) ? 'verification'
+          : prompt.includes('CURRENT PHASE: PLANNING') ? 'plan'
+          : prompt.includes('CURRENT PHASE: EXECUTING') ? 'execute' : 'other',
         tail: prompt.slice(-600),
       }) + '\n', 'utf8');
   } catch { /* a log that cannot be written must not change what the stub answers */ }
@@ -194,6 +203,19 @@ if (prompt.includes('SCORING TASK')) {
   const verdict = JSON.stringify({ score: 0.8, reason });
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
   done(verdict);
+  process.exit(0);
+}
+
+// 智库 VALIDATION pass (ClaudeValidateService): a read-only run over a diff that touched .claude/, whose
+// final message must START with VALIDATION_OK or VALIDATION_FAIL on its own line — anything else is read
+// as not-ok (fail closed). Answered OK, with the model this process was handed echoed into the report, so
+// a suite can check the verdict the server parsed came from THIS spawn (e2e-p16's validate case). Tested on
+// the phase header, before the generic read-only branch below, which would otherwise answer it with a plan.
+if (prompt.includes('CURRENT PHASE: VALIDATION')) {
+  const mi = args.indexOf('--model');
+  const text = `VALIDATION_OK\n- stub validator (model=${mi >= 0 ? args[mi + 1] : 'cli-default'})`;
+  emit({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+  done(text);
   process.exit(0);
 }
 
@@ -445,6 +467,9 @@ if (readOnly) {
     // e2e-p21 (egress audit): the agent reaches the network through BOTH planes — the CLI's built-in
     // WebFetch and the registry's mediated scrape — so the run trace has to record where each went.
     : userReq.includes('EGRESSTEST') ? ' [TRIG:EGRESS]'
+    // e2e-p16 (validate model): the execute turn writes under .claude/, the one kind of diff that runs
+    // the 智库 validation pass — so its spawn, and the --model it receives, can be observed at all.
+    : userReq.includes('KBEDITTEST') ? ' [TRIG:KBEDIT]'
     : userReq.includes('NOOPTEST') ? ' [TRIG:NOOP]' : '';
   const planText = systemMode ? text : text + trig;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
@@ -575,6 +600,20 @@ if (readOnly) {
     emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: egAbs } }] } });
     emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
     done('已创建 plans/daily/2026-07-16.md,并通过两条通道各取了一次网页(stub)');
+    process.exit(0);
+  }
+  // Knowledge-base edit (e2e-p16): a skill file under .claude/ — inside the planner guard's write set
+  // (.claude/ minus hooks/ and settings*.json) — so the diff at the gate touches .claude/ and the server
+  // runs its validation pass. Every other suite that has files in .claude/ plants them on disk, which never
+  // reaches a validation. The content carries the pid so two such turns in one suite each leave a real
+  // diff (a byte-identical rewrite would be dropped as a no-op and end the turn 'rejected').
+  if (prompt.includes('[TRIG:KBEDIT]')) {
+    const kbAbs = path.resolve(process.cwd(), '.claude/skills/zz-validate-e2e/SKILL.md');
+    fs.mkdirSync(path.dirname(kbAbs), { recursive: true });
+    fs.writeFileSync(kbAbs, `# zz-validate-e2e (fixture)\n\n- written-by-stub ${process.pid}\n`, 'utf8');
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: kbAbs } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    done('已更新 .claude/skills/zz-validate-e2e/SKILL.md(stub)');
     process.exit(0);
   }
   const rel = systemMode ? 'src/client/src/stub-touch.txt' : 'plans/daily/2026-07-14.md';
