@@ -4782,3 +4782,428 @@ was run on the smoke's evidence first. **A failed guard leaves the rule unread. 
   symmetric in expectation: it costs the exact test power, not validity.
 - No chat-judge A/A twin runs. Run 5's control pair put a sampling 1B judge's run-to-run wander at 25 discordant top-1
   queries.
+
+## Run 7 — Qwen3-0.6B's own tagging (2026-09-24, llama.cpp b10549; claude never called — every server on the stub)
+
+**Command**, exactly as registered in `ab7f301`, which is the run's app HEAD (v1.3.0):
+
+```
+node devtools/dev.mjs judge-bench --claude-stub --reuse-seed --tag-seed=Qwen3-0.6B-Q8_0 --arms=formula,formula2 \
+  --chat-judges=Qwen3-0.6B-Q8_0 --chat-arms=lc --rerankers=bge-reranker-v2-m3-Q5_K_M --rerank-arms=rr \
+  --tag-seed-arms=formula,lc:Qwen3-0.6B-Q8_0 --resources=devtools/_rr-res --port-base=6400 --llama-port=6440 \
+  > devtools/_judge-bench-run7.txt 2>&1
+```
+
+- **The build.** The bench is `7d34527`'s, unmodified (`git diff HEAD` empty for the script). No product code changed; the
+  server binary is the branch's current build.
+- **Timing.** 12:48:22Z–12:55:13Z, exit 0 on the first attempt.
+- **Order and arms.** Order seed 12345 (240 queries, 0 same-fact adjacencies), eight arms in parallel, latency sample 12.
+- **The seeds.** All three were reused and re-verified at startup: rows, the pairing preconditions, and tags unchanged
+  since the build.
+
+**Every guard held**, checked by `devtools/_run7/guards7.mjs` (output kept as `devtools/_run7/evidence/guards.txt`):
+
+| guard | result |
+|---|---|
+| 1. instrument | `formula` digest **`f661eb6a056e`** = Runs 1–6c; `formula@replay` **`f661eb6a056e`** too; `formula@tags` `4a3481edadf4`; tags vs replay equal beyond the tags (rows, every non-timestamp node column, positions, no other edges, no vectors, no reviews); replay vs default: same 65 subjects on the same nodes and the same 32 subject edges, differing only in `stability`, `last_recalled_position` and the engine position |
+| 2. engine A/A | `formula`/`formula2` byte-identical: 0/0 on every set, p = 1.000 |
+| 3. 0 claude-cli calls | both seed builds 0/0; every arm 0 at startup, after the accuracy pass and in total; no `router: claude-cli` line in any arm's log |
+| 4. annotations on the llama.cpp child | the tag seed: 60 of 60 annotation requests on the Qwen3 child (60 `router: llamacpp → Ok`, 61 forwarded = 61 proxied with the warm); the replay seed: 60 of 60 replayed, only the warm forwarded (1 = 1); the run writes nothing |
+| 5. thinking off in argv | Qwen3's child spawned once with `--reasoning off --n-predict 512 --ctx-size 16384`, BGE's once (`--ctx-size 4096 --reranking`); no unload, eviction or out-of-memory line; 741 generation tasks, none over 512 tokens, **26 capped at 512** (all three `lc` arms together; the router log cannot attribute them to an arm) |
+| 6. completion and startup | every arm 240 accuracy + 12 latency rows; every local arm read back `llama-cpp · <its id>`, no startup warning, the deadline knob not announced; 0 FTS fallbacks and 0 deadline NoOpinions in every arm's log; llama.cpp chat calls 234/0 (accuracy) and 12/0 (latency) in each `lc` arm |
+
+- **The clock moved no formula row.** `formula@replay` reproduces the 2026-09-23 seed's `formula` row for row (the same
+  digest; 0/0 on both metrics), so the decay-clock difference that made the replay seed necessary changes nothing the
+  formula arm returns on this fixture.
+- **The 60 s deadline was never reached.** The slowest judge-arm recall of the accuracy pass took 15.4 s, with eight arms
+  contending.
+
+### The headline
+
+All figures are of 240 queries. Pairs are within this run; b = the right-hand arm hit & the left-hand arm miss. Serial
+medians are over 12 queries, verdict-carrying recalls only.
+
+| arm | tags | top-1 | found@8 | coverage | serial median |
+|---|---|---|---|---|---|
+| `formula@tags` | Qwen3-0.6B's | 78 | 120 | — | 258 ms |
+| **`lc:Qwen3@tags`** (fully local) | Qwen3-0.6B's | **104** | **155** | 219/234 (93.6%) | 477 ms |
+| `formula@replay` | Claude's, replayed | 79 | 125 | — | 260 ms |
+| **`lc:Qwen3@replay`** (Qwen3 over Claude's tags) | Claude's, replayed | **114** | **152** | 225/234 (96.2%) | 571 ms |
+| `formula` | Claude's, 2026-09-23 seed | 79 | 125 | — | 224 ms |
+| `lc:Qwen3` (Run 5b's configuration) | Claude's, 2026-09-23 seed | 105 | 146 | 223/234 (95.3%) | 364 ms |
+| `rr:` BGE | Claude's, 2026-09-23 seed | 90 | 203 | 234/234 | 440 ms |
+
+| pair | top-1 b/c, p, net, 95% | found@8 b/c, p, net, 95% |
+|---|---|---|
+| **`lc@tags` vs `lc@replay`** (the tags; the rule) | 24/14, p = 0.143, **−4.2pp**, [−9.2, +0.9] | 16/19, p = 0.736, **+1.3pp**, [−3.6, +6.1] |
+| **`lc@tags` vs `formula@tags`** (the judge over Qwen3's tags; the rule) | 6/32, p < 0.001, **+10.8pp**, [+5.9, +15.6] | 4/39, p < 0.001, **+14.6pp**, [+9.4, +19.5] |
+| `formula@tags` vs `formula@replay` (the tags, no judge) | 3/2, p = 1.000, −0.4pp, [−2.4, +1.6], **equivalent** | 7/2, p = 0.180, −2.1pp, [−4.6, +0.5] |
+| `lc@replay` vs `formula@replay` | 5/40, p < 0.001, +14.6pp, [+9.3, +19.6] | 5/32, p < 0.001, +11.3pp, [+6.4, +15.9] |
+| `lc@replay` vs `lc` (the clock alone) | 17/26, p = 0.222, +3.8pp, [−1.6, +9.1] | 13/19, p = 0.377, +2.5pp, [−2.2, +7.1] |
+| `lc@tags` vs `lc` (tags and clock; the plan's pairing) | 23/22, p = 1.000, −0.4pp, [−5.9, +5.1] | 21/30, p = 0.262, +3.8pp, [−2.1, +9.5] |
+| `lc` vs `formula` (Run 5b's reading) | 11/37, p < 0.001, +10.8pp, [+5.2, +16.2] | 4/25, p < 0.001, +8.8pp, [+4.4, +13.0] |
+| `lc` vs `rr:` BGE | 13/28, p = 0.028, +6.3pp, [+1.0, +11.4] | 57/0, p < 0.001, −23.8pp, [−29.0, −18.1] |
+
+### The decision rule, applied
+
+- **The first test: NOT significantly worse** than Qwen3 over Claude's tags, on either metric.
+  - top-1: 104 against 114, 24/14, p = 0.143, −4.2pp, 95% [−9.2, +0.9]pp.
+  - found@8: 155 against 152, 16/19, p = 0.736, +1.3pp, 95% [−3.6, +6.1]pp.
+- **The second test: significantly better than its own seed's `formula`** on both.
+  - top-1: 104 against 78, 6/32, p < 0.001, +10.8pp, [+5.9, +15.6]pp.
+  - found@8: 155 against 120, 4/39, p < 0.001, +14.6pp, [+9.4, +19.5]pp.
+- **So the note's 「没有量过」 becomes the result**, in words no stronger than the intervals allow.
+  - Against Qwen3 over Claude's tags: **no significant difference** on either metric. Neither interval lies inside ±3pp,
+    so "equivalent" is not claimed. The run cannot rule out a top-1 loss of up to 9.2pp, nor a found@8 loss of up to
+    3.6pp.
+  - Against no judge over the same tags: **significantly better** on both.
+- Coverage 93.6% (219/234), against 96.2% for the Claude-tag arm; each abstention is a reply the verifier could not
+  read. Every llama.cpp call returned Ok.
+- **Proposed replacement** for the note's 「它自己写的主题标注好不好没有量过 —— 测试集里的主题标注是 Claude 写的。」:
+  「上面的数字是在 Claude 写的主题标注上量的;把标注也换成它自己写的(写入和检索都在本机完成,同样的测试集和设置),同一轮对比没有
+  显著差别:答案排第一少 4.2 个百分点、带进前八多 1.3 个百分点,但这一轮还不能排除排第一最多少约 9 个百分点、带进前八最多少约 4
+  个百分点;和同样这批标注下检索时不做判断相比,两项仍都显著变好(排第一多 10.8 个百分点,带进前八多 14.6 个百分点)。它写的标注比
+  Claude 的宽泛,常把已有的主题套到不相干的事实上(例如一个 parent 标在 12 条事实上)。」
+  The catalogue is not changed here; the sentence is routed by the round's controller.
+
+### Accuracy — the four sets and `all`
+
+```
+60 facts × 4 sets = 240 queries per arm, order seed 12345 (0 same-fact adjacencies left), 8 arms in parallel
+
+== same ==
+arm                                                                                  n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (Claude tags, 2026-09-23 seed)                                60   0    60     0       0         42/60     54/60     0.769   341
+公式 · no verification · A/A twin · Claude tags, 2026-09-23 seed                     60   0    60     0       0         42/60     54/60     0.769   342            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition · cut · Claude tags, 2026-09-23 seed  60   0    60     60      60        43/60     57/60     0.808   499            +1 / +3 / +0.039
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags, 2026-09-23 seed       60   0    60     59      59        42/60     55/60     0.797   934            +0 / +1 / +0.028
+公式 · no verification (Claude tags replayed)                                        60   0    60     0       0         42/60     54/60     0.769   343            +0 / +0 / +0.000
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags replayed               60   0    60     60      60        48/60     55/60     0.845   916            +6 / +1 / +0.076
+公式 · no verification (Qwen3-0.6B-Q8_0 tags)                                        60   0    60     0       0         39/60     51/60     0.722   373            -3 / -3 / -0.047
+local chat judge Qwen3-0.6B-Q8_0 · content only · Qwen3-0.6B-Q8_0 tags               60   0    60     59      59        43/60     54/60     0.785   879            +1 / +0 / +0.016
+
+== cross ==
+arm                                                                                  n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (Claude tags, 2026-09-23 seed)                                60   0    60     0       0         1/60      6/60      0.042   419
+公式 · no verification · A/A twin · Claude tags, 2026-09-23 seed                     60   0    60     0       0         1/60      6/60      0.042   420            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition · cut · Claude tags, 2026-09-23 seed  60   0    60     60      60        3/60      48/60     0.221   589            +2 / +42 / +0.179
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags, 2026-09-23 seed       60   0    60     57      57        10/60     16/60     0.202   1317           +9 / +10 / +0.160
+公式 · no verification (Claude tags replayed)                                        60   0    60     0       0         1/60      6/60      0.042   414            +0 / +0 / +0.000
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags replayed               60   0    60     58      58        9/60      20/60     0.220   1493           +8 / +14 / +0.178
+公式 · no verification (Qwen3-0.6B-Q8_0 tags)                                        60   0    60     0       0         1/60      4/60      0.025   421            +0 / -2 / -0.017
+local chat judge Qwen3-0.6B-Q8_0 · content only · Qwen3-0.6B-Q8_0 tags               60   0    60     56      56        11/60     26/60     0.283   1418           +10 / +20 / +0.241
+
+== third ==
+arm                                                                                  n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (Claude tags, 2026-09-23 seed)                                60   0    55     0       0         1/60      18/60     0.119   342
+公式 · no verification · A/A twin · Claude tags, 2026-09-23 seed                     60   0    55     0       0         1/60      18/60     0.119   344            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition · cut · Claude tags, 2026-09-23 seed  60   0    55     55      55        7/60      42/60     0.275   491            +6 / +24 / +0.156
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags, 2026-09-23 seed       60   0    55     51      51        11/60     25/60     0.280   1217           +10 / +7 / +0.161
+公式 · no verification (Claude tags replayed)                                        60   0    55     0       0         1/60      18/60     0.119   362            +0 / +0 / +0.000
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags replayed               60   0    55     51      51        14/60     26/60     0.308   1235           +13 / +8 / +0.188
+公式 · no verification (Qwen3-0.6B-Q8_0 tags)                                        60   0    55     0       0         1/60      17/60     0.116   362            +0 / -1 / -0.003
+local chat judge Qwen3-0.6B-Q8_0 · content only · Qwen3-0.6B-Q8_0 tags               60   0    55     50      50        9/60      24/60     0.247   1778           +8 / +6 / +0.128
+
+== mixed ==
+arm                                                                                  n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (Claude tags, 2026-09-23 seed)                                60   0    59     0       0         35/60     47/60     0.657   415
+公式 · no verification · A/A twin · Claude tags, 2026-09-23 seed                     60   0    59     0       0         35/60     47/60     0.657   418            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition · cut · Claude tags, 2026-09-23 seed  60   0    59     59      59        37/60     56/60     0.720   602            +2 / +9 / +0.063
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags, 2026-09-23 seed       60   0    59     56      56        42/60     50/60     0.750   1553           +7 / +3 / +0.093
+公式 · no verification (Claude tags replayed)                                        60   0    59     0       0         35/60     47/60     0.657   417            +0 / +0 / +0.000
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags replayed               60   0    59     56      56        43/60     51/60     0.764   1650           +8 / +4 / +0.107
+公式 · no verification (Qwen3-0.6B-Q8_0 tags)                                        60   0    59     0       0         37/60     48/60     0.685   417            +2 / +1 / +0.028
+local chat judge Qwen3-0.6B-Q8_0 · content only · Qwen3-0.6B-Q8_0 tags               60   0    59     54      54        41/60     51/60     0.750   1601           +6 / +4 / +0.093
+
+== all ==
+arm                                                                                  n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (Claude tags, 2026-09-23 seed)                                240  0    234    0       0         79/240    125/240   0.397   379
+公式 · no verification · A/A twin · Claude tags, 2026-09-23 seed                     240  0    234    0       0         79/240    125/240   0.397   381            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition · cut · Claude tags, 2026-09-23 seed  240  0    234    234     234       90/240    203/240   0.506   545            +11 / +78 / +0.109
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags, 2026-09-23 seed       240  0    234    223     223       105/240   146/240   0.507   1255           +26 / +21 / +0.111
+公式 · no verification (Claude tags replayed)                                        240  0    234    0       0         79/240    125/240   0.397   384            +0 / +0 / +0.000
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags replayed               240  0    234    225     225       114/240   152/240   0.534   1323           +35 / +27 / +0.137
+公式 · no verification (Qwen3-0.6B-Q8_0 tags)                                        240  0    234    0       0         78/240    120/240   0.387   393            -1 / -5 / -0.010
+local chat judge Qwen3-0.6B-Q8_0 · content only · Qwen3-0.6B-Q8_0 tags               240  0    234    219     219       104/240   155/240   0.516   1419           +25 / +30 / +0.119
+```
+
+### Paired — the local-tag seeds
+
+`@tags` against `@replay` differ ONLY in the tags; `@replay` against the default seed only in the decay clock. b = the
+right-hand arm hit & the left-hand arm miss.
+
+```
+  top-1:
+  arm                                                   set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  formula@tags vs formula@replay                        all     240    3/2      1.000   -1 (-0.4pp)      [-2.4, +1.6]pp      YES         no
+                                                        same    60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —
+                                                        cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                        third   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                        mixed   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —
+  formula@tags vs formula                               all     240    3/2      1.000   -1 (-0.4pp)      [-2.4, +1.6]pp      YES         no
+                                                        same    60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —
+                                                        cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                        third   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                        mixed   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —
+  lc:Qwen3-0.6B-Q8_0@tags vs lc:Qwen3-0.6B-Q8_0@replay  all     240    24/14    0.143   -10 (-4.2pp)     [-9.2, +0.9]pp      no          no
+                                                        same    60     6/1      0.125   -5 (-8.3pp)      [-16.8, +0.6]pp     —
+                                                        cross   60     5/7      0.774   +2 (+3.3pp)      [-8.1, +14.6]pp     —
+                                                        third   60     7/2      0.180   -5 (-8.3pp)      [-17.9, +1.7]pp     —
+                                                        mixed   60     6/4      0.754   -2 (-3.3pp)      [-13.7, +7.2]pp     —
+  lc:Qwen3-0.6B-Q8_0@tags vs lc:Qwen3-0.6B-Q8_0         all     240    23/22    1.000   -1 (-0.4pp)      [-5.9, +5.1]pp      no          no
+                                                        same    60     6/7      1.000   +1 (+1.7pp)      [-10.2, +13.4]pp    —
+                                                        cross   60     4/5      1.000   +1 (+1.7pp)      [-8.4, +11.6]pp     —
+                                                        third   60     8/6      0.791   -2 (-3.3pp)      [-15.4, +9.0]pp     —
+                                                        mixed   60     5/4      1.000   -1 (-1.7pp)      [-11.6, +8.4]pp     —
+  lc:Qwen3-0.6B-Q8_0@tags vs formula@tags               all     240    6/32     <0.001  +26 (+10.8pp)    [+5.9, +15.6]pp     no          YES (arm better)
+                                                        same    60     3/7      0.344   +4 (+6.7pp)      [-3.9, +16.8]pp     —
+                                                        cross   60     0/10     0.002   +10 (+16.7pp)    [+6.4, +25.8]pp     —
+                                                        third   60     0/8      0.008   +8 (+13.3pp)     [+4.0, +21.8]pp     —
+                                                        mixed   60     3/7      0.344   +4 (+6.7pp)      [-3.9, +16.8]pp     —
+  formula@replay vs formula                             all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+                                                        same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                        cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                        third   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                        mixed   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+  lc:Qwen3-0.6B-Q8_0@replay vs lc:Qwen3-0.6B-Q8_0       all     240    17/26    0.222   +9 (+3.8pp)      [-1.6, +9.1]pp      no          no
+                                                        same    60     3/9      0.146   +6 (+10.0pp)     [-1.5, +20.8]pp     —
+                                                        cross   60     5/4      1.000   -1 (-1.7pp)      [-11.6, +8.4]pp     —
+                                                        third   60     6/9      0.607   +3 (+5.0pp)      [-7.7, +17.4]pp     —
+                                                        mixed   60     3/4      1.000   +1 (+1.7pp)      [-7.3, +10.5]pp     —
+  lc:Qwen3-0.6B-Q8_0@replay vs formula@replay           all     240    5/40     <0.001  +35 (+14.6pp)    [+9.3, +19.6]pp     no          YES (arm better)
+                                                        same    60     3/9      0.146   +6 (+10.0pp)     [-1.5, +20.8]pp     —
+                                                        cross   60     0/8      0.008   +8 (+13.3pp)     [+4.0, +21.8]pp     —
+                                                        third   60     0/13     <0.001  +13 (+21.7pp)    [+10.4, +31.6]pp    —
+                                                        mixed   60     2/10     0.039   +8 (+13.3pp)     [+2.0, +23.8]pp     —
+  found@8:
+  arm                                                   set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  formula@tags vs formula@replay                        all     240    7/2      0.180   -5 (-2.1pp)      [-4.6, +0.5]pp      no          no
+                                                        same    60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —
+                                                        cross   60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —
+                                                        third   60     2/1      1.000   -1 (-1.7pp)      [-7.9, +4.7]pp      —
+                                                        mixed   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+  formula@tags vs formula                               all     240    7/2      0.180   -5 (-2.1pp)      [-4.6, +0.5]pp      no          no
+                                                        same    60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —
+                                                        cross   60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —
+                                                        third   60     2/1      1.000   -1 (-1.7pp)      [-7.9, +4.7]pp      —
+                                                        mixed   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+  lc:Qwen3-0.6B-Q8_0@tags vs lc:Qwen3-0.6B-Q8_0@replay  all     240    16/19    0.736   +3 (+1.3pp)      [-3.6, +6.1]pp      no          no
+                                                        same    60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —
+                                                        cross   60     5/11     0.210   +6 (+10.0pp)     [-3.1, +22.5]pp     —
+                                                        third   60     7/5      0.774   -2 (-3.3pp)      [-14.6, +8.1]pp     —
+                                                        mixed   60     3/3      1.000   +0 (+0.0pp)      [-8.4, +8.4]pp      —
+  lc:Qwen3-0.6B-Q8_0@tags vs lc:Qwen3-0.6B-Q8_0         all     240    21/30    0.262   +9 (+3.8pp)      [-2.1, +9.5]pp      no          no
+                                                        same    60     2/1      1.000   -1 (-1.7pp)      [-7.9, +4.7]pp      —
+                                                        cross   60     6/16     0.052   +10 (+16.7pp)    [+1.5, +30.7]pp     —
+                                                        third   60     10/9     1.000   -1 (-1.7pp)      [-15.7, +12.5]pp    —
+                                                        mixed   60     3/4      1.000   +1 (+1.7pp)      [-7.3, +10.5]pp     —
+  lc:Qwen3-0.6B-Q8_0@tags vs formula@tags               all     240    4/39     <0.001  +35 (+14.6pp)    [+9.4, +19.5]pp     no          YES (arm better)
+                                                        same    60     1/4      0.375   +3 (+5.0pp)      [-2.8, +12.5]pp     —
+                                                        cross   60     1/23     <0.001  +22 (+36.7pp)    [+22.4, +48.6]pp    —
+                                                        third   60     2/9      0.065   +7 (+11.7pp)     [+0.7, +21.9]pp     —
+                                                        mixed   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+  formula@replay vs formula                             all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+                                                        same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                        cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                        third   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                        mixed   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+  lc:Qwen3-0.6B-Q8_0@replay vs lc:Qwen3-0.6B-Q8_0       all     240    13/19    0.377   +6 (+2.5pp)      [-2.2, +7.1]pp      no          no
+                                                        same    60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —
+                                                        cross   60     5/9      0.424   +4 (+6.7pp)      [-5.7, +18.6]pp     —
+                                                        third   60     6/7      1.000   +1 (+1.7pp)      [-10.2, +13.4]pp    —
+                                                        mixed   60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —
+  lc:Qwen3-0.6B-Q8_0@replay vs formula@replay           all     240    5/32     <0.001  +27 (+11.3pp)    [+6.4, +15.9]pp     no          YES (arm better)
+                                                        same    60     2/3      1.000   +1 (+1.7pp)      [-6.1, +9.3]pp      —
+                                                        cross   60     2/16     0.001   +14 (+23.3pp)    [+10.0, +35.2]pp    —
+                                                        third   60     1/9      0.021   +8 (+13.3pp)     [+2.9, +22.9]pp     —
+                                                        mixed   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —
+```
+
+### The tag statistics
+
+Printed by the seed build (before the design) and again by the run, identical. Groups are the fixture's near-duplicate
+clusters (shared id prefix, and the three `-bill` facts): 12 groups, 29 facts. A group's first fact is the first written.
+
+```
+                                                          Claude (default and replay seeds) Qwen3-0.6B-Q8_0 (tag seed)
+facts with ≥ 1 handle                                     59/60                             60/60
+handles per fact: mean (0 / 1 / 2 / 3 / ≥4)               1.08 (1 / 57 / 0 / 0 / 2)         1.30 (0 / 50 / 6 / 0 / 4)
+handle vocabulary (distinct handles)                      52 (8 on ≥ 2 facts)               42 (10 on ≥ 2 facts)
+widest handle                                             孩子 (3 facts)                    parent (12 facts)
+grouped facts sharing a handle within their group         10/29                             12/29
+drift: later members sharing none with the first          11/17                             10/17
+groups whose later members all share one with the first   4/12                              4/12
+handles spanning ≥ 2 groups                               4                                 10
+facts sharing a handle with another group's fact          7/60                              29/60
+facts with a handle not in the fact's script              3/60                              18/60
+vs Claude: facts with ≥ 1 identical handle                —                                 25/60
+vs Claude: facts with ≥ 1 handle contained in the other   —                                 34/60
+vs Claude: mean Jaccard (facts either tagged)             —                                 0.388 (over 60)
+vs Claude: handles also in Claude's vocabulary            —                                 22/42
+```
+
+Claude's widest handle is a five-way tie: 市立博物馆, 家长a, 家长b, 孩子 and 小学 are each on 3 facts, and the table
+prints one.
+Qwen3-0.6B's handles on 3 or more facts: `parent` 12, 东门农贸市场 5, `city station pharmacy` 5, `school lunch` 5,
+市立博物馆 4, `riverside library` 4, `grandparent` 4 and `east gate market` 3.
+
+**Reuse, by where a handle came from.** This is computed from `tags.json` (scratch `devtools/_run7/reuse.mjs`). Each
+handle on a fact counts once, and is classed by whether an EARLIER-written fact already carried it:
+
+| | handle assignments | new | reused from an earlier fact of the SAME group | reused only from ANOTHER group |
+|---|---|---|---|---|
+| Claude | 65 | 52 | 6 | 7 |
+| Qwen3-0.6B | 78 | 42 | 7 | **29** |
+
+- **Claude's 7 cross-group reuses are all real shared entities.** 孩子, 家长a and 家长b on the school-lunch and flu-shot
+  facts, and 家里的猫 on the cat's two facts.
+- **Qwen3-0.6B's 29 are mostly unrelated facts sharing a handle.** Examples:
+  - `parent` on passport, visa, id-card, school-pickup, school-lunch, allergy-peanut, car-insurance, car-inspection,
+    rest-noodle, dentist, cat-food and grandma-bday;
+  - `east gate market` on the old-street noodle shop;
+  - `city station pharmacy` on the cat's food;
+  - 东门农贸市场 on the museum's adult ticket.
+
+  school-pickup carries four handles, three from unrelated earlier facts: `parent`, `riverside library`, 东门农贸市场,
+  市立博物馆. The annotator is offered the existing subjects to reuse: 9 at school-pickup, the 16th write, rising to the cap of
+  24 at the 41st. The 0.6B often copies them onto a fact they do not describe.
+- **This is Lyntai's COLLAPSE, not its DRIFT.**
+  - Drift within the near-duplicate groups is about the same for both annotators: 10 of 17 later members share no handle
+    with their group's first, against Claude's 11.
+  - What differs is the reach across groups: 10 handles span groups against Claude's 4, and 29 of 60 facts share a
+    handle with another group's fact against Claude's 7.
+  - 18 facts carry a handle in another script than the fact, against Claude's 3. The prompt asks for the fact's own
+    language.
+- **Overlap with Claude's handles.** 25 of 60 facts have a handle identical to Claude's, 34 have one contained in the
+  other, and the mean Jaccard is 0.388. 22 of Qwen3's 42 distinct handles are also in Claude's vocabulary.
+
+### Paired vs `formula` (the 2026-09-23 seed) — `all`
+
+```
+PAIRED vs formula — per query; b = formula hit & arm miss, c = formula miss & arm hit
+  top-1:
+  arm                                                                                  set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  公式 · no verification · A/A twin · Claude tags, 2026-09-23 seed                     all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+  reranker bge-reranker-v2-m3-Q5_K_M · partition · cut · Claude tags, 2026-09-23 seed  all     240    3/14     0.013   +11 (+4.6pp)     [+1.2, +7.9]pp      no          YES (arm better)
+  local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags, 2026-09-23 seed       all     240    11/37    <0.001  +26 (+10.8pp)    [+5.2, +16.2]pp     no          YES (arm better)
+  公式 · no verification (Claude tags replayed)                                        all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+  local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags replayed               all     240    5/40     <0.001  +35 (+14.6pp)    [+9.3, +19.6]pp     no          YES (arm better)
+  公式 · no verification (Qwen3-0.6B-Q8_0 tags)                                        all     240    3/2      1.000   -1 (-0.4pp)      [-2.4, +1.6]pp      YES         no
+  local chat judge Qwen3-0.6B-Q8_0 · content only · Qwen3-0.6B-Q8_0 tags               all     240    9/34     <0.001  +25 (+10.4pp)    [+5.1, +15.5]pp     no          YES (arm better)
+  found@8:
+  arm                                                                                  set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  公式 · no verification · A/A twin · Claude tags, 2026-09-23 seed                     all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+  reranker bge-reranker-v2-m3-Q5_K_M · partition · cut · Claude tags, 2026-09-23 seed  all     240    1/79     <0.001  +78 (+32.5pp)    [+26.2, +38.3]pp    no          YES (arm better)
+  local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags, 2026-09-23 seed       all     240    4/25     <0.001  +21 (+8.8pp)     [+4.4, +13.0]pp     no          YES (arm better)
+  公式 · no verification (Claude tags replayed)                                        all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+  local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags replayed               all     240    5/32     <0.001  +27 (+11.3pp)    [+6.4, +15.9]pp     no          YES (arm better)
+  公式 · no verification (Qwen3-0.6B-Q8_0 tags)                                        all     240    7/2      0.180   -5 (-2.1pp)      [-4.6, +0.5]pp      no          no
+  local chat judge Qwen3-0.6B-Q8_0 · content only · Qwen3-0.6B-Q8_0 tags               all     240    7/37     <0.001  +30 (+12.5pp)    [+7.2, +17.6]pp     no          YES (arm better)
+```
+
+### Latency
+
+Warm, one GPU, two models resident. Serial medians over 12 queries, verdict-carrying recalls only.
+
+```
+latency (ms) — parallel: mean over the accuracy pass, 8 arm(s) at once; serial median: one arm at a time, first 12 queries, judge arms counting only recalls that carried a verdict
+arm                                                                                  ms (parallel)  ms (serial median)  cli ok/failed (accuracy)  cli ok/failed (total)  judge
+公式 · no verification (Claude tags, 2026-09-23 seed)                                379            224                 0/0                       0/0                    off · claude-cli · haiku
+公式 · no verification · A/A twin · Claude tags, 2026-09-23 seed                     381            227                 0/0                       0/0                    off · claude-cli · haiku
+reranker bge-reranker-v2-m3-Q5_K_M · partition · cut · Claude tags, 2026-09-23 seed  545            440                 0/0                       0/0                    on · llama-cpp · bge-reranker-v2-m3-Q5_K_M
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags, 2026-09-23 seed       1255           364                 0/0                       0/0                    on · llama-cpp · Qwen3-0.6B-Q8_0
+公式 · no verification (Claude tags replayed)                                        384            260                 0/0                       0/0                    off · claude-cli · haiku
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags replayed               1323           571                 0/0                       0/0                    on · llama-cpp · Qwen3-0.6B-Q8_0
+公式 · no verification (Qwen3-0.6B-Q8_0 tags)                                        393            258                 0/0                       0/0                    off · claude-cli · haiku
+local chat judge Qwen3-0.6B-Q8_0 · content only · Qwen3-0.6B-Q8_0 tags               1419           477                 0/0                       0/0                    on · llama-cpp · Qwen3-0.6B-Q8_0
+
+llama.cpp chat calls (router: llamacpp) — ok/failed per pass; a local chat judge's verdicts arrive through these
+arm                                                                                  startup     accuracy pass   latency pass
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags, 2026-09-23 seed       0/0         234/0           12/0
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags replayed               0/0         234/0           12/0
+local chat judge Qwen3-0.6B-Q8_0 · content only · Qwen3-0.6B-Q8_0 tags               0/0         234/0           12/0
+
+local chat judge latency (ms), EVERY graph-ranked recall, verdict or not — serial pass, and the accuracy pass (parallel, contended)
+arm                                                                                  serial median  serial max  no verdict: n · median  parallel max  parallel ≥ 60 s parallel no-verdict median
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags, 2026-09-23 seed       364            722         0 · —                   15430         0/234           1291
+local chat judge Qwen3-0.6B-Q8_0 · content only · Claude tags replayed               612            4026        2 · 3813                13201         0/234           8407
+local chat judge Qwen3-0.6B-Q8_0 · content only · Qwen3-0.6B-Q8_0 tags               496            3289        2 · 3264                15031         0/234           5894
+```
+
+- **A verdict adds** about +0.14 s over the same seed's formula on the 2026-09-23 seed (364 against 224 ms), +0.31 s on
+  the replay seed (571 against 260) and +0.22 s on the tag seed (477 against 258).
+  - Run 5b measured +0.16 s for the same judge on the same seed.
+  - The spread is 12 queries' noise. On the replay and tag seeds, 2 of the 12 serial recalls each carried no verdict
+    (3.8 s and 3.3 s median, runaways) and are left out.
+- **The judge arms' parallel means** (1,255–1,419 ms) were eight arms at once and are not latency.
+
+### Warnings, as printed
+
+```
+WARNING: arm lc:Qwen3-0.6B-Q8_0 — judge failed open on 11/234 graph recalls
+WARNING: arm lc:Qwen3-0.6B-Q8_0@replay — judge failed open on 9/234 graph recalls
+WARNING: arm lc:Qwen3-0.6B-Q8_0@replay — 2/12 graph-ranked latency recalls carried no verdict (left out of its serial median)
+WARNING: arm lc:Qwen3-0.6B-Q8_0@tags — judge failed open on 15/234 graph recalls
+WARNING: arm lc:Qwen3-0.6B-Q8_0@tags — 2/12 graph-ranked latency recalls carried no verdict (left out of its serial median)
+```
+
+Each "failed open" is a graph recall whose reply the verifier could not read. Every llama.cpp call returned Ok; the 26
+replies capped at 512 tokens are among them. Coverage is stated with every outcome.
+
+### Across runs — descriptive only (measuring rule 2)
+
+- `lc:Qwen3` on the 2026-09-23 seed read **105 / 146** here, against Run 5b's **110 / 148**: the same configuration
+  re-run, and one draw each of a sampling judge.
+- `formula` and BGE reproduce Run 5b exactly: 79 / 125 and 90 / 203, with the same `formula` digest.
+
+### What it says
+
+- **On this fixture, Qwen3-0.6B's own tags did not measurably cost the local judge recall.**
+  - Paired against the same judge over Claude's tags, written the same way, top-1 reads 104 against 114 and found@8 155
+    against 152, neither significant.
+  - The leaning is on top-1, and the run cannot rule out a loss of up to 9.2pp there.
+- **The fully local configuration beats having no judge**, significantly, on both metrics. Over its own tags, +10.8pp
+  top-1 and +14.6pp found@8. Against the 2026-09-23 seed's `formula`, 79 / 125, it reads +10.4pp and +12.5pp.
+- **Without a judge, whose tags they are barely matters here.** `formula` over Qwen3's tags against Claude's is
+  equivalent on top-1 (within ±3pp) and not significantly different on found@8 (−2.1pp). On this fixture, swapping
+  Claude's tags for Qwen3's barely moves what the engine returns on its own. No seed without tags was measured here, so
+  this says nothing about what having tags at all is worth.
+- **The tags themselves are worse in kind.** They collapse unrelated facts together far more often than Claude's (29 of
+  78 handle assignments reused only across groups, against 7 of 65, all real entities), with one handle, `parent`, on 12
+  facts. Lyntai's drift records name two failures. Drift (a new handle for the same thing) is no worse than Claude's
+  here. Collapse (one handle across unrelated things) is much worse, and resembles the over-picking Lyntai saw when a
+  model is offered existing handles to choose from. On these 240 questions it did not show up in recall.
+- **The clock difference between seeds changed no formula row.** It was real in the database and ruled out before the
+  run by construction, and it turned out not to matter for the formula arm here. The pair that differs only in it,
+  `lc@replay` against `lc`, shows 43 discordant top-1 queries (17/26) and 32 found@8 (13/19). Since the two arms' formula
+  rows are identical, that discordance is mostly the judge's own draw-to-draw wander, and it is the same size as the
+  tag pair's (38 and 35).
+
+### What it does NOT say
+
+- **One fixture of 60 invented facts, one annotation pass, one run, one machine** (RTX 4080 Laptop, llama.cpp b10549,
+  Vulkan).
+  - The annotator samples at llama-server's default temperature, so a second seed would carry different tags.
+  - No chat-judge A/A twin ran.
+- **The fixture barely exercises what tags are for.** Each question targets one fact, and few facts refer to one entity
+  by pronoun or oblique reference. Linking such facts is the job subject tags exist to do, and it is what Lyntai's drift
+  fixture measures.
+  - A household whose facts lean on that linking, such as notes about one person written weeks apart, could see Qwen3's
+    collapse cost recall where this run shows none.
+  - A larger store gives the 0.6B more existing handles to misapply.
+  - Neither is measured here.
+- **The replay seed carries Claude's final handles, not Claude's calls.** Its subject rows and subject edges are identical
+  to the Claude seed's. Each handle reached the product through Qwen3's client path, as a reply of llama-server's shape.
+- **No embedder** (语义 off), **partition**, **`EndorseCount`/page 8**, **≤ 60 candidates**.
+- **Warm latency on one GPU**, with two models resident.
+
+**Evidence, local only** (gitignored):
+
+- the run: `devtools/_judge-bench/results-2026-09-24T124822.872Z.json` and `rows-2026-09-24T124822.872Z.jsonl`, with copies
+  in `devtools/_run7/evidence/` beside the run's `router.log`, `presets.ini`, `arm-0` … `arm-7` and `guards.txt`; the
+  output, in `devtools/_judge-bench-run7.txt`;
+- the seeds: `devtools/_judge-bench-seed-tags-Qwen3-0.6B-Q8_0/` (`seed.json`, `chat-requests.jsonl`, `router.log`,
+  `presets.ini`, `tags.json`) and `devtools/_judge-bench-seed-replay-Qwen3-0.6B-Q8_0/` (`seed.json`, `chat-requests.jsonl`);
+  the build output, in `devtools/_run7/seed-build.txt`;
+- the smoke: `devtools/_judge-bench/results-2026-09-24T124250.791Z.json` and `devtools/_run7/smoke.txt`;
+- the scratch checkers: `devtools/_run7/guards7.mjs`, `reuse.mjs` and `discord.mjs`.
