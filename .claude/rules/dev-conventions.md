@@ -954,14 +954,35 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   go of its port** before probing, at most 15 s, because `Kill`'s 5 s wait carries on either way and a dying
   router's socket most likely still accepted that re-probe — so a router we just killed is reported as not yet
   gone, never as a stranger holding the port; and a panel probe DURING our restart, which runs outside the lock,
-  reads `_restarting` and says the app is restarting llama.cpp rather than blaming another process. Proof:
+  reads `_restarting` and says the app is restarting llama.cpp rather than blaming another process. **Our own
+  START has the same window** — `_started` is set only once the router answers — so `SpawnAsync` (every start, a
+  fresh one included) sets `_starting` and `HeldProblem` says 「应用正在启动 llama.cpp,稍等几秒」; before that
+  it blamed "another process" for our own starting router. **Both 「稍等几秒」 sentences are true only while their
+  flag is set**, so each flag is cleared in a `finally`, under `_gate`, TOGETHER with the cached probe
+  (`InvalidateLocked`) — a cached 「稍等」 used to outlive the transition by the cache's 20 s — and a probe that was
+  already out when the cache was dropped does not write back (`_probeEpoch`). And **a restart that finds the port
+  HELD after it was released never passes the re-probe's sentence on**: that sentence was computed with
+  `_restarting` set, so the bind's FINAL answer was 「应用正在重启,稍等几秒」 from a restart that had given up with
+  nothing running. It is `RestartBlocked` instead — the app stopped llama.cpp to load the model and could not start
+  a new one because the port is held by something that does not answer as llama.cpp, llama.cpp is NOT running, end
+  it in 任务管理器 and try again or restart the service, plus `ReselectAfterRestart`. What holds the port is ONE
+  writer shared with the stranger sentence (`HeldBy`), naming both candidates, because the app cannot tell a
+  stranger that took the freed port from our OLD router still dying with an accept too slow for the release check
+  to see. That is also why `NotOursRemedy` is not reused there: "not started by the app this time" is false of the
+  second. Proof:
   `e2e-p51` and `e2e-p52` case 8a (a fake that accepts and never answers `/v1/models`): the held sentence, and NO
   spawn attempted in the fixture's log — the no-spawn check fails when a held port falls through to the spawn —
   plus ten real-binary restarts in the runtime doc, where the wait never had to wait. **Asserted by nothing,
-  stated as gaps:** `HeldProblem`'s other two sentences — 「应用正在重启 llama.cpp」 (our own restart window) and
-  「应用启动的 llama.cpp 还在运行,但端口…没有回应」 (a router we started, too busy to answer) — because a fake is
-  always ADOPTED, so case 8a reaches only the stranger's sentence; and the port-release timeout's sentence
-  (「…秒内没有让出端口…」), which no suite can reach and none of the ten real restarts produced. **The restart branch has NO
+  stated as gaps:** `HeldProblem`'s other three sentences — 「应用正在重启 llama.cpp」 (our own restart window),
+  「应用正在启动 llama.cpp」 (our own start window) and 「应用启动的 llama.cpp 还在运行,但端口…没有回应」 (a router
+  we started, too busy to answer) — because a fake is always ADOPTED, so case 8a reaches only the stranger's
+  sentence; the port-release timeout's sentence (「…秒内没有让出端口…」), which no suite can reach and none of the
+  ten real restarts produced; and `RestartBlocked`, verified by READING only, because a stranger grabbing the port
+  inside the restart window cannot be staged on demand. A real-binary start + restart (the runtime doc,
+  §2026-09-24) shows the flags regressed nothing, and a panel polling through that restart did show
+  「应用正在重启」 while the old router was dying — the first time that sentence was seen outside the code — and
+  nothing stale after the bind; 「应用正在启动」 was not seen, since the new router went from refused straight to
+  answering. **The restart branch has NO
   e2e coverage**: the fake router can only ever be adopted, and no stub can be a real router. It was verified by hand on the real binary — a bind racing 资源's start button
   left one router and a second restart still worked; with 语义 on llama.cpp the same bind was refused with 0
   restarts.

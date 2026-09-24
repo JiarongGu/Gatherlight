@@ -384,3 +384,35 @@ check every time (0 polls waited), 0.8–2.7 s after the restart decision, and n
 wait is unexercised here: the 500 came in 1 of the 15 restarts driven on this machine for this work, and
 not in these ten. The slower runs were slower loads (bge warm in 8.6–9.7 s) and a port that refused
 connections for up to 5.0 s, not waits.
+
+### 2026-09-24 — a restart that could not come back, and our own start
+
+Two sentences were stale, found by review rather than on the binary. **(a)** After a restart stops our router and the
+port is released, the re-probe can still find the port HELD: a stranger took the freed port, or our old router was
+still dying and accepted too slowly for the release check's 120 ms connect to see it. That probe ran while
+`_restarting` was set, so its sentence was 「应用正在重启 llama.cpp,稍等几秒」, and the bind passed it on as its FINAL
+answer. By then the restart had given up with nothing of ours running, and the 20 s probe cache kept repeating it. It is
+now `RestartBlocked`: 「应用为了载入 <model> 停下了 llama.cpp,但没能启动新的:端口 <port> 被另一个进程占着:它接受连接,
+却没有像 llama.cpp 那样回答(可能是没有正常退出的 llama-server.exe,也可能是别的程序)。应用不会在它旁边再启动一个,所以
+llama.cpp 现在没有在运行 —— 在任务管理器里结束它,然后再试一次,或者重启服务。」 plus the reselect clause, because
+the bind saved nothing. The description of the holder is shared with the stranger sentence (`HeldBy`). The not-ours
+clause is not reused, because "not started by the app this time" is false when the holder is our own old router.
+**(b)** A fresh start set no flag, and `_started` is set only once the new router answers. So a panel probe during
+a start that found the port held by our own starting router blamed "another process". `SpawnAsync` now sets
+`_starting` for every start, a fresh one included, and the sentence is 「应用正在启动 llama.cpp,稍等几秒」 (a restart
+keeps its own). Each flag is cleared in a `finally`, under the same lock and together with the cached probe. A probe
+that was already out when the cache was dropped does not write its result back (`_probeEpoch`).
+
+Neither is driven by e2e: both need a router the app started, and a fake is always adopted. (a) is verified by
+reading only, because a stranger grabbing the port inside the restart window cannot be staged on demand. Two
+real-binary runs (same build, the round-1 harness, a reranker judge at startup, then bge dropped in and bound) show
+no regression. Both started the router fresh at boot, with LAMAR warm in 6.0 s and 5.2 s. Both binds returned
+**200** after ONE restart and one spawn, in 10.3 s and 8.7 s. The port was free 124 ms and 122 ms after the stop
+(0 polls waited) and refused connections for 3.5 s and 2.7 s. bge warmed in 6.1 s and 5.2 s, and LAMAR re-warmed
+about 5 s later. There were 19 fact writes during each bind, all 200 and all tagged by the CLI. The server log had
+no warning, no `not started: port` line and no held sentence. In the second run a panel polled
+`GET /api/manage/models/llama?refresh=true` through the bind. It saw the dying router as HELD for about 0.3 s and
+said 「应用正在重启 llama.cpp,稍等几秒。」, which is the first time that sentence was seen outside the code. It then
+reported not serving with no problem while the new router was not yet listening, then serving. Right after the bind
+it read serving with no problem, so nothing stale was left. 「应用正在启动」 was not seen, because the new router went
+from refused straight to answering.

@@ -146,6 +146,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     private readonly object _gate = new();
     private LlamaServerState? _cached;
     private DateTimeOffset _cachedAt;
+    /// <summary>Bumped by every invalidation, under <see cref="_gate"/>. A probe notes it before its first await and
+    /// caches only if it is unchanged, so an invalidation that lands while a probe is out — a start or restart
+    /// ending, a spawn answering — cannot be undone by that probe writing back what was just retracted.</summary>
+    private long _probeEpoch;
     // Memoized facts about the BINARY — see BinaryFactsAsync. Deliberately not cleared by Invalidate():
     // that exists for the live state, and the file has not changed just because the server was restarted.
     private (string Key, string? Version, IReadOnlyList<string> Devices)? _binaryFacts;
@@ -155,11 +159,17 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// to kill our own process, and Dispose orphaned it.</summary>
     private Process? _started;
 
-    /// <summary>True from <see cref="StopOursCore"/> in a restart until the new router is ours (or the restart has
-    /// failed). In that window a probe that runs WITHOUT the lifecycle lock — the panel's — can see the dying or
-    /// starting router as HELD, and must not blame "another process" for our own restart. Read and written under
-    /// <see cref="_gate"/>.</summary>
+    /// <summary>True from <see cref="StopOursCore"/> in a restart until the restart returns — the new router ours, or
+    /// the restart given up. In that window a probe that runs WITHOUT the lifecycle lock — the panel's — can see the
+    /// dying or starting router as HELD, and must not blame "another process" for our own restart. Read and written
+    /// under <see cref="_gate"/>; cleared together with the cached probe (see <see cref="EnsureServesAsync"/>).</summary>
     private bool _restarting;
+
+    /// <summary>True while <see cref="SpawnAsync"/> runs — ANY start, a fresh one included. <see cref="_started"/> is
+    /// set only once the new router answers, so before that a panel probe that finds the port held by our own
+    /// starting router had nothing to tell it apart from a stranger's, and blamed "another process". Read and written
+    /// under <see cref="_gate"/>; cleared together with the cached probe on every exit of the spawn.</summary>
+    private bool _starting;
 
     /// <summary>ONE lock over start, restart and stop. Probe-then-spawn is a check-then-act on a port, and
     /// three callers can overlap (a bind on either layer, 资源's start button, the startup warm step); a restart
@@ -277,7 +287,12 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         return path;
     }
 
-    public void Invalidate() { lock (_gate) _cached = null; }
+    /// <summary>Drop the cached probe, and void any probe still in flight — see <see cref="_probeEpoch"/>.</summary>
+    public void Invalidate() { lock (_gate) InvalidateLocked(); }
+
+    /// <summary><see cref="Invalidate"/> for a caller already holding <see cref="_gate"/>, so a transition flag and
+    /// the cache it fed are dropped in ONE step.</summary>
+    private void InvalidateLocked() { _cached = null; _probeEpoch++; }
 
     public LlamaServerState? Cached { get { lock (_gate) return _cached; } }
 
@@ -394,24 +409,49 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
     /// <summary>The sentence for a HELD port, which takes precedence over every other problem: nothing else can be
     /// fixed while it stands, and 「还没有下载」 beside it would send the household to download something that could
-    /// not start anyway. Three cases, because the remedy differs. During OUR restart (<see cref="_restarting"/>) the
-    /// holder is our own router, dying or starting: wait. A router WE started and still hold is busy, and a service
-    /// restart ends it (Dispose kills it). Anything else is not ours to end — the same rule, and the same remedy
-    /// (任务管理器), as the refusal for an ADOPTED router in <see cref="EnsureServesAsync"/>. "Not as llama.cpp
-    /// answers" rather than "does not answer": a non-2xx or an HTML page IS an answer, just not a model list.</summary>
+    /// not start anyway. Four cases, because the remedy differs. During OUR restart (<see cref="_restarting"/>) the
+    /// holder is our own router, dying or starting: wait. During our own START (<see cref="_starting"/>) it is the
+    /// router we are starting, which is not <see cref="_started"/> until it answers: wait. A router WE started and
+    /// still hold is busy, and a service restart ends it (Dispose kills it). Anything else is not ours to end — the
+    /// same rule, and the same remedy (任务管理器), as the refusal for an ADOPTED router in
+    /// <see cref="EnsureServesAsync"/>.
+    /// <para>The two 「稍等几秒」 sentences are true only WHILE their flag is set, which is why clearing a flag also
+    /// drops the cache — and why a restart that gives up never passes this sentence on (<see cref="RestartBlocked"/>).</para></summary>
     private string HeldProblem()
     {
         var port = new Uri(BaseUrl).Port;
-        bool ours, restarting;
-        lock (_gate) { ours = _started is { HasExited: false }; restarting = _restarting; }
+        bool ours, restarting, starting;
+        lock (_gate) { ours = _started is { HasExited: false }; restarting = _restarting; starting = _starting; }
         return restarting
             ? "应用正在重启 llama.cpp,稍等几秒。"
+            : starting
+            ? "应用正在启动 llama.cpp,稍等几秒。"
             : ours
             ? $"应用启动的 llama.cpp 还在运行,但端口 {port} 上这次没有回应 —— 稍后再试;一直这样的话,请重启服务。"
-            : $"llama.cpp 用的端口 {port} 被另一个进程占着:它接受连接,却没有像 llama.cpp 那样回答(可能是没有正常退出的"
-              + " llama-server.exe,也可能是别的程序)。应用不会在它旁边再启动一个,也不会替你结束它 —— 在任务管理器里"
+            : $"llama.cpp 用的{HeldBy(port)}。应用不会在它旁边再启动一个,也不会替你结束它 —— 在任务管理器里"
               + "结束它后再试,应用会重新启动 llama.cpp;或者重启电脑。";
     }
+
+    /// <summary>What holds a HELD port, as far as the app can tell — ONE writer, because two sentences say it: a held
+    /// port that no router or transition of ours explains (<see cref="HeldProblem"/>), and a restart that found the port held after it
+    /// stopped our router (<see cref="RestartBlocked"/>). "Not as llama.cpp answers" rather than "does not answer": a
+    /// non-2xx or an HTML page IS an answer, just not a model list. And it names BOTH candidates, because the app
+    /// cannot tell them apart: the holder after a restart may be a stranger that took the freed port, or our OLD router
+    /// still dying, whose accept was too slow for the release check to see — which is also why
+    /// <see cref="NotOursRemedy"/> ("not started by the app this time") cannot be said there.</summary>
+    private static string HeldBy(int port) =>
+        $"端口 {port} 被另一个进程占着:它接受连接,却没有像 llama.cpp 那样回答(可能是没有正常退出的 llama-server.exe,也可能是别的程序)";
+
+    /// <summary>A restart's FINAL answer when, after our router stopped and its port was released, the re-probe found
+    /// the port HELD. The probe's own sentence cannot be passed on: it ran while <see cref="_restarting"/> was set, so
+    /// it said 「应用正在重启 llama.cpp,稍等几秒」 — as the bind's last word, from a restart that had given up with
+    /// nothing of ours running. So: what happened, that llama.cpp is NOT running, and what to do. 「再试一次」 is a new
+    /// bind, which finds the port free once the holder is gone and starts a router listing every model; the bind that
+    /// got this answer saved nothing, hence <see cref="LlamaRestartPolicy.ReselectAfterRestart"/>.</summary>
+    private string RestartBlocked(string modelId) =>
+        $"应用为了载入 {modelId} 停下了 llama.cpp,但没能启动新的:{HeldBy(new Uri(BaseUrl).Port)}。应用不会在它旁边再启动一个,"
+        + "所以 llama.cpp 现在没有在运行 —— 在任务管理器里结束它,然后再试一次,或者重启服务。"
+        + LlamaRestartPolicy.ReselectAfterRestart;
 
     public async Task<LlamaServerState> ProbeAsync(bool refresh = false, CancellationToken ct = default)
     {
@@ -430,6 +470,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
     private async Task<LlamaServerState> BuildAsync(bool withBinaryFacts, CancellationToken ct)
     {
+        // Noted BEFORE the first await — see _probeEpoch. The state is still returned to this caller either way.
+        long epoch;
+        lock (_gate) epoch = _probeEpoch;
         var exe = Locate();
         var (version, devices) = exe is null || !withBinaryFacts
             ? (null, (IReadOnlyList<string>)Array.Empty<string>())
@@ -459,8 +502,14 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             ours);
 
         // Only the FULL state is cached: a Live one has empty Version/Devices by design, and letting it
-        // populate this would serve 资源 a blank build number that looks like a failed install.
-        if (withBinaryFacts) lock (_gate) { _cached = state; _cachedAt = DateTimeOffset.UtcNow; }
+        // populate this would serve 资源 a blank build number that looks like a failed install. And only if nothing
+        // was invalidated while this probe was out: a start or restart that ended meanwhile retracted exactly the
+        // 「稍等几秒」 this may carry.
+        if (withBinaryFacts)
+            lock (_gate)
+            {
+                if (epoch == _probeEpoch) { _cached = state; _cachedAt = DateTimeOffset.UtcNow; }
+            }
         return state;
     }
 
@@ -516,6 +565,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         };
 
         Process? proc = null;
+        // Our own start window: until the new router answers it is not _started, and a panel probe that finds the
+        // port held by it must not blame "another process". Cleared in the finally, with the cache — see _starting.
+        lock (_gate) _starting = true;
         try
         {
             var psi = new ProcessStartInfo(state.Executable)
@@ -565,8 +617,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                         if (!_disposed) { _started = proc; proc = null; }
                     }
                     if (proc is not null) { Kill(proc); return false; }
-                    Invalidate();
-                    return true;
+                    return true;   // the finally drops the cached "not serving"
                 }
                 await Task.Delay(500, ct);
             }
@@ -581,6 +632,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             if (proc is not null) Kill(proc);
             return false;
         }
+        // EVERY exit — answered, never answered, exited, disposed, thrown, cancelled. The flag goes with the cache in
+        // one step: a 「应用正在启动」 cached during the start is false once it has ended either way.
+        finally { lock (_gate) { _starting = false; InvalidateLocked(); } }
     }
 
     /// <summary>
@@ -611,7 +665,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <para><b>The restart waits for the old router to let go of its port</b> before it spawns the new one
     /// (<see cref="WaitForPortReleaseAsync"/>). A bind once came back 500 with llama.cpp left stopped: the probe's
     /// timeout escaped, most likely because the kill's 5 s wait ran out and the dying router's socket still
-    /// accepted the re-probe (<c>docs/self-managed-llm-runtime.md</c> §2026-09-23).</para>
+    /// accepted the re-probe (<c>docs/self-managed-llm-runtime.md</c> §2026-09-23). A port still HELD after that
+    /// wait ends the restart with <see cref="RestartBlocked"/> — never with the re-probe's own 「稍等几秒」.</para>
     /// <para>After a restart the requested model is warmed HERE, before returning, so the caller's own screen
     /// or proof is not a second concurrent load; what was warm before is then re-warmed ONE AT A TIME, off the
     /// request path — llama.cpp loads concurrently badly (its #20137), and <c>--models-max</c> is 2.</para>
@@ -646,7 +701,6 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 "llama-server: restarting our router — {Model} was added after it started; re-warming {Warm}",
                 modelId, string.Join(", ", warm));
             // Our own restart window: a panel probe outside the lock must not blame "another process" for it.
-            // Cleared on EVERY exit — once the new router is ours, HeldProblem's "ours" case applies instead.
             (bool Ok, string? Held) restarted;
             lock (_gate) _restarting = true;
             try
@@ -662,8 +716,18 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 // stranger holding the port; that case is the sentence above.
                 restarted = await EnsureServingCoreAsync(ct);
             }
-            finally { lock (_gate) _restarting = false; }
-            if (!restarted.Ok) return restarted.Held ?? "llama.cpp 重启后没能启动 —— 请看「日志」里的原因。";
+            // Cleared on EVERY exit, WITH the cached probe: any 「应用正在重启」 computed in the window — by a panel probe,
+            // or by the re-probe above — is false once the restart has returned, whether the new router is ours (then
+            // HeldProblem's "ours" case applies) or the restart gave up with nothing running. Left cached, the panel
+            // repeated it for 20 s.
+            finally { lock (_gate) { _restarting = false; InvalidateLocked(); } }
+            // HELD even though the port was released: something took it, or our old router accepted too slowly for the
+            // release check to see it. `restarted.Held` is the re-probe's sentence, computed while _restarting was set —
+            // 「稍等几秒」 from a restart that has given up — so it is replaced, never passed on.
+            if (!restarted.Ok)
+                return restarted.Held is not null
+                    ? RestartBlocked(modelId)
+                    : "llama.cpp 重启后没能启动 —— 请看「日志」里的原因。";
             live = await IsServingAsync(ct);
             if (!live.Models.Contains(modelId, StringComparer.OrdinalIgnoreCase))
                 return $"llama.cpp 重启后仍然没有列出 {modelId} —— 请看「日志」里的原因。";
