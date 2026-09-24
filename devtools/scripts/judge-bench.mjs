@@ -84,6 +84,17 @@
 // llama.cpp binary and GGUFs from --resources and nothing else there. Its default is local/state/resources —
 // a household's data folder — so pass --resources=<a scratch folder> unless reading that one is intended.
 //
+// THE LONG FIXTURE (`--fixture=long`, docs/judge-bench.md Run 6). The same 60 facts and 240 questions, each fact's
+// content turned into a ~900–1,200-character note with the answer at a pre-registered POSITION (start / middle / end /
+// beyond 1,000 characters) — written by judge-bench-long-fixture.mjs, and REFUSED here unless the committed file is
+// byte-for-byte what that generator writes. It is a different instrument, so everything it touches is its own: its seed
+// (devtools/_judge-bench-seed-long/), its work dir (devtools/_judge-bench-long/), and its fixture hash, which no
+// --baseline from the bilingual fixture can match. Its seed is written with 判断 OFF — no subject tags, so no annotation
+// call — and every server it starts (seed and arms) points at the e2e claude STUB, so quota cannot be spent even by
+// accident; the seed still asserts zero `router: claude-cli` lines, before and after its writes, and that every fact
+// got its own graph node holding exactly its note. Every table gains a BY POSITION block. `--seed-only` builds (or,
+// with --reuse-seed, re-verifies) the seed and stops before any arm starts.
+//
 // Usage:
 //   node devtools/dev.mjs judge-bench                     # formula, formula2, topic, content, content2, contentonly, fuse
 //   node devtools/dev.mjs judge-bench --arms=formula,content --n=20 --reuse-seed
@@ -91,19 +102,23 @@
 //   node devtools/dev.mjs judge-bench --reuse-seed --arms=formula --chat-judges=gemma-3-1b-it-Q4_K_M --resources=devtools/_rr-res
 //   node devtools/dev.mjs judge-bench --report-only=devtools/_judge-bench/results-<iso>.json [--baseline=…]
 //   node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,rr… --baseline=devtools/_judge-bench/results-<iso>.json:content
+//   node devtools/dev.mjs judge-bench --fixture=long --seed-only --resources=devtools/_rr-res
+//   node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 --rerankers=… --resources=devtools/_rr-res
 // Flags: --arms= --rerankers= --chat-judges= --n= --port-base= --llama-port= --resources= --seed= --latency-sample=
-//        --reuse-seed | --reseed   --report-only=<results.json | rows-*.jsonl>   --baseline=<results.json>:<arm>
+//        --fixture=bilingual|long   --reuse-seed | --reseed   --seed-only
+//        --report-only=<results.json | rows-*.jsonl>   --baseline=<results.json>:<arm>
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { makeTestData, startServer, waitHealthy, makeClient, until, repo, git } from './e2e/_e2e-common.mjs';
+import { makeTestData, startServer, waitHealthy, makeClient, until, repo, git, claudeStubCmd } from './e2e/_e2e-common.mjs';
 import { resolveClaude, QUESTION_SETS } from './recall-questions.mjs';
+import { expectedLongBytes, POSITIONS } from './judge-bench-long-fixture.mjs';
 
 // ---- flags: known ones only ------------------------------------------------------------------------------
-const VALUED = ['arms', 'rerankers', 'chat-judges', 'n', 'port-base', 'llama-port', 'resources', 'seed', 'latency-sample', 'report-only', 'baseline'];
-const BOOLEAN = ['reuse-seed', 'reseed'];
+const VALUED = ['arms', 'rerankers', 'chat-judges', 'n', 'port-base', 'llama-port', 'resources', 'seed', 'latency-sample', 'report-only', 'baseline', 'fixture'];
+const BOOLEAN = ['reuse-seed', 'reseed', 'seed-only'];
 const die = (msg) => { console.error(`judge-bench: ${msg}`); process.exit(2); };
 const KNOWN = `known flags: ${[...VALUED.map((k) => `--${k}=…`), ...BOOLEAN.map((k) => `--${k}`)].join(' ')}`;
 const opts = {};
@@ -133,8 +148,9 @@ const list = (name, dflt) => {
 };
 const REPORT_ONLY = opts['report-only'] ?? null;
 if (REPORT_ONLY) {
-  const extra = Object.keys(opts).filter((k) => k !== 'report-only' && k !== 'baseline');
-  if (extra.length > 0) die(`--report-only re-analyses a saved run and takes only --baseline — drop ${extra.map((k) => `--${k}`).join(' ')}`);
+  // --fixture only matters to a RECOVERY from rows (a saved results file carries its own positions), so it is allowed.
+  const extra = Object.keys(opts).filter((k) => k !== 'report-only' && k !== 'baseline' && k !== 'fixture');
+  if (extra.length > 0) die(`--report-only re-analyses a saved run and takes only --baseline (and --fixture) — drop ${extra.map((k) => `--${k}`).join(' ')}`);
 }
 // `<file>.json:<arm>` — split at `.json:` because a Windows path has a drive colon and a reranker arm key has
 // one too (`rr:<model>`), so neither the first nor the last colon is the separator.
@@ -146,10 +162,26 @@ const BASELINE = (() => {
   return { file: path.resolve(v.slice(0, i + 5)), arm: v.slice(i + 6) };
 })();
 
-const FIXTURE_PATH = path.join(repo, 'devtools', 'fixtures', 'recall-bilingual.json');
+// ONE instrument per fixture: its own file, seed and work dir, so a run on one can never read the other's seed or wipe
+// the other's arm folders (a bilingual run and a long run may even be in flight at once).
+const VARIANTS = {
+  bilingual: { file: 'recall-bilingual.json', seed: '_judge-bench-seed', work: '_judge-bench' },
+  long: { file: 'recall-bilingual-long.json', seed: '_judge-bench-seed-long', work: '_judge-bench-long' },
+};
+const VARIANT = opts.fixture ?? 'bilingual';
+if (!VARIANTS[VARIANT]) die(`--fixture must be one of ${Object.keys(VARIANTS).join(', ')}, got '${VARIANT}'`);
+const LONG = VARIANT === 'long';
+const FIXTURE_REL = `devtools/fixtures/${VARIANTS[VARIANT].file}`;
+const FIXTURE_PATH = path.join(repo, 'devtools', 'fixtures', VARIANTS[VARIANT].file);
 const FIXTURE_BYTES = fs.readFileSync(FIXTURE_PATH);
 const FIXTURE = JSON.parse(FIXTURE_BYTES.toString('utf8'));
 const FIXTURE_HASH = crypto.createHash('sha256').update(FIXTURE_BYTES).digest('hex');
+// The long fixture is GENERATED; a hand-edited or stale copy would measure positions nobody registered.
+if (LONG && !FIXTURE_BYTES.equals(expectedLongBytes()))
+  die(`${FIXTURE_REL} is not what judge-bench-long-fixture.mjs writes — re-run it (and re-register anything that depends on it)`);
+/** fact id → where its answer sits in its note, or null for a fixture without positions. */
+const FIXTURE_POSITIONS = FIXTURE.facts.some((f) => f.position)
+  ? Object.fromEntries(FIXTURE.facts.map((f) => [f.id, f.position])) : null;
 const LIMIT = 8;
 const PORT_BASE = int('port-base', 5620, 1);
 const LLAMA_PORT = int('llama-port', 5660, 1);
@@ -157,8 +189,9 @@ const ORDER_SEED = int('seed', 12345, 0);
 const LATENCY_SAMPLE = int('latency-sample', 12, 0);
 const REUSE_SEED = opts['reuse-seed'] === true;
 const RESEED = opts.reseed === true;
-const WORK = path.join(repo, 'devtools', '_judge-bench');
-const SEED_ROOT = path.join(repo, 'devtools', '_judge-bench-seed');
+const SEED_ONLY = opts['seed-only'] === true;
+const WORK = path.join(repo, 'devtools', VARIANTS[VARIANT].work);
+const SEED_ROOT = path.join(repo, 'devtools', VARIANTS[VARIANT].seed);
 const SEED_DATA = path.join(SEED_ROOT, 'data');
 const SEED_META = path.join(SEED_ROOT, 'seed.json');
 const RESOURCES = path.resolve(arg('resources', path.join(repo, 'local', 'state', 'resources')));
@@ -407,6 +440,9 @@ const loadRun = (json, source) => {
       concurrency: json.concurrency ?? arms.length, latencySample: json.latencySample ?? null,
       claudeVersion: json.claudeVersion ?? null, appHead: json.appHead ?? null, appVersion: json.appVersion ?? null,
       seedFolder: json.seedFolder ?? null,
+      // The fixture a run used, and where each fact's answer sat in its note (the long fixture; null before it).
+      fixture: json.fixture ?? null,
+      positions: json.positions ?? null,
     },
     arms,
     notes,
@@ -457,11 +493,13 @@ const delta = (s, b) => (s.n === b.n
 // PAIRED, per query: both arms answered query `seq`, neither errored. b = base hit & arm miss; c = the reverse.
 const HITS = { top1: (r) => r.pos === 0, found: (r) => r.pos >= 0 };
 const HIT_NAMES = { top1: 'top-1', found: 'found@8' };
-const pairedTest = (arm, baseArm, set) => {
+// `where` narrows the queries some other way than by question set (the long fixture's POSITION); `set` then only says
+// whether this is the `all` row, the one row equivalence is judged on — a position's 60 pairs never are.
+const pairedTest = (arm, baseArm, set, where = inSet(set)) => {
   const baseBySeq = new Map(baseArm.rows.map((r) => [r.seq, r]));
   const out = { pairs: 0 };
   const counts = Object.fromEntries(Object.keys(HITS).map((k) => [k, { b: 0, c: 0 }]));
-  for (const r of arm.rows.filter(inSet(set))) {
+  for (const r of arm.rows.filter(where)) {
     const q = baseBySeq.get(r.seq);
     if (!q || r.error !== null || q.error !== null) continue;
     out.pairs++;
@@ -522,6 +560,62 @@ const printPaired = (title, comps) => {
     }
   }
   return Object.fromEntries(results.map(({ c, bySet, finding }) => [c.key, { ...bySet, finding }]));
+};
+
+/** THE LONG FIXTURE'S QUESTION (docs/judge-bench.md Run 6): what each arm does to a fact by WHERE its answer sits in
+ *  its note. All four question sets pooled per position (4 × 15 facts = 60 queries); for every arm, accuracy and
+ *  coverage; then paired, each arm against `formula` and every reranker against every other, per position. Equivalence
+ *  is not judged here (60 pairs can essentially never bound ±3 pp) — the interval is printed instead. Returns what
+ *  goes into the results file. */
+const printByPosition = (run) => {
+  const positions = run.meta.positions;
+  const groups = POSITIONS.filter((p) => Object.values(positions).includes(p));
+  const at = (p) => (r) => positions[r.fact] === p;
+  const { arms } = run;
+  const W = Math.max(dw('arm'), ...arms.map((a) => dw(a.label))) + 2;
+  const out = { positions: groups, sets: {}, paired: {} };
+  console.log('\nBY POSITION — where the answer sits in its note; every question set pooled (4 questions × the facts at that'
+    + ' position). Cells: top-1 / found@8 / judged-of-graph');
+  console.log(pad('arm', W) + groups.map((p) => pad(`${p} (n=${run.arms[0].rows.filter(at(p)).length})`, 22)).join(''));
+  for (const arm of arms) {
+    const cells = groups.map((p) => {
+      const s = stat(arm.rows.filter(at(p)));
+      out.sets[p] = { ...(out.sets[p] ?? {}), [arm.key]: s };
+      return pad(`${s.top1} / ${s.found} / ${s.judged}-${s.graph}`, 22);
+    });
+    console.log(pad(arm.label, W) + cells.join(''));
+  }
+  const table = (title, comps) => {
+    const res = Object.fromEntries(comps.map((c) => [c.key,
+      Object.fromEntries(groups.map((p) => [p, pairedTest(c.arm, c.base, null, at(p))]))]));
+    const LW = Math.max(dw('arm'), ...comps.map((c) => dw(c.label))) + 2;
+    console.log(`\n${title}`);
+    for (const k of Object.keys(HITS)) {
+      console.log(`  ${HIT_NAMES[k]}:`);
+      console.log('  ' + pad('arm', LW) + pad('position', 10) + pad('pairs', 7) + pad('b/c', 9) + pad('p', 8) + pad('net c−b', 17) + '95% net interval');
+      for (const c of comps) {
+        for (const [i, p] of groups.entries()) {
+          const x = res[c.key][p][k];
+          const net = x.netPp === null ? '—' : `${signed(x.net)} (${signed(x.netPp, 1)}pp)`;
+          const ci = x.interval95Pp ? `[${signed(x.interval95Pp[0], 1)}, ${signed(x.interval95Pp[1], 1)}]pp` : '—';
+          console.log('  ' + pad(i === 0 ? c.label : '', LW) + pad(p, 10) + pad(res[c.key][p].pairs, 7) + pad(`${x.b}/${x.c}`, 9)
+            + pad(pv(x.p), 8) + pad(net, 17) + ci);
+        }
+      }
+    }
+    return res;
+  };
+  const base = arms.find((a) => a.key === 'formula');
+  if (base) out.paired.formula = table('BY POSITION, PAIRED vs formula — b = formula hit & arm miss, c = the reverse',
+    arms.filter((a) => a !== base).map((a) => ({ key: a.key, label: a.label, arm: a, base })));
+  const rr = arms.filter((a) => a.reranker);
+  const rrComps = [];
+  for (let i = 0; i < rr.length; i++)
+    for (let j = i + 1; j < rr.length; j++)
+      rrComps.push({ key: `${rr[j].key} vs ${rr[i].key}`, label: `${rr[j].key} vs ${rr[i].key}`, arm: rr[j], base: rr[i] });
+  if (rrComps.length) out.paired.rerankers = table('BY POSITION, PAIRED — every reranker against every other; b = right-hand hit'
+    + ' & left-hand miss, c = the reverse', rrComps);
+  return out;
 };
 
 /** Every table, from a run in saved shape. Prints, and returns what goes into the results file. */
@@ -620,6 +714,7 @@ const analyse = (run, { baseline = null } = {}) => {
         + ` b = baseline hit & arm miss, c = the reverse`, comps);
     }
   }
+  if (meta.positions) out.byPosition = printByPosition(run);
 
   // THE A/A SANITY CHECK. Each twin ran the identical configuration from the identical snapshot, so the paired
   // test must stay quiet on `all`. Per-set p is shown but not warned on (ten tests at 0.05 alarm by themselves).
@@ -904,6 +999,8 @@ const recoverFromRows = (file) => {
   const json = {
     format: 'recovered',
     fixtureHash, facts: factIds.length, limit: LIMIT, at: runAt,
+    // Positions only when the fixture is confirmed to be the one the rows were asked from.
+    fixture: fixtureHash ? FIXTURE_REL : null, ...(fixtureHash && FIXTURE_POSITIONS ? { positions: FIXTURE_POSITIONS } : {}),
     seedFolder: seedMeta ? { fixtureHash: seedMeta.fixtureHash, createdAt: seedMeta.createdAt, claudeVersion: seedMeta.claudeVersion ?? null } : null,
     order: { seed: orderSeed, queries: queriesPerArm, adjacentSameFact },
     concurrency: keys.length,
@@ -939,7 +1036,7 @@ const reportOnly = () => {
   const out = path.join(path.dirname(file), `${path.basename(file).replace(/\.jsonl?$/, '')}.reanalysed-${RUN_STAMP}.json`);
   fs.writeFileSync(out, JSON.stringify({
     reanalysedAt: RUN_AT, reanalysedFrom: rel(file), reanalysedBy: { appHead, appVersion },
-    ...run.meta, fixture: 'devtools/fixtures/recall-bilingual.json',
+    ...run.meta, fixture: run.meta.fixture ?? 'devtools/fixtures/recall-bilingual.json',
     arms: armsWithStats(run.arms, analysis),
     ...rest,
   }, null, 2));
@@ -974,6 +1071,8 @@ const live = async () => {
   }
   // The model a local-model arm binds 判断 to, whichever kind it is.
   for (const a of arms) a.llamaModel = a.reranker ?? a.chatJudge ?? null;
+  // The long seed is written with 判断 off, so its formula arm has NO tags to recall over — say so in the label.
+  if (LONG) for (const a of arms) a.label = a.label.replace('(seed tags present)', '(seed has no tags)');
   if (arms.length === 0) die('no arms selected');
   for (const a of arms) a.pinned = { ...PINNED, ...a.env };
 
@@ -985,6 +1084,7 @@ const live = async () => {
     seedMeta = JSON.parse(fs.readFileSync(SEED_META, 'utf8'));
     if (seedMeta.fixtureHash !== FIXTURE_HASH)
       die(`--reuse-seed: the fixture changed since the seed was made (${seedMeta.fixtureHash.slice(0, 12)} → ${FIXTURE_HASH.slice(0, 12)}) — pass --reseed`);
+    if (LONG && seedMeta.judge !== 'off') die(`--reuse-seed: ${rel(SEED_ROOT)} was not written with 判断 off — pass --reseed`);
   } else if (!RESEED && fs.existsSync(SEED_ROOT) && fs.readdirSync(SEED_ROOT).length > 0) {
     const when = fs.existsSync(SEED_META) ? JSON.parse(fs.readFileSync(SEED_META, 'utf8')).createdAt : 'an interrupted seeding (no seed.json)';
     die(`a seed exists from ${when}; pass --reuse-seed to use it or --reseed to replace it`);
@@ -1004,10 +1104,17 @@ const live = async () => {
     if (pre.length) die(`--baseline ${rel(BASELINE.file)} cannot be paired with this run: ${pre.join('; ')}`);
   }
 
-  const claude = resolveClaude();
+  // THE LONG FIXTURE NEVER REACHES A REAL CLI: its seed is written with 判断 off and its arms are formula, rerankers or
+  // local chat judges, none of which should call the CLI — so every server it starts is pointed at the e2e stub, and an
+  // unexpected call is then counted (router lines) without spending quota. A Claude-judge arm would measure the stub.
+  if (LONG) {
+    const cliArms = arms.filter((a) => ARMS[a.key]?.enrichment);
+    if (cliArms.length) die(`--fixture=long runs against the claude stub, so a Claude-judge arm would measure the stub — drop ${cliArms.map((a) => a.key).join(', ')}`);
+  }
+  const claude = LONG ? claudeStubCmd : resolveClaude();
   // shell:false always. A .cmd cannot be spawned directly (Node refuses since the batch-file CVE fix), so it goes
   // through cmd.exe explicitly; anything that still yields no version is recorded as unknown WITH the reason.
-  const claudeVersion = (() => {
+  const claudeVersion = LONG ? 'none — the e2e claude stub (devtools/scripts/claude-stub.mjs), never a real CLI' : (() => {
     const viaCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(claude);
     const r = viaCmd
       ? spawnSync('cmd.exe', ['/d', '/s', '/c', `""${claude}" --version"`], { encoding: 'utf8', shell: false, windowsVerbatimArguments: true })
@@ -1041,12 +1148,40 @@ const live = async () => {
     const emit = (row) => fs.appendFileSync(ROWS, JSON.stringify({ run: RUN_AT, ...row }) + '\n');
 
     // ---- 1. seed ONE folder (real CLI, so annotation writes subject tags) — or reuse the last one --------------
+    // The long fixture's seed is written with 判断 OFF instead (no tags, no annotation call), against the stub.
+    /** The long seed's database, checked rather than trusted: one knowledge row per fact holding EXACTLY its note (a
+     *  truncated note would move the answer), and each on its own graph node (a merged node would make one fact's
+     *  recall return another's row). Returns what it found. */
+    const verifyLongSeed = (ids) => {
+      const conn = new DatabaseSync(path.join(SEED_DATA, 'state', 'gatherlight.db'));
+      try {
+        const rows = conn.prepare('SELECT id, kind, topic, content, graph_ref FROM knowledge').all();
+        const byId = new Map(rows.map((r) => [Number(r.id), r]));
+        const problems = [];
+        if (rows.length !== FIXTURE.facts.length) problems.push(`${rows.length} knowledge rows, the fixture has ${FIXTURE.facts.length}`);
+        for (const f of FIXTURE.facts) {
+          const r = byId.get(Number(ids[f.id]));
+          if (!r) { problems.push(`no row ${ids[f.id]} for ${f.id}`); continue; }
+          if (r.topic !== f.topic || r.kind !== f.kind || r.content !== f.content) problems.push(`row ${r.id} does not hold ${f.id}'s note exactly`);
+          if (!r.graph_ref) problems.push(`${f.id} has no graph node`);
+        }
+        const refs = rows.map((r) => r.graph_ref).filter(Boolean);
+        if (new Set(refs).size !== refs.length) problems.push(`${refs.length - new Set(refs).size} graph node(s) shared by two facts`);
+        if (problems.length) throw new Error(`the long seed is not what the fixture says: ${problems.join('; ')}`);
+        return { rows: rows.length, graphNodes: new Set(refs).size };
+      } finally { conn.close(); }
+    };
     if (seedMeta) {
       const madeBy = seedMeta.appHead ? `${seedMeta.appHead} v${seedMeta.appVersion}` : 'unrecorded (the seed predates the field)';
       console.log(`  reusing seed from ${seedMeta.createdAt}: annotated by ${seedMeta.claudeVersion ?? 'unrecorded'},`
         + ` made by app ${madeBy} — now running app ${appHead} v${appVersion}`);
       settleSeedRepo(SEED_DATA);
       await checkpoint(SEED_DATA);
+      if (LONG) {
+        const v = verifyLongSeed(seedMeta.idOf);
+        console.log(`  long seed re-verified: 判断 was ${seedMeta.judge}, ${seedMeta.claudeCalls.ok + seedMeta.claudeCalls.failed} claude-cli call(s)`
+          + ` while seeding, ${v.rows} rows each holding its exact note, ${v.graphNodes} distinct graph nodes`);
+      }
     } else {
       fs.rmSync(SEED_ROOT, { recursive: true, force: true });
       const made = makeTestData(SEED_DATA);
@@ -1057,6 +1192,16 @@ const live = async () => {
       servers.push(seed);
       await waitHealthy(seed.base);
       const sc = makeClient(seed.base);
+      const cliCalls = () => { const o = routerOutcomes(SEED_DATA); return { ...o, n: o.ok + o.failed }; };
+      if (LONG) {
+        // 判断 OFF before the first write, read back — a write with it on would be annotated (a model call, and tags).
+        if (cliCalls().n > 0) throw new Error(`seed: ${cliCalls().n} claude-cli call(s) before any write`);
+        const off = await sc.post('/api/manage/memory/enrichment', { enabled: false });
+        if (off.status !== 200) throw new Error(`seed: switching 判断 off returned HTTP ${off.status}`);
+        const judge = await judgeLayer(sc);
+        if (judge?.on !== false) throw new Error(`seed: 判断 reads back ${judge?.on}, not off`);
+        console.log(`  seeding with 判断 off (read back: ${judge.on}), against the claude stub`);
+      }
       const ids = {};
       for (const [i, f] of FIXTURE.facts.entries()) {
         const w = await sc.call('remember_fact', {
@@ -1070,13 +1215,26 @@ const live = async () => {
       seed.stop();
       servers.length = 0;
       await until(async () => { try { await fetch(`${seed.base}/api/health`); return false; } catch { return true; } }, 60000);
+      // Counted AFTER the server exited, so every line it wrote is in its log.
+      const seedCalls = cliCalls();
+      if (LONG && seedCalls.n > 0)
+        throw new Error(`seed: ${seedCalls.n} claude-cli call(s) (${seedCalls.ok} ok, ${seedCalls.failed} failed) with 判断 off — see ${rel(SEED_DATA)}/state/logs`);
       settleSeedRepo(SEED_DATA);
       await checkpoint(SEED_DATA);
       seedMeta = { idOf: ids, fixtureHash: FIXTURE_HASH, claudeVersion, appHead, appVersion, createdAt: new Date().toISOString() };
+      if (LONG) {
+        const v = verifyLongSeed(ids);
+        Object.assign(seedMeta, { fixture: FIXTURE_REL, judge: 'off', claudeCalls: { ok: seedCalls.ok, failed: seedCalls.failed }, graphNodes: v.graphNodes });
+        console.log(`  long seed: 0 claude-cli calls, ${v.rows} rows each holding its exact note, ${v.graphNodes} distinct graph nodes`);
+      }
       fs.writeFileSync(SEED_META, JSON.stringify(seedMeta, null, 2));
     }
     const idOf = new Map(Object.entries(seedMeta.idOf));
     for (const f of facts) if (!idOf.has(f.id)) throw new Error(`seed has no id for fact ${f.id}`);
+    if (SEED_ONLY) {
+      console.log(`  --seed-only: the seed at ${rel(SEED_ROOT)} (fixture ${FIXTURE_HASH.slice(0, 12)}) is ready; no arm was started`);
+      return;
+    }
 
     // ---- 2. the local-model arms share ONE real router, started here -----------------------------------------
     // Each arm's own resources get EMPTY stand-ins for the runtime and the model, which is all IsConfigured asks;
@@ -1246,11 +1404,13 @@ const live = async () => {
     // table is computed, so a throw below costs a re-analysis, not a re-run.
     const saved = {
       format: 3,
-      fixture: 'devtools/fixtures/recall-bilingual.json', fixtureHash: FIXTURE_HASH, facts: N, limit: LIMIT, at: RUN_AT,
+      fixture: FIXTURE_REL, fixtureHash: FIXTURE_HASH, facts: N, limit: LIMIT, at: RUN_AT,
+      ...(FIXTURE_POSITIONS ? { positions: Object.fromEntries(facts.map((f) => [f.id, FIXTURE_POSITIONS[f.id]])) } : {}),
       claudeVersion, appHead, appVersion,
       seedFolder: {
         fixtureHash: seedMeta.fixtureHash, createdAt: seedMeta.createdAt, claudeVersion: seedMeta.claudeVersion,
         appHead: seedMeta.appHead ?? null, appVersion: seedMeta.appVersion ?? null, reused: REUSE_SEED,
+        ...(seedMeta.judge ? { judge: seedMeta.judge, claudeCalls: seedMeta.claudeCalls, graphNodes: seedMeta.graphNodes } : {}),
       },
       order: { seed: ORDER_SEED, queries: queries.length, adjacentSameFact },
       concurrency: arms.length,
