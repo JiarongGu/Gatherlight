@@ -14,6 +14,10 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// <param name="Held">Something ACCEPTS connections on our port and does not answer — a hung llama-server, another
 /// program, or our own router too busy to reply. Not serving, and not free either: nothing may be spawned beside it,
 /// and <paramref name="Problem"/> says so ahead of anything else.</param>
+/// <param name="Ours">The router on our port is one THIS process started and still holds. False for an ADOPTED one —
+/// an orphan of an earlier run, or the household's own — which a service restart does not end (Dispose kills only
+/// ours), so any remedy that ends in 「重启服务」 is true only when this is. The same fact <c>HeldProblem</c> and the
+/// not-ours refusal in <see cref="LlamaServerRuntime.EnsureServesAsync"/> read.</param>
 public sealed record LlamaServerState(
     string BaseUrl,
     bool Installed,
@@ -24,7 +28,8 @@ public sealed record LlamaServerState(
     IReadOnlyList<string> Devices,
     bool GpuLikely,
     string? Problem,
-    bool Held = false);
+    bool Held = false,
+    bool Ours = false);
 
 public interface ILlamaServerRuntime
 {
@@ -378,6 +383,15 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         public bool IsHeld => State == PortState.Held;
     }
 
+    /// <summary>What to do about an ADOPTED router that does not list a model — ONE writer for the clause, because
+    /// two surfaces say it: the refusal in <see cref="EnsureServesAsync"/> (a bind, and the startup warm step), and
+    /// 资源's start button reporting a bound model it left cold. The start button once said 「重启服务」 here, which is
+    /// true only of OUR router: a service restart ends ours (Dispose) and leaves an adopted one running, to be adopted
+    /// again. 「再试」 is the next start or bind, either of which then spawns a router of ours that lists every file.</summary>
+    internal const string NotOursRemedy =
+        "这个 llama.cpp 进程不是应用这次启动的(可能是上次异常退出后留下的),应用不会替你结束它 —— "
+        + "在任务管理器里结束 llama-server.exe 后再试,应用会重新启动它。";
+
     /// <summary>The sentence for a HELD port, which takes precedence over every other problem: nothing else can be
     /// fixed while it stands, and 「还没有下载」 beside it would send the household to download something that could
     /// not start anyway. Three cases, because the remedy differs. During OUR restart (<see cref="_restarting"/>) the
@@ -423,6 +437,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
         var probe = await IsServingAsync(ct);
         var (serving, models) = (probe.Serving, probe.Models);
+        bool ours;
+        lock (_gate) ours = _started is { HasExited: false };
 
         var problem = probe.IsHeld ? HeldProblem()
             : exe is null
@@ -439,7 +455,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             // GpuLikely elsewhere in this codebase, because --list-devices answers it exactly.
             devices.Any(d => d.StartsWith("Vulkan", StringComparison.OrdinalIgnoreCase)),
             problem,
-            probe.IsHeld);
+            probe.IsHeld,
+            ours);
 
         // Only the FULL state is cached: a Live one has empty Version/Devices by design, and letting it
         // populate this would serve 资源 a blank build number that looks like a failed install.
@@ -616,10 +633,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             var unknown = $"{modelId} 是在 llama.cpp 启动之后才下载的,正在运行的 llama.cpp 要重启才会载入它。";
             bool ours;
             lock (_gate) ours = _started is { HasExited: false };
-            if (!ours)
-                return unknown
-                     + "这个 llama.cpp 进程不是应用这次启动的(可能是上次异常退出后留下的),应用不会替你结束它 —— "
-                     + "在任务管理器里结束 llama-server.exe 后再试,应用会重新启动它。";
+            if (!ours) return unknown + NotOursRemedy;
             if (_restartPolicy?.WhyNotNow() is { } notNow) return unknown + notNow;
 
             // Re-warm only OUR models. The real router also lists what sits in the machine's llama.cpp/Hugging

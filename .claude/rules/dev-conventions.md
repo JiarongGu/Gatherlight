@@ -842,11 +842,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   reads, through the resolvers the DI wiring uses, one model per layer at most — so never more than the router
   holds, and ours by construction, since a llama.cpp binding resolves only while its file is in the app's folder.
   Nothing bound means the router starts and loads nothing. A bound model the router does NOT list is reported
-  (`notWarmed`, and a `note` the console toasts), never restarted in: that restart is a bind's decision, and the
-  start button is not a bind (the startup step still goes through `EnsureServesAsync`, as a bind does). `p51`
-  asserts an unbound GGUF of ours the router lists is not warmed (confirmed to FAIL against the old button, which
-  sent it `/v1/rerank`), that the unplanted cache model is not either, and that an unlisted bound model is
-  reported with its layer and reason rather than warmed.
+  (`notWarmed`, and a `note` the console toasts as a warning), never restarted in: that restart is a bind's
+  decision, and the start button is not a bind (the startup step still goes through `EnsureServesAsync`, as a bind
+  does). **Its cure depends on WHOSE router it is** (`LlamaServerState.Ours`): a service restart ends only ours, and
+  an adopted one — an orphan of a crash, or the household's own on our port — is adopted again, so 「重启服务」 there
+  was a restart for nothing; that case says the runtime's own not-ours clause (`LlamaServerRuntime.NotOursRemedy`,
+  one writer with `EnsureServesAsync`'s refusal). `p51` asserts an unbound GGUF of ours the router lists is not
+  warmed (confirmed to FAIL against the old button, which sent it `/v1/rerank`), that the unplanted cache model is
+  not either, that an unlisted bound model on its ADOPTED fake is reported with the not-ours cure and never
+  「重启服务」 (which the first version said, and asserted), and that a router going silent right after the start is
+  a 409 in the probe's words rather than a 200 reading 「已在运行」.
   **(3) `embeddings = true` RESTRICTS a child to embeddings** — and `reranking = true` restricts one to
   `/v1/rerank` — so each goes only on its own kind, and what a GGUF IS has exactly ONE writer,
   `ResourceProvisioner.GgufKind`: chat, embedding or reranking (`GgufCapability`). Exact for what we provision

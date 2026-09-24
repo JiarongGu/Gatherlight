@@ -137,7 +137,11 @@ export function LocalModelsPanel(
         body: body ? JSON.stringify(body) : undefined,
       });
       const j = await r.json().catch(() => ({}));
-      if (r.ok) { toast(j.note ?? '已完成'); await load(true); return j; }
+      // A start that left a BOUND model cold (`notWarmed`) succeeded and still needs the household to act, so its
+      // note is not shown as a success. The toast has two kinds, and 'err' is the one that is not "done" — it also
+      // stays up longer, which a note naming a model and a remedy needs.
+      const cold = Array.isArray(j.notWarmed) && j.notWarmed.length > 0;
+      if (r.ok) { toast(j.note ?? '已完成', cold ? 'err' : 'ok'); await load(true); return j; }
       toast(j.error ?? '操作失败', 'err');
       return null;
     } catch { toast('请求失败', 'err'); return null; } finally { setBusy(null); }

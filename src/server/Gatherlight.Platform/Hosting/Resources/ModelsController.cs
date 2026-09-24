@@ -104,7 +104,6 @@ public sealed class ModelsController : ControllerBase
     public async Task<IActionResult> Get([FromQuery] bool refresh = false)
     {
         var mem = Settings();
-        var judgeModel = MemorySources.ResolveJudgeModel(mem);
         // CHEAP by construction. `installed` is a file check and `serving` a 120 ms loopback connect
         // (LiveAsync); the build tag and device list come from whatever the last full probe left behind, and
         // a background refresh fills them in if nothing has. Awaiting the full probe here cost ~1.9 s on the
@@ -121,7 +120,7 @@ public sealed class ModelsController : ControllerBase
             : await _llama.LiveAsync();
         var known = _llama.Cached;
         if (known is null) _ = _llama.ProbeAsync(ct: CancellationToken.None);
-        var models = Models(mem, judgeModel);
+        var models = Models(mem);
 
         return Ok(new
         {
@@ -153,9 +152,9 @@ public sealed class ModelsController : ControllerBase
 
     /// <summary>One row per model the app manages, in the order the choice is actually made: by what the
     /// model is FOR, then by what you already have.</summary>
-    private IReadOnlyList<ModelRowView> Models(MemorySourceSettings mem, string? judgeModel)
+    private IReadOnlyList<ModelRowView> Models(MemorySourceSettings mem)
     {
-        var rows = new List<ModelRowView>(GgufRows(mem, judgeModel)) { BuiltInRow(mem) };
+        var rows = new List<ModelRowView>(GgufRows(MemorySources.BoundToLlamaCpp(mem))) { BuiltInRow(mem) };
         return rows
             .OrderBy(r => r.Capability == "embedding" ? 0 : 1)
             .ThenByDescending(r => r.Installed)
@@ -191,7 +190,7 @@ public sealed class ModelsController : ControllerBase
     /// (repo, commit, checksum), so a model we have not pinned is a model we cannot verify. A file the
     /// household dropped into the directory themselves still gets a row, because it is on their disk and
     /// they may want the space back; it simply has no note and no measurement.</para></summary>
-    private IEnumerable<ModelRowView> GgufRows(MemorySourceSettings mem, string? judgeModel)
+    private IEnumerable<ModelRowView> GgufRows(IReadOnlyList<(string Layer, string Model)> bound)
     {
         var dir = Services.ResourceProvisioner.ProvisionedGgufDir(_platform.ResourcesPath);
         var onDisk = Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath);
@@ -210,7 +209,7 @@ public sealed class ModelsController : ControllerBase
                 id, known?.Name ?? id, MemoryBackends.LlamaCpp,
                 kind switch { GgufCapability.Embedding => "embedding", GgufCapability.Reranking => "reranking", _ => "completion" },
                 installed ? SizeOnDisk(dir, id, known?.ApproxBytes ?? 0) : known?.ApproxBytes ?? 0,
-                installed, GgufInUse(id, mem, judgeModel), known?.Note ?? "",
+                installed, GgufInUse(id, bound), known?.Note ?? "",
                 known?.Measured is { } k
                     ? new MeasuredView(k.RecallTop1, k.RecallTop3, k.Queries, k.MsPerQuery)
                     : null,
@@ -277,19 +276,13 @@ public sealed class ModelsController : ControllerBase
     /// Ollama-shaped. Here it would not be: a household could plausibly have `embeddinggemma:300m` on
     /// Ollama and `embeddinggemma-300M-Q8_0` as a GGUF, and reporting the wrong one as in-use turns a
     /// delete button into a label on a model nobody is using — or worse, leaves it enabled on one that is.
-    /// So the layer must ALSO be bound to llama.cpp for its model to count.</para></summary>
-    private static string? GgufInUse(string modelId, MemorySourceSettings mem, string? judgeModel)
-    {
-        if (MemorySources.ResolveSemantic(mem)?.Id == MemoryBackends.LlamaCpp
-            && string.Equals(mem.Config.EmbeddingModel, modelId, StringComparison.OrdinalIgnoreCase))
-            return MemoryLayers.Semantic;
-
-        if (MemorySources.ResolveJudge(mem).Id == MemoryBackends.LlamaCpp
-            && string.Equals(judgeModel, modelId, StringComparison.OrdinalIgnoreCase))
-            return MemoryLayers.Judge;
-
-        return null;
-    }
+    /// So the layer must ALSO be bound to llama.cpp for its model to count.</para>
+    ///
+    /// <para>Read from <see cref="MemorySources.BoundToLlamaCpp"/>, the set the start button and the startup step
+    /// warm — so a model this badge calls 使用中 is exactly one they load. It asked the same resolvers itself
+    /// before, a second writer of that set in this very file.</para></summary>
+    private static string? GgufInUse(string modelId, IReadOnlyList<(string Layer, string Model)> bound) =>
+        bound.FirstOrDefault(b => string.Equals(b.Model, modelId, StringComparison.OrdinalIgnoreCase)).Layer;
 
     /// <summary>Actual bytes on disk, falling back to the catalogue's figure. Measured rather than quoted
     /// because a household deciding what to delete wants the space they would get back, and a partially
@@ -355,56 +348,63 @@ public sealed class ModelsController : ControllerBase
     /// <para><b>A bound model the router does not list is REPORTED, not restarted in.</b> Warming it would go
     /// through <see cref="ILlamaServerRuntime.EnsureServesAsync"/>, which can restart our router to load a model
     /// downloaded after it started. That is a BIND's decision, and the start button is not a bind. The model rides
-    /// in <c>notWarmed</c> with the reason, and in <c>note</c>, which the console shows. Proof for all of it:
-    /// <c>e2e-p51</c>.</para></summary>
+    /// in <c>notWarmed</c> with the reason, and in <c>note</c>, which the console shows as a warning.</para>
+    ///
+    /// <para><b>The cure depends on WHOSE router it is</b> (<see cref="LlamaServerState.Ours"/>). A service restart
+    /// ends ours and the next start spawns one that lists every file, which the startup warm step loads; it leaves an
+    /// ADOPTED one running — an orphan of a crash, or the household's own on our port — to be adopted again, so
+    /// saying 「重启服务」 there sent the household round a restart for nothing. That case gets the runtime's own
+    /// not-ours clause (<c>LlamaServerRuntime.NotOursRemedy</c>). Re-binding the model is not offered either way: the
+    /// picker shows 使用中, with no button, for the current binding. Proof for all of it: <c>e2e-p51</c>.</para></summary>
     [HttpPost("api/manage/models/llama/start")]
     public async Task<IActionResult> LlamaStart()
     {
-        if (!await _llama.EnsureServingAsync())
-            return StatusCode(409, new
-            {
-                error = (await _llama.ProbeAsync(refresh: true)).Problem ?? "无法启动 llama-server。",
-            });
+        if (!await _llama.EnsureServingAsync()) return NotRunning(await _llama.ProbeAsync(refresh: true));
 
         var state = await _llama.ProbeAsync(refresh: true);
-        // What the router LISTS, and only when it ANSWERED: a probe that did not get through reports the files on
-        // disk instead, and warming one of those could reach EnsureServesAsync's restart after all.
-        var listed = state.Serving ? state.Models : Array.Empty<string>();
+        // It answered a moment ago and does not now: a router that died, or one holding the port without answering.
+        // Not running either way, so this is the start failing, in the probe's own words (HELD names the port and
+        // whose it is) — a 200 reading 「已在运行」 would have been false. Past this line `state.Models` is what the
+        // router LISTS: a probe that did not answer reports the files on disk instead.
+        if (!state.Serving) return NotRunning(state);
+
         var warmed = new List<string>();
-        var notWarmed = new List<object>();
-        var whys = new List<string>();
+        var cold = new List<(string Layer, string Model, string Cause, string Cure)>();
         foreach (var (layer, model) in MemorySources.BoundToLlamaCpp(Settings()))
         {
-            var isListed = listed.Contains(model, StringComparer.OrdinalIgnoreCase);
+            var listed = state.Models.Contains(model, StringComparer.OrdinalIgnoreCase);
             // Same single writer the preset generator uses — a second copy of this test here is how the
             // preset and the warm-up would come to disagree about what a model is.
-            if (isListed && await _llama.WarmAsync(model, Services.ResourceProvisioner.GgufKind(model)))
+            if (listed && await _llama.WarmAsync(model, Services.ResourceProvisioner.GgufKind(model)))
             {
                 warmed.Add(model);
                 continue;
             }
             var name = layer == MemoryLayers.Semantic ? "语义" : "判断";
-            // The remedy is the SERVICE restart, whichever router this is: a graceful stop ends ours and the next
-            // start spawns one that lists every file, which the startup warm step then loads; an adopted one
-            // survives, and that step says what to end instead (EnsureServesAsync's not-ours sentence).
-            // Re-binding the model is not offered — the picker shows 使用中 and no button for the current binding.
-            const string cure = " —— 重启服务后应用会载入它,载入不了时会说明原因。";
-            var why = isListed ? $"「{name}」绑定的 {model} 没能载入 —— 请看「日志」里的原因。"
-                : state.Serving
-                    ? $"「{name}」绑定的 {model} 不在这个 llama.cpp 列出的模型里(多半是它启动之后才下载的),所以没有预热,"
-                      + "启动按钮也不会为它重启 llama.cpp" + cure
-                    : $"llama.cpp 这次没有及时报出它的模型列表,所以「{name}」绑定的 {model} 没有预热" + cure;
-            notWarmed.Add(new { layer, model, why });
-            whys.Add(why);
+            cold.Add(listed
+                ? (layer, model, $"「{name}」绑定的 {model} 没能载入", "请看「日志」里的原因。")
+                : state.Ours
+                    ? (layer, model, $"「{name}」绑定的 {model} 不在这个 llama.cpp 列出的模型里(多半是它启动之后才下载的),"
+                        + "所以没有预热,启动按钮也不会为它重启 llama.cpp", "重启服务后应用会载入绑定的模型,载入不了时会说明原因。")
+                    : (layer, model, $"「{name}」绑定的 {model} 不在这个 llama.cpp 列出的模型里,所以没有预热",
+                        LlamaServerRuntime.NotOursRemedy));
         }
         return Ok(new
         {
-            ok = true, warmed, notWarmed, models = state.Models, devices = state.Devices,
-            // The console toasts `note` when there is one and 「已完成」 otherwise — so this is null exactly when
-            // every bound model is warm, and a start that left one cold says which and why.
-            note = whys.Count == 0 ? null : "llama.cpp 已在运行。" + string.Join(" ", whys),
+            ok = true, warmed,
+            notWarmed = cold.Select(c => new { layer = c.Layer, model = c.Model, why = $"{c.Cause}。{c.Cure}" }),
+            models = state.Models, devices = state.Devices,
+            // The console toasts `note` when there is one and 「已完成」 otherwise — so this is null exactly when every
+            // bound model is warm. Each cure is said ONCE, after the models it applies to: both layers cold on one
+            // router share one.
+            note = cold.Count == 0 ? null : string.Concat(cold.GroupBy(c => c.Cure)
+                .Select(g => string.Join(";", g.Select(c => c.Cause)) + "。" + g.Key)),
         });
     }
+
+    /// <summary>The start failing — before the router answered, or after it stopped — in the probe's own words.</summary>
+    private ObjectResult NotRunning(LlamaServerState state) =>
+        StatusCode(409, new { error = state.Problem ?? "无法启动 llama-server。" });
 
     /// <summary>Delete a model, freeing its disk.
     /// <para>Refused for one a layer is BOUND to, even when that binding is not running yet: recall is
@@ -433,7 +433,7 @@ public sealed class ModelsController : ControllerBase
         var builtIn = string.Equals(body?.Runtime, MemoryBackends.BuiltIn, StringComparison.OrdinalIgnoreCase);
         var holder = builtIn
             ? BuiltInRow(mem).InUse
-            : GgufInUse(model!, mem, MemorySources.ResolveJudgeModel(mem));
+            : GgufInUse(model!, MemorySources.BoundToLlamaCpp(mem));
         if (holder is not null)
             return StatusCode(409, new
             {

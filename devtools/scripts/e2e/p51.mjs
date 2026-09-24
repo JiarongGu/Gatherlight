@@ -976,9 +976,12 @@ try {
     // is never planted on disk — it stands in for the machine's own llama.cpp/Hugging Face cache, which the real
     // router lists beside ours and which the start button must not load.
     let listing = ['zzwarm-embed-model', 'zzwarm-chat-model', 'zzwarm-rerank-model', 'zzcache-chat-model'];
+    // How many more times the model list is answered before it is refused with a 500 — HELD, to the runtime.
+    let answerModels = Infinity;
     const fake = http.createServer((req, res) => {
       if (req.url === '/v1/models') {
         asked++;
+        if (answerModels-- <= 0) { res.writeHead(500); res.end(); return; }
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ data: listing.map((id) => ({ id })) }));
         return;
@@ -1097,7 +1100,7 @@ try {
       // A BOUND MODEL THE ROUTER DOES NOT LIST is reported, not restarted in: loading it means a restart, which
       // is a bind's decision, and the start button is not a bind. (This router is adopted, so no restart could
       // happen here anyway — the runtime never kills a process it did not start. What is asserted is the
-      // report: which layer, which model, and why it is cold.)
+      // report: which layer, which model, why it is cold, and what to do.)
       listing = listing.filter((id) => id !== 'zzwarm-rerank-model');
       hits.length = 0;
       const unlisted = await post('/api/manage/models/llama/start');
@@ -1106,12 +1109,38 @@ try {
         unlisted.status === 200 && skipped?.layer === 'judge' && /不在这个 llama\.cpp 列出的模型里/.test(skipped?.why ?? '')
           && warmedAt('zzwarm-rerank-model').length === 0,
         JSON.stringify({ requests: requests(), body: unlisted.body }));
-      ok('…and the console is told: the note names the model and the cure',
-        String(unlisted.body?.note ?? '').includes('zzwarm-rerank-model') && /重启服务/.test(String(unlisted.body?.note ?? '')),
-        String(unlisted.body?.note));
+      // THE CURE DEPENDS ON WHOSE ROUTER IT IS, and this one is ADOPTED: the app started nothing here. A service
+      // restart ends only a router the app started, and leaves an adopted one running, to be adopted again, still
+      // not listing the model. The first version of this note said 「重启服务」 anyway, and this assertion pinned it.
+      // For a router the app did not start the cure is the runtime's own not-ours clause: end that process.
+      const note = String(unlisted.body?.note ?? '');
+      ok('THE POINT: on an ADOPTED router the note says to end that llama-server.exe — never 重启服务, which leaves it running',
+        note.includes('zzwarm-rerank-model') && /任务管理器/.test(note) && /llama-server\.exe/.test(note) && !/重启服务/.test(note),
+        note);
       ok('…while the model that IS listed is still warmed',
         JSON.stringify(unlisted.body?.warmed) === JSON.stringify(['zzwarm-embed-model']) && hits.length === 1,
         JSON.stringify({ requests: requests(), reported: unlisted.body?.warmed }));
+
+      // BOTH layers cold on one router share one cure, and the note says it once, after both models.
+      listing = listing.filter((id) => id !== 'zzwarm-embed-model');
+      hits.length = 0;
+      const bothCold = await post('/api/manage/models/llama/start');
+      const bothNote = String(bothCold.body?.note ?? '');
+      ok('…and with BOTH layers cold, both are reported and the cure is said once',
+        (bothCold.body?.notWarmed ?? []).length === 2 && bothNote.includes('zzwarm-embed-model')
+          && bothNote.includes('zzwarm-rerank-model') && bothNote.split('任务管理器').length === 2 && hits.length === 0,
+        bothNote);
+
+      // A ROUTER THAT STOPS ANSWERING once the start has succeeded is the start failing. This returned 200 with
+      // 「llama.cpp 已在运行」 over a router that was gone or no longer answering, and threw away the probe's own
+      // sentence. The fake answers the start's probe, then refuses the model list: a non-2xx is HELD.
+      answerModels = 1;
+      const stopped = await post('/api/manage/models/llama/start');
+      answerModels = Infinity;
+      ok("a router that stops answering right after the start is a 409 in the probe's own words, never 「已在运行」",
+        stopped.status === 409 && /被另一个进程占着/.test(String(stopped.body?.error ?? ''))
+          && !/已在运行/.test(JSON.stringify(stopped.body ?? {})),
+        `${stopped.status} ${JSON.stringify(stopped.body)}`);
     } finally {
       // As we found them: both layers on the CLI. The files the bindings name go below, and a binding left
       // pointing at them would fall back at the next boot of this folder for a reason that is not its own.
