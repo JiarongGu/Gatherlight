@@ -149,13 +149,18 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
 /// equivalent; but a <c>--baseline=…:content</c> against a pre-bump results file then pairs content-only against
 /// <c>both</c> under one arm name, so say so when quoting such a comparison.</para>
 ///
-/// <para><b>THE LOCAL CHAT JUDGE WAS FLIPPED TOO, UNMEASURED.</b> <c>JudgeWiring.Llm</c> builds the verifier for
-/// BOTH LLM judges — <c>ClaudeCliJudgeSource</c> and <c>LlamaCppSource</c> bound to a chat GGUF — so the 2026-09-24
-/// default moved the llama.cpp chat judge to content alone as well. <c>docs/judge-bench.md</c> benched the Claude
-/// judge (Run 1) and the rerankers (Run 2), never a local chat judge on either input. The owner approved the flip
-/// on the Claude judge's measurement; for the local one it only brings forward what Lyntai's <c>ContentChars</c>
-/// will give every LLM verifier on the bump anyway, and it is deliberately not scoped in code. Quote no figure for
-/// the local chat judge's input until a bench arm measures it.</para>
+/// <para><b>THE LOCAL CHAT JUDGE WAS FLIPPED TOO, AND RUN 3 MEASURED IT.</b> <c>JudgeWiring.Llm</c> builds the
+/// verifier for BOTH LLM judges — <c>ClaudeCliJudgeSource</c> and <c>LlamaCppSource</c> bound to a chat GGUF — so
+/// the 2026-09-24 default moved the llama.cpp chat judge to content alone as well. The owner approved the flip on
+/// the Claude judge's measurement. <c>docs/judge-bench.md</c> Run 3 (2026-09-24, <c>gemma-3-1b-it-Q4_K_M</c>, the
+/// pre-registered rule being "stop only if content alone is significantly worse") found NO SIGNIFICANT DIFFERENCE
+/// but not equivalence either. Content alone trails "topic — content" by 4.6 pp top-1 (23/12, p = 0.090,
+/// 95% [−9.4, +0.3]) and by 4.2 pp found@8 (18/8, p = 0.076, [−8.3, +0.04]); part of that is the longer input
+/// failing to yield a verdict more often (75% against 86% coverage), which leaves the engine's page. So the default
+/// stays unscoped. It only brings forward what Lyntai's <c>ContentChars</c> gives every LLM verifier on the bump
+/// anyway. The same run found something larger: in EITHER mode, this 1B judge is significantly WORSE than no judge
+/// (top-1 −19.2 / −14.6 pp), because partition promotes whatever it endorses. That is a statement about the model,
+/// not about this class.</para>
 ///
 /// <para><b>Cost.</b> <c>FactIndex.RankAsync</c> asks the engine for <c>min(3×limit, 100)</c> candidates when
 /// no kind is given, but a flat 100 whenever a kind IS given (a kind narrows AFTER the ranking, so a thin

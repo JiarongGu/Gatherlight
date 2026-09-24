@@ -525,11 +525,17 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing it asserts); (d) accept that `both` can no longer be reproduced: Run 1's `content` rows become its only
   record, which is fine because Run 1 measured it equivalent — but a `--baseline=…:content` against a pre-bump
   results file then pairs content-only with `both` under one arm name. The full list is in the class comment.
-  **The flip also moved the llama.cpp CHAT judge, and that is UNMEASURED.** `JudgeWiring.Llm` builds the
-  verifier for both LLM judges (`ClaudeCliJudgeSource`, and `LlamaCppSource` bound to a chat GGUF), while
-  `docs/judge-bench.md` benched only the Claude judge and the rerankers. It is left unscoped on purpose: the bump
-  gives every LLM verifier the same content-only rendering through `ContentChars`, so the flip only brings that
-  date forward for the local judge — without a measurement, which is why no figure is quoted for it.
+  **The flip also moved the llama.cpp CHAT judge, and `docs/judge-bench.md` Run 3 measured that.** `JudgeWiring.Llm`
+  builds the verifier for both LLM judges (`ClaudeCliJudgeSource`, and `LlamaCppSource` bound to a chat GGUF). Run 3
+  benched `gemma-3-1b-it-Q4_K_M` on both inputs, under a rule written before the run: stop and ask the owner only
+  if content alone is significantly worse. It is not significantly worse, but it is not equivalent either. Content
+  alone trails `topic — content` by 4.6pp top-1 (23/12, p = 0.090, 95% [−9.4, +0.3]pp) and by 4.2pp found@8 (18/8,
+  p = 0.076, [−8.3, +0.04]pp). Part of that gap is `both` failing to give a verdict more often (75% coverage
+  against 86%), since a recall with no verdict keeps the engine's page. So the flip stays unscoped: the bump gives
+  every LLM verifier the same content-only rendering through `ContentChars` anyway. Quote the lean with the
+  figures, never as "equivalent". The same run found the bigger thing: in EITHER mode this 1B judge is
+  significantly WORSE than no judge (top-1 79 → 33 / 44 of 240, −19.2 / −14.6pp, p < 0.001), because partition
+  promotes whatever it endorses.
   **(2) `JudgeScopedModelRoutingStore` ↔ `docs/task-archive.md` Part 284 / D176, closed the same day it was
   filed.** Lyntai's live override (`IModelRoutingStore`, which served `llm.model.memory`) was keyed by CONSUMER
   alone, so it could not know which client or provider a model name was written for, and a key written for one

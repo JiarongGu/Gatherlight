@@ -922,3 +922,214 @@ and keep the default.* How it is read, fixed now:
   wanders between identical runs (Run 1's Claude A/A differed by 2 of 240). The exact test stays valid without
   one, since under the null sampling noise splits discordant pairs evenly, but a gap of a few queries should be
   read against that.
+
+## Run 3 — the local chat judge (2026-09-24, llama.cpp b10549; claude 2.1.281, never called)
+
+**Command**
+
+```
+node devtools/dev.mjs judge-bench --reuse-seed --arms=formula --chat-judges=gemma-3-1b-it-Q4_K_M \
+  --resources=devtools/_rr-res --port-base=5620 --llama-port=5640 > devtools/_judge-bench-lc.txt 2>&1
+```
+
+The design above was committed as `48568a8` before anything ran. The arm pair ran from the working tree that
+became `7932445`; that commit differs from what ran by one space. `--resources` pointed at the same scratch folder
+as Run 2, never at a household's data folder. The two port flags keep off every tcp range Windows had reserved
+that day and off the band the shifted e2e runner uses. The smoke run (`--n=10`, same arms) passed the coverage
+guard: 35/39 and 36/39 graph recalls judged.
+
+**Seed**: Run 1's, reused (created 2026-09-23T08:55:21.396Z, annotated by claude `2.1.280 (Claude Code)`, fixture
+sha256 `9680443e206495ca8bcd067f80f4705cff5e31a365504fbac438413002ecf555`). App HEAD `426be89` (v1.3.0). Order seed
+**12345** (240 queries, 0 same-fact adjacencies), **3 arms in parallel**, latency sample 12 queries. Formula positions
+digest **`f661eb6a056e`**, **equal to Runs 1 and 2**: the three runs asked the same questions, in the same order, of
+the same starting graph. Every non-vacuity check held. `lcb` announced `judge input = both`, and `lc` printed no
+`[measurement]` line. Both chat arms read back 判断 running `llama-cpp · gemma-3-1b-it-Q4_K_M` with no startup
+warnings. No arm made a claude-cli call at startup or at any time in the run (0/0 in every row below). The shared
+router ran with `--models-max 2` and a preset of exactly `[gemma-3-1b-it-Q4_K_M]` / `n-gpu-layers = 99`.
+
+### Accuracy — the four sets and `all`
+
+```
+== same ==
+arm                                                      n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)               60   0    60     0       0         42/60     54/60     0.769   243            
+local chat judge gemma-3-1b-it-Q4_K_M · content only     60   0    60     59      59        20/60     48/60     0.447   630            -22 / -6 / -0.322
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  60   0    60     43      43        24/60     51/60     0.521   953            -18 / -3 / -0.248
+
+== cross ==
+arm                                                      n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)               60   0    60     0       0         1/60      6/60      0.042   292            
+local chat judge gemma-3-1b-it-Q4_K_M · content only     60   0    60     47      47        1/60      4/60      0.029   762            +0 / -2 / -0.013
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  60   0    60     46      46        1/60      7/60      0.037   1018           +0 / +1 / -0.005
+
+== third ==
+arm                                                      n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)               60   0    55     0       0         1/60      18/60     0.119   246            
+local chat judge gemma-3-1b-it-Q4_K_M · content only     60   0    55     44      44        2/60      14/60     0.085   691            +1 / -4 / -0.034
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  60   0    55     37      37        2/60      16/60     0.093   669            +1 / -2 / -0.026
+
+== mixed ==
+arm                                                      n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)               60   0    59     0       0         35/60     47/60     0.657   289            
+local chat judge gemma-3-1b-it-Q4_K_M · content only     60   0    59     52      52        10/60     45/60     0.318   724            -25 / -2 / -0.339
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  60   0    59     50      50        17/60     47/60     0.407   686            -18 / +0 / -0.250
+
+== all ==
+arm                                                      n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)               240  0    234    0       0         79/240    125/240   0.397   268            
+local chat judge gemma-3-1b-it-Q4_K_M · content only     240  0    234    202     202       33/240    111/240   0.220   702            -46 / -14 / -0.177
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  240  0    234    176     176       44/240    121/240   0.265   832            -35 / -4 / -0.132
+```
+
+### Paired — content only against topic — content (the question)
+
+`b` = `lcb` (topic — content) hit & `lc` (content only) miss, `c` = the reverse. A negative net means content
+alone did worse.
+
+```
+  top-1:
+  arm                                                  set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  lc:gemma-3-1b-it-Q4_K_M vs lcb:gemma-3-1b-it-Q4_K_M  all     240    23/12    0.090   -11 (-4.6pp)     [-9.4, +0.3]pp      no          no
+                                                       same    60     8/4      0.388   -4 (-6.7pp)      [-17.7, +4.8]pp     —           
+                                                       cross   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+                                                       third   60     2/2      1.000   +0 (+0.0pp)      [-7.1, +7.1]pp      —           
+                                                       mixed   60     12/5     0.143   -7 (-11.7pp)     [-24.4, +1.8]pp     —           
+  found@8:
+  arm                                                  set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  lc:gemma-3-1b-it-Q4_K_M vs lcb:gemma-3-1b-it-Q4_K_M  all     240    18/8     0.076   -10 (-4.2pp)     [-8.3, +0.0]pp      no          no
+                                                       same    60     4/1      0.375   -3 (-5.0pp)      [-12.5, +2.8]pp     —           
+                                                       cross   60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —           
+                                                       third   60     6/4      0.754   -2 (-3.3pp)      [-13.7, +7.2]pp     —           
+                                                       mixed   60     5/3      0.727   -2 (-3.3pp)      [-12.7, +6.2]pp     —           
+```
+
+The found@8 interval's upper end, printed `+0.0`, is +0.04pp: it includes zero, barely.
+
+### Paired vs `formula` — McNemar exact, per query
+
+`b` = formula hit & arm miss, `c` = formula miss & arm hit.
+
+```
+  top-1:
+  arm                                                      set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  local chat judge gemma-3-1b-it-Q4_K_M · content only     all     240    51/5     <0.001  -46 (-19.2pp)    [-24.6, -13.4]pp    no          YES (arm worse)
+                                                           same    60     23/1     <0.001  -22 (-36.7pp)    [-48.6, -22.4]pp    —           
+                                                           cross   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+                                                           third   60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —           
+                                                           mixed   60     26/1     <0.001  -25 (-41.7pp)    [-53.7, -26.9]pp    —           
+  local chat judge gemma-3-1b-it-Q4_K_M · topic — content  all     240    40/5     <0.001  -35 (-14.6pp)    [-19.6, -9.3]pp     no          YES (arm worse)
+                                                           same    60     20/2     <0.001  -18 (-30.0pp)    [-42.4, -15.7]pp    —           
+                                                           cross   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —           
+                                                           third   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —           
+                                                           mixed   60     19/1     <0.001  -18 (-30.0pp)    [-41.6, -16.5]pp    —           
+  found@8:
+  arm                                                      set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  local chat judge gemma-3-1b-it-Q4_K_M · content only     all     240    17/3     0.003   -14 (-5.8pp)     [-9.4, -2.1]pp      no          YES (arm worse)
+                                                           same    60     7/1      0.070   -6 (-10.0pp)     [-18.9, -0.5]pp     —           
+                                                           cross   60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+                                                           third   60     6/2      0.289   -4 (-6.7pp)      [-15.8, +2.9]pp     —           
+                                                           mixed   60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —           
+  local chat judge gemma-3-1b-it-Q4_K_M · topic — content  all     240    13/9     0.523   -4 (-1.7pp)      [-5.5, +2.2]pp      no          no
+                                                           same    60     4/1      0.375   -3 (-5.0pp)      [-12.5, +2.8]pp     —           
+                                                           cross   60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —           
+                                                           third   60     5/3      0.727   -2 (-3.3pp)      [-12.7, +6.2]pp     —           
+                                                           mixed   60     3/3      1.000   +0 (+0.0pp)      [-8.4, +8.4]pp      —           
+```
+
+### Latency, llama.cpp calls and candidate-text size
+
+```
+latency (ms) — parallel: mean over the accuracy pass, 3 arm(s) at once; serial median: one arm at a time, first 12 queries, judge arms counting only recalls that carried a verdict
+arm                                                      ms (parallel)  ms (serial median)  cli ok/failed (accuracy)  cli ok/failed (total)  judge
+公式 · no verification (seed tags present)               268            219                 0/0                       0/0                    off · claude-cli · haiku
+local chat judge gemma-3-1b-it-Q4_K_M · content only     702            403                 0/0                       0/0                    on · llama-cpp · gemma-3-1b-it-Q4_K_M
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  832            480                 0/0                       0/0                    on · llama-cpp · gemma-3-1b-it-Q4_K_M
+
+llama.cpp chat calls (router: llamacpp) — ok/failed per pass; a local chat judge's verdicts arrive through these
+arm                                                      startup     accuracy pass   latency pass
+local chat judge gemma-3-1b-it-Q4_K_M · content only     0/0         234/0           12/0
+local chat judge gemma-3-1b-it-Q4_K_M · topic — content  0/0         234/0           12/0
+
+candidate text per recall (estimated; 60 candidates at most — the engine gathers only what matches or links; numbering, instructions and the query are excluded, and chars ≠ tokens):
+  local chat judge gemma-3-1b-it-Q4_K_M · content only     up to ~2517 chars (42 per candidate)
+  local chat judge gemma-3-1b-it-Q4_K_M · topic — content  up to ~3306 chars (55 per candidate)
+```
+
+### Warnings
+
+```
+WARNING: arm lc:gemma-3-1b-it-Q4_K_M — judge failed open on 32/234 graph recalls
+WARNING: arm lc:gemma-3-1b-it-Q4_K_M — 3/12 graph-ranked latency recalls carried no verdict (left out of its serial median)
+WARNING: arm lcb:gemma-3-1b-it-Q4_K_M — judge failed open on 58/234 graph recalls
+WARNING: arm lcb:gemma-3-1b-it-Q4_K_M — 1/12 graph-ranked latency recalls carried no verdict (left out of its serial median)
+```
+
+Every one of the 234 chat calls per arm returned `Ok`, so no missing verdict was a transport failure. Each was a reply
+the verifier could not read as one, and it therefore left the engine's page alone (fail-open). Verdict coverage is
+**86.3%** for `lc` (202/234) and **75.2%** for `lcb` (176/234): above the design's 50% guard, below the bench's 98%
+bar, so both arms carry the warning. No other warning fired, and none about the CLI.
+
+### The decision rule, applied
+
+- **Significantly worse? No.** Content only trails `topic — content` on `all` on both metrics, but neither reaches
+  p < 0.05: top-1 23/12, p = 0.090, net −11 = −4.6pp; found@8 18/8, p = 0.076, net −10 = −4.2pp. **The STOP is not
+  triggered.**
+- **Equivalent? No.** The 95% intervals, [−9.4, +0.3]pp for top-1 and [−8.3, +0.04]pp for found@8, reach far past
+  −3pp.
+- **The recorded outcome is therefore "no significant difference".** The run could not show that content alone
+  hurts this judge. It also cannot rule out a harm as large as ~9pp on top-1 or ~8pp on found@8, and both point
+  estimates lean that way. Every set in which the arms disagree at all leans the same way, and none is significant
+  on its own. Per the rule, **the default stays content alone**.
+- **Vacuity guards.** (1) Coverage 86.3% / 75.2% cleared the 50% guard. (2) The judge moves the ranking, significantly
+  and downward (next section), so the comparison is not two ways of feeding a judge that changes nothing.
+
+### What it says
+
+- **Content only against topic — content: a lean, not a finding, and partly an artefact of abstaining.** The
+  numbers are in the section above. What they hide is that the two arms do not judge equally often. `lcb` failed to
+  give a verdict on 58 graph recalls against `lc`'s 32. A recall with no verdict keeps the engine's page, and on this
+  fixture the engine's page is better than this judge's (next bullet). So part of `lcb`'s lead is `lcb` abstaining
+  more. *Post hoc, not pre-registered, and not used for the decision*: on the 157 graph recalls where both arms gave
+  a verdict, the gap shrinks to −3.8pp on both metrics (top-1 14/8, p = 0.286; found@8 13/7, p = 0.263). The longer
+  `topic — content` input is also the one that more often produced an unreadable reply, which is a property of that
+  input with this model, not noise.
+- **The larger finding: this judge makes recall WORSE than no judge.** Against 公式 with no verification, both
+  arms are significantly worse on top-1. Content only goes 79 → 33/240 (51/5, p < 0.001, **−19.2pp**, [−24.6, −13.4]pp),
+  and topic — content goes 79 → 44 (40/5, p < 0.001, **−14.6pp**, [−19.6, −9.3]pp). The loss is in the two sets where
+  the formula already puts the answer first most of the time: `same` (−36.7 / −30.0pp) and `mixed` (−41.7 / −30.0pp),
+  all four p < 0.001. `cross` and `third` barely move, because the formula has almost nothing there to lose (1/60
+  first). On found@8, content only is also significantly worse (17/3, p = 0.003, −5.8pp), while topic — content is
+  not a finding (13/9, p = 0.523). The mechanism is the partition, and it is the failure Lyntai's
+  `LlmVerificationOptions` documentation warns of ("a judge can be WORSE than no judge"). gemma endorsed at least one
+  candidate on every recall it judged (`endorsed` = `judged` in every set), and partition promotes whatever is
+  endorsed ahead of the engine's ranking. *Post hoc*: on the 202 recalls where content only gave a verdict, its
+  top-1 is −22.8pp against 公式 (51/5). On the 32 where it gave none, its top-1 matches 公式's (0/0).
+- **Beside the other judges on the same seed and questions (digest `f661eb6a056e` in all three runs; quoted from the
+  tables, not paired here).** top-1 / found@8 of 240: 公式 79 / 125; Claude judge (Run 1 `content`) 132 / 133;
+  rerankers under partition (Run 2) 86–90 / 203–208; this local chat judge 33 / 111 (content only) and 44 / 121
+  (topic — content). It is the only judge measured here that loses to having none.
+- **Latency.** Serial medians are **403 ms** for content only and **480 ms** for topic — content, against **219 ms**
+  for 公式. A verdict therefore adds ~0.18 s and ~0.26 s per recall. Content only's cost is in line with the
+  0.15–0.20 s per call quoted for this model, and the longer `topic — content` input costs more. Content only's
+  candidate text is ~24% smaller (up to ~2517 against ~3306 chars). The parallel means
+  (702 / 832 ms) were contended: three arms at once, two of them on one router and one GPU.
+
+### What it does NOT say
+
+- One fixture (60 invented facts), one run per arm, ONE chat model (the 1B at Q4), one llama.cpp build (`b10549`,
+  Vulkan) on one machine. Nothing here says how `gemma-3-4b-it-Q4_K_M` or any other local chat model would do. In
+  particular it does not say that a larger local judge also loses to 公式, only that this one does.
+- No judge A/A twin ran, and the judge samples at llama-server's default temperature. Nothing in this run sizes how
+  far its verdicts wander between identical runs. Whether noise alone could produce the lc/lcb gaps (10–11 queries)
+  is exactly what an A/A pair would have shown. Run 1's Claude A/A differed by 2.
+- Partition only, the product default. Fuse, which exists to soften a verdict that replaces the page, was not
+  measured for this judge. Nothing here says whether it would recover the loss.
+- The bench records WHETHER the judge endorsed anything, not which candidates or how many. That gemma endorses too
+  much, or the wrong fact, is the mechanism's likely reading, not a measurement.
+- Recall-time only. A local chat judge also ANNOTATES every fact write on llama.cpp; a reused seed writes nothing, so
+  every arm recalled against subject tags the Claude CLI wrote when the seed was made. A household on this judge
+  has tags written by gemma instead, and that configuration was not measured.
+- 语义 was off, as in Runs 1 and 2. Kind-filtered recalls (up to 400 candidates) were not exercised, and nothing here
+  prices a longer candidate list for a 1B model.
+- "No significant difference" is not "content alone is as good". The run did not show content alone worse; it did
+  not show it equivalent either.
