@@ -66,18 +66,22 @@ public sealed record GgufModel(
 ///
 /// <para><b>Measurements are per model and honestly sparse.</b> Only the embedder has been scored on the
 /// 10-query fixture (9/10 top-1, 25 ms/query through the app, 2026-08-22 — the same instrument as every
-/// number in <see cref="EmbeddingCatalog"/>). The rerankers and the 1B chat model have been scored AS 判断 on
+/// number in <see cref="EmbeddingCatalog"/>). The rerankers and two chat models have been scored AS 判断 on
 /// the 240-question bilingual fixture (<c>docs/judge-bench.md</c>: Run 2 for LAMAR and BGE, Run 3 for Gemma 3
-/// 1B, Run 4 for mMiniLMv2) — top-1 and found@8, which is not the shape of <see cref="EmbeddingMeasurement"/>
-/// (top-3 of 10 queries), so those figures live in the note and <see cref="GgufModel.Measured"/> stays null
-/// rather than carrying a found@8 in a top-3 slot. The 4B chat model has no measurement at all, and its note says so; claiming
-/// otherwise is the failure this whole area keeps correcting.</para>
+/// 1B, Run 4 for mMiniLMv2, Run 5b for Qwen3 0.6B) — top-1 and found@8, which is not the shape of
+/// <see cref="EmbeddingMeasurement"/> (top-3 of 10 queries), so those figures live in the note and
+/// <see cref="GgufModel.Measured"/> stays null rather than carrying a found@8 in a top-3 slot. The 4B chat model has
+/// no measurement at all, and its note says so; claiming otherwise is the failure this whole area keeps correcting.
+/// (Run 5b also measured Qwen3.5 0.8B — no significant difference from no judge — and Gemma 3 270M — worse; neither
+/// is catalogued.)</para>
 ///
-/// <para><b>There is no recommended CHAT judge, and that is a measurement, not an omission.</b> Gemma 3 1B
+/// <para><b>There is no recommended CHAT judge, and that is a decision, not an omission.</b> Gemma 3 1B
 /// was <c>RecommendedJudge</c> — 推荐 in its name, 「判断质量没有单独实测过」 in its note, the model 资源's 推荐
 /// badge fell to and the download the 判断 row suggested — until Run 3 (2026-09-24) measured it significantly
 /// WORSE than no judge. It stays selectable and says so; the constant is gone, and 判断's local default is
-/// <see cref="RecommendedReranker"/>, the local judge that measured better.</para>
+/// <see cref="RecommendedReranker"/>. Qwen3 0.6B (Run 5b) is the first chat judge measured BETTER than no judge on
+/// both metrics — and it is offered, not recommended: the reranker still puts the answer on the page far more often
+/// (found@8 203 against 148 in the same run), which is what the owner kept the default for (2026-09-24).</para>
 /// </summary>
 public static class GgufCatalog
 {
@@ -98,8 +102,10 @@ public static class GgufCatalog
     ///
     /// <para><b>It is also 判断's local DEFAULT</b> (owner decision, 2026-09-24): the model 资源's 推荐 badge offers
     /// once the embedders are in, and the download the 判断 row suggests when llama.cpp holds no judge model. That
-    /// job was the Gemma 3 1B chat model's until Run 3 measured it worse than no judge; a reranker is the local
-    /// judge that measured BETTER (Runs 2 and 4). Which reranker is still the tie-break above, and the note says
+    /// job was the Gemma 3 1B chat model's until Run 3 measured it worse than no judge; a reranker is a local
+    /// judge that measured BETTER (Runs 2 and 4). So is Qwen3 0.6B (Run 5b), a chat judge — and it stays offered, not
+    /// the default: it ranks the answer first more often than BGE and gets it onto the page far less often (found@8
+    /// 148 against 203), and the owner kept the reranker (2026-09-24). Which reranker is still the tie-break above, and the note says
     /// so where the badge points. Its display name carries no 推荐 — no row's does — because a name is read in
     /// every picker, long after the advice has been taken. Re-run <c>dev.mjs judge-bench</c> before treating the
     /// choice between rerankers as more than the tie-break.</para></summary>
@@ -204,7 +210,7 @@ public static class GgufCatalog
             + "但实测它让检索比不开判断更差:"
             + "答案排第一从不开判断的 79 题降到 33 题,带进前八从 125 题降到 111 题,"
             + "两项都是显著变差。量的是检索时的判断,它自己写的主题标注没有量过。"
-            + "要在本机做判断,重排模型在同一测试集上让检索变好(见它们的说明)。"),
+            + "要在本机做判断,重排模型和 Qwen3 0.6B 在同一测试集上都让检索变好(见它们的说明)。"),
 
         // UNMEASURED HERE, and not a candidate we mean to recommend — said plainly, and without borrowing the 1B's
         // result in either direction: Run 3 measured one model at one size. Its size is the two pinned files': 2,489,757,856
@@ -217,6 +223,34 @@ public static class GgufCatalog
             "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863", 2_489_757_856,
             "同样用于判断,参数量约是 1B 的四倍,文件约 2.5 GB,是 1B 的三倍多:更大、更慢,显存不够时会明显更慢。"
             + "判断质量没有在这里实测过 —— 1B 的实测结果说明不了它会怎样;我们也不打算推荐它。"),
+
+        // THE LOCAL CHAT JUDGE THAT MEASURED BETTER (docs/judge-bench.md Run 5b, committed 1e8e743), offered and NOT
+        // recommended: RecommendedReranker stays the local default by the owner's decision (2026-09-24). Every figure
+        // is Run 5b's and carries its configuration — the 240-question fixture, 语义 off, content-only judge input,
+        // thinking off with the 512-token cap (the preset LlamaServerRuntime.WritePresets writes for a chat model),
+        // one chat model per run beside 公式 and BGE. top-1 79 → 110 (+12.9pp, p < 0.001) and found@8 125 → 148
+        // (+9.6pp, p < 0.001) against no judge; against BGE in the same run, top-1 +8.3pp (p = 0.002) and found@8
+        // 148 against 203 (−22.9pp). Serial median 381 ms against the run's 公式 220 ms. Coverage 226/234.
+        //
+        // Its TAGGING is unmeasured, and the note says so: the fixture's subject tags were written by the Claude CLI
+        // when the seed was built, so no run has scored the tags this model writes. Why a household might still pick
+        // it is the other half of the same fact — tagging and checking both stay on the machine, no account quota.
+        // Pinned at Qwen's own repo, commit and sha256 as Run 5's pre-registration recorded them; HEAD-checked
+        // 2026-09-24 (X-Repo-Commit and X-Linked-Size / X-Linked-ETag match). The repo itself declares Apache-2.0.
+        // Id = the upstream stem, as every row.
+        new GgufModel(
+            "Qwen3-0.6B-Q8_0", "Qwen3 0.6B(Q8 · 判断)", GgufCapability.Completion,
+            "Qwen/Qwen3-0.6B-GGUF", "23749fefcc72300e3a2ad315e1317431b06b590a",
+            "Qwen3-0.6B-Q8_0.gguf",
+            "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031", 639_446_688,
+            "判断用的对话模型:写入时的主题标注和检索时的判断都在本机完成,不消耗账号额度。"
+            + "本应用双语测试集 240 道提问、不开语义、判断按默认只读事实内容、关闭思考(应用启动它时就这样设置),"
+            + "每轮只测这一个对话模型:答案排第一从不开判断的 79 题增加到 110 题,带进前八从 125 题增加到 148 题,"
+            + "两项都显著变好。和同一轮的 BGE 重排模型比:它把答案排在第一的次数更多(多 8.3 个百分点,显著),"
+            + "BGE 把答案带进前八的次数多得多(203 对 148)。每次检索约 0.38 秒,同一轮不开判断约 0.22 秒"
+            + "(串行中位数,模型已加载、在显卡上)。"
+            + "它自己写的主题标注好不好没有量过 —— 测试集里的主题标注是 Claude 写的。"
+            + "许可:Apache-2.0(Qwen 的官方仓库写明)。"),
 
         new GgufModel(
             "LAMAR-600m.Q5_K_M", "LAMAR 600M(Q5 · 判断 · 重排)", GgufCapability.Reranking,

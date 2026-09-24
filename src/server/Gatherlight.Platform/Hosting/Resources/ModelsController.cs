@@ -242,8 +242,11 @@ public sealed class ModelsController : ControllerBase
     /// <para>Order of preference: the measured GGUF embedder, then the built-in one (same weights, no
     /// runtime needed), then <see cref="GgufCatalog.RecommendedReranker"/> for 判断 — and NOTHING after that.
     /// 判断's pick was the Gemma 3 1B chat model until docs/judge-bench.md Run 3 (2026-09-24) measured it
-    /// significantly WORSE than no judge (top-1 79 → 33 of 240); a reranker is the local judge that measured
-    /// better. The two fallbacks that followed went with it — "any embedder", then "whatever is smallest" — because
+    /// significantly WORSE than no judge (top-1 79 → 33 of 240); a reranker is a local judge that measured
+    /// better. So is the Qwen3 0.6B chat judge (Run 5b), and it is never suggested here: the owner kept the reranker as
+    /// 判断's local default (2026-09-24), which puts the answer on the page far more often (found@8 203 against 148),
+    /// and a chat judge on disk does not stop the reranker suggestion either — it is a different kind of judge, not a
+    /// second copy. The two fallbacks that followed went with it — "any embedder", then "whatever is smallest" — because
     /// once the three above are in, the smallest row left is a model nobody chose to recommend (the 1B, or a
     /// reranker kept off the badge), and a badge on it would be a claim no measurement stands behind. Null then is
     /// the honest answer: nothing left to advise.</para>

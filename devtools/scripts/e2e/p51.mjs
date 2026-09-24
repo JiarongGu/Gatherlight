@@ -1233,6 +1233,7 @@ try {
     const RERANKER = 'bge-reranker-v2-m3-Q5_K_M';
     const GEMMA_1B = 'gemma-3-1b-it-Q4_K_M';
     const MMINILM = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
+    const QWEN3 = 'Qwen3-0.6B-Q8_0';
     // MemorySources.CliTaggingCost, pinned as the exact clause for the reason p52 case 5 gives.
     const TAGGING_COST = '每条事实一次调用,消耗账号额度,事实内容会发给 Claude';
     const rowOf = (shelf, id) => (shelf.models ?? []).find((m) => m.id === id);
@@ -1268,6 +1269,24 @@ try {
         !!mini && !/推荐/.test(String(mini.name)) && /512/.test(String(mini.note)) && /非商业/.test(String(mini.note))
           && /没有量过/.test(String(mini.note)) && /199\/240/.test(String(mini.note)),
         JSON.stringify({ name: mini?.name, note: mini?.note }));
+
+      // QWEN3 0.6B (docs/judge-bench.md Run 5b): the first CHAT judge measured better than no judge on both metrics —
+      // catalogued, described by its measurement with its configuration, and NOT recommended (BGE stays the default).
+      // Its note must also say what was NOT measured: the tags it writes (the fixture's tags came from the Claude CLI).
+      const qwen = rowOf(shelf, QWEN3);
+      const qwenRes = resources.find((r) => r.id === `gguf-${QWEN3}`);
+      const qwenNote = String(qwen?.note ?? '');
+      ok('Qwen3 0.6B is on the shelf as a CHAT model at its pinned size, with a 资源 row — and neither name says 推荐',
+        !!qwen && qwen.capability === 'completion' && qwen.sizeBytes === 639446688 && qwenRes?.approxBytes === 639446688
+          && !/推荐/.test(String(qwen.name)) && !/推荐/.test(String(qwenRes?.name)),
+        JSON.stringify({ row: qwen ?? null, resource: qwenRes ?? null }));
+      ok('…its note carries Run 5b with its configuration — 79 → 110 and 125 → 148 of 240, 语义 off, thinking off, BGE\'s 203 beside it, ~0.38 s',
+        /240 道提问/.test(qwenNote) && /不开语义/.test(qwenNote) && /关闭思考/.test(qwenNote)
+          && /79 题增加到 110 题/.test(qwenNote) && /125 题增加到 148 题/.test(qwenNote) && /显著/.test(qwenNote)
+          && /203 对 148/.test(qwenNote) && /0\.38 秒/.test(qwenNote),
+        qwenNote);
+      ok('…and says its TAGGING was not measured, and its licence',
+        /主题标注好不好没有量过/.test(qwenNote) && /Apache-2\.0/.test(qwenNote), qwenNote);
 
       // 判断's WHAT-IT-DOES SENTENCE quotes a range for "the local rerankers" — so it must cover EVERY catalogued one.
       // It read 203–208 / 7–11 until mMiniLMv2 (199, +20) was catalogued, which made both ends false while every check
@@ -1348,6 +1367,17 @@ try {
         llamaJudge?.suggest === `gguf-${RERANKER}`,
         JSON.stringify({ suggest: llamaJudge?.suggest, reason: llamaJudge?.reason }));
 
+      // A CHAT judge on disk — even the one measured better than none — is not the suggestion, and not a reason to
+      // stop suggesting the reranker: it is a different kind of judge, not a second copy of one.
+      fs.writeFileSync(path.join(ggufDir, `${QWEN3}.gguf`), '');
+      const withChatJudge = await getJson('/api/manage/models');
+      ok('(fixture) Qwen3 0.6B reads as an installed chat model',
+        rowOf(withChatJudge, QWEN3)?.installed === true && rowOf(withChatJudge, QWEN3)?.capability === 'completion',
+        JSON.stringify(rowOf(withChatJudge, QWEN3) ?? null));
+      ok('THE POINT: with Qwen3 0.6B installed the badge still names the reranker — never the chat judge',
+        withChatJudge.recommendation?.id === RERANKER, JSON.stringify(withChatJudge.recommendation ?? null));
+      fs.rmSync(path.join(ggufDir, `${QWEN3}.gguf`), { force: true });
+
       // ONE RERANKER IS ENOUGH, as one embedder is: any installed reranker is a local judge that measured better than
       // none, so suggesting BGE beside another is the second-copy redundancy the embedder rule already refuses.
       fs.writeFileSync(path.join(ggufDir, `${MMINILM}.gguf`), '');
@@ -1363,7 +1393,7 @@ try {
       // which, with these in, is a model nobody chose to recommend.
       fs.writeFileSync(path.join(ggufDir, `${RERANKER}.gguf`), '');
       const allIn = await getJson('/api/manage/models');
-      ok('…and once it is in, nothing else is recommended — not the 1B, not whichever file is smallest',
+      ok('…and once it is in, nothing else is recommended — not the 1B, not Qwen3 0.6B, not whichever file is smallest',
         allIn.recommendation == null, JSON.stringify(allIn.recommendation ?? null));
     } finally {
       // As the next block expects: it plants its own binary and models, and asserts on the preset they produce.
@@ -1400,6 +1430,11 @@ try {
     // under its upstream name — no "rerank" in it, so only the row can type it.
     const WINDOWED = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
     fs.writeFileSync(path.join(ggufDir, `${WINDOWED}.gguf`), 'x');
+    // …and the catalogued CHAT judge (Qwen3 0.6B, docs/judge-bench.md Run 5b), whose template THINKS by default: the
+    // kind that most needs `reasoning = off`. Its row types it chat; so would its name, so this pins the launch the
+    // row gets rather than proving the row exists (the shelf block does that).
+    const QWEN3 = 'Qwen3-0.6B-Q8_0';
+    fs.writeFileSync(path.join(ggufDir, `${QWEN3}.gguf`), 'x');
 
     await post('/api/manage/models/llama/start');   // spawn fails; presets are written first
 
@@ -1435,6 +1470,11 @@ try {
         && /^n-predict\s*=\s*512\s*$/m.test(sectionOf('zztest-chat-model'))
         && /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf('zztest-chat-model')),
       JSON.stringify({ chat: sectionOf('zztest-chat-model') }));
+    ok('…and so does the catalogued Qwen3 0.6B — thinking off, the cap, offloaded, and none of another kind\'s keys',
+      /^reasoning\s*=\s*off\s*$/m.test(sectionOf(QWEN3)) && /^n-predict\s*=\s*512\s*$/m.test(sectionOf(QWEN3))
+        && /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf(QWEN3))
+        && !/ctx-size|embeddings|reranking/.test(sectionOf(QWEN3)),
+      JSON.stringify({ qwen3: sectionOf(QWEN3) }));
     // …and ONLY there: an embedder or a reranker never generates, and a key its child does not need is a key whose
     // meaning for that kind nobody measured.
     ok('…and ONLY a chat section: no embedder or reranker carries either key',

@@ -509,11 +509,17 @@ try {
   const judgeManaged = String(groupOf(rrLayer, 'managed').description ?? '');
   ok('…and so does the 本机模型 group sentence on 判断: a reranker\'s tagging goes to Claude',
     /重排/.test(judgeManaged) && /发给 Claude/.test(judgeManaged), judgeManaged);
-  // …and it claims measurement only where there is some. ONE chat model's judging was measured (docs/judge-bench.md
+  // …and it claims measurement only where there is some. Gemma 3 1B's judging was measured (docs/judge-bench.md
   // Run 3) and came out worse than no judge; the sentence said none had been, which the measurement made false. It
   // must now say both: what the measured one did, and that the others were not measured.
   ok("…and does not claim every model on 判断 was measured — and says the chat model that was did worse than none",
     !/都实测排过名/.test(judgeManaged) && /没有实测过/.test(judgeManaged) && /比不开判断更差/.test(judgeManaged),
+    judgeManaged);
+  // Run 5b then measured Qwen3 0.6B BETTER than no judge, and it is catalogued — so "only Gemma 1B was measured, and
+  // was worse" went false. The sentence names the one that did better, and that the reranker still wins on the page.
+  ok('…and names the catalogued chat model that did BETTER than none, and that it trails the reranker on the page',
+    /Qwen3 0\.6B 比不开判断好/.test(judgeManaged) && /前八的次数远不如重排模型/.test(judgeManaged)
+      && !/实测过的只有/.test(judgeManaged),
     judgeManaged);
   // What the 判断 picker SHOWS for each model: it listed raw file ids, so a reranker and a chat model read
   // alike although binding one moves only the checking. A catalogued model shows the catalogue's name (which

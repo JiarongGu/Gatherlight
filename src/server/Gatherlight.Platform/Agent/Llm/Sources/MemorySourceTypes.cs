@@ -232,12 +232,15 @@ public static class MemoryGroups
              + "代价是消耗账号额度,每次调用都要启动一次 CLI。",
         Managed when layer == MemoryLayers.Judge =>
             // NOT 「都实测排过名」: a group sentence is true of every member. docs/judge-bench.md measured the
-            // catalogued rerankers (Runs 2 and 4) and ONE chat model, Gemma 3 1B (Run 3) — worse than no judge. It
-            // said "not measured per model" for every chat model until that run made it false; now it says what
-            // the measured one did, and that the others (the 4B, a household's own file) were not measured.
+            // catalogued rerankers (Runs 2 and 4) and four chat models: Gemma 3 1B (Run 3) worse than no judge,
+            // Qwen3 0.6B (Run 5b) better on both metrics but far behind the reranker on found@8 (148 against BGE's
+            // 203 in the same run), and Qwen3.5 0.8B and Gemma 3 270M (Run 5b), which are not catalogued. It said
+            // "only Gemma 3 1B was measured, and was worse" until Qwen3 0.6B was catalogued; it still says the
+            // others (the 4B, a household's own file) were not measured.
             "由应用下载、启动和管理的模型(llama.cpp),占磁盘、不用填地址,模型在「资源 · Resources」面板下载。"
-             + "对话模型:判断整个在本机完成,不消耗账号额度;实测过的只有 Gemma 3 1B,在本应用的双语测试集上"
-             + "比不开判断更差,其他对话模型没有实测过。"
+             + "对话模型:判断整个在本机完成,不消耗账号额度。在本应用的双语测试集上,Qwen3 0.6B 比不开判断好,"
+             + "但把答案带进前八的次数远不如重排模型;Gemma 3 1B 比不开判断更差;"
+             + "Qwen3.5 0.8B 和 Gemma 3 270M 也测过,没有收录;其他对话模型没有实测过。"
              + "重排模型:应用提供的都在同一测试集上实测过,只有检索时的核对在本机 —— "
              // The tagging clause is MemorySources.CliTaggingCost, like the toast, cost line and model note.
              + $"写入事实时的主题标注由 Claude CLI 完成 —— {MemorySources.CliTaggingCost}。",

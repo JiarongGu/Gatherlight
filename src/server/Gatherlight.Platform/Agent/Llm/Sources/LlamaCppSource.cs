@@ -298,7 +298,8 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // stale literal here would render a button that fetches nothing.
             //
             // 判断's is the RERANKER. It was the Gemma 3 1B chat model until docs/judge-bench.md Run 3 measured that
-            // judge worse than no judge; the button beside this sentence should fetch the one that measured better.
+            // judge worse than no judge; the button beside this sentence fetches the local default the owner kept.
+            // (Qwen3 0.6B, a chat judge, also measured better than none in Run 5b; it is offered, not suggested.)
             return new SourceStatus(false,
                 _layer == MemoryLayers.Semantic
                     ? "运行时已就绪,但还没有嵌入模型 —— 在「资源 · Resources」面板下载一个。"

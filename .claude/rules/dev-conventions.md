@@ -795,10 +795,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   configuration in its note; the constant is retired, and 判断's local default (badge and suggestion) is
   `GgufCatalog.RecommendedReranker`, the local judge that measured better. The badge's fallbacks ("any
   embedder", then "whatever is smallest") went too: past the three recommended ids the smallest row left is a
-  model nobody chose to recommend, so nothing is. The 判断 group sentence says what the measured chat model
+  model nobody chose to recommend, so nothing is. The 判断 group sentence says what the measured chat models
   did and that the others were not measured, rather than "not measured per model". `p51` asserts the name, the
   note, the badge and the suggestion; `p52` case 5 the group sentence — each confirmed to FAIL on the code
-  before.
+  before. **Measured BETTER is offered — and still not recommended when the owner says so** (2026-09-24, Run 5b):
+  Qwen3 0.6B is the first chat judge significantly better than no judge on both metrics (top-1 79 → 110, found@8
+  125 → 148), and it is catalogued with those figures, its configuration and its unmeasured TAGGING in its note.
+  `RecommendedReranker` stays the default, because the reranker puts the answer on the page far more often
+  (203 against 148 in the same run); the badge never names a chat judge, and one on disk does not stop the reranker
+  suggestion (`p51`).
 
 - **VOCABULARY, because this area had none and the gap cost a whole design conversation.** FOUR words, and
   they are not interchangeable. A **LAYER** is a job (公式 · 判断 · 语义). A **BACKEND** is *where the model
