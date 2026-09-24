@@ -1,3 +1,4 @@
+using System.Text;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Lyntai.Memory.Annotation;
 using Lyntai.Memory.Verification;
@@ -246,24 +247,44 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// 1,000-character cap does to it: dense Chinese at the cap is 781 tokens and the whole call comes back
 /// <c>400 input (781 tokens) is larger than the max context size (512 tokens)</c>. A pair is formatted as query +
 /// document + 4 special tokens (read back from the server's own figure in that refusal), and on this tokenizer
-/// family — XLM-RoBERTa SentencePiece, no byte fallback — a text costs at most its UTF-16 length + 1 in tokens
-/// (measured over adversarial scripts, emoji, whitespace runs, every prefix of eight strings and all 300 fixture
-/// strings). So <c>query + document ≤ window − <see cref="PairOverheadTokens"/></c> CHARACTERS is a hard bound, not
-/// an estimate, and it needs no <c>/tokenize</c> round trip per candidate. The query gets at most half that budget,
-/// so a long question cannot starve the documents; each candidate gets the rest, never more than
-/// <see cref="MaxChars"/>. At 512: the query ≤ 253 characters, each candidate ≤ 506 − the query's length.
-/// <b>The bound does NOT transfer to a byte-level tokenizer</b>, where one character can be several tokens — a row
-/// declaring a window for such a model needs its own measurement first. Verified on the real binary (2026-09-24)
-/// under the preset the row now produces (<c>ctx-size</c>/<c>batch-size</c>/<c>ubatch-size = 512</c>): a pair of 512
-/// tokens is served and 513 refused with a 500, <c>too large to process … batch size 512</c> — the same whole-call
-/// refusal in another shape — and the app bound to the catalogued id got a verdict on a recall of a 1,236-character
-/// Chinese fact with a 347-character query.</para>
+/// family — XLM-RoBERTa SentencePiece, no byte fallback — an NFKC-normalised text costs at most its UTF-16 length + 1
+/// in tokens (see the next paragraph for why NFKC). So <c>query + document ≤ window − <see cref="PairOverheadTokens"/></c>
+/// CHARACTERS OF THE NORMALISED TEXT is a hard bound, not an estimate, and it needs no <c>/tokenize</c> round trip per
+/// candidate. The query gets at most half that budget, so a long question cannot starve the documents; each candidate
+/// gets the rest, never more than <see cref="MaxChars"/>. At 512: the query ≤ 253 characters, each candidate ≤ 506 − the
+/// query's length. <b>The bound does NOT transfer to a byte-level tokenizer</b>, where one character can be several
+/// tokens — a row declaring a window for such a model needs its own measurement first. Verified on the real binary
+/// (2026-09-24) under the preset the row now produces (<c>ctx-size</c>/<c>batch-size</c>/<c>ubatch-size = 512</c>): a
+/// pair of 512 tokens is served and 513 refused with a 500, <c>too large to process … batch size 512</c> — the same
+/// whole-call refusal in another shape — and the app bound to the catalogued id got a verdict on a recall of a
+/// 1,236-character Chinese fact with a 347-character query.</para>
 ///
-/// <para><b>No declared window keeps today's behaviour exactly</b>: the 1,000-character cap per candidate and the
-/// query untouched. That covers the catalogued rerankers served at 4096, and every GGUF a household dropped in (no
-/// row, so no window — a stated limit, see <see cref="GgufCatalog.DeclaredWindow"/>). The query stays unbounded
-/// there on purpose: at 4096 tokens it would take ~3,000 Chinese characters of question to crowd out a candidate,
-/// and recall queries are written by the agent, short.</para>
+/// <para><b>WHY THE COUNT IS TAKEN AFTER NFKC — and the text SENT is the normalised one.</b> XLM-R's SentencePiece
+/// normalises with <c>nmt_nfkc</c> before it tokenizes, so a compatibility character EXPANDS: ℃ → °C, ㎡ → m2,
+/// ㍿ → 株式会社, ﷺ → an 18-character phrase. The bound above was measured on text with none of them, and one
+/// character past the window refuses the whole call — fail-open, silently. Measured on the real mMiniLMv2 GGUF with
+/// <c>/tokenize</c> (llama.cpp b10549, 2026-09-24): RAW, a lone ℃ or ㎡ is 2 tokens, ﷺ 4, ㌚ 6 — up to 6 tokens per
+/// UTF-16 unit — and 200 ℃ in a row cost 400 tokens, so a raw character count undercounts by up to 6×. NORMALISED,
+/// every assigned BMP scalar and every astral one FormKC changes (64,012 scalars; 4,928 changed) costs at most its
+/// normalised UTF-16 length + 1 — no exception — and dense strings of ℃, ㎡, ㍿ or ﷺ, alone or mixed into Chinese, ran
+/// 0.22–1.00 tokens per normalised unit. .NET 10's FormKC matched Node's NFKC on all 64,012. So the count is exact
+/// again once it is taken on the normalised text, with no slack margin needed. SENDING the normalised text loses
+/// nothing the model would have read: the tokenizer normalises anyway, and the token ids came out identical for all
+/// but 95 of the 4,928 changed scalars — characters newer than the model's normalisation table (㋿ U+32FF, Unicode
+/// 12.1) plus fullwidth ～, where the model now reads the NFKC form (令和, ~) instead of an unmapped original.</para>
+///
+/// <para><b>A declared window too small to hold a pair's overhead is NO window</b> (<see cref="UsableWindow"/>): at
+/// ≤ <see cref="PairOverheadTokens"/> the budget is zero and every query and candidate would be cut to nothing, so the
+/// verifier would score empty strings on every recall. <see cref="GgufCatalog.DeclaredWindow"/> applies the same rule,
+/// so the preset and the fitting still agree. No row declares one; this is a guard, not a case.</para>
+///
+/// <para><b>No declared window keeps today's behaviour exactly</b>: the 1,000-character cap per candidate, the query
+/// untouched, and the text not normalised. That covers the catalogued rerankers served at 4096, and every GGUF a
+/// household dropped in (no row, so no window — a stated limit, see <see cref="GgufCatalog.DeclaredWindow"/>). The
+/// query stays unbounded there on purpose: at 4096 tokens it would take ~3,000 Chinese characters of question to crowd
+/// out a candidate, and recall queries are written by the agent, short. The same stated limit covers compatibility
+/// characters there: at the costliest rate measured (㌚, 6 tokens) a candidate would need ~680 of them before the cap
+/// alone could overflow 4096 — possible in principle, not guarded.</para>
 ///
 /// <para>What the fitting COSTS on a long fact — how much a cut document's score moves — is unmeasured: the bench
 /// fixture's facts are all ≤ 101 characters, so no run could show it. Cut is still better than a refused call,
@@ -299,22 +320,55 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
             Query = query,
             Candidates = [.. request.Candidates.Select(c => c with
             {
-                Headline = Cap(c.Headline, perCandidate),
-                Content = c.Content is null ? null : Cap(c.Content, perCandidate),
+                Headline = Cap(Prepare(c.Headline, _window), perCandidate),
+                Content = c.Content is null ? null : Cap(Prepare(c.Content, _window), perCandidate),
             })],
         }, ct);
     }
 
     /// <summary>The query as it will be sent, and how many characters each candidate may then run — for one call.
-    /// Without a window: the query untouched and <see cref="MaxChars"/>. With one: the query cut to half the budget,
-    /// and each candidate given what the query left, so every pair fits; see the class comment for why a character
-    /// count bounds the tokens.</summary>
+    /// Without a usable window: the query untouched and <see cref="MaxChars"/>. With one: the query NFKC-normalised
+    /// and cut to half the budget, and each candidate given what the query left — counted, like the query, on its
+    /// normalised text (<see cref="Prepare"/>) — so every pair fits; see the class comment for why a character count of
+    /// the normalised text bounds the tokens.</summary>
     public static (string Query, int PerCandidate) Fit(string query, int? window)
     {
-        if (window is not { } tokens) return (query, MaxChars);
-        var budget = Math.Max(0, tokens - PairOverheadTokens);
-        var fitted = Cap(query, budget / 2);
+        if (UsableWindow(window) is not { } tokens) return (query, MaxChars);
+        var budget = tokens - PairOverheadTokens;
+        var fitted = Cap(Prepare(query, tokens), budget / 2);
         return (fitted, Math.Min(MaxChars, budget - fitted.Length));
+    }
+
+    /// <summary>A declared window, or null when it cannot hold even a pair's overhead — the ONE rule
+    /// <see cref="Fit"/> and <see cref="GgufCatalog.DeclaredWindow"/> share, so the preset never launches a model
+    /// with a window the fitting ignores. See the class comment.</summary>
+    public static int? UsableWindow(int? window) => window > PairOverheadTokens ? window : null;
+
+    /// <summary>A text as it is COUNTED and SENT: NFKC-normalised under a usable window, untouched without one. The
+    /// tokenizer applies the same normalisation, so the count is taken on what it will actually read.
+    /// <para>A lone surrogate makes <see cref="string.Normalize(NormalizationForm)"/> throw; it becomes U+FFFD first —
+    /// one unit, which the measured bound covers — rather than failing the whole recall's verification.</para></summary>
+    public static string Prepare(string text, int? window)
+    {
+        if (UsableWindow(window) is null) return text;
+        try { return text.Normalize(NormalizationForm.FormKC); }
+        catch (ArgumentException) { return WithoutLoneSurrogates(text).Normalize(NormalizationForm.FormKC); }
+    }
+
+    private static string WithoutLoneSurrogates(string text)
+    {
+        var sb = new StringBuilder(text.Length);
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                sb.Append(c).Append(text[++i]);
+                continue;
+            }
+            sb.Append(char.IsSurrogate(c) ? '\uFFFD' : c);
+        }
+        return sb.ToString();
     }
 
     /// <summary>At most <paramref name="max"/> UTF-16 units, never splitting a surrogate pair (so a cut can land one

@@ -309,8 +309,15 @@ export function LocalModelsPanel(
         「判断」用的模型在本应用的双语测试集(240 道提问)上量过的,数字写在它自己的说明里 —— 说明里没有数字的,就是没量过。
       </div>
       <div className="mem-fine">
+        {/* It said 「自己跑起来,然后在「记忆检索」里用本机填地址连上去」 — the retired openai-compat arm, which no
+            picker offers any more. What IS true, read off the code: a GGUF in the models folder is listed here
+            (ModelsController.GgufRows over InstalledGgufIds), offered on the layer its kind suits
+            (LlamaCppSource.ModelsOnDisk), carries no note or measurement, and has its kind guessed from its file
+            name by ResourceProvisioner.GgufKind — "rerank" checked before "embed". */}
         这是一份<b>固定</b>的清单:这些模型由应用按仓库、提交和 sha256 下载,所以只能是我们钉过的那几个。
-        想用别的?自己跑起来,然后在「记忆检索」里用<b>本机</b>填地址连上去 —— 那正是它的用途。
+        想用别的?把它的 GGUF 文件放进数据文件夹里的 state/resources/gguf,它就会出现在这张表里,也能在「记忆检索」里选用
+        —— 但应用没有核对过它:没有说明、没有实测数字,用途也只按文件名判断(名字含 rerank 当重排模型,含 embed
+        当嵌入模型,其余当对话模型)。
       </div>
     </div>
   );

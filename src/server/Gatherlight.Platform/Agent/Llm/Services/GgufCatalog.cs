@@ -15,7 +15,10 @@ public enum GgufCapability
 /// <summary>One downloadable GGUF for the app-provisioned llama.cpp runtime.</summary>
 /// <param name="Id">The model id the router will answer to — and, because <c>--models-dir</c> derives an id
 /// from the DIRECTORY name when a model sits in one, also this model's install directory. So the id is ours
-/// to choose and stays stable no matter what the upstream filename is.</param>
+/// to choose: the router answers to it whatever the file inside is called. And every row CHOOSES the upstream
+/// file's stem, on purpose — a catalogued id is typed and fitted by its row, and the stem is also the id a
+/// household who drops that same file in flat ends up with (a flat file takes its filename), so they get the
+/// row too rather than a kind guessed from the name (see the mMiniLMv2 row, whose stem has no "rerank").</param>
 /// <param name="Repo">HuggingFace repo.</param>
 /// <param name="Commit">Pinned COMMIT, never a branch: a branch ref lets the bytes move under the checksum,
 /// which then reads as a corrupt download rather than as an upstream edit.</param>
@@ -52,8 +55,11 @@ public sealed record GgufModel(
 /// against its own registry and we only advise. Here we are the downloader — url, commit and checksum — so
 /// a model we have not pinned is a model we cannot fetch. The trade is deliberate: a household gains a
 /// verified download and loses free choice, and the panel says so rather than presenting a short list as if
-/// it were the whole world. A household who wants something else runs it themselves and points
-/// <c>openai-compat</c> at it, which is exactly what that backend is for.</para>
+/// it were the whole world. A household who wants something else drops its GGUF into the models folder
+/// (<c>ResourceProvisioner.ProvisionedGgufDir</c>, <c>state/resources/gguf</c>): the router serves it, 资源 lists
+/// it and 记忆检索 offers it — with no note, no measurement, and a kind guessed from its file name
+/// (<c>ResourceProvisioner.GgufKind</c>), which the panel's fine print says in those words. (This said "points
+/// <c>openai-compat</c> at it" until that backend was retired, 2026-08-22.)</para>
 ///
 /// <para><b>Every entry is sha256-pinned at a commit</b>, like git, node and the ONNX model. Unlike
 /// <c>ollama pull</c>, which fetches a mutable tag, this cannot silently become different bytes.</para>
@@ -120,6 +126,12 @@ public static class GgufCatalog
         + "(每次约 8.7 秒):重排把答案带进前八的次数多得多,排到第一的次数却只比不开判断略多 —— "
         + "它挑哪八条上页,先后仍按原来的排序。";
 
+    /// <summary>The configuration every reranker row's figures were measured in (docs/judge-bench.md Runs 2 and 4): the
+    /// 240-question fixture, 语义 off (no embedder), and each recall's page of 8 chosen by the reranker (EndorseCount =
+    /// the page). A reranker's gain belongs to its configuration — with an embedder, or a different page, it was not
+    /// measured — so the figures never appear without it.</summary>
+    private const string RerankerBenchSetup = "本应用双语测试集 240 道提问、不开语义、每次检索由它挑 8 条上页:";
+
     /// <summary>What a reranker row's latency was measured UNDER: serial medians with the model already loaded,
     /// on one machine's GPU, over recalls of at most 60 candidates (docs/judge-bench.md, Run 2). A reranker
     /// scores every candidate it is shown, so a CPU-only machine — or a recall naming a kind, which can carry up
@@ -168,26 +180,33 @@ public static class GgufCatalog
         // content-only judge input, and the no-judge base (79 / 125) it is read against — because a number without
         // them cannot be weighed. Content only is the arm quoted since it is what ships; `topic — content` read
         // 44 / 121, also worse on top-1. Its speed and quota facts stay: they are true, and they are the trade-off a
-        // household is weighing against the result.
+        // household is weighing against the result. The latencies are the SAME fixture's serial medians, model warm,
+        // on one GPU: this judge 403 ms and no judge 219 ms (Run 3), the Claude CLI judge 8,733 ms (Run 1's content-only
+        // arm, the shipped input). They read 「每次判断约 0.15–0.20 秒(Claude CLI 那条实测每次检索 9–17 秒)」 until
+        // 2026-09-24: a per-CALL figure beside a per-RECALL one, the second from five runs on one household's 16 facts,
+        // while the reranker rows beside it quoted Run 1's 8.7 s — two configurations in adjacent rows.
         new GgufModel(
             "gemma-3-1b-it-Q4_K_M", "Gemma 3 1B(Q4 · 判断)", GgufCapability.Completion,
             "ggml-org/gemma-3-1b-it-GGUF", "f9c28bcd85737ffc5aef028638d3341d49869c27",
             "gemma-3-1b-it-Q4_K_M.gguf",
             "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135", 806_058_240,
-            "判断用的对话模型:写入时的主题标注和检索时的判断都在本机完成,不消耗账号额度,每次判断约 0.15–0.20 秒"
-            + "(Claude CLI 那条实测每次检索 9–17 秒)。但实测它让检索比不开判断更差:本应用双语测试集 240 道提问、"
-            + "不开语义、判断按默认只读事实内容,答案排第一从不开判断的 79 题降到 33 题,带进前八从 125 题降到 111 题,"
+            "判断用的对话模型:写入时的主题标注和检索时的判断都在本机完成,不消耗账号额度。"
+            + "本应用双语测试集 240 道提问、不开语义、判断按默认只读事实内容:每次检索约 0.40 秒,不开判断约 0.22 秒,"
+            + "Claude CLI 判断约 8.7 秒(串行中位数;本机模型已加载、在显卡上)。但实测它让检索比不开判断更差:"
+            + "答案排第一从不开判断的 79 题降到 33 题,带进前八从 125 题降到 111 题,"
             + "两项都是显著变差。量的是检索时的判断,它自己写的主题标注没有量过。"
             + "要在本机做判断,重排模型在同一测试集上让检索变好(见它们的说明)。"),
 
         // UNMEASURED HERE, and not a candidate we mean to recommend — said plainly, and without borrowing the 1B's
-        // result in either direction: Run 3 measured one model at one size.
+        // result in either direction: Run 3 measured one model at one size. Its size is the two pinned files': 2,489,757,856
+        // B against the 1B's 806,058,240 — 3.1×, not the "四倍" this note once claimed for both parameters and footprint
+        // (the parameter counts are ~4× apart; the Q4 files are not).
         new GgufModel(
             "gemma-3-4b-it-Q4_K_M", "Gemma 3 4B(Q4 · 判断 · 更大)", GgufCapability.Completion,
             "ggml-org/gemma-3-4b-it-GGUF", "d0976223747697cb51e056d85c532013931fe52e",
             "gemma-3-4b-it-Q4_K_M.gguf",
             "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863", 2_489_757_856,
-            "同样用于判断,参数量和占用都是 1B 的四倍:更大、更慢,显存不够时会明显更慢。"
+            "同样用于判断,参数量约是 1B 的四倍,文件约 2.5 GB,是 1B 的三倍多:更大、更慢,显存不够时会明显更慢。"
             + "判断质量没有在这里实测过 —— 1B 的实测结果说明不了它会怎样;我们也不打算推荐它。"),
 
         new GgufModel(
@@ -201,7 +220,9 @@ public static class GgufCatalog
             // tilted toward LAMAR in a run where LAMAR Q8 exactly EQUALLED BGE Q8. Lyntai's own rule is that a
             // reranker's delta belongs to its configuration (docs/memory-measurements.md). The household's
             // evidence is this app's own bench; the Lyntai figures, with their bases, are in dev-conventions.
-            RerankerNote + "本应用双语测试集:首位命中 86/240,前八命中 208/240,每次检索约 0.47 秒"
+            // The configuration rides with the figures (RerankerBenchSetup), as it does on the mMiniLMv2 row — these two
+            // quoted bare 「本应用双语测试集」 while the row below said 不开语义 and 8 on the page.
+            RerankerNote + RerankerBenchSetup + "首位命中 86/240,前八命中 208/240,每次检索约 0.47 秒"
             + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair),
         new GgufModel(
             RecommendedReranker, "BGE Reranker v2 M3(Q5 · 判断 · 重排)", GgufCapability.Reranking,
@@ -210,7 +231,7 @@ public static class GgufCatalog
             "1a212007526c7083627eed92b39dd4472e90ff1374a03fb068733378220813ef", 468_392_352,
             // No claim about public Chinese benchmarks: this row once said it was stronger than its peers there,
             // naming no benchmark and no source — an attribution nobody could check is not one.
-            RerankerNote + "本应用双语测试集:首位命中 90/240,前八命中 203/240,每次检索约 0.49 秒"
+            RerankerNote + RerankerBenchSetup + "首位命中 90/240,前八命中 203/240,每次检索约 0.49 秒"
             + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair),
 
         // THE SMALL RERANKER (docs/judge-bench.md Run 4, 2026-09-24): offered, NOT recommended — BGE stays
@@ -232,20 +253,28 @@ public static class GgufCatalog
         // pair to it. At the 1,000-character cap every other reranker gets, dense Chinese is 781 tokens and the
         // whole call is refused. What the fitting COSTS on a long fact is unmeasured (the fixture's facts are ≤ 101
         // characters), and the note says so. Licence: the model card says Apache-2.0; its training set, mMARCO, is
-        // a translation of MS MARCO, whose terms are non-commercial; the GGUF repo declares none.
+        // a translation of MS MARCO, whose terms are non-commercial; the GGUF repo declares none — so the note says
+        // what the CARD says rather than what the model "is".
+        //
+        // ITS LATENCY WAS MEASURED UNDER THE 4096 LAUNCH (Run 4's router preset, before this row declared 512), and the
+        // product now launches it at 512 — so the rerank CALL was re-measured under both, 2026-09-24, on the same GPU:
+        // dedicated llama-server b10549, --n-gpu-layers 99, 12 fixture questions × all 60 fixture facts per call, 36 calls
+        // each after a warm-up — median 75.1 and 79.3 ms at 4096 (two runs), 76.3 ms at 512. No difference beyond the
+        // 4096 launch's own run-to-run spread, so the whole-recall 0.31 s / +0.08 s stand, said as measured at 4096.
         new GgufModel(
             "mmarco-mMiniLMv2-L12-H384-v1-Q8_0", "mMiniLMv2(Q8 · 判断 · 重排 · 更小)", GgufCapability.Reranking,
             "keisuke-miyako/mmarco-mMiniLMv2-L12-H384-v1-gguf-q8_0", "2b37d162c88e0aeb8a1b4acb2d50f0e5ade16fd5",
             "mmarco-mMiniLMv2-L12-H384-v1-Q8_0.gguf",
             "91d70301828ba735c22eda56adb649f48975f371337e8c8b046326b885e26eed", 132_584_000,
-            RerankerNote + "体积约 133 MB,是 BGE 的 28%。本应用双语测试集 240 道提问、不开语义、每次检索由它挑 8 条上页"
+            RerankerNote + "体积约 133 MB,是 BGE 的 28%。" + RerankerBenchSetup.TrimEnd(':')
             + "(不开判断是 79/240 与 125/240):前八命中 199/240,同一轮 BGE 是 204/240 —— 没有测出显著差别,"
             + "但也不能算一样好,这一轮排除不了它最多少带进约 11 题;比 LAMAR(208/240)显著少,9 题只有 LAMAR 带进前八,"
             + "反过来一题也没有。首位命中 99/240,比同一轮 BGE 的 90 和 LAMAR 的 86 多,但和 BGE 的差距不足以下结论。"
-            + "每次检索约 0.31 秒,同一轮 BGE 约 0.45 秒" + RerankerLatencyCaveat + "。"
+            + "每次检索约 0.31 秒,同一轮 BGE 约 0.45 秒" + RerankerLatencyCaveat + ";这一轮是按 4096 个词元启动它的,"
+            + "应用现在按 512 启动 —— 单次重排调用(60 条候选)在两种启动下另测过,都约 0.08 秒,看不出差别。"
             + "它一次最多只能读 512 个词元,所以应用会把提问和每条事实截短到放得下 —— 很长的事实只读开头约 250–500 个字符;"
             + "这样截短对长事实的检索影响有多大还没有量过(测试集里的事实都很短)。"
-            + "许可:模型本身是 Apache-2.0,但训练它用的 MS MARCO 数据只许非商业使用。",
+            + "许可:模型卡写的是 Apache-2.0(下载用的 GGUF 仓库没有写明许可),但训练它用的 MS MARCO 数据只许非商业使用。",
             ContextTokens: 512),
     };
 
@@ -256,11 +285,17 @@ public static class GgufCatalog
     /// input contract: the window <see cref="LlamaServerRuntime"/> launches it with, and the window
     /// <see cref="RerankInputCap"/> fits each (query, document) pair to. Two lookups could disagree; one cannot.
     ///
-    /// <para><b>A GGUF the household dropped in has no row, so no declared window — a STATED limit.</b> It gets
-    /// the preset's 4096 and the 1,000-character cap, exactly as before per-model windows existed; a small-window
-    /// model dropped in under a name of its own is refused on long input as it always was. The fix for such a
-    /// model is a catalogue row, measured, not a guess from its file name.</para></summary>
-    public static int? DeclaredWindow(string? id) => Find(id)?.ContextTokens;
+    /// <para><b>A GGUF the household dropped in has no row, so no declared window — a STATED limit.</b> What then
+    /// happens to a small-window model depends on its NAME, because that is all <c>ResourceProvisioner.GgufKind</c>
+    /// has: named with "rerank", it is served at 4096 with the 1,000-character cap and refused on long input, as
+    /// before per-model windows existed; named without it — this very model's other quants included, whose upstream
+    /// stems carry no "rerank" either — <c>ResourceProvisioner.GgufKind</c> types it CHAT, so it is never used
+    /// as a reranker at all. The fix for such a model is a catalogue row, measured, not a guess from its file
+    /// name.</para>
+    ///
+    /// <para>A declared window too small to hold a pair's overhead reads as none
+    /// (<see cref="RerankInputCap.UsableWindow"/>) — the same rule the fitting applies, so the two halves agree.</para></summary>
+    public static int? DeclaredWindow(string? id) => RerankInputCap.UsableWindow(Find(id)?.ContextTokens);
 
     /// <summary>The download URL. Assembled here so the pinned commit appears in exactly one place.</summary>
     public static string UrlFor(GgufModel m) =>

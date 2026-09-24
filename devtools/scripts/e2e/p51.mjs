@@ -1269,20 +1269,55 @@ try {
           && /没有量过/.test(String(mini.note)) && /199\/240/.test(String(mini.note)),
         JSON.stringify({ name: mini?.name, note: mini?.note }));
 
-      // THE BADGE. It recommends only what is not installed, embedders first — so both embedders go in (empty
-      // files: the GGUF by its id, the built-in by the two files OnnxEmbedder.IsPresent checks) and the badge
-      // has to move on to 判断.
-      fs.mkdirSync(ggufDir, { recursive: true });
-      fs.writeFileSync(path.join(ggufDir, 'embeddinggemma-300M-Q8_0.gguf'), '');
+      // 判断's WHAT-IT-DOES SENTENCE quotes a range for "the local rerankers" — so it must cover EVERY catalogued one.
+      // It read 203–208 / 7–11 until mMiniLMv2 (199, +20) was catalogued, which made both ends false while every check
+      // stayed green. Derived from the rows' own notes rather than restated, so adding a reranker whose figures fall
+      // outside the range fails here instead of in a household's reading.
+      const figuresOf = (note, label) => Number((String(note).match(new RegExp(`${label} (\\d+)/240`)) ?? [])[1]);
+      const rerankRows = (shelf.models ?? []).filter((m) => m.capability === 'reranking' && m.note);
+      const found8 = rerankRows.map((m) => figuresOf(m.note, '前八命中'));
+      const top1 = rerankRows.map((m) => figuresOf(m.note, '首位命中'));
+      const judgeWhat = String(layerOf(await getJson('/api/manage/memory'), 'judge')?.what ?? '');
+      ok('(fixture) every catalogued reranker note states its top-1 and found@8 of 240',
+        rerankRows.length >= 3 && [...found8, ...top1].every(Number.isFinite), JSON.stringify({ found8, top1 }));
+      ok('THE POINT: 判断\'s sentence quotes a found@8 and top-1 range spanning EVERY catalogued reranker, from the no-judge 125 / 79',
+        judgeWhat.includes(`从 125 题增加到 ${Math.min(...found8)}–${Math.max(...found8)} 题`)
+          && judgeWhat.includes(`排第一的多 ${Math.min(...top1) - 79}–${Math.max(...top1) - 79} 题`)
+          && /不开语义/.test(judgeWhat),
+        JSON.stringify({ found8, top1, what: judgeWhat }));
+
+      // THE BADGE, before anything is installed: the GGUF embedder, with a reason that is true of it. It said
+      // 「这几个里只有它…量过」, false of both embedders — each has a score in the same 检索质量 column.
+      ok('with nothing installed the badge is the GGUF embedder, and its reason claims no exclusive measurement',
+        shelf.recommendation?.id === 'embeddinggemma-300M-Q8_0' && /实测过/.test(String(shelf.recommendation?.reason))
+          && !/只有它/.test(String(shelf.recommendation?.reason)),
+        JSON.stringify(shelf.recommendation ?? null));
+
+      // THE BADGE. It recommends only what is not installed — and ONE embedder is enough: the two embedder rows are
+      // the same EmbeddingGemma 300M, as a GGUF and as ONNX, and 语义 binds one of them. With EITHER in, the other is
+      // never suggested and the badge moves on to 判断; it used to suggest the second copy and hide the reranker
+      // behind it. Both directions, each with ONE embedder planted (empty files: the GGUF by its id, the built-in by
+      // the two files OnnxEmbedder.IsPresent checks).
       fs.mkdirSync(path.join(builtinDir, 'onnx'), { recursive: true });
       fs.writeFileSync(path.join(builtinDir, 'onnx', 'model_q4.onnx'), '');
       fs.writeFileSync(path.join(builtinDir, 'tokenizer.model'), '');
+      const withBuiltIn = await getJson('/api/manage/models');
+      const embedderState = (inv) => JSON.stringify((inv.models ?? []).filter((m) => m.capability === 'embedding')
+        .map((m) => [m.id, m.installed]));
+      ok('(fixture) the built-in embedder reads as installed, the GGUF one does not',
+        (withBuiltIn.models ?? []).filter((m) => m.capability === 'embedding' && m.installed).length === 1,
+        embedderState(withBuiltIn));
+      ok('THE POINT: with the built-in embedder in, the badge skips the GGUF copy of the same model and recommends the RERANKER',
+        withBuiltIn.recommendation?.id === RERANKER, JSON.stringify(withBuiltIn.recommendation ?? null));
+      fs.rmSync(builtinDir, { recursive: true, force: true });
+      fs.mkdirSync(ggufDir, { recursive: true });
+      fs.writeFileSync(path.join(ggufDir, 'embeddinggemma-300M-Q8_0.gguf'), '');
       const withEmbedders = await getJson('/api/manage/models');
-      ok('(fixture) both embedders read as installed, so the badge moves on to 判断',
-        (withEmbedders.models ?? []).filter((m) => m.capability === 'embedding').every((m) => m.installed),
-        JSON.stringify((withEmbedders.models ?? []).filter((m) => m.capability === 'embedding').map((m) => [m.id, m.installed])));
+      ok('(fixture) the GGUF embedder reads as installed, the built-in one does not',
+        (withEmbedders.models ?? []).filter((m) => m.capability === 'embedding' && m.installed).length === 1,
+        embedderState(withEmbedders));
       const rec = withEmbedders.recommendation;
-      ok('THE POINT: 资源 then recommends the RERANKER for 判断 — never the 1B chat model, never the small reranker',
+      ok('THE POINT: …and the other way round: 资源 recommends the RERANKER for 判断 — not the built-in copy, never the 1B chat model, never the small reranker',
         rec?.id === RERANKER, JSON.stringify(rec ?? null));
       ok('…and its reason says what binding it moves: the checking is local, the tagging goes to the Claude CLI on the account',
         /Claude CLI/.test(String(rec?.reason)) && String(rec?.reason ?? '').includes(TAGGING_COST), String(rec?.reason));
@@ -1350,10 +1385,17 @@ try {
       const body = preset.split(`[${id}]`)[1] ?? '';
       return body.split('[')[0];
     };
+    // EVERY section, of every kind — the rerankers' too, which carry the most other keys and are where a refactor of
+    // the per-kind switch would most easily drop it.
+    const allSections = ['zztest-embed-model', 'zztest-chat-model', 'zztest-rerank-model', WINDOWED];
     ok('THE POINT: every model gets n-gpu-layers — without it recall is ~30x slower, silently',
-      /n-gpu-layers\s*=\s*\d+/.test(sectionOf('zztest-embed-model'))
-        && /n-gpu-layers\s*=\s*\d+/.test(sectionOf('zztest-chat-model')),
-      JSON.stringify({ embed: sectionOf('zztest-embed-model'), chat: sectionOf('zztest-chat-model') }));
+      allSections.every((id) => /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf(id))),
+      JSON.stringify(Object.fromEntries(allSections.map((id) => [id, sectionOf(id)]))));
+    // …and ctx-size ONLY where the pair-in-one-batch contract needs it. A chat or embedding child takes its model's
+    // own training context; a ctx-size written there would silently cap what a chat judge can be shown.
+    ok('chat and embedder sections carry NO ctx-size — only a reranker\'s whole-pair contract sets one',
+      !/ctx-size/.test(sectionOf('zztest-chat-model')) && !/ctx-size/.test(sectionOf('zztest-embed-model')),
+      JSON.stringify({ chat: sectionOf('zztest-chat-model'), embed: sectionOf('zztest-embed-model') }));
 
     ok('embeddings = true goes on the EMBEDDER and nowhere else',
       /embeddings\s*=\s*true/.test(sectionOf('zztest-embed-model'))

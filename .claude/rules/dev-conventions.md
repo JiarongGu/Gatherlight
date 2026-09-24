@@ -1022,15 +1022,29 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   own — fail-open, so every recall surfacing a long fact would go unverified in silence. `GgufModel.ContextTokens`
   declares the window, and `GgufCatalog.DeclaredWindow` is the ONE read behind both halves of the contract: the
   preset launches the model with that `ctx-size`/`batch-size`/`ubatch-size`, and `RerankInputCap` fits every pair
-  to it. Never a branch on the id. On this tokenizer family (XLM-R SentencePiece, no byte fallback) a text costs at
-  most its UTF-16 length + 1 in tokens, and a pair adds 4 special tokens, so query + document ≤ window − 6
-  CHARACTERS is a hard bound with no `/tokenize` round trip: the query gets at most half (253 at 512), each
-  candidate the rest (≤ 506 − the query's length, never over 1,000). Verified on the real binary under the new
-  preset: a 512-token pair is served and 513 refused (`n_ctx_slot = 512`), and the app bound to the catalogued id
-  recalled a 1,236-character Chinese fact with a 347-character query and got a verdict. **Stated limits**: a row
-  WITHOUT a window keeps the 1,000-character cap and an untouched query, exactly as before; a GGUF the household
-  dropped in has no row, so no window — a small-window model under a name of its own is refused on long input as
-  it always was, and the fix is a measured row, not a guess from its file name; the character bound does NOT
+  to it. Never a branch on the id. On this tokenizer family (XLM-R SentencePiece, no byte fallback) an
+  NFKC-normalised text costs at most its UTF-16 length + 1 in tokens, and a pair adds 4 special tokens, so query +
+  document ≤ window − 6 CHARACTERS OF THE NORMALISED TEXT is a hard bound with no `/tokenize` round trip: the query
+  gets at most half (253 at 512), each candidate the rest (≤ 506 − the query's length, never over 1,000). Verified on
+  the real binary under the new preset: a 512-token pair is served and 513 refused (`n_ctx_slot = 512`), and the app
+  bound to the catalogued id recalled a 1,236-character Chinese fact with a 347-character query and got a verdict.
+  **The count is taken AFTER NFKC, and the normalised text is what is sent** (2026-09-24). The tokenizer normalises
+  with `nmt_nfkc`, so a compatibility character EXPANDS — ℃ → °C, ㎡ → m2, ㍿ → 株式会社 — and a raw count
+  undercounts: on the real mMiniLMv2 `/tokenize`, a lone ℃ or ㎡ is 2 tokens, ﷺ 4, ㌚ 6 per UTF-16 unit, and a pair
+  of 506 raw characters dense in ℃ came to 1,006 tokens and was refused (`500 … too large to process`), while the
+  same pair fitted on its normalised text came to 510 and was served. Normalised, the bound held with NO exception
+  over every assigned BMP scalar and every astral one FormKC changes (64,012; .NET 10's FormKC equal to Node's NFKC
+  on all of them), so no slack margin is kept. Sending the normalised text loses nothing the model reads — the token
+  ids are identical for all but 95 of the 4,928 changed scalars, characters newer than the model's normalisation
+  table (㋿) plus fullwidth ～. `e2e-p52` case 6c writes a fact dense in ℃/㎡/㎏/㍿ and fails with the raw count. A
+  declared window ≤ 6 (no room for a pair's overhead) reads as NO window (`RerankInputCap.UsableWindow`, also
+  applied by `DeclaredWindow`), rather than cutting every query and candidate to nothing; no row declares one, and
+  no suite can drive it. **Stated limits**: a row WITHOUT a window keeps the 1,000-character cap, an untouched query
+  and un-normalised text, exactly as before — at the costliest rate measured (㌚, 6 tokens) ~680 such characters in
+  one candidate could still overflow 4096, not guarded; a GGUF the household dropped in has no row, so it gets no
+  window: named with "rerank" it is served at 4096 with the 1,000-character cap and refused on long input, as
+  before; named without it — this model's other quants included — `GgufKind` types it CHAT, so it is never used as
+  a reranker; either way the fix is a measured row, not a guess from its file name; the character bound does NOT
   transfer to a byte-level tokenizer; and what the fitting costs on a long fact is unmeasured (the bench's facts
   are ≤ 101 characters). The row's id is the UPSTREAM file stem, with no "rerank" in it, on purpose: a catalogued
   id is typed by its row, and the upstream stem also catches a household who drops the file in under its own name

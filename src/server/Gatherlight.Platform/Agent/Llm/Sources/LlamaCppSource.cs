@@ -91,7 +91,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         // Per call for a chat judge (docs/self-managed-llm-runtime.md); for a reranker the ADDED cost per
         // recall under partition — the comparable figure, not the whole recall the model notes quote, which
         // includes the formula's own ~0.23 s. The range spans the catalogued rerankers: mMiniLMv2 +0.08 s (Run 4:
-        // 313 ms against the formula's 237), BGE and LAMAR +0.21–0.26 s (Runs 2 and 4).
+        // 313 ms against the formula's 237), BGE and LAMAR +0.21–0.26 s (Runs 2 and 4). mMiniLMv2's figure was taken
+        // under Run 4's 4096 launch, and the product launches it at its declared 512 — so the rerank CALL was
+        // re-measured under both (60 fixture facts per call: median 75–79 ms at 4096, 76 ms at 512; the mMiniLMv2
+        // row's comment in GgufCatalog has the setup). No difference beyond noise, so +0.08 s stands.
         + "用重排模型时每次检索多约 0.08–0.26 秒,看是哪个模型(都是模型已加载后的实测)。";
 
     /// <summary>A chat model does both halves on our router. A RERANKER only scores, so it verifies and the
@@ -145,8 +148,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
               // the FIRST time with this binding, and "still" would hide exactly that.
               + "写入事实时的主题标注由 Claude CLI 完成 —— " + MemorySources.CliTaggingCost + ";"
               + "没有已登录的 CLI 时只是不标注,检索时的判断照常。"
+            // The CLI figure is the one the model notes beside it quote — docs/judge-bench.md Run 1's content-only arm,
+            // the same 240-question fixture — so this line and the Gemma note cannot disagree about one number.
             : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
-              + "没有 CLI 那条的进程启动开销(那条实测每次检索 9–17 秒)。";
+              + "没有 CLI 那条的进程启动开销(那条在本应用双语测试集上每次检索约 8.7 秒,串行中位数)。";
 
     /// <summary>No address to ask for: the app chose the port and started the process. That was the whole
     /// difference from the retired <c>openai-compat</c> backend — the same protocol, with the household owning

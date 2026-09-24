@@ -246,12 +246,20 @@ public sealed class ModelsController : ControllerBase
     /// better. The two fallbacks that followed went with it — "any embedder", then "whatever is smallest" — because
     /// once the three above are in, the smallest row left is a model nobody chose to recommend (the 1B, or a
     /// reranker kept off the badge), and a badge on it would be a claim no measurement stands behind. Null then is
-    /// the honest answer: nothing left to advise.</para></summary>
+    /// the honest answer: nothing left to advise.</para>
+    ///
+    /// <para><b>ONE embedder is enough, so the second is never suggested.</b> The two embedder rows are the same
+    /// EmbeddingGemma 300M, as a GGUF for llama.cpp and as ONNX in this process — 语义 binds one of them. Offering
+    /// the other once either is in recommended a redundant download, and hid the reranker suggestion behind it
+    /// until the household had fetched the same model twice.</para></summary>
     private static object? Recommend(IReadOnlyList<ModelRowView> models)
     {
         var offers = models.Where(m => !m.Installed).ToList();
-        var pick = offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedEmbedder)
-            ?? offers.FirstOrDefault(o => o.Id == BuiltInSemanticSource.ModelId)
+        var anEmbedderIsIn = models.Any(m => m.Installed
+            && (m.Id == GgufCatalog.RecommendedEmbedder || m.Id == BuiltInSemanticSource.ModelId));
+        var pick = (anEmbedderIsIn ? null
+                : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedEmbedder)
+                  ?? offers.FirstOrDefault(o => o.Id == BuiltInSemanticSource.ModelId))
             ?? offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedReranker);
         if (pick is null) return null;
 
@@ -259,7 +267,10 @@ public sealed class ModelsController : ControllerBase
             return new
             {
                 id = pick.Id,
-                reason = "「语义」那一层用它 —— 这几个里只有它在本应用自己的 10 题检索基准上量过。",
+                // Both embedder rows ARE measured on that benchmark (the GGUF 9/10 top-1, the built-in 8/10), so this
+                // sentence claims only what is true of whichever one it lands on. It once said 「这几个里只有它…量过」 —
+                // false of both, since each has a score in the same column.
+                reason = "「语义」那一层用它 —— 它在本应用自己的 10 题检索基准上实测过,分数在「检索质量」一列。",
                 caution = (string?)null,
             };
 

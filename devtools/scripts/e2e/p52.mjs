@@ -679,6 +679,48 @@ try {
     bgeLong.length > 0 && bgeLong.every((d) => d.length === 1000 && !d.includes('zzminitail'))
       && bge.every((b) => String(b.query ?? '').length > 253),
     JSON.stringify({ docs: bgeLong.map((d) => d.length), queries: bge.map((b) => String(b.query ?? '').length) }));
+
+  // 6c, COMPATIBILITY CHARACTERS: the character bound holds for text the tokenizer does not EXPAND. XLM-R normalises
+  // with nmt_nfkc first, so ℃ → °C, ㎡ → m2, ㎏ → kg, ㍿ → 株式会社 — measured on the real mMiniLMv2, a pair of 506 raw
+  // characters dense in ℃ is 1,006 tokens and refused, the same pair counted on its NFKC form 510 and served. So the
+  // rule is: the text sent is NFKC-normalised, and the budget is spent on the normalised length. Every rerank request
+  // to the windowed model must satisfy both; the raw count sends ℃ unnormalised and ~25% past the budget.
+  const compatFact = 'zzcompathead 天文社楼顶气温记录:' + '气温3℃,面积120㎡,重23㎏,㍿天文。'.repeat(30) + ' zzcompattail';
+  const compatQuery = 'zzcompatquery 天文社楼顶气温记录 面积 ㍿天文';
+  for (const [name, cl] of [['windowed', cWin], ['BGE', cUnwin]]) {
+    const wrote = await cl.call('remember_fact', {
+      kind: 'household', topic: 'zzcompattopic 天文社气温', content: compatFact,
+      source: 'https://example.test/zzcompat', confidence: 0.8,
+    });
+    ok(`(fixture) the compatibility-dense fact is stored on the ${name} server`, wrote.status === 200 && wrote.result?.ok === true,
+      JSON.stringify(wrote.result));
+  }
+  const beforeCompat = hits.length;
+  await Promise.all([cWin.call('recall_facts', { query: compatQuery, limit: 5 }), cUnwin.call('recall_facts', { query: compatQuery, limit: 5 })]);
+  const compatOf = (model) => hits.slice(beforeCompat)
+    .filter((h) => h.path === '/v1/rerank' && h.model === model && h.body.includes('zzcompatquery'))
+    .map((h) => { try { return JSON.parse(h.body); } catch { return null; } })
+    .filter(Boolean);
+  const carriesCompat = (model) => compatOf(model).some((b) => (b.documents ?? []).some((d) => String(d).includes('zzcompathead')));
+  await until(() => carriesCompat(WINDOWED_RERANK) && carriesCompat(UNWINDOWED_RERANK), 60000).catch(() => {});
+  const nfkc = (s) => s.normalize('NFKC');
+  const compatPairs = compatOf(WINDOWED_RERANK)
+    .flatMap((b) => (b.documents ?? []).map((d) => ({ q: String(b.query ?? ''), d: String(d) })));
+  const compatShape = (list) => JSON.stringify(list.map((p) => ({ raw: p.q.length + p.d.length, nfkc: nfkc(p.q).length + nfkc(p.d).length,
+    normalised: p.q === nfkc(p.q) && p.d === nfkc(p.d) })));
+  ok('(non-vacuity) the windowed reranker was sent the compatibility-dense fact',
+    carriesCompat(WINDOWED_RERANK), JSON.stringify(hits.slice(beforeCompat).map((h) => `${h.path} ${h.model} ${h.body.length}`)));
+  ok('THE POINT: every pair sent to the 512-token reranker is NFKC-normalised and fits on its NORMALISED length — ≤ 506',
+    compatPairs.length > 0 && compatPairs.every((p) => p.q === nfkc(p.q) && p.d === nfkc(p.d)
+      && nfkc(p.q).length + nfkc(p.d).length <= 506),
+    compatShape(compatPairs));
+  ok('…and the fact still keeps its head, and loses its tail',
+    compatPairs.some((p) => p.d.includes('zzcompathead')) && compatPairs.every((p) => !p.d.includes('zzcompattail')),
+    compatShape(compatPairs.filter((p) => p.d.includes('zzcompathead'))));
+  const bgeCompat = compatOf(UNWINDOWED_RERANK).flatMap((b) => b.documents ?? []).map(String).filter((d) => d.includes('zzcompathead'));
+  ok('(control) BGE, declaring no window, is sent the fact as WRITTEN — not normalised, ㍿ and ℃ intact',
+    bgeCompat.length > 0 && bgeCompat.every((d) => d.includes('㍿') && d.includes('℃') && compatFact.startsWith(d)),
+    JSON.stringify(bgeCompat.map((d) => d.slice(0, 40))));
   windowedServer.stop(); windowedServer = null;
   unwindowedServer.stop(); unwindowedServer = null;
 

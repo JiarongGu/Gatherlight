@@ -159,15 +159,20 @@ public sealed class MemoryRecallController : ControllerBase
                     // household's 16 facts to every household, measured while the judge still saw only topics.
                     // The mechanism is Lyntai's partition — an endorsed fact is promoted to the front, in the
                     // engine's own order — and the numbers now come from the committed bilingual fixture anyone
-                    // can re-run (docs/judge-bench.md, Runs 1 and 2, `all` set): the two judges move different
+                    // can re-run (docs/judge-bench.md, Runs 1, 2 and 4, `all` set): the two judges move different
                     // things, which is the one sentence a household choosing between them needs.
                     // The Claude figure is Run 1's CONTENT-ONLY arm (130), the judge input that ships since
                     // 2026-09-24 — not its `content` arm (topic — content, 132), the 1.3.0 input, measured
                     // equivalent to it. A number belongs to its configuration.
+                    // The reranker range spans the THREE catalogued rerankers, each under partition with 语义 off
+                    // and 8 endorsed = the page: found@8 199 (mMiniLMv2, Run 4) to 208 (LAMAR, Runs 2 and 4), top-1
+                    // +7 (LAMAR, 86) to +20 (mMiniLMv2, 99). It read 203–208 / 7–11 until mMiniLMv2 was catalogued,
+                    // which made both ends false — a range quoted for "the local rerankers" has to cover every one
+                    // the picker offers.
                     what = "写入事实时标注主题(让讲同一件事的记录彼此关联);检索时判断哪些结果真正回答了问题,"
                         + "被判断为「答到了」的事实会排到前面,也更容易被后续检索记住。"
-                        + "在本应用 240 题的双语测试集上实测:Claude CLI 判断让排第一的答案从 79 题增加到 130 题;"
-                        + "本机重排模型让答案进入前八的次数从 125 题增加到 203–208 题,排第一的只多 7–11 题。"
+                        + "在本应用 240 题的双语测试集上实测(不开语义):Claude CLI 判断让排第一的答案从 79 题增加到 130 题;"
+                        + "本机重排模型(每次挑 8 条上页)让答案进入前八的次数从 125 题增加到 199–208 题,排第一的多 7–20 题。"
                         + "每次检索都要等它一次,这一点是当场就有的。",
                     // COST IS TWO THINGS, and only one of them was stated. The token cost was here from the
                     // start; the LATENCY was measured later, on this household's own facts.
