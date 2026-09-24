@@ -3997,3 +3997,204 @@ verdict, and no server made a claude-cli call.
 - the seed build, in `devtools/_judge-bench-long-seed.txt`.
 
 `results-2026-09-24T091322.161Z.json` in the same folder is the plumbing smoke, on the superseded fixture, and not Run 6.
+
+## Run 6b — chunked reranker scoring (design)
+
+Written and committed BEFORE either run; the results section that follows names this commit. The mechanism (`d64fcea`),
+a batch-limit probe and two plumbing smokes came first, because this design quotes them.
+
+**The question.** Run 6 measured what the input fit costs when a long note's answer is past the cut: under partition a
+reranker that cannot see the answer endorses eight other candidates and pushes the note OFF the page. mMiniLMv2 found the
+answer at `end` 4 times in 60, against BGE's 50 and 公式's 29; BGE and LAMAR at `beyond`, past their own 1,000-character
+cap, 3 and 4 against 公式's 30. The owner's standing guidance is that the data design may change if a new method is
+better. **Does scoring a long candidate in overlapping windows, keeping its best window's score, recover what the cut
+loses — without changing anything for a short fact?** If the rule below holds, chunking ships as the default.
+
+### The method (`d64fcea`, off by default)
+
+- **The seam.** Lyntai 3.2.0's `ScoringVerificationPolicy` sends ONE document per candidate and endorses its best
+  `EndorseCount` by index. Windows added as extra candidates would make `EndorseCount` count windows, and working around
+  that would mean re-implementing the verifier. The provider seam is one call wide instead: an `IScoreProvider` takes a
+  query and documents and returns one score per document, in input order. So `ChunkedScoreProvider` DECORATES the
+  reranker's own provider (`llamacpp-rerank`, the `HttpModelProvider` that `LlamaCppSource.Register` adds):
+  - it splits each document into windows, sends ALL windows in ONE `/v1/rerank` call, and returns each document's MAX
+    window score (MaxP);
+  - the policy still sees one score per candidate, so `EndorseCount` still means candidates;
+  - it is applied where the verifier is built (`LlamaCppSource.Wiring`, through `RerankProviders`) and registered nowhere
+    else;
+  - routing bookkeeping is unchanged. Lyntai keys cooldown on the provider id for any instance its pool did not build,
+    which is every DI-registered backend, and unconfigured admission admits everyone.
+- **The window is the fit's own budget.** `RerankInputCap.PerCandidate` is split out of `RerankInputCap.Fit`, and the
+  decorator calls it on the fitted query the request carries. That gives 506 − |query| NFKC characters for mMiniLMv2
+  (342–490 for this fixture's questions, at most 1,000) and 1,000 raw characters for BGE and LAMAR. `RerankInputCap`
+  still normalises (NFKC under a declared window) and fits the query. With chunking on it no longer CUTS candidates;
+  the decorator windows the whole text.
+- **The windows** (`RerankInputCap.Windows`):
+  - a text that fits one window is sent as it is;
+  - otherwise at most `RerankInputCap.MaxWindows` = 5 windows: the first at the start, the last at the TAIL, spaced
+    evenly between;
+  - while a text needs no more than 5, the stride is at most three quarters of a window, so consecutive windows overlap
+    by at least a quarter. Any span up to a quarter-window lies whole in some window;
+  - five windows read a text whole up to four window-lengths: 4,000 characters for BGE and LAMAR, 1,368–1,960 for
+    mMiniLMv2 at this fixture's budgets. Past that, the five windows are spread over the whole text and the stretches
+    between them go unread; the start and the end are always read;
+  - a window never splits a surrogate pair.
+- **Per call: at most `RerankInputCap.MaxWindowsPerCall` = 480 windows.** That is 5 × the 96 candidates a default-page
+  recall shows the verifier. Past it, every candidate gets fewer windows, down to one, which is today's cut. No recall in
+  either run can reach it (≤ 60 candidates × ≤ 5 windows).
+- **A short fact changes nothing.** When every document of a request fits one window, the decorator passes the request
+  through untouched: the same object, so the same bytes on the wire.
+- **The knob.** `GATHERLIGHT_RERANK_CHUNKING=on|off` (`RerankChunking`) is read once at startup and announced as
+  `[measurement] rerank chunking = …` on the console and at Warning in state/logs. Unset means the default, OFF.
+
+**Windows on the long fixture**, computed from the committed fixture with the same geometry (scratch
+`devtools/_run6b-windows.mjs`), for each question and its own fact's note:
+
+| model | windows per note | answer inside the CUT (today) | answer whole inside SOME window | smallest overlap |
+|---|---|---|---|---|
+| mMiniLMv2 | 3–4 | start 60/60 · middle 0/60 · end 0/60 · beyond 0/60 | 60/60 at every position | 98 characters |
+| BGE, LAMAR | 1–2 (end: 1) | start, middle, end 60/60 · beyond 0/60 | 60/60 at every position | 759 characters |
+
+End-position notes (880–960 characters) fit BGE's single window, so for BGE and LAMAR only the OTHER candidates change
+there.
+
+### Batch limits, measured (2026-09-24, before this design)
+
+A dedicated router (llama.cpp b10549, the bench's preset per model: mMiniLMv2 at 512, BGE and LAMAR at 4096, `-ngl 99`,
+one GPU), on its own port, killed by PID afterwards. The long fixture's notes were windowed as above. One call per case
+(scratch `devtools/_run6b-batch.mjs`; single calls, so the times are indicative):
+
+| model | case | documents in the call | served | ms |
+|---|---|---|---|---|
+| mMiniLMv2 | 60 notes cut, longest / shortest question | 60 / 60 | all | 998 / 326 |
+| mMiniLMv2 | the same 60 notes as windows | 249 / 181 | all | 1,096 / 940 |
+| mMiniLMv2 | 480 / 2,000 full dense-Chinese windows | 480 / 2,000 | all | 2,323 / 9,876 |
+| BGE | 60 notes cut, longest / shortest question | 60 / 60 | all | 3,249 / 1,616 |
+| BGE | the same 60 notes as windows | 91 / 91 | all | 4,486 / 2,562 |
+| BGE | 480 / 2,000 full dense-Chinese windows | 480 / 2,000 | all | 19,838 / 76,546 |
+| LAMAR | 60 notes cut, longest / shortest question | 60 / 60 | all | 4,842 / 1,723 |
+| LAMAR | the same 60 notes as windows | 91 / 91 | all | 5,154 / 2,571 |
+| LAMAR | 480 / 2,000 full dense-Chinese windows | 480 / 2,000 | all | 20,388 / 79,005 |
+
+- **Every call was served**: 200, one result per document, up to 2,000 documents in one call. The limit is per PAIR, as
+  measured before, not per call.
+- **Largest task per child**, from the router log: mMiniLMv2 **426 tokens** (n_ctx_slot 512), BGE 857 and LAMAR 858
+  (4096). No truncation and no error line, across 3,031 / 2,783 / 2,783 tasks.
+- **Cost scales with the windows sent.** 2,000 windows on BGE or LAMAR took 77–79 s, past the product's 60 s verification
+  deadline. That is why a call is capped at 480 windows: 480 took ~20 s.
+
+### The instrument — two runs, one per fixture
+
+1. **Long**: Run 6's fixture, `devtools/fixtures/recall-bilingual-long.json` (sha256 `1f48f1be…4f17`), and its seed
+   `devtools/_judge-bench-seed-long/` (判断 off, no tags, re-verified by the bench), every server on the claude stub.
+   Exactly Run 6's instrument.
+2. **Short (the guard)**: Runs 1–5b's fixture, `devtools/fixtures/recall-bilingual.json` (sha256 `9680443e…f555`),
+   every fact ≤ 101 characters, and its seed `devtools/_judge-bench-seed/` (CLI-written subject tags, 2026-09-23).
+   Every server points at the claude stub (`--claude-stub`); no arm judges with Claude, and a reused seed writes
+   nothing, so the stub is never asked for a model call. **Every candidate is one window**: 101 characters is below
+   the smallest budget (mMiniLMv2's 342), so the decorator passes every request through untouched.
+
+**The memo proxy (`--rerank-memo`, both runs).** llama.cpp's scores are not bit-exact between identical calls: Run 4's
+screen saw up to 0.0073 of drift over three identical calls, and BGE's identical configuration, paired across runs,
+disagreed on a few of 240 queries (Run 4 against Run 2: top-1 1/1, found@8 0/1). A drift at the 8th/9th boundary changes
+the endorsed set. So two arms that send the same bytes could still
+disagree, which rule (c) would misread as chunking's doing. The bench therefore puts a proxy in front of the router for
+each reranker arm:
+
+- during the ACCURACY pass, a `/v1/rerank` body identical to one already sent, by any arm, gets that first response;
+  bodies name the model, so two models never share one;
+- every body's hash, its document count, its longest document and whether the target's answer text was among the
+  documents are recorded on the row;
+- the serial latency pass is never memoised.
+
+So identical requests get identical verdicts, and a request that differs by one byte is computed fresh and shows up in
+the body comparison.
+
+**Plumbing smokes, before this design.**
+
+- Long, 4 facts × 4 questions, `formula` + `rr`/`rrk` for mMiniLMv2 and BGE. The `rrk` arms announced their knob, sent
+  windows (mMiniLMv2 up to 171 documents in a call, none over 486 characters), and the proxy recorded the answer text
+  reaching mMiniLMv2 at `middle`/`end` only when chunked (0/4 unchunked, 3/4 chunked).
+- Short, 6 facts × 4 questions, the same arms, `--claude-stub`. Both rerankers' `rrk` rows were IDENTICAL to their
+  `rr` rows: 24/24 queries, pages and bodies compared. Each body was computed once and shared once.
+
+Neither smoke's accuracy informs anything here. The first attempt at the long smoke, through `dev.mjs`, exited 127
+after the seed check with no message and no orphaned process, as one of Run 6's smokes did; run directly with `node` it
+completed. If either run below exits 127 before any arm starts, it is re-run unchanged.
+
+### Arms, commands and configuration
+
+```
+node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M,LAMAR-600m.Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-arms=rr,rrk \
+  --rerank-memo --resources=devtools/_rr-res --port-base=6200 --llama-port=6240 > devtools/_judge-bench-long-run6b.txt 2>&1
+node devtools/dev.mjs judge-bench --reuse-seed --claude-stub --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M,LAMAR-600m.Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-arms=rr,rrk \
+  --rerank-memo --resources=devtools/_rr-res --port-base=6300 --llama-port=6340 > devtools/_judge-bench-short-run6b.txt 2>&1
+```
+
+Eight arms per run, all in ONE run, so every comparison is paired within it:
+
+- `formula`, and its engine A/A twin `formula2`;
+- per reranker (BGE, LAMAR, mMiniLMv2): `rr:` (partition, chunking pinned blank = the product default, off) and `rrk:`
+  (partition, `GATHERLIGHT_RERANK_CHUNKING=on`, which must announce itself or the bench refuses the arm).
+
+No fuse arm: the product ships partition. Everything else is as in Run 6: mMiniLMv2 binds its catalogued id (window
+512), BGE and LAMAR declare none (4096, 1,000 characters), no embedder, `EndorseCount` 8 = the page, ≤ 60 candidates,
+the product's 60 s deadline (knob pinned blank). Ports 6200–6208, 6240, 6300–6308 and 6340 sit off every tcp range
+Windows had reserved that day and off the e2e fleet's; the proxies take ephemeral ports.
+
+**Measured**: everything the bench prints for Run 6, per set and, on the long run, per position (top-1, found@8,
+judged-of-graph; paired McNemar exact with the Agresti–Min 95% interval), plus:
+
+- **BY POSITION, chunked against unchunked**: `rrk:<m> vs rr:<m>` per reranker, per position, both metrics;
+- **CHUNKED vs UNCHUNKED identity**, per reranker: over every accuracy row, the target's position, the verdict flag,
+  graph or FTS, rows returned, errors, the WHOLE page in order, and the hash of every rerank body sent;
+- **what was sent**: rerank calls, documents per call, the longest document, memo hits, and per position how often the
+  target's answer text reached the reranker;
+- serial latency (12 queries, verdict-carrying recalls only) and the parallel mean.
+
+### Decision rule
+
+**Chunking becomes the DEFAULT if and only if (a), (b), (c) and (d) all hold.** `b` = the unchunked arm hit & the
+chunked arm miss, `c` = the reverse, for `rrk:<m> vs rr:<m>`.
+
+- **(a) It recovers what the cut loses.** On the long run, mMiniLMv2 at `end`, found@8 (60 pairs): exact McNemar
+  p < 0.05 AND c − b > 0. One test, no correction.
+- **(b) It costs nothing where the cut already read the answer.** On the long run, at `start`, for EACH of BGE, LAMAR
+  and mMiniLMv2, on found@8 AND on top-1: NOT (p < 0.05 AND c − b < 0). Six tests, each of which can only block, with
+  no correction: that errs towards keeping today's behaviour.
+- **(c) Short facts are untouched.** On the short run, for EACH of BGE, LAMAR and mMiniLMv2, the bench's identity check
+  reads YES: all 240 accuracy rows of `rrk:<m>` equal `rr:<m>`'s in position, verdict flag, graph or FTS, rows returned
+  and errors, with the whole page compared on 240/240 rows and every rerank body hash compared on 240/240 rows. Not
+  "no significant difference": byte-identical.
+- **(d) Its latency is reported.** The serial median of every arm of both runs is reported beside the rule. It gates
+  nothing: what chunking costs in time is the household's trade-off, and the notes will state it.
+
+**Reported beside the rule, outside it (descriptive):** BGE and LAMAR at `beyond` (chunked against unchunked and against
+`formula`), mMiniLMv2 at `middle`, every position's top-1, each arm against `formula`, the by-language split of the long
+run, the answer-reached-the-reranker table and the documents sent.
+
+**If it holds**: chunking becomes the default and the household-facing sentences follow the result (the `RerankInputCap`
+comment, the reranker bullet in dev-conventions, the mMiniLMv2 note and the rerankers' latency caveat, each with the
+numbers and their configuration). p52 case 6c's machinery then asserts that a long candidate reaches `/v1/rerank` as
+several windows including its tail, and that a short one is sent exactly as before. **If it does not**, the knob stays
+off, and the same sentences are corrected with Run 6's numbers instead.
+
+### Guards, checked before the rule is read
+
+1. **The instrument.** The long fixture is accepted (generator check) and its seed re-verified; the short seed is
+   reused with a matching fixture hash. The short run's `formula` digest is expected to be Runs 1–5b's
+   **`f661eb6a056e`**. If it is not, the within-run comparisons still stand, and no number is set beside another run's.
+2. **The engine A/A**, in each run: `formula` against `formula2` is quiet on `all` (p ≥ 0.05).
+3. **Every reranker arm's startup**: it reads back `llama-cpp · <id>`, raises no startup warning, and makes 0 claude-cli
+   calls at startup and over the whole run. Every `rrk` arm announced its knob, and no `rr` arm printed a
+   `[measurement]` line (the bench enforces both).
+4. **The router log**, in each run: each model spawns once; mMiniLMv2's child logs `n_ctx_slot = 512`, and every task
+   it processes is ≤ 512 tokens; there is no error or truncation line.
+5. **Coverage**: `judged` = `graph` in every set, and on the long run in every position, of every reranker arm. A
+   reranker abstains only on a fault. An abstention on a chunked arm (a call the server refused, say) is a finding in
+   itself, and the rule is then not read.
+6. **Can the instrument express the effect? Yes, by construction** (the windows table): mMiniLMv2's answer is outside
+   its cut at `middle`/`end`/`beyond` for every question, and inside some window for every question at every position.
+   The live record of what reached the reranker is reported, not a guard, because the target is not always a candidate.
