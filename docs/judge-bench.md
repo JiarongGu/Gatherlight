@@ -4276,3 +4276,47 @@ These numbers decide nothing. Run 6c does.
   router checks above had been taken from them (scratch `devtools/_run6b-analyse.mjs`);
 - **Run 6's** `router.log`, `presets.ini` and `arm-*`, which its evidence list names, were overwritten by this round's
   first plumbing smoke. Run 6's results and rows files are intact, and every Run 6 number is recomputable from them.
+
+## Run 6c — Run 6b re-run with the proxy fixed (design)
+
+Written and committed BEFORE either run; the results section that follows names this commit.
+
+**What changes from Run 6b: the instrument, and nothing else.** Run 6b's rule was not read because one rerank request
+per run was lost between the bench's memo proxy and the router (above). `41ad454` fixed the proxy:
+
+- a fresh connection per forward, so no socket is ever reused;
+- a request the router never answered is retried once;
+- a failed forward is never memoised;
+- every failure is counted per arm and warned on;
+- every run reconciles each model's forwarded `/v1/rerank` requests with the router log's `proxying request to model
+  <m>` lines, and warns on any difference.
+
+A smoke of the fixed bench (long fixture, 4 facts, `rr`/`rrk` for mMiniLMv2 and BGE) forwarded 38 requests per model
+and the router proxied 38 of each, with 0 retries and 0 failures.
+
+**Everything else is Run 6b's design, unchanged**: the method (`d64fcea`, off by default), the two fixtures and seeds,
+the eight arms per run, the memo, the metrics, the decision rule (a)–(d) word for word, and guards 1–6. Run 6b's
+numbers were seen before this was written, and that is why none of the rule changes: the re-run exists to read the
+SAME registered rule on an instrument that delivers every request.
+
+**Commands**, exactly as Run 6b's but with new output files:
+
+```
+node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M,LAMAR-600m.Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-arms=rr,rrk \
+  --rerank-memo --resources=devtools/_rr-res --port-base=6200 --llama-port=6240 > devtools/_judge-bench-long-run6c.txt 2>&1
+node devtools/dev.mjs judge-bench --reuse-seed --claude-stub --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M,LAMAR-600m.Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-arms=rr,rrk \
+  --rerank-memo --resources=devtools/_rr-res --port-base=6300 --llama-port=6340 > devtools/_judge-bench-short-run6c.txt 2>&1
+```
+
+The same retry applies: a run that exits 127 before any arm starts is re-run unchanged.
+
+**One guard added, before the rule is read:**
+
+7. **Every request reached the model.** In each run, for each model, the bench's reconciliation line shows forwarded =
+   proxied, and no arm's proxy reports a failed forward. Retries are reported. A difference, or a failure, voids the
+   run as Run 6b's was, and the rule is not read.
+
+Guard 5 keeps its wording: an abstention on any reranker arm is traced, and one on a chunked arm leaves the rule
+unread.
