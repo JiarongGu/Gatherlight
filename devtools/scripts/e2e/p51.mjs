@@ -1312,10 +1312,29 @@ try {
       fs.rmSync(builtinDir, { recursive: true, force: true });
       fs.mkdirSync(ggufDir, { recursive: true });
       fs.writeFileSync(path.join(ggufDir, 'embeddinggemma-300M-Q8_0.gguf'), '');
+
+      // …BUT ONLY AN EMBEDDER THAT CAN RUN COUNTS. The GGUF copy needs the llama.cpp runtime, and with none installed
+      // the badge used to treat it as "in" and move on to the reranker — which needs the same runtime — while 语义 had
+      // nothing that worked. What makes the model they already have work is the runtime, not the built-in second copy.
+      const noRuntime = await getJson('/api/manage/models');
+      ok('(fixture) the GGUF embedder reads as installed, the built-in one does not, and there is no llama.cpp runtime',
+        (noRuntime.models ?? []).filter((m) => m.capability === 'embedding' && m.installed).length === 1
+          && noRuntime.runtime?.installed === false,
+        `${embedderState(noRuntime)} runtime.installed=${noRuntime.runtime?.installed}`);
+      const noRuntimeRec = noRuntime.recommendation;
+      ok('THE POINT: a GGUF embedder with no runtime is not "in" — the line recommends the RUNTIME, not the reranker (which needs it too) and not a second copy of the model',
+        noRuntimeRec?.id === 'llama-cpp', JSON.stringify(noRuntimeRec ?? null));
+      ok('…naming the download (35 MB) and the no-runtime alternative, the built-in row',
+        /35 MB/.test(String(noRuntimeRec?.reason)) && /内置/.test(String(noRuntimeRec?.reason)), String(noRuntimeRec?.reason));
+
+      // RUNTIME IN — a stub binary that merely exists is what `installed` asks — so the GGUF embedder is usable.
+      fs.mkdirSync(path.dirname(stubExe), { recursive: true });
+      fs.writeFileSync(stubExe, 'not a real binary');
       const withEmbedders = await getJson('/api/manage/models');
-      ok('(fixture) the GGUF embedder reads as installed, the built-in one does not',
-        (withEmbedders.models ?? []).filter((m) => m.capability === 'embedding' && m.installed).length === 1,
-        embedderState(withEmbedders));
+      ok('(fixture) the GGUF embedder reads as installed, the built-in one does not, and the runtime is in',
+        (withEmbedders.models ?? []).filter((m) => m.capability === 'embedding' && m.installed).length === 1
+          && withEmbedders.runtime?.installed === true,
+        `${embedderState(withEmbedders)} runtime.installed=${withEmbedders.runtime?.installed}`);
       const rec = withEmbedders.recommendation;
       ok('THE POINT: …and the other way round: 资源 recommends the RERANKER for 判断 — not the built-in copy, never the 1B chat model, never the small reranker',
         rec?.id === RERANKER, JSON.stringify(rec ?? null));
@@ -1324,12 +1343,21 @@ try {
 
       // THE 判断 ROW'S SUGGESTION: runtime present, no model 判断 can use (the embedder is the wrong kind), so its
       // sentence names a download — and that download is the reranker's.
-      fs.mkdirSync(path.dirname(stubExe), { recursive: true });
-      fs.writeFileSync(stubExe, 'not a real binary');
       const llamaJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
       ok('THE POINT: the 判断 row, runtime in and no judge model, suggests downloading the reranker',
         llamaJudge?.suggest === `gguf-${RERANKER}`,
         JSON.stringify({ suggest: llamaJudge?.suggest, reason: llamaJudge?.reason }));
+
+      // ONE RERANKER IS ENOUGH, as one embedder is: any installed reranker is a local judge that measured better than
+      // none, so suggesting BGE beside another is the second-copy redundancy the embedder rule already refuses.
+      fs.writeFileSync(path.join(ggufDir, `${MMINILM}.gguf`), '');
+      const otherReranker = await getJson('/api/manage/models');
+      ok('(fixture) the small reranker reads as an installed reranker',
+        rowOf(otherReranker, MMINILM)?.installed === true && rowOf(otherReranker, MMINILM)?.capability === 'reranking',
+        JSON.stringify(rowOf(otherReranker, MMINILM) ?? null));
+      ok('THE POINT: with ANOTHER reranker in, BGE is not suggested as a second one — nothing is',
+        otherReranker.recommendation == null, JSON.stringify(otherReranker.recommendation ?? null));
+      fs.rmSync(path.join(ggufDir, `${MMINILM}.gguf`), { force: true });
 
       // …AND NOTHING AFTER IT. The badge used to fall through to "any embedder", then "whatever is smallest" —
       // which, with these in, is a model nobody chose to recommend.

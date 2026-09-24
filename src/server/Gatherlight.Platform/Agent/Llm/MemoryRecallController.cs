@@ -177,22 +177,25 @@ public sealed class MemoryRecallController : ControllerBase
                     // COST IS TWO THINGS, and only one of them was stated. The token cost was here from the
                     // start; the LATENCY was measured later, on this household's own facts.
                     //
-                    // QUOTED AS A RANGE because it is not stable: five paired runs gave 8.9, 14.9, 15.1,
-                    // 16.5 and 16.9 s against a 公式 floor of 68–90 ms. This line said "约 9 秒" — the
-                    // fastest reading of the five, and roughly half the typical wait. A household deciding
-                    // whether to leave 判断 on was being quoted the best case as if it were the case; the
-                    // spread is a CLI process spawn competing with whatever else the machine is doing, so
-                    // a single number here can only ever be one machine on one afternoon.
-                    // essentially all of it a CLI process spawn per call. A household deciding whether to
-                    // leave 判断 on is entitled to that before they notice recall feeling slow, and it is
-                    // OUR number, so unlike the weighting note below it needs no attribution.
+                    // TWO MEASURED WAITS, each with its configuration. Five paired runs on one household's own 16
+                    // facts (2026-08-23, the judge still reading topics only) gave 8.9, 14.9, 15.1, 16.5 and 16.9 s
+                    // against a 公式 floor of 68–90 ms; this line once said "约 9 秒" — the fastest reading of the
+                    // five, the best case quoted as if it were the case — and then quoted the range, 9–17 s, with no
+                    // configuration at all, while the model notes in the same picker quoted docs/judge-bench.md Run
+                    // 1's 8.7 s. Now both are quoted, each where it was measured: the fixture's serial median (240
+                    // questions, 语义 off, Haiku, content only — MemorySources.ClaudeJudgeWaitMeasured, the one
+                    // writer every row quoting it reads) beside its own no-judge floor, and the household range beside
+                    // its own. Neither alone is "the" wait: the cost is a CLI process spawn per call, so a figure is
+                    // one machine on one afternoon. It is OUR number, so unlike the weighting note below it needs no
+                    // attribution.
                     // The local arm avoids the spawn, and its latency IS quoted now that it has been measured —
                     // this comment said "deliberately NOT quoted, nobody has measured it" long after it had
-                    // been. A warm chat judge answers in 150–204 ms (docs/self-managed-llm-runtime.md,
-                    // gemma-3-1b), quoted in LlamaCppSource.Description and the chat models' notes; a reranker
-                    // recall takes ~0.47–0.49 s warm (docs/judge-bench.md, Run 2), quoted with its conditions
-                    // in the reranker notes. Every figure carries its source; a plausible one without is still
-                    // the thing this panel refuses.
+                    // been. Two figures, of two kinds: LlamaCppSource.Description quotes a warm chat judge's CALL,
+                    // 150–204 ms (docs/self-managed-llm-runtime.md, gemma-3-1b); the chat model's note quotes a whole
+                    // RECALL on the same fixture, ~0.40 s against ~0.22 s with no judge (docs/judge-bench.md Run 3,
+                    // serial medians, model warm on one GPU). A reranker recall takes ~0.31–0.49 s warm (Runs 2 and
+                    // 4), quoted with its conditions in the reranker notes. Every figure carries its source; a
+                    // plausible one without is still the thing this panel refuses.
                     // The texts live on each source's `Cost` (IMemoryJudgeSource) — the bound arm describes itself.
                     cost = boundJudge.Cost(boundJudgeModel),
                     source = boundJudge.Id, model = boundJudgeModel,

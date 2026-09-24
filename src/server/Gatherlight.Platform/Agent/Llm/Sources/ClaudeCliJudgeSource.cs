@@ -13,20 +13,34 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
     public string Id => "claude-cli";
     public string Name => "Claude CLI";
 
+    /// <summary>The OTHER measured wait, kept beside the fixture's and scoped to where it was taken: five paired runs
+    /// (8.9, 14.9, 15.1, 16.5, 16.9 s) on one household's own 16 facts, 2026-08-23, while the judge still read topics
+    /// only, against a 公式 floor there of 68–90 ms. It stays because it is the slower, real-world reading: quoting only
+    /// the fixture's median would be the best case presented as the case — the defect that turned 「约 9 秒」 into a
+    /// range in the first place. It went out bare until 2026-09-24, beside rows quoting the fixture's 8.7 s.</summary>
+    private const string HouseholdWait = "一户人家自己的 16 条事实上五次实测 9–17 秒、多数在 15 秒上下(当时判断只读主题)";
+
+    /// <summary>Both measured waits, each with its configuration — the fixture's from the one writer
+    /// (<see cref="MemorySources.ClaudeJudgeWaitMeasured"/>) the local rows quote too, so the picker cannot show this
+    /// arm at one figure and the rows beside it at another.</summary>
     public string Description =>
-        "适合:不想在这台机器上跑模型 —— 没有独立显卡、不想再下载几百 MB,而账号本来就有。" +
-        "每次记录事实、每次检索各消耗一次调用,实测每次检索 9–17 秒(本机模型没有这次进程启动)。" +
-        "Lyntai 在自己的语料上实测这是漏检最低的一档(0.54 → 0.19)。";
+        "适合:不想在这台机器上跑模型 —— 没有独立显卡、不想再下载几百 MB,而账号本来就有。"
+        + "每次记录事实、每次检索各消耗一次调用,每次调用都要启动一次 CLI 进程(本机模型没有这一步)。"
+        + "实测等待:" + MemorySources.ClaudeJudgeWaitMeasured + ";" + HouseholdWait + "。"
+        + "Lyntai 在自己的语料上实测这是漏检最低的一档(0.54 → 0.19)。";
 
     /// <summary>Null client = the default client: the CLI provider is already registered.</summary>
     public JudgeWiring Wiring(MemoryWiringContext ctx) => JudgeWiring.Llm(null, AnnotationModel(ctx.Model));
 
     public string AnnotationModel(string model) => model;
 
+    /// <summary>Each wait beside the no-judge floor of its OWN measurement: Run 1's 公式 arm (211 ms serial median) for
+    /// the fixture, 68–90 ms for the household's facts — a floor from one next to a wait from the other would be the
+    /// cross-run comparison docs/judge-bench.md refuses.</summary>
     public string Cost(string? model) =>
-        "每次记录事实与每次检索各消耗一次 Claude CLI 调用(使用已登录的账号)。"
-        + "实测每次检索 9–17 秒(五次测量,多数在 15 秒上下)—— 每次调用都要启动一次 CLI 进程;"
-        + "只用「公式」时是 0.07–0.09 秒。"
+        "每次记录事实与每次检索各消耗一次 Claude CLI 调用(使用已登录的账号),每次调用都要启动一次 CLI 进程。"
+        + "实测等待:" + MemorySources.ClaudeJudgeWaitMeasured + ",同一测试集不开判断约 0.21 秒;"
+        + HouseholdWait + ",同样的事实只用「公式」是 0.07–0.09 秒。"
         + "换成本机模型可以省掉这次进程启动。";
 
     /// <summary>Not a URL: the CLI is a process this install spawns.</summary>

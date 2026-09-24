@@ -148,12 +148,23 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <para><b>Why 512.</b> The longest LEGITIMATE output of either seam, measured with <c>/tokenize</c> on the three
     /// small chat models' own tokenizers (Qwen3-0.6B, Qwen3.5-0.8B, gemma-3-1b; 2026-09-24): a verdict naming a whole
     /// page of 8 is 19 tokens, the annotator's four subject handles 18–26 (31–40 at twice its accepted maximum), and a
-    /// verdict naming EVERY candidate a kind-less recall can show (96) is 282 — 385–388 pretty-printed in a code
-    /// fence. 512 holds all of those with room. What it cuts is a verdict endorsing more than ~170 candidates, which
-    /// only a kind-filtered recall (up to 400; 1,495 tokens to name them all) can reach — and Lyntai names "endorses a
-    /// large fraction of what it sees" as the judge's FAILURE signal, because partition then replaces the page. A cut
-    /// reply fails to parse and is NoOpinion: the engine's page stands, which is the better outcome there anyway.
-    /// Run 5's screen measured the replies actually given, with thinking off: 6–21 tokens.</para>
+    /// verdict naming EVERY candidate a recall at the DEFAULT limit of 8 can show (96) is 282 — 385–388 pretty-printed
+    /// in a code fence. 512 holds all of those with room. What it cuts is a verdict endorsing more than ~170
+    /// candidates, which only a recall showing the judge more than that can reach: the judge sees 4× what
+    /// <c>FactIndex.RankAsync</c> asks for — min(3 × limit, 100) with no kind, 100 with one — so a recall naming a kind
+    /// (up to 400; 1,495 tokens to name them all), or a kind-less one asking for 15 or more (180 at 15, 400 from 34).
+    /// Whichever it is, Lyntai names "endorses a large fraction of what it sees" as the judge's FAILURE signal, because
+    /// partition then replaces the page. A cut reply fails to parse and is NoOpinion: the engine's page stands, which is
+    /// the better outcome there anyway. Run 5's screen measured the replies actually given, with thinking off: 6–21
+    /// tokens.</para>
+    ///
+    /// <para><b>The cap turns an ALWAYS-THINKING model silent rather than slow.</b> <c>reasoning = off</c> works by the
+    /// chat template rendering a pre-closed think block; a dropped-in model whose template thinks regardless (ignores
+    /// <c>--reasoning off</c>) spends its 512 tokens inside the thinking and is cut before it writes a verdict or a
+    /// subject list. That reply does not parse, and both seams fail open — so such a model verifies nothing and tags
+    /// nothing, on every call, in about the time the cap takes to decode, with no error anywhere. Uncapped it would have
+    /// been slow instead (seconds to minutes per call, Run 5's screen), which at least shows. No catalogued model does
+    /// this; the fix for one that does is a row measured on the bench, not a larger cap.</para>
     ///
     /// <para><b>What it bounds a runaway to: cap ÷ decode rate.</b> Measured on the real binary under the preset this
     /// file generates (2026-09-24, llama.cpp b10549, Qwen3-0.6B-Q8_0 on one laptop GPU): a prompt asking for every
@@ -316,8 +327,11 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 // the child as `--reasoning off`; the template then renders its pre-closed think block, and replies ran
                 // 6–21 tokens. For a template with nothing to turn off (Gemma 3) the rendered prompt is byte-identical.
                 // NOT `reasoning-budget = 0`: the template stays in thinking mode, the model writes its reasoning into
-                // the content, and 4 of 6 replies did not parse. KEEP THIS LINE UNTIL PART 288 CLOSES — Lyntai will
-                // tell the adopter when the wire carries Suppress; then this line goes, and p51's assertion with it.
+                // the content, and 4 of 6 replies did not parse. KEEP THIS LINE UNTIL PART 288 CLOSES. Part 288's own
+                // design question is that hosted OpenAI-shaped APIs may reject an unknown field, so the fix may well be
+                // an option the ADOPTER sets rather than a field always sent. On that bump: turn on whatever option the
+                // closing Part adds (if any), delete this line and p51's assertion of it, and re-check on the real
+                // binary that a Qwen judge's reply carries no `<think>` — the wire has to do what the preset did.
                 //
                 // `n-predict` is our own launch contract, not a workaround — see ChatMaxTokens.
                 case GgufCapability.Completion:

@@ -127,9 +127,13 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
 /// generation cap bounds to seconds (<c>LlamaServerRuntime.ChatMaxTokens</c>).</para>
 ///
 /// <para><b>Annotation is deliberately NOT given one.</b> On the write path the same tool deadline fails the graph
-/// index (<c>FactIndex.IndexAsync</c> returns null, the row's <c>graph_ref</c> stays empty) and the startup back-fill
-/// indexes the fact again later — annotation included. A deadline here would instead index it WITHOUT subjects,
-/// permanently, since an indexed row is never revisited. Read from the code, not driven by a suite.</para>
+/// index (<c>FactIndex.IndexAsync</c> returns null) and the row's <c>graph_ref</c> is left EMPTY — for a new fact
+/// because nothing was ever written, and for an EDITED one because <c>RememberFactTool</c> writes the null (and
+/// <c>KnowledgeStore.LearnAsync</c> detached the changed row already). Until 2026-09-24 an edit kept its previous
+/// content's ref there, so the back-fill never returned to it. The startup back-fill then indexes the fact again —
+/// annotation included. A deadline here would instead index it WITHOUT subjects, permanently, since an indexed row is
+/// never revisited. <c>e2e-p48</c> case 9 hangs the annotation of an edit and sees the new content indexed, with its
+/// subject, at the next start.</para>
 ///
 /// <para><b>A test knob, and only a shortening one</b>: <c>GATHERLIGHT_JUDGE_DEADLINE_SECONDS</c>, read once at
 /// startup and clamped to [1 s, <see cref="Default"/>], so <c>e2e-p52</c> can hang a judge and see the page stand in
@@ -171,9 +175,12 @@ public sealed class VerificationDeadlinePolicy : IMemoryVerificationPolicy
         {
             return await _inner.VerifyAsync(request, deadline.Token).ConfigureAwait(false);
         }
-        // OUR deadline, the caller's token still live: a judge that did not answer in time. Anything else — the
-        // caller's own cancellation — propagates, as Lyntai's seams require.
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        // OUR deadline, the caller's token still live: a judge that did not answer in time. Anything else propagates —
+        // the caller's own cancellation, as Lyntai's seams require, and an OperationCanceledException from some OTHER
+        // clock while ours has not fired (an inner timeout a policy failed to swallow), which the engine's own
+        // VerifyAsync turns into NoOpinion under its own log line. Catching that here too logged "no verdict within
+        // 60 s" for a failure that took a fraction of it.
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
         {
             _log?.LogWarning(
                 "memory verification gave no verdict within {Seconds:0.#} s; leaving the engine's own page in place",
@@ -254,7 +261,8 @@ public sealed class VerificationDeadlinePolicy : IMemoryVerificationPolicy
 /// no kind is given, but a flat 100 whenever a kind IS given (a kind narrows AFTER the ranking, so a thin
 /// kind needs a far wider one to fill its own page). Lyntai's <c>VerificationDepth</c> then shows the judge up
 /// to 4× THAT many — so at the default limit of 8, the judge sees up to 96 candidates on a kind-less recall
-/// and up to 400 on one naming a kind. The prompt grows with that depth × line length; the bench's latency
+/// and up to 400 on one naming a kind (a kind-less recall reaches 400 too, from a limit of 34: 4 × min(3 × 34, 100)).
+/// The prompt grows with that depth × line length; the bench's latency
 /// and estimated judge-input columns are where the trade-off is priced, not this class.</para>
 ///
 /// <para>Topics stay the STORED headline, so <c>expand_fact</c>'s neighbour list is unchanged; only what the judge
@@ -358,7 +366,9 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// again once it is taken on the normalised text, with no slack margin needed. SENDING the normalised text loses
 /// nothing the model would have read: the tokenizer normalises anyway, and the token ids came out identical for all
 /// but 95 of the 4,928 changed scalars — characters newer than the model's normalisation table (㋿ U+32FF, Unicode
-/// 12.1) plus fullwidth ～, where the model now reads the NFKC form (令和, ~) instead of an unmapped original.</para>
+/// 12.1) plus fullwidth ～, where the model now reads the NFKC form (令和, ~) instead of an unmapped original.
+/// Reproducible: <c>dev.mjs rerank-window</c> re-runs the sweep and the pair at the limit on the pinned GGUF; the method
+/// and the recorded run are in <c>docs/self-managed-llm-runtime.md</c>.</para>
 ///
 /// <para><b>A declared window too small to hold a pair's overhead is NO window</b> (<see cref="UsableWindow"/>): at
 /// ≤ <see cref="PairOverheadTokens"/> the budget is zero and every query and candidate would be cut to nothing, so the

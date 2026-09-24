@@ -63,6 +63,9 @@ public sealed record KnowledgeRow(
 
 public interface IKnowledgeStore
 {
+    /// <summary>Insert a fact, or update the one with the same <c>(kind, topic)</c> in place. An update that CHANGES
+    /// the content also clears the row's graph ref — the node it named holds the old text — so the startup back-fill
+    /// indexes the new content; the same content keeps its ref.</summary>
     Task<long> LearnAsync(string kind, string topic, string content, string? source, double confidence);
     /// <param name="exclude">Rows the caller has ALREADY shown for this recall, by id — left out of the
     /// result, and with it out of the <c>hits</c> increment.
@@ -83,7 +86,9 @@ public interface IKnowledgeStore
     /// <summary>EMA reinforcement: confirmations pull confidence toward 1, refutations toward 0.</summary>
     Task ReinforceAsync(long id, bool positive);
 
-    /// <summary>Record where this fact lives in the derived graph index. Null clears it.</summary>
+    /// <summary>Record where this fact lives in the derived graph index. Null clears it — which is how an index
+    /// attempt that failed hands the fact to the startup back-fill, so every caller writes the result unconditionally
+    /// (<c>RememberFactTool</c>, <c>FactIndex</c>'s back-fill and rebuild).</summary>
     Task SetGraphRefAsync(long id, string? graphRef);
 
     /// <summary>Store alternate phrasings for a fact, addressed by its unique <c>(kind, topic)</c>.
@@ -144,8 +149,14 @@ public sealed class KnowledgeStore : IKnowledgeStore
             "SELECT id FROM knowledge WHERE kind = @kind AND topic = @topic", new { kind, topic });
         if (existing is { } id)
         {
+            // A CHANGED fact is detached from the graph in the same statement (the CASE reads the row's old
+            // content). The graph dedups by content hash, so the ref it carried addresses a node holding the
+            // PREVIOUS text, and the startup back-fill revisits only EMPTY refs — so a writer that does not
+            // re-index (the memory import) or whose re-index fails left the new content out of the graph until a
+            // rebuild. Unchanged content keeps its ref: the same text is the same node. Proof: e2e-p48 case 9.
             await conn.ExecuteAsync(
-                "UPDATE knowledge SET content = @content, source = @source, confidence = @confidence, updated_at = @now WHERE id = @id",
+                "UPDATE knowledge SET content = @content, source = @source, confidence = @confidence, updated_at = @now, " +
+                "graph_ref = CASE WHEN content = @content THEN graph_ref ELSE NULL END WHERE id = @id",
                 new { content, source, confidence = Math.Clamp(confidence, 0, 1), now, id });
             return id;
         }

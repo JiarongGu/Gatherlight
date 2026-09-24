@@ -418,3 +418,29 @@ said 「应用正在重启 llama.cpp,稍等几秒。」, which is the first time
 reported not serving with no problem while the new router was not yet listening, then serving. Right after the bind
 it read serving with no problem, so nothing stale was left. 「应用正在启动」 was not seen, because the new router went
 from refused straight to answering.
+
+### 2026-09-24 — mMiniLMv2's 512 window: the NFKC bound, a pair at the limit, and the launch
+
+The figures behind the mMiniLMv2 row's declared window were first taken with scratch scripts when the window was
+declared (commit bbc9b10) and quoted only in code comments (`RerankInputCap`, the row's comment in `GgufCatalog`,
+`LlamaCppSource.Description`). They are reproducible now with `devtools/scripts/rerank-window-probe.mjs`, run as
+`node devtools/dev.mjs rerank-window --resources=<dir>` where `<dir>` holds `llama-cpp/` and `gguf/`. It refuses a
+GGUF whose sha256 is not the catalogue's pin, and re-ran them the same day with the same answers. Same build as above
+(`version: 0.1.2-dev (build 10549, commit b2e5e9b28)`), the pinned `mmarco-mMiniLMv2-L12-H384-v1-Q8_0.gguf`, one
+dedicated `llama-server --reranking --n-gpu-layers 99` per part, one laptop GPU.
+
+- **The NFKC bound** that `RerankInputCap` counts by. .NET 10.0.11's `FormKC` over every assigned BMP scalar and
+  every astral scalar it changes: 64,012 scalars, 4,928 of them changed. Each was tokenized by the model's own
+  `/tokenize`, without special tokens. Scalars over `tokens(NFKC) ≤ UTF-16 length(NFKC) + 1`: **0**. Raw and
+  normalised token ids differ for 95 of the 4,928: characters newer than the model's normalisation table (㋿ U+32FF)
+  plus fullwidth ～ U+FF5E. The worst RAW cost is 6 tokens for one UTF-16 unit (㌚ U+331A). Node's NFKC and .NET's
+  `FormKC` differ on 0.
+- **A pair at the limit**, fitted to 512 the way `RerankInputCap.Fit` does it (window − 6, the query at most half).
+  A ℃-dense fact cut on its RAW length is 506 characters and 1,006 tokens, and `/v1/rerank` answers **500** `input
+  (1006 tokens) is too large to process … (current batch size: 512)`. Cut on its NFKC text it is 506 characters and
+  510 tokens, and is served (**200**). ℃㎡㎏㍿ mixed into Chinese fits either way (416 tokens raw, 349 NFKC).
+- **The launch.** judge-bench Run 4 measured the row's whole recall under a 4096 launch, and the product launches it
+  at the declared 512, so the rerank CALL was timed under both: one fixture question against all 60 fixture facts,
+  12 questions × 3 rounds after a warm-up, serial. First run: median 75.1 ms at 4096, 76.3 ms at 512, 79.3 ms at
+  4096 again. The script's run: 75.2, 71.7 and 71.8 ms. There is no difference beyond the 4096 launch's own
+  run-to-run spread, so the row's 0.31 s per recall and +0.08 s over no judge stand, said as measured at 4096.

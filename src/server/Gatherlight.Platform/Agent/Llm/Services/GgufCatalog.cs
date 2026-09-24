@@ -118,12 +118,13 @@ public static class GgufCatalog
     /// every reranker, and a figure with nothing beside it cannot be weighed. The trade is stated both ways:
     /// a reranker puts the answer on the page far more often and first hardly more often, because it chooses
     /// which eight make the page and the engine still orders them.
-    /// <para>The Claude figures are Run 1's CONTENT-ONLY arm (130 / 131, serial median 8.7 s) — the judge input
+    /// <para>The Claude figures are Run 1's CONTENT-ONLY arm (130 / 131, serial median 8.7 s, Haiku) — the judge input
     /// that ships since 2026-09-24 — not its <c>content</c> arm (topic — content: 132 / 133, 9.5 s), the 1.3.0
-    /// input, which Run 1 measured equivalent. A number belongs to its configuration.</para></summary>
+    /// input, which Run 1 measured equivalent. A number belongs to its configuration. The wait is
+    /// <see cref="Sources.MemorySources.ClaudeJudgeWait"/>, the one writer the CLI row quotes too.</para></summary>
     private const string RerankerMeasuredAgainst =
-        "同一测试集上,不开判断是 79/240 与 125/240(每次约 0.23 秒),Claude CLI 判断是 130/240 与 131/240"
-        + "(每次约 8.7 秒):重排把答案带进前八的次数多得多,排到第一的次数却只比不开判断略多 —— "
+        "同一测试集上,不开判断是 79/240 与 125/240(每次约 0.23 秒),Claude CLI 判断(Haiku)是 130/240 与 131/240"
+        + "(每次" + Sources.MemorySources.ClaudeJudgeWait + "):重排把答案带进前八的次数多得多,排到第一的次数却只比不开判断略多 —— "
         + "它挑哪八条上页,先后仍按原来的排序。";
 
     /// <summary>The configuration every reranker row's figures were measured in (docs/judge-bench.md Runs 2 and 4): the
@@ -134,11 +135,16 @@ public static class GgufCatalog
 
     /// <summary>What a reranker row's latency was measured UNDER: serial medians with the model already loaded,
     /// on one machine's GPU, over recalls of at most 60 candidates (docs/judge-bench.md, Run 2). A reranker
-    /// scores every candidate it is shown, so a CPU-only machine — or a recall naming a kind, which can carry up
-    /// to 400 — may be much slower. A bare 「0.47 秒」 would promise that figure on any machine.</summary>
+    /// scores every candidate it is shown, so a CPU-only machine — or a recall showing it more — may be much slower.
+    /// A bare 「0.47 秒」 would promise that figure on any machine.
+    ///
+    /// <para><b>How many it is shown depends on the recall's LIMIT</b>, not only on its kind: Lyntai verifies 4× the
+    /// candidates <c>FactIndex.RankAsync</c> asks for, which is min(3 × limit, 100) with no kind and 100 with one — so
+    /// up to 96 at the default page of 8, and 400 on a recall naming a kind OR asking for 34 or more. This said
+    /// 「限定类别、候选可达 400 条」 until 2026-09-24, true only at the default limit.</para></summary>
     private const string RerankerLatencyCaveat =
-        "(模型已加载、在显卡上、每次不超过 60 条候选时测得;只有 CPU 的机器,或限定类别、候选可达 400 条的检索,"
-        + "可能慢得多)";
+        "(模型已加载、在显卡上、每次不超过 60 条候选时测得;只有 CPU 的机器,或候选更多的检索,可能慢得多 —— "
+        + "默认每次取 8 条时候选最多 96 条,限定类别或一次要 34 条以上时可达 400 条)";
 
     /// <summary>LAMAR against BGE, ONE sentence shared by both rows — the same comparison read from either side,
     /// so the two notes cannot tell it differently. It used to say only that the fixture could not separate
@@ -184,15 +190,18 @@ public static class GgufCatalog
         // on one GPU: this judge 403 ms and no judge 219 ms (Run 3), the Claude CLI judge 8,733 ms (Run 1's content-only
         // arm, the shipped input). They read 「每次判断约 0.15–0.20 秒(Claude CLI 那条实测每次检索 9–17 秒)」 until
         // 2026-09-24: a per-CALL figure beside a per-RECALL one, the second from five runs on one household's 16 facts,
-        // while the reranker rows beside it quoted Run 1's 8.7 s — two configurations in adjacent rows.
+        // while the reranker rows beside it quoted Run 1's 8.7 s — two configurations in adjacent rows. The GPU clause
+        // then sat after all three figures, as if it covered the CLI's too; it is scoped to the one figure it
+        // describes, and the CLI wait comes from its one writer (MemorySources.ClaudeJudgeWait), with its model.
         new GgufModel(
             "gemma-3-1b-it-Q4_K_M", "Gemma 3 1B(Q4 · 判断)", GgufCapability.Completion,
             "ggml-org/gemma-3-1b-it-GGUF", "f9c28bcd85737ffc5aef028638d3341d49869c27",
             "gemma-3-1b-it-Q4_K_M.gguf",
             "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135", 806_058_240,
             "判断用的对话模型:写入时的主题标注和检索时的判断都在本机完成,不消耗账号额度。"
-            + "本应用双语测试集 240 道提问、不开语义、判断按默认只读事实内容:每次检索约 0.40 秒,不开判断约 0.22 秒,"
-            + "Claude CLI 判断约 8.7 秒(串行中位数;本机模型已加载、在显卡上)。但实测它让检索比不开判断更差:"
+            + "本应用双语测试集 240 道提问、不开语义、判断按默认只读事实内容:每次检索约 0.40 秒(模型已加载、在显卡上),"
+            + "不开判断约 0.22 秒,Claude CLI 判断(Haiku)" + Sources.MemorySources.ClaudeJudgeWait + ",都是串行中位数。"
+            + "但实测它让检索比不开判断更差:"
             + "答案排第一从不开判断的 79 题降到 33 题,带进前八从 125 题降到 111 题,"
             + "两项都是显著变差。量的是检索时的判断,它自己写的主题标注没有量过。"
             + "要在本机做判断,重排模型在同一测试集上让检索变好(见它们的说明)。"),
@@ -261,6 +270,7 @@ public static class GgufCatalog
         // dedicated llama-server b10549, --n-gpu-layers 99, 12 fixture questions × all 60 fixture facts per call, 36 calls
         // each after a warm-up — median 75.1 and 79.3 ms at 4096 (two runs), 76.3 ms at 512. No difference beyond the
         // 4096 launch's own run-to-run spread, so the whole-recall 0.31 s / +0.08 s stand, said as measured at 4096.
+        // Reproducible: `dev.mjs rerank-window` (its part 3); docs/self-managed-llm-runtime.md records the run.
         new GgufModel(
             "mmarco-mMiniLMv2-L12-H384-v1-Q8_0", "mMiniLMv2(Q8 · 判断 · 重排 · 更小)", GgufCapability.Reranking,
             "keisuke-miyako/mmarco-mMiniLMv2-L12-H384-v1-gguf-q8_0", "2b37d162c88e0aeb8a1b4acb2d50f0e5ade16fd5",

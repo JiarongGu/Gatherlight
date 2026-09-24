@@ -139,7 +139,7 @@ public sealed class ModelsController : ControllerBase
             // A fixed id here named the embedder, which is the first thing a household installs — so the
             // moment they took the advice the panel went on recommending a model they already had. A
             // recommendation that survives being followed is not a recommendation, it is a slogan.
-            recommendation = Recommend(models),
+            recommendation = Recommend(models, probe.Installed),
             // The sample size travels with the numbers, here as everywhere: "9/10" invites the right
             // question where a bare adjective does not.
             measuredOn = MeasuredOnLabel(),
@@ -251,16 +251,43 @@ public sealed class ModelsController : ControllerBase
     /// <para><b>ONE embedder is enough, so the second is never suggested.</b> The two embedder rows are the same
     /// EmbeddingGemma 300M, as a GGUF for llama.cpp and as ONNX in this process — 语义 binds one of them. Offering
     /// the other once either is in recommended a redundant download, and hid the reranker suggestion behind it
-    /// until the household had fetched the same model twice.</para></summary>
-    private static object? Recommend(IReadOnlyList<ModelRowView> models)
+    /// until the household had fetched the same model twice.</para>
+    ///
+    /// <para><b>…but only an embedder that can RUN counts as in.</b> The GGUF one needs the llama.cpp runtime; with its
+    /// file on disk and the runtime gone, it read as "in" and the badge moved on to the reranker — which needs the same
+    /// runtime — while 语义 had nothing that worked. What makes it work is the 35 MB runtime, not a second copy of the
+    /// same weights, so that is what the line then recommends, naming the in-process 内置 row as the no-runtime
+    /// alternative. The id is the runtime's RESOURCE id: no model row matches it, so no table row carries the badge —
+    /// the runtime's own row above the table is where it is downloaded. (With nothing installed at all the GGUF
+    /// embedder is still the first suggestion, runtime or not: it measured 9/10 against 8/10, and the runtime row says
+    /// it is needed.)</para>
+    ///
+    /// <para><b>ONE reranker is enough too.</b> Any installed reranker is a local judge that measured better than
+    /// none (docs/judge-bench.md Runs 2 and 4); suggesting BGE beside LAMAR or mMiniLMv2 was the same second-copy
+    /// redundancy as the embedders. Proof for all of it: <c>e2e-p51</c>'s badge block.</para></summary>
+    private static object? Recommend(IReadOnlyList<ModelRowView> models, bool llamaRuntimeInstalled)
     {
         var offers = models.Where(m => !m.Installed).ToList();
-        var anEmbedderIsIn = models.Any(m => m.Installed
-            && (m.Id == GgufCatalog.RecommendedEmbedder || m.Id == BuiltInSemanticSource.ModelId));
+        var builtInIsIn = models.Any(m => m.Installed && m.Id == BuiltInSemanticSource.ModelId);
+        var ggufEmbedderIsIn = models.Any(m => m.Installed && m.Id == GgufCatalog.RecommendedEmbedder);
+        if (ggufEmbedderIsIn && !llamaRuntimeInstalled && !builtInIsIn)
+            return new
+            {
+                // The runtime's RESOURCE id — ResourceProvisioner's catalogue entry, the id LlamaCppSource's own
+                // "download the runtime" suggestion names too.
+                id = "llama-cpp",
+                reason = "「语义」要用的 EmbeddingGemma(GGUF)已经下载了,但它跑在 llama.cpp 上,而这台机器还没有这个运行时 —— "
+                    + "在上面的资源列表里下载「本机模型运行时 · llama.cpp」(约 35 MB)就能用。"
+                    + "不想多装一个运行时,也可以下载下表里标着「内置」的嵌入模型 —— 同一个模型,在应用自己的进程里运行,不需要运行时。",
+                caution = (string?)null,
+            };
+
+        var anEmbedderIsIn = builtInIsIn || (ggufEmbedderIsIn && llamaRuntimeInstalled);
+        var aRerankerIsIn = models.Any(m => m.Installed && m.Capability == "reranking");
         var pick = (anEmbedderIsIn ? null
                 : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedEmbedder)
                   ?? offers.FirstOrDefault(o => o.Id == BuiltInSemanticSource.ModelId))
-            ?? offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedReranker);
+            ?? (aRerankerIsIn ? null : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedReranker));
         if (pick is null) return null;
 
         if (pick.Capability == "embedding")

@@ -40,7 +40,14 @@ public sealed class RememberFactTool : IGatherlightTool
         // never depend on the index succeeding to be remembered at all.
         var id = await _store.LearnAsync(kind, topic, content, a.Source, a.Confidence ?? 0.7);
         var reference = await _index.IndexAsync(kind, topic, content, ct);
-        if (reference is not null) await _store.SetGraphRefAsync(id, reference);
+        // WRITTEN EVEN WHEN NULL — the rule IndexEachAsync already follows. Same kind+topic is an EDIT, and the
+        // graph dedups by content hash, so the ref this row carried points at a node holding the PREVIOUS text.
+        // When the re-index fails (the tool's deadline cancelling the annotation, an engine error), writing only a
+        // non-null ref left that old ref in place — and the startup back-fill revisits only EMPTY refs, so the new
+        // content and its subjects stayed out of the graph until a rebuild. Null clears it, so the back-fill
+        // retries. (LearnAsync also detaches a row whose content changed, which covers the memory import — an
+        // edit path that never indexes at all.) Proof: e2e-p48 case 9.
+        await _store.SetGraphRefAsync(id, reference);
 
         return new JsonObject { ["ok"] = true, ["id"] = id }.ToJsonString();
     }

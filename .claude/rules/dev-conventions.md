@@ -630,9 +630,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   section, which the router passes to the child as `--reasoning off` (read back from the child's argv on the real
   binary, 2026-09-24); it is byte-neutral for Gemma 3, whose template has nothing to turn off. NOT
   `reasoning-budget = 0`, which leaves the template thinking and puts the reasoning in the content (4 of 6 replies
-  unparseable). Part 288's own text names this preset and says the adopter should be told when it ships. **On that
-  bump**: delete the `reasoning = off` line and p51's assertion of it, and re-check a Qwen judge's reply length on
-  the real binary — the wire's field has to do what the preset did. The `n-predict` cap beside it is NOT part of
+  unparseable). Part 288's own text names this preset and says the adopter should be told when it ships — and its
+  design question is that hosted OpenAI-shaped APIs may reject an unknown field, so the fix may be an option the
+  ADOPTER turns on rather than a field always sent. **On that bump**: enable whatever option the closing Part adds
+  (if any), delete the `reasoning = off` line and p51's assertion of it, and re-check on the real binary that a Qwen
+  judge's reply carries no `<think>` — the wire has to do what the preset did. The `n-predict` cap beside it is NOT part of
   this workaround and stays: it is our own launch contract (`LlamaServerRuntime.ChatMaxTokens` — the memory seams
   send no `max_tokens`, and the router does not stop a child's generation when the app abandons a request).
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
@@ -857,7 +859,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   and what only running it revealed). Ollama is not gone: it stays a **household** origin, detected and
   connected to but never installed by us, because plenty of households run their own. `llama-cpp` is 35 MB
   against Ollama's 1460, matches its retrieval (9/10 top-1 on the `EmbeddingCatalog` fixture) and beats its
-  latency (25 ms/query through the app against 69). Three things about it are load-bearing and all three
+  latency (25 ms/query through the app against 69). Four things about it are load-bearing and all four
   fail SILENTLY, which is why they are here and not only in the doc:
   **(1) `--n-gpu-layers` is launch CONTRACT.** Absent it, llama-server runs on the CPU and logs nothing —
   222 ms/query against 7 ms, on the path of every recall. It goes into a generated per-model preset, which
@@ -912,11 +914,17 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Both fail silently: a thinking-capable template thinks on every judgement (the first key is open workaround (5)
   in the Lyntai list above), and a small model's runaway fills its whole context — Run 5's screen saw gemma-3-270m
   reach 31,073 tokens in 154 s. 512 holds every legitimate reply measured on the small models' own tokenizers (a
-  whole page's verdict 19 tokens, four subject handles ≤ 26, a verdict naming all 96 candidates of a kind-less
-  recall 282) and cuts only a verdict endorsing ~170+ candidates, which Lyntai calls the judge's failure signal and
-  which then parses as NoOpinion. On the real binary the capped runaway stopped at 512 tokens in 2.4 s. `p51` pins
-  both keys on chat sections and their absence on embedder and reranker sections; both confirmed to FAIL when
-  broken.
+  whole page's verdict 19 tokens, four subject handles ≤ 26, a verdict naming all 96 candidates a recall at the
+  DEFAULT limit of 8 shows the judge 282) and cuts only a verdict endorsing ~170+ candidates, which Lyntai calls the
+  judge's failure signal and which then parses as NoOpinion. How many the judge is shown depends on the LIMIT as well
+  as the kind: 4× what `FactIndex.RankAsync` asks for, min(3 × limit, 100) with no kind and 100 with one — so 400 on
+  a recall naming a kind or asking for 34 or more, and past ~170 from a kind-less limit of 15. On the real binary the
+  capped runaway stopped at 512 tokens in 2.4 s. `p51` pins both keys on chat sections and their absence on embedder
+  and reranker sections; both confirmed to FAIL when broken. **The cap makes an ALWAYS-THINKING model silent, not
+  slow**: a dropped-in model whose template thinks regardless of `--reasoning off` spends the 512 tokens inside its
+  thinking and is cut before any verdict or subject list, so it verifies nothing and tags nothing on every call —
+  fail-open, no error — where uncapped it would at least have been visibly slow. None in the catalogue does; the cure
+  for one is a row measured on the bench, not a bigger cap.
   Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
   (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
   already there" is not on the table. And `LlamaServerRuntime` deliberately does **not** search PATH: a
@@ -1059,7 +1067,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   over every assigned BMP scalar and every astral one FormKC changes (64,012; .NET 10's FormKC equal to Node's NFKC
   on all of them), so no slack margin is kept. Sending the normalised text loses nothing the model reads — the token
   ids are identical for all but 95 of the 4,928 changed scalars, characters newer than the model's normalisation
-  table (㋿) plus fullwidth ～. `e2e-p52` case 6c writes a fact dense in ℃/㎡/㎏/㍿ and fails with the raw count. A
+  table (㋿) plus fullwidth ～. The sweep, that pair, and the 4096-vs-512 launch latency re-run with
+  `dev.mjs rerank-window` on the pinned GGUF (`docs/self-managed-llm-runtime.md` records the method and the run).
+  `e2e-p52` case 6c writes a fact dense in ℃/㎡/㎏/㍿ and fails with the raw count. A
   declared window ≤ 6 (no room for a pair's overhead) reads as NO window (`RerankInputCap.UsableWindow`, also
   applied by `DeclaredWindow`), rather than cutting every query and candidate to nothing; no row declares one, and
   no suite can drive it. **Stated limits**: a row WITHOUT a window keeps the 1,000-character cap, an untouched query
@@ -1089,8 +1099,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   FTS", the token's "The operation was canceled." rather than `HttpClient.Timeout`'s message, 120 s after the last
   answer). `VerificationDeadlinePolicy` gives every verifier half the tool's deadline and turns its own expiry —
   the caller's token still live — into NoOpinion, so the engine's page stands; a real caller cancellation still
-  propagates. Annotation deliberately has none: there the tool's deadline leaves `graph_ref` empty and the startup
-  back-fill re-indexes the fact WITH subjects, where a deadline would index it permanently without them. The test
+  propagates. Annotation deliberately has none: there the tool's deadline fails the index, `graph_ref` is left empty
+  and the startup back-fill re-indexes the fact WITH subjects, where a deadline would index it permanently without
+  them. **That was true of a NEW fact only until 2026-09-24**: an EDIT (same kind+topic) kept the ref to its previous
+  content's node — `RememberFactTool` wrote the ref only when it was non-null, and `LearnAsync` updated the content
+  without touching it — and the back-fill revisits only EMPTY refs, so the new content and its subjects stayed out of
+  the graph until a rebuild. The memory import had the same hole without any failure, since it never indexes. Now the
+  tool writes the null and `LearnAsync` clears the ref of a row whose content CHANGED; `e2e-p48` case 9 hangs the
+  annotation of an edit, edits a second fact by import, and asserts both refs empty and both facts re-indexed with
+  their new content at the next start (the edited one with its subject). The test
   knob `GATHERLIGHT_JUDGE_DEADLINE_SECONDS` can only shorten it. `e2e-p52` case 3b hangs the chat judge and asserts
   a graph-ranked page in seconds; with the policy removed it gets `ranked: fts` after 120 s.
 - **A recall layer's BACKEND is a SOURCE, and a source serves a layer by existing.** One interface per layer
@@ -1525,8 +1542,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 ## Dev loop
 
-- `node devtools/dev.mjs <server|host|desktop-e2e|vite|build|publish|resources-pack|e2e|smoke|memory|eval|embed-bench|test-data|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs|check-host-actions>`
-  — kept in step with the tool's own usage line (`dev.mjs`, bottom of the switch).
+- `node devtools/dev.mjs <server|host|vite|build|publish|resources-pack|e2e|desktop-e2e|smoke|shot|memory|eval|embed-bench|recall-bench|judge-bench|rerank-window|test-data|new-tool|fetch-tools|install-hooks|check-sensitive|check-layering|check-ui-registry|check-tool-docs|check-host-actions|check-doc-refs>`
+  — kept in step with the tool's own usage line (`dev.mjs`, bottom of the switch). It had drifted by six commands
+  (2026-09-24); `rerank-window` re-measures what mMiniLMv2's declared 512-token window rests on.
 - **`fatal: timeout` USUALLY MEANS THE SERVER NEVER BOUND, and the reason is in the fixture's own log.**
   A suite whose Kestrel fails to start reports only that the harness ran out of patience — which reads
   exactly like a hang in the code under test, and cost a long hunt for a regression that did not exist.

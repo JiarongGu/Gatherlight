@@ -14,6 +14,8 @@
 //      at all — the marker postdates the layout it names, so "no marker" IS the upgrade case
 //   8. …but an upgrade that moved only the VECTORS (Lyntai 3.2's collection address) does NOT rebuild an
 //      install with no embedder: nothing there reads a vector, and a rebuild would erase decay and links
+//   9. an EDITED fact whose re-index fails — and one edited by the memory import, which never indexes — keeps
+//      no ref to its previous content's node, so the next start's back-fill indexes the NEW content
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -31,11 +33,17 @@ const PORT = 5498;
 const RESTORE_PORT = 5499;
 const UPGRADE_PORT = 5497;
 const VECTOR_MOVE_PORT = 5495;
+const BACKFILL_PORT = 5512;
+
+/** A fact whose content carries this marker is never annotated by the stub while the server runs with
+ *  GATHERLIGHT_STUB_HANG_ANNOTATION set to it — case 9's failing re-index. */
+const HANG = 'zzhangindex';
 
 let server = null;
 let restoreServer = null;
 let upgraded = null;
 let vectorMove = null;
+let backfill = null;
 
 const remember = (c, kind, topic, content, confidence = 0.8) =>
   c.call('remember_fact', { kind, topic, content, source: `https://example.test/${encodeURIComponent(topic)}`, confidence });
@@ -475,7 +483,9 @@ try {
   ok('(fixture) the marker names the pre-3.2 layout',
     vdb.prepare("SELECT value FROM app_config WHERE key = 'facts.index.layout'").get()?.value === '2');
 
-  vectorMove = startServer({ dataDir, port: VECTOR_MOVE_PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+  // The hang marker is case 9's; no fact before case 9 carries it, so case 8 sees an ordinary server.
+  vectorMove = startServer({ dataDir, port: VECTOR_MOVE_PORT,
+    env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_HANG_ANNOTATION: HANG } });
   await waitHealthy(`http://127.0.0.1:${VECTOR_MOVE_PORT}`);
   const vc = makeClient(`http://127.0.0.1:${VECTOR_MOVE_PORT}`);
   // Something must go through the index after boot, or "unchanged" could just mean "not run yet" — the
@@ -488,6 +498,119 @@ try {
   ok('…and it still ranks', afterMove.result?.ranked === 'graph', `ranked=${afterMove.result?.ranked}`);
   vdb.close();
 
+  // --- 9. an EDITED fact whose re-index fails is re-indexed at the next start -----------------------
+  // Same kind+topic is an EDIT: the row's content changes in place, and the graph — which dedups by content hash —
+  // gets a NEW node for the new text. The back-fill that repairs a failed index (FactIndexStep → SyncAsync) revisits
+  // only rows whose ref is EMPTY. A NEW fact whose index fails has none, so it was retried; an edited one kept the
+  // ref to its PREVIOUS content's node — RememberFactTool wrote the ref only when the index returned one, and
+  // LearnAsync updated the content without touching it — so the new content and its subjects stayed out of the graph
+  // until a rebuild, while the docs promised the back-fill would index it WITH subjects. The memory import had the
+  // same hole with no failure at all: it edits through LearnAsync and never indexes.
+  //
+  // The failure is the one those docs describe: the annotation never answers (the stub hangs on the marker while
+  // this server runs with GATHERLIGHT_STUB_HANG_ANNOTATION), and the write's CALLER gives up — here the HTTP client,
+  // whose abort cancels the tool's token exactly as the tool's own 120 s deadline would, only sooner. Lyntai
+  // propagates a caller cancellation out of the annotation, so nothing reaches the graph and IndexAsync returns null.
+  const vbase = `http://127.0.0.1:${VECTOR_MOVE_PORT}`;
+  const dbFile = path.join(dataDir, 'state', 'gatherlight.db');
+  const rowOf = (topic) => {
+    const db = new DatabaseSync(dbFile);
+    try {
+      return db.prepare("SELECT content, COALESCE(graph_ref, '') AS ref FROM knowledge WHERE kind = 'schedule' AND topic = ?")
+        .get(topic) ?? null;
+    } finally { db.close(); }
+  };
+  const nodeOf = (ref) => {
+    const db = new DatabaseSync(dbFile);
+    try {
+      const id = Number(String(ref).split('#').pop());
+      return {
+        content: db.prepare("SELECT content FROM lyntai_memory_node WHERE engine = 'facts/graph' AND id = ?").get(id)?.content ?? null,
+        subjects: db.prepare("SELECT subject FROM lyntai_memory_subject WHERE engine = 'facts/graph' AND node_id = ?")
+          .all(id).map((r) => r.subject),
+      };
+    } finally { db.close(); }
+  };
+
+  await remember(vc, 'schedule', 'ferry timetable', 'The ferry leaves the east pier at 07:40 on weekdays.');
+  await remember(vc, 'schedule', 'museum hours', 'The city museum opens at 09:00 and closes at 17:00.');
+  const ferryBefore = rowOf('ferry timetable');
+  const museumBefore = rowOf('museum hours');
+  ok('(fixture) both facts were indexed on the way in', !!ferryBefore?.ref && !!museumBefore?.ref,
+    JSON.stringify({ ferryBefore, museumBefore }));
+
+  // THE EDIT THROUGH THE TOOL, whose re-index cannot finish.
+  const ferryV2 = `The ferry now leaves the east pier at 08:10 on weekdays ${HANG}.`;
+  let gaveUp = false;
+  try {
+    await fetch(`${vbase}/api/tools/call`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'remember_fact', arguments: {
+        kind: 'schedule', topic: 'ferry timetable', content: ferryV2, source: 'https://example.test/ferry', confidence: 0.8 } }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch { gaveUp = true; }
+  ok('(fixture) the edit was still waiting on the hung annotation when its caller gave up', gaveUp);
+
+  // The server finishes the call after the client has gone: the record of truth is written first, then the index is
+  // cancelled and logged, then the ref is written. The SYNC POINT is the index failing — polling the row alone would
+  // stop as soon as the content changed, before the index had ended at all.
+  const logDir = path.join(dataDir, 'state', 'logs');
+  const logText = () => (fs.existsSync(logDir)
+    ? fs.readdirSync(logDir).map((n) => fs.readFileSync(path.join(logDir, n), 'utf8')).join('\n') : '');
+  const failedIndex = /could not index schedule\/ferry timetable/;
+  for (let i = 0; i < 60 && !failedIndex.test(logText()); i++) await new Promise((r) => setTimeout(r, 500));
+  // Non-vacuity: the index REALLY failed — by cancellation, the tool-deadline path — rather than the ref being empty
+  // because nothing had finished yet.
+  ok('(fixture) the re-index of the edit really failed — the fact index logged it',
+    failedIndex.test(logText()),
+    logText().split('\n').filter((l) => /fact index/.test(l)).slice(-3).join(' | ') || '(no fact index lines)');
+  await new Promise((r) => setTimeout(r, 500));   // the ref is written right after IndexAsync returns
+  const ferryEdited = rowOf('ferry timetable');
+  ok('(fixture) the edit reached the record of truth', ferryEdited?.content === ferryV2, JSON.stringify(ferryEdited));
+  ok('THE POINT: a failed re-index of an EDITED fact leaves no ref to its previous content\'s node',
+    ferryEdited?.ref === '', JSON.stringify({ before: ferryBefore?.ref, after: ferryEdited?.ref }));
+
+  // THE EDIT THROUGH THE MEMORY IMPORT, which never indexes.
+  const museumV2 = 'The city museum now opens at 10:00 and closes at 18:00 on weekdays.';
+  const imported2 = await fetch(`${vbase}/api/memory/import`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ gatherlightMemory: 1, knowledge: [{
+      kind: 'schedule', topic: 'museum hours', content: museumV2, source: 'https://example.test/museum', confidence: 0.8 }] }),
+  });
+  const museumEdited = rowOf('museum hours');
+  ok('(fixture) the memory import edited the fact in place',
+    imported2.status === 200 && museumEdited?.content === museumV2, `${imported2.status} ${JSON.stringify(museumEdited)}`);
+  ok('THE POINT: an edit by the memory import leaves no ref to the previous content\'s node either',
+    museumEdited?.ref === '', JSON.stringify({ before: museumBefore?.ref, after: museumEdited?.ref }));
+
+  // …AND THE NEXT START INDEXES THE NEW CONTENT. A new port (see case 7), and no hang marker: the same fact now
+  // annotates. The layout marker is current, so this start only back-fills.
+  vectorMove.stop();
+  vectorMove = null;
+  backfill = startServer({ dataDir, port: BACKFILL_PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+  await waitHealthy(`http://127.0.0.1:${BACKFILL_PORT}`);
+  const bc = makeClient(`http://127.0.0.1:${BACKFILL_PORT}`);
+
+  const ferryAfter = rowOf('ferry timetable');
+  const ferryNode = ferryAfter?.ref ? nodeOf(ferryAfter.ref) : null;
+  ok('THE POINT: the back-fill indexed the edited fact\'s NEW content — a new node, holding the new text',
+    !!ferryAfter?.ref && ferryAfter.ref !== ferryBefore?.ref && ferryNode?.content === ferryV2,
+    JSON.stringify({ before: ferryBefore?.ref, after: ferryAfter?.ref, node: ferryNode }));
+  ok('…WITH its subject: the annotation the failed write never got ran on the back-fill',
+    (ferryNode?.subjects ?? []).includes('sailingtimes'), JSON.stringify(ferryNode?.subjects ?? null));
+  const museumAfter = rowOf('museum hours');
+  const museumNode = museumAfter?.ref ? nodeOf(museumAfter.ref) : null;
+  ok('…and the fact edited by import is indexed with its new content too',
+    !!museumAfter?.ref && museumAfter.ref !== museumBefore?.ref && museumNode?.content === museumV2,
+    JSON.stringify({ before: museumBefore?.ref, after: museumAfter?.ref, node: museumNode }));
+  // What the household sees: the subject names the edited fact, which only the new node carries.
+  const bySailing = await bc.call('recall_facts', { query: 'sailingtimes', limit: 5 });
+  ok('…so recall reaches the edited fact through its new subject, ranked by the graph',
+    bySailing.result?.ranked === 'graph'
+      && (bySailing.result?.facts ?? []).some((f) => f.topic === 'ferry timetable' && f.ref === ferryAfter?.ref),
+    JSON.stringify({ ranked: bySailing.result?.ranked, facts: (bySailing.result?.facts ?? []).map((f) => [f.topic, f.ref]) }));
+
 } catch (err) {
   fail('e2e-p48 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {
@@ -495,6 +618,7 @@ try {
   try { restoreServer?.stop(); } catch {}
   try { upgraded?.stop(); } catch {}
   try { vectorMove?.stop(); } catch {}
+  try { backfill?.stop(); } catch {}
 }
 
 done();

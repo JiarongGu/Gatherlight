@@ -148,10 +148,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
               // the FIRST time with this binding, and "still" would hide exactly that.
               + "写入事实时的主题标注由 Claude CLI 完成 —— " + MemorySources.CliTaggingCost + ";"
               + "没有已登录的 CLI 时只是不标注,检索时的判断照常。"
-            // The CLI figure is the one the model notes beside it quote — docs/judge-bench.md Run 1's content-only arm,
-            // the same 240-question fixture — so this line and the Gemma note cannot disagree about one number.
+            // The CLI figure, with its configuration, from its one writer — the CLI row and the model notes quote the
+            // same constant, so this line, that row and the Gemma note cannot disagree about one number.
             : "每次记录事实与每次检索各调用一次本机模型:不消耗账号额度,不联网,断网也能用。"
-              + "没有 CLI 那条的进程启动开销(那条在本应用双语测试集上每次检索约 8.7 秒,串行中位数)。";
+              + "没有 CLI 那条的进程启动开销 —— 那条在" + MemorySources.ClaudeJudgeWaitMeasured + "。";
 
     /// <summary>No address to ask for: the app chose the port and started the process. That was the whole
     /// difference from the retired <c>openai-compat</c> backend — the same protocol, with the household owning

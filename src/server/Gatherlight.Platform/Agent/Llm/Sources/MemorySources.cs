@@ -101,6 +101,23 @@ public static class MemorySources
     /// recall, so it is the app's most frequent model call by a wide margin.</summary>
     public const string DefaultJudgeModel = "haiku";
 
+    /// <summary>The Claude CLI judge's measured wait per recall — the FIGURE alone, for a sentence that already
+    /// states the configuration (the model notes, which open with the fixture). ONE writer, because every surface
+    /// that weighs a local judge against this one quotes it: the CLI row's description and cost line, the llama.cpp
+    /// cost line, and the chat and reranker notes. They read 9–17 s on the CLI row and 8.7 s beside it — two
+    /// configurations in one picker, the first carrying none.
+    ///
+    /// <para>docs/judge-bench.md Run 1 (2026-09-23), its CONTENT-ONLY arm: 8,733 ms serial median over 12 queries of
+    /// the 240-question bilingual fixture, 语义 off, <see cref="DefaultJudgeModel"/>, the judge reading each fact's
+    /// content alone — the input that ships since 2026-09-24. Its topic — content arm, the 1.3.0 input, read 9,531 ms.
+    /// A number belongs to its configuration.</para></summary>
+    public const string ClaudeJudgeWait = "约 8.7 秒";
+
+    /// <summary><see cref="ClaudeJudgeWait"/> WITH its configuration, for a surface that has no fixture preamble of
+    /// its own. Opens with the fixture so it reads after 「实测等待:」 or 「那条在」 alike.</summary>
+    public const string ClaudeJudgeWaitMeasured =
+        "本应用双语测试集上(240 道提问、不开语义、Haiku、判断按默认只读事实内容)每次检索" + ClaudeJudgeWait + "(串行中位数)";
+
     /// <summary>What TAGGING costs when the bound judge only CHECKS — a reranker scores and never generates, so
     /// every fact write is annotated by the Claude CLI instead. ONE writer for the clause, because three
     /// surfaces carry it at three moments of one decision: the reranker's model note (while choosing), the

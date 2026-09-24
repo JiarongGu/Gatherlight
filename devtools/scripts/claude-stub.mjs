@@ -212,9 +212,20 @@ if (prompt.includes('{"subjects"')) {
   // the "read the CURRENT request" rule further down exists to prevent, one call site over. It cost a
   // failing selectivity assertion here rather than shipping, because that assertion exists.
   const fact = prompt.split('Fact:\n').pop();
+  // HANG, on request: a server started with GATHERLIGHT_STUB_HANG_ANNOTATION=<marker> never gets an annotation
+  // for a fact containing that marker, so the write's index is ended by its caller's cancellation — the way a
+  // tool deadline ends a real hung annotator (e2e-p48 case 9). An env var rather than a prompt token, so the SAME
+  // fact annotates normally once a server without it back-fills it. Bounded: the server kills this process on
+  // cancellation, and if nothing does it still exits.
+  const hangOn = process.env.GATHERLIGHT_STUB_HANG_ANNOTATION;
+  if (hangOn && fact.includes(hangOn)) {
+    await new Promise((r) => setTimeout(r, 30000));
+    process.exit(1);
+  }
   const handles = [];
   if (fact.includes('伴侣')) handles.push('pairbond');
   if (fact.includes('旅行证件')) handles.push('paperwork');
+  if (fact.includes('zzhangindex')) handles.push('sailingtimes');
   const verdict = JSON.stringify({ subjects: handles });
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: verdict }] } });
   done(verdict);
