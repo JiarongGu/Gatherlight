@@ -4320,3 +4320,226 @@ The same retry applies: a run that exits 127 before any arm starts is re-run unc
 
 Guard 5 keeps its wording: an abstention on any reranker arm is traced, and one on a chunked arm leaves the rule
 unread.
+
+## Run 6c — chunked reranker scoring, on the fixed proxy (2026-09-24, llama.cpp b10549; claude never called — every server on the stub)
+
+**Commands**, exactly as registered in `c7be059`, which is both runs' app HEAD (v1.3.0). The server binary was built
+from `d64fcea`'s C#, unchanged since; the bench is `41ad454`'s.
+
+- **Long**: the first attempt exited 127 at 11:17:07Z, after the seed check and before any arm started, leaving no
+  process behind. It was re-run unchanged, as registered, and ran 11:17:07Z–11:57:38Z.
+- **Short**: one deviation, then the registered run.
+  - The first short run (11:57:39Z–12:01:00Z) started after this round's bench edits for shipping had been made in
+    the working tree. Its `rr` arms therefore pinned `GATHERLIGHT_RERANK_CHUNKING=off` explicitly instead of blank.
+    Its binary's default was off, so the behaviour was the same, and its outcome was the same (identity YES for all
+    three), but it is not the registered instrument.
+  - The short command was re-run at 12:01:25Z–12:04:38Z with the COMMITTED bench (`git diff HEAD` empty for the
+    script). **That run is the one read below.** The first is kept as `devtools/_judge-bench-short-run6c-pinned-off.txt`.
+
+**Every guard held:**
+
+| guard | long | short |
+|---|---|---|
+| 1. instrument | fixture accepted; seed re-verified (判断 off, 0 claude-cli calls, 60 exact notes, 60 graph nodes); digest `976af4663b6e` = Runs 6/6b | seed reused, fixture hash `9680443e…`; digest **`f661eb6a056e`** = Runs 1–5b |
+| 2. engine A/A | `formula`/`formula2` byte-identical, p = 1.000 | byte-identical, p = 1.000 |
+| 3. startup | every reranker arm read back `llama-cpp · <id>`, no startup warning, 0 claude-cli calls at startup and over the run; every `rrk` announced its knob, no `rr` printed a `[measurement]` line | the same |
+| 4. router log | each model spawned once; mMiniLMv2 `n_ctx_slot = 512`, largest task 429 tokens (BGE 857, LAMAR 858); no error or truncation line | each once; largest task 71–72 tokens; no error or truncation line |
+| 5. coverage | `judged` = `graph` = 60 in every position of every reranker arm | `judged` = `graph` = 234 of 240 on `all`, every set, every reranker arm (6 FTS queries, as in every run on this seed) |
+| 6. expressible | by construction (Run 6b's windows table) | every candidate one window |
+| **7. every request reached the model** | forwarded = proxied: BGE 505/505, LAMAR 505/505, mMiniLMv2 506/506; 0 retries, 0 failures | 260/260 for each model; 0 retries, 0 failures |
+
+The bench printed **no WARNING line** in either run.
+
+### The headline — chunked against the cut, long notes, found@8 of 60
+
+`b` = cut hit & chunked miss, `c` = the reverse.
+
+| position | 公式 | BGE cut → chunked (b/c, p) | LAMAR cut → chunked (b/c, p) | **mMiniLMv2** cut → chunked (b/c, p) |
+|---|---|---|---|---|
+| start | 21 | 49 → 47 (2/0, p = 0.500) | 55 → 54 (1/0, p = 1.000) | 52 → 50 (2/0, p = 0.500) |
+| middle | 24 | 53 → 53 (0/0) | 53 → 54 (0/1, p = 1.000) | 8 → **50** (0/42, p < 0.001) |
+| **end** | 29 | 50 → 50 (0/0) | 52 → 49 (3/0, p = 0.250) | **4 → 44 (0/40, p < 0.001, +66.7pp, [+52.2, +76.8])** |
+| beyond | 30 | 3 → **51** (0/48, p < 0.001) | 3 → **52** (0/49, p < 0.001) | 7 → **38** (3/34, p < 0.001) |
+
+### The decision rule, applied
+
+- **(a) holds.** mMiniLMv2 at `end`, found@8: 4 → 44 of 60, b/c 0/40, exact McNemar p < 0.001, c − b = +40.
+- **(b) holds.** At `start`, no reranker is significantly worse on either metric:
+
+  | reranker | found@8 b/c, p | top-1 b/c, p |
+  |---|---|---|
+  | BGE | 2/0, 0.500 | 3/0, 0.250 |
+  | LAMAR | 1/0, 1.000 | 0/1, 1.000 |
+  | mMiniLMv2 | 2/0, 0.500 | 6/1, 0.125 |
+
+- **(c) holds.** The identity check read **YES for all three rerankers**: 240/240 rows identical in position, verdict
+  flag, graph or FTS, rows returned and errors, with the whole page compared on 240/240 and every rerank body hash on
+  240/240. Each pair's `all` row: BGE 90 / 203, LAMAR 86 / 208, mMiniLMv2 99 / 199 (top-1 / found@8, both arms).
+- **(d)** The serial medians are below.
+
+**All four hold, so chunking becomes the DEFAULT** (what shipped is at the end of this section).
+
+### Accuracy — `all`, long notes
+
+```
+arm                                                               n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed has no tags)                         240  0    240    0       0         68/240    104/240   0.323   415
+公式 · no verification · A/A twin                                 240  0    240    0       0         68/240    104/240   0.323   415            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition                    240  0    240    240     240       66/240    155/240   0.368   9072           -2 / +51 / +0.045
+reranker bge-reranker-v2-m3-Q5_K_M · partition · chunked          240  0    240    240     240       87/240    201/240   0.487   9324           +19 / +97 / +0.164
+reranker LAMAR-600m.Q5_K_M · partition                            240  0    240    240     240       54/240    163/240   0.330   9360           -14 / +59 / +0.008
+reranker LAMAR-600m.Q5_K_M · partition · chunked                  240  0    240    240     240       76/240    209/240   0.437   9425           +8 / +105 / +0.114
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · partition            240  0    240    240     240       31/240    71/240    0.176   4165           -37 / -33 / -0.146
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · partition · chunked  240  0    240    240     240       79/240    182/240   0.447   4403           +11 / +78 / +0.124
+```
+
+(`partition` here is the cut: the run's `rr` arms, knob blank, whose default was off.) Paired on `all`, chunked
+against the cut, every one a finding in the chunked arm's favour with no set against it:
+
+| reranker | found@8 b/c, net, 95% | top-1 b/c, net, 95% |
+|---|---|---|
+| BGE | 2/48, +19.2pp, [+13.7, +24.3] | 7/28, +8.8pp, [+3.9, +13.4] |
+| LAMAR | 4/50, +19.2pp, [+13.5, +24.5] | 1/23, +9.2pp, [+5.2, +13.0] |
+| mMiniLMv2 | 5/116, +46.3pp, [+39.0, +52.7] | 9/57, +20.0pp, [+13.7, +26.0] |
+
+Against `formula` on `all`, found@8 (b = formula hit & arm miss): chunked BGE 0/97, LAMAR 0/105, mMiniLMv2 18/96, all
+findings; the cut mMiniLMv2 in this run was 77/44 (p = 0.003, below `formula`, not a finding only because `cross` goes
+the other way).
+
+### By position — accuracy and coverage (cells: top-1 / found@8 / judged-of-graph)
+
+```
+arm                                                               start (n=60)          middle (n=60)         end (n=60)            beyond (n=60)
+公式 · no verification (seed has no tags)                         16 / 21 / 0-60        13 / 24 / 0-60        19 / 29 / 0-60        20 / 30 / 0-60
+reranker bge-reranker-v2-m3-Q5_K_M · partition                    21 / 49 / 60-60       21 / 53 / 60-60       22 / 50 / 60-60       2 / 3 / 60-60
+reranker bge-reranker-v2-m3-Q5_K_M · partition · chunked          18 / 47 / 60-60       20 / 53 / 60-60       21 / 50 / 60-60       28 / 51 / 60-60
+reranker LAMAR-600m.Q5_K_M · partition                            18 / 55 / 60-60       15 / 53 / 60-60       18 / 52 / 60-60       3 / 3 / 60-60
+reranker LAMAR-600m.Q5_K_M · partition · chunked                  19 / 54 / 60-60       15 / 54 / 60-60       17 / 49 / 60-60       25 / 52 / 60-60
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · partition            24 / 52 / 60-60       2 / 8 / 60-60         2 / 4 / 60-60         3 / 7 / 60-60
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · partition · chunked  19 / 50 / 60-60       20 / 50 / 60-60       22 / 44 / 60-60       18 / 38 / 60-60
+```
+
+Top-1, chunked against the cut, per position (b/c, p): BGE start 3/0 (0.250), beyond 0/26 (< 0.001); LAMAR beyond 0/22
+(< 0.001); mMiniLMv2 start 6/1 (0.125), middle 0/18, end 0/20 (both < 0.001), beyond 3/18 (0.001). Every other cell is
+p = 1.000.
+
+**Reported beside the rule:**
+
+- **BGE `beyond`**: 3 → 51 of 60, 0/48, p < 0.001. Against `formula` (30), chunked is 0/21, +35.0pp, where the cut was
+  28/1 BELOW it. LAMAR: 3 → 52, and 0/22 against `formula`.
+- **mMiniLMv2 `middle`**: 8 → 50, 0/42, p < 0.001. Against `formula` (24) it is now 3/29, +43.3pp, where the cut was
+  21/5 below it.
+- **mMiniLMv2 `beyond`** stays short of BGE and LAMAR (38 against 51–52): its notes need 3–4 windows, and the answer sits
+  in the last one. Against `formula` (30) it is 10/18, p = 0.185, no longer the loss the cut was (28/5).
+- **What reached the reranker.** The target's answer text was among the documents sent at every position for every
+  chunked arm (48–55 of 60), and in 0 of 60 for the cut mMiniLMv2 at `middle`/`end`/`beyond` and the cut BGE and
+  LAMAR at `beyond`. Where it was not sent on a chunked arm, the target was not a candidate.
+
+### By fact language — descriptive
+
+Computed from the saved rows by the scratch `devtools/_run6b-analyse.mjs`. Each cell is top-1 / found@8 / n.
+
+```
+position·lang   formula      rr:BGE       rrk:BGE      rr:LAMAR     rrk:LAMAR    rr:mMiniLM   rrk:mMiniLM
+start·zh        9/13/40      14/34/40     11/34/40     10/36/40     11/35/40     16/38/40     13/37/40
+start·en        6/7/16       6/12/16      6/11/16      7/16/16      7/16/16      7/11/16      5/10/16
+start·ja        1/1/4        1/3/4        1/2/4        1/3/4        1/3/4        1/3/4        1/3/4
+middle·zh       9/14/40      12/35/40     12/35/40     9/35/40      9/36/40      2/5/40       12/34/40
+middle·en       4/9/16       8/14/16      8/14/16      6/14/16      6/14/16      0/0/16       8/12/16
+middle·ja       0/1/4        1/4/4        0/4/4        0/4/4        0/4/4        0/3/4        0/4/4
+end·zh          14/18/40     17/34/40     15/34/40     13/36/40     12/33/40     2/3/40       15/29/40
+end·en          4/10/16      4/14/16      5/14/16      4/15/16      4/15/16      0/0/16       5/12/16
+end·ja          1/1/4        1/2/4        1/2/4        1/1/4        1/1/4        0/1/4        2/3/4
+beyond·zh       11/19/40     2/3/40       19/36/40     1/1/40       16/36/40     3/6/40       8/23/40
+beyond·en       8/10/16      0/0/16       8/14/16      1/1/16       8/15/16      0/0/16       8/13/16
+beyond·ja       1/1/4        0/0/4        1/1/4        1/1/4        1/1/4        0/1/4        2/2/4
+```
+
+The English 0/16s of Run 6 are gone: the windows are still character-bounded, but the answer is inside one of them.
+
+### Latency
+
+Serial medians over 12 queries, warm, one GPU, three models resident; verdict-carrying recalls only (every recall carried
+one).
+
+| arm | long notes (ms) | short facts (ms) |
+|---|---|---|
+| 公式 | 233 | 240 |
+| BGE, cut → chunked | 2,006 → **3,150** | 405 → 387 |
+| LAMAR, cut → chunked | 2,185 → **3,156** | 410 → 396 |
+| mMiniLMv2, cut → chunked | 515 → **1,155** | 300 → 309 |
+
+- On long notes chunking costs about 1.0–1.1 s per recall on BGE and LAMAR, and 0.6 s on mMiniLMv2. The chunked arms sent 74
+  (BGE) and 78 (LAMAR) documents per call on average, at most 91, and mMiniLMv2 161, at most 245 — against 47–50 for the
+  cut. No document was longer than its budget (1,000; 490).
+- On short facts the requests are byte-identical, and the medians differ only by noise.
+- The slowest single recall of the long accuracy pass took 14.7 s (eight arms contending), far from the 60 s deadline.
+
+### What it says
+
+- **Scoring a long note in windows gives the reranker back its view of the whole note.** Where the cut hid the answer,
+  chunking recovers nearly all of it: mMiniLMv2 at `middle`/`end` 8/4 → 50/44, BGE and LAMAR past 1,000 characters
+  3/3 → 51/52. The recall that the cut pushed BELOW no judge is now above it.
+- **Where the cut already read the answer, nothing measurable was lost.** At `start` every found@8 difference is 0–2
+  queries and every top-1 difference 0–6, none significant. The obvious risk there — later windows of OTHER notes,
+  which name the question's subject in passing, outscoring the answer — did not show at this size.
+- **Short facts are untouched**, byte for byte, for all three rerankers.
+- **The price is time on long notes**: 1.4–1.6× the cut's recall on BGE and LAMAR and 2.2× on mMiniLMv2 here.
+
+### What it does NOT say
+
+- **One constructed fixture, one machine, one GPU.** Notes of 883–1,241 characters with the answer at a controlled
+  position, padded with neutral filler and topic mentions. It says what happens WHEN a long note's answer is past the
+  cut, not how often a household's notes are like that.
+- **Every candidate in a recall was long, or every one was short.** A household mixes them. A long note's best window
+  has up to five chances to score high where a short fact has one, so in a mixed recall MaxP may favour long notes.
+  That is unmeasured.
+- **Notes past five windows** (4,000 characters for BGE and LAMAR, ~1,000–2,000 for mMiniLMv2 depending on the query)
+  are read with gaps between windows. Unmeasured; no note here needed more than four.
+- **A recall of more than 96 long candidates** gets fewer windows per candidate (480 per call at most). The per-call
+  cap is measured for time (above and in the design), not for accuracy.
+- **No embedder, a page of 8, ≤ 60 candidates, no subject tags on the long seed.** A CPU-only machine is unmeasured, and
+  its latency would be far worse.
+- The memo proxy shares replies between arms sending identical bytes. That removes llama.cpp's third-decimal drift
+  between arms, which is what (c) needed. It does not change what any single arm was told.
+
+### What shipped
+
+- **Chunking is the default.** `RerankChunking.Default` is `true`, so `LlamaCppSource.Wiring` wraps the reranker's
+  provider in `ChunkedScoreProvider` and `RerankInputCap` no longer cuts candidates.
+- **The knob is KEPT**, as `GATHERLIGHT_JUDGE_INPUT` was when its default flipped. `GATHERLIGHT_RERANK_CHUNKING=off`
+  reproduces the cut every reranker was measured under in Runs 2–6. judge-bench's `rr` and `rrf` arms now pin it `off`
+  (labels `partition · cut` and `fuse · cut`), and `rrk` pins it `on`, so re-launching Runs 2–6 measures what they
+  measured and every reranker arm announces its knob.
+- **The code comments** that argued "a cut is better than a refused call" now say where it holds (the other candidates)
+  and where it does not (the cut note), with Runs 6 and 6c: `RerankInputCap`, `ChunkedScoreProvider`, the mMiniLMv2
+  row's comment in `GgufCatalog`, and the reranker bullet in `.claude/rules/dev-conventions.md`.
+- **Household strings, before → after:**
+  - **mMiniLMv2 note.** Before: 「它一次最多只能读 512 个词元,所以应用会把提问和每条事实截短到放得下 —— 很长的事实只读开头约
+    250–500 个字符;这样截短对长事实的检索影响有多大还没有量过(测试集里的事实都很短)。」 After:
+    「它一次最多只能读 512 个词元:应用把提问截短到放得下,较长的事实则分成几段来读 —— 每段约 250–500 个字符,相邻两段有
+    重叠,一条最多 5 段 —— 各段分别打分、取最高的一段。这是量过才改的:在 60 条约 900–1,200 字的长笔记上(240 道提问、
+    不开语义、没有主题标注、每次由它挑 8 条上页),答案在笔记末尾时,只读开头的旧做法把答案带进前八只有 4/60,比不开判断
+    (29/60)还差;分段读之后是 44/60。答案在开头时两种做法没有显著差别(52/60 与 50/60)。还没有量过的:长短事实混在一起
+    时会怎样;还有长到 5 段读不完的事实(约 1,000–2,000 字以上,提问越长、每段越短),段与段之间会有读不到的部分。」
+  - **The rerankers' latency caveat** (BGE, LAMAR and mMiniLMv2 rows). Before: 「(模型已加载、在显卡上、每次不超过 60 条
+    候选时测得;只有 CPU 的机器,或候选更多的检索,可能慢得多 —— 默认每次取 8 条时候选最多 96 条,限定类别或一次要 34 条
+    以上时可达 400 条)」 After: 「(模型已加载、在显卡上、每次不超过 60 条候选、事实都很短时测得;只有 CPU 的机器、候选更多
+    或事实很长的检索,都可能慢得多 —— 默认每次取 8 条时候选最多 96 条,限定类别或一次要 34 条以上时可达 400 条;较长的事实会
+    分段打分、每段都要算一次,在 60 条约 900–1,200 字的长笔记上,BGE 与 LAMAR 每次检索约 3.2 秒,mMiniLMv2 约 1.2 秒)」
+  - **llama.cpp's description**, last clause. Before: 「(都是模型已加载后的实测)」 After: 「(都是模型已加载后、事实都很短
+    时的实测;事实很长时会更慢,见各模型的说明)」
+- **Tests.** `e2e-p52` cases 6b and 6c assert that a long fact reaches `/v1/rerank` as several windows, head in one and
+  TAIL in another, each fitting its pair budget (mMiniLMv2's NFKC 506, BGE's 1,000), and that a short fact in the same
+  call is sent whole, exactly as written. With `GATHERLIGHT_RERANK_CHUNKING=off` exactly the four window assertions fail
+  (the cut: one head-only document) and the short-fact ones pass. `p51` asserts the mMiniLMv2 note carries 4/60, 29/60
+  and 44/60 and no longer says the cost is unmeasured.
+
+**Evidence, local only** (gitignored):
+
+- long: `devtools/_judge-bench-long/results-2026-09-24T111707.456Z.json`, its `rows-*.jsonl`, `router.log` and `arm-*`,
+  and the output `devtools/_judge-bench-long-run6c.txt` (the 127 attempt's in `…run6c.txt.127-1`);
+- short: `devtools/_judge-bench/results-2026-09-24T120125.816Z.json`, its rows, `router.log` and `arm-*`, and
+  `devtools/_judge-bench-short-run6c.txt`; the deviating first run is `results-2026-09-24T115739.129Z.json`,
+  `router-run6c-pinned-off.log` and `devtools/_judge-bench-short-run6c-pinned-off.txt`;
+- the scratch `devtools/_run6c-drive.sh` and `devtools/_run6b-analyse.mjs`.
