@@ -1367,3 +1367,521 @@ parallel latency, and exact bytes.
 - **No reranker A/A pair.** The bench runs each model once per list. As context outside the decision, a re-analysis
   pairs this run's BGE with Run 2's (the same configuration and seed, and the same digest if the guard holds). That is
   the nearest thing to a model A/A this data has.
+
+## Run 4 — smaller rerankers (2026-09-24, llama.cpp b10549; claude 2.1.281, never called)
+
+**Command**, as registered:
+
+```
+node devtools/dev.mjs judge-bench --reuse-seed --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M,LAMAR-600m.Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0,Qwen3-Reranker-0.6B-Q6_K \
+  --resources=devtools/_rr-res --port-base=5620 --llama-port=5660 > devtools/_judge-bench-rr4.txt 2>&1
+
+node devtools/dev.mjs judge-bench --report-only=devtools/_judge-bench/results-2026-09-24T023624.720Z.json \
+  --baseline=devtools/_judge-bench/results-2026-09-23T113455.224Z.json:rr:bge-reranker-v2-m3-Q5_K_M \
+  > devtools/_judge-bench-rr4-vs-run2-bge.txt 2>&1
+```
+
+The design above was committed as `1d10235` before anything ran, and the run's app HEAD is that commit (v1.3.0). The
+bench is unchanged since Run 3, the server binary was built from this HEAD's sources, and no product code changed. `--resources` pointed at the same
+scratch folder as Runs 2–3, never at a household's data folder.
+
+**Seed**: Run 1's, reused (created 2026-09-23T08:55:21.396Z, annotated by claude `2.1.280 (Claude Code)`, fixture
+sha256 `9680443e206495ca8bcd067f80f4705cff5e31a365504fbac438413002ecf555`). Order seed **12345** (240 queries, 0
+same-fact adjacencies), **10 arms in parallel**, latency sample 12 queries.
+
+**Every guard held:**
+
+- **The formula digest** is **`f661eb6a056e`**, equal to Runs 1–3.
+- **The engine A/A pair** is byte-identical (p = 1.000 on every set).
+- **Every reranker arm** read back 判断 running `llama-cpp · <its id>` with no startup warning, and made **0**
+  claude-cli calls, at startup and over the whole run. The bench printed **no WARNING line**.
+- **The router log** shows each of the four models spawned as its own child and proxied **494** requests each. That
+  is 2 arms × 247: 234 graph recalls, 12 latency recalls and 1 warm. There is no error line and no truncation. The
+  mMiniLM child logged `n_ctx_slot = 512`, and the largest pair any XLM-R child processed was 72 tokens (146 for Qwen3,
+  whose rerank template wraps every pair).
+
+### The headline
+
+Partition arms, `all`, 240 queries. Every arm has the same configuration:
+
+- **base**: this run's `formula`, at 79 / 125;
+- **embedder**: none (语义 unbound);
+- **`EndorseCount`**: 8 = the page;
+- **candidates**: ≤ 60;
+- **input**: `RerankInputCap` at the shipped 1,000 characters, which cuts nothing on this fixture.
+
+| arm (partition) | bytes | top-1 | found@8 | Δ vs 公式 (top-1 / found@8) | found@8 vs BGE, paired (b/c, p, net, 95%) | top-1 vs BGE, paired | serial median |
+|---|---|---|---|---|---|---|---|
+| 公式 (base) | — | 79 | 125 | — | — | — | 237 ms |
+| BGE (control) | 468,392,352 | 90 | 204 | +11 / +79 | — | — | 447 ms |
+| LAMAR (control) | 468,393,760 | 86 | 208 | +7 / +83 | 0/4, p = 0.125, +4 (+1.7pp), [−0.1, +3.5] | 7/3, p = 0.344 | 498 ms |
+| **mMiniLM** | **132,584,000** | **99** | **199** | **+20 / +74** | **7/2, p = 0.180, −5 (−2.1pp), [−4.6, +0.5]** | **4/13, p = 0.049, +3.8pp** | **313 ms** |
+| Qwen3 (reference) | 494,879,136 | 92 | 207 | +13 / +82 | 1/4, p = 0.375, +3 (+1.3pp), [−0.7, +3.2] | 4/6, p = 0.754 | 1,530 ms |
+
+b = BGE hit & arm miss, c = the reverse. xVITA failed the screen and did not run.
+
+### Accuracy — the four sets and `all`
+
+```
+== same ==
+arm                                                            n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)                     60   0    60     0       0         42/60     54/60     0.769   325
+公式 · no verification · A/A twin                              60   0    60     0       0         42/60     54/60     0.769   323            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition                 60   0    60     60      60        43/60     57/60     0.808   967            +1 / +3 / +0.039
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                      60   0    60     60      60        42/60     55/60     0.790   994            +0 / +1 / +0.021
+reranker LAMAR-600m.Q5_K_M · partition                         60   0    60     60      60        42/60     57/60     0.795   958            +0 / +3 / +0.027
+reranker LAMAR-600m.Q5_K_M · fuse                              60   0    60     60      60        42/60     55/60     0.785   940            +0 / +1 / +0.017
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · partition  60   0    60     60      60        46/60     57/60     0.835   559            +4 / +3 / +0.066
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · fuse       60   0    60     60      60        42/60     54/60     0.792   505            +0 / +0 / +0.023
+reranker Qwen3-Reranker-0.6B-Q6_K · partition                  60   0    60     60      60        43/60     57/60     0.806   2466           +1 / +3 / +0.037
+reranker Qwen3-Reranker-0.6B-Q6_K · fuse                       60   0    60     60      60        42/60     54/60     0.780   2487           +0 / +0 / +0.011
+
+== cross ==
+arm                                                            n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)                     60   0    60     0       0         1/60      6/60      0.042   400
+公式 · no verification · A/A twin                              60   0    60     0       0         1/60      6/60      0.042   402            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition                 60   0    60     60      60        3/60      48/60     0.220   1336           +2 / +42 / +0.178
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                      60   0    60     60      60        2/60      12/60     0.071   1322           +1 / +6 / +0.030
+reranker LAMAR-600m.Q5_K_M · partition                         60   0    60     60      60        1/60      49/60     0.174   1339           +0 / +43 / +0.133
+reranker LAMAR-600m.Q5_K_M · fuse                              60   0    60     60      60        1/60      9/60      0.051   1343           +0 / +3 / +0.009
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · partition  60   0    60     60      60        3/60      46/60     0.236   688            +2 / +40 / +0.194
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · fuse       60   0    60     60      60        1/60      14/60     0.076   661            +0 / +8 / +0.034
+reranker Qwen3-Reranker-0.6B-Q6_K · partition                  60   0    60     60      60        2/60      49/60     0.215   2866           +1 / +43 / +0.173
+reranker Qwen3-Reranker-0.6B-Q6_K · fuse                       60   0    60     60      60        1/60      9/60      0.052   2830           +0 / +3 / +0.010
+
+== third ==
+arm                                                            n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)                     60   0    55     0       0         1/60      18/60     0.119   353
+公式 · no verification · A/A twin                              60   0    55     0       0         1/60      18/60     0.119   352            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition                 60   0    55     55      55        8/60      43/60     0.293   1138           +7 / +25 / +0.173
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                      60   0    55     55      55        8/60      20/60     0.205   1141           +7 / +2 / +0.086
+reranker LAMAR-600m.Q5_K_M · partition                         60   0    55     55      55        5/60      45/60     0.271   1180           +4 / +27 / +0.152
+reranker LAMAR-600m.Q5_K_M · fuse                              60   0    55     55      55        5/60      22/60     0.190   1180           +4 / +4 / +0.071
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · partition  60   0    55     55      55        12/60     40/60     0.324   530            +11 / +22 / +0.205
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · fuse       60   0    55     55      55        11/60     22/60     0.243   589            +10 / +4 / +0.123
+reranker Qwen3-Reranker-0.6B-Q6_K · partition                  60   0    55     55      55        8/60      44/60     0.306   2470           +7 / +26 / +0.186
+reranker Qwen3-Reranker-0.6B-Q6_K · fuse                       60   0    55     55      55        7/60      23/60     0.201   2495           +6 / +5 / +0.082
+
+== mixed ==
+arm                                                            n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)                     60   0    59     0       0         35/60     47/60     0.657   395
+公式 · no verification · A/A twin                              60   0    59     0       0         35/60     47/60     0.657   393            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition                 60   0    59     59      59        36/60     56/60     0.712   1324           +1 / +9 / +0.055
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                      60   0    59     59      59        35/60     51/60     0.681   1321           +0 / +4 / +0.024
+reranker LAMAR-600m.Q5_K_M · partition                         60   0    59     59      59        38/60     57/60     0.731   1313           +3 / +10 / +0.074
+reranker LAMAR-600m.Q5_K_M · fuse                              60   0    59     59      59        37/60     51/60     0.702   1319           +2 / +4 / +0.045
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · partition  60   0    59     59      59        38/60     56/60     0.732   716            +3 / +9 / +0.075
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · fuse       60   0    59     59      59        38/60     51/60     0.715   709            +3 / +4 / +0.058
+reranker Qwen3-Reranker-0.6B-Q6_K · partition                  60   0    59     59      59        39/60     57/60     0.738   2468           +4 / +10 / +0.082
+reranker Qwen3-Reranker-0.6B-Q6_K · fuse                       60   0    59     59      59        37/60     51/60     0.696   2472           +2 / +4 / +0.039
+
+== all ==
+arm                                                            n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed tags present)                     240  0    234    0       0         79/240    125/240   0.397   368
+公式 · no verification · A/A twin                              240  0    234    0       0         79/240    125/240   0.397   368            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition                 240  0    234    234     234       90/240    204/240   0.508   1191           +11 / +79 / +0.111
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                      240  0    234    234     234       87/240    138/240   0.437   1194           +8 / +13 / +0.040
+reranker LAMAR-600m.Q5_K_M · partition                         240  0    234    234     234       86/240    208/240   0.493   1198           +7 / +83 / +0.096
+reranker LAMAR-600m.Q5_K_M · fuse                              240  0    234    234     234       85/240    137/240   0.432   1195           +6 / +12 / +0.035
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · partition  240  0    234    234     234       99/240    199/240   0.532   623            +20 / +74 / +0.135
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · fuse       240  0    234    234     234       92/240    141/240   0.456   616            +13 / +16 / +0.059
+reranker Qwen3-Reranker-0.6B-Q6_K · partition                  240  0    234    234     234       92/240    207/240   0.516   2568           +13 / +82 / +0.119
+reranker Qwen3-Reranker-0.6B-Q6_K · fuse                       240  0    234    234     234       87/240    137/240   0.432   2571           +8 / +12 / +0.035
+```
+
+### Paired vs `formula` — McNemar exact, per query
+
+`b` = formula hit & arm miss, `c` = formula miss & arm hit.
+
+```
+  top-1:
+  arm                                                            set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  公式 · no verification · A/A twin                              all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+                                                                 same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                 cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                 third   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                 mixed   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+  reranker bge-reranker-v2-m3-Q5_K_M · partition                 all     240    3/14     0.013   +11 (+4.6pp)     [+1.2, +7.9]pp      no          YES (arm better)
+                                                                 same    60     2/3      1.000   +1 (+1.7pp)      [-6.1, +9.3]pp      —
+                                                                 cross   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —
+                                                                 third   60     0/7      0.016   +7 (+11.7pp)     [+2.8, +19.8]pp     —
+                                                                 mixed   60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —
+  reranker bge-reranker-v2-m3-Q5_K_M · fuse                      all     240    3/11     0.057   +8 (+3.3pp)      [+0.2, +6.4]pp      no          no
+                                                                 same    60     2/2      1.000   +0 (+0.0pp)      [-7.1, +7.1]pp      —
+                                                                 cross   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+                                                                 third   60     0/7      0.016   +7 (+11.7pp)     [+2.8, +19.8]pp     —
+                                                                 mixed   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —
+  reranker LAMAR-600m.Q5_K_M · partition                         all     240    1/8      0.039   +7 (+2.9pp)      [+0.4, +5.4]pp      no          YES (arm better)
+                                                                 same    60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —
+                                                                 cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                 third   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —
+                                                                 mixed   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+  reranker LAMAR-600m.Q5_K_M · fuse                              all     240    1/7      0.070   +6 (+2.5pp)      [+0.1, +4.9]pp      no          no
+                                                                 same    60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —
+                                                                 cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                 third   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —
+                                                                 mixed   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —
+  reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · partition  all     240    3/23     <0.001  +20 (+8.3pp)     [+4.2, +12.3]pp     no          YES (arm better)
+                                                                 same    60     2/6      0.289   +4 (+6.7pp)      [-2.9, +15.8]pp     —
+                                                                 cross   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —
+                                                                 third   60     0/11     <0.001  +11 (+18.3pp)    [+7.7, +27.8]pp     —
+                                                                 mixed   60     1/4      0.375   +3 (+5.0pp)      [-2.8, +12.5]pp     —
+  reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · fuse       all     240    5/18     0.011   +13 (+5.4pp)     [+1.5, +9.3]pp      no          YES (arm better)
+                                                                 same    60     4/4      1.000   +0 (+0.0pp)      [-9.5, +9.5]pp      —
+                                                                 cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                 third   60     0/10     0.002   +10 (+16.7pp)    [+6.4, +25.8]pp     —
+                                                                 mixed   60     1/4      0.375   +3 (+5.0pp)      [-2.8, +12.5]pp     —
+  reranker Qwen3-Reranker-0.6B-Q6_K · partition                  all     240    3/16     0.004   +13 (+5.4pp)     [+1.8, +8.9]pp      no          YES (arm better)
+                                                                 same    60     2/3      1.000   +1 (+1.7pp)      [-6.1, +9.3]pp      —
+                                                                 cross   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+                                                                 third   60     0/7      0.016   +7 (+11.7pp)     [+2.8, +19.8]pp     —
+                                                                 mixed   60     1/5      0.219   +4 (+6.7pp)      [-1.8, +14.7]pp     —
+  reranker Qwen3-Reranker-0.6B-Q6_K · fuse                       all     240    4/12     0.077   +8 (+3.3pp)      [-0.0, +6.6]pp      no          no
+                                                                 same    60     3/3      1.000   +0 (+0.0pp)      [-8.4, +8.4]pp      —
+                                                                 cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                 third   60     0/6      0.031   +6 (+10.0pp)     [+1.7, +17.7]pp     —
+                                                                 mixed   60     1/3      0.625   +2 (+3.3pp)      [-3.8, +10.2]pp     —
+  found@8:
+  arm                                                            set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  公式 · no verification · A/A twin                              all     240    0/0      1.000   +0 (+0.0pp)      [-0.8, +0.8]pp      YES         no
+                                                                 same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                 cross   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                 third   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                 mixed   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+  reranker bge-reranker-v2-m3-Q5_K_M · partition                 all     240    0/79     <0.001  +79 (+32.9pp)    [+26.7, +38.6]pp    no          YES (arm better)
+                                                                 same    60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+                                                                 cross   60     0/42     <0.001  +42 (+70.0pp)    [+55.7, +79.8]pp    —
+                                                                 third   60     0/25     <0.001  +25 (+41.7pp)    [+27.7, +52.9]pp    —
+                                                                 mixed   60     0/9      0.004   +9 (+15.0pp)     [+5.2, +23.8]pp     —
+  reranker bge-reranker-v2-m3-Q5_K_M · fuse                      all     240    5/18     0.011   +13 (+5.4pp)     [+1.5, +9.3]pp      no          YES (arm better)
+                                                                 same    60     2/3      1.000   +1 (+1.7pp)      [-6.1, +9.3]pp      —
+                                                                 cross   60     1/7      0.070   +6 (+10.0pp)     [+0.5, +18.9]pp     —
+                                                                 third   60     2/4      0.688   +2 (+3.3pp)      [-5.1, +11.6]pp     —
+                                                                 mixed   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —
+  reranker LAMAR-600m.Q5_K_M · partition                         all     240    0/83     <0.001  +83 (+34.6pp)    [+28.3, +40.3]pp    no          YES (arm better)
+                                                                 same    60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+                                                                 cross   60     0/43     <0.001  +43 (+71.7pp)    [+57.5, +81.3]pp    —
+                                                                 third   60     0/27     <0.001  +27 (+45.0pp)    [+30.8, +56.3]pp    —
+                                                                 mixed   60     0/10     0.002   +10 (+16.7pp)    [+6.4, +25.8]pp     —
+  reranker LAMAR-600m.Q5_K_M · fuse                              all     240    3/15     0.008   +12 (+5.0pp)     [+1.5, +8.4]pp      no          YES (arm better)
+                                                                 same    60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —
+                                                                 cross   60     1/4      0.375   +3 (+5.0pp)      [-2.8, +12.5]pp     —
+                                                                 third   60     1/5      0.219   +4 (+6.7pp)      [-1.8, +14.7]pp     —
+                                                                 mixed   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —
+  reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · partition  all     240    1/75     <0.001  +74 (+30.8pp)    [+24.6, +36.6]pp    no          YES (arm better)
+                                                                 same    60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+                                                                 cross   60     0/40     <0.001  +40 (+66.7pp)    [+52.2, +76.8]pp    —
+                                                                 third   60     1/23     <0.001  +22 (+36.7pp)    [+22.4, +48.6]pp    —
+                                                                 mixed   60     0/9      0.004   +9 (+15.0pp)     [+5.2, +23.8]pp     —
+  reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · fuse       all     240    5/21     0.002   +16 (+6.7pp)     [+2.5, +10.7]pp     no          YES (arm better)
+                                                                 same    60     2/2      1.000   +0 (+0.0pp)      [-7.1, +7.1]pp      —
+                                                                 cross   60     1/9      0.021   +8 (+13.3pp)     [+2.9, +22.9]pp     —
+                                                                 third   60     2/6      0.289   +4 (+6.7pp)      [-2.9, +15.8]pp     —
+                                                                 mixed   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —
+  reranker Qwen3-Reranker-0.6B-Q6_K · partition                  all     240    0/82     <0.001  +82 (+34.2pp)    [+27.9, +39.9]pp    no          YES (arm better)
+                                                                 same    60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+                                                                 cross   60     0/43     <0.001  +43 (+71.7pp)    [+57.5, +81.3]pp    —
+                                                                 third   60     0/26     <0.001  +26 (+43.3pp)    [+29.3, +54.6]pp    —
+                                                                 mixed   60     0/10     0.002   +10 (+16.7pp)    [+6.4, +25.8]pp     —
+  reranker Qwen3-Reranker-0.6B-Q6_K · fuse                       all     240    6/18     0.023   +12 (+5.0pp)     [+1.0, +9.0]pp      no          YES (arm better)
+                                                                 same    60     2/2      1.000   +0 (+0.0pp)      [-7.1, +7.1]pp      —
+                                                                 cross   60     1/4      0.375   +3 (+5.0pp)      [-2.8, +12.5]pp     —
+                                                                 third   60     3/8      0.227   +5 (+8.3pp)      [-2.7, +18.8]pp     —
+                                                                 mixed   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —
+```
+
+### Paired — the candidates against the controls and each other
+
+This is an excerpt of the bench's every-reranker block; the full block is in the run's output. `b` = right-hand arm hit
+& left-hand arm miss, `c` = the reverse (`rr:` = partition, `rrf:` = fuse).
+
+```
+  top-1:
+  arm                                                                                          set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  rr:LAMAR-600m.Q5_K_M vs rr:bge-reranker-v2-m3-Q5_K_M                                         all     240    7/3      0.344   -4 (-1.7pp)      [-4.3, +1.0]pp      no          no
+                                                                                               same    60     2/1      1.000   -1 (-1.7pp)      [-7.9, +4.7]pp      —
+                                                                                               cross   60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —
+                                                                                               third   60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —
+                                                                                               mixed   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —
+  rr:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M                  all     240    4/13     0.049   +9 (+3.8pp)      [+0.3, +7.1]pp      no          YES (arm better)
+                                                                                               same    60     1/4      0.375   +3 (+5.0pp)      [-2.8, +12.5]pp     —
+                                                                                               cross   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —
+                                                                                               third   60     0/4      0.125   +4 (+6.7pp)      [-0.4, +13.3]pp     —
+                                                                                               mixed   60     2/4      0.688   +2 (+3.3pp)      [-5.1, +11.6]pp     —
+  rr:Qwen3-Reranker-0.6B-Q6_K vs rr:bge-reranker-v2-m3-Q5_K_M                                  all     240    4/6      0.754   +2 (+0.8pp)      [-1.9, +3.5]pp      no          no
+                                                                                               same    60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —
+                                                                                               cross   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —
+                                                                                               third   60     2/2      1.000   +0 (+0.0pp)      [-7.1, +7.1]pp      —
+                                                                                               mixed   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+  rrf:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 vs rrf:bge-reranker-v2-m3-Q5_K_M                all     240    5/10     0.302   +5 (+2.1pp)      [-1.2, +5.3]pp      no          no
+                                                                                               same    60     3/3      1.000   +0 (+0.0pp)      [-8.4, +8.4]pp      —
+                                                                                               cross   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —
+                                                                                               third   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+                                                                                               mixed   60     1/4      0.375   +3 (+5.0pp)      [-2.8, +12.5]pp     —
+  rr:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 vs rr:LAMAR-600m.Q5_K_M                          all     240    3/16     0.004   +13 (+5.4pp)     [+1.8, +8.9]pp      no          YES (arm better)
+                                                                                               same    60     1/5      0.219   +4 (+6.7pp)      [-1.8, +14.7]pp     —
+                                                                                               cross   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —
+                                                                                               third   60     0/7      0.016   +7 (+11.7pp)     [+2.8, +19.8]pp     —
+                                                                                               mixed   60     2/2      1.000   +0 (+0.0pp)      [-7.1, +7.1]pp      —
+  rr:Qwen3-Reranker-0.6B-Q6_K vs rr:LAMAR-600m.Q5_K_M                                          all     240    2/8      0.109   +6 (+2.5pp)      [-0.2, +5.1]pp      no          no
+                                                                                               same    60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —
+                                                                                               cross   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+                                                                                               third   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+                                                                                               mixed   60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —
+  rrf:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 vs rr:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0  all     240    7/0      0.016   -7 (-2.9pp)      [-5.2, -0.6]pp      no          YES (arm worse)
+                                                                                               same    60     4/0      0.125   -4 (-6.7pp)      [-13.3, +0.4]pp     —
+                                                                                               cross   60     2/0      0.500   -2 (-3.3pp)      [-8.6, +2.2]pp      —
+                                                                                               third   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —
+                                                                                               mixed   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+  rr:Qwen3-Reranker-0.6B-Q6_K vs rr:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0                   all     240    12/5     0.143   -7 (-2.9pp)      [-6.3, +0.5]pp      no          no
+                                                                                               same    60     5/2      0.453   -3 (-5.0pp)      [-13.7, +4.0]pp     —
+                                                                                               cross   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —
+                                                                                               third   60     5/1      0.219   -4 (-6.7pp)      [-14.7, +1.8]pp     —
+                                                                                               mixed   60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —
+  found@8:
+  arm                                                                                          set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  rr:LAMAR-600m.Q5_K_M vs rr:bge-reranker-v2-m3-Q5_K_M                                         all     240    0/4      0.125   +4 (+1.7pp)      [-0.1, +3.5]pp      no          no
+                                                                                               same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                                               cross   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+                                                                                               third   60     0/2      0.500   +2 (+3.3pp)      [-2.2, +8.6]pp      —
+                                                                                               mixed   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+  rr:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M                  all     240    7/2      0.180   -5 (-2.1pp)      [-4.6, +0.5]pp      no          no
+                                                                                               same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                                               cross   60     3/1      0.625   -2 (-3.3pp)      [-10.2, +3.8]pp     —
+                                                                                               third   60     4/1      0.375   -3 (-5.0pp)      [-12.5, +2.8]pp     —
+                                                                                               mixed   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+  rr:Qwen3-Reranker-0.6B-Q6_K vs rr:bge-reranker-v2-m3-Q5_K_M                                  all     240    1/4      0.375   +3 (+1.3pp)      [-0.7, +3.2]pp      no          no
+                                                                                               same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                                               cross   60     1/2      1.000   +1 (+1.7pp)      [-4.7, +7.9]pp      —
+                                                                                               third   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+                                                                                               mixed   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+  rrf:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 vs rrf:bge-reranker-v2-m3-Q5_K_M                all     240    6/9      0.607   +3 (+1.3pp)      [-2.0, +4.5]pp      no          no
+                                                                                               same    60     2/1      1.000   -1 (-1.7pp)      [-7.9, +4.7]pp      —
+                                                                                               cross   60     2/4      0.688   +2 (+3.3pp)      [-5.1, +11.6]pp     —
+                                                                                               third   60     2/4      0.688   +2 (+3.3pp)      [-5.1, +11.6]pp     —
+                                                                                               mixed   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+  rr:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 vs rr:LAMAR-600m.Q5_K_M                          all     240    9/0      0.004   -9 (-3.8pp)      [-6.2, -1.2]pp      no          YES (arm worse)
+                                                                                               same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                                               cross   60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —
+                                                                                               third   60     5/0      0.063   -5 (-8.3pp)      [-15.5, -0.6]pp     —
+                                                                                               mixed   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —
+  rr:Qwen3-Reranker-0.6B-Q6_K vs rr:LAMAR-600m.Q5_K_M                                          all     240    2/1      1.000   -1 (-0.4pp)      [-2.0, +1.2]pp      YES         no
+                                                                                               same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                                               cross   60     1/1      1.000   +0 (+0.0pp)      [-5.5, +5.5]pp      —
+                                                                                               third   60     1/0      1.000   -1 (-1.7pp)      [-6.1, +2.8]pp      —
+                                                                                               mixed   60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+  rrf:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 vs rr:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0  all     240    58/0     <0.001  -58 (-24.2pp)    [-29.4, -18.5]pp    no          YES (arm worse)
+                                                                                               same    60     3/0      0.250   -3 (-5.0pp)      [-11.0, +1.4]pp     —
+                                                                                               cross   60     32/0     <0.001  -32 (-53.3pp)    [-64.4, -38.8]pp    —
+                                                                                               third   60     18/0     <0.001  -18 (-30.0pp)    [-40.8, -17.3]pp    —
+                                                                                               mixed   60     5/0      0.063   -5 (-8.3pp)      [-15.5, -0.6]pp     —
+  rr:Qwen3-Reranker-0.6B-Q6_K vs rr:mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0                   all     240    1/9      0.021   +8 (+3.3pp)      [+0.7, +6.0]pp      no          YES (arm better)
+                                                                                               same    60     0/0      1.000   +0 (+0.0pp)      [-3.2, +3.2]pp      —
+                                                                                               cross   60     0/3      0.250   +3 (+5.0pp)      [-1.4, +11.0]pp     —
+                                                                                               third   60     1/5      0.219   +4 (+6.7pp)      [-1.8, +14.7]pp     —
+                                                                                               mixed   60     0/1      1.000   +1 (+1.7pp)      [-2.8, +6.1]pp      —
+```
+
+### Paired across runs vs Run 2's BGE (context, not the decision)
+
+Re-analysis only; no model was called. Digest, order seed, fact count and fixture hash all match, so the bench accepted
+the pairing. `b` = Run 2 `rr:bge` hit & arm miss.
+
+```
+  top-1:
+  arm                                                            set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  公式 · no verification (seed tags present)                     all     240    14/3     0.013   -11 (-4.6pp)     [-7.9, -1.2]pp      no          YES (arm worse)
+  reranker bge-reranker-v2-m3-Q5_K_M · partition                 all     240    1/1      1.000   +0 (+0.0pp)      [-1.4, +1.4]pp      YES         no
+  reranker LAMAR-600m.Q5_K_M · partition                         all     240    6/2      0.289   -4 (-1.7pp)      [-4.1, +0.8]pp      no          no
+  reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · partition  all     240    4/13     0.049   +9 (+3.8pp)      [+0.3, +7.1]pp      no          YES (arm better)
+  reranker Qwen3-Reranker-0.6B-Q6_K · partition                  all     240    4/6      0.754   +2 (+0.8pp)      [-1.9, +3.5]pp      no          no
+  found@8:
+  arm                                                            set     pairs  b/c      p       net c−b          95% net interval    equiv ±3pp  finding
+  公式 · no verification (seed tags present)                     all     240    79/1     <0.001  -78 (-32.5pp)    [-38.3, -26.2]pp    no          YES (arm worse)
+  reranker bge-reranker-v2-m3-Q5_K_M · partition                 all     240    0/1      1.000   +1 (+0.4pp)      [-0.7, +1.6]pp      YES         no
+  reranker LAMAR-600m.Q5_K_M · partition                         all     240    0/5      0.063   +5 (+2.1pp)      [+0.1, +4.0]pp      no          no
+  reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · partition  all     240    7/3      0.344   -4 (-1.7pp)      [-4.3, +1.0]pp      no          no
+  reranker Qwen3-Reranker-0.6B-Q6_K · partition                  all     240    1/5      0.219   +4 (+1.7pp)      [-0.5, +3.8]pp      no          no
+```
+
+### A/A sanity check
+
+```
+A/A SANITY CHECK — each pair ran the identical configuration from the identical snapshot, so its p on `all`
+must stay ≥ 0.05; if it does not, the paired test is seeing something that is not there and the run is suspect.
+
+formula vs formula2 (engine — no model in the loop):   Δ top-1 / found / MRR   ·   paired p (top-1, found@8)
+  same    +0 / +0 / +0.000           ·   p 1.000, 1.000
+  cross   +0 / +0 / +0.000           ·   p 1.000, 1.000
+  third   +0 / +0 / +0.000           ·   p 1.000, 1.000
+  mixed   +0 / +0 / +0.000           ·   p 1.000, 1.000
+  all     +0 / +0 / +0.000           ·   p 1.000, 1.000
+
+judge A/A: NOT run (add content,content2) — nothing shows how far the judge wanders between identical runs.
+
+formula positions digest: f661eb6a056e (240 queries, 60 facts, order seed 12345) — equal digests across runs mean identical formula rows, the precondition for comparing runs
+```
+
+### Latency
+
+```
+latency (ms) — parallel: mean over the accuracy pass, 10 arm(s) at once; serial median: one arm at a time, first 12 queries, judge arms counting only recalls that carried a verdict
+arm                                                            ms (parallel)  ms (serial median)  cli ok/failed (accuracy)  cli ok/failed (total)  judge
+公式 · no verification (seed tags present)                     368            237                 0/0                       0/0                    off · claude-cli · haiku
+公式 · no verification · A/A twin                              368            232                 0/0                       0/0                    off · claude-cli · haiku
+reranker bge-reranker-v2-m3-Q5_K_M · partition                 1191           447                 0/0                       0/0                    on · llama-cpp · bge-reranker-v2-m3-Q5_K_M
+reranker bge-reranker-v2-m3-Q5_K_M · fuse                      1194           460                 0/0                       0/0                    on · llama-cpp · bge-reranker-v2-m3-Q5_K_M
+reranker LAMAR-600m.Q5_K_M · partition                         1198           498                 0/0                       0/0                    on · llama-cpp · LAMAR-600m.Q5_K_M
+reranker LAMAR-600m.Q5_K_M · fuse                              1195           423                 0/0                       0/0                    on · llama-cpp · LAMAR-600m.Q5_K_M
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · partition  623            313                 0/0                       0/0                    on · llama-cpp · mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0
+reranker mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0 · fuse       616            292                 0/0                       0/0                    on · llama-cpp · mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0
+reranker Qwen3-Reranker-0.6B-Q6_K · partition                  2568           1530                0/0                       0/0                    on · llama-cpp · Qwen3-Reranker-0.6B-Q6_K
+reranker Qwen3-Reranker-0.6B-Q6_K · fuse                       2571           1104                0/0                       0/0                    on · llama-cpp · Qwen3-Reranker-0.6B-Q6_K
+```
+
+### Warnings
+
+None. The bench printed no WARNING line. No reranker arm left a graph recall without a verdict: `judged` equals
+`graph` in every set of every arm, both partition and fuse. No query errored, and no claude-cli call was made at any
+time.
+
+### By fact language — the household's case
+
+This is not the bench's own output: it is computed from this run's saved rows, by the fact's language as
+`recall-questions.mjs` decides it (40 Chinese, 16 English, 4 Japanese facts). Each cell is top-1 / found@8 / n, for
+partition arms. The same script reproduces Run 2's table exactly from Run 2's file.
+
+```
+set·facts     formula       rr:BGE        rr:LAMAR      rr:mMiniLM    rr:Qwen3
+same·zh       31/36/40      29/37/40      30/37/40      30/37/40      29/37/40
+same·en       7/14/16       10/16/16      8/16/16       12/16/16      10/16/16
+same·ja       4/4/4         4/4/4         4/4/4         4/4/4         4/4/4
+cross·zh      0/0/40        0/30/40       0/30/40       1/27/40       0/30/40
+cross·en      1/5/16        2/14/16       1/15/16       1/15/16       1/15/16
+cross·ja      0/1/4         1/4/4         0/4/4         1/4/4         1/4/4
+third·zh      1/13/40       5/28/40       5/30/40       8/27/40       7/29/40
+third·en      0/4/16        2/12/16       0/12/16       3/11/16       1/12/16
+third·ja      0/1/4         1/3/4         0/3/4         1/2/4         0/3/4
+mixed·zh      21/31/40      23/38/40      23/39/40      22/38/40      24/39/40
+mixed·en      14/16/16      13/16/16      14/16/16      15/16/16      14/16/16
+mixed·ja      0/0/4         0/2/4         1/2/4         1/2/4         1/2/4
+```
+
+mMiniLM against BGE, paired (mMiniLM-only hits / BGE-only hits):
+
+- **The household's case** (Chinese facts asked in Chinese or code-switched, `same` × zh + `mixed` × zh, 80
+  queries): top-1 3/3, found@8 **0/0**. On found@8 the two are identical, query for query.
+- **All 240**: top-1 13/4, found@8 2/7. mMiniLM's found@8 shortfall sits entirely in `cross` (BGE-only 3,
+  mMiniLM-only 1) and `third` (4 and 1), and mostly on Chinese facts asked in another language: `cross` × zh 27
+  vs 30, `third` × zh 27 vs 28.
+
+### The decision rule, applied
+
+- **mMiniLM (`mmarco-mMiniLMv2-L12-H384-v1` Q8_0, 132,584,000 B): VIABLE for the owner to consider.** The result
+  against BGE is **no significant difference**.
+  1. **Screened correctly.** It loads, (i) is ahead by 11.817970, and (ii) is ordered.
+  2. **No failed call.** It judged 234/234 graph recalls in both arms, the router log holds no error, and no
+     abstention occurred.
+  3. **Not significantly worse than BGE on found@8.** 7/2, p = 0.180, net −5 = −2.1pp. It is not equivalent either:
+     the 95% interval [−4.6, +0.5]pp reaches past −3pp, so **this run cannot rule out a found@8 loss of up to
+     ~4.6pp (~11 of 240)** against BGE.
+
+  **It keeps Run 2's gain**: its found@8 over 公式 is a finding, 1/75, p < 0.001, **+30.8pp**, [+24.6, +36.6]pp. It
+  was read at its fitted input, which on this fixture is its shipped-cap arm (see the design).
+- **Qwen3-Reranker-0.6B Q6_K (494,879,136 B, reference): viable by the rule.** The result against BGE is **no
+  significant difference** on found@8: 1/4, p = 0.375, +1.3pp, [−0.7, +3.2]pp, whose upper bound is just past +3.
+  Its found@8 is **equivalent** to LAMAR's (2/1, p = 1.000, [−2.0, +1.2]pp). It is larger than both controls and 3.4×
+  slower than BGE (1,530 ms serial), so it answers nothing about smaller models.
+- **xVITA-Rerank-300M-zhTW Q8_0 (332,894,432 B): not viable.** It failed screen (i) and did not run.
+
+### What it says
+
+- **A reranker a quarter the size keeps nearly all of the gain.** mMiniLM is 28.3% of BGE's bytes (3.53× smaller).
+  Its found@8 is 199 against BGE's 204, a gap the run cannot call a loss and cannot rule one out up to ~4.6pp, and
+  +74 against 公式. On the household's case its found@8 is identical to BGE's.
+- **But against LAMAR, its found@8 loss IS a finding.** 9/0, p = 0.004, net −9 = **−3.8pp**, [−6.2, −1.2]pp,
+  with no set against it: `third` 5/0 (p = 0.063), `cross` 3/0, `mixed` 1/0, `same` 0/0. The rule was set against
+  BGE, the current `RecommendedReranker`, so this does not change the outcome. But a household on LAMAR that moves to
+  mMiniLM gives up about 4 in 100 answers on the page: eight of these nine were asked in another language, one
+  code-switched.
+- **top-1 moves the other way, and that is the partition's arithmetic.** mMiniLM's partition arm has the best top-1
+  of any arm measured on this seed other than the Claude judge's partition arms (120–132, Run 1): 99 against
+  公式's 79 (3/23, p < 0.001, **+8.3pp**), and against BGE 4/13, p = 0.049, +3.8pp, and LAMAR 3/16, p = 0.004,
+  +5.4pp.
+  - The gain sits in `third` (0/11 against 公式) and among English facts (`same` × en 12 vs BGE's 10, `mixed` × en
+    15 vs 13).
+  - Under partition, top-1 is the engine's first choice among the eight a reranker endorses. A reranker that leaves a
+    wrong engine favourite out of its eight lets the answer rise, whatever it scored. How often that happens differs
+    by model, which is a reading of the mechanism, not a measurement.
+  - The top-1 comparison against BGE is outside the rule and sits at p = 0.049, among more than 70 paired
+    comparisons in this run, so it is not to be leaned on.
+- **Latency.** Serial medians over 12 queries, models warm:
+  - 公式 237 ms;
+  - mMiniLM **313 ms**, about +0.08 s per recall;
+  - BGE 447 ms, about +0.21 s, and LAMAR 498 ms, about +0.26 s; both were 474–489 ms in Run 2;
+  - Qwen3 1,530 ms, about +1.29 s. It is a 0.6B decoder with a ~75-token template around every pair.
+
+  The parallel means (mMiniLM 623 ms, BGE 1,191, LAMAR 1,198, Qwen3 2,568) were contended: ten arms at once, four
+  models on one router and one GPU.
+- **The controls reproduced Run 2.** BGE is 90 / 204 against Run 2's 90 / 203, and paired across runs it is
+  **equivalent** on both metrics: top-1 1/1, [−1.4, +1.4]pp; found@8 0/1, [−0.7, +1.6]pp. LAMAR's totals are
+  identical to Run 2's (86 / 208). LAMAR against BGE leans as it did in Run 2: found@8 LAMAR's way (0/4, p = 0.125),
+  top-1 BGE's way (7/3, p = 0.344), neither a finding. So the same reranker, rerun on the same seed, moved by at most 2
+  discordant queries per metric, against the 9 separating mMiniLM from LAMAR on found@8.
+- **Fuse behaves as in Run 2 for every model.** It gives back most of the found@8 gain: mMiniLM fuse against its
+  partition is 58/0 (−24.2pp). Its top-1 gain over 公式 survives for mMiniLM (+13, p = 0.011) and for no other model.
+
+### What a product integration of mMiniLM would need (for the owner; nothing here was changed)
+
+1. **A catalogue row, which also fixes its kind.** Its upstream filename has no "rerank", so as a dropped-in file the
+   app would type it CHAT (`ResourceProvisioner.GgufKind`); a `GgufCatalog` row with `Capability = Reranking` makes
+   that exact. The row would carry:
+   - the pin: `keisuke-miyako/mmarco-mMiniLMv2-L12-H384-v1-gguf-q8_0` @ `2b37d162c88e0aeb8a1b4acb2d50f0e5ade16fd5`,
+     `mmarco-mMiniLMv2-L12-H384-v1-Q8_0.gguf`, sha256 `91d70301828ba735c22eda56adb649f48975f371337e8c8b046326b885e26eed`,
+     132,584,000 B;
+   - a note quoting Run 4's figures with their configuration: base 79 / 125, no embedder, `EndorseCount` 8.
+2. **A per-model input cap. This one is required.** The shipped `RerankInputCap.MaxChars` (1,000) makes this model
+   refuse the WHOLE call for any recall that surfaces a long Chinese fact: 781 tokens against 512, screened. The
+   verifier fails open, so that is silent.
+   - **The query needs a bound too.** A pair is query + document + 4 special tokens ≤ 512, and the query is not capped
+     today.
+   - **A character budget is exact for this model.** Characters bound tokens on this tokenizer (≤ UTF-16 units + 1).
+     So per call the budget can be computed exactly as 512 − 4 − (query length + 1) − 1 characters, from the GGUF's
+     `bert.context_length` or the served `/props` `n_ctx`. The simple form is a flat 400 with the query bounded to
+     about 100 characters.
+   - **A router `/tokenize` round trip per candidate would buy nothing for this model family**, at up to 60 calls per
+     recall here and 400 on a kind-filtered recall.
+   - **The bound does NOT transfer to byte-level tokenizers.**
+3. **The preset needs no change to load it.** llama.cpp serves 512-token slots and warns
+   `n_ctx_seq (4096) > n_ctx_train (512)`. A per-model `ctx-size = 512` would state the limit instead of relying on
+   the cap.
+4. **The measurement still missing: what the cap COSTS on long facts.** This fixture has none, and a long-fact fixture
+   needs a reseed, i.e. quota.
+5. **Licence, for the owner to check.** The base model's card says Apache-2.0. Its training set is mMARCO, a
+   translation of MS MARCO, whose own terms are non-commercial. The GGUF repo declares no licence.
+
+### What it does NOT say
+
+- **One fixture, one run, one machine.** 60 invented facts, one run per arm, one quantisation per model, one
+  llama.cpp build (`b10549`, Vulkan) on one machine's GPU. The cross-run BGE pair is the only evidence of run-to-run
+  noise for a reranker, and it is one pair of runs.
+- **Nothing about long input.** Every fact is ≤ 101 characters, and 0 of 14,400 pairs came near 512 tokens. So the
+  run cannot show the 512-token failure, nor what a fitted cap costs. The screen carries the first, and nothing yet
+  carries the second. **The fitted-input arms the owner asked for did not run** (see the design): on this fixture they
+  would have been identical-input twins.
+- **"No significant difference" is not "as good".** mMiniLM against BGE on found@8 is neither worse nor equivalent,
+  and a loss of up to ~4.6pp is inside the interval. Against LAMAR the loss is measured.
+- **No embedder.** 语义 was off, as in Runs 1–3. Candidates came from the graph and FTS trigram alone, so no number
+  here says what a reranker adds on top of an embedder.
+- **Seed tags from the CLI.** Every arm recalled against subject tags the Claude CLI wrote. A household without a
+  signed-in CLI has none, and that configuration was not measured.
+- **The page size.** The found@8 gains are tied to `EndorseCount` = 8 = the page; no other limit was measured.
+- **The candidate list.** Kind-filtered recalls, which can carry up to 400 candidates, were not exercised. That matters
+  most for Qwen3's latency and for any per-candidate tokenization.
+- **Qwen3's saturation.** Its scores saturate near 1.0 (its screen margin was 0.00074 in probability), so its
+  endorsed eight are picked among near-ties. The run shows the outcome, not how stable that choice is.
+- **Latency is warm.** It is a 12-query serial median with each model loaded. Cold loads (6–13 s on the screen for the
+  four models that ran, including GPU start-up) are not in it. An unrelated llama-server process was resident on the
+  machine throughout.
+- **Recall only.** A reranker binding still annotates every fact WRITE on the Claude CLI; this run wrote nothing.
