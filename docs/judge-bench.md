@@ -5306,3 +5306,202 @@ exited 1; a copy carrying zeros printed exactly what the original prints. A live
 and `rrk` on mMiniLMv2) saved zero counts and exited 0 — which also showed the first draft writing its verdict over the
 saved counts, so a re-analysis of a void run would have read clean; the verdict is `paceGuard` now, and the smoke was
 repeated on the fix. The smoke's files were removed and the long work folder restored byte for byte.
+
+## Run 8 — the pace on a CPU (design)
+
+Written and committed BEFORE the run; the results section that follows names this commit. Three probes, the bench support
+and a plumbing smoke came first, because this design quotes them.
+
+**The question** (the plan's). What do the shipped chunked scoring and its pace (`RerankPace`, "The bench and the pace"
+above) do on a CPU? The reranker notes and `next.md` describe what the pace does on 「只有 CPU 等较慢的机器」 and add
+「这些还没有在只有 CPU 的机器上实测过」. This run measures it on THIS machine's CPU, with llama.cpp given no GPU at all. It is
+stated as "this machine's CPU", never as "a CPU": one processor, one build, one power setting.
+
+### The hardware
+
+| | |
+|---|---|
+| CPU | Intel Core Ultra 9 185H: 16 cores (Intel's spec: 6 performance, 8 efficient, 2 low-power efficient), 22 logical processors, as `Win32_Processor` reports them |
+| memory | 64 GB |
+| OS, power | Windows 11 Pro 10.0.26200; on mains, the Balanced plan |
+| llama.cpp | b10549 (commit `b2e5e9b28`, Clang 20.1.8), the bench's `devtools/_rr-res/llama-cpp`; its CPU backend is picked per CPU by the build's own loader (`ggml-cpu-*.dll`) |
+| threads | whatever llama.cpp picks — the product sets none. The smoke's children logged `n_threads = 16` |
+| GPUs | an RTX 4080 Laptop and the Intel Arc iGPU are present. The CPU-only arms use neither (below); the GPU reference arm uses the product's launch, as in Runs 6–6c |
+
+### Three probes, before this design (scratch, `devtools/_run8/probe-*.mjs`)
+
+Each on a dedicated router of its own, killed by PID; the long fixture's notes, one question of median length.
+
+- **`n-gpu-layers = 0` alone is not a CPU run.** llama.cpp's `--op-offload` defaults on: with a GPU visible, b10549 runs a
+  big batch's matrix work on it even when no layer is stored there. A 48-note BGE call, the notes cut at 1,000 characters:
+  **~5 s** with `n-gpu-layers = 0` alone, **143 s and 197 s** (two calls) with `device = none` added. A machine with no
+  GPU has only the CPU backend; `device = none` gives this one the same. So every CPU-only router here is launched with
+  **both** `n-gpu-layers = 0` and `device = none`, and the guards check the child's own argv for both.
+- **Costs on this CPU**, `device = none`, 48 notes: mMiniLMv2 cut 9.2 s / 7.3 s, its 148 windows 49.6 s; BGE cut 142.6 s /
+  196.8 s, its 72 windows 303.4 s. BGE scores roughly one long note every 3 s here, so a recall of more than about 20 long
+  notes cannot finish inside the 60 s verification deadline even cut to one window each.
+- **llama-server keeps scoring a batch whose request was abandoned.** A 72-window BGE call was aborted after 15 s, as the
+  deadline aborts one; a 1-document call sent straight after took **181.9 s** — it waited for the whole abandoned batch —
+  and one sent 20 s after that took 0.8 s. The router logged `Connection handling canceled`; its child scored on. This is
+  the "unmeasured" in `RerankPace`'s comment ("if it does not, the next call queues behind it and reads slower than the
+  machine is"), answered for this build, and it shapes the instrument below.
+
+### The instrument
+
+**Run 6's fixture and seed, unchanged**: `devtools/fixtures/recall-bilingual-long.json` (sha256 `1f48f1be…4f17`, accepted
+by the generator check), its seed `devtools/_judge-bench-seed-long/` (判断 off, no subject tags, re-verified at
+`--reuse-seed`), every server on the claude stub, the 240 questions in order seed 12345. No embedder, partition,
+`EndorseCount` 8 = the page, the product's 60 s verification deadline (knob pinned blank).
+
+**Seven arms in ONE run**, every one paired per query:
+
+| arm | router | preset section (the model's) | when |
+|---|---|---|---|
+| `formula`, `formula2` | — | — | in parallel, first |
+| `rrk:bge-reranker-v2-m3-Q5_K_M` — the **GPU reference** | the shared router, port 6540 | `n-gpu-layers = 99`, `reranking = true`, 4096 ctx/batch/ubatch (the product's) | in parallel, first |
+| `cpu-rr:mmarco-mMiniLMv2-L12-H384-v1-Q8_0` (cut) | its own CPU-only router, 6541 | `n-gpu-layers = 0`, `device = none`, `reranking = true`, 512 ctx/batch/ubatch | alone, 1st |
+| `cpu-rrk:mmarco-mMiniLMv2-L12-H384-v1-Q8_0` (chunked, with the pace) | its own, 6542 | the same | alone, 2nd |
+| `cpu-rr:bge-reranker-v2-m3-Q5_K_M` (cut) | its own, 6543 | `n-gpu-layers = 0`, `device = none`, `reranking = true`, 4096 | alone, 3rd |
+| `cpu-rrk:bge-reranker-v2-m3-Q5_K_M` (chunked, with the pace) | its own, 6544 | the same | alone, 4th |
+
+`rr` pins `GATHERLIGHT_RERANK_CHUNKING=off`, `rrk` pins it `on` (the shipped default), and each must announce its knob.
+Each arm's router, port and preset section are saved on the arm (`llamaRouter`).
+
+**How the CPU arms run** (the bench's `--cpu-rerankers`, added for this run in `42526b8`; judge-bench's header, "CPU-ONLY
+ARMS"):
+
+- **One at a time, after everything else.** The parallel arms' accuracy AND latency passes finish first; then each CPU
+  arm runs alone — nothing else querying — so its accuracy pass is the serial latency and it has no latency pass.
+  Parallel CPU arms would contend for the same cores and each would teach its pace the other's load.
+- **Each on a fresh router of its own**, started just before the arm (so the arm server's startup warm reaches it, as an
+  app's reaches the router it adopts) and killed by PID when the arm is done. Because of the third probe: a router
+  shared across arms would hand the next arm the last one's abandoned batches.
+- **Back to back, as every bench run.** Each recall starts when the last returned, which is what an agent turn that
+  recalls several times in a row does. On this CPU that has a consequence the run is meant to show: after a deadline cut
+  the child is still scoring the abandoned batch, so the NEXT call queues behind it. A household whose recalls are
+  minutes apart is not this pattern; for it, the answered calls' own times are the evidence, and the record will say
+  which is which.
+- **A record-only proxy** in front of each CPU router: never memoised (a shared reply comes back at once and would teach
+  the pace a machine it is not); a request its client abandons is closed upstream too, as the product's own connection
+  would be; and per call it records the windows sent, the fixture notes they came from (each window is a substring of
+  its note), the pair tokens as `RerankPace` counts them (its rule restated and held to the C# by the bench's
+  `paceMirror`), the wall time, the status, and whether the client abandoned it.
+- **Per recall**, from the product's own log, placed on the recall by timestamp: the deadline cut
+  (`VerificationDeadlinePolicy`'s "memory verification gave no verdict within 60 s") and the pace's line in either form
+  (`ChunkedScoreProvider`, "… window(s) per long candidate instead of …", with the rate it logged).
+- **The pace guard (I6) is relaxed for the four CPU arms only**, because the pace's activity is what they measure: their
+  counts are saved and printed as "exempt, as designated CPU-only arms". The GPU reference and the formula arms keep it:
+  one pace line there voids the run.
+- **One build.** A CPU arm's server starts hours after the others, and `dotnet run --no-build` runs whatever is built
+  then, so the bench fingerprints the three server assemblies before the first arm and refuses to start a CPU arm on a
+  different one. The binary is the branch's current build (built after `adf6ab8`, the last product commit).
+
+**The full 240, not a subset.** The plan allowed a question subset if a full run were infeasible. It is feasible — the
+estimate below is about ten hours, most of it BGE recalls waiting out the deadline — and a subset would not measure the
+same thing: a recall's candidate count GROWS over a run, as co-recall links form. In Run 6c the cut arms' notes per call
+went from ~20 in the first 16 questions to 55–60 after the 120th, and mMiniLMv2's chunked call from ~65 windows to ~190.
+For mMiniLMv2 the pace can act only where a chunked call's predicted time nears its 30 s budget, which on this CPU is the
+late part of the run (at the smoke's ~0.4 s per 1,000 pair tokens, ~190 windows of ~390 tokens is ~30 s); for BGE, how
+often a recall can finish at all depends on how many notes it carries. A question subset (`--n`) asks fewer questions, so
+its graph never gets there.
+
+**Estimated time**, from the probes and the smoke: mMiniLMv2 cut ~0.5 h, chunked ~1–1.5 h; each BGE arm up to ~4 h
+(240 × 60 s, the worst case, since most of its recalls are expected to wait out the deadline); the parallel part
+~15 min. About ten hours in all.
+
+**The machine is shared.** Another session may run e2e suites on it during the run. A sampler (scratch
+`devtools/_run8/load-sampler.ps1`) writes the machine's busy % and its five busiest processes about once a minute to
+`devtools/_run8/load.log`; the record states, per CPU arm, what else ran beside it.
+
+### Command
+
+```
+node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M --rerank-arms=rrk \
+  --cpu-rerankers=mmarco-mMiniLMv2-L12-H384-v1-Q8_0,bge-reranker-v2-m3-Q5_K_M --cpu-rerank-arms=rr,rrk \
+  --rerank-memo --resources=devtools/_rr-res --port-base=6500 --llama-port=6540 --cpu-llama-port=6541 \
+  > devtools/_judge-bench-long-run8.txt 2>&1
+```
+
+Ports 6501–6507 (arms), 6540 (the shared router) and 6541–6544 (the CPU routers) sit off every tcp range Windows had
+reserved that day (5357, 5458–5557, 5768–5967, 8270–8469, 8691–8890 and 9855 up) and off the ports in use (6317 and 6321
+are another program's). The proxies take ephemeral ports. A run that exits 127 before any arm starts is re-run unchanged.
+
+### Measured
+
+- **found@8 and top-1**, on `all` and per position (60 queries each), every arm; paired, McNemar exact with the
+  Agresti–Min 95% interval: each CPU arm chunked against itself cut (the rule's pairs), each arm against `formula`, and
+  every reranker arm against every other — so `cpu-rrk` BGE against the GPU reference.
+- **The deadline cuts**: how many per CPU arm, the first and the last (by position in the run), how they cluster (runs of
+  consecutive cuts), and a per-recall strip of the whole run.
+- **What each call sent, over the run**: windows per call, notes per call and windows per note, by quarter of the run;
+  every pace line (sized, or after a cut), with the rate it logged; and the rate each answered call implies
+  ((wall − 50 ms) per 1,000 pair tokens, what the pace reads) — does the pace converge, and to what?
+- **Serial latency**: each CPU arm's median, 90th percentile and maximum over every recall, and split into recalls with
+  a verdict and recalls cut. The GPU reference: the usual 12-query serial median.
+- The router's own record per CPU arm: the child's argv, `n_threads`, tasks scored, the largest, truncations, the
+  abandoned requests it noticed, error lines.
+
+### Decision rule
+
+Verbatim from the plan: **"if on the CPU the chunked+pace arm is significantly WORSE than the cut arm on `all` found@8
+for either reranker, the default on a machine the pace measures as CPU-slow must change (owner decision, with the
+numbers); otherwise the household sentences replace "not measured on a CPU-only machine" with what was measured here."**
+
+It is read as follows, fixed before the run.
+
+- **The pairs**: `cpu-rrk:<m>` against `cpu-rr:<m>`, for mMiniLMv2 and for BGE, over the 240 queries of `all`. b = the cut
+  arm hit & the chunked arm miss, c = the reverse.
+- **"Significantly worse"**: exact McNemar p < 0.05 AND c − b < 0. Two tests, one per reranker, each at 0.05, no
+  correction; either one triggers. The bench's per-set veto does not apply, as in Runs 6 and 7.
+- **If it triggers**: nothing in the product changes here. The owner is given the numbers (both pairs, per position,
+  the cut pattern and the latency) and decides what the default should be on a machine the pace measures as slow.
+- **If it does not**: the sentences that say it is unmeasured on a CPU — the reranker notes' 「这一点还没有在只有 CPU 的机器上实测
+  过」 (`GgufCatalog.RerankerLatencyCaveat`) and `next.md`'s 「这些还没有在只有 CPU 的机器上实测过」 — are replaced by what was
+  measured, stated as this machine's CPU, in words no stronger than the intervals allow. The sentences are proposed in
+  the report and routed by the round's controller; no product code or catalogue text is changed in this run.
+
+**Reported beside the rule, outside it (descriptive):** the per-position pairs; each CPU arm against `formula` and
+against the GPU reference; the deadline-cut pattern; the pace's lines and the rates; the latencies; the concurrent load.
+
+### Guards, checked before the rule is read
+
+A failed guard leaves the rule unread. It is reported, not worked around.
+
+1. **The instrument.** The fixture is accepted and the seed re-verified (判断 off, 0 claude-cli calls, 60 exact notes, 60
+   graph nodes). `formula`'s digest is expected to be Runs 6–6c's **`976af4663b6e`** (the same seed, questions and
+   order); if it is not, the within-run comparisons still stand and no number is set beside another run's.
+2. **The engine A/A.** `formula` against `formula2` is quiet on `all` (p ≥ 0.05).
+3. **Startup.** Every reranker arm reads back `llama-cpp · <its id>`, raises no startup warning, announces its knob, and
+   makes 0 claude-cli calls at startup and over the run (the bench enforces all of it).
+4. **One build.** The server fingerprint is unchanged at every CPU arm's start (the bench refuses otherwise).
+5. **CPU-only, as launched.** Each CPU router spawned its child exactly once, and the child's argv carries `--device none`
+   and `--n-gpu-layers 0`; no error line but `Connection handling canceled`; no truncated task; mMiniLMv2's largest task
+   at most 512 tokens.
+6. **Coverage.** The GPU reference: `judged` = `graph` (a reranker abstains only on a fault). Each CPU arm: every graph
+   recall without a verdict is a deadline cut traced to the product's own Warning during that recall, no recall with a
+   verdict carries one, and no recall errored.
+7. **Every request reached the model.** Per router — the shared one and each CPU router — the proxies' forwarded
+   `/v1/rerank` requests equal the router's `proxying request to model` lines; no forward failed.
+8. **The pace guard where it applies.** The GPU reference and the formula arms logged no pace line.
+
+### Plumbing smoke, before this design
+
+`--n=4` (16 questions), the same seven arms and ports, run directly with `node`, 2026-09-24T18:00Z–18:24Z
+(`devtools/_judge-bench-long/results-2026-09-24T180007.620Z.json`, output `devtools/_run8/smoke.txt`). It checked that:
+
+- each CPU router spawned its child once, with `--device none --n-gpu-layers 0` in its argv, `n_threads = 16`, no error
+  line and no truncated task (mMiniLMv2's largest 418–424 tokens, BGE's 843), and no Vulkan line in its log;
+- every forward reached its router: the shared router 29 of 29, each CPU router 17 of 17;
+- the GPU reference and the formula arms logged no pace line, so the guard held where it applies; the chunked BGE arm on
+  the CPU logged 7 (5 sized, 2 after a cut), the chunked mMiniLMv2 arm 0, and the bench printed them as exempt;
+- the BGE arms on the CPU were cut by the deadline on 5 and 4 of 16 recalls, each traced to the product's Warning during
+  that recall, and every call the client abandoned was counted; no unexplained abstention, no WARNING line;
+- the rates a call implies, answered calls only: mMiniLMv2 ~0.29–0.49 s per 1,000 pair tokens, BGE ~2.6–4.0.
+
+**Two bench faults it found, both fixed before this design.** (1) A pace line written 9 ms after a recall ended was
+placed on THAT recall (a 50 ms slack after each recall): the next recall's line comes that fast, because the gather
+before its rerank call takes milliseconds. Lines now go to the last recall that had begun, and a scratch re-placement of
+the smoke's lines (`devtools/_run8/reattach-check.mjs`) put every sized or after-cut line on a recall that sent one window
+per note, as such a line says. (2) The CPU block printed an empty preset. The server fingerprint was added after the
+smoke. Its accuracy numbers inform nothing here: 16 questions, early in a run, where candidates are few.
