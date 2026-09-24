@@ -3755,3 +3755,245 @@ seed built from that fixture. It checked:
 
 Its accuracy numbers (8 queries) inform nothing here. An earlier attempt at the same smoke exited 127 before any arm
 started, with no message and no orphaned process. It did not recur, and it is noted in case the run shows it again.
+
+## Run 6 — the input fit on long facts (2026-09-24, llama.cpp b10549; claude never called — every server on the stub)
+
+**Command**, exactly as registered:
+
+```
+node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M,LAMAR-600m.Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-Q8_0 \
+  --resources=devtools/_rr-res --port-base=6200 --llama-port=6240 > devtools/_judge-bench-long-run6.txt 2>&1
+```
+
+- **The design** was committed as `97e5a8c` before the run, and the run's app HEAD is that commit (v1.3.0). The fixture
+  and the bench are `ef6cdef`'s. No product code changed; the server binary is the branch's current build.
+- **Timing.** The run took 09:21:18Z–09:54:09Z. Eight arms ran in parallel, with a latency sample of 12, order seed
+  **12345** (240 queries, 0 same-fact adjacencies).
+- **The seed** was `devtools/_judge-bench-seed-long/`, reused, and re-verified by the bench at startup.
+- **The formula positions digest is `976af4663b6e`.** It is not Runs 1–5b's `f661eb6a056e`, as the design said it
+  could not be: a different base, compared within this run only.
+
+**Every guard held:**
+
+| guard | result |
+|---|---|
+| 1. the instrument | fixture accepted (generator check); seed re-verified — 判断 off, 0 claude-cli calls while seeding, 60 rows each holding its exact note, 60 distinct graph nodes |
+| 2. engine A/A | `formula` vs `formula2` byte-identical: 0/0 on every set and position, p = 1.000 |
+| 3. reranker startup | every arm read back `llama-cpp · <its id>`, no startup warning (`migrationWarnings` empty in all eight), **0 claude-cli calls** at startup, in the accuracy pass and over the whole run, every arm |
+| 4. router log | each of the three models spawned once; the mMiniLMv2 child logged `n_ctx_slot = 512` (BGE and LAMAR 4096); largest pair processed: **425 tokens** on mMiniLMv2 (the maximum measured before the run), 858 and 857 on the others; no error, truncation, unload or eviction line; 1,518 proxied rerank requests = 3 models × (2 arms × 252 + 1 warm) |
+| 5. coverage | `judged` = `graph` = 60 in every position of every reranker arm (240/240 on `all`, 12/12 in the latency pass) — no abstention, so the fit never failed a call |
+| 6. expressible | as designed; and no recall came near the 60 s deadline (slowest 12.3 s), no arm logged a deadline NoOpinion or an FTS fallback |
+
+The bench printed **no WARNING line**.
+
+### The headline — by position, partition arms, found@8 (of 60)
+
+Each cell is one position's 60 queries (15 facts × 4 question sets). `b` = BGE hit & mMiniLMv2 miss, `c` = the reverse.
+
+| position | where the answer is | 公式 (no judge) | BGE | LAMAR | **mMiniLMv2** | mMiniLMv2 vs BGE, paired (b/c, p, net, 95%) |
+|---|---|---|---|---|---|---|
+| start | read by every model | 21 | 49 | 55 | **52** | 2/5, p = 0.453, +3 (+5.0pp), [−4.0, +13.7] |
+| middle | past mMiniLMv2's cut, inside 1,000 | 24 | 53 | 53 | **7** | 46/0, p < 0.001, −46 (−76.7pp), [−85.5, −62.9] |
+| **end** | **past mMiniLMv2's cut, inside 1,000** | **29** | **50** | **52** | **4** | **47/1, p < 0.001, −46 (−76.7pp), [−86.4, −62.0]** |
+| beyond | past every model's cut | 30 | 3 | 4 | **7** | 3/7, p = 0.344, +4 (+6.7pp), [−3.9, +16.8] |
+
+### The decision rule, applied
+
+**The fit COSTS.** mMiniLMv2's found@8 on end-position facts is **4/60**, against BGE's **50/60** in the same run:
+
+- b/c 47/1, exact McNemar **p < 0.001**, c − b = −46;
+- net **−76.7pp**, 95% [−86.4, −62.0]pp.
+
+Both conditions of the registered test hold. So the mMiniLMv2 catalogue note must say so, with the number. The sentence
+is proposed in the report to the owner and routed by the round's controller. No product code was changed here.
+
+### Accuracy — the four sets and `all`
+
+```
+== all ==
+arm                                                     n    err  graph  judged  endorsed  top-1     found@8   MRR     ms (parallel)  Δ vs 公式 (top-1 / found / MRR)
+公式 · no verification (seed has no tags)               240  0    240    0       0         68/240    104/240   0.323   408
+公式 · no verification · A/A twin                       240  0    240    0       0         68/240    104/240   0.323   408            +0 / +0 / +0.000
+reranker bge-reranker-v2-m3-Q5_K_M · partition          240  0    240    240     240       66/240    155/240   0.367   7336           -2 / +51 / +0.044
+reranker bge-reranker-v2-m3-Q5_K_M · fuse               240  0    240    240     240       61/240    120/240   0.325   7372           -7 / +16 / +0.002
+reranker LAMAR-600m.Q5_K_M · partition                  240  0    240    240     240       55/240    164/240   0.333   7540           -13 / +60 / +0.010
+reranker LAMAR-600m.Q5_K_M · fuse                       240  0    240    240     240       57/240    111/240   0.306   7532           -11 / +7 / -0.017
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · partition  240  0    240    240     240       31/240    70/240    0.175   2250           -37 / -34 / -0.148
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · fuse       240  0    240    240     240       37/240    107/240   0.251   2250           -31 / +3 / -0.071
+```
+
+The per-set tables are in the run's output. On `same` and `mixed`, where the lexical floor is strongest, mMiniLMv2's
+partition arm reads 18/60 and 17/60 found@8, against 公式's 49 and 42.
+
+Paired on `all` (`b` = the base hit & the arm miss):
+
+- **vs `formula`, found@8.**
+  - BGE partition: 28/79, p < 0.001, **+21.3pp**.
+  - LAMAR partition: 26/86, p < 0.001, **+25.0pp**.
+  - mMiniLMv2 partition: 77/43, p = 0.002, **−14.2pp**. The bench does not call it a finding, because `cross` is
+    significant the other way (it gains on English questions about Chinese notes). But on `all` it is below having no
+    judge.
+- **vs BGE, found@8.**
+  - mMiniLMv2 partition: 98/13, p < 0.001, **−35.4pp**, [−42.5, −27.8].
+  - LAMAR: 7/16, p = 0.093, no finding.
+- **vs BGE, top-1.**
+  - mMiniLMv2: 44/9, p < 0.001, −14.6pp.
+  - LAMAR: 16/5, p = 0.027, −4.6pp.
+
+### By position — accuracy and coverage (cells: top-1 / found@8 / judged-of-graph)
+
+```
+arm                                                     start (n=60)          middle (n=60)         end (n=60)            beyond (n=60)
+公式 · no verification (seed has no tags)               16 / 21 / 0-60        13 / 24 / 0-60        19 / 29 / 0-60        20 / 30 / 0-60
+公式 · no verification · A/A twin                       16 / 21 / 0-60        13 / 24 / 0-60        19 / 29 / 0-60        20 / 30 / 0-60
+reranker bge-reranker-v2-m3-Q5_K_M · partition          21 / 49 / 60-60       21 / 53 / 60-60       22 / 50 / 60-60       2 / 3 / 60-60
+reranker bge-reranker-v2-m3-Q5_K_M · fuse               17 / 27 / 60-60       18 / 29 / 60-60       20 / 33 / 60-60       6 / 31 / 60-60
+reranker LAMAR-600m.Q5_K_M · partition                  18 / 55 / 60-60       15 / 53 / 60-60       18 / 52 / 60-60       4 / 4 / 60-60
+reranker LAMAR-600m.Q5_K_M · fuse                       18 / 28 / 60-60       15 / 25 / 60-60       18 / 30 / 60-60       6 / 28 / 60-60
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · partition  24 / 52 / 60-60       2 / 7 / 60-60         2 / 4 / 60-60         3 / 7 / 60-60
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · fuse       20 / 30 / 60-60       5 / 23 / 60-60        2 / 23 / 60-60        10 / 31 / 60-60
+```
+
+### By position — paired vs `formula`, partition arms
+
+`b` = formula hit & arm miss.
+
+| arm | position | found@8 b/c, p, net | top-1 b/c, p, net |
+|---|---|---|---|
+| BGE | start | 0/28, p < 0.001, +46.7pp | 1/6, p = 0.125, +8.3pp |
+| | middle | 0/29, p < 0.001, +48.3pp | 0/8, p = 0.008, +13.3pp |
+| | end | 0/21, p < 0.001, +35.0pp | 3/6, p = 0.508, +5.0pp |
+| | beyond | **28/1, p < 0.001, −45.0pp** | 18/0, p < 0.001, −30.0pp |
+| LAMAR | start | 0/34, p < 0.001, +56.7pp | 0/2, p = 0.500, +3.3pp |
+| | middle | 0/29, p < 0.001, +48.3pp | 0/2, p = 0.500, +3.3pp |
+| | end | 0/23, p < 0.001, +38.3pp | 3/2, p = 1.000, −1.7pp |
+| | beyond | **26/0, p < 0.001, −43.3pp** | 16/0, p < 0.001, −26.7pp |
+| mMiniLMv2 | start | 1/32, p < 0.001, +51.7pp | 1/9, p = 0.021, +13.3pp |
+| | middle | **21/4, p < 0.001, −28.3pp** | 12/1, p = 0.003, −18.3pp |
+| | end | **27/2, p < 0.001, −41.7pp** | 18/1, p < 0.001, −28.3pp |
+| | beyond | **28/5, p < 0.001, −38.3pp** | 20/3, p < 0.001, −28.3pp |
+
+### By position — the rerankers against BGE (partition; `b` = BGE hit & arm miss)
+
+| arm | position | found@8 b/c, p, net, 95% | top-1 b/c, p, net |
+|---|---|---|---|
+| mMiniLMv2 | start | 2/5, p = 0.453, +5.0pp, [−4.0, +13.7] | 3/6, p = 0.508, +5.0pp |
+| | middle | 46/0, p < 0.001, −76.7pp, [−85.5, −62.9] | 19/0, p < 0.001, −31.7pp |
+| | **end** | **47/1, p < 0.001, −76.7pp, [−86.4, −62.0]** | 20/0, p < 0.001, −33.3pp |
+| | beyond | 3/7, p = 0.344, +6.7pp, [−3.9, +16.8] | 2/3, p = 1.000, +1.7pp |
+| LAMAR | start | 1/7, p = 0.070, +10.0pp | 5/2, p = 0.453, −5.0pp |
+| | middle | 3/3, p = 1.000, +0.0pp | 6/0, p = 0.031, −10.0pp |
+| | end | 1/3, p = 0.625, +3.3pp | 4/0, p = 0.125, −6.7pp |
+| | beyond | 2/3, p = 1.000, +1.7pp | 1/3, p = 0.625, +3.3pp |
+
+The full block, fuse arms included, is in the run's output.
+
+### By fact language — descriptive
+
+This is computed from the saved rows by the scratch script `devtools/_run6-bylang.mjs`, not by the bench. Each cell is
+top-1 / found@8 / n, for partition arms.
+
+```
+position·lang   formula       rr:BGE        rr:LAMAR      rr:mMiniLM
+start·zh        9/13/40       14/34/40      10/36/40      16/38/40
+start·en        6/7/16        6/12/16       7/16/16       7/11/16
+start·ja        1/1/4         1/3/4         1/3/4         1/3/4
+middle·zh       9/14/40       12/35/40      9/35/40       2/4/40
+middle·en       4/9/16        8/14/16       6/14/16       0/0/16
+middle·ja       0/1/4         1/4/4         0/4/4         0/3/4
+end·zh          14/18/40      17/34/40      13/36/40      2/3/40
+end·en          4/10/16       4/14/16       4/15/16       0/0/16
+end·ja          1/1/4         1/2/4         1/1/4         0/1/4
+beyond·zh       11/19/40      2/3/40        2/2/40        3/6/40
+beyond·en       8/10/16       0/0/16        1/1/16        0/0/16
+beyond·ja       1/1/4         0/0/4         1/1/4         0/1/4
+```
+
+**English notes lose everything too**: `end` and `middle` × en are 0/16 found@8 for mMiniLMv2, against BGE's 14/16.
+
+- Those answers sit at 140–206 tokens, well inside 512, but past the character budget.
+- On English the loss is therefore the fit's CHARACTER bound, not the model's window. A token-based or language-aware
+  budget would have kept those answers in view. That is a design question for the owner, and nothing here tested it.
+
+### Latency
+
+Warm, one GPU, three models resident. Serial medians over 12 queries, verdict-carrying recalls only (every recall
+carried one).
+
+```
+arm                                                     ms (parallel)  ms (serial median)  cli ok/failed (accuracy)  cli ok/failed (total)  judge
+公式 · no verification (seed has no tags)               408            243                 0/0                       0/0                    off · claude-cli · haiku
+公式 · no verification · A/A twin                       408            254                 0/0                       0/0                    off · claude-cli · haiku
+reranker bge-reranker-v2-m3-Q5_K_M · partition          7336           2116                0/0                       0/0                    on · llama-cpp · bge-reranker-v2-m3-Q5_K_M
+reranker bge-reranker-v2-m3-Q5_K_M · fuse               7372           2307                0/0                       0/0                    on · llama-cpp · bge-reranker-v2-m3-Q5_K_M
+reranker LAMAR-600m.Q5_K_M · partition                  7540           2190                0/0                       0/0                    on · llama-cpp · LAMAR-600m.Q5_K_M
+reranker LAMAR-600m.Q5_K_M · fuse                       7532           2288                0/0                       0/0                    on · llama-cpp · LAMAR-600m.Q5_K_M
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · partition  2250           567                 0/0                       0/0                    on · llama-cpp · mmarco-mMiniLMv2-L12-H384-v1-Q8_0
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · fuse       2250           834                 0/0                       0/0                    on · llama-cpp · mmarco-mMiniLMv2-L12-H384-v1-Q8_0
+```
+
+- **Long candidates cost time.** With every candidate ~1,000 characters (up to ~858 tokens a pair), a BGE recall took
+  **~2.1 s** serial, and LAMAR ~2.2 s. On the ≤ 101-character fixture, Runs 2–5b measured 0.42–0.50 s.
+- mMiniLMv2 reads only its cut, and took **~0.57 s**.
+- 公式 took 0.24 s.
+- The parallel means (2.3–7.5 s) were eight arms at once on one GPU, and are not latency.
+- The slowest single recall of the accuracy pass took 12.3 s (LAMAR, contended), far from the 60 s deadline.
+
+### Warnings
+
+None. The bench printed no WARNING line and no NOTE. No query errored, no reranker left a graph recall without a
+verdict, and no server made a claude-cli call.
+
+### What it says
+
+- **Cutting a long note costs mMiniLMv2 almost everything when the answer is past its cut.**
+  - At `middle` and `end`, where BGE still reads the answer, mMiniLMv2 put it on the page 7 and 4 times in 60, against
+    BGE's 53 and 50.
+  - When the answer is at the start, the two are not distinguishable (52 against 49).
+  - The loss is the fit, not the model: the same model, reading its window, keeps its Run 4 standing.
+- **Under partition a blind reranker is WORSE than no judge.**
+  - mMiniLMv2 at `end`: 4 against 公式's 29.
+  - BGE and LAMAR at `beyond`, past their own 1,000-character cap: 3 and 4, against 30.
+  - The mechanism is Run 2's. The reranker endorses its eight best and promotes them ahead of everything else. A note
+    whose answer it cannot see scores like filler, so it is left out of the eight and pushed OFF a page the engine
+    would have given it.
+  - So the RerankInputCap comment's premise, that a cut is better than a refused call, does NOT hold for the recall of
+    the cut fact itself. A refused call fails open, and the engine's page (公式) would have stood.
+- **Fuse softens it and does not remove it.** mMiniLMv2's fuse arm at `end` reads 23/60 found@8, against 公式's 29:
+  8/2, p = 0.109, not a finding. The product ships partition.
+- **BGE's 1,000-character cap has the same shape one tier further out.** Past 1,000 characters BGE finds 3/60 against
+  公式's 30/60 (28/1, −45.0pp). No catalogue note claims otherwise, but it is the same mechanism, and a household with
+  notes over 1,000 characters is exposed to it on BGE and LAMAR as well.
+- **The instrument agrees with the design.**
+  - Every call was served and none was refused: the largest mMiniLMv2 pair was 425 tokens.
+  - The losses sit exactly where the answer is out of each model's view: mMiniLMv2 at middle/end/beyond, BGE and LAMAR
+    at beyond.
+  - LAMAR against BGE shows no found@8 difference at any position.
+
+### What it does NOT say
+
+- **One fixture, one run, one machine.** The fixture is constructed. It tests where the answer sits, not how real
+  household notes are distributed. The run shows what happens WHEN a long note's answer is past the cut; it does not
+  say how often a household's notes are like that.
+- **The notes are padded with neutral filler and topic mentions**, never other facts' answers. Real long notes (a pasted
+  school notice, a trip plan) may put more of the question's own words near the start, which could help a cut model.
+  That is not measured.
+- **A different base from Runs 1–5b.** There were no subject tags, long notes and the CLI stubbed, and the digest is
+  `976af4663b6e`, not `f661eb6a056e`. No number here sits beside another run's.
+- **No embedder** (语义 off), **`EndorseCount`/page 8**, **≤ 60 candidates**. The found@8 losses are tied to a page of 8
+  under partition.
+- **A token-based budget was not tested.** The English 0/16 says that the character bound gives up window a token count
+  would keep, not how much a token-based fit would recover.
+- **Warm latency on one GPU**, with three models resident.
+
+**Evidence, local only** (gitignored):
+
+- `devtools/_judge-bench-long/results-2026-09-24T092118.872Z.json` (the saved run) and
+  `rows-2026-09-24T092118.872Z.jsonl`;
+- `router.log`, `presets.ini` and `arm-0` … `arm-7` beside them;
+- the bench output, in `devtools/_judge-bench-long-run6.txt`;
+- the token measurement, in `devtools/_judge-bench-long/lengths-2026-09-24T091612.465Z.json`;
+- the seed build, in `devtools/_judge-bench-long-seed.txt`.
+
+`results-2026-09-24T091322.161Z.json` in the same folder is the plumbing smoke, on the superseded fixture, and not Run 6.
