@@ -146,6 +146,21 @@
 // seed step and saved with the seeds and the run. `--chat-arms=` picks which arms each `--chat-judges=` model gets
 // (`lc`, `lcb`; default both), as `--rerank-arms=` does for rerankers.
 //
+// CPU-ONLY ARMS (`--cpu-rerankers=<m,…>`, docs/judge-bench.md Run 8). What the shipped chunked scoring and its pace
+// (RerankPace) do on this machine's CPU. `--cpu-rerank-arms=` picks each model's kinds as `--rerank-arms=` does (default
+// `rr,rrk`); the arms are keyed `cpu-<kind>:<m>`. Each runs on its OWN, FRESH router, launched with `n-gpu-layers = 0` AND
+// `device = none` (b10549 offloads a big batch's ops to any GPU it sees even at n-gpu-layers = 0 — op-offload defaults on
+// — so the first alone is not a CPU run; `device = none` leaves the CPU backend alone, which is what a machine with no GPU
+// has), on `--cpu-llama-port=`, killed by PID when the arm is done: llama-server keeps scoring a batch whose request the
+// verification deadline abandoned, so a router shared across arms would hand the next arm the last one's queue. CPU arms
+// run ONE AT A TIME, after every other arm's accuracy pass, with nothing else querying — so their accuracy pass IS the
+// serial latency and they skip the latency pass. Each gets a RECORD-ONLY proxy: never memoised (a shared reply would come
+// back at once and teach the pace a machine it is not), a client's abandoned request closed upstream too (as the product's
+// own connection would be), and per call the windows, the fixture notes they came from, the pair tokens as RerankPace
+// counts them, the wall time and whether the client abandoned it. The pace guard is RELAXED for these arms only — the
+// pace's activity is what they measure — and says so per arm; every other arm keeps it. Per recall the row carries the
+// deadline cut and the pace line the product logged during it, read from the arm's own log by timestamp.
+//
 // Usage:
 //   node devtools/dev.mjs judge-bench                     # formula, formula2, topic, content, content2, contentonly, fuse
 //   node devtools/dev.mjs judge-bench --arms=formula,content --n=20 --reuse-seed
@@ -158,9 +173,11 @@
 //   node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 --rerankers=… --rerank-arms=rr,rrk --rerank-memo --resources=devtools/_rr-res
 //   node devtools/dev.mjs judge-bench --claude-stub --reuse-seed --tag-seed=Qwen3-0.6B-Q8_0 --build-tag-seed --seed-only --arms=formula --resources=devtools/_rr-res
 //   node devtools/dev.mjs judge-bench --claude-stub --reuse-seed --tag-seed=Qwen3-0.6B-Q8_0 --arms=formula --chat-judges=Qwen3-0.6B-Q8_0 --chat-arms=lc --tag-seed-arms=formula,lc:Qwen3-0.6B-Q8_0 --resources=devtools/_rr-res
+//   node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 --rerankers=bge-reranker-v2-m3-Q5_K_M --rerank-arms=rrk --cpu-rerankers=bge-reranker-v2-m3-Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-memo --resources=devtools/_rr-res
 // Flags: --arms= --rerankers= --rerank-arms=rr,rrf,rrk --chat-judges= --chat-arms=lc,lcb --n= --port-base= --llama-port= --resources=
 //        --seed= --latency-sample=   --fixture=bilingual|long   --reuse-seed | --reseed   --seed-only   --claude-stub   --rerank-memo
 //        --tag-seed=<chat model>   --build-tag-seed   --tag-seed-arms=<arm keys>
+//        --cpu-rerankers=<m,…>   --cpu-rerank-arms=rr,rrf,rrk   --cpu-llama-port=
 //        --report-only=<results.json | rows-*.jsonl>   --baseline=<results.json>:<arm>
 import fs from 'node:fs';
 import path from 'node:path';
@@ -174,7 +191,8 @@ import { expectedLongBytes, POSITIONS } from './judge-bench-long-fixture.mjs';
 
 // ---- flags: known ones only ------------------------------------------------------------------------------
 const VALUED = ['arms', 'rerankers', 'rerank-arms', 'chat-judges', 'chat-arms', 'n', 'port-base', 'llama-port', 'resources', 'seed',
-  'latency-sample', 'report-only', 'baseline', 'fixture', 'tag-seed', 'tag-seed-arms'];
+  'latency-sample', 'report-only', 'baseline', 'fixture', 'tag-seed', 'tag-seed-arms', 'cpu-rerankers', 'cpu-rerank-arms',
+  'cpu-llama-port'];
 const BOOLEAN = ['reuse-seed', 'reseed', 'seed-only', 'claude-stub', 'rerank-memo', 'build-tag-seed'];
 const die = (msg) => { console.error(`judge-bench: ${msg}`); process.exit(2); };
 const KNOWN = `known flags: ${[...VALUED.map((k) => `--${k}=…`), ...BOOLEAN.map((k) => `--${k}`)].join(' ')}`;
@@ -242,6 +260,9 @@ const FIXTURE_POSITIONS = FIXTURE.facts.some((f) => f.position)
 const LIMIT = 8;
 const PORT_BASE = int('port-base', 5620, 1);
 const LLAMA_PORT = int('llama-port', 5660, 1);
+// The CPU-only routers' first port (Run 8): one fresh router per CPU arm, the n-th CPU arm's on CPU_LLAMA_PORT + n — a
+// port of its own, never one a killed router just left.
+const CPU_LLAMA_PORT = int('cpu-llama-port', LLAMA_PORT + 1, 1);
 const ORDER_SEED = int('seed', 12345, 0);
 const LATENCY_SAMPLE = int('latency-sample', 12, 0);
 const REUSE_SEED = opts['reuse-seed'] === true;
@@ -339,6 +360,20 @@ function mirrorGuard() {
   if (JSON.stringify(Object.entries(declared).sort()) !== JSON.stringify(Object.entries(DECLARED_WINDOW).sort()))
     drift.push(`declared windows ${JSON.stringify(declared)} ≠ ${JSON.stringify(DECLARED_WINDOW)}`);
   if (drift.length) die(`the bench's launch numbers drifted from the product's — update them together: ${drift.join('; ')}`);
+}
+// RerankPace's counting rule, restated for Run 8's per-call record (pair tokens, and the rate the pace would read off an
+// answered call) — and GUARDED against the C# by paceMirror, as the launch numbers are by mirrorGuard.
+const PACE = { cjk: 0.83, other: 0.25, cjkFrom: 0x2E80, overheadMs: 50 };
+function paceMirror() {
+  const src = fs.readFileSync(path.join(repo, 'src', 'server', 'Gatherlight.Platform', 'Agent', 'Llm', 'Services', 'ChunkedScoreProvider.cs'), 'utf8');
+  const num = (name) => Number((new RegExp(`const double ${name} = ([\\d.]+);`).exec(src) ?? [])[1]);
+  const from = (/const char CjkFrom = '(.)';/u.exec(src) ?? [])[1];
+  const drift = [];
+  if (num('CjkTokensPerChar') !== PACE.cjk) drift.push(`CjkTokensPerChar ${num('CjkTokensPerChar')} ≠ ${PACE.cjk}`);
+  if (num('OtherTokensPerChar') !== PACE.other) drift.push(`OtherTokensPerChar ${num('OtherTokensPerChar')} ≠ ${PACE.other}`);
+  if (num('CallOverheadMs') !== PACE.overheadMs) drift.push(`CallOverheadMs ${num('CallOverheadMs')} ≠ ${PACE.overheadMs}`);
+  if (!from || from.charCodeAt(0) !== PACE.cjkFrom) drift.push(`CjkFrom ${from ? `U+${from.charCodeAt(0).toString(16).toUpperCase()}` : 'unread'} ≠ U+${PACE.cjkFrom.toString(16).toUpperCase()}`);
+  if (drift.length) die(`the bench's copy of RerankPace's counting drifted from the product's — update them together: ${drift.join('; ')}`);
 }
 const ARMS = {
   formula: { label: '公式 · no verification (seed tags present)', enrichment: false, env: {} },
@@ -628,6 +663,10 @@ const loadRun = (json, source) => {
       migrationWarnings: a.migrationWarnings ?? null,
       router: a.router ?? null,
       localRouter: a.localRouter ?? null,
+      // Run 8: which llama.cpp router the arm used and with what preset, and — for a CPU-only arm — its own router's
+      // record. Present only when saved, so a run saved before them re-analyses exactly as it did.
+      ...(a.llamaRouter ? { llamaRouter: a.llamaRouter } : {}),
+      ...((a.cpu ?? known.cpu) ? { cpu: true, cpuRecord: a.cpuRecord ?? null } : {}),
       rows: (json.rows[a.key] ?? []).filter((r) => (r.pass ?? 'accuracy') === 'accuracy'),
       latencyRows: json.latencyRows?.[a.key] ?? null,
     };
@@ -661,6 +700,8 @@ const loadRun = (json, source) => {
       // The pace guard's per-arm counts; ABSENT (not null) on a run saved before the guard, so a re-analysis of one
       // writes exactly what it wrote before.
       ...(json.rerankPace ? { rerankPace: json.rerankPace } : {}),
+      // Run 8: the CPU-only arms, run one at a time after the parallel ones; absent on every earlier run.
+      ...(json.cpuSerial ? { cpuSerial: json.cpuSerial } : {}),
     },
     arms,
     notes,
@@ -798,8 +839,12 @@ const printPaired = (title, comps) => {
 
 /** Each reranker run both unchunked (`rr:`) and chunked (`rrk:`) in one run — Run 6b's pairs, by key, so a saved run
  *  pairs the same way. */
-const chunkingPairs = (arms) => arms.filter((a) => /^rr:/.test(a.key))
-  .map((rr) => ({ model: rr.key.slice(3), rr, rrk: arms.find((a) => a.key === `rrk:${rr.key.slice(3)}`) }))
+const chunkingPairs = (arms) => arms.filter((a) => /^(cpu-)?rr:/.test(a.key))
+  .map((rr) => {
+    // Run 8: a CPU-only arm pairs with its own CPU-only twin, never with the GPU one.
+    const [, pre = '', model] = /^(cpu-)?rr:(.+)$/.exec(rr.key);
+    return { model: pre ? `${model} (CPU)` : model, rr, rrk: arms.find((a) => a.key === `${pre}rrk:${model}`) };
+  })
   .filter((p) => p.rrk);
 
 /** Are two arms' rows the SAME, query by query? Everything a row records about the recall's outcome — the target's
@@ -911,6 +956,110 @@ const printByPosition = (run) => {
   return out;
 };
 
+/** RUN 8 — what each CPU-only arm did, recall by recall, in the order it ran: which recalls the 60 s verification
+ *  deadline cut, what each rerank call sent (windows, the fixture notes they came from, windows per note), how long it
+ *  took and at what rate, and every pace line the product logged. Then each reranker chunked against itself cut, on the
+ *  CPU — the pairs Run 8's rule reads. Printed only for a run that has CPU-only arms, so every earlier run re-analyses as
+ *  it did. Returns what goes into the results file. */
+const printCpu = (run) => {
+  const cpuArms = run.arms.filter((a) => a.cpu);
+  if (!cpuArms.length) return null;
+  const out = { arms: {} };
+  const pct = (xs, p) => {
+    if (!xs.length) return null;
+    const s = [...xs].sort((a, b) => a - b);
+    return s[Math.min(s.length - 1, Math.ceil(p * s.length) - 1)];
+  };
+  const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const f1 = (v) => (v === null || v === undefined ? '—' : Number(v).toFixed(1));
+  const ms = (v) => (v === null || v === undefined ? '—' : `${(v / 1000).toFixed(1)} s`);
+  // What RerankPace would read off an ANSWERED single call, at the proxy: (wall − CallOverheadMs) per 1,000 pair tokens.
+  const rateOf = (r) => (r.rerank?.calls === 1 && r.rerank.aborted === false && r.rerank.statuses === '200' && r.rerank.pairTokens > 0
+    ? ((r.rerank.callMs - PACE.overheadMs) / r.rerank.pairTokens) * 1000 : null);
+  const sym = (r) => (r.error !== null ? 'x' : r.answered !== null ? 'v' : r.deadlineCut === true ? 'C' : !(r.rerank?.calls > 0) ? 'f' : '?');
+  console.log('\nCPU-ONLY ARMS (Run 8) — each alone on a fresh CPU-only router, one arm at a time; its accuracy pass is the serial pass.');
+  console.log('Per recall, in the order asked: v = a verdict · C = cut by the 60 s verification deadline (NoOpinion: the engine\'s own'
+    + ' page) · f = no rerank call (FTS, or nothing to judge) · x = the recall errored · ? = no verdict and no cut (a fault)');
+  for (const arm of cpuArms) {
+    const rows = [...arm.rows].sort((a, b) => a.seq - b.seq);
+    const strip = rows.map(sym).join('');
+    const cuts = rows.filter((r) => r.deadlineCut === true);
+    const withCall = rows.filter((r) => r.rerank?.calls > 0);
+    // Consecutive cuts: a cut whose previous rerank call was cut too queued behind a batch nobody was waiting for.
+    let run0 = 0, longest = 0, runs = 0;
+    for (const c of strip) {
+      if (c === 'C') { if (run0 === 0) runs++; run0++; longest = Math.max(longest, run0); } else if (c !== 'f') run0 = 0;
+    }
+    const quarter = (i) => rows.filter((_, k) => Math.floor((4 * k) / rows.length) === i);
+    const block = (rs) => {
+      const cs = rs.filter((r) => r.rerank?.calls > 0);
+      return {
+        recalls: rs.length, verdicts: rs.filter((r) => r.answered !== null).length, cuts: rs.filter((r) => r.deadlineCut === true).length,
+        windowsPerCall: mean(cs.map((r) => r.rerank.documents / r.rerank.calls)),
+        notesPerCall: mean(cs.filter((r) => r.rerank.candidates != null).map((r) => r.rerank.candidates / r.rerank.calls)),
+        windowsPerNote: mean(cs.filter((r) => r.rerank.candidates > 0).map((r) => r.rerank.documents / r.rerank.candidates)),
+        maxWindowsPerNote: cs.filter((r) => r.rerank.candidates > 0).reduce((m, r) => Math.max(m, r.rerank.documents / r.rerank.candidates), 0),
+        latencyMedian: median(rs.filter((r) => r.error === null).map((r) => r.ms)),
+        rateMedian: pct(rs.map(rateOf).filter((v) => v !== null), 0.5),
+      };
+    };
+    const quarters = [0, 1, 2, 3].map((i) => block(quarter(i)));
+    const all = block(rows);
+    const paceLines = rows.filter((r) => r.pace).map((r) => ({ seq: r.seq, ...r.pace }));
+    const lat = rows.filter((r) => r.error === null).map((r) => r.ms);
+    const x = {
+      strip, cuts: cuts.length, firstCut: cuts[0]?.seq ?? null, lastCut: cuts.at(-1)?.seq ?? null, cutRuns: runs, longestCutRun: longest,
+      recallsWithCall: withCall.length, all, quarters,
+      paceLines: { sized: paceLines.filter((p) => p.kind === 'sized').length, afterCut: paceLines.filter((p) => p.kind === 'afterCut').length,
+        first: paceLines.slice(0, 5), last: paceLines.slice(-5) },
+      latency: { median: median(lat), p90: pct(lat, 0.9), max: lat.length ? Math.max(...lat) : null,
+        verdictMedian: median(rows.filter((r) => r.answered !== null).map((r) => r.ms)),
+        cutMedian: median(cuts.map((r) => r.ms)) },
+      router: arm.cpuRecord ?? null,
+    };
+    out.arms[arm.key] = x;
+    console.log(`\n${arm.key} — ${rows.length} recalls, ${withCall.length} with a rerank call: ${all.verdicts} verdict(s), ${x.cuts} deadline cut(s)`
+      + `${x.cuts ? ` (first at seq ${x.firstCut}, last at ${x.lastCut}; ${runs} run(s) of consecutive cuts, the longest ${longest})` : ''}`);
+    for (let i = 0; i < strip.length; i += 60) console.log(`  seq ${pad(i, 4)} ${strip.slice(i, i + 60)}`);
+    console.log('  ' + pad('part of the run', 18) + pad('recalls', 9) + pad('verdicts', 10) + pad('cuts', 6) + pad('windows/call', 14)
+      + pad('notes/call', 12) + pad('windows/note', 14) + pad('max w/note', 12) + pad('median ms', 11) + 'ms per 1k pair tokens (answered, median)');
+    for (const [label, b] of [...quarters.map((b, i) => [`quarter ${i + 1}`, b]), ['whole run', all]])
+      console.log('  ' + pad(label, 18) + pad(b.recalls, 9) + pad(b.verdicts, 10) + pad(b.cuts, 6) + pad(f1(b.windowsPerCall), 14)
+        + pad(f1(b.notesPerCall), 12) + pad(b.windowsPerNote === null ? '—' : b.windowsPerNote.toFixed(2), 14)
+        + pad(b.maxWindowsPerNote ? b.maxWindowsPerNote.toFixed(2) : '—', 12) + pad(b.latencyMedian ?? '—', 11)
+        + (b.rateMedian === null ? '—' : b.rateMedian.toFixed(2)));
+    console.log(`  latency, every recall: median ${ms(x.latency.median)}, p90 ${ms(x.latency.p90)}, max ${ms(x.latency.max)}; with a verdict`
+      + ` ${ms(x.latency.verdictMedian)}; cut ${ms(x.latency.cutMedian)}`);
+    const pl = (p) => `seq ${p.seq}: ${p.kind === 'afterCut' ? 'after a cut' : 'sized'}, ${p.windows} window(s) instead of ${p.byCount}`
+      + `${p.msPer1k != null ? ` at ${p.msPer1k} ms/1k tokens` : ''}${p.budgetS != null ? ` (budget ~${p.budgetS} s)` : ''}`;
+    console.log(`  pace lines: ${x.paceLines.sized} sized · ${x.paceLines.afterCut} after a cut`
+      + (paceLines.length ? `; first: ${x.paceLines.first.map(pl).join(' | ')}` : ''));
+    if (paceLines.length > 5) console.log(`  pace lines, last: ${x.paceLines.last.map(pl).join(' | ')}`);
+    const r = arm.cpuRecord;
+    if (r) {
+      console.log(`  router: port ${r.port}, preset [${(arm.llamaRouter?.preset ?? '').split('\n').filter((l) => l && !l.startsWith('[')).join('; ')}],`
+        + ` child ${r.childArgs ? `--device ${r.device ?? '(absent)'} --n-gpu-layers ${r.nGpuLayers ?? '(absent)'}` : 'args unread'},`
+        + ` n_threads ${r.nThreads ?? '?'}, ${r.tasks ?? '?'} tasks (largest ${r.maxTaskTokens ?? '?'} tokens, ${r.truncated ?? '?'} truncated),`
+        + ` ${r.cancelled ?? '?'} "Connection handling canceled", ${r.errorLines ?? '?'} error line(s)`);
+    }
+  }
+  // THE RULE'S PAIRS: each reranker chunked against itself cut, both on the CPU. b = cut hit & chunked miss.
+  const pairs = chunkingPairs(run.arms).filter((p) => p.rr.cpu && p.rrk.cpu);
+  if (pairs.length) {
+    out.paired = printPaired('CPU — each reranker chunked (cpu-rrk) against itself cut (cpu-rr), both on the CPU; b = cut hit & chunked miss,'
+      + ' c = the reverse', pairs.map((p) => ({ key: `${p.rrk.key} vs ${p.rr.key}`, label: `${p.rrk.key} vs ${p.rr.key}`, arm: p.rrk, base: p.rr })));
+    out.rule = {};
+    for (const p of pairs) {
+      const f = out.paired[`${p.rrk.key} vs ${p.rr.key}`].all.found;
+      const worse = f.p < 0.05 && f.c - f.b < 0;
+      out.rule[p.model] = { b: f.b, c: f.c, p: f.p, netPp: f.netPp, interval95Pp: f.interval95Pp, worse };
+      console.log(`RUN 8 RULE — ${p.model}: all found@8 chunked ${worse ? 'IS' : 'is NOT'} significantly worse than cut `
+        + `(b/c ${f.b}/${f.c}, p ${pv(f.p)}, net ${signed(f.netPp, 1)}pp${f.interval95Pp ? `, 95% [${signed(f.interval95Pp[0], 1)}, ${signed(f.interval95Pp[1], 1)}]pp` : ''})`);
+    }
+  }
+  return out;
+};
+
 /** Every table, from a run in saved shape. Prints, and returns what goes into the results file. */
 const analyse = (run, { baseline = null } = {}) => {
   const { meta, arms } = run;
@@ -922,7 +1071,8 @@ const analyse = (run, { baseline = null } = {}) => {
   const COLS = [['n', 5], ['err', 5], ['graph', 7], ['judged', 8], ['endorsed', 10], ['top-1', 10], ['found@8', 10], ['MRR', 8], ['ms (parallel)', 15]];
 
   console.log(`\n${meta.facts ?? '?'} facts × ${QUESTION_SETS.length} sets = ${meta.queries} queries per arm, order seed ${meta.orderSeed ?? 'unrecorded'}`
-    + `${meta.adjacentSameFact === null ? '' : ` (${meta.adjacentSameFact} same-fact adjacencies left)`}, ${meta.concurrency} arms in parallel`);
+    + `${meta.adjacentSameFact === null ? '' : ` (${meta.adjacentSameFact} same-fact adjacencies left)`}, ${meta.concurrency} arms in parallel`
+    + `${meta.cpuSerial ? `, then ${meta.cpuSerial.length} CPU-only arm(s) one at a time (${meta.cpuSerial.join(', ')})` : ''}`);
   for (const set of SETS) {
     console.log(`\n== ${set} ==`);
     console.log(pad('arm', LABEL_W) + COLS.map(([h, w]) => pad(h, w)).join('') + 'Δ vs 公式 (top-1 / found / MRR)');
@@ -946,6 +1096,12 @@ const analyse = (run, { baseline = null } = {}) => {
       latency.unjudged = arm.enrichment ? ok.filter((r) => r.ranked === 'graph' && r.answered === null).length : 0;
       latency.errors = arm.latencyRows.length - ok.length;
       latency.serialMedian = median(ok.filter((r) => !arm.enrichment || r.answered !== null).map((r) => r.ms));
+    }
+    // Run 8: a CPU-only arm's accuracy pass ran ONE ARM AT A TIME, so it is the serial pass — over EVERY recall, since a
+    // recall the deadline cut is the cost being measured, not a failed-open judge looking cheap.
+    if (arm.cpu) {
+      latency.serialMedian = median(arm.rows.filter((r) => r.error === null).map((r) => r.ms));
+      latency.serialFrom = 'accuracy pass, every recall';
     }
     out.armStats[arm.key] = { latency, positionsDigest: positionsDigest(arm.rows) };
   }
@@ -1097,10 +1253,14 @@ const analyse = (run, { baseline = null } = {}) => {
   for (const arm of arms) {
     const l = out.armStats[arm.key].latency;
     const r = (x) => (x ? `${x.ok}/${x.failed}` : 'unrecorded');
-    console.log(pad(arm.label, LABEL_W) + pad(l.parallelMean, 15) + pad(l.serialMedian ?? '—', 20)
+    console.log(pad(arm.label, LABEL_W) + pad(l.parallelMean, 15) + pad(`${l.serialMedian ?? '—'}${l.serialFrom ? ' (*)' : ''}`, 20)
       + pad(r(arm.router?.accuracy), 26) + pad(r(arm.router?.total), 23)
       + `${arm.judgeOn === null ? '?' : arm.judgeOn ? 'on' : 'off'} · ${arm.judgeSource ?? '—'} · ${arm.judgeModel ?? '—'}`);
   }
+  if (arms.some((a) => a.cpu))
+    console.log('  (*) a CPU-only arm (Run 8): no latency pass — its accuracy pass ran one arm at a time, so it IS the serial pass;'
+      + ' the median is over every recall, a deadline cut included (the CPU block below splits it). Its "ms (parallel)" is that'
+      + ' same serial pass\'s mean.');
   for (const arm of arms)
     if (arm.migrationWarnings?.length > 0) console.log(`  startup warnings in ${arm.key}: ${arm.migrationWarnings.join(' | ')}`);
   // The memo proxy's record (Run 6b): what each arm SENT the reranker in the accuracy pass — calls, documents per call
@@ -1121,25 +1281,39 @@ const analyse = (run, { baseline = null } = {}) => {
         docsMax: docs.length ? Math.max(...docs) : null, longest: calls.reduce((m, r) => Math.max(m, r.rerank.maxChars), 0),
         forwarded: p.forwarded ?? null, retried: p.retried ?? null, errors: p.errors ?? null,
       };
+      // A CPU-only arm's proxy never memoises, and counts the requests its client ABANDONED (the verification deadline).
+      if (arm.cpu) x.abandoned = p.abandoned ?? null;
       out.rerankSent[arm.key] = x;
       console.log(pad(arm.label, LABEL_W) + pad(x.calls, 8) + pad(x.shared ?? '—', 8) + pad(x.docsMean === null ? '—' : x.docsMean.toFixed(1), 18)
         + pad(x.docsMax ?? '—', 17) + pad(x.longest, 21)
-        + (x.forwarded === null ? 'unrecorded' : `${x.forwarded} · ${x.retried} · ${x.errors}`));
+        + (x.forwarded === null ? 'unrecorded' : `${x.forwarded} · ${x.retried} · ${x.errors}`)
+        + (arm.cpu ? ` · ${x.abandoned ?? '?'} abandoned by the client (CPU arm, no memo)` : ''));
       // A request the proxy failed to deliver reads to the arm as a 502 — no verdict — and says nothing about the judge.
       if (x.errors > 0) out.warnings.push(`arm ${arm.key} — the rerank proxy failed to deliver ${x.errors} request(s): those recalls carry no verdict for a reason that is the bench's, not the judge's`);
     }
-    // Every forward must have reached the router (the reconciliation the live run saved).
+    // Every forward must have reached the router (the reconciliation the live run saved). The shared router serves the
+    // arms that are not CPU-only; each CPU-only arm had a router of its own, reconciled with its own log.
     const seen = meta.rerankProxy.routerProxied;
     if (seen && !seen.error) {
       out.rerankReconciled = {};
-      for (const model of [...new Set(arms.filter((a) => a.reranker && meta.rerankProxy.arms?.[a.key]).map((a) => a.reranker))]) {
-        const sent = arms.filter((a) => a.reranker === model).reduce((s, a) => s + (meta.rerankProxy.arms[a.key]?.forwarded ?? 0), 0);
+      for (const model of [...new Set(arms.filter((a) => a.reranker && !a.cpu && meta.rerankProxy.arms?.[a.key]).map((a) => a.reranker))]) {
+        const sent = arms.filter((a) => a.reranker === model && !a.cpu).reduce((s, a) => s + (meta.rerankProxy.arms[a.key]?.forwarded ?? 0), 0);
         out.rerankReconciled[model] = { forwarded: sent, routerSaw: seen[model] ?? 0 };
         console.log(`  ${pad(model, LABEL_W - 2)}forwarded ${sent} rerank requests, the router proxied ${seen[model] ?? 0} to this model's child`);
         if (sent !== (seen[model] ?? 0))
           out.warnings.push(`${model} — the proxies forwarded ${sent} rerank requests and the router saw ${seen[model] ?? 0}: some request never reached the model`);
       }
     } else if (seen?.error) out.notes.push(`router log not reconciled: ${seen.error}`);
+    // Run 8: each CPU-only arm against ITS OWN router's log.
+    for (const arm of arms.filter((a) => a.cpu && meta.rerankProxy.arms?.[a.key])) {
+      const p = meta.rerankProxy.arms[arm.key];
+      const saw = p.routerProxied;
+      if (saw === null || saw === undefined || typeof saw !== 'number') { out.notes.push(`${arm.key}: its CPU router's log was not reconciled (${saw?.error ?? 'no count saved'})`); continue; }
+      (out.rerankReconciled ??= {})[arm.key] = { forwarded: p.forwarded, routerSaw: saw };
+      console.log(`  ${pad(arm.key, LABEL_W - 2)}forwarded ${p.forwarded} rerank requests, its own CPU router proxied ${saw} to the child`);
+      if (p.forwarded !== saw)
+        out.warnings.push(`${arm.key} — its proxy forwarded ${p.forwarded} rerank requests and its CPU router saw ${saw}: some request never reached the model`);
+    }
   }
   const chatArms = arms.filter((a) => a.chatJudge);
   if (chatArms.length > 0) {
@@ -1180,6 +1354,10 @@ const analyse = (run, { baseline = null } = {}) => {
     }
   }
 
+  // Run 8: the CPU-only arms, recall by recall, and the pairs its rule reads. Nothing for a run without them.
+  const cpu = printCpu(run);
+  if (cpu) out.cpu = cpu;
+
   // WHAT THE JUDGE IS SHOWN PER RECALL — latency alone cannot price it (on the CLI arm a 9–17 s spawn dominates
   // and the cost is quota). Estimated from the fixture: the judge sees min(4 × min(3 × limit, 100), corpus)
   // candidates (Lyntai's 4× VerificationDepth over FactIndex's over-ask). On a large corpus a KIND-filtered recall
@@ -1206,7 +1384,17 @@ const analyse = (run, { baseline = null } = {}) => {
     const s = stat(arm.rows);
     const l = out.armStats[arm.key].latency;
     if (s.errors > 0.02 * s.queries) out.warnings.push(`arm ${arm.key} — ${s.errors}/${s.queries} queries errored`);
-    if (arm.reranker && s.judged < s.graph)
+    // Run 8: on a CPU-only arm a recall the verification DEADLINE cut is the thing measured, not a fault — so there the
+    // guard is that every abstention IS a traced deadline cut (the product's own Warning logged during that recall), and
+    // that no recall carrying a verdict was also cut.
+    if (arm.cpu) {
+      const unexplained = arm.rows.filter((r) => r.error === null && r.ranked === 'graph' && r.answered === null && r.deadlineCut !== true);
+      const contradicted = arm.rows.filter((r) => r.answered !== null && r.deadlineCut === true);
+      if (unexplained.length)
+        out.warnings.push(`arm ${arm.key} — ${unexplained.length}/${s.graph} graph recalls carried no verdict that no deadline cut explains (seq ${unexplained.slice(0, 12).map((r) => r.seq).join(', ')}): a fault, not the pace`);
+      if (contradicted.length)
+        out.warnings.push(`arm ${arm.key} — ${contradicted.length} recall(s) carried a verdict AND a deadline-cut line (seq ${contradicted.slice(0, 12).map((r) => r.seq).join(', ')}): the log and the rows disagree`);
+    } else if (arm.reranker && s.judged < s.graph)
       out.warnings.push(`arm ${arm.key} — reranker gave no verdict on ${s.graph - s.judged}/${s.graph} graph recalls (a reranker abstains only on a fault)`);
     else if (arm.enrichment && !arm.reranker && s.judged < 0.98 * s.graph)
       out.warnings.push(`arm ${arm.key} — judge failed open on ${s.graph - s.judged}/${s.graph} graph recalls`);
@@ -1241,9 +1429,15 @@ const analyse = (run, { baseline = null } = {}) => {
   // judged; one saved before the guard prints nothing new.
   let paceVoid = null;
   if (meta.rerankPace) {
-    const fired = Object.entries(meta.rerankPace).filter(([, n]) => n > 0);
+    // Run 8: a CPU-only arm is EXEMPT — the pace's activity is what it measures — and says so; every other arm is judged.
+    const cpuKeys = new Set(arms.filter((a) => a.cpu).map((a) => a.key));
+    const fired = Object.entries(meta.rerankPace).filter(([k, n]) => n > 0 && !cpuKeys.has(k));
+    const exempt = Object.entries(meta.rerankPace).filter(([k]) => cpuKeys.has(k));
     // Its own name: the saved counts stay `rerankPace` in the file, and a re-analysis must read those, not this.
-    out.paceGuard = { void: fired.length > 0, fired: Object.fromEntries(fired) };
+    out.paceGuard = { void: fired.length > 0, fired: Object.fromEntries(fired), ...(exempt.length ? { exempt: Object.fromEntries(exempt) } : {}) };
+    if (exempt.length)
+      console.log(`\nPACE GUARD — exempt, as designated CPU-only arms (the pace is what they measure): ${exempt.map(([k, n]) => `${k} (${n} line${n === 1 ? '' : 's'})`).join(', ')};`
+        + ` judged: ${Object.keys(meta.rerankPace).filter((k) => !cpuKeys.has(k)).join(', ') || 'none'}`);
     for (const [k, n] of fired)
       out.warnings.push(`arm ${k} — RerankPace sized ${n} rerank call(s) below the count ceiling (its log: "window(s) per long candidate instead of …"): what the arm sent depended on this machine's timing`);
     if (fired.length) paceVoid = fired.map(([k, n]) => `${k} (${n})`).join(', ');
@@ -1313,6 +1507,10 @@ const armConfigFor = (key) => {
   if (ARMS[key]) return { label: ARMS[key].label, enrichment: ARMS[key].enrichment, judgeInput: ARMS[key].judgeInput ?? null, reranker: null, chatJudge: null };
   const m = /^(rr[fk]?):(.+)$/.exec(key);
   if (m) return { label: `reranker ${m[2]} · ${RERANK_ARM_KINDS[m[1]].suffix}`, enrichment: true, judgeInput: null, reranker: m[2], chatJudge: null };
+  // Run 8: the same reranker arm on a CPU-only router (`cpu: true` is what exempts it from the pace guard).
+  const cpu = /^cpu-(rr[fk]?):(.+)$/.exec(key);
+  if (cpu) return { label: `reranker ${cpu[2]} · ${RERANK_ARM_KINDS[cpu[1]].suffix} · CPU-only router`, enrichment: true, judgeInput: null,
+    reranker: cpu[2], chatJudge: null, cpu: true };
   const c = /^(lcb?):(.+)$/.exec(key);
   if (c) return { label: `local chat judge ${c[2]} · ${c[1] === 'lcb' ? 'topic — content' : 'content only'}`, enrichment: true,
     judgeInput: c[1] === 'lcb' ? 'both' : 'content', reranker: null, chatJudge: c[2] };
@@ -1481,7 +1679,20 @@ const live = async () => {
     }
   // A llama.cpp CHAT judge, both ways it can be shown a candidate. `lc` sets NO knob — it is the shipped default,
   // so the knob-less check below proves nothing leaked in — and `lcb` must announce the one it sets.
+  // Run 8: the CPU-only arms — the same reranker arms, each run alone on a CPU-only router of its own (header).
+  const cpuRerankers = list('cpu-rerankers', '');
+  const cpuKinds = list('cpu-rerank-arms', 'rr,rrk');
+  for (const k of cpuKinds) if (!RERANK_ARM_KINDS[k]) die(`--cpu-rerank-arms: unknown kind '${k}' — one of ${Object.keys(RERANK_ARM_KINDS).join(', ')}`);
+  if (!cpuRerankers.length && opts['cpu-rerank-arms']) die('--cpu-rerank-arms needs --cpu-rerankers');
+  if (cpuRerankers.length && opts['tag-seed']) die('--cpu-rerankers is not for a local-tag seed run');
+  if (cpuRerankers.length) paceMirror();
+  for (const m of cpuRerankers)
+    for (const k of cpuKinds) {
+      const kind = RERANK_ARM_KINDS[k];
+      arms.push({ key: `cpu-${k}:${m}`, ...armConfigFor(`cpu-${k}:${m}`), env: { ...kind.env }, ...(kind.knob ? { knob: kind.knob } : {}) });
+    }
   const chatJudges = list('chat-judges', '');
+  if (chatJudges.find((m) => cpuRerankers.includes(m))) die('a model is in both --cpu-rerankers and --chat-judges — a GGUF is one kind');
   const both = chatJudges.find((m) => rerankers.includes(m));
   if (both) die(`'${both}' is in both --rerankers and --chat-judges — a GGUF is one kind, and the router's preset gives it one`);
   const chatKinds = list('chat-arms', 'lc,lcb');
@@ -1590,14 +1801,20 @@ const live = async () => {
 
   const servers = [];
   let router = null;
-  const stopRouter = () => {
-    if (!router || router.exitCode !== null) return;
+  // Run 8: every CPU-only router started, so none outlives the run — each is killed when its arm is done, and again here.
+  const cpuRouters = [];
+  const killTree = (child) => {
+    if (!child || child.exitCode !== null) return;
     // The router's model children live in its process tree; kill() alone would orphan them.
     if (process.platform === 'win32') {
-      const r = spawnSync('taskkill', ['/PID', String(router.pid), '/T', '/F'], { stdio: 'ignore' });
+      const r = spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
       if (r.status === 0) return;
     }
-    try { router.kill(); } catch { /* best effort */ }
+    try { child.kill(); } catch { /* best effort */ }
+  };
+  const stopRouter = () => {
+    killTree(router);
+    for (const c of cpuRouters) killTree(c);
   };
   const extraProxies = [];
   const stopAll = () => {
@@ -1607,8 +1824,10 @@ const live = async () => {
     stopRouter();
   };
   /** ONE real router for every llama.cpp model the caller names, launched as the product launches them; its preset and
-   *  log go to `dir` — the work dir for a run, the tag seed's own folder for a tag-seed build (Run 7). */
-  const startRouter = async (rerankerModels, chatModels, dir) => {
+   *  log go to `dir` — the work dir for a run, the tag seed's own folder for a tag-seed build (Run 7). With `cpu` (Run 8)
+   *  it is a CPU-only router instead: `n-gpu-layers = 0` and `device = none` in place of the product's `n-gpu-layers =
+   *  99`, on `port`, its preset and log named with `tag` — and it is not THE router, so the caller kills it. */
+  const startRouter = async (rerankerModels, chatModels, dir, { cpu = false, port = LLAMA_PORT, tag = '' } = {}) => {
     const models = [...rerankerModels, ...chatModels];
     const exe = path.join(RESOURCES, 'llama-cpp', 'llama-server.exe');
     const gguf = path.join(RESOURCES, 'gguf');
@@ -1639,20 +1858,29 @@ const live = async () => {
     // Runs 2–5b re-analyse identically: a preset is a launch setting, and no saved row depends on this text.
     mirrorGuard();
     const windowOf = (m) => DECLARED_WINDOW[m] ?? RERANK_WINDOW;
-    const presetSection = (m, kind) => [`[${m}]`, 'n-gpu-layers = 99',
+    // Run 8's CPU-only launch. `n-gpu-layers = 0` ALONE is not a CPU run on this build: op-offload defaults on, and b10549
+    // then runs a big batch's matrix work on any GPU it can see — measured before Run 8, a 48-note BGE call took ~5 s with
+    // `n-gpu-layers = 0` alone and 143–197 s with `device = none` as well. A machine with no GPU has only the CPU backend,
+    // and `device = none` is what gives this one the same.
+    const devices = cpu ? ['n-gpu-layers = 0', 'device = none'] : ['n-gpu-layers = 99'];
+    const presetSection = (m, kind) => [`[${m}]`, ...devices,
       ...(kind === 'reranking'
         ? ['reranking = true', `ctx-size = ${windowOf(m)}`, `batch-size = ${windowOf(m)}`, `ubatch-size = ${windowOf(m)}`]
         : ['reasoning = off', `n-predict = ${CHAT_MAX_TOKENS}`, `ctx-size = ${CHAT_CONTEXT_TOKENS}`]),
       ''].join('\n');
-    const preset = path.join(dir, 'presets.ini');
-    fs.writeFileSync(preset, [...rerankerModels.map((m) => presetSection(m, 'reranking')),
-      ...chatModels.map((m) => presetSection(m, 'chat'))].join('\n'));
-    const logFd = fs.openSync(path.join(dir, 'router.log'), 'w');
+    const preset = path.join(dir, `presets${tag}.ini`);
+    const presetText = [...rerankerModels.map((m) => presetSection(m, 'reranking')),
+      ...chatModels.map((m) => presetSection(m, 'chat'))].join('\n');
+    fs.writeFileSync(preset, presetText);
+    const log = path.join(dir, `router${tag}.log`);
+    const logFd = fs.openSync(log, 'w');
     // --models-max holds every model the arms bind at once, so no arm's model is evicted by another's mid-run.
-    router = spawn(exe, ['--models-dir', gguf, '--models-preset', preset, '--models-max', String(Math.max(2, models.length)),
-      '--host', '127.0.0.1', '--port', String(LLAMA_PORT)], { cwd: path.dirname(exe), stdio: ['ignore', logFd, logFd] });
+    const child = spawn(exe, ['--models-dir', gguf, '--models-preset', preset, '--models-max', String(Math.max(2, models.length)),
+      '--host', '127.0.0.1', '--port', String(port)], { cwd: path.dirname(exe), stdio: ['ignore', logFd, logFd] });
     fs.closeSync(logFd);
-    await until(async () => (await fetch(`http://127.0.0.1:${LLAMA_PORT}/v1/models`)).ok, 60000);
+    if (cpu) cpuRouters.push(child); else router = child;
+    await until(async () => (await fetch(`http://127.0.0.1:${port}/v1/models`)).ok, 60000);
+    return { child, port, preset, presetText, log };
   };
 
   try {
@@ -2124,7 +2352,9 @@ const live = async () => {
     // Each arm's own resources get EMPTY stand-ins for the runtime and the model, which is all IsConfigured asks;
     // the arm then ADOPTS this router at GATHERLIGHT_LLAMACPP_URL (EnsureServingAsync probes before it spawns).
     const llamaModels = [...rerankers, ...chatJudges];
-    if (llamaModels.length > 0) await startRouter(rerankers, chatJudges, WORK);
+    const gpuRouter = llamaModels.length > 0 ? await startRouter(rerankers, chatJudges, WORK) : null;
+    /** The preset section a model was launched with, from a router's preset text (Run 8 records it per arm). */
+    const sectionOf = (presetText, m) => (presetText.split(/\n(?=\[)/).find((s) => s.startsWith(`[${m}]`)) ?? '').trim();
 
     // ---- 2b. `--rerank-memo`: one proxy per local-model arm, in front of the router --------------------------
     // Everything passes through untouched, except a /v1/rerank POST during the ACCURACY pass: its body is hashed and
@@ -2146,36 +2376,78 @@ const live = async () => {
     // response (the router never answered) is retried once, a failed forward is never memoised, and every failure is
     // counted on the arm and warned on.
     const upstream = new http.Agent({ keepAlive: false });
-    const startProxy = () => new Promise((resolve) => {
-      const state = { phase: 'startup', seq: null, records: new Map(), requests: 0, memoHits: 0, forwarded: 0, retried: 0, errors: 0 };
-      const once = (req, body) => new Promise((ok, fail) => {
+    // Run 8, for a CPU-only arm's record: which fixture note each window came from (a window is a substring of its note,
+    // or of the note's NFKC form under a declared window), and the pair tokens as RerankPace counts them — its ONE rule,
+    // mirrored here and held to the C# by paceMirror (CJK rate from U+2E80 up, the English rate below it).
+    const NOTE_TEXTS = FIXTURE.facts.map((f) => [f.content, f.content.normalize('NFKC')]);
+    const notesOf = (docs) => {
+      const seen = new Set();
+      let unmatched = 0;
+      for (const d of docs) {
+        const i = NOTE_TEXTS.findIndex(([raw, nfkc]) => raw.includes(d) || nfkc.includes(d));
+        if (i < 0) unmatched++; else seen.add(i);
+      }
+      return { candidates: seen.size, unmatched };
+    };
+    const tokensOf = (s) => {
+      let t = 0;
+      for (let i = 0; i < s.length; i++) t += s.charCodeAt(i) >= PACE.cjkFrom ? PACE.cjk : PACE.other;
+      return t;
+    };
+    const pairTokensOf = (q, docs) => { const qt = tokensOf(String(q ?? '')); return docs.reduce((a, d) => a + qt + tokensOf(d), 0); };
+    /** A proxy in front of a router. `memo` shares identical accuracy-pass bodies (--rerank-memo). `cpu` (Run 8) is a
+     *  CPU-only arm's: never memoised, an abandoned request closed upstream too, and each call's windows, notes, pair
+     *  tokens, wall time, status and abandonment recorded. */
+    const startProxy = ({ upstreamPort = LLAMA_PORT, memo: useMemo = MEMO, cpu = false } = {}) => new Promise((resolve) => {
+      const state = { phase: 'startup', seq: null, records: new Map(), requests: 0, memoHits: 0, forwarded: 0, retried: 0, errors: 0,
+        ...(cpu ? { abandoned: 0 } : {}) };
+      const once = (req, body, hold = null) => new Promise((ok, fail) => {
         const up = http.request({
-          host: '127.0.0.1', port: LLAMA_PORT, method: req.method, path: req.url, agent: upstream,
-          headers: { ...req.headers, host: `127.0.0.1:${LLAMA_PORT}`, 'content-length': body.length, connection: 'close' },
+          host: '127.0.0.1', port: upstreamPort, method: req.method, path: req.url, agent: upstream,
+          headers: { ...req.headers, host: `127.0.0.1:${upstreamPort}`, 'content-length': body.length, connection: 'close' },
         }, (r) => {
           const out = [];
           r.on('data', (c) => out.push(c));
           r.on('end', () => ok({ status: r.statusCode, headers: r.headers, body: Buffer.concat(out) }));
           r.on('error', (e) => fail(Object.assign(e, { answered: true })));
         });
+        if (hold) {
+          hold.up = up;
+          // The client left before this forward began: never send it.
+          if (hold.abandoned) up.destroy(new Error('the client abandoned the request'));
+        }
         up.on('error', fail);
         up.end(body);
       });
       // `forwarded` counts /v1/rerank forwards only — every one the router must then log as proxied to its model's child,
       // which is how a lost request is found (Run 6b).
-      const forward = async (req, body) => {
+      const forward = async (req, body, hold = null) => {
         if (req.url === '/v1/rerank') state.forwarded++;
-        try { return await once(req, body); } catch (e) {
+        try { return await once(req, body, hold); } catch (e) {
+          // A request its client abandoned is neither re-sent nor a delivery failure (Run 8's CPU arms).
+          if (hold?.abandoned) throw e;
           if (e.answered) { state.errors++; throw e; }
           state.retried++;
-          try { return await once(req, body); } catch (e2) { state.errors++; throw e2; }
+          try { return await once(req, body, hold); } catch (e2) { if (!hold?.abandoned) state.errors++; throw e2; }
         }
       };
       const server = http.createServer((req, res) => {
         const chunks = [];
+        // Run 8: when a CPU-only arm's client abandons a request — the verification deadline cancelling it — the upstream
+        // request is closed as well, as the product's own connection to the router would be. What the router then does
+        // with the batch is llama-server's behaviour, not this proxy's.
+        const hold = cpu ? { up: null, abandoned: false } : null;
+        if (hold) res.on('close', () => {
+          if (res.writableFinished) return;
+          hold.abandoned = true;
+          if (req.url === '/v1/rerank') state.abandoned++;
+          hold.up?.destroy(new Error('the client abandoned the request'));
+        });
         req.on('data', (c) => chunks.push(c));
         req.on('end', async () => {
           const body = Buffer.concat(chunks);
+          const t0 = Date.now();
+          let rec = null;
           try {
             let reply;
             if (req.method === 'POST' && req.url === '/v1/rerank' && state.phase === 'accuracy') {
@@ -2184,14 +2456,16 @@ const live = async () => {
               try { parsed = JSON.parse(body.toString('utf8')); } catch { /* recorded as unparsed */ }
               const docs = Array.isArray(parsed.documents) ? parsed.documents.map(String) : [];
               const ans = answerOf.get(String(parsed.query ?? ''));
-              const rec = {
+              rec = {
                 hash: hash.slice(0, 16), documents: docs.length, maxChars: docs.reduce((m, d) => Math.max(m, d.length), 0),
                 answerSent: ans === undefined ? null : docs.some((d) => d.includes(ans) || d.includes(ans.normalize('NFKC'))),
+                ...(cpu ? { ...notesOf(docs), pairTokens: pairTokensOf(parsed.query, docs) } : {}),
               };
               state.requests++;
               if (!state.records.has(state.seq)) state.records.set(state.seq, []);
               state.records.get(state.seq).push(rec);
-              if (MEMO) {
+              if (cpu) reply = await forward(req, body, hold);
+              else if (useMemo) {
                 // ONLY A 2xx IS SHARED. A refusal or a server error is one moment's failure, and memoising it handed the
                 // same failure to every later arm sending these bytes — a no-verdict that was never that arm's. So a
                 // reply that is not 2xx is evicted when it arrives (a failed forward already was), and a request that
@@ -2206,14 +2480,19 @@ const live = async () => {
                 reply = await pending;
                 if (shared && !is2xx(reply)) { state.memoHits--; reply = await forward(req, body); }
               } else reply = await forward(req, body);
-            } else reply = await forward(req, body);
+            } else reply = await forward(req, body, hold);
+            if (rec && cpu) Object.assign(rec, { ms: Date.now() - t0, status: reply.status, aborted: hold.abandoned });
             const headers = { ...reply.headers, 'content-length': reply.body.length };
             delete headers['transfer-encoding'];
             res.writeHead(reply.status, headers);
             res.end(reply.body);
           } catch (e) {
-            res.writeHead(502, { 'content-type': 'application/json' });
-            res.end(JSON.stringify({ error: { code: 502, message: `judge-bench proxy: ${e?.message ?? e}` } }));
+            if (rec && cpu) Object.assign(rec, { ms: Date.now() - t0, status: null, aborted: hold.abandoned });
+            // The client may already be gone (an abandoned request), and then there is no one to answer.
+            try {
+              res.writeHead(502, { 'content-type': 'application/json' });
+              res.end(JSON.stringify({ error: { code: 502, message: `judge-bench proxy: ${e?.message ?? e}` } }));
+            } catch { /* nobody is listening */ }
           }
         });
       });
@@ -2232,12 +2511,31 @@ const live = async () => {
           calls: recs.length, hash: recs.map((r) => r.hash).join('+'),
           documents: recs.reduce((a, r) => a + r.documents, 0), maxChars: recs.reduce((m, r) => Math.max(m, r.maxChars), 0),
           answerSent: recs.length === 0 || recs.every((r) => r.answerSent === null) ? null : recs.some((r) => r.answerSent === true),
+          // Run 8, a CPU-only arm: the notes the windows came from, the pair tokens, the call time, and the abandonment.
+          ...(arm.cpu ? {
+            candidates: recs.reduce((a, r) => a + r.candidates, 0), unmatched: recs.reduce((a, r) => a + r.unmatched, 0),
+            pairTokens: Math.round(recs.reduce((a, r) => a + r.pairTokens, 0) * 100) / 100,
+            callMs: recs.reduce((a, r) => a + (r.ms ?? 0), 0), aborted: recs.some((r) => r.aborted === true),
+            statuses: recs.map((r) => String(r.status)).join('+'),
+          } : {}),
         },
       };
     };
 
     // ---- 3. one snapshot + one server per arm ----------------------------------------------------------------
-    for (const [i, arm] of arms.entries()) {
+    // THE SAME SERVER BINARY FOR EVERY ARM (Run 8). A CPU-only arm's server starts in its own turn, possibly hours after the
+    // others, and `dotnet run --no-build` runs whatever is built THEN — so the build is fingerprinted before the first
+    // arm, each CPU-only arm refuses to start on a different one, and the fingerprint is saved.
+    const binaryDir = path.join(repo, 'src', 'server', 'Gatherlight.Server', 'bin', 'Debug', 'net10.0');
+    const binaryPrint = () => Object.fromEntries(['Gatherlight.Platform.dll', 'Gatherlight.Planner.dll', 'Gatherlight.Server.dll'].map((f) => {
+      const p = path.join(binaryDir, f);
+      return [f, fs.existsSync(p) ? crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex').slice(0, 16) : null];
+    }));
+    const serverBinary = binaryPrint();
+    // A CPU-only arm (Run 8) is set up later, in its own turn: its router is started fresh just before it, so its server's
+    // startup warm reaches the router it will run against, as an app's warm reaches the router it adopted.
+    /** Copy the arm's seed, bind its judge, start its proxy and its server; `llamaPort` is the router it talks to. */
+    const setupArm = async (arm, i, llamaPort) => {
       arm.dir = path.join(WORK, `arm-${i}`);
       // Each arm starts from ITS seed (Run 7): `<arm>@tags` / `<arm>@replay` from a local-tag seed, the default otherwise.
       if (!idMapOf[arm.seed]) throw new Error(`arm ${arm.key}: no ${arm.seed} seed — pass --tag-seed=<chat model>`);
@@ -2257,14 +2555,17 @@ const live = async () => {
         const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
         settings.memory = { ...(settings.memory ?? {}), judgeSource: 'llama-cpp', judgeModel: arm.llamaModel };
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-        if (MEMO) arm.proxy = await startProxy();
-        env.GATHERLIGHT_LLAMACPP_URL = `http://127.0.0.1:${arm.proxy ? arm.proxy.port : LLAMA_PORT}`;
+        // A CPU-only arm always gets its RECORD-ONLY proxy (never memoised); every other arm one only with --rerank-memo.
+        if (arm.cpu) arm.proxy = await startProxy({ upstreamPort: llamaPort, memo: false, cpu: true });
+        else if (MEMO) arm.proxy = await startProxy();
+        env.GATHERLIGHT_LLAMACPP_URL = `http://127.0.0.1:${arm.proxy ? arm.proxy.port : llamaPort}`;
       }
       arm.port = PORT_BASE + 1 + i;
       arm.srv = startServer({ dataDir: arm.dir, port: arm.port, env });
       servers.push(arm.srv);
-    }
-    for (const arm of arms) {
+    };
+    /** Every check an arm passes before it answers a question. */
+    const checkArm = async (arm) => {
       await waitHealthy(arm.srv.base);
       // THE SEED IS WHAT THE ARM STARTS FROM, or the comparison is void: a claude call before any query means
       // startup re-derived something (a fact-index layout rebuild re-remembers every fact) from a changed app.
@@ -2302,9 +2603,14 @@ const live = async () => {
       arm.judgeOn = judge.on;
       arm.judgeSource = judge.activeSource ?? null;
       arm.judgeModel = judge.activeModel ?? null;
-    }
+    };
+    for (const [i, arm] of arms.entries()) if (!arm.cpu) await setupArm(arm, i, LLAMA_PORT);
+    for (const arm of arms) if (!arm.cpu) await checkArm(arm);
+    // Which router, and which preset section, each local-model arm ran on (Run 8; a CPU-only arm's is set in its turn).
+    for (const arm of arms) if (arm.llamaModel && !arm.cpu && gpuRouter)
+      arm.llamaRouter = { kind: 'gpu', port: LLAMA_PORT, preset: sectionOf(gpuRouter.presetText, arm.llamaModel), log: rel(gpuRouter.log) };
 
-    // ---- 4. identical questions, identical SHUFFLED order, every arm in parallel ------------------------------
+    // ---- 4. identical questions, identical SHUFFLED order: every arm in parallel, then each CPU-only arm alone --------
     const { queries, adjacentSameFact } = queryOrder(facts, ORDER_SEED);
 
     const recall = async (c, x, idMap) => {
@@ -2326,28 +2632,38 @@ const live = async () => {
         return { status: null, ranked: null, returned: null, answered: null, error: String(e?.message ?? e), pos: null, ms: Date.now() - t0 };
       }
     };
-
-    for (const arm of arms) if (arm.proxy) arm.proxy.state.phase = 'accuracy';
-    await Promise.all(arms.map(async (arm) => {
+    /** One arm's accuracy pass: every query, in the run's order. `t0` (when the recall began) lets Run 8 place the
+     *  product's own log lines on the recall they belong to. */
+    const accuracyPass = async (arm) => {
       const c = makeClient(arm.srv.base);
       arm.rows = [];
       for (const [seq, x] of queries.entries()) {
         if (arm.proxy) arm.proxy.state.seq = seq;
+        const t0 = Date.now();
         const result = await recall(c, x, arm.idMap);
-        const row = { arm: arm.key, pass: 'accuracy', seq, ...x, ...result, ...rerankOf(arm, seq) };
+        // A CPU-only arm's abandoned call is closed at the proxy a moment after the product gave up on it — its record
+        // (time, abandonment) is complete only then.
+        if (arm.cpu) await until(() => (arm.proxy.state.records.get(seq) ?? []).every((r) => r.ms !== undefined), 5000, 20).catch(() => {});
+        const row = { arm: arm.key, pass: 'accuracy', seq, ...x, ...result, ...rerankOf(arm, seq), t0 };
         arm.rows.push(row);
         emit(row);
       }
-    }));
-    for (const arm of arms) if (arm.proxy) arm.proxy.state.phase = 'latency';
-    for (const arm of arms) {
+    };
+
+    const parallel = arms.filter((a) => !a.cpu);
+    for (const arm of parallel) if (arm.proxy) arm.proxy.state.phase = 'accuracy';
+    await Promise.all(parallel.map(accuracyPass));
+    for (const arm of parallel) if (arm.proxy) arm.proxy.state.phase = 'latency';
+    for (const arm of parallel) {
       arm.routerAccuracy = routerOutcomes(arm.dir);
       if (arm.chatJudge) arm.localAccuracy = routerOutcomes(arm.dir, LLAMA_CHAT_PROVIDER);
     }
 
     // ---- 5. serial latency: one arm at a time, nothing else querying (mutates state — accuracy is already in) -
+    // A CPU-only arm has none: its accuracy pass, next, is already serial. This pass runs FIRST, so the arms above are
+    // finished before any CPU-only arm starts, and nothing of theirs runs beside one.
     const sample = queries.slice(0, Math.min(LATENCY_SAMPLE, queries.length));
-    for (const arm of arms) {
+    for (const arm of parallel) {
       const c = makeClient(arm.srv.base);
       arm.latencyRows = [];
       for (const [seq, x] of sample.entries()) {
@@ -2358,6 +2674,101 @@ const live = async () => {
       arm.routerTotal = routerOutcomes(arm.dir);
       if (arm.chatJudge) arm.localTotal = routerOutcomes(arm.dir, LLAMA_CHAT_PROVIDER);
     }
+
+    // RUN 8: each CPU-only arm ALONE — a fresh CPU-only router of its own, its own server, nothing else querying — so what
+    // the pace learns is this machine's CPU and not another arm's load. Its router is killed when the arm is done:
+    // llama-server keeps scoring a batch whose request was abandoned, and the next arm must not inherit that queue.
+    const LOG_LINE = /^\[(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d{3})\] \[(\w+)\s*\] \[([^\]]*)\] (.*)$/;
+    const PACE_SIZED = /(\d+) window\(s\) per long candidate instead of (\d+), so the call fits ~([\d.]+) s at the ([\d.]+) ms per 1,000 pair tokens/;
+    const PACE_AFTER_CUT = /(\d+) window\(s\) per long candidate instead of (\d+), until a call answers in time.*? slower than ([\d.]+) ms per 1,000 pair tokens/;
+    const DEADLINE = /memory verification gave no verdict within [\d.]+ s/;
+    /** The product's own log lines, placed on the recall during which each was written (by timestamp): the deadline cut
+     *  (VerificationDeadlinePolicy's Warning) and the pace's line (ChunkedScoreProvider's Information, both forms). */
+    const attachCpuEvents = (arm) => {
+      const events = [];
+      for (const line of readLogs(arm.dir).split(/\r?\n/)) {
+        const m = LOG_LINE.exec(line);
+        if (!m) continue;
+        const at = new Date(`${m[1]}T${m[2]}`).getTime();
+        let p;
+        if ((p = PACE_SIZED.exec(m[5]))) events.push({ at, kind: 'sized', windows: +p[1], byCount: +p[2], budgetS: +p[3], msPer1k: +p[4] });
+        else if ((p = PACE_AFTER_CUT.exec(m[5]))) events.push({ at, kind: 'afterCut', windows: +p[1], byCount: +p[2], msPer1k: +p[3] });
+        else if (DEADLINE.test(m[5])) events.push({ at, kind: 'deadline' });
+      }
+      for (const row of arm.rows) { row.deadlineCut = false; row.pace = null; }
+      let unplaced = 0, doubled = 0;
+      // The recalls ran back to back, so a line belongs to the LAST recall that had begun when it was written — the next
+      // one's pace line can come within 10 ms of the previous recall's end (the smoke's did), so no slack after a recall
+      // may be given to it. A line written more than a second after that recall ended belongs to none.
+      const byStart = [...arm.rows].sort((a, b) => a.t0 - b.t0);
+      for (const e of events) {
+        const row = byStart.filter((r) => r.t0 <= e.at).at(-1);
+        if (!row || e.at > row.t0 + row.ms + 1000) { unplaced++; continue; }
+        if (e.kind === 'deadline') { if (row.deadlineCut) doubled++; row.deadlineCut = true; continue; }
+        if (row.pace) doubled++;
+        row.pace = { kind: e.kind, windows: e.windows, byCount: e.byCount, msPer1k: e.msPer1k, ...(e.budgetS !== undefined ? { budgetS: e.budgetS } : {}) };
+      }
+      return { deadlineLines: events.filter((e) => e.kind === 'deadline').length, paceLines: events.filter((e) => e.kind !== 'deadline').length,
+        unplaced, doubled };
+    };
+    /** A CPU-only router's own record, from its log: how its child was launched, how many threads, what it scored, and
+     *  every abandoned request it noticed. */
+    const cpuRouterRecord = (logFile, model) => {
+      const text = fs.readFileSync(logFile, 'utf8');
+      const lines = text.split(/\r?\n/);
+      const spawns = [];
+      for (let i = 0; i < lines.length; i++) {
+        const m = /spawning server instance with name=(\S+) on port (\d+)/.exec(lines[i]);
+        if (!m || m[1] !== model) continue;
+        const args = [];
+        for (let j = i + 2; j < lines.length && /load:\s{2,}\S/.test(lines[j]) && !/spawning/.test(lines[j]); j++) args.push(lines[j].replace(/^.*load:\s+/, '').trim());
+        spawns.push(args);
+      }
+      const a = spawns[0] ?? null;
+      const val = (...ks) => { for (const k of ks) if (a && a.includes(k)) return a[a.indexOf(k) + 1]; return null; };
+      let tasks = 0, maxTaskTokens = 0, truncated = 0;
+      for (const m of text.matchAll(/stop processing: n_tokens = (\d+), truncated = (\d)/g)) { tasks++; maxTaskTokens = Math.max(maxTaskTokens, +m[1]); truncated += +m[2]; }
+      const level = (l) => /\d+\.\d+\.\d+\.\d+ ([IWE]) /.exec(l)?.[1] ?? null;
+      return {
+        spawns: spawns.length, childArgs: a, device: val('--device', '-dev'), nGpuLayers: val('--n-gpu-layers', '-ngl', '--gpu-layers'),
+        nThreads: Number(/n_threads = (\d+)/.exec(text)?.[1]) || null,
+        tasks, maxTaskTokens, truncated,
+        cancelled: (text.match(/Connection handling canceled/g) ?? []).length,
+        errorLines: lines.filter((l) => level(l) === 'E' && !/Connection handling canceled/.test(l)).length,
+        vulkanLines: lines.filter((l) => /vulkan/i.test(l)).length,
+      };
+    };
+    let cpuSlot = 0;
+    for (const [i, arm] of arms.entries()) {
+      if (!arm.cpu) continue;
+      if (JSON.stringify(binaryPrint()) !== JSON.stringify(serverBinary))
+        throw new Error(`arm ${arm.key}: the server binary changed since the run began (${JSON.stringify(serverBinary)} → ${JSON.stringify(binaryPrint())}) — its arms would not run one build`);
+      const port = CPU_LLAMA_PORT + cpuSlot++;
+      const startedAt = new Date().toISOString();
+      console.log(`  ${arm.key}: its own CPU-only router on ${port}, then its server — ${queries.length} recalls, alone`);
+      const r = await startRouter([arm.reranker], [], WORK, { cpu: true, port, tag: `-cpu-${i}` });
+      arm.llamaRouter = { kind: 'cpu', port, preset: sectionOf(r.presetText, arm.reranker), log: rel(r.log) };
+      await setupArm(arm, i, port);
+      await checkArm(arm);
+      arm.proxy.state.phase = 'accuracy';
+      const accuracyFrom = new Date().toISOString();
+      await accuracyPass(arm);
+      arm.proxy.state.phase = 'done';
+      const accuracyTo = new Date().toISOString();
+      arm.routerAccuracy = routerOutcomes(arm.dir);
+      // No latency pass: the accuracy pass WAS the serial one (header, CPU-ONLY ARMS).
+      arm.routerTotal = arm.routerAccuracy;
+      arm.latencyRows = [];
+      const events = attachCpuEvents(arm);
+      // Reconciled with its OWN router's log, before that router goes (it logs through a queue).
+      arm.cpuProxied = await routerProxiedTo(r.log, arm.reranker);
+      arm.cpuRecord = { ...cpuRouterRecord(r.log, arm.reranker), port, startedAt, accuracyFrom, accuracyTo, events };
+      killTree(r.child);
+      await until(async () => { try { await fetch(`http://127.0.0.1:${port}/v1/models`); return false; } catch { return true; } }, 30000).catch(() => {});
+      console.log(`  ${arm.key}: ${arm.rows.filter((x) => x.answered !== null).length}/${arm.rows.length} with a verdict, `
+        + `${arm.rows.filter((x) => x.deadlineCut).length} cut by the deadline, ${events.paceLines} pace line(s); router on ${port} stopped`);
+    }
+
     // THE PACE GUARD: how many rerank calls the pace sized below the count ceiling, per arm, over both passes.
     for (const arm of arms) arm.paceCuts = paceCutsIn(arm.dir);
 
@@ -2410,7 +2821,9 @@ const live = async () => {
         },
       } : {}),
       order: { seed: ORDER_SEED, queries: queries.length, adjacentSameFact },
-      concurrency: arms.length,
+      // The arms that ran in PARALLEL; the CPU-only arms (Run 8) ran one at a time after them.
+      concurrency: parallel.length,
+      ...(arms.some((a) => a.cpu) ? { cpuSerial: arms.filter((a) => a.cpu).map((a) => a.key), serverBinary } : {}),
       latencySample: sample.length,
       arms: arms.map((a) => ({
         key: a.key, label: a.label, enrichment: a.enrichment, judgeInput: a.judgeInput ?? null, reranker: a.reranker ?? null,
@@ -2419,6 +2832,9 @@ const live = async () => {
         migrationWarnings: a.migrationWarnings,
         router: { startup: a.routerStartup, accuracy: a.routerAccuracy, total: a.routerTotal },
         ...(a.chatJudge ? { localRouter: { startup: a.localStartup, accuracy: a.localAccuracy, total: a.localTotal } } : {}),
+        // Run 8: the llama.cpp router and preset section each local-model arm ran on; a CPU-only arm's own router record.
+        ...(a.llamaRouter ? { llamaRouter: a.llamaRouter } : {}),
+        ...(a.cpu ? { cpu: true, cpuRecord: a.cpuRecord ?? null } : {}),
       })),
       ...(arms.some((a) => a.proxy) ? {
         rerankProxy: {
@@ -2428,6 +2844,8 @@ const live = async () => {
             // Every forward to the router, all passes and startup included; retried = a connection-level failure retried
             // once; errors = a forward that still failed, which the arm read as a 502.
             forwarded: a.proxy.state.forwarded, retried: a.proxy.state.retried, errors: a.proxy.state.errors,
+            // A CPU-only arm's (Run 8): never memoised; the requests its client abandoned; and what its OWN router proxied.
+            ...(a.cpu ? { memo: false, abandoned: a.proxy.state.abandoned, routerProxied: a.cpuProxied ?? null } : {}),
           }])),
           routerProxied,
         },
