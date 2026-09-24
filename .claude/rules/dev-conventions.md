@@ -567,9 +567,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   reader finding nothing (silent fallback to a default model) or hands `provider:model` straight to `--model`.
   A migration moves what is already stored for `scorer`/`memory` only, and `MemoryService.cs`'s export/import
   (~154, the memory bundle's `SetModel` import over `_cortex.Models()`'s tunable-consumer list) has to SPLIT the
-  same way — `chat`/`extract` keep `llm.model.<consumer>` in the bundle (`validate` is not tunable, so it never
-  travels), `scorer` alone becomes `llm.route.scorer` (`memory` already never travels in it — `ExportAsync`'s own
-  comment says why). D176's own
+  same way — `chat`/`extract`/`validate` keep `llm.model.<consumer>` in the bundle (round 2 gave `validate` a
+  cortex row too, so it is tunable now and travels exactly like `chat`/`extract` — it stays a plain
+  `llm.model.` key on the bump, never a route, for the same reason those two do), `scorer` alone becomes
+  `llm.route.scorer` (`memory` already never travels in it — `ExportAsync`'s own comment says why). D176's own
   warn-once for a leftover key covers only ITS `lyntai.model.` prefix (`IModelRoutingStore.cs` ~37-47, a
   Lyntai-namespaced constant, not our configured one) — our `llm.model.` namespace gets no such warning, so this
   migration has no safety net if a key is missed. `MemoryRecallController.cs` ~550 and `BackupService.cs` ~242's
@@ -661,13 +662,24 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   lives there. **A consumer routed in `DefaultModelByConsumer` must be settable SOMEWHERE the household can
   reach** — otherwise its model is routable in principle and unreachable in practice, which `memory` was for
   a while, with a comment promising a live override the product gave no way to set. Cortex's `ModelCatalog`
-  is the default home and the right one for `chat`/`extract`/`scorer`. **`memory` is the exception and is
+  is the default home and the right one for `chat`/`extract`/`scorer`/`validate`. **`memory` is the exception and is
   deliberately absent from it**: 记忆检索 binds the judge's model together with its BACKEND, and a cortex row
   beside that was a SECOND writer of one value — the one that won. A household who set 记忆判断 to `haiku`
   there and later moved the judge to a local model had the router asking the Ollama provider for a model
   called `haiku`; both memory policies are fail-open, so the symptom was zero model calls and no error at
   all. Two controls for one value is worse than one control in an unexpected place. Proof lives in
   `e2e-p51`, which asserts the cortex row is GONE as well as that the binding writes the key.
+  **`validate` was the inverse defect — read but settable NOWHERE, not routed twice.**
+  `ClaudeValidateService` fed `llm.model.validate` to `ClaudeAgentOptions.Model` beside a comment claiming "a
+  cheaper model suffices", but the key was in no settable place (not `ModelCatalog`, not
+  `DefaultModelByConsumer`), so the comment's cheaper model was unreachable and the pass always ran on the
+  CLI default. It is a cortex row now, default `null` (today's behaviour, unchanged — a cheaper default is
+  an unmeasured cost/quality call nobody has made), and the comment in `ClaudeValidateService.cs` stopped
+  claiming a model it did not use. `validate` needs no `memory`-style exclusion: nothing else writes
+  `llm.model.validate`, so a cortex row is not a second writer of anything. Proof lives in `e2e-p16`
+  (listed + settable + round-trips) and `e2e-p14` (a bundle carrying `llm.model.validate` imports it, now
+  that `validate` is tunable and travels in the bundle — see the `JudgeScopedModelRoutingStore` class doc's
+  D176 bump note for what stays true on the Lyntai bump).
 - **Meaning-based fact recall is a GRAPH OPTION and ONE SCOPE — not a second engine member.** Both halves
   were got wrong first, both failed silently, and neither was visible from any API response, so the
   reasoning is on the record. (1) With an embedder + vector store registered, `UseGraph()` already embeds

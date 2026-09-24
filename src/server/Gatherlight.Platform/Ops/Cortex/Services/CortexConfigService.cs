@@ -56,6 +56,8 @@ public sealed class CortexConfigService : ICortexConfigService
             "一次性文件提取工具(中性 cwd,廉价调用)。默认 sonnet。", "sonnet"),
         ("scorer", "自动评分 · Scorer",
             "自动评分的 LLM 评判(切题 / 事实可靠等维度,中性 cwd,廉价调用)。默认 haiku。", "haiku"),
+        ("validate", "智库校验 · Validate",
+            "两道闸提交前的只读复核:检查 .claude/ 改动的一致性与索引完整性。留空则用 claude CLI 默认模型。", null),
     };
 
     // Ordered from cheapest to most capable; "" = fall back to the CLI/consumer default.

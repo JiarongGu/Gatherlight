@@ -30,6 +30,10 @@ try {
   await callA('remember_fact', { kind: 'venue-url', topic: 'Export Temple official', content: 'https://example.org/temple verified', source: 'https://example.org/temple', confidence: 0.95 });
   // tune the cortex on A — this should travel with the bundle
   await fetch(`${baseA}/api/manage/cortex/model/extract`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: 'opus' }) });
+  // `validate` (智库校验) is tunable now too (round 2) — unlike `memory`, nothing binds it to a
+  // backend the bundle doesn't carry, so a plain llm.model.<consumer> key should travel exactly like
+  // `extract`'s.
+  await fetch(`${baseA}/api/manage/cortex/model/validate`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: 'haiku' }) });
   // The judge's model is BOUND with its backend (settings.json), which a memory bundle does not carry — so
   // the key must not travel alone. Binding the CLI judge writes llm.model.memory = sonnet on A.
   const judgeBind = await fetch(`${baseA}/api/manage/memory/layer/judge`, {
@@ -57,6 +61,7 @@ try {
     JSON.stringify({ v: bundle.gatherlightMemory, lib: bundle.library.length, kn: bundle.knowledge.length }));
   ok('bundle preserves lat/nameLocal', bundle.library.some((i) => i.key === 'export-temple' && i.nameLocal === '导出寺' && Math.abs((i.lat ?? 0) - 35.01) < 0.001));
   ok('bundle carries cortex tuning', bundle.cortex && bundle.cortex['llm.model.extract'] === 'opus', JSON.stringify(bundle.cortex));
+  ok('bundle carries the validate model too (tunable since round 2)', bundle.cortex && bundle.cortex['llm.model.validate'] === 'haiku', JSON.stringify(bundle.cortex));
   ok('THE POINT: the bundle does NOT carry the judge\'s model — it belongs to a binding the bundle lacks',
     !Object.prototype.hasOwnProperty.call(bundle.cortex ?? {}, 'llm.model.memory'), JSON.stringify(bundle.cortex));
 
@@ -90,6 +95,8 @@ try {
   const bCortex = await getJsonB('/api/manage/cortex');
   ok('seeded cortex override survived transfer', bCortex.models.find((m) => m.consumer === 'extract')?.effective === 'opus',
     JSON.stringify(bCortex.models?.find((m) => m.consumer === 'extract')));
+  ok('seeded validate model override survived transfer too', bCortex.models.find((m) => m.consumer === 'validate')?.effective === 'haiku',
+    JSON.stringify(bCortex.models?.find((m) => m.consumer === 'validate')));
 
   // An older (1.3.0-era) bundle exported before this fix DID carry llm.model.memory — hand-edit one back in
   // and confirm import refuses to write it: a model key travels only if cortex can set it, and cortex cannot

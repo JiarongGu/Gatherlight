@@ -74,8 +74,10 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// nothing (a silent fallback to a default model) or hand <c>provider:model</c> straight to <c>--model</c>.
 /// A migration moves what is already stored for <c>scorer</c>/<c>memory</c> only, and
 /// <c>MemoryService.cs</c>'s export/import (~154, the memory bundle's <c>SetModel</c> import over
-/// <c>_cortex.Models()</c>'s tunable-consumer list) has to SPLIT the same way — <c>chat</c>/<c>extract</c>
-/// keep <c>llm.model.&lt;consumer&gt;</c> in the bundle (<c>validate</c> is not tunable, so it never travels),
+/// <c>_cortex.Models()</c>'s tunable-consumer list) has to SPLIT the same way — <c>chat</c>/<c>extract</c>/
+/// <c>validate</c> keep <c>llm.model.&lt;consumer&gt;</c> in the bundle (post-1.3-followups-2 gave
+/// <c>validate</c> a cortex row too, so it is now tunable and travels exactly like <c>chat</c>/<c>extract</c> —
+/// it stays a plain <c>llm.model.</c> key on the bump, never a route, for the same reason those two do),
 /// <c>scorer</c> alone becomes <c>llm.route.scorer</c> (<c>memory</c> already never travels in it —
 /// <c>ExportAsync</c>'s own comment says why). D176's own warn-once for a leftover key covers only ITS <c>lyntai.model.</c> prefix
 /// (<c>IModelRoutingStore.cs</c> ~37-47, a Lyntai-namespaced constant, not our configured one) — our

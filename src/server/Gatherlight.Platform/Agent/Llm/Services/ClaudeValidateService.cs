@@ -51,7 +51,8 @@ public sealed partial class ClaudeValidateService : IClaudeValidateService
                 Prompt = await _harness.ValidatePrompt(paths, diff),
                 WorkingDirectory = _data.RootPath,
                 ToolPolicy = AgentToolPolicy.ReadOnly,
-                // The verdict pass is simple — a cheaper model suffices.
+                // The model is chosen in 校准 · Cortex (CortexConfigService.ModelCatalog, consumer
+                // "validate"); blank (today's default) runs the claude CLI's own default model.
                 Model = _appConfig.Get("llm.model.validate"),
                 TimeoutSeconds = 600,
             }, label: "validate", onEvent: null, ct: ct); // swallow chatter — only its verdict matters

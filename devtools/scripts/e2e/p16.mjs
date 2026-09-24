@@ -20,6 +20,11 @@ try {
   let c = await getCortex();
   ok('cortex: prompt catalog present (>= 6)', Array.isArray(c.prompts) && c.prompts.length >= 6, String(c.prompts?.length));
   ok('cortex: model catalog has chat + extract', !!model(c, 'chat') && !!model(c, 'extract'));
+  // `validate` (智库校验 pass) has a settable home now — round 1 left it read but settable nowhere.
+  // Default null (CLI default model) and not overridden until something sets it.
+  ok('cortex: model catalog has validate, default null, not overridden',
+    !!model(c, 'validate') && model(c, 'validate').default === null && model(c, 'validate').overridden === false,
+    JSON.stringify(model(c, 'validate')));
   const plan = prompt(c, 'plan');
   ok('plan prompt: default carries {userMessage}', plan?.default.includes('{userMessage}'));
   ok('plan prompt: placeholder contract lists userMessage', plan?.placeholders.includes('userMessage'), JSON.stringify(plan?.placeholders));
@@ -76,6 +81,17 @@ try {
   await put('/api/manage/cortex/model/extract', { value: 'opus' });
   c = await getCortex();
   ok('extract override persisted (opus)', model(c, 'extract').effective === 'opus' && model(c, 'extract').overridden === true);
+
+  // --- validate model round-trips through PUT + GET, same as any other cortex-settable consumer ---
+  const vSet = await put('/api/manage/cortex/model/validate', { value: 'haiku' });
+  ok('set model validate=haiku → 200', vSet.status === 200, JSON.stringify(vSet.body));
+  c = await getCortex();
+  ok('validate model overridden to haiku (reads back)',
+    model(c, 'validate')?.override === 'haiku' && model(c, 'validate')?.effective === 'haiku' && model(c, 'validate')?.overridden === true,
+    JSON.stringify(model(c, 'validate')));
+  await put('/api/manage/cortex/model/validate', { value: '' });
+  c = await getCortex();
+  ok('empty validate model value clears override', model(c, 'validate')?.overridden === false && model(c, 'validate')?.override === null);
 } catch (err) {
   fail('e2e-p16 fatal: ' + err.message);
   console.error(srv.log().slice(-3000));
