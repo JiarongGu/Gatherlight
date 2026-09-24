@@ -1232,6 +1232,7 @@ try {
     const stubExe = path.join(res, 'llama-cpp', 'llama-server.exe');
     const RERANKER = 'bge-reranker-v2-m3-Q5_K_M';
     const GEMMA_1B = 'gemma-3-1b-it-Q4_K_M';
+    const MMINILM = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
     // MemorySources.CliTaggingCost, pinned as the exact clause for the reason p52 case 5 gives.
     const TAGGING_COST = '每条事实一次调用,消耗账号额度,事实内容会发给 Claude';
     const rowOf = (shelf, id) => (shelf.models ?? []).find((m) => m.id === id);
@@ -1255,6 +1256,19 @@ try {
       ok('the 4B chat model says it was not measured here, rather than guessing from the 1B',
         /没有在这里实测过/.test(String(big?.note ?? '')), String(big?.note));
 
+      // THE SMALL RERANKER (docs/judge-bench.md Run 4): listed, typed a RERANKER by its row although its upstream
+      // name carries no "rerank" (an uncatalogued file of that name would be typed CHAT), pinned at its exact size,
+      // and NOT recommended — BGE stays the recommended reranker, which the badge assertions below pin.
+      const mini = rowOf(shelf, MMINILM);
+      const miniRes = resources.find((r) => r.id === `gguf-${MMINILM}`);
+      ok('mMiniLMv2 is on the shelf as a reranker, at its pinned size',
+        !!mini && mini.capability === 'reranking' && mini.sizeBytes === 132584000 && miniRes?.approxBytes === 132584000,
+        JSON.stringify({ row: mini ?? null, resource: miniRes?.approxBytes ?? null }));
+      ok('…carries no 推荐, and says why it is not the default: the 512-token window, the licence, the unmeasured long-fact cost',
+        !!mini && !/推荐/.test(String(mini.name)) && /512/.test(String(mini.note)) && /非商业/.test(String(mini.note))
+          && /没有量过/.test(String(mini.note)) && /199\/240/.test(String(mini.note)),
+        JSON.stringify({ name: mini?.name, note: mini?.note }));
+
       // THE BADGE. It recommends only what is not installed, embedders first — so both embedders go in (empty
       // files: the GGUF by its id, the built-in by the two files OnnxEmbedder.IsPresent checks) and the badge
       // has to move on to 判断.
@@ -1268,7 +1282,7 @@ try {
         (withEmbedders.models ?? []).filter((m) => m.capability === 'embedding').every((m) => m.installed),
         JSON.stringify((withEmbedders.models ?? []).filter((m) => m.capability === 'embedding').map((m) => [m.id, m.installed])));
       const rec = withEmbedders.recommendation;
-      ok('THE POINT: 资源 then recommends the RERANKER for 判断 — never the 1B chat model',
+      ok('THE POINT: 资源 then recommends the RERANKER for 判断 — never the 1B chat model, never the small reranker',
         rec?.id === RERANKER, JSON.stringify(rec ?? null));
       ok('…and its reason says what binding it moves: the checking is local, the tagging goes to the Claude CLI on the account',
         /Claude CLI/.test(String(rec?.reason)) && String(rec?.reason ?? '').includes(TAGGING_COST), String(rec?.reason));
@@ -1319,6 +1333,10 @@ try {
     // A RERANKER is the third kind: `reranking = true` restricts its child to /v1/rerank, and a cross-encoder
     // needs the whole (query, document) pair in ONE physical batch, so the batch sizes are contract too.
     fs.writeFileSync(path.join(ggufDir, 'zztest-rerank-model.gguf'), 'x');
+    // …and a CATALOGUED reranker whose row declares a 512-token window (mMiniLMv2, docs/judge-bench.md Run 4),
+    // under its upstream name — no "rerank" in it, so only the row can type it.
+    const WINDOWED = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
+    fs.writeFileSync(path.join(ggufDir, `${WINDOWED}.gguf`), 'x');
 
     await post('/api/manage/models/llama/start');   // spawn fails; presets are written first
 
@@ -1354,6 +1372,17 @@ try {
         && !/reranking\s*=\s*true/.test(sectionOf('zztest-chat-model')),
       JSON.stringify({ rerank: sectionOf('zztest-rerank-model'), embed: sectionOf('zztest-embed-model'),
         chat: sectionOf('zztest-chat-model') }));
+
+    // THE WINDOW IS THE ROW's. llama.cpp serves this model 512-token slots whatever the preset asks (it logs
+    // n_ctx_seq (4096) > n_ctx_train (512)), so a preset claiming 4096 for it states a limit nothing honours. Typed
+    // a reranker by its catalogue row — the name alone would make it a chat model with no reranking at all.
+    ok('THE POINT: a reranker whose row declares a 512-token window is launched with that window, not 4096',
+      /reranking\s*=\s*true/.test(sectionOf(WINDOWED))
+        && /^ctx-size\s*=\s*512\s*$/m.test(sectionOf(WINDOWED))
+        && /^batch-size\s*=\s*512\s*$/m.test(sectionOf(WINDOWED))
+        && /^ubatch-size\s*=\s*512\s*$/m.test(sectionOf(WINDOWED))
+        && !/4096/.test(sectionOf(WINDOWED)),
+      JSON.stringify({ windowed: sectionOf(WINDOWED) }));
 
     // Planted files removed: later runs of this fixture assert on llama.cpp being ABSENT, and a stub
     // left behind would make those pass or fail for a reason that is not theirs.

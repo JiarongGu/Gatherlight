@@ -27,7 +27,9 @@
 //      a reason other than its ordering is told apart, quoting the server.
 //   6. A reranker AT WORK, on a server that booted bound to one: a fact write makes no chat call to
 //      llama.cpp and is tagged by the CLI on the CLI's model, and a recall sends the query AND each
-//      candidate's CONTENT to /v1/rerank.
+//      candidate's CONTENT to /v1/rerank. 6b: a long fact is capped at 1,000 characters. 6c: a catalogued
+//      reranker whose row declares a 512-token window is sent only pairs that fit it, the query included;
+//      BGE, declaring none, keeps the 1,000-character cap and an uncut query.
 //   7. Whether a reranker's TAGGING is happening — it goes to the CLI, and a signed-out CLI means none — is
 //      said in the 判断 row, the bind toast and the startup warning, each paired with a signed-in control.
 //      7b: a measurement knob set at startup reaches state/logs, not only stdout.
@@ -122,6 +124,29 @@ fs.writeFileSync(path.join(rerankDir, 'state', 'settings.json'), JSON.stringify(
 }, null, 2), 'utf8');
 fs.rmSync(rerankArgsLog, { force: true });
 
+// Case 6c: two servers, each booted bound to a CATALOGUED reranker by its pinned id. mMiniLMv2's row declares a
+// 512-token window — and its upstream name has no "rerank" in it, so only the row makes it a reranker at all; BGE's
+// row declares none. Planted flat by id, like every stand-in here.
+const WINDOWED_RERANK = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
+const UNWINDOWED_RERANK = 'bge-reranker-v2-m3-Q5_K_M';
+const WINDOWED_PORT = 5422;
+const UNWINDOWED_PORT = 5423;
+const plantBoundReranker = (suffix, model) => {
+  const dir = dataDirFor(`p52-${suffix}`);
+  makeTestData(dir);
+  const res = path.join(dir, 'state', 'resources');
+  fs.mkdirSync(path.join(res, 'llama-cpp'), { recursive: true });
+  fs.mkdirSync(path.join(res, 'gguf'), { recursive: true });
+  fs.writeFileSync(path.join(res, 'llama-cpp', 'llama-server.exe'), '');
+  fs.writeFileSync(path.join(res, 'gguf', `${model}.gguf`), '');
+  fs.writeFileSync(path.join(dir, 'state', 'settings.json'), JSON.stringify({
+    memory: { judgeSource: 'llama-cpp', judgeModel: model },
+  }, null, 2), 'utf8');
+  return dir;
+};
+const windowedDir = plantBoundReranker('windowed', WINDOWED_RERANK);
+const unwindowedDir = plantBoundReranker('unwindowed', UNWINDOWED_RERANK);
+
 const plantTaggingFixture = (suffix) => {
   const dir = dataDirFor(`p52-${suffix}`);
   makeTestData(dir);
@@ -169,7 +194,8 @@ let refuseEmbeddings = false;
 // Case 8a: a router that ACCEPTS and never answers /v1/models — counted, so the case can prove it was asked.
 let hangModels = false;
 let modelsHung = 0;
-const served = new Set([JUDGE_MODEL, EMBED_MODEL, RERANK_MODEL, LEXICAL_RERANK, BACKWARDS_RERANK, BROKEN_RERANK, SHORT_RERANK]);
+const served = new Set([JUDGE_MODEL, EMBED_MODEL, RERANK_MODEL, LEXICAL_RERANK, BACKWARDS_RERANK, BROKEN_RERANK, SHORT_RERANK,
+  WINDOWED_RERANK, UNWINDOWED_RERANK]);
 const fake = http.createServer((req, res) => {
   const send = (obj) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
   if (req.method === 'GET' && req.url === '/v1/models') {
@@ -246,6 +272,8 @@ let signedInServer = null;
 let rebuildServer = null;
 let goneServer = null;
 let goneOutServer = null;
+let windowedServer = null;
+let unwindowedServer = null;
 try {
   server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
   const base = `http://127.0.0.1:${PORT}`;
@@ -585,6 +613,74 @@ try {
   ok('THE POINT: the reranker is sent the long fact CAPPED — its head, never its tail, at most 1000 characters',
     sentLong.length > 0 && sentLong.every((d) => d.length <= 1000 && !d.includes('zzlongtail')),
     JSON.stringify(sentLong.map((d) => ({ length: d.length, tail: d.includes('zzlongtail') }))));
+
+  // --- 6c. a reranker with a 512-token WINDOW is sent what fits it — the query included --------------------
+  // mMiniLMv2 serves 512-token slots, and one (query, document) pair past that fails the WHOLE /v1/rerank call:
+  // `400 input (781 tokens) is larger than the max context size (512 tokens)`, measured on dense Chinese at the
+  // 1,000-character cap above (docs/judge-bench.md Run 4). The verifier is fail-open, so every recall surfacing a
+  // long fact would go unverified and nothing would say so. Its catalogue row declares the window, and the input is
+  // fitted per PAIR: on this tokenizer family a text costs at most its characters + 1 in tokens, plus 4 special
+  // tokens around the pair, so query + document ≤ 512 − 6 = 506 characters is a hard bound — with the query held to
+  // half of it. BGE's row declares no window: it keeps the 1,000-character cap and an unbounded query (the control).
+  windowedServer = startServer({ dataDir: windowedDir, port: WINDOWED_PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
+  unwindowedServer = startServer({ dataDir: unwindowedDir, port: UNWINDOWED_PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
+  const winBase = `http://127.0.0.1:${WINDOWED_PORT}`;
+  const unwinBase = `http://127.0.0.1:${UNWINDOWED_PORT}`;
+  await Promise.all([waitHealthy(winBase), waitHealthy(unwinBase)]);
+  const cWin = makeClient(winBase);
+  const cUnwin = makeClient(unwinBase);
+  const winJudge = layerOf(await cWin.getJson('/api/manage/memory'), 'judge');
+  const unwinJudge = layerOf(await cUnwin.getJson('/api/manage/memory'), 'judge');
+  ok('(fixture) one server runs 判断 on the windowed reranker, the other on BGE',
+    winJudge.activeSource === 'llama-cpp' && winJudge.activeModel === WINDOWED_RERANK
+      && unwinJudge.activeSource === 'llama-cpp' && unwinJudge.activeModel === UNWINDOWED_RERANK,
+    JSON.stringify({ windowed: [winJudge.activeSource, winJudge.activeModel], bge: [unwinJudge.activeSource, unwinJudge.activeModel] }));
+
+  // A Chinese fact past 1,000 characters (so BGE's cap engages too) and a query past half the window — both
+  // dense CJK, the worst tokens-per-character case measured. The query's words are the fact's, so the graph
+  // returns the fact as a candidate.
+  const miniFact = 'zzminihead 天文社每周五晚上在楼顶观测。' + '观测记录与器材清单。'.repeat(120) + ' zzminitail';
+  const miniQuery = ['zzminiquery', ...Array(14).fill('天文社每周五晚上在楼顶观测 观测记录与器材清单')].join(' ');
+  for (const [name, cl] of [['windowed', cWin], ['BGE', cUnwin]]) {
+    const wrote = await cl.call('remember_fact', {
+      kind: 'household', topic: 'zzminitopic 天文社', content: miniFact,
+      source: 'https://example.test/zzmini', confidence: 0.8,
+    });
+    ok(`(fixture) the long fact is stored whole on the ${name} server`, wrote.status === 200 && wrote.result?.ok === true,
+      JSON.stringify(wrote.result));
+  }
+  const beforeMini = hits.length;
+  await Promise.all([cWin.call('recall_facts', { query: miniQuery, limit: 5 }), cUnwin.call('recall_facts', { query: miniQuery, limit: 5 })]);
+  const rerankOf = (model) => hits.slice(beforeMini)
+    .filter((h) => h.path === '/v1/rerank' && h.model === model && h.body.includes('zzminiquery'))
+    .map((h) => { try { return JSON.parse(h.body); } catch { return null; } })
+    .filter(Boolean);
+  const carriesFact = (model) => rerankOf(model).some((b) => (b.documents ?? []).some((d) => String(d).includes('zzminihead')));
+  await until(() => carriesFact(WINDOWED_RERANK) && carriesFact(UNWINDOWED_RERANK), 60000).catch(() => {});
+
+  const win = rerankOf(WINDOWED_RERANK);
+  const pairs = win.flatMap((b) => (b.documents ?? []).map((d) => ({ q: String(b.query ?? ''), d: String(d) })));
+  const shape = (list) => JSON.stringify(list.map((p) => [p.q.length, p.d.length]));
+  ok('(non-vacuity) the windowed reranker was sent the long fact, beside the long query',
+    carriesFact(WINDOWED_RERANK) && win.every((b) => String(b.query ?? '').startsWith('zzminiquery')),
+    JSON.stringify(hits.slice(beforeMini).map((h) => `${h.path} ${h.model} ${h.body.length}`)));
+  ok('THE POINT: EVERY pair sent to the 512-token reranker fits its window — query + document ≤ 506 characters',
+    pairs.length > 0 && pairs.every((p) => p.q.length + p.d.length <= 506), shape(pairs));
+  ok('…the QUERY is bounded too — to half the budget, its head kept',
+    win.length > 0 && win.every((b) => String(b.query).length <= 253 && miniQuery.startsWith(String(b.query))),
+    JSON.stringify(win.map((b) => String(b.query).length)));
+  const cutFact = pairs.filter((p) => p.d.includes('zzminihead'));
+  ok('…and the long fact keeps its head and loses its tail',
+    cutFact.length > 0 && cutFact.every((p) => !p.d.includes('zzminitail')), shape(cutFact));
+
+  const bge = rerankOf(UNWINDOWED_RERANK);
+  const bgeLong = bge.flatMap((b) => b.documents ?? []).map(String).filter((d) => d.includes('zzminihead'));
+  ok('(control) BGE, whose row declares no window, still gets the long fact at the 1,000-character cap — and the query uncut',
+    bgeLong.length > 0 && bgeLong.every((d) => d.length === 1000 && !d.includes('zzminitail'))
+      && bge.every((b) => String(b.query ?? '').length > 253),
+    JSON.stringify({ docs: bgeLong.map((d) => d.length), queries: bge.map((b) => String(b.query ?? '').length) }));
+  windowedServer.stop(); windowedServer = null;
+  unwindowedServer.stop(); unwindowedServer = null;
 
   // --- 7. whether a reranker's TAGGING is happening, said where it is decided ---------------------------
   // A reranker hands tagging to the Claude CLI, and a CLI that is signed out means NO tagging — the annotation
@@ -926,6 +1022,8 @@ try {
   try { goneOutServer?.stop(); } catch {}
   try { rebuildServer?.stop(); } catch {}
   try { goneServer?.stop(); } catch {}
+  try { windowedServer?.stop(); } catch {}
+  try { unwindowedServer?.stop(); } catch {}
   fake.closeAllConnections();
   await new Promise((r) => fake.close(r));
 }

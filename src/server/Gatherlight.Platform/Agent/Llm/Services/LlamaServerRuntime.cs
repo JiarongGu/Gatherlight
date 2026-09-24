@@ -129,7 +129,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     private const int GpuLayers = 99;
 
     /// <summary>A cross-encoder scores (query, document) as ONE sequence, which must fit one physical batch;
-    /// 4096 is how Lyntai's own harness runs the same reranker files. Launch CONTRACT, like GpuLayers.</summary>
+    /// 4096 is how Lyntai's own harness runs the same reranker files. Launch CONTRACT, like GpuLayers. The default
+    /// only: a reranker whose catalogue row declares a window (<see cref="GgufCatalog.DeclaredWindow"/>) is launched
+    /// with that one.</summary>
     private const int RerankBatch = 4096;
 
     /// <summary>How long a freshly spawned router has to answer before it is killed as never-ours.</summary>
@@ -274,12 +276,16 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 case GgufCapability.Embedding:
                     sb.AppendLine("embeddings = true");
                     break;
-                // `reranking` restricts it to /v1/rerank, and the pair must fit one batch — see RerankBatch.
+                // `reranking` restricts it to /v1/rerank, and the pair must fit one batch — see RerankBatch. A row
+                // that DECLARES a smaller window gets that instead (GgufCatalog.DeclaredWindow — the read
+                // RerankInputCap fits the input to, so the two cannot disagree). llama.cpp serves mMiniLMv2 512-token
+                // slots whatever the preset asks; a preset claiming 4096 for it states a limit nothing honours.
                 case GgufCapability.Reranking:
+                    var window = GgufCatalog.DeclaredWindow(m) ?? RerankBatch;
                     sb.AppendLine("reranking = true");
-                    sb.AppendLine($"ctx-size = {RerankBatch}");
-                    sb.AppendLine($"batch-size = {RerankBatch}");
-                    sb.AppendLine($"ubatch-size = {RerankBatch}");
+                    sb.AppendLine($"ctx-size = {window}");
+                    sb.AppendLine($"batch-size = {window}");
+                    sb.AppendLine($"ubatch-size = {window}");
                     break;
             }
         }

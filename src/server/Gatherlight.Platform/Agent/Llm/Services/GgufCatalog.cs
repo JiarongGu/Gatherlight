@@ -23,6 +23,13 @@ public enum GgufCapability
 /// is traceable back to the thing it came from.</param>
 /// <param name="Measured">What it scored on this app's own recall job, or null. Null must be SAID by the UI,
 /// not left blank: an empty cell in a comparison table reads as a zero.</param>
+/// <param name="ContextTokens">The model's own token window, DECLARED when it is a hard limit on what the model can
+/// be sent — null for a model that takes whatever the launch preset gives it. Read for a RERANKER, by both sides of
+/// one contract: the preset launches it with this <c>ctx-size</c> and batch (<see cref="LlamaServerRuntime"/>), and
+/// <see cref="RerankInputCap"/> fits every (query, document) pair to it. Past it llama.cpp refuses the WHOLE
+/// <c>/v1/rerank</c> call — one over-long pair and no candidate is scored — and the verifier fails open, so a missing
+/// declaration is a silent loss of verification on exactly the recalls that surface a long fact. Declared from the
+/// GGUF header's <c>context_length</c> and the served slot size, both measured, never guessed.</param>
 public sealed record GgufModel(
     string Id,
     string Name,
@@ -33,7 +40,8 @@ public sealed record GgufModel(
     string Sha256,
     long ApproxBytes,
     string Note,
-    EmbeddingMeasurement? Measured = null);
+    EmbeddingMeasurement? Measured = null,
+    int? ContextTokens = null);
 
 /// <summary>
 /// The GGUFs the app can download for its own llama.cpp runtime — the shelf, as
@@ -54,9 +62,9 @@ public sealed record GgufModel(
 /// 10-query fixture (9/10 top-1, 25 ms/query through the app, 2026-08-22 — the same instrument as every
 /// number in <see cref="EmbeddingCatalog"/>). The rerankers and the 1B chat model have been scored AS 判断 on
 /// the 240-question bilingual fixture (<c>docs/judge-bench.md</c>: Run 2 for LAMAR and BGE, Run 3 for Gemma 3
-/// 1B) — top-1 and found@8, which is not the shape of <see cref="EmbeddingMeasurement"/> (top-3 of 10 queries),
-/// so those figures live in the note and <see cref="GgufModel.Measured"/> stays null rather than carrying a
-/// found@8 in a top-3 slot. The 4B chat model has no measurement at all, and its note says so; claiming
+/// 1B, Run 4 for mMiniLMv2) — top-1 and found@8, which is not the shape of <see cref="EmbeddingMeasurement"/>
+/// (top-3 of 10 queries), so those figures live in the note and <see cref="GgufModel.Measured"/> stays null
+/// rather than carrying a found@8 in a top-3 slot. The 4B chat model has no measurement at all, and its note says so; claiming
 /// otherwise is the failure this whole area keeps correcting.</para>
 ///
 /// <para><b>There is no recommended CHAT judge, and that is a measurement, not an omission.</b> Gemma 3 1B
@@ -204,10 +212,55 @@ public static class GgufCatalog
             // naming no benchmark and no source — an attribution nobody could check is not one.
             RerankerNote + "本应用双语测试集:首位命中 90/240,前八命中 203/240,每次检索约 0.49 秒"
             + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair),
+
+        // THE SMALL RERANKER (docs/judge-bench.md Run 4, 2026-09-24): offered, NOT recommended — BGE stays
+        // RecommendedReranker by the owner's decision. Every figure is Run 4's and carries its configuration: the
+        // 240-question fixture, 语义 off, EndorseCount 8 = the page, candidates ≤ 60, base 79 / 125; BGE and LAMAR are
+        // quoted from the SAME run (204 / 208), not from their own rows' Run 2 figures, because only a within-run
+        // pairing says anything. Its found@8 against BGE is "no significant difference" and NOT "equivalent" (7/2,
+        // p = 0.180, 95% [−4.6, +0.5]pp), and against LAMAR a measured loss (9/0, p = 0.004) — both said.
+        //
+        // THE ID IS THE UPSTREAM FILE NAME, and deliberately has no "rerank" in it. A catalogued id is typed by its
+        // row (ResourceProvisioner.GgufKind asks the catalogue first), so it needs no name hint — and keeping the
+        // upstream stem means a household who drops the file in under its own name gets THIS row too: typed a
+        // reranker, and fitted to its window. Under an id of ours with "rerank" in it, that same dropped-in file
+        // would stay uncatalogued and be typed a CHAT judge by its name — the hazard Run 4 recorded, which is why
+        // the bench had to rename it. The other rows follow the same rule (id = upstream stem).
+        //
+        // ITS WINDOW IS 512 TOKENS — the GGUF's context_length, and the slot size llama.cpp serves it with whatever
+        // the preset asks — so the row declares it: the preset launches it at 512 and RerankInputCap fits every
+        // pair to it. At the 1,000-character cap every other reranker gets, dense Chinese is 781 tokens and the
+        // whole call is refused. What the fitting COSTS on a long fact is unmeasured (the fixture's facts are ≤ 101
+        // characters), and the note says so. Licence: the model card says Apache-2.0; its training set, mMARCO, is
+        // a translation of MS MARCO, whose terms are non-commercial; the GGUF repo declares none.
+        new GgufModel(
+            "mmarco-mMiniLMv2-L12-H384-v1-Q8_0", "mMiniLMv2(Q8 · 判断 · 重排 · 更小)", GgufCapability.Reranking,
+            "keisuke-miyako/mmarco-mMiniLMv2-L12-H384-v1-gguf-q8_0", "2b37d162c88e0aeb8a1b4acb2d50f0e5ade16fd5",
+            "mmarco-mMiniLMv2-L12-H384-v1-Q8_0.gguf",
+            "91d70301828ba735c22eda56adb649f48975f371337e8c8b046326b885e26eed", 132_584_000,
+            RerankerNote + "体积约 133 MB,是 BGE 的 28%。本应用双语测试集 240 道提问、不开语义、每次检索由它挑 8 条上页"
+            + "(不开判断是 79/240 与 125/240):前八命中 199/240,同一轮 BGE 是 204/240 —— 没有测出显著差别,"
+            + "但也不能算一样好,这一轮排除不了它最多少带进约 11 题;比 LAMAR(208/240)显著少,9 题只有 LAMAR 带进前八,"
+            + "反过来一题也没有。首位命中 99/240,比同一轮 BGE 的 90 和 LAMAR 的 86 多,但和 BGE 的差距不足以下结论。"
+            + "每次检索约 0.31 秒,同一轮 BGE 约 0.45 秒" + RerankerLatencyCaveat + "。"
+            + "它一次最多只能读 512 个词元,所以应用会把提问和每条事实截短到放得下 —— 很长的事实只读开头约 250–500 个字符;"
+            + "这样截短对长事实的检索影响有多大还没有量过(测试集里的事实都很短)。"
+            + "许可:模型本身是 Apache-2.0,但训练它用的 MS MARCO 数据只许非商业使用。",
+            ContextTokens: 512),
     };
 
     public static GgufModel? Find(string? id) =>
         id is null ? null : Models.FirstOrDefault(m => string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The token window a model's row DECLARES, or null — the ONE read behind both halves of a reranker's
+    /// input contract: the window <see cref="LlamaServerRuntime"/> launches it with, and the window
+    /// <see cref="RerankInputCap"/> fits each (query, document) pair to. Two lookups could disagree; one cannot.
+    ///
+    /// <para><b>A GGUF the household dropped in has no row, so no declared window — a STATED limit.</b> It gets
+    /// the preset's 4096 and the 1,000-character cap, exactly as before per-model windows existed; a small-window
+    /// model dropped in under a name of its own is refused on long input as it always was. The fix for such a
+    /// model is a catalogue row, measured, not a guess from its file name.</para></summary>
+    public static int? DeclaredWindow(string? id) => Find(id)?.ContextTokens;
 
     /// <summary>The download URL. Assembled here so the pinned commit appears in exactly one place.</summary>
     public static string UrlFor(GgufModel m) =>

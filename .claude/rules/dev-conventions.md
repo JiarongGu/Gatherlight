@@ -1015,7 +1015,30 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   scored), and the scoring verifier is fail-open, so one long fact made every recall that surfaced it
   unverified. `RerankInputCap` sends at most 1,000 characters per candidate, ~830 tokens at the worst rate
   measured (0.83 per UTF-16 unit, common CJK); `e2e-p52` case 6b, and `p51` pins `ctx-size = 4096` on the
-  preset. And because a reranker hands TAGGING to the CLI, a signed-out or missing CLI means no tagging at all —
+  preset.
+  **The limit is PER MODEL, and it comes from the model's catalogue row** (2026-09-24). mMiniLMv2
+  (`docs/judge-bench.md` Run 4) serves 512-token slots, and at the 1,000-character cap dense Chinese is 781 tokens:
+  the whole call is refused — 400 under the 4096 preset, 500 「too large to process … batch size 512」 under its
+  own — fail-open, so every recall surfacing a long fact would go unverified in silence. `GgufModel.ContextTokens`
+  declares the window, and `GgufCatalog.DeclaredWindow` is the ONE read behind both halves of the contract: the
+  preset launches the model with that `ctx-size`/`batch-size`/`ubatch-size`, and `RerankInputCap` fits every pair
+  to it. Never a branch on the id. On this tokenizer family (XLM-R SentencePiece, no byte fallback) a text costs at
+  most its UTF-16 length + 1 in tokens, and a pair adds 4 special tokens, so query + document ≤ window − 6
+  CHARACTERS is a hard bound with no `/tokenize` round trip: the query gets at most half (253 at 512), each
+  candidate the rest (≤ 506 − the query's length, never over 1,000). Verified on the real binary under the new
+  preset: a 512-token pair is served and 513 refused (`n_ctx_slot = 512`), and the app bound to the catalogued id
+  recalled a 1,236-character Chinese fact with a 347-character query and got a verdict. **Stated limits**: a row
+  WITHOUT a window keeps the 1,000-character cap and an untouched query, exactly as before; a GGUF the household
+  dropped in has no row, so no window — a small-window model under a name of its own is refused on long input as
+  it always was, and the fix is a measured row, not a guess from its file name; the character bound does NOT
+  transfer to a byte-level tokenizer; and what the fitting costs on a long fact is unmeasured (the bench's facts
+  are ≤ 101 characters). The row's id is the UPSTREAM file stem, with no "rerank" in it, on purpose: a catalogued
+  id is typed by its row, and the upstream stem also catches a household who drops the file in under its own name
+  — an id of ours containing "rerank" would leave that file uncatalogued and typed CHAT, the hazard that made Run 4
+  rename it. Proof: `e2e-p52` case 6c (every pair at the fake router fits, query included; BGE, declaring no
+  window, still gets 1,000 characters and an uncut query) and `p51`'s preset block (the row's 512, not 4096) —
+  both confirmed to FAIL with the row kept and the window unwired.
+  And because a reranker hands TAGGING to the CLI, a signed-out or missing CLI means no tagging at all —
   fail-open, unreported — so the 判断 row, the bind toast and the startup warning read the CLI's CACHED probe
   (`MemorySources.CliTaggingNow`; a panel must not await a process) and say whether tagging is happening, and
   nothing when nobody has probed yet (`e2e-p52` case 7, signed out against signed in; the unknown state is not
@@ -1159,7 +1182,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   ranking instead of refining it — the partition's documented cost. Held by construction rather than by a
   suite; its consequence is measured in `docs/judge-bench.md` Run 2, which also says no other limit was.
   **Preset and warm are launch CONTRACT, like `--n-gpu-layers`.** `reranking = true` plus a 4096
-  `ctx-size`/`batch-size`/`ubatch-size` go on a reranker's section only — a cross-encoder needs the whole pair
+  `ctx-size`/`batch-size`/`ubatch-size` — or the smaller window the row declares (the capped-input bullet) — go on
+  a reranker's section only — a cross-encoder needs the whole pair
   in ONE physical batch — and `p51` pins `reranking = true`, both batch sizes, and that neither `embeddings`
   nor `reranking` crosses kinds. A reranker warms through `/v1/rerank`, never the chat route: a chat warm sent
   to a reranking child gets a **500** even though the router loads the model, so it warms AND reports failure

@@ -89,9 +89,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         + "判断与语义共用同一个进程、各用自己的模型,所以两层都开也只有一个常驻服务。"
         + "实测语义检索 10 题首位命中 9 题、每次查询 0.025 秒;判断用对话模型时每次约 0.15–0.20 秒,"
         // Per call for a chat judge (docs/self-managed-llm-runtime.md); for a reranker the ADDED cost per
-        // recall under partition (docs/judge-bench.md, Run 2) — the comparable figure, not the 0.47–0.49 s
-        // whole recall the model notes quote, which includes the formula's own ~0.23 s.
-        + "用重排模型时每次检索多约 0.23–0.26 秒(都是模型已加载后的实测)。";
+        // recall under partition — the comparable figure, not the whole recall the model notes quote, which
+        // includes the formula's own ~0.23 s. The range spans the catalogued rerankers: mMiniLMv2 +0.08 s (Run 4:
+        // 313 ms against the formula's 237), BGE and LAMAR +0.21–0.26 s (Runs 2 and 4).
+        + "用重排模型时每次检索多约 0.08–0.26 秒,看是哪个模型(都是模型已加载后的实测)。";
 
     /// <summary>A chat model does both halves on our router. A RERANKER only scores, so it verifies and the
     /// default client (the Claude CLI) annotates — on <see cref="AnnotationModel"/>, which is where the
@@ -106,14 +107,17 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         !IsReranker(ctx.Model)
             ? JudgeWiring.Llm(ClientId, AnnotationModel(ctx.Model))
             // Verification by the reranker; annotation by the default client on the CLI's default model.
-            // CAPPED: one pair past the router's 4096-token batch fails the whole rerank call — see RerankInputCap.
+            // CAPPED: one pair past the model's window fails the whole rerank call — see RerankInputCap. The window
+            // is the one the catalogue row DECLARES (the same read the preset makes), never a branch on the id; a
+            // model with none keeps the 1,000-character cap.
             : new JudgeWiring(null, AnnotationModel(ctx.Model), sp => new RerankInputCap(
                 new Lyntai.Memory.Verification.ScoringVerificationPolicy(
                     sp.GetServices<Lyntai.Inference.IModelProvider>(),
                     new Lyntai.Memory.Verification.ScoringVerificationOptions
                         { ProviderId = RerankProviderId, EndorseCount = RerankEndorseCount },
                     sp.GetService<ILogger<Lyntai.Memory.Verification.ScoringVerificationPolicy>>(),
-                    sp.GetService<Lyntai.Inference.IProviderRouterFactory>())));
+                    sp.GetService<Lyntai.Inference.IProviderRouterFactory>()),
+                GgufCatalog.DeclaredWindow(ctx.Model)));
 
     /// <summary>A reranker's id must never reach the CLI, which would be asked for a model it has never heard
     /// of — so a reranker binding annotates on the CLI's default judge model.</summary>

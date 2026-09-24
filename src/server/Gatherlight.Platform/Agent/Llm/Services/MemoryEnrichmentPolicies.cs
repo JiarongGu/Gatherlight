@@ -238,34 +238,93 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// under a fifth of the limit, room for the query and for a household-dropped reranker whose tokenizer is
 /// several times greedier. And it bounds cost: the same 96-candidate page at the cap is about half the ~9.7 s
 /// above. Household facts are granular, so a real fact is whole at this length; only a pathological one is
-/// cut, and cut is better than every recall that surfaces it going unverified.</para></summary>
+/// cut, and cut is better than every recall that surfaces it going unverified.</para>
+///
+/// <para><b>A model whose row DECLARES a window is fitted to it, PER PAIR — the query included</b>
+/// (<see cref="GgufModel.ContextTokens"/>, read through <see cref="GgufCatalog.DeclaredWindow"/>, the same read the
+/// preset makes). mMiniLMv2 serves 512-token slots, and <c>docs/judge-bench.md</c> Run 4 measured what the
+/// 1,000-character cap does to it: dense Chinese at the cap is 781 tokens and the whole call comes back
+/// <c>400 input (781 tokens) is larger than the max context size (512 tokens)</c>. A pair is formatted as query +
+/// document + 4 special tokens (read back from the server's own figure in that refusal), and on this tokenizer
+/// family — XLM-RoBERTa SentencePiece, no byte fallback — a text costs at most its UTF-16 length + 1 in tokens
+/// (measured over adversarial scripts, emoji, whitespace runs, every prefix of eight strings and all 300 fixture
+/// strings). So <c>query + document ≤ window − <see cref="PairOverheadTokens"/></c> CHARACTERS is a hard bound, not
+/// an estimate, and it needs no <c>/tokenize</c> round trip per candidate. The query gets at most half that budget,
+/// so a long question cannot starve the documents; each candidate gets the rest, never more than
+/// <see cref="MaxChars"/>. At 512: the query ≤ 253 characters, each candidate ≤ 506 − the query's length.
+/// <b>The bound does NOT transfer to a byte-level tokenizer</b>, where one character can be several tokens — a row
+/// declaring a window for such a model needs its own measurement first. Verified on the real binary (2026-09-24)
+/// under the preset the row now produces (<c>ctx-size</c>/<c>batch-size</c>/<c>ubatch-size = 512</c>): a pair of 512
+/// tokens is served and 513 refused with a 500, <c>too large to process … batch size 512</c> — the same whole-call
+/// refusal in another shape — and the app bound to the catalogued id got a verdict on a recall of a 1,236-character
+/// Chinese fact with a 347-character query.</para>
+///
+/// <para><b>No declared window keeps today's behaviour exactly</b>: the 1,000-character cap per candidate and the
+/// query untouched. That covers the catalogued rerankers served at 4096, and every GGUF a household dropped in (no
+/// row, so no window — a stated limit, see <see cref="GgufCatalog.DeclaredWindow"/>). The query stays unbounded
+/// there on purpose: at 4096 tokens it would take ~3,000 Chinese characters of question to crowd out a candidate,
+/// and recall queries are written by the agent, short.</para>
+///
+/// <para>What the fitting COSTS on a long fact — how much a cut document's score moves — is unmeasured: the bench
+/// fixture's facts are all ≤ 101 characters, so no run could show it. Cut is still better than a refused call,
+/// which scores nothing at all.</para></summary>
 public sealed class RerankInputCap : IMemoryVerificationPolicy
 {
     /// <summary>The most one candidate's text may run, in UTF-16 units. See the class comment.</summary>
     public const int MaxChars = 1000;
 
-    private readonly IMemoryVerificationPolicy _inner;
+    /// <summary>What a (query, document) pair costs in tokens beyond one per character of its two texts: the 4
+    /// special tokens llama.cpp wraps an XLM-RoBERTa pair in, plus at most one leading <c>▁</c> for each text.</summary>
+    public const int PairOverheadTokens = 6;
 
-    public RerankInputCap(IMemoryVerificationPolicy inner) => _inner = inner;
+    private readonly IMemoryVerificationPolicy _inner;
+    private readonly int? _window;
+
+    /// <param name="window">The model's DECLARED token window (<see cref="GgufCatalog.DeclaredWindow"/>), or null
+    /// for none — which keeps the 1,000-character cap and leaves the query alone.</param>
+    public RerankInputCap(IMemoryVerificationPolicy inner, int? window = null)
+    {
+        _inner = inner;
+        _window = window;
+    }
 
     /// <summary>Both the content and the headline, because the scoring policy reads the content and falls back
-    /// to the headline when none was supplied.</summary>
+    /// to the headline when none was supplied — and, under a declared window, the query, which the scoring policy
+    /// sends beside every candidate.</summary>
     public Task<MemoryVerification> VerifyAsync(MemoryVerificationRequest request, CancellationToken ct = default)
-        => _inner.VerifyAsync(request with
+    {
+        var (query, perCandidate) = Fit(request.Query, _window);
+        return _inner.VerifyAsync(request with
         {
+            Query = query,
             Candidates = [.. request.Candidates.Select(c => c with
             {
-                Headline = Cap(c.Headline),
-                Content = c.Content is null ? null : Cap(c.Content),
+                Headline = Cap(c.Headline, perCandidate),
+                Content = c.Content is null ? null : Cap(c.Content, perCandidate),
             })],
         }, ct);
+    }
 
-    /// <summary>At most <see cref="MaxChars"/>, never splitting a surrogate pair. No ellipsis: a reranker scores
-    /// the text, and a mark it was never trained on is noise in the one thing it reads.</summary>
-    public static string Cap(string text)
+    /// <summary>The query as it will be sent, and how many characters each candidate may then run — for one call.
+    /// Without a window: the query untouched and <see cref="MaxChars"/>. With one: the query cut to half the budget,
+    /// and each candidate given what the query left, so every pair fits; see the class comment for why a character
+    /// count bounds the tokens.</summary>
+    public static (string Query, int PerCandidate) Fit(string query, int? window)
     {
-        if (text.Length <= MaxChars) return text;
-        var cut = MaxChars;
+        if (window is not { } tokens) return (query, MaxChars);
+        var budget = Math.Max(0, tokens - PairOverheadTokens);
+        var fitted = Cap(query, budget / 2);
+        return (fitted, Math.Min(MaxChars, budget - fitted.Length));
+    }
+
+    /// <summary>At most <paramref name="max"/> UTF-16 units, never splitting a surrogate pair (so a cut can land one
+    /// short, never one over). No ellipsis: a reranker scores the text, and a mark it was never trained on is noise
+    /// in the one thing it reads.</summary>
+    public static string Cap(string text, int max)
+    {
+        if (text.Length <= max) return text;
+        if (max <= 0) return "";
+        var cut = max;
         if (char.IsHighSurrogate(text[cut - 1])) cut--;
         return text[..cut];
     }
