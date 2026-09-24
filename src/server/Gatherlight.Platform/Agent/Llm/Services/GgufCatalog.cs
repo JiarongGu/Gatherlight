@@ -28,8 +28,10 @@ public enum GgufCapability
 /// not left blank: an empty cell in a comparison table reads as a zero.</param>
 /// <param name="ContextTokens">The model's own token window, DECLARED when it is a hard limit on what the model can
 /// be sent — null for a model that takes whatever the launch preset gives it. Read for a RERANKER, by both sides of
-/// one contract: the preset launches it with this <c>ctx-size</c> and batch (<see cref="LlamaServerRuntime"/>), and
-/// <see cref="RerankInputCap"/> fits every (query, document) pair to it. Past it llama.cpp refuses the WHOLE
+/// one contract: the preset launches it with this <c>ctx-size</c> and batch (<see cref="LlamaServerRuntime"/>), and every
+/// (query, document) pair is fitted to it — <see cref="RerankInputCap"/> fits the query and sets each candidate's budget,
+/// and <see cref="ChunkedScoreProvider"/> cuts a longer candidate into windows of that budget (the default since
+/// 2026-09-24; with chunking off the cap cuts the candidate itself). Past it llama.cpp refuses the WHOLE
 /// <c>/v1/rerank</c> call — one over-long pair and no candidate is scored — and the verifier fails open, so a missing
 /// declaration is a silent loss of verification on exactly the recalls that surface a long fact. Declared from the
 /// GGUF header's <c>context_length</c> and the served slot size, both measured, never guessed.</param>
@@ -159,8 +161,12 @@ public static class GgufCatalog
     /// <para><b>What happens on a SLOW machine</b> (2026-09-24): the per-call window count was tuned on that GPU, so a
     /// chunked call is now sized by the speed this process measures (<see cref="RerankPace"/>) to fit half the 60-second
     /// verification deadline — fewer windows per long candidate, down to one, the cut, whose cost Run 6 measured (an answer
-    /// past the first window is not read). The clause says exactly that, and 尽量 rather than a promise: the pace starts
-    /// from the GPU figure and learns from the calls it times, and nothing about it has run on a CPU-only machine.</para>
+    /// past the first window is not read). The clause says exactly that, and 尽量 rather than a promise, for two reasons
+    /// it now states (review, 2026-09-25): the pace starts from the GPU figure after every launch and learns only from the
+    /// calls it times, so the first recall after a launch that has too many long facts to read can still run to the full
+    /// minute and come back unjudged — the verification cut there is NoOpinion, the engine's own order — and none of it
+    /// has run on a CPU-only machine (「这一点还没有在只有 CPU 的机器上实测过」). "Can still", not "will": slow short-fact
+    /// recalls before it may already have taught the pace (<see cref="RerankPace"/>'s rules).</para>
     ///
     /// <para><b>Mixed recalls are unmeasured, for every reranker</b>: Runs 6 and 6c showed each reranker recalls where every
     /// candidate was long or every one was short, and a long note's best window has up to five chances to score high where a
@@ -171,7 +177,9 @@ public static class GgufCatalog
         + "较长的事实会分段打分、每段都要算一次,在 60 条约 900–1,200 字的长笔记上,"
         + "BGE 与 LAMAR 每次检索约 3.2 秒,mMiniLMv2 约 1.2 秒。"
         + "在只有 CPU 等较慢的机器上,应用会按实测的速度让长事实少分几段来读(最少只读开头一段,那时写在后面的答案就读不到),"
-        + "尽量让判断在它最多等待的一分钟内做完;长短事实混在一起的检索还没有量过"
+        + "尽量让判断在它最多等待的一分钟内做完 —— 但每次启动后它都先按显卡上的速度估计,所以启动后头一次要读的长事实太多时,"
+        + "仍可能等满一分钟、那次检索按没有判断时的顺序返回;这一点还没有在只有 CPU 的机器上实测过。"
+        + "长短事实混在一起的检索还没有量过"
         + "(长事实取几段里最高的一段,得高分的机会比只有一段的短事实多))";
 
     /// <summary>LAMAR against BGE, ONE sentence shared by both rows — the same comparison read from either side,
@@ -327,6 +335,12 @@ public static class GgufCatalog
         // quoted from the SAME run (204 / 208), not from their own rows' Run 2 figures, because only a within-run
         // pairing says anything. Its found@8 against BGE is "no significant difference" and NOT "equivalent" (7/2,
         // p = 0.180, 95% [−4.6, +0.5]pp), and against LAMAR a measured loss (9/0, p = 0.004) — both said.
+        // THAT PARITY IS A SHORT-FACT RESULT, so the note says 「(事实都很短时)」 on it (review, 2026-09-25). On Run 6c's
+        // 60 long notes, both read in windows, the same pairing is a loss: found@8 182 against BGE's 201 of 240 (33/14,
+        // p = 0.008, 95% [−13.4, −2.3]pp), mostly past 1,000 characters (38 against 51 of 60, 17/4, p = 0.007); top-1 79
+        // against 87 (22/14, p = 0.243). It is a POST-HOC descriptive pairing — computed from the saved rows with
+        // `--report-only`, not registered before the run — and the note says so (「测完后另算的比较」);
+        // docs/judge-bench.md Run 6c has the table.
         //
         // THE ID IS THE UPSTREAM FILE NAME, and deliberately has no "rerank" in it. A catalogued id is typed by its
         // row (ResourceProvisioner.GgufKind asks the catalogue first), so it needs no name hint — and keeping the
@@ -336,8 +350,8 @@ public static class GgufCatalog
         // the bench had to rename it. The other rows follow the same rule (id = upstream stem).
         //
         // ITS WINDOW IS 512 TOKENS — the GGUF's context_length, and the slot size llama.cpp serves it with whatever
-        // the preset asks — so the row declares it: the preset launches it at 512 and RerankInputCap fits every
-        // pair to it. At the 1,000-character cap every other reranker gets, dense Chinese is 781 tokens and the
+        // the preset asks — so the row declares it: the preset launches it at 512, and RerankInputCap (the query and each
+        // candidate's budget) plus ChunkedScoreProvider (a longer candidate's windows) fit every pair to it. At the 1,000-character cap every other reranker gets, dense Chinese is 781 tokens and the
         // whole call is refused. What the fit COSTS on a long fact was measured (docs/judge-bench.md Runs 6 and 6c, 60
         // notes of 883–1,241 characters, 240 questions, no subject tags, no embedder, a page of 8 chosen by the reranker):
         // cut to its first window, a note whose answer sat at its END reached the page 4 times in 60 — worse than no judge
@@ -364,7 +378,7 @@ public static class GgufCatalog
             "mmarco-mMiniLMv2-L12-H384-v1-Q8_0.gguf",
             "91d70301828ba735c22eda56adb649f48975f371337e8c8b046326b885e26eed", 132_584_000,
             RerankerNote + "体积约 133 MB,是 BGE 的 28%。" + RerankerBenchSetup.TrimEnd(':')
-            + "(不开判断是 79/240 与 125/240):前八命中 199/240,同一轮 BGE 是 204/240 —— 没有测出显著差别,"
+            + "(不开判断是 79/240 与 125/240):前八命中 199/240,同一轮 BGE 是 204/240 —— 没有测出显著差别(事实都很短时),"
             + "但也不能算一样好,这一轮排除不了它最多少带进约 11 题;比 LAMAR(208/240)显著少,9 题只有 LAMAR 带进前八,"
             + "反过来一题也没有。首位命中 99/240,比同一轮 BGE 的 90 和 LAMAR 的 86 多,但和 BGE 的差距不足以下结论。"
             + "每次检索约 0.31 秒,同一轮 BGE 约 0.45 秒" + RerankerLatencyCaveat + ";这一轮是按 4096 个词元启动它的,"
@@ -373,6 +387,9 @@ public static class GgufCatalog
             + "相邻两段有重叠,一条最多 5 段 —— 各段分别打分、取最高的一段。这是量过才改的:在 60 条约 900–1,200 字的长笔记上"
             + "(240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页),答案在笔记末尾时,只读开头的旧做法把答案带进前八"
             + "只有 4/60,比不开判断(29/60)还差;分段读之后是 44/60。答案在开头时两种做法没有显著差别(52/60 与 50/60)。"
+            + "在同一批长笔记上、两者都分段读时(测完后另算的比较),它把答案带进前八显著少于 BGE:182/240 对 201/240,"
+            + "33 题只有 BGE 做到、14 题只有它做到(p = 0.008),差距主要在答案写在 1,000 字以后的笔记(38/60 对 51/60,"
+            + "p = 0.007);排第一是 79/240 对 87/240,没有显著差别。"
             + "5 段也读不完的事实(1,265–2,530 字以上,提问越长、每段越短)还没有量过:段与段之间会有读不到的部分,"
             + "事实越长读不到的越多 —— 长到 5 段总长的两倍时,约一半读不到。"
             + "许可:模型卡写的是 Apache-2.0(下载用的 GGUF 仓库没有写明许可),但训练它用的 MS MARCO 数据只许非商业使用。",

@@ -1284,6 +1284,20 @@ try {
         rerankerNotes.every(([, n]) => /只有 CPU 等较慢的机器上/.test(n) && /少分几段/.test(n) && /最少只读开头一段/.test(n)
           && /一分钟/.test(n) && /长短事实混在一起的检索还没有量过/.test(n)),
         JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('BGE 与 LAMAR 每次检索约 3.2 秒'), n.indexOf('BGE 与 LAMAR 每次检索约 3.2 秒') + 160)])));
+      // …and what the pace does NOT promise (review, 2026-09-25): it starts from the GPU figure after every launch, so the
+      // first recall after a launch with too many long facts can still wait the full minute and come back unjudged (the
+      // engine's own order) — and none of this has run on a CPU-only machine. The clause said only 尽量 before.
+      ok('…and says the pace restarts from the GPU figure at every launch — a first recall can still wait the minute and come back unjudged — and is unmeasured on a CPU-only machine',
+        rerankerNotes.every(([, n]) => /每次启动后它都先按显卡上的速度估计/.test(n) && /仍可能等满一分钟/.test(n)
+          && /按没有判断时的顺序返回/.test(n) && /这一点还没有在只有 CPU 的机器上实测过/.test(n)),
+        JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('尽量'), n.indexOf('尽量') + 120)])));
+      // mMiniLMv2's parity with BGE is a SHORT-fact result: on Run 6c's long notes, both read in windows, it brought the
+      // answer onto the page significantly less often (182 against 201 of 240, 33/14, p = 0.008) — post hoc, and said so.
+      ok('…and mMiniLMv2\'s parity with BGE is qualified as short-fact, beside the long-note loss with its p and that it was computed afterwards',
+        /没有测出显著差别\(事实都很短时\)/.test(String(mini?.note)) && /182\/240 对 201\/240/.test(String(mini?.note))
+          && /p = 0\.008/.test(String(mini?.note)) && /38\/60 对 51\/60/.test(String(mini?.note)) && /p = 0\.007/.test(String(mini?.note))
+          && /测完后另算的比较/.test(String(mini?.note)),
+        String(mini?.note));
 
       // QWEN3 0.6B (docs/judge-bench.md Run 5b): the first CHAT judge measured better than no judge on both metrics —
       // catalogued, described by its measurement with its configuration, and NOT recommended (BGE stays the default).
