@@ -842,3 +842,83 @@ None of these reaches the exact test on its own; see "LAMAR vs BGE" below for wh
 - Recall-time only. A reranker binding still annotates every fact WRITE on the Claude CLI; this run made no
   writes, so that cost is not in these numbers.
 - The questions are the same hand-reviewed ones as Run 1's (see its last-but-one bullet).
+
+## Run 3 — the local chat judge (design)
+
+Written and committed BEFORE the run; the results section that follows names this commit.
+
+**The question.** On 2026-09-24 `JudgeSeesContentPolicy`'s default moved from `topic — content` to content alone,
+on Run 1's measurement of the CLAUDE judge (equivalent on both metrics, ~24% less candidate text). `JudgeWiring.Llm`
+builds the verifier for both LLM judges, so the same flip reached 判断 bound to a llama.cpp CHAT model — which
+neither Run 1 nor Run 2 measured, in either mode. **Does content alone hurt a local chat judge relative to
+`topic — content`?** Run 1's equivalence does not carry over by argument: a 1B model may lean on a short authored
+label far more than Claude does.
+
+**Arms.** Three, from Run 1/2's seed (`--reuse-seed`, not reseeded), order seed 12345, all 240 queries:
+
+| arm | 判断 | what the judge reads | knob |
+|---|---|---|---|
+| `formula` | off | — | none |
+| `lc:gemma-3-1b-it-Q4_K_M` | llama.cpp · gemma | content alone — the shipped default | none: must print no `[measurement]` line |
+| `lcb:gemma-3-1b-it-Q4_K_M` | llama.cpp · gemma | `topic — content` | `GATHERLIGHT_JUDGE_INPUT=both`: must announce `judge input = both` |
+
+No Claude arm runs, so nothing here spends account quota. `formula` is the baseline, and its positions digest is
+the check that this run started where Runs 1–2 did: equal to their `f661eb6a056e` means the same questions, in the
+same order, of the same starting graph. That is what lets the chat judge be read beside Run 1's Claude judge and
+Run 2's rerankers. Any cross-run pairing is context only and is computed afterwards by re-analysis
+(`--report-only … --baseline=…`), which calls no model. It is not part of the decision.
+
+**How each chat arm is wired: exactly as the product runs a local chat judge.** The arm's own `settings.json` binds
+`memory.judgeSource = llama-cpp` and `judgeModel = gemma-3-1b-it-Q4_K_M`. Its resources folder holds empty stand-ins
+for the runtime and the GGUF, which is all `IsConfigured` asks, and `GATHERLIGHT_LLAMACPP_URL` points it at ONE shared
+real router, which it adopts. That router is launched with the section the product writes for a CHAT model:
+`n-gpu-layers = 99` and nothing else (`LlamaServerRuntime.WritePresets` puts `embeddings`, `reranking` and the
+4096 batch sizes on the other kinds only). `--models-max` covers every model the bench serves. A chat judge both
+annotates and verifies on llama.cpp, and a reused seed writes nothing, so neither arm should make a single
+claude-cli call. The bench counts them and warns on any. The verifier's request names no sampling temperature, so
+gemma samples at llama-server's default and its verdicts vary between identical runs, as the product's do.
+
+**Model and machine.** `gemma-3-1b-it-Q4_K_M` is `GgufCatalog.RecommendedJudge`; its sha256 `8ccc5cd1…a135` was
+re-checked against the catalogue pin before the run. llama.cpp `b10549` (commit `b2e5e9b28`, Vulkan x64) is the
+pinned build Run 2 used. The GPUs are an NVIDIA GeForce RTX 4080 Laptop GPU (12 GB) and an Intel Arc iGPU, both
+visible to Vulkan. The preset offloads every layer and selects no device, as the product's does. The CPU is an
+Intel Core Ultra 9 185H. An unrelated llama-server process stays resident on the machine throughout.
+
+**Measured.** Per set and `all`: top-1, found@8, MRR, `judged`/`graph` and `endorsed`. `judged`/`graph` is verdict
+coverage: the judge fails open, so a graph recall with no verdict is the formula's ranking under another name.
+Also measured: the parallel mean and serial median latency (12 queries, verdict-carrying recalls only), llama.cpp
+chat calls ok/failed and claude-cli calls per arm, and the estimated candidate text per recall. Comparisons are
+paired per query, with McNemar's exact p and the Agresti–Min 95% interval for the net rate, as in Runs 1–2: `lc`
+against `lcb` (the question), and each against `formula`.
+
+**Decision rule**, the plan's verbatim: *if content-only is significantly worse than `both` (paired, p < 0.05) on
+top-1 or found@8, STOP and ask the owner whether to scope the flip to the Claude arm; otherwise record the result
+and keep the default.* How it is read, fixed now:
+
+- **"Significantly worse"** means: on `all`, on either metric, the exact McNemar p is below 0.05 and `lc` trails
+  `lcb` (c − b < 0, with b = `lcb` hit & `lc` miss). The bench's per-set veto does NOT cancel it. A stop-and-ask
+  rule should err towards asking, so a significant `all` stops even if a set runs the other way, and the owner is
+  shown both. A single set significant on its own while `all` is not does not trigger, because eight per-set tests
+  at 0.05 raise false alarms by themselves. It is reported all the same.
+- **Otherwise the default stays**, and the result is recorded as exactly one of three outcomes:
+  - **Equivalent**: the 95% interval on `all` lies inside ±3pp on BOTH metrics, Run 1's bar. Content alone then
+    costs this judge nothing this fixture can show, and Run 1's conclusion extends to it.
+  - **No significant difference**: on at least one metric, neither a finding nor equivalent. The run could not
+    show a harm, and could not rule out one as large as the interval's lower bound, which is quoted with it. The
+    default stays, because the question is whether to REVERT an owner-approved default, and that needs a measured
+    harm. This is the opposite burden from Run 1, whose rule kept the old behaviour when undecided, because
+    removing a feature needs evidence.
+  - **`lc` significantly better**: recorded, and the default stays.
+- **Two vacuity guards, checked before `lc` is read against `lcb`** (dev-conventions' measuring rule 1: can the
+  instrument express the effect?):
+  - *Verdict coverage.* If the smoke run (`--n=10`: 40 queries, the same arms) shows either chat arm giving verdicts
+    on fewer than half its graph recalls, the full run is not made. A 1B judge that cannot produce a verdict is
+    itself the finding, and its two arms would be the formula arm under two names. In the full run, coverage below
+    98% raises the bench's own WARNING, and the result is reported with it.
+  - *Does the judge move anything?* If neither chat arm differs from `formula`, i.e. both are equivalent to it on
+    both metrics, then any content-against-both "equivalence" is vacuous: two ways of feeding a judge that changes
+    nothing. It is recorded as that, not as evidence that the topic is not needed.
+- **No judge A/A twin runs**; the arm list is the plan's. Nothing in this run sizes how far a sampling 1B judge
+  wanders between identical runs (Run 1's Claude A/A differed by 2 of 240). The exact test stays valid without
+  one, since under the null sampling noise splits discordant pairs evenly, but a gap of a few queries should be
+  read against that.
