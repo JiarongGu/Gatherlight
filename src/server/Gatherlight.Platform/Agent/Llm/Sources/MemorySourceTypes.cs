@@ -236,7 +236,9 @@ public static class MemoryGroups
             // Qwen3 0.6B (Run 5b) better on both metrics but far behind the reranker on found@8 (148 against BGE's
             // 203 in the same run), and Qwen3.5 0.8B and Gemma 3 270M (Run 5b), which are not catalogued. It said
             // "only Gemma 3 1B was measured, and was worse" until Qwen3 0.6B was catalogued; it still says the
-            // others (the 4B, a household's own file) were not measured.
+            // others (the 4B, a household's own file) were not measured. 「Qwen3 0.6B 比不开判断好」 holds for the fully
+            // local configuration too: over its OWN tags it beat no judge over the same tags on both metrics (Run 7) —
+            // what its tags cost against Claude's is in its model note, not here.
             "由应用下载、启动和管理的模型(llama.cpp),占磁盘、不用填地址,模型在「资源 · Resources」面板下载。"
              + "对话模型:判断整个在本机完成,不消耗账号额度。在本应用的双语测试集上,Qwen3 0.6B 比不开判断好,"
              + "但把答案带进前八的次数远不如重排模型;Gemma 3 1B 比不开判断更差;"

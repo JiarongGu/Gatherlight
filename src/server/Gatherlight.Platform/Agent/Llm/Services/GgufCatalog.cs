@@ -262,9 +262,17 @@ public static class GgufCatalog
         // every size in these notes. Run 5b launched it uncapped; the cap sits far above every fixture prompt (60
         // candidates, ~1.7k tokens), so its figures stand.
         //
-        // Its TAGGING is unmeasured, and the note says so: the fixture's subject tags were written by the Claude CLI
-        // when the seed was built, so no run has scored the tags this model writes. Why a household might still pick
-        // it is the other half of the same fact — tagging and checking both stay on the machine, no account quota.
+        // Its TAGGING was measured in docs/judge-bench.md Run 7 (2026-09-24, same fixture, 语义 off, content-only, the
+        // chat preset as the product writes it): a seed written by Qwen3-0.6B's own annotation, paired within the run
+        // against Claude's final tags REPLAYED through the same path, so the two differ only in the tags. Qwen3 over its
+        // own tags against Qwen3 over Claude's: top-1 104 vs 114 (24/14, p = 0.143, −4.2pp, 95% [−9.2, +0.9]), found@8
+        // 155 vs 152 (16/19, p = 0.736, +1.3pp, [−3.6, +6.1]) — no significant difference and NOT equivalent (neither
+        // interval inside ±3pp), so the note says what the run cannot rule out. Against no judge over the same tags,
+        // +10.8 / +14.6pp, both p < 0.001. The tags are worse in KIND — Lyntai's collapse: `parent` on 12 facts, 29 of 78
+        // handle assignments reused only across unrelated groups against Claude's 7 of 65 — and the fixture barely
+        // exercises the linking tags exist for, so the note says a household relying on it may pay a cost this run does
+        // not show. It said 「它自己写的主题标注好不好没有量过」 until Run 7. Why a household might pick it is the same
+        // fact's other half: tagging and checking both stay on the machine, no account quota.
         // Pinned at Qwen's own repo, commit and sha256 as Run 5's pre-registration recorded them; HEAD-checked
         // 2026-09-24 (X-Repo-Commit and X-Linked-Size / X-Linked-ETag match). The repo itself declares Apache-2.0.
         // Id = the upstream stem, as every row.
@@ -281,7 +289,11 @@ public static class GgufCatalog
             + "(串行中位数,模型已加载、在显卡上)。"
             + "文件约 640 MB,运行时 llama.cpp 为它预留的显存却约 2.6 GB(应用按 16,384 个词元的上下文启动它,"
             + "在一块显卡上实测、含服务本身;不设上限时会按它训练时的 40,960 个词元预留,约 5.4 GB)。"
-            + "它自己写的主题标注好不好没有量过 —— 测试集里的主题标注是 Claude 写的。"
+            + "上面的数字是在 Claude 写的主题标注上量的。标注也换成它自己写的(同样的测试集和设置,写入和检索都在本机),"
+            + "同一轮对比没有显著差别:答案排第一少 4.2 个百分点、带进前八多 1.3 个百分点,"
+            + "但排除不了排第一最多少约 9 个、带进前八最多少约 4 个百分点;和同一批标注下不开判断相比,两项仍显著变好"
+            + "(多 10.8 与 14.6 个百分点)。它的标注更宽泛,常把一个主题套到不相干的事实上(一个 parent 标了 12 条),"
+            + "靠主题把关于同一个人的事实连起来的检索,可能有这个测试集看不出的代价。"
             + "许可:Apache-2.0(Qwen 的官方仓库写明)。"),
 
         new GgufModel(

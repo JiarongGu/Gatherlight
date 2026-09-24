@@ -4887,6 +4887,12 @@ medians are over 12 queries, verdict-carrying recalls only.
   个百分点;和同样这批标注下检索时不做判断相比,两项仍都显著变好(排第一多 10.8 个百分点,带进前八多 14.6 个百分点)。它写的标注比
   Claude 的宽泛,常把已有的主题套到不相干的事实上(例如一个 parent 标在 12 条事实上)。」
   The catalogue is not changed here; the sentence is routed by the round's controller.
+- **What shipped** (the next commit round, 2026-09-24), tightened to the row's length and given the collapse's
+  consequence: 「上面的数字是在 Claude 写的主题标注上量的。标注也换成它自己写的(同样的测试集和设置,写入和检索都在本机),
+  同一轮对比没有显著差别:答案排第一少 4.2 个百分点、带进前八多 1.3 个百分点,但排除不了排第一最多少约 9 个、带进前八最多少
+  约 4 个百分点;和同一批标注下不开判断相比,两项仍显著变好(多 10.8 与 14.6 个百分点)。它的标注更宽泛,常把一个主题套到
+  不相干的事实上(一个 parent 标了 12 条),靠主题把关于同一个人的事实连起来的检索,可能有这个测试集看不出的代价。」 `p51`
+  asserts its numbers and that 「没有量过」 is gone.
 
 ### Accuracy — the four sets and `all`
 

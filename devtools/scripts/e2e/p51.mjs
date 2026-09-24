@@ -1300,8 +1300,14 @@ try {
           && /79 题增加到 110 题/.test(qwenNote) && /125 题增加到 148 题/.test(qwenNote) && /显著/.test(qwenNote)
           && /203 对 148/.test(qwenNote) && /0\.38 秒/.test(qwenNote),
         qwenNote);
-      ok('…and says its TAGGING was not measured, and its licence',
-        /主题标注好不好没有量过/.test(qwenNote) && /Apache-2\.0/.test(qwenNote), qwenNote);
+      // Its TAGGING was measured since (docs/judge-bench.md Run 7): over its OWN tags against Claude's, replayed through
+      // the same path, no significant difference — −4.2pp top-1, +1.3pp found@8 — and not equivalent either, so the note
+      // says what the run cannot rule out (~9 / ~4pp); still significantly better than no judge over the same tags
+      // (+10.8 / +14.6pp); and its tags collapse unrelated facts (`parent` on 12). It said 「没有量过」 until then.
+      ok('…and states what its OWN tagging measured — no significant difference, what it cannot rule out, better than none, the collapse — and its licence',
+        /4\.2 个百分点/.test(qwenNote) && /1\.3 个百分点/.test(qwenNote) && /约 9 个/.test(qwenNote) && /约 4 个百分点/.test(qwenNote)
+          && /10\.8/.test(qwenNote) && /14\.6/.test(qwenNote) && /parent 标了 12 条/.test(qwenNote)
+          && !/没有量过/.test(qwenNote) && /Apache-2\.0/.test(qwenNote), qwenNote);
       // A 640 MB download whose child held +5,175 MiB of GPU memory uncapped and +2,472 MiB at the chat cap
       // (docs/self-managed-llm-runtime.md, 2026-09-24): the footprint is part of the trade, so the note states it —
       // with the context it was measured at, which is the launch setting that decides it.
