@@ -43,8 +43,9 @@
 //     and so mutates each arm's graph — it runs after every accuracy row is recorded, so it cannot touch them.
 //
 // HOW TO READ IT. Every arm answers the same queries, so arms are compared PAIRED, per query, on top-1 hits and
-// on found@8 hits: against `content` and against `formula` when they ran, every reranker against every other,
-// and against `--baseline=<results.json>:<arm>` from another run. Each comparison reports McNemar's exact p, the
+// on found@8 hits: against `content` and against `formula` when they ran, every reranker against every other, each
+// local chat judge against its own other input, against each reranker under partition and against every other chat
+// model shown the same input, and against `--baseline=<results.json>:<arm>` from another run. Each comparison reports McNemar's exact p, the
 // net difference c − b, and a 95% interval for the net rate (c − b)/pairs — the Agresti–Min adjusted Wald interval
 // for a paired difference in proportions, which accounts for both how often the arms disagree and how that splits.
 //   - A FINDING needs p < 0.05 on `all` AND no question set that is itself significant (p < 0.05) in the
@@ -75,7 +76,8 @@
 // `--chat-judges=<m,…>` adds `lc:<m>` (content alone — the shipped default, no knob) and `lcb:<m>`
 // (`GATHERLIGHT_JUDGE_INPUT=both`, "topic — content") per llama.cpp CHAT model, paired against each other — the
 // question docs/judge-bench.md Run 3 asks — as well as against `formula`. All of them share ONE real router,
-// launched with the preset section the product writes for each model's kind (see presetSection).
+// launched with the preset section the product writes for each model's kind, plus `reasoning = off` on a chat
+// section, which the product does not write yet (see presetSection and docs/judge-bench.md Run 5).
 //
 // PRIVACY. The fixture is invented and committed; this touches no household data. Local-model arms READ the
 // llama.cpp binary and GGUFs from --resources and nothing else there. Its default is local/state/resources —
@@ -541,6 +543,25 @@ const analyse = (run, { baseline = null } = {}) => {
   }
   if (cjComps.length > 0) out.paired.chatJudges = printPaired('PAIRED — each local chat judge, content only (lc) against topic — content (lcb);'
     + ' b = lcb hit & lc miss, c = the reverse', cjComps);
+  // docs/judge-bench.md Run 5: a local chat judge beside ANOTHER local model — against each reranker under partition
+  // (the reference) and against every other chat model shown the same input (the first listed is the control). Both
+  // are within-run pairs, and neither exists in a run with one chat model and no reranker, so Runs 2–4 re-analyse
+  // exactly as they did.
+  const cjArms = arms.filter((a) => chatKey(a));
+  const cjVsRr = [];
+  for (const c of cjArms)
+    for (const r of arms.filter((a) => /^rr:/.test(a.key))) cjVsRr.push({ key: `${c.key} vs ${r.key}`, label: `${c.key} vs ${r.key}`, arm: c, base: r });
+  if (cjVsRr.length > 0) out.paired.chatJudgesVsRerankers = printPaired('PAIRED — each local chat judge against each reranker under partition;'
+    + ' b = reranker hit & chat-judge miss, c = the reverse', cjVsRr);
+  const cjAcross = [];
+  for (const input of ['lc', 'lcb']) {
+    const same = cjArms.filter((a) => chatKey(a)[1] === input);
+    for (let i = 0; i < same.length; i++)
+      for (let j = i + 1; j < same.length; j++)
+        cjAcross.push({ key: `${same[j].key} vs ${same[i].key}`, label: `${same[j].key} vs ${same[i].key}`, arm: same[j], base: same[i] });
+  }
+  if (cjAcross.length > 0) out.paired.chatJudgesAcross = printPaired('PAIRED — every local chat judge against every other, same input;'
+    + ' b = right-hand hit & left-hand miss, c = the reverse', cjAcross);
   if (baseline) {
     const { problems, arm: bArm } = checkBaseline(run, baseline.run, baseline.arm);
     out.crossRun = { baseline: { file: rel(baseline.file), arm: baseline.arm, at: baseline.run.meta.at }, refused: problems.length ? problems : null, paired: null };
@@ -614,6 +635,32 @@ const analyse = (run, { baseline = null } = {}) => {
     for (const arm of chatArms) {
       const l = arm.localRouter;
       console.log(pad(arm.label, LABEL_W) + pad(r(l?.startup), 12) + pad(r(minus(l?.accuracy, l?.startup)), 16) + r(minus(l?.total, l?.accuracy)));
+    }
+  }
+  // THE COST OF A RECALL WITH NO VERDICT, for a chat judge. The serial median above leaves such recalls out, which
+  // is right for a fast fail-open and WRONG for a reply that runs away: a small chat model can generate until the
+  // provider's 2-minute timeout, then fail open — slow AND verdict-less, so it would vanish from the median exactly
+  // when it costs most. Printed only for a run with a chat judge beside another local model (docs/judge-bench.md
+  // Run 5), so Runs 2–4 re-analyse exactly as they did.
+  if (cjVsRr.length + cjAcross.length > 0) {
+    out.chatJudgeLatencyAll = {};
+    console.log('\nlocal chat judge latency (ms), EVERY graph-ranked recall, verdict or not — serial pass, and the accuracy pass (parallel, contended)');
+    console.log(pad('arm', LABEL_W) + pad('serial median', 15) + pad('serial max', 12) + pad('no verdict: n · median', 24)
+      + pad('parallel max', 14) + pad('parallel ≥ 60 s', 16) + 'parallel no-verdict median');
+    for (const arm of cjArms) {
+      const g = (rows) => (rows ?? []).filter((r) => r.error === null && r.ranked === 'graph');
+      const lat = g(arm.latencyRows), acc = g(arm.rows);
+      const none = lat.filter((r) => r.answered === null), accNone = acc.filter((r) => r.answered === null);
+      const x = {
+        serialMedian: median(lat.map((r) => r.ms)), serialMax: lat.length ? Math.max(...lat.map((r) => r.ms)) : null,
+        serialNoVerdict: none.length, serialNoVerdictMedian: median(none.map((r) => r.ms)),
+        parallelMax: acc.length ? Math.max(...acc.map((r) => r.ms)) : null, parallelOver60s: acc.filter((r) => r.ms >= 60000).length,
+        parallelNoVerdictMedian: median(accNone.map((r) => r.ms)),
+      };
+      out.chatJudgeLatencyAll[arm.key] = x;
+      console.log(pad(arm.label, LABEL_W) + pad(x.serialMedian ?? '—', 15) + pad(x.serialMax ?? '—', 12)
+        + pad(`${x.serialNoVerdict} · ${x.serialNoVerdictMedian ?? '—'}`, 24) + pad(x.parallelMax ?? '—', 14)
+        + pad(`${x.parallelOver60s}/${acc.length}`, 16) + (x.parallelNoVerdictMedian ?? '—'));
     }
   }
 
@@ -1005,10 +1052,19 @@ const live = async () => {
       // THE PRODUCT'S PRESET, per kind — LlamaServerRuntime.WritePresets, mirrored line for line, because a bench
       // that launches a model differently measures a product we do not ship. Every kind gets n-gpu-layers (launch
       // CONTRACT: without it the CPU runs the model, silently ~30× slower); a reranker adds `reranking` and the
-      // 4096 ctx/batch/ubatch (a pair must fit one batch); a CHAT model gets NOTHING else — no ctx-size, and never
-      // `embeddings` or `reranking`, either of which restricts the child to one route and refuses chat.
+      // 4096 ctx/batch/ubatch (a pair must fit one batch); a CHAT model gets no ctx-size, and never `embeddings` or
+      // `reranking`, either of which restricts the child to one route and refuses chat.
+      // ONE DEPARTURE, on purpose (docs/judge-bench.md Run 5): a chat section also gets `reasoning = off`, which the
+      // product does NOT write yet. The verifier asks for no reasoning (TextReasoning.Suppress), but Lyntai's
+      // OpenAI-shaped payload drops that field, and llama-server's default `--reasoning auto` then OPENS a thinking
+      // block for any template that supports one — Qwen3 by its own default, Qwen3.5 against its own default — so
+      // as shipped such a model spends seconds per verdict thinking. `reasoning = off` renders the template's
+      // pre-closed think block (measured on b10549, router preset and dedicated server alike) and leaves a template
+      // without thinking byte-identical (gemma-3: the same rendered prompt with and without it), so Run 3's control
+      // is unchanged. `reasoning-budget = 0` is NOT equivalent: it leaves the template thinking and cuts the
+      // thinking short, and the model then writes its reasoning into the reply as prose.
       const presetSection = (m, kind) => [`[${m}]`, 'n-gpu-layers = 99',
-        ...(kind === 'reranking' ? ['reranking = true', 'ctx-size = 4096', 'batch-size = 4096', 'ubatch-size = 4096'] : []),
+        ...(kind === 'reranking' ? ['reranking = true', 'ctx-size = 4096', 'batch-size = 4096', 'ubatch-size = 4096'] : ['reasoning = off']),
         ''].join('\n');
       const preset = path.join(WORK, 'presets.ini');
       fs.writeFileSync(preset, [...rerankers.map((m) => presetSection(m, 'reranking')),

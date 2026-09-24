@@ -1885,3 +1885,255 @@ mMiniLM against BGE, paired (mMiniLM-only hits / BGE-only hits):
   four models that ran, including GPU start-up) are not in it. An unrelated llama-server process was resident on the
   machine throughout.
 - **Recall only.** A reranker binding still annotates every fact WRITE on the Claude CLI; this run wrote nothing.
+
+## Run 5 — newer small chat models as 判断 (design)
+
+Written and committed BEFORE the run; the results section that follows names this commit. The screen below ran first.
+
+**The question.** Run 3 measured `gemma-3-1b-it` as a local CHAT judge WORSE than no judge (top-1 −19.2pp, found@8
+−5.8pp, content only). Lyntai's position is that small instruct models fail at SELECTIVE tasks: its 1B judge was inert
+(`docs/memory-measurements.md` there, "A 1B judge is INERT"), and `docs/model-tasks.md` §3 prices instruct models in a
+selective role as the shape to stop reaching for. The owner asked for the newer small multilingual chat models to be
+measured anyway, on OUR fixture. **Is any newer, smaller multilingual chat model NOT significantly worse than having no
+judge, bound to 判断 the way the product binds a chat GGUF?** Measurement only: no product code or catalogue row
+changes here.
+
+**Candidates**, each fetched here at a pinned repo commit and hashed over the downloaded bytes. Each sha256 equals the
+repo's own LFS sha256; for the control and the reference it also equals the `GgufCatalog` pin. All sit flat in
+`devtools/_rr-res/gguf/<id>.gguf`, the scratch folder Runs 2–4 used, and every id is the upstream file's stem.
+
+| id in this run | role | uploader / repo @ commit | bytes | sha256 | GGUF header |
+|---|---|---|---|---|---|
+| `gemma-3-1b-it-Q4_K_M` | control (Run 3) | `ggml-org/gemma-3-1b-it-GGUF` @ `f9c28bcd85737ffc5aef028638d3341d49869c27` | 806,058,240 | `8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135` | `gemma3`, 26 blocks, ctx 32768, SentencePiece 262,144 |
+| `Qwen3-0.6B-Q8_0` | candidate | `Qwen/Qwen3-0.6B-GGUF` @ `23749fefcc72300e3a2ad315e1317431b06b590a` | 639,446,688 | `9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031` | `qwen3`, 28 blocks, ctx 40960, BPE (`qwen2`) 151,936 |
+| `gemma-3-270m-it-Q8_0` | candidate | `ggml-org/gemma-3-270m-it-GGUF` @ `e7647be17ae1108f2f605ed061ca0608b171afff` | 291,545,600 | `0ef57d2c838458a1952664260dcba38e5bdda37494f3af732f06e4add24068e3` | `gemma3`, 18 blocks, ctx 32768, SentencePiece 262,144 |
+| `Qwen3.5-0.8B-Q8_0` | candidate | `ggml-org/Qwen3.5-0.8B-GGUF` @ `8fea620810c4afa23dd6443f999a48574c1611a3` | 833,592,096 | `37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f` | `qwen35`, 25 blocks (one, an MTP head, unused by llama.cpp), ctx 262144, BPE (`qwen35`) 248,320 |
+| `bge-reranker-v2-m3-Q5_K_M` | reference (`RecommendedReranker`, Runs 2 and 4) | `gpustack/bge-reranker-v2-m3-GGUF` @ `3093af03b1a635e67b084b1d8c03c5f5e020fd05` | 468,392,352 | `1a212007526c7083627eed92b39dd4472e90ff1374a03fb068733378220813ef` | as Run 4 |
+
+- **Qwen3-0.6B** (Qwen's own upload; model released 2025-04; Apache-2.0). Its card says "100+ languages and dialects",
+  with thinking ON by default. **Why Q8_0:** the official repo ships a Q8_0 and nothing else for 0.6B, and at
+  639,446,688 B it is under the ~700 MB line the plan set. A 4-bit quant would come from a third party, and it would be
+  quantising the size class where quantisation costs most.
+- **gemma-3-270m-it** (ggml-org's upload of Google's weights; released 2025-08; Gemma terms). The official repo ships
+  only this Q8_0. **Its multilingual claim is the FAMILY's, not its own.** The Gemma 3 card's "over 140 languages"
+  describes the training data of all sizes. The 270M's own benchmark tables are English only (HellaSwag, PIQA, ARC,
+  WinoGrande, BIG-Bench Hard, IFEval). The 1B at least has a multilingual row (Global-MMLU-Lite 34.2); nothing
+  multilingual is published for the 270M.
+- **Qwen3.5-0.8B: the one optional addition** (ggml-org's upload of Qwen's weights; released 2026-02; Apache-2.0). It is
+  the only one added because it is the clear successor to the first candidate: the same line, the same size class and
+  ten months newer. It is multilingual on its own card ("201 languages and dialects"). Its card also says it "operates in
+  non-thinking mode by default", which the screen below shows does not hold under llama-server. **Why Q8_0 at 834 MB:**
+  the official repo's other quants are a Q4_0 (563,036,064 B) and a BF16. Q8_0 keeps all three candidates at one
+  quantisation, so the comparison between them is not confounded by it. It is within the ~1 GB bound and 3.4% over the
+  control's bytes. Q4_K_M files exist only from third parties (e.g. unsloth, 532,517,120 B).
+- **Considered and not added**, so as not to pad the run:
+  - `gemma-4-E2B`, the smallest Gemma 4: its official GGUFs are 3,349,516,256 B (Google's QAT q4_0) and 4,967,478,336 B
+    (ggml-org Q8_0), far over ~1 GB.
+  - `LFM2.5-350M` (Liquid AI's own GGUF, 2026-03, 379,217,632 B at Q8_0): newer and small, but a third family with no
+    predecessor in these runs, under a non-OSI licence (`lfm1.0`).
+
+### The screen (2026-09-24, before this design)
+
+Each configuration ran on its own `llama-server` on its own port: llama.cpp **b10549** (commit `b2e5e9b28`, Vulkan x64),
+the build the product pins and Runs 2–4 used. Each was killed by PID and its port re-checked free. The instrument is
+`devtools/_lc5-screen/screen.mjs` (scratch, untracked; its JSON and server logs sit beside it). It sends exactly what
+Lyntai 3.2.0's `LlmMemoryVerificationPolicy` puts on the wire through the app's `llamacpp` provider:
+
+- the verifier's system prompt verbatim, then `Question:` plus the numbered notes;
+- the body `{model, messages, stream:false}`, with no temperature, no max_tokens and no reasoning field;
+- the notes are all 60 fixture facts, content alone (the shipped input), which is the most a bench recall can show;
+- the reply is parsed the way the verifier's `Parse` does it.
+
+Two requests, three calls each. **A** (the gate) asks the `same` question of `car-insurance`, whose note is ordinal 21.
+**B** asks the `cross` question of `mkt-east`, whose note is ordinal 1. B turned out to be a poor probe: ordinal 1 is in
+the prompt's own example `{"relevant":[1,4,7]}`, so B cannot tell a model that read the notes from one that copied the
+example.
+
+**Thinking: how it goes off, and why the bench must do it.**
+
+- **As shipped, the product would run Qwen3 and Qwen3.5 THINKING.** The verifier asks for no reasoning
+  (`TextReasoning.Suppress`), but Lyntai's OpenAI-shaped payload drops the field; only its Ollama payload maps it. That
+  is true at `v3.2.0`, the version the app pins. llama-server's default `--reasoning auto` then opens a thinking block
+  for any template that supports one.
+  - Qwen3-0.6B's template thinks unless `enable_thinking` is false. With no key, the rendered prompt ends at a bare
+    `<|im_start|>assistant\n`, and every call thought: 1,027–5,799 characters of `reasoning_content`, 237–1,446
+    completion tokens, 1.3–7.5 s. The default `--reasoning-format` moved the thoughts out of `content`, so every reply
+    still parsed. The cost is the latency.
+  - Qwen3.5-0.8B's template thinks only if `enable_thinking` is true, yet with no key the rendered prompt ends in
+    `<think>\n`. `auto` turned it on. The first call thought for 3,152 tokens (9,201 characters, 17.5 s). The second was
+    still thinking when the screen's 300 s client timeout cut it; in the product, the 2-minute provider timeout would
+    have failed it open.
+- **`reasoning = off` in the model's preset section is the key.** Router mode passes it to the child as
+  `--reasoning off`; the router log shows it in the spawn arguments. The template then renders its pre-closed block
+  (`<think>\n\n</think>\n\n`). No call produced any reasoning, and replies were 10–15 completion tokens for Qwen3 and 6–21
+  for Qwen3.5, at 53–353 ms once the model was loaded. This was verified both ways:
+  - on a router started with a one-section preset (`n-gpu-layers = 99`, `reasoning = off`), with the no-key router as
+    the control;
+  - on a dedicated server with `--reasoning off`.
+- **It is a no-op where there is nothing to turn off.** Gemma 3's rendered prompt is byte-identical with and without the
+  key: sha256 `e6cc1ea4f6bf7d0b0f66a9e1bede2c9e6e1298163eb97e289c60f404a0d79cf3`, the same for the 1B and the 270M. So
+  writing it on every chat section leaves the Run 3 control exactly as Run 3 ran it.
+- **The alternatives:**
+  - `--chat-template-kwargs {"enable_thinking":false}` renders the same prefix on a dedicated server. It was not tried
+    as a preset key, and it is template-specific.
+  - `--reasoning-budget 0` is WRONG for this. The template stays in thinking mode and the budget cuts the thinking
+    short. The model then writes its reasoning into `content` as prose ("好的,我需要处理用户的问题…", "Okay, let's
+    see…"; 246–1,204 tokens), and 4 of 6 replies did not parse.
+- **Product follow-up (not done here; product code unchanged):** `LlamaServerRuntime.WritePresets` should write
+  `reasoning = off` on every chat section. Without it, binding either Qwen to 判断 buys seconds of thinking per verdict,
+  and a chat judge annotates every write through the same client. The Lyntai half of the gap is that the OpenAI-shaped
+  payload ignores `TextReasoning.Suppress`. By dev-conventions' "recorded on both sides" rule, a preset workaround
+  needs a Lyntai task naming it; this session is read-only on Lyntai and filed none.
+- **What the bench does:** its `presetSection` now adds `reasoning = off` to every CHAT section. Run 5 therefore
+  measures the two Qwens as the product WOULD launch them after that follow-up, not as it launches them today.
+
+**Verdict screen**, with every model launched as the bench launches it: router, its preset section, and
+`reasoning = off`. Gemma's no-key calls are pooled in, since the rendered prompt is identical. Six of Qwen3's twelve ran
+on a dedicated server with `--reasoning off`, which renders the same 1,632-token prompt.
+
+| model | calls | parsed | A (answer = 21) | B (answer = 1) | completion tokens | ms |
+|---|---|---|---|---|---|---|
+| gemma-3-1b (control) | 12 | 12 | `[4,7]` ×6 | `[4,7]` ×6 | 8–13 | 71–599 |
+| gemma-3-270m | 12 | 5 | `[1,4,7]` ×2, 4 unparsed | `[1,4,7]` ×3, 3 unparsed | 34–31,073 | 195–153,940 |
+| Qwen3-0.6B | 12 | 12 | answer first 6/6 (`[21]` ×4, `[21,23,24]` ×2) | `[1,4,7]` ×6 | 10–15 | 53–5,846 (first call = load) |
+| Qwen3.5-0.8B | 6 | 5 | answer first 3/3, beside 4–5 others each | answer in 0 of 2; 1 unparsed | 6–21 | 114–353 |
+
+- **Every candidate produced at least one reply the verifier accepts, so none is dropped.** "Usable" here means what
+  the verifier's parser accepts, which is the product's own bar.
+- **The small Gemmas answer the prompt, not the question.**
+  - gemma-3-1b replied `[4,7]` on all 12 calls, whatever it was asked. That is a direct view of Run 3's loss
+    mechanism: partition promotes whatever the judge endorses.
+  - Every verdict gemma-3-270m managed was the prompt's own example, `[1,4,7]`. Its unparsed replies were lists of note
+    texts instead of numbers, extra fields that broke the JSON, and two runaways to its full 32,768-token context
+    (31,072 and 31,073 tokens; 154 s and 137 s). The product's default 2-minute provider timeout would fail such a call
+    open at 120 s.
+- **Qwen3 (thinking off) put the answer first on every A call, and copied the example on every B call.** With thinking
+  ON it endorsed the answer on 11 of 12 calls, including every B. That hints thinking helps the verdict, at 10–30× the
+  latency. It is not measured here.
+
+**Memory, checked before the design** (`devtools/_lc5-screen/fit.mjs`: one router with the bench's exact five-section
+preset and `--models-max 5`, warmed in arm order, then asked fresh prompts):
+
+- All five load and stay resident, with no eviction and no error. The chat preset writes no `ctx-size`, so every child
+  takes its model's training context: 4,096 for BGE (its preset), 32,768 for both Gemmas, 40,960 for Qwen3 and 262,144
+  for Qwen3.5. By nvidia-smi, the Qwen3 child alone is ~5.1 GB, nearly all of it KV cache. This is a product property
+  worth knowing, not a bench one.
+- With all five resident the RTX 4080 Laptop GPU (12,282 MiB, ~3.5 GB of it held by other processes including the
+  unrelated resident llama-server) had 1.3 GB free.
+- Prompt processing for the two Qwens was 4–6× slower than alone: Qwen3 3,054–3,155 against 17,157 tokens/s, Qwen3.5
+  1,946–2,096 against 7,915–8,273. The product holds at most `MaxResidentModels` = 2, so **their serial latencies in this run
+  are pessimistic**, and the screen's single-model latencies are quoted beside them. Accuracy does not depend on it,
+  unless a call reaches the 2-minute timeout.
+
+### Arms, command and configuration
+
+```
+node devtools/dev.mjs judge-bench --reuse-seed --arms=formula \
+  --chat-judges=gemma-3-1b-it-Q4_K_M,Qwen3-0.6B-Q8_0,gemma-3-270m-it-Q8_0,Qwen3.5-0.8B-Q8_0 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M \
+  --resources=devtools/_rr-res --port-base=5620 --llama-port=5640 > devtools/_judge-bench-lc5.txt 2>&1
+```
+
+**Eleven arms in ONE run.** `formula`, then `rr:` and `rrf:` for BGE, then `lc:` (content alone, the shipped input) and
+`lcb:` (`topic — content`) for each of the four chat models. The `rrf:` and `lcb:` arms are there because the bench adds
+them automatically with `--rerankers` and `--chat-judges`, not because the question needs them.
+
+- No Claude arm, so no quota is spent.
+- The seed is Run 1's, reused and not reseeded. If the bench asks for a reseed, the run stops there.
+- The ports keep off every tcp range Windows had reserved that day (5458–5557, 5768–5967), off the e2e fleet's ports and
+  off the band the shifted e2e runner uses (5658–5757).
+- **No smoke run.** The bench's startup checks run before any query, so a wiring failure costs no more in the full run.
+  Low coverage is a candidate's result here, not a reason to stop, unlike Run 3, whose question needed the judge to
+  judge.
+
+**The bench changes for this run** (committed with this design; `node --check` passes). The first applies to the run
+itself; the other two are analysis only.
+
+- **`reasoning = off`** on every chat section of the shared router's preset (see the screen).
+- **Two paired blocks**: each chat judge against each reranker under partition, and every chat judge against every
+  other shown the same input. The first listed chat model, the control, is on the right of each of its pairs.
+- **A latency block that counts EVERY graph recall of a chat judge, verdict or not.** The existing serial median leaves
+  verdict-less recalls out, which is right for a fast fail-open. It is wrong for a runaway, which is slow AND
+  verdict-less, and would vanish from the median exactly when it costs most.
+
+The two analysis blocks print only for a run with a chat judge beside another local model. Runs 2, 3 and 4 were
+re-analysed (`--report-only`) before and after the change, and the output is identical line for line apart from the
+line naming the re-analysis file.
+
+**Configuration of every judge arm**, stated because a judge's effect does not transfer without it:
+
+- **Base:** this run's `formula` (79 / 125 in Runs 1–4), recalling over the seed's CLI-written subject tags.
+- **Embedder: none** (语义 unbound), so candidates come from the graph and FTS trigram, ≤ 60 per recall.
+- **Combination: partition** (the product default).
+- **Chat judges** are shown content alone (`lc:`) or `topic — content` (`lcb:`). They sample at llama-server's default
+  temperature, because the verifier names none, and each child serves 4 slots at its model's training context.
+- **The reranker** reads through `RerankInputCap` at 1,000 characters with `EndorseCount` 8, as in Run 4.
+- **A chat judge also ANNOTATES every fact write**, but a reused seed writes nothing, so this run measures recall only.
+
+**Measured** (the bench's own tables, as in Runs 3–4):
+
+- per set and on `all`: top-1, found@8, MRR, `judged`/`graph` (verdict coverage) and `endorsed`;
+- the serial median (12 queries, verdict-carrying recalls only), the new every-graph-recall latency block, and the
+  parallel mean;
+- llama.cpp chat calls ok/failed per pass, and claude-cli calls per arm;
+- paired McNemar exact p and the Agresti–Min 95% interval for: every arm against `formula`, `lc` against `lcb` per
+  model, every chat judge against `rr:bge`, and every chat judge against every other on the same input.
+
+### Decision rule
+
+A candidate is **viable to offer for 判断** when its `lc:` arm (content alone, the input the product ships) is **NOT
+significantly worse than `formula`** on top-1 AND on found@8.
+
+- "Significantly worse" means: on `all`, paired within this run, the exact McNemar p < 0.05 AND c − b < 0, with
+  b = `formula` hit & candidate miss. The bench's per-set veto does not rescue a candidate.
+- **Verdict coverage (`judged`/`graph` on `all`) is stated beside every outcome.**
+
+For a viable candidate, each metric against `formula` is recorded as exactly one of:
+
+- **equivalent**: the 95% interval on `all` lies inside ±3pp;
+- **no significant difference**: neither a finding nor equivalent, with the interval's lower bound quoted as the loss the
+  run cannot rule out;
+- **significantly better**.
+
+**Coverage decides how a viable result reads** (dev-conventions' measuring rule 1: can the instrument express the
+effect?). A recall with no verdict IS the formula's page, so an arm that abstains is partly `formula` under another name.
+
+- Below 50% coverage on `all`, a viable result is recorded as **"viable, but mostly inert"**, and never as evidence
+  that the model judges well.
+- Whatever the coverage, one secondary analysis is pre-registered, outside the rule, as the Run 3 post-hoc split was
+  not: top-1 and found@8 against `formula`, paired, on the recalls where the candidate gave a verdict.
+
+**Reported beside the rule, outside it:**
+
+- **each candidate against BGE** (`lc:<m>` against `rr:bge`, both metrics). BGE is the local judge the product
+  recommends;
+- **each candidate against the control** (`lc` against `lc:gemma-3-1b`, and `lcb` against `lcb`): is the newer model
+  better than Run 3's?
+- **the `lcb:` arms under the same rule.** If `lcb` is viable where `lc` is not, that is recorded for the owner as an
+  input-design finding (the owner's standing direction: fit the input to the model), not as a decision;
+- **`lc` against `lcb` per model**, Run 3's question;
+- **latency**: serial median, every-graph-recall block, llama.cpp calls, and the screen's single-model figures;
+- **exact bytes**.
+
+**Multiplicity.** Three candidates × two metrics, each at 0.05 with no correction. That errs towards calling a candidate
+worse, the conservative direction for a rule whose output is "viable to offer".
+
+**Guards**, checked before any candidate is read:
+
+- **The formula digest** must equal **`f661eb6a056e`**, as in Runs 1–4. If it does not, the within-run pairing stands,
+  but no number here may be set beside another run's.
+- **Every local arm's startup:** 判断 reads back `llama-cpp · <its id>`, with no startup warning and no claude-cli call.
+  The bench enforces the first two and warns on the third.
+- **Thinking really was off**, checked three ways:
+  - the router's `presets.ini` carries `reasoning = off` in all four chat sections;
+  - the router log shows `--reasoning off` in each chat child's spawn arguments;
+  - for each Qwen child, the median completion length over the run's tasks in the router log is at most 50 tokens.
+    With thinking on, the screen's shortest reply was 237.
+- **Kind and residency.** None of the three new ids contains "rerank" or "embed", so `ResourceProvisioner.GgufKind`
+  types all three as chat; the readback confirms the binding. The router log must show each of the five children
+  spawned once and never unloaded.
+- **No judge A/A twin runs.** As context outside the decision, the control is paired across runs with Run 3's
+  `lc:gemma-3-1b-it-Q4_K_M` by re-analysis (`--baseline=devtools/_judge-bench/results-2026-09-24T015928.030Z.json:lc:gemma-3-1b-it-Q4_K_M`),
+  provided the digests match. It is the same model, input and seed; the only change is a preset key shown above not to
+  change the rendered prompt. That pair is therefore the nearest thing to a chat-judge A/A this data has. BGE is paired
+  with Run 4's BGE the same way.
