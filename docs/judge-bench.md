@@ -2720,3 +2720,130 @@ The design's own follow-up still stands: write `reasoning = off` into every chat
 holds the router log, `presets.ini`, the row stream, the bench's own output, the recovered re-analysis, both cross-run
 re-analyses, the post-hoc fallback check, and every arm's logs and `settings.json`. The screen and analysis scripts
 sit in `devtools/_lc5-screen/`, also untracked.
+
+## Run 5b — the three candidates, one chat model per run, as the product now launches them (design)
+
+An amendment to Run 5, written and committed BEFORE any of its runs; the results section that follows names this
+commit.
+
+**Why an amendment.** Run 5 stopped with two of its three candidates incomplete. Several chat children shared one GPU,
+runaway replies were uncapped, llama-server kept decoding abandoned requests, and every 2-minute timeout degraded its
+recall to FTS. Round 2's Task P then changed the product in three commits (`bbc9b10`, `d644e86`, `28ea1d4`):
+
+- a chat section of the generated preset carries `reasoning = off` and `n-predict = 512`
+  (`LlamaServerRuntime.ChatMaxTokens`); rerankers and embedders get neither;
+- verification has its own deadline, 60 s by default (`VerificationDeadlinePolicy`, half the tool call's 120 s). A hung
+  judge now yields NoOpinion and the engine's own page stands, where it used to fall back to FTS;
+- reranker input under a DECLARED window is NFKC-normalised. BGE's row declares no window, so BGE is unaffected.
+
+**The question**, unchanged from Run 5: is any newer, smaller multilingual chat model NOT significantly worse than
+having no judge, bound to 判断 the way the product binds a chat GGUF, now as the product launches it (thinking off,
+capped, with the deadline)?
+
+**The design: one chat model per run, three runs, one after another.** With one chat child, a runaway can no longer
+starve another arm's judge. The router holds exactly two models, the chat model and BGE, which is also the most the
+product ever holds (`MaxResidentModels` = 2). Qwen3.5-0.8B, complete in Run 5, is measured again so that all three
+candidates are read in one configuration. The gemma-3-1b control is not re-run. Each run's within-run reference is BGE,
+and the control's Run 3 and Run 5 figures are context only.
+
+```
+node devtools/dev.mjs judge-bench --reuse-seed --arms=formula --chat-judges=Qwen3-0.6B-Q8_0 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M --resources=devtools/_rr-res --port-base=5600 --llama-port=5610 \
+  > devtools/_judge-bench-lc5b-qwen3.txt 2>&1
+node devtools/dev.mjs judge-bench --reuse-seed --arms=formula --chat-judges=gemma-3-270m-it-Q8_0 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M --resources=devtools/_rr-res --port-base=5620 --llama-port=5630 \
+  > devtools/_judge-bench-lc5b-gemma270m.txt 2>&1
+node devtools/dev.mjs judge-bench --reuse-seed --arms=formula --chat-judges=Qwen3.5-0.8B-Q8_0 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M --resources=devtools/_rr-res --port-base=5640 --llama-port=5650 \
+  > devtools/_judge-bench-lc5b-qwen35.txt 2>&1
+```
+
+They run in that order, driven by a scratch script (`devtools/_lc5b/`). After each run, the script copies that run's
+router log, `presets.ini` and arm logs aside, since the next run overwrites them, and checks the guards below.
+
+- **The ports** sit in 5600–5656, off every tcp range Windows had reserved that day (5458–5557, 5768–5967), off the
+  e2e fleet's ports and off the shifted runner's band (5658–5757).
+- **Five arms per run**: `formula`, `rr:bge-reranker-v2-m3-Q5_K_M` (the reference), `rrf:` BGE, `lc:<model>` and
+  `lcb:<model>`. `rrf:` and `lcb:` are there because the bench adds them automatically with `--rerankers` and
+  `--chat-judges`.
+- **No Claude arm, and the seed is reused**, as in Run 5. If the bench asks for a reseed, the sequence stops.
+- **The bench**, as committed in `0b588af`:
+  - it writes the chat section exactly as the product now does (`n-gpu-layers = 99`, `reasoning = off`,
+    `n-predict = 512`);
+  - it pins the deadline test knob (`GATHERLIGHT_JUDGE_DEADLINE_SECONDS`) blank, and startup refuses an arm that
+    announces it, so every arm runs the product's 60 s deadline;
+  - Runs 2–5 re-analyse identically under it, apart from the line naming the re-analysis file.
+
+**Configuration of every judge arm**, as in Run 5 except where marked:
+
+- **Base:** each run's own `formula`, recalling over the seed's CLI-written subject tags.
+- **Embedder: none**, so candidates come from the graph and FTS trigram, ≤ 60 per recall.
+- **Combination: partition.**
+- **Chat judge:**
+  - shown content alone (`lc:`) or `topic — content` (`lcb:`);
+  - sampled at llama-server's default temperature;
+  - its child serves 4 slots at the model's training context;
+  - **new:** thinking off and at most 512 generated tokens per request, from the preset;
+  - **new:** a 60 s verification deadline.
+- **Reranker:** `RerankInputCap` at 1,000 characters, `EndorseCount` 8, as in Runs 4–5.
+
+**The serial latency pass is part of every run.** The bench runs it on its own after the accuracy pass: one arm at a
+time over the first 12 queries in the shared order (`--latency-sample`, default 12). A judge arm's serial median counts
+only recalls that carried a verdict, and the every-graph-recall block counts all of them. It never ran in Run 5, which
+was stopped first. **A run counts as complete only when every arm has 240 accuracy rows AND 12 latency rows.**
+
+**Measured**, as in Run 5:
+
+- per set and on `all`: top-1, found@8, MRR, `judged`/`graph` and `endorsed`;
+- the serial median, the every-graph-recall latency block, and llama.cpp and claude-cli calls per pass;
+- paired McNemar exact p and the Agresti–Min 95% interval for every arm against `formula`, `lc` against `lcb`, and each
+  chat judge against `rr:` BGE.
+
+### Decision rule (unchanged from Run 5)
+
+A candidate is **viable to offer for 判断** when its `lc:` arm is **NOT significantly worse than `formula`** on top-1 AND
+on found@8.
+
+- "Significantly worse" means: on `all`, paired within the candidate's own run, the exact McNemar p < 0.05 AND
+  c − b < 0, with b = `formula` hit & candidate miss. The per-set veto does not rescue a candidate.
+- **Coverage** (`judged`/`graph` on `all`) is stated beside every outcome. Below 50%, a viable result is recorded as
+  "viable, but mostly inert".
+
+For a viable candidate, each metric is recorded as exactly one of: **equivalent** (the 95% interval inside ±3pp), **no
+significant difference** (quoting the interval's lower bound as the loss the run cannot rule out), or **significantly
+better**.
+
+**Reported beside the rule, outside it:**
+
+- each candidate against BGE in its own run, both metrics;
+- the `lcb:` arm under the same rule, recorded as an input-design finding if it passes where `lc:` does not;
+- `lc` against `lcb`;
+- the clean serial latency;
+- the judged-only secondary analysis, pre-registered exactly as in Run 5;
+- exact bytes, as in Run 5's design.
+
+**Multiplicity:** three candidates × two metrics, each at 0.05 with no correction, the conservative direction.
+
+**A candidate whose run did not complete gets no outcome.** A partial series is not re-read, as in Run 5.
+
+**Guards**, checked after each run by `devtools/_lc5b/guards5b.mjs` (scratch). That checker was confirmed to FAIL on
+Run 5's evidence: no `--n-predict` in the chat spawns, 21 chat tasks over 512 tokens, and 11 FTS fallbacks in
+`lc:Qwen3`. **A failed guard stops the sequence after that run, and it is reported, not worked around.**
+
+1. **The formula digest** is **`f661eb6a056e`** in every run.
+2. **Startup.** The bench's own checks pass: 判断 reads back `llama-cpp · <id>`, with no startup warning, no
+   claude-cli call and no knob leak, and the deadline knob is not announced.
+3. **The chat child's spawn arguments** carry `--reasoning off` and `--n-predict 512`. Each of the two models spawns
+   exactly once, and none is unloaded, evicted or out of memory.
+4. **The cap held:** no chat task generated more than 512 tokens. A task that generated exactly 512 is a runaway that
+   was capped (`finish_reason: length`). It is counted and reported, and it is not a failure.
+5. **No FTS fallback.** No arm's log may carry `fact index: recall failed; falling back to FTS`. With the deadline, a
+   hung judge is NoOpinion (`memory verification gave no verdict within 60 s`); those lines are counted and reported,
+   and they are not a failure. An FTS line means the deadline did not hold. It is a finding, and it fails the guard.
+6. **No claude-cli call** by any arm over the whole run.
+
+**Readings across runs are descriptive only** (measuring rule 2). Each run starts from the same seed, but a run's
+recalls reinforce what they return, so only the within-run pairing is evidence. That covers each candidate against the
+other two, Run 5b against Run 5, and each candidate against Run 3's or Run 5's control. The three `formula` arms must
+agree by digest. The three BGE arms are reported side by side as an instrument check: the same reranker, rerun on the
+same seed.
