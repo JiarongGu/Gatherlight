@@ -96,6 +96,93 @@ public sealed class SwitchableVerificationPolicy : IMemoryVerificationPolicy
             : Task.FromResult(MemoryVerification.NoOpinion);
 }
 
+/// <summary>Gives a recall's verification a deadline of its OWN, inside the tool call's — so a judge that hangs costs
+/// its verdict, never the page.
+///
+/// <para><b>What happened without it</b> (docs/judge-bench.md Run 5, found in the arm logs): a local chat judge's
+/// verification hung, and 120 s later <c>FactIndex</c> logged "recall failed; falling back to FTS" with a
+/// <c>TaskCanceledException</c> raised through <c>LlmMemoryVerificationPolicy.VerifyAsync</c> →
+/// <c>GraphMemoryEngine.VerifyAsync</c> → <c>RecallAsync</c>. The designed outcome of a judge failure is NoOpinion —
+/// the engine's own page stands — and Lyntai 3.2.0 implements it: every layer of that chain fails open on its own
+/// timeout and rethrows ONLY when the CALLER's token is cancelled (<c>HttpChatEngine</c>, <c>TextRouter</c>,
+/// <c>LlmMemoryVerificationPolicy</c> and <c>GraphMemoryEngine.VerifyAsync</c>, each
+/// <c>catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }</c>). The caller's token WAS
+/// cancelled: <c>ToolRegistry</c> links every tool call to a 120 s deadline (<c>ToolRegistry.ToolTimeout</c>), and
+/// Lyntai's provider timeout is also 120 s (<c>LyntaiOptions.ProviderTimeout</c>, the 2-minute default) but starts
+/// LATER — at the HTTP send, after the gather — so on a hung judge the tool's deadline always fires first. The logged
+/// message is the token's ("The operation was canceled."), not <c>HttpClient.Timeout</c>'s, and only a cancelled
+/// caller token could have passed those four rethrow filters. To the engine that is a caller cancellation, correctly
+/// propagated; <c>FactIndex.RankAsync</c> then catches everything and falls back to FTS. So the cause is APP-side —
+/// two equal clocks, the outer one started first — and this is its fix; nothing in Lyntai is wrong here.</para>
+///
+/// <para><b>The fix is a shorter clock on the inside.</b> This policy links the caller's token to a deadline of
+/// <see cref="Default"/> — HALF the tool's, so the gather, the reinforcement and the FTS top-up keep the other half —
+/// and when that deadline ends the verification while the caller's token is still live, the answer is
+/// <see cref="MemoryVerification.NoOpinion"/>: the engine's page stands, exactly as for any other judge failure. A
+/// real caller cancellation (the request abandoned, the tool's own deadline) still propagates, because only an
+/// exception with the caller's token un-cancelled is caught. It wraps EVERY verifier — the Claude CLI judge, a chat
+/// GGUF, a reranker — because the clock problem is the tool's, not any one judge's. 60 s is ~3.5× the slowest
+/// measured Claude CLI judge (9–17 s per recall on the household's own facts; serial medians 8.7–11.7 s in Run 1), and
+/// far beyond a local chat judge with thinking off (0.1–0.3 s per verdict on the real binary), whose runaway the
+/// generation cap bounds to seconds (<c>LlamaServerRuntime.ChatMaxTokens</c>).</para>
+///
+/// <para><b>Annotation is deliberately NOT given one.</b> On the write path the same tool deadline fails the graph
+/// index (<c>FactIndex.IndexAsync</c> returns null, the row's <c>graph_ref</c> stays empty) and the startup back-fill
+/// indexes the fact again later — annotation included. A deadline here would instead index it WITHOUT subjects,
+/// permanently, since an indexed row is never revisited. Read from the code, not driven by a suite.</para>
+///
+/// <para><b>A test knob, and only a shortening one</b>: <c>GATHERLIGHT_JUDGE_DEADLINE_SECONDS</c>, read once at
+/// startup and clamped to [1 s, <see cref="Default"/>], so <c>e2e-p52</c> can hang a judge and see the page stand in
+/// seconds rather than a minute. It can never lengthen the deadline past the point where the tool's would win
+/// again.</para></summary>
+public sealed class VerificationDeadlinePolicy : IMemoryVerificationPolicy
+{
+    /// <summary>Half the tool call's deadline — see the class comment.</summary>
+    public static readonly TimeSpan Default = Capabilities.Tools.Services.ToolRegistry.ToolTimeout / 2;
+
+    /// <summary>The deadline in effect: <see cref="Default"/>, or the test knob's shorter value.</summary>
+    public static readonly TimeSpan Configured = FromKnob(Environment.GetEnvironmentVariable(KnobName));
+
+    /// <summary>The test knob's name — announced at startup when set, like the measurement knobs.</summary>
+    public const string KnobName = "GATHERLIGHT_JUDGE_DEADLINE_SECONDS";
+
+    private readonly IMemoryVerificationPolicy _inner;
+    private readonly TimeSpan _deadline;
+    private readonly ILogger? _log;
+
+    public VerificationDeadlinePolicy(IMemoryVerificationPolicy inner, TimeSpan deadline, ILogger? log = null)
+    {
+        _inner = inner;
+        _deadline = deadline;
+        _log = log;
+    }
+
+    private static TimeSpan FromKnob(string? raw) =>
+        double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture,
+            out var seconds) && seconds > 0
+            ? TimeSpan.FromSeconds(Math.Clamp(seconds, 1, Default.TotalSeconds))
+            : Default;
+
+    public async Task<MemoryVerification> VerifyAsync(MemoryVerificationRequest request, CancellationToken ct = default)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(_deadline);
+        try
+        {
+            return await _inner.VerifyAsync(request, deadline.Token).ConfigureAwait(false);
+        }
+        // OUR deadline, the caller's token still live: a judge that did not answer in time. Anything else — the
+        // caller's own cancellation — propagates, as Lyntai's seams require.
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _log?.LogWarning(
+                "memory verification gave no verdict within {Seconds:0.#} s; leaving the engine's own page in place",
+                _deadline.TotalSeconds);
+            return MemoryVerification.NoOpinion;
+        }
+    }
+}
+
 /// <summary>Shows an LLM judge each candidate's CONTENT, not only its headline.
 ///
 /// <para><b>Why.</b> Lyntai's <see cref="LlmMemoryVerificationPolicy"/> renders each candidate as

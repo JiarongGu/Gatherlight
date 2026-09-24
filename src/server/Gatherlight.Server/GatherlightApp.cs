@@ -324,9 +324,15 @@ public static class GatherlightApp
                             new Lyntai.Memory.Annotation.LlmAnnotationOptions { ClientName = judgeWiring.AnnotationClient },
                             sp.GetService<ILogger<Lyntai.Memory.Annotation.LlmMemoryAnnotationPolicy>>()),
                         sp.GetRequiredService<IAppConfigService>()));
+                // The verifier runs on a deadline of its own, INSIDE the tool call's: when the tool's fired first, a
+                // hung judge cancelled the recall itself and the page fell back to FTS (VerificationDeadlinePolicy).
                 b.Services.AddSingleton<Lyntai.Memory.Verification.IMemoryVerificationPolicy>(sp =>
                     new Platform.Agent.Llm.Services.SwitchableVerificationPolicy(
-                        judgeWiring.Verifier(sp), sp.GetRequiredService<IAppConfigService>()));
+                        new Platform.Agent.Llm.Services.VerificationDeadlinePolicy(
+                            judgeWiring.Verifier(sp),
+                            Platform.Agent.Llm.Services.VerificationDeadlinePolicy.Configured,
+                            sp.GetService<ILogger<Platform.Agent.Llm.Services.VerificationDeadlinePolicy>>()),
+                        sp.GetRequiredService<IAppConfigService>()));
                 // Still called: their TryAdd now stands down, but calling them keeps any future
                 // side-effect of those registrations rather than silently missing it.
                 b.AddMemoryAnnotation().AddMemoryVerification();
@@ -704,6 +710,13 @@ public static class GatherlightApp
             app.Logger.LogWarning(
                 "Measurement knob set: judge input = {Mode} (GATHERLIGHT_JUDGE_INPUT={Raw}) — a benchmark setting, not a household one",
                 Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode, judgeInputRaw);
+        // Same reason, for the test knob that SHORTENS the verification deadline (it cannot lengthen it).
+        var deadlineRaw = Environment.GetEnvironmentVariable(Platform.Agent.Llm.Services.VerificationDeadlinePolicy.KnobName);
+        if (!string.IsNullOrWhiteSpace(deadlineRaw))
+            app.Logger.LogWarning(
+                "Test knob set: judge verification deadline = {Seconds:0.#} s ({Knob}={Raw}) — a test setting, not a household one",
+                Platform.Agent.Llm.Services.VerificationDeadlinePolicy.Configured.TotalSeconds,
+                Platform.Agent.Llm.Services.VerificationDeadlinePolicy.KnobName, deadlineRaw);
 
         // Run the versioned startup migration in the background once we're listening, so /manage can
         // render the progress overlay instead of the app appearing to hang. The gate keeps /api closed

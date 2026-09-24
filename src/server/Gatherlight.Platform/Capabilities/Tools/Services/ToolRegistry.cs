@@ -25,7 +25,10 @@ public interface IToolRegistry
 
 public sealed class ToolRegistry : IToolRegistry
 {
-    private static readonly TimeSpan ToolTimeout = TimeSpan.FromSeconds(120);
+    /// <summary>Every tool call's deadline, linked to the caller's token. Internal because a model-backed seam INSIDE a
+    /// tool call must finish well before it — to that seam the tool's deadline is a CALLER cancellation, which Lyntai
+    /// propagates instead of failing open; see <c>VerificationDeadlinePolicy</c>, which takes half of it.</summary>
+    internal static readonly TimeSpan ToolTimeout = TimeSpan.FromSeconds(120);
     private static readonly string[] AllSurfaces = { "http", "mcp" };
 
     private readonly Dictionary<string, IGatherlightTool> _builtins;

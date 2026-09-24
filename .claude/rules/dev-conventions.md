@@ -1080,6 +1080,19 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (`MemorySources.CliTaggingNow`; a panel must not await a process) and say whether tagging is happening, and
   nothing when nobody has probed yet (`e2e-p52` case 7, signed out against signed in; the unknown state is not
   drivable — the startup CLI step always probes).
+- **A model call INSIDE a tool call needs a clock that ends first — two equal clocks lose the page.** Lyntai's seams
+  fail open on their OWN timeout and propagate only the caller's cancellation (`catch (OperationCanceledException)
+  when (ct.IsCancellationRequested) { throw; }` at every layer), which is right. But `ToolRegistry` links every tool
+  call to 120 s and Lyntai's provider timeout is also 120 s, started LATER (at the HTTP send), so a hung judge was
+  always ended by the TOOL's deadline: a caller cancellation to the engine, propagated, and `FactIndex.RankAsync`
+  caught it and served the page from FTS (docs/judge-bench.md Run 5's arm logs: "recall failed; falling back to
+  FTS", the token's "The operation was canceled." rather than `HttpClient.Timeout`'s message, 120 s after the last
+  answer). `VerificationDeadlinePolicy` gives every verifier half the tool's deadline and turns its own expiry —
+  the caller's token still live — into NoOpinion, so the engine's page stands; a real caller cancellation still
+  propagates. Annotation deliberately has none: there the tool's deadline leaves `graph_ref` empty and the startup
+  back-fill re-indexes the fact WITH subjects, where a deadline would index it permanently without them. The test
+  knob `GATHERLIGHT_JUDGE_DEADLINE_SECONDS` can only shorten it. `e2e-p52` case 3b hangs the chat judge and asserts
+  a graph-ranked page in seconds; with the policy removed it gets `ranked: fts` after 120 s.
 - **A recall layer's BACKEND is a SOURCE, and a source serves a layer by existing.** One interface per layer
   (`Agent/Llm/Sources`: `IMemoryJudgeSource`, `IMemorySemanticSource`, sharing `IMemorySource`), one class per
   backend, a **static catalog** (`MemorySources`) — never a predicate over capability strings. That earlier

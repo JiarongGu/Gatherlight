@@ -14,6 +14,9 @@
 //   3. A RECALL embeds the QUERY. Only the semantic seed channel does that, and since 3.2 it is a registered
 //      seed source rather than a graph option — so a missing registration leaves every vector bought on
 //      write and read by no recall, which no API response shows.
+//      3b: a judge that HANGS costs its verdict, never the page: the verification's own deadline ends it inside
+//      the tool call's, and the engine's page stands — where the tool's deadline used to cancel the recall itself
+//      and drop it to FTS.
 //   4. When 判断 FALLS BACK to the CLI (its runtime gone), the CLI is asked for the CLI's model — not for
 //      the GGUF named by the saved judgeModel or by the live llm.model.memory the binding wrote. Read from
 //      the stub's own argv log, because a CLI asked for an unknown model is otherwise indistinguishable
@@ -194,6 +197,9 @@ let refuseEmbeddings = false;
 // Case 8a: a router that ACCEPTS and never answers /v1/models — counted, so the case can prove it was asked.
 let hangModels = false;
 let modelsHung = 0;
+// Case 3b: a chat judge that never answers — each held response is kept, and released when the case ends.
+let hangChat = false;
+const heldChats = [];
 const served = new Set([JUDGE_MODEL, EMBED_MODEL, RERANK_MODEL, LEXICAL_RERANK, BACKWARDS_RERANK, BROKEN_RERANK, SHORT_RERANK,
   WINDOWED_RERANK, UNWINDOWED_RERANK]);
 const fake = http.createServer((req, res) => {
@@ -251,6 +257,7 @@ const fake = http.createServer((req, res) => {
       send({ model: json.model, results });
       return;
     }
+    if (hangChat) { heldChats.push(res); return; }   // case 3b: accepted, never answered
     // Chat: an answer no policy can parse. Both are fail-open, so this proves the call was MADE without
     // depending on what the judge concluded.
     send({
@@ -275,7 +282,9 @@ let goneOutServer = null;
 let windowedServer = null;
 let unwindowedServer = null;
 try {
-  server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
+  // The verification deadline shortened to 2 s (case 3b) — the knob can only shorten it, and every other judge call
+  // on this server is answered by the fake at once.
+  server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '2' } });
   const base = `http://127.0.0.1:${PORT}`;
   await waitHealthy(base);
   const c = makeClient(base);
@@ -326,6 +335,38 @@ try {
     .filter((h) => h.path === '/v1/embeddings' && h.body.includes('zzqueryprobe'));
   ok('THE POINT: a recall embeds its query — the semantic seed channel is registered and reads the vectors',
     queryEmbeds.length > 0, JSON.stringify(hits.slice(beforeRecall).map((h) => `${h.path} ${h.model}`)));
+
+  // --- 3b. a judge that HANGS costs its verdict, never the page -------------------------------------------
+  // docs/judge-bench.md Run 5: a chat judge's verification hung, and at 120 s the TOOL call's deadline
+  // (ToolRegistry) cancelled the recall itself. To Lyntai that is the CALLER cancelling — every layer rethrows it —
+  // so FactIndex caught it and the page came back from FTS instead of from the engine. The verifier now has a
+  // deadline of its own INSIDE the tool's (VerificationDeadlinePolicy: half of it, 2 s on this server through the
+  // test knob); past it the verdict is NoOpinion and the engine's own page stands, as for any other judge failure.
+  hangChat = true;
+  const beforeHang = hits.length;
+  const hangStarted = Date.now();
+  const hung = await c.call('recall_facts', { query: 'zzroutefact morning walk bakery', limit: 5 });
+  const hungMs = Date.now() - hangStarted;
+  hangChat = false;
+  for (const r of heldChats.splice(0)) { try { if (!r.destroyed) r.destroy(); } catch { /* already gone */ } }
+  const heldVerification = hits.slice(beforeHang)
+    .filter((h) => h.path === '/v1/chat/completions' && h.model === JUDGE_MODEL && h.body.includes('zzroutefact'));
+  ok('(non-vacuity) the recall\'s verification reached the chat judge — and was never answered',
+    heldVerification.length > 0, JSON.stringify(hits.slice(beforeHang).map((h) => `${h.path} ${h.model}`)));
+  ok('THE POINT: a judge that never answers leaves the ENGINE\'s page — ranked by the graph, the fact on it, no verdict',
+    hung.status === 200 && hung.result?.ranked === 'graph' && hung.result?.answered === undefined
+      && (hung.result?.facts ?? []).some((f) => JSON.stringify(f).includes('zzroutefact')),
+    `${hung.status} ${JSON.stringify(hung.result).slice(0, 300)}`);
+  ok('…and it answers at the verification deadline, not at the tool call\'s 120 s', hungMs < 30000, `${hungMs} ms`);
+  const logText = () => {
+    const dir = path.join(dataDir, 'state', 'logs');
+    return fs.existsSync(dir) ? fs.readdirSync(dir).map((n) => fs.readFileSync(path.join(dir, n), 'utf8')).join('\n') : '';
+  };
+  ok('…and the log says the judge gave no verdict in time, and that the deadline was the test knob\'s',
+    /gave no verdict within 2 s/.test(logText()) && /Test knob set: judge verification deadline = 2 s/.test(logText()),
+    logText().split('\n').filter((l) => /verdict within|deadline|falling back to FTS/.test(l)).slice(-4).join(' | '));
+  ok('…and nothing fell back to FTS', !/recall failed; falling back to FTS/.test(logText()),
+    logText().split('\n').filter((l) => /falling back to FTS/.test(l)).slice(-2).join(' | '));
 
   // --- 4. a FALLBACK to the CLI asks the CLI for the CLI's model -----------------------------------
   // The household story: a chat GGUF is bound, then the runtime goes (deleted, a failed update). 判断
