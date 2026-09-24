@@ -394,8 +394,10 @@ still dying and accepted too slowly for the release check's 120 ms connect to se
 answer. By then the restart had given up with nothing of ours running, and the 20 s probe cache kept repeating it. It is
 now `RestartBlocked`: 「应用为了载入 <model> 停下了 llama.cpp,但没能启动新的:端口 <port> 被另一个进程占着:它接受连接,
 却没有像 llama.cpp 那样回答(可能是没有正常退出的 llama-server.exe,也可能是别的程序)。应用不会在它旁边再启动一个,所以
-llama.cpp 现在没有在运行 —— 在任务管理器里结束它,然后再试一次,或者重启服务。」 plus the reselect clause, because
-the bind saved nothing. The description of the holder is shared with the stranger sentence (`HeldBy`). The not-ours
+llama.cpp 现在没有在运行 —— 稍等片刻再试一次;仍然这样的话,在任务管理器里结束它后再试,或者重启电脑。这次的选择没有保存,
+端口空出来后在「记忆检索」里再选一次这个模型。」 The first version ended 「…然后再试一次,或者重启服务」, and review caught
+it: a service restart ends neither a stranger nor a router stuck in teardown, so waiting comes first and a reboot is the
+remedy that always works. The description of the holder is shared with the stranger sentence (`HeldBy`). The not-ours
 clause is not reused, because "not started by the app this time" is false when the holder is our own old router.
 **(b)** A fresh start set no flag, and `_started` is set only once the new router answers. So a panel probe during
 a start that found the port held by our own starting router blamed "another process". `SpawnAsync` now sets

@@ -445,13 +445,16 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <summary>A restart's FINAL answer when, after our router stopped and its port was released, the re-probe found
     /// the port HELD. The probe's own sentence cannot be passed on: it ran while <see cref="_restarting"/> was set, so
     /// it said 「应用正在重启 llama.cpp,稍等几秒」 — as the bind's last word, from a restart that had given up with
-    /// nothing of ours running. So: what happened, that llama.cpp is NOT running, and what to do. 「再试一次」 is a new
-    /// bind, which finds the port free once the holder is gone and starts a router listing every model; the bind that
-    /// got this answer saved nothing, hence <see cref="LlamaRestartPolicy.ReselectAfterRestart"/>.</summary>
+    /// nothing of ours running. So: what happened, that llama.cpp is NOT running, and what to do — WAITING first, because
+    /// the likeliest holder is our own old router still dying; then ending it; then a reboot, the one remedy that always
+    /// works. NOT 「重启服务」: a service restart ends neither a stranger nor a router stuck in teardown (Kill's own wait
+    /// already failed), so it would send the household round a restart for nothing — <see cref="NotOursRemedy"/>'s
+    /// lesson. 「再选一次」 is a new bind, which finds the port free once the holder is gone and starts a router listing
+    /// every model; the bind that got this answer saved nothing.</summary>
     private string RestartBlocked(string modelId) =>
         $"应用为了载入 {modelId} 停下了 llama.cpp,但没能启动新的:{HeldBy(new Uri(BaseUrl).Port)}。应用不会在它旁边再启动一个,"
-        + "所以 llama.cpp 现在没有在运行 —— 在任务管理器里结束它,然后再试一次,或者重启服务。"
-        + LlamaRestartPolicy.ReselectAfterRestart;
+        + "所以 llama.cpp 现在没有在运行 —— 稍等片刻再试一次;仍然这样的话,在任务管理器里结束它后再试,或者重启电脑。"
+        + "这次的选择没有保存,端口空出来后在「记忆检索」里再选一次这个模型。";
 
     public async Task<LlamaServerState> ProbeAsync(bool refresh = false, CancellationToken ct = default)
     {

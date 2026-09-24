@@ -968,8 +968,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   HELD after it was released never passes the re-probe's sentence on**: that sentence was computed with
   `_restarting` set, so the bind's FINAL answer was 「应用正在重启,稍等几秒」 from a restart that had given up with
   nothing running. It is `RestartBlocked` instead — the app stopped llama.cpp to load the model and could not start
-  a new one because the port is held by something that does not answer as llama.cpp, llama.cpp is NOT running, end
-  it in 任务管理器 and try again or restart the service, plus `ReselectAfterRestart`. What holds the port is ONE
+  a new one because the port is held by something that does not answer as llama.cpp, llama.cpp is NOT running;
+  wait and retry, then end it in 任务管理器, then reboot — never 「重启服务」, which ends neither a stranger nor a router
+  stuck in teardown — and choose the model again, since the bind saved nothing. What holds the port is ONE
   writer shared with the stranger sentence (`HeldBy`), naming both candidates, because the app cannot tell a
   stranger that took the freed port from our OLD router still dying with an accept too slow for the release check
   to see. That is also why `NotOursRemedy` is not reused there: "not started by the app this time" is false of the
