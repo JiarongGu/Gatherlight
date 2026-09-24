@@ -247,6 +247,29 @@ public static class MemorySources
         return source is not null && source.IsConfigured(s) && source.HasModel(s, s.Config.EmbeddingModel!)
             ? source : null;
     }
+
+    /// <summary>The models this install has bound to llama.cpp — at most one per layer, 语义 first — through the
+    /// SAME resolvers the DI wiring uses, so a model is here exactly when a layer would call it. ONE writer for
+    /// the set two callers warm: the startup step (<c>LlamaWarmStep</c>) and 资源's start button
+    /// (<c>ModelsController.LlamaStart</c>).
+    ///
+    /// <para><b>The button used to derive its own set</b> — every GGUF of ours the router listed. The router holds
+    /// <c>--models-max</c> 2, so with three of ours on disk the button loaded them in turn and could evict the
+    /// bound judge or embedder with an unbound one. Warming exists so the first RECALL does not stall, and only a
+    /// bound model is recalled; one per layer is also never more than the router holds.</para>
+    ///
+    /// <para>Every model here is a file in the app's own folder: both resolvers keep a llama.cpp binding only
+    /// while <see cref="IMemorySource.HasModel"/> finds it there — so this never names a model the router lists
+    /// from the machine's llama.cpp cache either.</para></summary>
+    public static IReadOnlyList<(string Layer, string Model)> BoundToLlamaCpp(MemorySourceSettings s)
+    {
+        var bound = new List<(string Layer, string Model)>();
+        if (ResolveSemantic(s)?.Id == MemoryBackends.LlamaCpp && s.Config.EmbeddingModel is { Length: > 0 } embed)
+            bound.Add((MemoryLayers.Semantic, embed));
+        if (ResolveJudge(s).Id == MemoryBackends.LlamaCpp && ResolveJudgeModel(s) is { Length: > 0 } judge)
+            bound.Add((MemoryLayers.Judge, judge));
+        return bound;
+    }
 }
 
 /// <summary>Whether a checks-only judge's tagging is happening now, and the sentence that says so — see

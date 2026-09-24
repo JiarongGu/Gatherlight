@@ -972,18 +972,15 @@ try {
     const u = new URL(String(llamaCold.baseUrl));
     let asked = 0;
     const hits = [];
+    // What the fake router LISTS, mutable: the last start below takes a bound model off it. zzcache-chat-model
+    // is never planted on disk — it stands in for the machine's own llama.cpp/Hugging Face cache, which the real
+    // router lists beside ours and which the start button must not load.
+    let listing = ['zzwarm-embed-model', 'zzwarm-chat-model', 'zzwarm-rerank-model', 'zzcache-chat-model'];
     const fake = http.createServer((req, res) => {
       if (req.url === '/v1/models') {
         asked++;
         res.writeHead(200, { 'content-type': 'application/json' });
-        // The router REPORTS which models it holds, and the start endpoint warms exactly those THAT
-        // WE PROVISIONED. zzcache-chat-model is not planted on disk below — it stands in for the machine's
-        // own llama.cpp/Hugging Face cache, which the real router lists beside ours and which the start
-        // button must not load.
-        res.end(JSON.stringify({ data: [
-          { id: 'zzwarm-embed-model' }, { id: 'zzwarm-chat-model' }, { id: 'zzwarm-rerank-model' },
-          { id: 'zzcache-chat-model' },
-        ] }));
+        res.end(JSON.stringify({ data: listing.map((id) => ({ id })) }));
         return;
       }
       let body = '';
@@ -991,16 +988,26 @@ try {
       req.on('end', () => {
         hits.push({ path: req.url, body });
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end('{}');
+        // Enough of each route's answer for a BIND to pass against this fake: 语义's proof reads a vector's
+        // width, and a reranker's screen needs the answer (index 1) scored above the distractor. A warm call
+        // reads only the status, so the same answers serve it.
+        res.end(req.url === '/v1/embeddings'
+          ? JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3] }] })
+          : req.url === '/v1/rerank'
+            ? JSON.stringify({ results: [{ index: 0, relevance_score: -1 }, { index: 1, relevance_score: 2 }] })
+            : '{}');
       });
     });
     await new Promise((r) => fake.listen(Number(u.port), '127.0.0.1', r));
-    // OURS are files in {data}/state/resources/gguf; the router also lists the machine's llama.cpp/HF cache
-    // (zzcache-chat-model here), which the start button must NOT load.
-    const warmGguf = path.join(dir, 'state', 'resources', 'gguf');
+    // OURS are files in {data}/state/resources/gguf — one of each kind, so each warm route can be checked.
+    const res = path.join(dir, 'state', 'resources');
+    const warmGguf = path.join(res, 'gguf');
+    const stubExe = path.join(res, 'llama-cpp', 'llama-server.exe');
     fs.mkdirSync(warmGguf, { recursive: true });
     for (const m of ['zzwarm-embed-model', 'zzwarm-chat-model', 'zzwarm-rerank-model'])
       fs.writeFileSync(path.join(warmGguf, `${m}.gguf`), '');
+    const requests = () => hits.map((h) => `${h.path} ${h.body.slice(0, 60)}`);
+    const warmedAt = (id) => hits.filter((h) => h.body.includes(id));
     try {
       const started = await post('/api/manage/models/llama/start');
       ok('THE POINT: a port that already answers is adopted, with no binary installed at all',
@@ -1008,52 +1015,115 @@ try {
       ok('…and it really probed the running router rather than assuming',
         asked > 0, `GET /v1/models seen ${asked} time(s)`);
 
-      // ---- STARTING MEANS START-AND-WARM ------------------------------------------------------
+      // ---- STARTING MEANS START-AND-WARM — WHAT IS BOUND, AND NOTHING ELSE -----------------------
       //
       // llama.cpp loads models LAZILY: --models-max is a cap, not a preload, so the first request for a
       // model spawns a child and waits — 17.3 s measured for a 1B q4. Returning when the router answers
       // would hand back a runtime that stalls on the first real recall, which is the very cost this
-      // runtime was chosen to remove. Nothing checked that warming happened.
+      // runtime was chosen to remove.
       //
-      // Reachable without a spawn after all: the start endpoint warms the models the ROUTER reports AND
-      // WE PROVISIONED, so a fake router naming three of ours gets three warm calls sent to it.
-      // COUNTED AT THE FAKE SERVER, not read from the response. The first version of this asserted
-      // `started.body.warmed.length === 2` — and it PASSED with the warm call deleted, because the
-      // endpoint still built that list from the models it had probed. A field reporting that work
-      // happened is not evidence the work happened; that is this whole session in one assertion.
-      ok('every model of OURS the router reports is warmed, not just started',
-        hits.length === 3 && (started.body?.warmed ?? []).length === 3,
-        JSON.stringify({ requests: hits.map((h) => h.path), reported: started.body?.warmed }));
+      // But only a BOUND model is ever recalled, and the router holds two (--models-max). The button used to
+      // warm every GGUF of ours the router listed — three here — so it loaded them in turn and could evict
+      // the bound judge or embedder with an unbound one of our own. It warms MemorySources.BoundToLlamaCpp
+      // now, the set the startup warm step reads. Nothing is bound yet (both layers are on the CLI), so this
+      // start loads nothing.
+      //
+      // COUNTED AT THE FAKE SERVER, not read from the response. An earlier version asserted the endpoint's
+      // own `warmed` list — and it PASSED with the warm call deleted, because the endpoint still built that
+      // list from the models it had probed. A field reporting that work happened is not evidence the work
+      // happened.
+      ok('THE POINT: with nothing bound, starting loads nothing — three GGUFs of ours are listed, none is warmed',
+        hits.length === 0 && Array.isArray(started.body?.warmed) && started.body.warmed.length === 0,
+        JSON.stringify({ requests: requests(), reported: started.body?.warmed }));
 
-      // THE POINT of this case: the real router also lists the machine's own llama.cpp/Hugging Face cache
-      // (four unrelated chat models, seen on a real restart) beside ours, and loading those is not ours to
-      // do — under --models-max it would evict the model this app actually needs. The same OWNERSHIP
-      // filter as the restart re-warm (LlamaServerRuntime.EnsureServesAsync), applied to this second caller.
-      ok('THE POINT: a model the router lists that is not in our models folder is NOT warmed',
-        !hits.some((h) => h.body.includes('zzcache-chat-model'))
-          && !(started.body?.warmed ?? []).includes('zzcache-chat-model'),
-        JSON.stringify({ requests: hits.map((h) => `${h.path} ${h.body.slice(0, 60)}`), reported: started.body?.warmed }));
+      // BIND, through the endpoint the console uses: 语义 to the embedder, 判断 to the chat model. A binding
+      // needs the runtime on disk (IsConfigured), so a stub binary goes in now — AFTER the adoption above,
+      // which must hold with nothing installed. The fake answers every probe, so this stub is never run as a
+      // router. Binding sends its own requests (the embed proof, the chat judge's warm), so the count restarts.
+      fs.mkdirSync(path.dirname(stubExe), { recursive: true });
+      fs.writeFileSync(stubExe, 'not a real binary');
+      const bindEmbed = await post('/api/manage/memory/layer/semantic', { source: 'llama-cpp', model: 'zzwarm-embed-model' });
+      const bindChat = await post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: 'zzwarm-chat-model' });
+      ok('(fixture) 语义 and 判断 bind to llama.cpp against the fake router',
+        bindEmbed.status === 200 && bindChat.status === 200,
+        JSON.stringify({ semantic: [bindEmbed.status, bindEmbed.body?.error], judge: [bindChat.status, bindChat.body?.error] }));
+      hits.length = 0;
 
-      // The two warm calls are NOT the same request, and sending an embedder a chat completion (or the
-      // reverse) fails against a real llama-server — `embeddings = true` restricts that child to one API.
-      const embedHit = hits.find((h) => h.body.includes('zzwarm-embed-model'));
-      const chatHit = hits.find((h) => h.body.includes('zzwarm-chat-model'));
+      const bound = await post('/api/manage/models/llama/start');
+      ok('both BOUND models are warmed — two requests, one per layer, 语义 first',
+        hits.length === 2 && JSON.stringify(bound.body?.warmed) === JSON.stringify(['zzwarm-embed-model', 'zzwarm-chat-model']),
+        JSON.stringify({ requests: requests(), reported: bound.body?.warmed }));
+      // THE POINT of the binding: a GGUF of OURS the router lists, and nothing bound to it. The code before
+      // this sent it a warm request, and with three of ours listed that is the load that evicts a bound model.
+      ok('THE POINT: a GGUF of ours the router lists but no layer is bound to is NOT warmed',
+        warmedAt('zzwarm-rerank-model').length === 0 && !(bound.body?.warmed ?? []).includes('zzwarm-rerank-model'),
+        JSON.stringify({ requests: requests(), reported: bound.body?.warmed }));
+      // The machine's llama.cpp/Hugging Face cache (four unrelated chat models, seen on a real restart) is not
+      // ours to load — and cannot be bound, since a binding needs the file in our folder.
+      ok('a model the router lists that is not in our models folder is NOT warmed',
+        warmedAt('zzcache-chat-model').length === 0 && !(bound.body?.warmed ?? []).includes('zzcache-chat-model'),
+        JSON.stringify({ requests: requests(), reported: bound.body?.warmed }));
+      ok('…and a start that warmed everything bound has nothing to report — no note, so the console says 已完成',
+        (bound.body?.notWarmed ?? []).length === 0 && bound.body?.note == null, JSON.stringify(bound.body));
+
+      // The warm calls are NOT the same request, and sending an embedder a chat completion (or the reverse)
+      // fails against a real llama-server — `embeddings = true` restricts that child to one API.
+      const embedHit = warmedAt('zzwarm-embed-model')[0];
+      const chatHit = warmedAt('zzwarm-chat-model')[0];
       ok('an EMBEDDER is warmed through /v1/embeddings',
         embedHit?.path === '/v1/embeddings' && embedHit.body.includes('"input"'),
         JSON.stringify(embedHit));
       ok('a CHAT model is warmed through /v1/chat/completions',
         chatHit?.path === '/v1/chat/completions' && chatHit.body.includes('"messages"'),
         JSON.stringify(chatHit));
-      const rerankHit = hits.find((h) => h.body.includes('zzwarm-rerank-model'));
+
+      // THE THIRD KIND needs a second binding: 判断 holds a chat model OR a reranker, never both, so one
+      // binding cannot cover all three warm routes. Rebinding it also makes the chat model the unbound one.
+      const bindRerank = await post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: 'zzwarm-rerank-model' });
+      ok('(fixture) 判断 rebinds to the reranker — the fake passes its screen',
+        bindRerank.status === 200, `${bindRerank.status} ${JSON.stringify(bindRerank.body)}`);
+      hits.length = 0;
+
+      const reranked = await post('/api/manage/models/llama/start');
+      const rerankHit = warmedAt('zzwarm-rerank-model')[0];
       ok('a RERANKER is warmed through /v1/rerank',
         rerankHit?.path === '/v1/rerank' && rerankHit.body.includes('"documents"'),
         JSON.stringify(rerankHit));
+      ok('…and the chat model it replaced, still listed and still ours, is not warmed any more',
+        hits.length === 2 && warmedAt('zzwarm-chat-model').length === 0
+          && JSON.stringify(reranked.body?.warmed) === JSON.stringify(['zzwarm-embed-model', 'zzwarm-rerank-model']),
+        JSON.stringify({ requests: requests(), reported: reranked.body?.warmed }));
+
+      // A BOUND MODEL THE ROUTER DOES NOT LIST is reported, not restarted in: loading it means a restart, which
+      // is a bind's decision, and the start button is not a bind. (This router is adopted, so no restart could
+      // happen here anyway — the runtime never kills a process it did not start. What is asserted is the
+      // report: which layer, which model, and why it is cold.)
+      listing = listing.filter((id) => id !== 'zzwarm-rerank-model');
+      hits.length = 0;
+      const unlisted = await post('/api/manage/models/llama/start');
+      const skipped = (unlisted.body?.notWarmed ?? []).find((n) => n.model === 'zzwarm-rerank-model');
+      ok('THE POINT: a bound model the router does not list is REPORTED — layer, model and why — not warmed',
+        unlisted.status === 200 && skipped?.layer === 'judge' && /不在这个 llama\.cpp 列出的模型里/.test(skipped?.why ?? '')
+          && warmedAt('zzwarm-rerank-model').length === 0,
+        JSON.stringify({ requests: requests(), body: unlisted.body }));
+      ok('…and the console is told: the note names the model and the cure',
+        String(unlisted.body?.note ?? '').includes('zzwarm-rerank-model') && /重启服务/.test(String(unlisted.body?.note ?? '')),
+        String(unlisted.body?.note));
+      ok('…while the model that IS listed is still warmed',
+        JSON.stringify(unlisted.body?.warmed) === JSON.stringify(['zzwarm-embed-model']) && hits.length === 1,
+        JSON.stringify({ requests: requests(), reported: unlisted.body?.warmed }));
     } finally {
+      // As we found them: both layers on the CLI. The files the bindings name go below, and a binding left
+      // pointing at them would fall back at the next boot of this folder for a reason that is not its own.
+      await post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'haiku' });
+      await post('/api/manage/memory/layer/semantic', { source: 'claude-cli', model: 'haiku' });
+      fake.closeAllConnections();
       await new Promise((r) => fake.close(r));
-      // Leave the directory as later cases expect it — the next block plants its own files under the
-      // same path and does not expect these three still sitting there.
+      // Leave the directory as later cases expect it — the next block plants its own files under the same
+      // path, and asserts the held sentence wins over 「还没有下载」, which a stub binary left here would void.
       for (const m of ['zzwarm-embed-model', 'zzwarm-chat-model', 'zzwarm-rerank-model'])
         fs.rmSync(path.join(warmGguf, `${m}.gguf`), { force: true });
+      fs.rmSync(stubExe, { force: true });
     }
   }
 

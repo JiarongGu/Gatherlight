@@ -341,14 +341,22 @@ public sealed class ModelsController : ControllerBase
     /// q4. Returning as soon as the router answers would hand the household a runtime that stalls on its
     /// first real recall, which is the cost this runtime was chosen to remove.
     ///
-    /// <para>Warms OUR models only — the router also lists whatever sits in the machine's llama.cpp/Hugging
-    /// Face cache (four unrelated chat models, seen on a real machine), and loading those into the GPU is
-    /// not ours to do: under `--models-max` it evicts the ones this app needs. "Ours" = a GGUF in the app's
-    /// models folder (<see cref="Services.ResourceProvisioner.InstalledGgufIds"/>), the same OWNERSHIP filter
-    /// the restart re-warm applies (<see cref="ILlamaServerRuntime.EnsureServesAsync"/>). Only that filter is
-    /// shared: the re-warm is also limited to what was loaded and capped below `--models-max`, while this
-    /// warms every GGUF of ours — so with more of them on disk than the router holds, it can still evict a
-    /// BOUND model with an unbound one of our own. Known, and not fixed here.</para></summary>
+    /// <para><b>Warms what is BOUND, and nothing else</b> — <see cref="MemorySources.BoundToLlamaCpp"/>, the set the
+    /// startup warm step reads, through the resolvers the DI wiring uses. Warming exists so the first RECALL does not
+    /// stall, and only a bound model is recalled. It used to warm every GGUF of ours the router listed: the router
+    /// holds `--models-max` 2, so with three of ours on disk the button loaded them in turn and could evict the
+    /// bound judge or embedder with an unbound one of our own. One model per layer is never more than the router
+    /// holds. Nothing bound → the router is started and nothing is loaded (<c>warmed: []</c>).</para>
+    ///
+    /// <para>That set is OURS by construction — a llama.cpp binding resolves only while its file is in the app's
+    /// models folder — so the router's listing of the machine's llama.cpp/Hugging Face cache (four unrelated chat
+    /// models, seen on a real machine) is never warmed either.</para>
+    ///
+    /// <para><b>A bound model the router does not list is REPORTED, not restarted in.</b> Warming it would go
+    /// through <see cref="ILlamaServerRuntime.EnsureServesAsync"/>, which can restart our router to load a model
+    /// downloaded after it started. That is a BIND's decision, and the start button is not a bind. The model rides
+    /// in <c>notWarmed</c> with the reason, and in <c>note</c>, which the console shows. Proof for all of it:
+    /// <c>e2e-p51</c>.</para></summary>
     [HttpPost("api/manage/models/llama/start")]
     public async Task<IActionResult> LlamaStart()
     {
@@ -359,16 +367,43 @@ public sealed class ModelsController : ControllerBase
             });
 
         var state = await _llama.ProbeAsync(refresh: true);
-        // OUR models only (see the summary). Proof: e2e-p51.
-        var ours = Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath);
+        // What the router LISTS, and only when it ANSWERED: a probe that did not get through reports the files on
+        // disk instead, and warming one of those could reach EnsureServesAsync's restart after all.
+        var listed = state.Serving ? state.Models : Array.Empty<string>();
         var warmed = new List<string>();
-        foreach (var m in state.Models.Where(m => ours.Contains(m, StringComparer.OrdinalIgnoreCase)))
+        var notWarmed = new List<object>();
+        var whys = new List<string>();
+        foreach (var (layer, model) in MemorySources.BoundToLlamaCpp(Settings()))
         {
+            var isListed = listed.Contains(model, StringComparer.OrdinalIgnoreCase);
             // Same single writer the preset generator uses — a second copy of this test here is how the
             // preset and the warm-up would come to disagree about what a model is.
-            if (await _llama.WarmAsync(m, Services.ResourceProvisioner.GgufKind(m))) warmed.Add(m);
+            if (isListed && await _llama.WarmAsync(model, Services.ResourceProvisioner.GgufKind(model)))
+            {
+                warmed.Add(model);
+                continue;
+            }
+            var name = layer == MemoryLayers.Semantic ? "语义" : "判断";
+            // The remedy is the SERVICE restart, whichever router this is: a graceful stop ends ours and the next
+            // start spawns one that lists every file, which the startup warm step then loads; an adopted one
+            // survives, and that step says what to end instead (EnsureServesAsync's not-ours sentence).
+            // Re-binding the model is not offered — the picker shows 使用中 and no button for the current binding.
+            const string cure = " —— 重启服务后应用会载入它,载入不了时会说明原因。";
+            var why = isListed ? $"「{name}」绑定的 {model} 没能载入 —— 请看「日志」里的原因。"
+                : state.Serving
+                    ? $"「{name}」绑定的 {model} 不在这个 llama.cpp 列出的模型里(多半是它启动之后才下载的),所以没有预热,"
+                      + "启动按钮也不会为它重启 llama.cpp" + cure
+                    : $"llama.cpp 这次没有及时报出它的模型列表,所以「{name}」绑定的 {model} 没有预热" + cure;
+            notWarmed.Add(new { layer, model, why });
+            whys.Add(why);
         }
-        return Ok(new { ok = true, warmed, models = state.Models, devices = state.Devices });
+        return Ok(new
+        {
+            ok = true, warmed, notWarmed, models = state.Models, devices = state.Devices,
+            // The console toasts `note` when there is one and 「已完成」 otherwise — so this is null exactly when
+            // every bound model is warm, and a start that left one cold says which and why.
+            note = whys.Count == 0 ? null : "llama.cpp 已在运行。" + string.Join(" ", whys),
+        });
     }
 
     /// <summary>Delete a model, freeing its disk.

@@ -823,24 +823,30 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   **(2) Models load LAZILY**, so starting means start-and-WARM. `--models-max` is a cap, not a preload; the
   first request for a model spawns a child and waits (17.3 s for a 1B q4). Returning when the router answers
   hands back a runtime that stalls on the first real recall — the very cost this runtime was chosen to remove.
-  **`p51` pins it, and needed no spawn either**: the start endpoint warms the models the router reports that
-  are OURS, so a fake router naming three of ours plus one it must skip receives three warm calls. It asserts
-  they are DIFFERENT requests — `/v1/embeddings` for an embedder, `/v1/rerank` for a reranker,
-  `/v1/chat/completions` otherwise — because `embeddings = true` restricts that child to one API and the wrong
-  warm call fails against a real llama-server.
+  **`p51` pins it, and needed no spawn either**: the start endpoint warms the BOUND models the router reports,
+  so a fake router, with 语义 and 判断 bound through the real bind endpoint, receives one warm call per bound
+  model. It asserts they are DIFFERENT requests — `/v1/embeddings` for an embedder, `/v1/chat/completions` for a
+  chat model, and `/v1/rerank` for a reranker, which takes a second binding because 判断 holds one or the other —
+  because `embeddings = true` restricts that child to one API and the wrong warm call fails against a real
+  llama-server.
   **The first version of that test was vacuous and this is the useful part**: it asserted the endpoint's own
   `warmed` list, which still came back complete with the warm call deleted, because the endpoint builds it
   from the models it probed. A field reporting that work happened is not evidence the work happened. It now
   counts the requests that arrived at the fake server, and fails with `requests:[] reported:[both]` — which
   is the shape of every self-reported metric in this codebase, one level down.
-  **It warms OUR models, not everything the router lists.** The real router also lists the machine's
-  llama.cpp/HF cache, and warming those loaded unrelated models and evicted ours. "Ours" is a GGUF in the app's
-  models folder (`InstalledGgufIds`, household-dropped files included) — the same OWNERSHIP filter as the
-  restart re-warm, and only that: the re-warm is also limited to what was loaded and capped below
-  `--models-max`, while the start button warms every GGUF of ours, so with more of them on disk than the router
-  holds it can still evict a BOUND model with an unbound one. Known and not fixed; warming the bound models
-  first, capped, is the fix, and it needs `p51`'s fixture to bind rather than merely plant. `p51` lists an
-  unplanted model and asserts it is not warmed.
+  **It warms what is BOUND, never more than the router holds.** Two fixes, one inside the other. The real router
+  also lists the machine's llama.cpp/HF cache, and warming everything it listed loaded unrelated models and
+  evicted ours — so the button was narrowed to OUR models (`InstalledGgufIds`). That still warmed every GGUF of
+  ours, and with three on disk and `--models-max` 2 it loaded them in turn and could evict the bound judge or
+  embedder with an unbound one of our own. It now warms `MemorySources.BoundToLlamaCpp`: the set `LlamaWarmStep`
+  reads, through the resolvers the DI wiring uses, one model per layer at most — so never more than the router
+  holds, and ours by construction, since a llama.cpp binding resolves only while its file is in the app's folder.
+  Nothing bound means the router starts and loads nothing. A bound model the router does NOT list is reported
+  (`notWarmed`, and a `note` the console toasts), never restarted in: that restart is a bind's decision, and the
+  start button is not a bind (the startup step still goes through `EnsureServesAsync`, as a bind does). `p51`
+  asserts an unbound GGUF of ours the router lists is not warmed (confirmed to FAIL against the old button, which
+  sent it `/v1/rerank`), that the unplanted cache model is not either, and that an unlisted bound model is
+  reported with its layer and reason rather than warmed.
   **(3) `embeddings = true` RESTRICTS a child to embeddings** — and `reranking = true` restricts one to
   `/v1/rerank` — so each goes only on its own kind, and what a GGUF IS has exactly ONE writer,
   `ResourceProvisioner.GgufKind`: chat, embedding or reranking (`GgufCapability`). Exact for what we provision

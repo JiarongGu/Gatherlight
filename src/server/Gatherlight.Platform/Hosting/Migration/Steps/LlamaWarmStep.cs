@@ -115,12 +115,13 @@ public sealed class LlamaWarmStep : IMigrationStep
                 + "重新建立一次语义索引,这些事实才会补上向量;也可以在「记忆检索」另选一个。");
         }
 
-        var judgeModel = judge.Id == MemoryBackends.LlamaCpp
-            ? MemorySources.ResolveJudgeModel(settings) : null;
-        var embedModel = semantic?.Id == MemoryBackends.LlamaCpp
-            ? settings.Config.EmbeddingModel : null;
+        // WHAT is bound here comes from the one writer 资源's start button also warms from, so the two cannot
+        // come to disagree about which models deserve the router's two slots.
+        var bound = MemorySources.BoundToLlamaCpp(settings);
+        string? judgeModel = bound.FirstOrDefault(b => b.Layer == MemoryLayers.Judge).Model;
+        string? embedModel = bound.FirstOrDefault(b => b.Layer == MemoryLayers.Semantic).Model;
 
-        if (judgeModel is null && embedModel is null)
+        if (bound.Count == 0)
         {
             _log.LogDebug("llama-warm: no layer is bound to llama.cpp — nothing to start.");
             return;
@@ -151,23 +152,21 @@ public sealed class LlamaWarmStep : IMigrationStep
 
         // Warm each bound model. A failure here is per-model: one layer can be usable while the other is
         // not, and reporting them together would hide which.
-        foreach (var (model, layer, loss) in new[]
-                 {
-                     (embedModel, "语义", embedLoss),
-                     (judgeModel, "判断", judgeLoss),
-                 })
+        foreach (var (boundLayer, model) in bound)
         {
-            if (string.IsNullOrWhiteSpace(model)) continue;
+            var (layer, loss) = boundLayer == MemoryLayers.Semantic ? ("语义", embedLoss) : ("判断", judgeLoss);
             // The runtime's own sentence when it cannot serve the model at all — an ADOPTED router that never
             // listed it names the process to end. It used to reach only the log, and the warning said just
             // 没能载入, which gives the household nothing to do.
-            if (await _llama.EnsureServesAsync(model!, ct) is { } unserved)
+            // Unlike 资源's start button, which only REPORTS a bound model the router does not list, this asks
+            // EnsureServesAsync — whose restart path, guarded by ILlamaRestartPolicy, is the same one a bind takes.
+            if (await _llama.EnsureServesAsync(model, ct) is { } unserved)
             {
                 _log.LogWarning("warming {Layer} model {Model} skipped: {Why}", layer, model, unserved);
                 _state.AddWarning($"「{layer}」的本机模型 {model} 没能载入:{unserved.TrimEnd('。')} —— {loss}。");
                 continue;
             }
-            if (await _llama.WarmAsync(model!, ResourceProvisioner.GgufKind(model!), ct)) continue;
+            if (await _llama.WarmAsync(model, ResourceProvisioner.GgufKind(model), ct)) continue;
             _log.LogWarning("warming {Layer} model {Model} failed", layer, model);
             _state.AddWarning($"「{layer}」的本机模型 {model} 没能载入 —— {loss}。");
         }
