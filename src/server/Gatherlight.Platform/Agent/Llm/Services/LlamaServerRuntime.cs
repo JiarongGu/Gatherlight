@@ -137,8 +137,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <summary>A cross-encoder scores (query, document) as ONE sequence, which must fit one physical batch;
     /// 4096 is how Lyntai's own harness runs the same reranker files. Launch CONTRACT, like GpuLayers. The default
     /// only: a reranker whose catalogue row declares a window (<see cref="GgufCatalog.DeclaredWindow"/>) is launched
-    /// with that one.</summary>
-    private const int RerankBatch = 4096;
+    /// with that one. Public because it is also the pair limit <see cref="RerankInputCap"/> caps an undeclared-window
+    /// reranker's query against (<see cref="RerankInputCap.UndeclaredQueryMaxChars"/>) — one writer for both.</summary>
+    public const int RerankBatch = 4096;
 
     /// <summary>The most a CHAT child generates for one request — written as <c>n-predict</c>, which llama-server
     /// uses as the default for a request naming no <c>max_tokens</c> and as the ceiling for one that does. Lyntai's
@@ -408,7 +409,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                     break;
                 // `reranking` restricts it to /v1/rerank, and the pair must fit one batch — see RerankBatch. A row
                 // that DECLARES a smaller window gets that instead (GgufCatalog.DeclaredWindow — the read
-                // RerankInputCap fits the input to, so the two cannot disagree). llama.cpp serves mMiniLMv2 512-token
+                // RerankInputCap and ChunkedScoreProvider fit the input to, so they cannot disagree). llama.cpp serves mMiniLMv2 512-token
                 // slots whatever the preset asks; a preset claiming 4096 for it states a limit nothing honours.
                 case GgufCapability.Reranking:
                     var window = GgufCatalog.DeclaredWindow(m) ?? RerankBatch;

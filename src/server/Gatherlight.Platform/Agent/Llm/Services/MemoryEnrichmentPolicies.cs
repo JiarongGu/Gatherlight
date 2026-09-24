@@ -384,13 +384,21 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// verifier would score empty strings on every recall. <see cref="GgufCatalog.DeclaredWindow"/> applies the same rule,
 /// so the preset and the fitting still agree. No row declares one; this is a guard, not a case.</para>
 ///
-/// <para><b>No declared window keeps today's behaviour exactly</b>: the 1,000-character cap per candidate, the query
-/// untouched, and the text not normalised. That covers the catalogued rerankers served at 4096, and every GGUF a
-/// household dropped in (no row, so no window — a stated limit, see <see cref="GgufCatalog.DeclaredWindow"/>). The
-/// query stays unbounded there on purpose: at 4096 tokens it would take ~3,000 Chinese characters of question to crowd
-/// out a candidate, and recall queries are written by the agent, short. The same stated limit covers compatibility
-/// characters there: at the costliest rate measured (㌚, 6 tokens) a candidate would need ~680 of them before the cap
-/// alone could overflow 4096 — possible in principle, not guarded.</para>
+/// <para><b>No declared window keeps the 1,000-character cap per candidate and leaves the text un-normalised</b> — the
+/// catalogued rerankers served at 4096 (BGE, LAMAR), and every GGUF a household dropped in (no row, so no window — a
+/// stated limit, see <see cref="GgufCatalog.DeclaredWindow"/>). <b>The query is capped there too</b>, at
+/// <see cref="UndeclaredQueryMaxChars"/>: the rule a declared window applies — half the pair's budget — applied to the
+/// 4,096-token batch the preset launches such a reranker with (<see cref="LlamaServerRuntime.RerankBatch"/>). It used to
+/// stay uncut, argued from recall queries being short; but the agent writes them, one pair past the batch refuses the
+/// WHOLE call, and the verifier is fail-open, so a long enough question would silently leave every recall it made
+/// unjudged. With the cap a pair is at most 2,045 + 1,000 characters, and on the tokenizer family these rerankers use (a
+/// text NFKC leaves unchanged costs at most one token per character plus one — the NFKC paragraph's measurement; BGE
+/// and LAMAR tokenized Run 6c's windows alike, 857 and 858 tokens for the largest task) that is ~3,050 of the 4,096
+/// tokens: a hard bound for such text, with ~1,000 tokens left for what it does not cover. Compatibility characters
+/// stay a stated limit here, since the text is not normalised: at the costliest rate measured (㌚, 6 tokens) the
+/// question and a candidate together would need ~680 of them before the pair could overflow — possible in principle,
+/// not guarded; so does a household-dropped model with a greedier tokenizer. The cap changes no question any bench run
+/// has asked: the fixtures' longest is 164 characters.</para>
 ///
 /// <para><b>A CUT WAS NOT BETTER FOR THE CUT FACT ITSELF — measured, so a long candidate is scored in windows</b>
 /// (<c>docs/judge-bench.md</c> Runs 6 and 6c, 2026-09-24). This class used to cut every candidate to the budget and
@@ -474,14 +482,19 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
         }, ct);
     }
 
+    /// <summary>The most characters a query may run beside a reranker that declares no window: half the pair budget of
+    /// the 4,096-token batch the preset launches it with — the declared-window rule, applied to that batch. See the class
+    /// comment.</summary>
+    public const int UndeclaredQueryMaxChars = (LlamaServerRuntime.RerankBatch - PairOverheadTokens) / 2;
+
     /// <summary>The query as it will be sent, and how many characters each candidate may then run — for one call.
-    /// Without a usable window: the query untouched and <see cref="MaxChars"/>. With one: the query NFKC-normalised
-    /// and cut to half the budget, and each candidate given what the query left — counted, like the query, on its
-    /// normalised text (<see cref="Prepare"/>) — so every pair fits; see the class comment for why a character count of
-    /// the normalised text bounds the tokens.</summary>
+    /// Without a usable window: the query cut to <see cref="UndeclaredQueryMaxChars"/>, not normalised, and
+    /// <see cref="MaxChars"/>. With one: the query NFKC-normalised and cut to half the budget, and each candidate given
+    /// what the query left — counted, like the query, on its normalised text (<see cref="Prepare"/>) — so every pair
+    /// fits; see the class comment for why a character count of the normalised text bounds the tokens.</summary>
     public static (string Query, int PerCandidate) Fit(string query, int? window)
     {
-        if (UsableWindow(window) is not { } tokens) return (query, MaxChars);
+        if (UsableWindow(window) is not { } tokens) return (Cap(query, UndeclaredQueryMaxChars), MaxChars);
         var fitted = Cap(Prepare(query, tokens), (tokens - PairOverheadTokens) / 2);
         return (fitted, PerCandidate(fitted, tokens));
     }
@@ -506,20 +519,31 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
     public const int MaxWindowsPerCall = 480;
 
     /// <summary>How many windows each document of one call may use: <see cref="MaxWindows"/>, lowered — the same for
-    /// every document — until the call's windows fit <see cref="MaxWindowsPerCall"/> AND its pair characters (the query
-    /// beside each window: <paramref name="queryLength"/> plus the window's own length) fit
-    /// <paramref name="pairCharBudget"/> (<see cref="RerankPace.PairCharBudget"/>). Never below one, which is the cut —
-    /// sent even when it does not fit either limit, since fewer windows than candidates would leave one unscored.</summary>
-    public static int WindowsPerDocument(IReadOnlyList<string> documents, int size, int queryLength = 0,
-        long pairCharBudget = long.MaxValue)
+    /// every document — until the call's windows fit <see cref="MaxWindowsPerCall"/> AND its pair TOKENS fit
+    /// <paramref name="pairTokenBudget"/> (<see cref="RerankPace.PairTokenBudget"/>): <paramref name="query"/> beside each
+    /// window, both counted by <see cref="RerankPace.Tokens"/> over the exact spans <see cref="Windows"/> would cut, so a
+    /// Chinese window weighs what a Chinese window costs. Never below one, which is the cut — sent even when it does not
+    /// fit either limit, since fewer windows than candidates would leave one unscored.</summary>
+    public static int WindowsPerDocument(IReadOnlyList<string> documents, int size, string query = "",
+        double pairTokenBudget = double.PositiveInfinity)
     {
-        var needed = documents.Select(d => (Windows: WindowsNeeded(d.Length, size), Chars: Math.Min(d.Length, Math.Max(size, 0))))
-            .ToList();
+        var queryTokens = RerankPace.Tokens(query);
+        // Cumulative weights per document, so a window's tokens are one subtraction whatever its span.
+        var weights = documents.Select(RerankPace.CumulativeTokens).ToList();
         var k = MaxWindows;
-        while (k > 1
-               && (needed.Sum(n => Math.Min(n.Windows, k)) > MaxWindowsPerCall
-                   || needed.Sum(n => (long)Math.Min(n.Windows, k) * (queryLength + n.Chars)) > pairCharBudget))
+        while (k > 1)
+        {
+            int count = 0;
+            double tokens = 0;
+            for (var i = 0; i < documents.Count; i++)
+                foreach (var (start, end) in WindowSpans(documents[i], size, k))
+                {
+                    count++;
+                    tokens += queryTokens + weights[i][end] - weights[i][start];
+                }
+            if (count <= MaxWindowsPerCall && tokens <= pairTokenBudget) break;
             k--;
+        }
         return k;
     }
 
@@ -544,24 +568,33 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
     /// Windows never split a surrogate pair (a boundary moves inward by one unit instead), so a window can run one
     /// short of <paramref name="size"/>, never over. A <paramref name="size"/> of zero or less gives no window to cut:
     /// the text whole, as one — <see cref="ChunkedScoreProvider"/> passes such a request through rather than score
-    /// empty strings as if they were the candidates.</summary>
+    /// empty strings as if they were the candidates. The spans are <see cref="WindowSpans"/>'s — the one writer the
+    /// time sizing (<see cref="WindowsPerDocument"/>) counts too.</summary>
     public static IReadOnlyList<string> Windows(string text, int size, int maxWindows = MaxWindows)
     {
-        if (size <= 0) return [text];
-        if (text.Length <= size) return [text];
+        var spans = WindowSpans(text, size, maxWindows);
+        if (spans.Count == 1 && spans[0] == (0, text.Length)) return [text];
+        return [.. spans.Select(s => text[s.Start..s.End])];
+    }
+
+    /// <summary>Where each of <see cref="Windows"/>'s windows starts and ends in <paramref name="text"/> — computed
+    /// once, here, so the windows sent and the windows the time budget counts cannot differ.</summary>
+    public static IReadOnlyList<(int Start, int End)> WindowSpans(string text, int size, int maxWindows = MaxWindows)
+    {
+        if (size <= 0 || text.Length <= size) return [(0, text.Length)];
         var n = Math.Clamp(WindowsNeeded(text.Length, size), 1, Math.Max(1, maxWindows));
-        if (n == 1) return [Cap(text, size)];
+        if (n == 1) return [(0, Cap(text, size).Length)];
         var span = text.Length - size;                       // where the last window starts
-        var windows = new string[n];
+        var spans = new (int Start, int End)[n];
         for (var i = 0; i < n; i++)
         {
             var start = (int)((long)i * span / (n - 1));     // 0 … span, the last exactly at the tail
             if (start > 0 && char.IsLowSurrogate(text[start]) && char.IsHighSurrogate(text[start - 1])) start++;
             var end = Math.Min(text.Length, start + size);
             if (end < text.Length && char.IsHighSurrogate(text[end - 1]) && char.IsLowSurrogate(text[end])) end--;
-            windows[i] = text[start..end];
+            spans[i] = (start, end);
         }
-        return windows;
+        return spans;
     }
 
     /// <summary>A declared window, or null when it cannot hold even a pair's overhead — the ONE rule

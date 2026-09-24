@@ -66,28 +66,40 @@ public static class RerankChunking
 /// for every DI-registered backend (Lyntai's <c>RegisterProviderLifetime</c>).</para>
 ///
 /// <para><b>What it costs, and why a call is sized by TIME.</b> Every window is a pair the model scores, so a recall costs
-/// roughly the characters it sends: a candidate needing two windows costs about twice what its cut prefix did, and at
-/// most <see cref="RerankInputCap.MaxWindows"/> times. Measured on 60 notes of ~900–1,200 characters: a recall's serial
-/// median went 2.0 → 3.2 s on BGE and 0.5 → 1.2 s on mMiniLMv2, on one GPU. Short candidates cost nothing extra. A call
-/// carries at most <see cref="RerankInputCap.MaxWindowsPerCall"/> windows — a COUNT tuned on that GPU — and, below it, only
-/// as many as <see cref="RerankPace"/> predicts will be scored within half the verification deadline on THIS machine:
-/// fewer windows per candidate on a slow one, down to one, which is the cut.</para>
+/// roughly the tokens it sends: a candidate needing two windows costs about twice what its cut prefix did, and at most
+/// <see cref="RerankInputCap.MaxWindows"/> times. Measured on 60 notes of ~900–1,200 characters: a recall's serial median
+/// went 2.0 → 3.2 s on BGE and 0.5 → 1.2 s on mMiniLMv2, on one GPU. Short candidates cost nothing extra. A call carries at
+/// most <see cref="RerankInputCap.MaxWindowsPerCall"/> windows — a COUNT tuned on that GPU — and, below it, only as many as
+/// <see cref="RerankPace"/> predicts will be scored within half the verification deadline on THIS machine: fewer windows
+/// per candidate on a slow one, down to one, which is the cut.</para>
 ///
 /// <para><b>A WORKAROUND FOR A LYNTAI GAP, recorded on both sides</b> (dev-conventions: open workaround (6)). Lyntai has
-/// closed the gap upstream — <c>docs/task-archive.md</c> Part 287 / D177, committed and NOT released, no version
-/// promised: a provider given <c>HttpModelOptions.MaxInputChars</c> SEGMENTS an over-long input
-/// (<c>InputSegmentation</c>) and scores a document as its best piece, as here. It is not a drop-in. D177's HTTP bound is
-/// a FIXED character count per document that never counts the query (Lyntai's advice: the window minus your longest
-/// query, with margin), and it caps neither pieces per document nor pieces per call. This class's budget is QUERY-AWARE
-/// — what the fitted query leaves (<see cref="RerankInputCap.PerCandidate"/>) — and counted on the NFKC-normalised text;
-/// its windows overlap by at least a quarter (D177: 0.15, ending at a boundary), the last is anchored at the tail, a
-/// candidate gets at most five windows and a call at most what <see cref="RerankPace"/> allows; and a request whose every
-/// document fits one window is passed through byte for byte. <b>On the bump</b>: measure D177 against this class on
-/// Run 6's long fixture within ONE run — the rule: not significantly worse at <c>end</c> or <c>beyond</c>, and identical on
-/// short facts. If it holds, delete this class, configure <c>MaxInputChars</c>/<c>Segmentation</c> on the
-/// <c>llamacpp-rerank</c> registration (<c>LlamaCppSource.Register</c>), keep <see cref="RerankInputCap"/>'s query fit, and
-/// decide what bounds a call's TIME, since D177 bounds none (keep <see cref="RerankPace"/>'s sizing, or ask Lyntai for
-/// one). If it does not hold, keep this class and tell Lyntai why.</para></summary>
+/// closed the gap upstream — <c>docs/task-archive.md</c> Part 287 / D177, with Part 289 closed into it; committed and NOT
+/// released, no version promised (read at Lyntai commit <c>e6fa579b</c>). D177 as it stands there: a provider given
+/// <c>HttpModelOptions.MaxInputChars</c> SEGMENTS an over-long input (<c>InputSegmentation</c>) and scores a document as
+/// its best piece, as here; on a Score registration that bound is the PAIR window, the query keeping at most
+/// (1 − <c>MinDocumentShare</c>, default 0.5) of it, cut once per call at a word boundary; it counts characters after NFKC,
+/// per text element, and sends the ORIGINAL text; <c>InputSegmentation.MaxPiecesPerInput</c> caps an input's pieces —
+/// the first, the last (anchored at the tail) and the rest spread evenly between; <c>Overlap</c> defaults to 0.15 and is
+/// configurable. So D177 now does what this class's budget does under a declared window — and this class is QUERY-AWARE
+/// only there: for BGE and LAMAR, which declare none, <see cref="RerankInputCap.PerCandidate"/> is 1,000 characters
+/// whatever the query. <b>What remains ours</b>: (1) consecutive windows overlap by at least a quarter — settable in D177
+/// as <c>Overlap = 0.25</c>, where it is an upper bound (the next piece restarts at the earliest sentence end or space
+/// inside it, else where the last ended); (2) under a declared window the text SENT is its NFKC form, where D177 counts
+/// NFKC and sends the original (the tokenizer normalises either way; the measurement in <see cref="RerankInputCap"/>
+/// found identical token ids for all but 95 scalars newer than the model's table); (3) the call sized by TIME
+/// (<see cref="RerankPace"/>), which D177 explicitly rejects as library policy — fitting a call to a latency budget is
+/// the deployment's — and cannot carry: <c>MaxPiecesPerInput</c> is fixed at registration, so no decorator can vary a
+/// call's pieces per request, and deleting this class deletes the pace. <b>On the bump</b>: measure D177 against this
+/// class on Run 6's long fixture within ONE run — the rule, unchanged: not significantly worse at <c>end</c> or
+/// <c>beyond</c>, and identical on short facts. D177 cannot carry <see cref="RerankPace"/>, so what follows is an OWNER
+/// decision, informed by that comparison: keep this class for the pace, or configure <c>MaxInputChars</c>/
+/// <c>Segmentation</c> on the <c>llamacpp-rerank</c> registration (<c>LlamaCppSource.Register</c>) with a fixed
+/// <c>MaxPiecesPerInput</c> and lose time-sizing. Either way <see cref="RerankInputCap"/>'s query fit stays until D177's is
+/// measured beside it. If D177 fails the rule, keep this class and tell Lyntai why, with the run. The Lyntai half is
+/// complete: Part 289's outcome names an app-side segmenting score-provider decorator as the adopter's copy to remove when
+/// D177 releases, and Lyntai's <c>docs/memory-measurements.md</c> records our Run 6c as
+/// <c>rerank-segmented-adopter-long-notes</c>.</para></summary>
 public sealed class ChunkedScoreProvider : IScoreProvider
 {
     private readonly IScoreProvider _inner;
@@ -115,21 +127,22 @@ public sealed class ChunkedScoreProvider : IScoreProvider
     public async Task<ScoreResponse> CallAsync(ScoreRequest request, CancellationToken ct = default)
     {
         var size = RerankInputCap.PerCandidate(request.Query, _window);
-        // Nothing to split — or no room to split into: the request as it came, byte for byte. Still timed: every call
-        // teaches the pace, and timing a call changes nothing that is sent.
-        if (size <= 0 || request.Documents.All(d => d.Length <= size)) return await TimedAsync(request, ct).ConfigureAwait(false);
+        // Nothing to split — or no room to split into: the request as it came, byte for byte. Still timed: a slow
+        // pass-through call can teach the pace that this machine is slow, and timing a call changes nothing that is sent.
+        if (size <= 0 || request.Documents.All(d => d.Length <= size))
+            return await TimedAsync(request, RerankPace.Call.PassThrough, ct).ConfigureAwait(false);
 
         // As many windows per document as the call can carry: MaxWindows, lowered — the same for every document — past
         // the per-call ceiling, or past what this machine scores within the time budget, down to one: the cut.
         var byCount = RerankInputCap.WindowsPerDocument(request.Documents, size);
-        var perDocument = RerankInputCap.WindowsPerDocument(request.Documents, size, request.Query.Length, _pace.PairCharBudget());
+        var perDocument = RerankInputCap.WindowsPerDocument(request.Documents, size, request.Query, _pace.PairTokenBudget());
         if (perDocument < byCount)
             _log?.LogInformation(
-                "{Id}: {Windows} window(s) per long candidate instead of {ByCount}, so the call fits ~{Budget:0.#} s at the {Pace:0.###} ms per 1,000 pair characters measured here",
-                Id, perDocument, byCount, _pace.Budget.TotalSeconds, _pace.MsPerChar * 1000);
+                "{Id}: {Windows} window(s) per long candidate instead of {ByCount}, so the call fits ~{Budget:0.#} s at the {Pace:0.###} ms per 1,000 pair tokens (counted by script) measured here",
+                Id, perDocument, byCount, _pace.Budget.TotalSeconds, _pace.MsPerToken * 1000);
         var windows = request.Documents.Select(d => RerankInputCap.Windows(d, size, perDocument)).ToList();
         var flat = windows.SelectMany(w => w).ToList();
-        var response = await TimedAsync(request with { Documents = flat }, ct).ConfigureAwait(false);
+        var response = await TimedAsync(request with { Documents = flat }, RerankPace.Call.Chunked, ct).ConfigureAwait(false);
         if (!response.IsOk) return response;
         // Pairing windows back to documents by position is only sound when every window was scored — the arity rule
         // the scoring policy applies to documents, one level down.
@@ -152,19 +165,19 @@ public sealed class ChunkedScoreProvider : IScoreProvider
     /// <summary>One call to the inner provider, timed into the pace: a call that answered as a measurement, a call a
     /// deadline cut off as a lower bound (it ran at least that long). A failed answer teaches nothing — a quick refusal
     /// would read as a fast machine.</summary>
-    private async Task<ScoreResponse> TimedAsync(ScoreRequest request, CancellationToken ct)
+    private async Task<ScoreResponse> TimedAsync(ScoreRequest request, RerankPace.Call kind, CancellationToken ct)
     {
-        var chars = RerankPace.PairChars(request.Query, request.Documents);
+        var tokens = RerankPace.PairTokens(request.Query, request.Documents);
         var clock = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var response = await _inner.CallAsync(request, ct).ConfigureAwait(false);
-            if (response.IsOk) _pace.Observe(clock.Elapsed, chars);
+            if (response.IsOk) _pace.Observe(clock.Elapsed, tokens, kind);
             return response;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            _pace.AtLeast(clock.Elapsed, chars);
+            _pace.AtLeast(clock.Elapsed, tokens);
             throw;
         }
     }
@@ -174,36 +187,72 @@ public sealed class ChunkedScoreProvider : IScoreProvider
 /// read in fit the verification deadline on a slow machine, not only on the GPU the fixed ceiling was tuned on.
 ///
 /// <para><b>Why.</b> <see cref="RerankInputCap.MaxWindowsPerCall"/> is a COUNT measured on one GPU (RTX 4080 Laptop,
-/// llama.cpp b10549): 480 full windows took ~20 s on BGE and LAMAR (<c>docs/judge-bench.md</c> Run 6b). A CPU-only machine
-/// scores many times slower, so the same call can outlast <see cref="VerificationDeadlinePolicy"/>'s 60 s — and a
-/// verification cut off there is NoOpinion after a minute's wait, logged at Warning and nowhere a household looks. So a
-/// chunked call is sized by TIME: the windows per candidate are chosen so the predicted call fits <see cref="Budget"/>,
-/// HALF the verification deadline, the other half being the margin for a prediction that is wrong.</para>
+/// llama.cpp b10549): 480 full windows of dense Chinese took ~20 s on BGE and LAMAR (<c>docs/judge-bench.md</c> Run 6b). A
+/// CPU-only machine scores many times slower, so the same call can outlast <see cref="VerificationDeadlinePolicy"/>'s 60 s
+/// — and a verification cut off there is NoOpinion after a minute's wait, logged at Warning and nowhere a household
+/// looks. So a chunked call is sized by TIME: the windows per candidate are chosen so the predicted call fits
+/// <see cref="Budget"/>, HALF the verification deadline, the other half being the margin for a prediction that is
+/// wrong.</para>
 ///
-/// <para><b>What is estimated: milliseconds per PAIR CHARACTER</b> — the query's length plus the document's, summed over
-/// the pairs a call sends, which is what a cross-encoder reads. Not per window: a short fact is a window of ~60
-/// characters and a long note's window 1,000, so a per-window pace learned from short facts would under-predict a long
-/// note by the ratio of their lengths, where a per-character one lets every call teach it — the pass-through calls of a
-/// household of short facts included. It still under-predicts a long window somewhat (attention grows faster than
-/// length), which the other half of the deadline covers. <see cref="CallOverheadMs"/> is taken off each call first, so a
-/// call of two short facts, nearly all round trip, does not read as a slow machine.</para>
+/// <para><b>What is estimated: milliseconds per PAIR TOKEN</b> — the query beside each document, summed over the pairs a
+/// call sends, which is what a cross-encoder reads. Not per window: a short fact is a window of ~60 characters and a long
+/// note's 1,000, so a per-window pace learned from short facts would under-predict a long note by the ratio of their
+/// lengths. Not per CHARACTER either, which is what it was until review: a character of Chinese costs ~0.83 tokens and
+/// one of English ~0.25 (<see cref="CjkTokensPerChar"/>, <see cref="OtherTokensPerChar"/> — measured on the real router,
+/// <c>docs/self-managed-llm-runtime.md</c>), so a per-character pace learned on English under-predicted the same number
+/// of Chinese characters by ~3.3× — more than the half-deadline margin covers. So each character is counted as the
+/// tokens its script costs (<see cref="Tokens"/>, the ONE writer both the timing and the sizing use), from the text alone,
+/// with no <c>/tokenize</c> round trip. <see cref="CallOverheadMs"/> is taken off each call first, so a call of two short
+/// facts, nearly all round trip, does not read as a slow machine.</para>
 ///
-/// <para><b>How it moves.</b> Seeded with the GPU measurement (<see cref="SeedMsPerChar"/>), at which the time budget
-/// allows more than the ceiling — so until a call has been timed nothing changes from the fixed cap. A SLOWER call is
-/// believed at once; a faster one moves the estimate halfway toward it. A call a deadline cut off raises it to at least
-/// what that call proved: the time it had run, over what it sent. Pessimistic on purpose: believing a slow machine
-/// wrongly costs a few windows on a few recalls, while disbelieving it costs a minute's wait and no verdict. A failed
-/// answer teaches nothing. It lives as long as the process — a restart re-seeds it — and there is one per verifier, so
-/// one per reranker.</para>
+/// <para><b>How it moves</b> — every rule chosen so that believing a slow machine wrongly costs a few windows on a few
+/// recalls, while disbelieving one costs a minute's wait and no verdict:
+/// <list type="bullet">
+/// <item>Seeded with the GPU measurement (<see cref="SeedMsPerToken"/>), at which the time budget allows more than the
+/// ceiling for a question of up to ~500 characters beside dense Chinese windows — so until a call has been timed,
+/// nothing changes from the fixed cap on that GPU.</item>
+/// <item><b>A call a deadline cut off</b> raises it at once to at least what that call proved — the time it ran, over what
+/// it sent: it has already cost its verdict.</item>
+/// <item><b>A slower call that answered</b> is believed at once when the call before it was slow too (answered slower
+/// than the estimate, or cut off). ALONE, it moves the estimate only halfway in log space — to the geometric mean of the
+/// two — and waits for a second: a single outlier (a model reloading after the router evicted it, another program on
+/// the GPU for a moment) would otherwise read a fast machine as a slow one, and one 100× outlier on a short call can be
+/// enough to cut every long note of the next recalls to its first window. This is a judgement, not a measurement: its
+/// cost on a genuinely slow machine is that a call answered past the budget is repeated once at the same size — inside
+/// the deadline, since it answered — before the pace believes it.</item>
+/// <item><b>A faster call</b> moves the estimate halfway toward it — but only a CHUNKED call. A pass-through call (every
+/// document fit one window) may RAISE the estimate and never lowers it: short pairs cost less per token than long ones
+/// (attention grows faster than length) and a short call is mostly round trip, so a household of short facts would
+/// otherwise pull the estimate DOWN on every recall, below what a long note's windows really cost.</item>
+/// <item>A failed answer teaches nothing. It lives as long as the process — each launch re-seeds it at the GPU figure —
+/// and there is one per verifier, so one per reranker.</item>
+/// </list></para>
 ///
 /// <para><b>Unmeasured</b>: it has not run on a CPU-only machine, so how many recalls it takes to settle there, and how
-/// far a long window's cost outruns the per-character rate learned from short facts, are not known. <c>e2e-p52</c> case
-/// 6e drives it with a fake router that answers in time proportional to the pair characters it is sent.</para></summary>
+/// far a long window's cost outruns a rate learned from short facts, are not known. The two token rates are two
+/// measurements on the XLM-R tokenizer family: every character from U+2E80 up (CJK, kana, Hangul, full-width forms, both
+/// halves of a surrogate pair) is counted at the CJK rate, the worst measured — emoji measured ~0.48, rare CJK less — and
+/// every character below it at the English one, which leaves other scripts (Cyrillic, Greek, Arabic, Thai, Devanagari…)
+/// counted like English, unmeasured. That rerank time is proportional to tokens is itself an assumption the GPU figures
+/// fit, not a measured law. The transient rule's halfway-in-log-space step is a judgement. <c>e2e-p52</c> case 6e drives
+/// the answered path with a fake router that answers in time proportional to the pair characters it is sent — a lone
+/// slow call not believed, the second believed — and case 6f the cut-off path.</para></summary>
 public sealed class RerankPace
 {
-    /// <summary>The GPU measurement the fixed ceiling was tuned on: 480 windows of 1,000 characters in ~20 s (Run 6b),
-    /// the query not counted — which only makes the seed slower, i.e. safer.</summary>
-    public const double SeedMsPerChar = 20_000.0 / (480 * 1_000);
+    /// <summary>Tokens per UTF-16 unit of CJK text — the worst rate measured on the real router (4,089 Chinese characters
+    /// ~3,400 tokens, 6,010 ~4,960; <c>docs/self-managed-llm-runtime.md</c>, 2026-09-23).</summary>
+    public const double CjkTokensPerChar = 0.83;
+
+    /// <summary>Tokens per character of English, measured beside it (6,263 characters ~1,600 tokens, 12,503 ~3,160).</summary>
+    public const double OtherTokensPerChar = 0.25;
+
+    /// <summary>The first code unit counted at the CJK rate: U+2E80, CJK Radicals Supplement. Everything from it up —
+    /// ideographs, kana, Hangul syllables, full-width forms, and both halves of a surrogate pair — is counted as CJK.</summary>
+    public const char CjkFrom = '⺀';
+
+    /// <summary>The GPU measurement the fixed ceiling was tuned on: 480 windows of 1,000 dense Chinese characters in
+    /// ~20 s (Run 6b), counted at the CJK rate, the query not counted — which only makes the seed slower, i.e. safer.</summary>
+    public const double SeedMsPerToken = 20_000.0 / (480 * 1_000 * CjkTokensPerChar);
 
     /// <summary>What a call costs before it scores anything — the HTTP round trip, the batch set-up — taken off each
     /// measurement. The two-document bind screen ran in 25–33 ms warm on the real router (<c>LlamaCppSource</c>), so 50 ms
@@ -212,50 +261,104 @@ public sealed class RerankPace
 
     /// <summary>A floor, so a run of calls faster than the allowance cannot drive the estimate to zero and the budget to
     /// infinity — the per-call ceiling then decides, as it did before this class.</summary>
-    private const double MinMsPerChar = 1e-4;
+    private const double MinMsPerToken = 1e-4;
+
+    /// <summary>What a timed call was, which decides what it may teach (the class comment's rules).</summary>
+    public enum Call
+    {
+        /// <summary>Every document fit one window, so the request went as it came: may raise the estimate, never lower it.</summary>
+        PassThrough,
+
+        /// <summary>At least one document went as several windows (or as its first, the cut).</summary>
+        Chunked,
+    }
 
     private readonly object _gate = new();
-    private double _msPerChar;
+    private double _msPerToken;
+    // The last call that taught anything was SLOW — answered slower than the estimate, or cut off — so the next slower
+    // answer is a repeat and is believed at once.
+    private bool _slowBefore;
 
     /// <param name="budget">How long one call may be predicted to take — half the verification deadline.</param>
-    /// <param name="seedMsPerChar">The estimate before any call is timed.</param>
-    public RerankPace(TimeSpan budget, double seedMsPerChar = SeedMsPerChar)
+    /// <param name="seedMsPerToken">The estimate before any call is timed.</param>
+    public RerankPace(TimeSpan budget, double seedMsPerToken = SeedMsPerToken)
     {
         Budget = budget;
-        _msPerChar = Math.Max(MinMsPerChar, seedMsPerChar > 0 ? seedMsPerChar : SeedMsPerChar);
+        _msPerToken = Math.Max(MinMsPerToken, seedMsPerToken > 0 ? seedMsPerToken : SeedMsPerToken);
     }
 
     /// <summary>How long one call may be predicted to take.</summary>
     public TimeSpan Budget { get; }
 
-    /// <summary>The current estimate, in milliseconds per pair character.</summary>
-    public double MsPerChar { get { lock (_gate) return _msPerChar; } }
+    /// <summary>The current estimate, in milliseconds per pair token.</summary>
+    public double MsPerToken { get { lock (_gate) return _msPerToken; } }
 
-    /// <summary>How many pair characters one call may carry within <see cref="Budget"/> at the current estimate.</summary>
-    public long PairCharBudget()
+    /// <summary>How many pair tokens one call may carry within <see cref="Budget"/> at the current estimate.</summary>
+    public double PairTokenBudget()
     {
         var ms = Budget.TotalMilliseconds - CallOverheadMs;
-        return ms <= 0 ? 0 : (long)Math.Min(long.MaxValue / 2, Math.Floor(ms / MsPerChar));
+        return ms <= 0 ? 0 : ms / MsPerToken;
     }
 
-    /// <summary>A call that answered: <paramref name="elapsed"/> for <paramref name="pairChars"/>.</summary>
-    public void Observe(TimeSpan elapsed, long pairChars) => Update(elapsed, pairChars, lowerBound: false);
-
-    /// <summary>A call cut off after <paramref name="elapsed"/> — it would have taken at least that long.</summary>
-    public void AtLeast(TimeSpan elapsed, long pairChars) => Update(elapsed, pairChars, lowerBound: true);
-
-    private void Update(TimeSpan elapsed, long pairChars, bool lowerBound)
+    /// <summary>A call that answered: <paramref name="elapsed"/> for <paramref name="pairTokens"/>.</summary>
+    public void Observe(TimeSpan elapsed, double pairTokens, Call kind)
     {
-        if (pairChars <= 0) return;
-        var observed = Math.Max(MinMsPerChar, (elapsed.TotalMilliseconds - CallOverheadMs) / pairChars);
+        if (!(pairTokens > 0)) return;
+        var observed = Rate(elapsed, pairTokens);
         lock (_gate)
         {
-            if (observed > _msPerChar) _msPerChar = observed;
-            else if (!lowerBound) _msPerChar = Math.Max(MinMsPerChar, _msPerChar + (observed - _msPerChar) / 2);
+            if (observed > _msPerToken)
+            {
+                // Slower: believed at once on a repeat; alone, halfway in log space, and remembered.
+                _msPerToken = _slowBefore ? observed : Math.Sqrt(_msPerToken * observed);
+                _slowBefore = !_slowBefore;
+                return;
+            }
+            _slowBefore = false;
+            if (kind == Call.Chunked) _msPerToken = Math.Max(MinMsPerToken, _msPerToken + (observed - _msPerToken) / 2);
         }
     }
 
-    /// <summary>The pair characters a call sends: the query beside each document.</summary>
-    public static long PairChars(string query, IReadOnlyList<string> documents) =>
-        documents.Sum(d => (long)query.Length + d.Length);
+    /// <summary>A call cut off after <paramref name="elapsed"/> — it would have taken at least that long.</summary>
+    public void AtLeast(TimeSpan elapsed, double pairTokens)
+    {
+        if (!(pairTokens > 0)) return;
+        var observed = Rate(elapsed, pairTokens);
+        lock (_gate)
+        {
+            if (observed > _msPerToken) _msPerToken = observed;
+            _slowBefore = true;
+        }
+    }
+
+    private static double Rate(TimeSpan elapsed, double pairTokens) =>
+        Math.Max(MinMsPerToken, (elapsed.TotalMilliseconds - CallOverheadMs) / pairTokens);
+
+    /// <summary>What one character is counted as: <see cref="CjkTokensPerChar"/> from <see cref="CjkFrom"/> up,
+    /// <see cref="OtherTokensPerChar"/> below it.</summary>
+    public static double Weight(char c) => c >= CjkFrom ? CjkTokensPerChar : OtherTokensPerChar;
+
+    /// <summary>A text's tokens as this class counts them — the one writer the timing and the sizing share.</summary>
+    public static double Tokens(string text)
+    {
+        var sum = 0.0;
+        foreach (var c in text) sum += Weight(c);
+        return sum;
+    }
+
+    /// <summary><see cref="Tokens"/> of every prefix: entry <c>i</c> counts the first <c>i</c> characters, so a window's
+    /// tokens are one subtraction (<see cref="RerankInputCap.WindowsPerDocument"/>).</summary>
+    public static double[] CumulativeTokens(string text)
+    {
+        var sums = new double[text.Length + 1];
+        for (var i = 0; i < text.Length; i++) sums[i + 1] = sums[i] + Weight(text[i]);
+        return sums;
+    }
+
+    /// <summary>The pair tokens a call sends: the query beside each document.</summary>
+    public static double PairTokens(string query, IReadOnlyList<string> documents)
+    {
+        var q = Tokens(query);
+        return documents.Sum(d => q + Tokens(d));
+    }
 }
