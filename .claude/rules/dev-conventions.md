@@ -1077,13 +1077,38 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   e2e coverage**: the fake router can only ever be adopted, and no stub can be a real router. It was verified by hand on the real binary — a bind racing 资源's start button
   left one router and a second restart still worked; with 语义 on llama.cpp the same bind was refused with 0
   restarts.
-- **A reranker judge: capped input, and its tagging state said out loud.** One (query, document) pair past the
-  router's 4096-token batch fails the WHOLE `/v1/rerank` call (measured: ~6,000 Chinese characters ≈ 4,960
-  tokens → 500, the short document beside it unscored too; the limit is per pair — 96 long documents in one call
-  scored), and the scoring verifier is fail-open, so one long fact made every recall that surfaced it
-  unverified. `RerankInputCap` sends at most 1,000 characters per candidate, ~830 tokens at the worst rate
-  measured (0.83 per UTF-16 unit, common CJK); `e2e-p52` case 6b, and `p51` pins `ctx-size = 4096` on the
-  preset.
+- **A reranker judge: input bounded per PAIR, a long candidate read in WINDOWS, and its tagging state said out
+  loud.** One (query, document) pair past the router's 4096-token batch fails the WHOLE `/v1/rerank` call
+  (measured: ~6,000 Chinese characters ≈ 4,960 tokens → 500, the short document beside it unscored too; the limit is
+  per pair — 96 long documents in one call scored, and 2,000 windows in one call were served), and the scoring
+  verifier is fail-open, so one long fact made every recall that surfaced it unverified. `RerankInputCap` bounds every
+  pair: at most 1,000 characters of document, ~830 tokens at the worst rate measured (0.83 per UTF-16 unit, common
+  CJK); `p51` pins `ctx-size = 4096` on the preset.
+  **A CUT IS WORSE THAN NO JUDGE for the note it cuts, so a long candidate is scored in windows** (2026-09-24,
+  `docs/judge-bench.md` Runs 6 and 6c). The bound used to be a cut, argued as "better than a refused call" — true for
+  the recall's OTHER candidates, false for the cut one: under partition the reranker endorses its eight best and
+  promotes them, so a note whose answer lies past the cut scores like filler and is pushed OFF a page the engine would
+  have given it. Measured on 60 notes of 883–1,241 characters (240 questions, no tags, no embedder, a page of 8): an
+  answer at a note's END reached the page 4 times in 60 on mMiniLMv2, against 29 with no judge; past 1,000
+  characters, 3 of 60 on BGE and LAMAR against 30. `ChunkedScoreProvider` decorates the reranker's own score provider
+  (applied where `LlamaCppSource.Wiring` builds the verifier, registered nowhere): each document is split by
+  `RerankInputCap.Windows` into windows of the SAME budget the bound uses (`RerankInputCap.PerCandidate`, NFKC under a
+  declared window) — at most 5, overlapping by a quarter, the last at the tail, at most 480 per call (past that, fewer
+  per candidate, down to the cut) — all windows go in ONE call, and each document keeps its MAX window score, so
+  `ScoringVerificationPolicy` still sees one score per candidate and `EndorseCount` still counts candidates. A request
+  whose documents all fit one window passes through untouched. Run 6c's pre-registered rule held and it is the default:
+  end-position answers 4 → 44 of 60 on mMiniLMv2 (0/40, p < 0.001), beyond-1,000 answers 3 → 51 / 52 on BGE / LAMAR,
+  no reranker significantly worse at the start, and every row byte-identical on the ≤ 101-character fixture. It costs
+  time where notes are long: 2.0 → 3.2 s per recall on BGE, 0.5 → 1.2 s on mMiniLMv2, on those notes, one GPU.
+  `GATHERLIGHT_RERANK_CHUNKING=off` (`RerankChunking`) is KEPT as a measurement knob so the bench can reproduce the cut
+  Runs 2–6 measured; judge-bench's `rr`/`rrf` arms pin it off and `rrk` on. **Two traps met measuring it**: llama.cpp's
+  scores drift in the third decimal between identical calls, so an A/B that must be byte-identical needs identical
+  requests to get identical replies (the bench's `--rerank-memo`); and that memo's proxy, on Node's default keep-alive
+  agent, lost one request in each run (of ~780 and ~1,500) before the router saw it — each an abstention that voided
+  Run 6b — found only by
+  reconciling the proxy's forwards with the router log's `proxying request to model` lines, which the bench now does
+  itself. Proof: `e2e-p52` cases 6b/6c (a long fact reaches `/v1/rerank` as windows, tail included; a short one exactly
+  as written), confirmed to FAIL with the knob off.
   **The limit is PER MODEL, and it comes from the model's catalogue row** (2026-09-24). mMiniLMv2
   (`docs/judge-bench.md` Run 4) serves 512-token slots, and at the 1,000-character cap dense Chinese is 781 tokens:
   the whole call is refused — 400 under the 4096 preset, 500 「too large to process … batch size 512」 under its
@@ -1115,13 +1140,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   window: named with "rerank" it is served at 4096 with the 1,000-character cap and refused on long input, as
   before; named without it — this model's other quants included — `GgufKind` types it CHAT, so it is never used as
   a reranker; either way the fix is a measured row, not a guess from its file name; the character bound does NOT
-  transfer to a byte-level tokenizer; and what the fitting costs on a long fact is unmeasured (the bench's facts
-  are ≤ 101 characters). The row's id is the UPSTREAM file stem, with no "rerank" in it, on purpose: a catalogued
+  transfer to a byte-level tokenizer; and the windows (above) are measured on notes of one length band only — long
+  and short notes mixed in one recall, notes past five windows, and a CPU-only machine are not. The row's id is the UPSTREAM file stem, with no "rerank" in it, on purpose: a catalogued
   id is typed by its row, and the upstream stem also catches a household who drops the file in under its own name
   — an id of ours containing "rerank" would leave that file uncatalogued and typed CHAT, the hazard that made Run 4
-  rename it. Proof: `e2e-p52` case 6c (every pair at the fake router fits, query included; BGE, declaring no
-  window, still gets 1,000 characters and an uncut query) and `p51`'s preset block (the row's 512, not 4096) —
-  both confirmed to FAIL with the row kept and the window unwired.
+  rename it. Proof: `e2e-p52` case 6c (every pair at the fake router fits, query included, windows too; BGE,
+  declaring no window, gets 1,000-character windows and an uncut query) and `p51`'s preset block (the row's 512, not
+  4096) — both confirmed to FAIL with the row kept and the window unwired.
   And because a reranker hands TAGGING to the CLI, a signed-out or missing CLI means no tagging at all —
   fail-open, unreported — so the 判断 row, the bind toast and the startup warning read the CLI's CACHED probe
   (`MemorySources.CliTaggingNow`; a panel must not await a process) and say whether tagging is happening, and

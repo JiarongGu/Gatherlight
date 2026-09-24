@@ -1265,9 +1265,12 @@ try {
       ok('mMiniLMv2 is on the shelf as a reranker, at its pinned size',
         !!mini && mini.capability === 'reranking' && mini.sizeBytes === 132584000 && miniRes?.approxBytes === 132584000,
         JSON.stringify({ row: mini ?? null, resource: miniRes?.approxBytes ?? null }));
-      ok('…carries no 推荐, and says why it is not the default: the 512-token window, the licence, the unmeasured long-fact cost',
+      // The long-fact cost is MEASURED since docs/judge-bench.md Runs 6 and 6c: cut to its first window, an end-position
+      // answer reached the page 4 times in 60 (no judge: 29); read in windows, 44. The note used to say 「还没有量过」.
+      ok('…carries no 推荐, and says why it is not the default: the 512-token window, the licence, and what reading a LONG fact costs, measured',
         !!mini && !/推荐/.test(String(mini.name)) && /512/.test(String(mini.note)) && /非商业/.test(String(mini.note))
-          && /没有量过/.test(String(mini.note)) && /199\/240/.test(String(mini.note)),
+          && /4\/60/.test(String(mini.note)) && /29\/60/.test(String(mini.note)) && /44\/60/.test(String(mini.note))
+          && !/截短对长事实的检索影响有多大还没有量过/.test(String(mini.note)) && /199\/240/.test(String(mini.note)),
         JSON.stringify({ name: mini?.name, note: mini?.note }));
 
       // QWEN3 0.6B (docs/judge-bench.md Run 5b): the first CHAT judge measured better than no judge on both metrics —

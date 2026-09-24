@@ -282,8 +282,11 @@ characters is ~3 400 tokens and scores, 6 010 is ~4 960 and fails the same way. 
 call: 96 documents of 2 000 Chinese characters (~1 660 tokens each, ~160 000 in all) scored in one call, in
 ~9.7 s. The worst rate measured was 0.83 tokens per UTF-16 unit (common CJK; emoji ~0.48; rare CJK, Extension
 A or B, collapses to a handful of tokens). Since the scoring verifier is fail-open, a single long fact made every
-recall that surfaced it unverified, silently — so `RerankInputCap` sends at most 1 000 characters per candidate
-(~830 tokens at the worst rate measured). llama-server does NOT truncate per pair.
+recall that surfaced it unverified, silently — so `RerankInputCap` bounds every pair at 1 000 characters of document
+(~830 tokens at the worst rate measured). llama-server does NOT truncate per pair. Since 2026-09-24 a longer candidate
+is not cut to that bound but scored in several windows of it, in the same call (`ChunkedScoreProvider`;
+`docs/judge-bench.md` Runs 6 and 6c measured the cut pushing a long note off the page). One call carrying 2 000 such
+windows was served whole, and took 77–79 s on BGE and LAMAR — hence at most 480 windows per call.
 
 **An upgrade stripped every vector from an install on 语义 · llama.cpp — reproduced, then fixed** (same build,
 2026-09-24). Lyntai's graph engine does not fail a write whose embed fails: `GraphMemoryEngine.SearchAsync` logs

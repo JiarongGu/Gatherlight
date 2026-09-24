@@ -100,7 +100,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         // mMiniLMv2's figure was taken under Run 4's 4096 launch, and the product launches it at its declared 512 — so the
         // rerank CALL was re-measured under both (60 fixture facts per call: median 75–79 ms at 4096, 76 ms at 512; the
         // mMiniLMv2 row's comment in GgufCatalog has the setup). No difference beyond noise, so +0.08 s stands.
-        + "用重排模型时多约 0.08–0.26 秒,看是哪个模型(都是模型已加载后的实测)。";
+        // The reranker figures are on facts of at most 101 characters. A long fact is scored in several windows since
+        // 2026-09-24 (ChunkedScoreProvider), so a recall of long notes takes longer — measured, and quoted in each
+        // reranker's note (GgufCatalog.RerankerLatencyCaveat); this sentence says only that it does.
+        + "用重排模型时多约 0.08–0.26 秒,看是哪个模型(都是模型已加载后、事实都很短时的实测;事实很长时会更慢,见各模型的说明)。";
 
     /// <summary>A chat model does both halves on our router. A RERANKER only scores, so it verifies and the
     /// default client (the Claude CLI) annotates — on <see cref="AnnotationModel"/>, which is where the

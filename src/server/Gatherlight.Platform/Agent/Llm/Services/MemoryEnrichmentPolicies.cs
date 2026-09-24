@@ -320,8 +320,10 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
     }
 }
 
-/// <summary>Caps what a SCORING verifier (a reranker) is sent per candidate — the reranker's counterpart of
-/// <see cref="JudgeSeesContentPolicy.MaxChars"/>, which only ever bounded the LLM judge.
+/// <summary>Bounds what a SCORING verifier (a reranker) is sent per (query, document) PAIR — the reranker's counterpart
+/// of <see cref="JudgeSeesContentPolicy.MaxChars"/>, which only ever bounded the LLM judge — and, since 2026-09-24,
+/// hands a candidate longer than that bound to <see cref="ChunkedScoreProvider"/> WHOLE, to be scored in windows of it,
+/// instead of cutting it to its first window (see the last paragraph).
 ///
 /// <para><b>Why a cap is not optional here — measured 2026-09-23 on the real llama-server</b>, both catalogued
 /// rerankers, preset <c>ctx-size</c>/<c>batch-size</c>/<c>ubatch-size = 4096</c>
@@ -336,8 +338,8 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// (common CJK; emoji ~0.48, rare CJK collapses to a handful of tokens), so 1000 characters is ~830 tokens —
 /// under a fifth of the limit, room for the query and for a household-dropped reranker whose tokenizer is
 /// several times greedier. And it bounds cost: the same 96-candidate page at the cap is about half the ~9.7 s
-/// above. Household facts are granular, so a real fact is whole at this length; only a pathological one is
-/// cut, and cut is better than every recall that surfaces it going unverified.</para>
+/// above. Household facts are granular, so a real fact is whole at this length; a longer one is read in windows of
+/// it (the last paragraph), never sent past it.</para>
 ///
 /// <para><b>A model whose row DECLARES a window is fitted to it, PER PAIR — the query included</b>
 /// (<see cref="GgufModel.ContextTokens"/>, read through <see cref="GgufCatalog.DeclaredWindow"/>, the same read the
@@ -386,9 +388,27 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// characters there: at the costliest rate measured (㌚, 6 tokens) a candidate would need ~680 of them before the cap
 /// alone could overflow 4096 — possible in principle, not guarded.</para>
 ///
-/// <para>What the fitting COSTS on a long fact — how much a cut document's score moves — is unmeasured: the bench
-/// fixture's facts are all ≤ 101 characters, so no run could show it. Cut is still better than a refused call,
-/// which scores nothing at all.</para></summary>
+/// <para><b>A CUT WAS NOT BETTER FOR THE CUT FACT ITSELF — measured, so a long candidate is scored in windows</b>
+/// (<c>docs/judge-bench.md</c> Runs 6 and 6c, 2026-09-24). This class used to cut every candidate to the budget and
+/// argued that a cut beats a refused call. For the recall's OTHER candidates it does — they still get scored — but not
+/// for the note that was cut: under partition the reranker endorses the eight candidates it scores highest and
+/// promotes them ahead of the rest, so a note whose answer lies past the cut scores like filler and is pushed OFF a
+/// page the engine would have given it — worse than no judge, which fails open and leaves the engine's page standing.
+/// On 60 notes of 883–1,241 characters (240 questions, no tags, no embedder, a page of 8 chosen by the reranker):
+/// mMiniLMv2 put the answer on the page 4 times in 60 when it sat at the note's END, against 29 with no judge; BGE and
+/// LAMAR, past their 1,000-character cap, 3 of 60 against 30. So with <see cref="RerankChunking"/> on — the default —
+/// this class prepares candidates (NFKC under a window) and fits the query exactly as before but does NOT cut the
+/// candidates: <see cref="ChunkedScoreProvider"/> scores each in windows of this same budget (<see cref="Windows"/>:
+/// at most <see cref="MaxWindows"/>, overlapping by a quarter, the last at the tail; at most
+/// <see cref="MaxWindowsPerCall"/> per call) and keeps its best window's score. Run 6c's pre-registered rule held:
+/// in the same run, the end-position answers went 4 → 44 of 60 on mMiniLMv2 (0/40, p &lt; 0.001), beyond-1,000 answers
+/// 3 → 51 on BGE and 3 → 52 on LAMAR, no reranker was significantly worse where the cut already read the answer
+/// (start: 49 → 47, 55 → 54, 52 → 50), and on the ≤ 101-character fixture every row of every reranker was
+/// byte-identical, because a candidate that fits one window is sent exactly as before. The cost is time, where notes
+/// are long: serial medians on those notes 2.0 → 3.2 s (BGE), 2.2 → 3.2 s (LAMAR), 0.5 → 1.2 s (mMiniLMv2); unchanged
+/// on short facts. Unmeasured: long and short notes mixed in one recall (a note's best window has more chances to
+/// score high than a short fact's only one), notes past five windows (the stretches between windows go unread), real
+/// household notes, a CPU-only machine.</para></summary>
 public sealed class RerankInputCap : IMemoryVerificationPolicy
 {
     /// <summary>The most one candidate's text may run, in UTF-16 units. See the class comment.</summary>
@@ -417,9 +437,10 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
 
     /// <param name="window">The model's DECLARED token window (<see cref="GgufCatalog.DeclaredWindow"/>), or null
     /// for none — which keeps the 1,000-character cap and leaves the query alone.</param>
-    /// <param name="chunked">True when a <see cref="ChunkedScoreProvider"/> scores each candidate in windows: the
-    /// candidates are then prepared (NFKC under a window) but NOT cut here, because the windows are cut from the whole
-    /// text downstream. The query is fitted exactly as without it.</param>
+    /// <param name="chunked">True when a <see cref="ChunkedScoreProvider"/> scores each candidate in windows — the default,
+    /// <see cref="RerankChunking.On"/>: the candidates are then prepared (NFKC under a window) but NOT cut here, because
+    /// the windows are cut from the whole text downstream. The query is fitted exactly as without it. False is the cut
+    /// Runs 2–6 measured, kept for the bench.</param>
     public RerankInputCap(IMemoryVerificationPolicy inner, int? window = null, bool chunked = false)
     {
         _inner = inner;

@@ -147,10 +147,19 @@ public static class GgufCatalog
     /// <para><b>How many it is shown depends on the recall's LIMIT</b>, not only on its kind: Lyntai verifies 4× the
     /// candidates <c>FactIndex.RankAsync</c> asks for, which is min(3 × limit, 100) with no kind and 100 with one — so
     /// up to 96 at the default page of 8, and 400 on a recall naming a kind OR asking for 34 or more. This said
-    /// 「限定类别、候选可达 400 条」 until 2026-09-24, true only at the default limit.</para></summary>
+    /// 「限定类别、候选可达 400 条」 until 2026-09-24, true only at the default limit.</para>
+    ///
+    /// <para><b>And on how LONG the candidates are</b> (<c>docs/judge-bench.md</c> Runs 6 and 6c): the row figures are on
+    /// facts of at most 101 characters. A candidate longer than one window is scored in several (ChunkedScoreProvider,
+    /// the default since 2026-09-24), each window a pair the model scores, so the same recall on 60 notes of 883–1,241
+    /// characters — the same GPU, warm, serial medians — took 3.2 s on BGE and LAMAR (3,150 / 3,156 ms) and 1.2 s on
+    /// mMiniLMv2 (1,155 ms), against 2.0 / 2.2 / 0.5 s when each note was cut to its first window. The clause names those
+    /// figures and their notes, because 「事实很长时更慢」 alone would not let a household weigh it.</para></summary>
     private const string RerankerLatencyCaveat =
-        "(模型已加载、在显卡上、每次不超过 60 条候选时测得;只有 CPU 的机器,或候选更多的检索,可能慢得多 —— "
-        + "默认每次取 8 条时候选最多 96 条,限定类别或一次要 34 条以上时可达 400 条)";
+        "(模型已加载、在显卡上、每次不超过 60 条候选、事实都很短时测得;只有 CPU 的机器、候选更多或事实很长的检索,"
+        + "都可能慢得多 —— 默认每次取 8 条时候选最多 96 条,限定类别或一次要 34 条以上时可达 400 条;"
+        + "较长的事实会分段打分、每段都要算一次,在 60 条约 900–1,200 字的长笔记上,"
+        + "BGE 与 LAMAR 每次检索约 3.2 秒,mMiniLMv2 约 1.2 秒)";
 
     /// <summary>LAMAR against BGE, ONE sentence shared by both rows — the same comparison read from either side,
     /// so the two notes cannot tell it differently. It used to say only that the fixture could not separate
@@ -304,8 +313,13 @@ public static class GgufCatalog
         // ITS WINDOW IS 512 TOKENS — the GGUF's context_length, and the slot size llama.cpp serves it with whatever
         // the preset asks — so the row declares it: the preset launches it at 512 and RerankInputCap fits every
         // pair to it. At the 1,000-character cap every other reranker gets, dense Chinese is 781 tokens and the
-        // whole call is refused. What the fitting COSTS on a long fact is unmeasured (the fixture's facts are ≤ 101
-        // characters), and the note says so. Licence: the model card says Apache-2.0; its training set, mMARCO, is
+        // whole call is refused. What the fit COSTS on a long fact was measured (docs/judge-bench.md Runs 6 and 6c, 60
+        // notes of 883–1,241 characters, 240 questions, no subject tags, no embedder, a page of 8 chosen by the reranker):
+        // cut to its first window, a note whose answer sat at its END reached the page 4 times in 60 — worse than no judge
+        // (29) — and scored in windows (ChunkedScoreProvider, the default since 2026-09-24) 44 times; at the START, 52 and
+        // 50, no significant difference. The note says both, with the configuration, and what is still unmeasured; its
+        // long-note latency is RerankerLatencyCaveat's. The note said 「这样截短…还没有量过」 until then, which Run 6 made
+        // false. Licence: the model card says Apache-2.0; its training set, mMARCO, is
         // a translation of MS MARCO, whose terms are non-commercial; the GGUF repo declares none — so the note says
         // what the CARD says rather than what the model "is".
         //
@@ -326,8 +340,12 @@ public static class GgufCatalog
             + "反过来一题也没有。首位命中 99/240,比同一轮 BGE 的 90 和 LAMAR 的 86 多,但和 BGE 的差距不足以下结论。"
             + "每次检索约 0.31 秒,同一轮 BGE 约 0.45 秒" + RerankerLatencyCaveat + ";这一轮是按 4096 个词元启动它的,"
             + "应用现在按 512 启动 —— 单次重排调用(60 条候选)在两种启动下另测过,都约 0.08 秒,看不出差别。"
-            + "它一次最多只能读 512 个词元,所以应用会把提问和每条事实截短到放得下 —— 很长的事实只读开头约 250–500 个字符;"
-            + "这样截短对长事实的检索影响有多大还没有量过(测试集里的事实都很短)。"
+            + "它一次最多只能读 512 个词元:应用把提问截短到放得下,较长的事实则分成几段来读 —— 每段约 250–500 个字符,"
+            + "相邻两段有重叠,一条最多 5 段 —— 各段分别打分、取最高的一段。这是量过才改的:在 60 条约 900–1,200 字的长笔记上"
+            + "(240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页),答案在笔记末尾时,只读开头的旧做法把答案带进前八"
+            + "只有 4/60,比不开判断(29/60)还差;分段读之后是 44/60。答案在开头时两种做法没有显著差别(52/60 与 50/60)。"
+            + "还没有量过的:长短事实混在一起时会怎样;还有长到 5 段读不完的事实(约 1,000–2,000 字以上,提问越长、每段越短),"
+            + "段与段之间会有读不到的部分。"
             + "许可:模型卡写的是 Apache-2.0(下载用的 GGUF 仓库没有写明许可),但训练它用的 MS MARCO 数据只许非商业使用。",
             ContextTokens: 512),
     };

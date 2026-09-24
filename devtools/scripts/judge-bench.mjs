@@ -72,7 +72,8 @@
 // measured); the report goes to results-<iso>.json. Neither is ever deleted or truncated by a later run.
 // Unknown flags and duplicate arms are REJECTED, so a typo cannot launch a full-cost run with the defaults.
 //
-// LOCAL-MODEL ARMS. `--rerankers=<m,…>` adds `rr:<m>` (partition) and `rrf:<m>` (fuse) per reranker;
+// LOCAL-MODEL ARMS. `--rerankers=<m,…>` adds `rr:<m>` (partition) and `rrf:<m>` (fuse) per reranker, both over the cut
+// (`--rerank-arms=` adds `rrk:<m>`, the shipped chunked input — see CHUNKED RERANKING below);
 // `--chat-judges=<m,…>` adds `lc:<m>` (content alone — the shipped default, no knob) and `lcb:<m>`
 // (`GATHERLIGHT_JUDGE_INPUT=both`, "topic — content") per llama.cpp CHAT model, paired against each other — the
 // question docs/judge-bench.md Run 3 asks — as well as against `formula`. All of them share ONE real router,
@@ -95,10 +96,11 @@
 // got its own graph node holding exactly its note. Every table gains a BY POSITION block. `--seed-only` builds (or,
 // with --reuse-seed, re-verifies) the seed and stops before any arm starts.
 //
-// CHUNKED RERANKING (docs/judge-bench.md Run 6b). `--rerank-arms=` picks which arms each `--rerankers=` model gets:
-// `rr` (partition), `rrf` (fuse) and `rrk` (partition with GATHERLIGHT_RERANK_CHUNKING=on — each long candidate scored
-// in windows, its best window's score kept; ChunkedScoreProvider). The default stays `rr,rrf`, so Runs 2–6 re-launch as
-// they ran. Every arm pins that knob blank, so `rr` runs the product default and `rrk` must announce itself.
+// CHUNKED RERANKING (docs/judge-bench.md Runs 6b and 6c). `--rerank-arms=` picks which arms each `--rerankers=` model
+// gets: `rr` (partition) and `rrf` (fuse), each over the CUT (GATHERLIGHT_RERANK_CHUNKING=off), and `rrk` (partition with
+// the knob on — each long candidate scored in windows, its best window's score kept; ChunkedScoreProvider). Chunking is
+// the product DEFAULT since Run 6c, so `rrk` is what ships; `rr`/`rrf` pin the cut so Runs 2–6 re-launch as they ran, and
+// every reranker arm must announce the knob it sets. The default stays `rr,rrf`.
 // `--claude-stub` points every server at the e2e claude STUB on ANY fixture (the long fixture always does), refusing a
 // Claude-judge arm, so a reranker-only run on the bilingual seed cannot spend quota even by accident.
 // `--rerank-memo` puts a small proxy in front of the router for each local-model arm: during the ACCURACY pass an
@@ -223,15 +225,18 @@ const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
 // full list is JudgeSeesContentPolicy's class comment, "ON THE BUMP"; after it, `both` cannot be reproduced.
 // GATHERLIGHT_JUDGE_DEADLINE_SECONDS (VerificationDeadlinePolicy's test knob) is pinned blank for the same reason, so
 // every arm runs the product's default verification deadline; startup below refuses an arm that announces it.
-// GATHERLIGHT_RERANK_CHUNKING (RerankChunking, Run 6b) is pinned blank the same way: `rr` then runs the product default
-// and `rrk` sets it on, announcing it or the arm is refused.
+// GATHERLIGHT_RERANK_CHUNKING (RerankChunking, Runs 6b/6c) is pinned blank the same way, and every reranker arm then
+// sets it and must announce it: chunking became the product default on 2026-09-24 (Run 6c), so `rr`/`rrf` pin it OFF —
+// the cut Runs 2–6 measured, so they re-launch as they ran — and `rrk` pins it ON, which is what ships.
 const PINNED = { GATHERLIGHT_JUDGE_INPUT: '', GATHERLIGHT_VERDICT_COMBINATION: '', GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '',
   GATHERLIGHT_RERANK_CHUNKING: '' };
-/** Which arms each `--rerankers=` model gets, and what each pins. `rr` pins nothing (the product default), `rrf` fuse,
- *  `rrk` chunking on. ONE writer: the live run builds reranker arms from this and armConfigFor labels them from it. */
+/** Which arms each `--rerankers=` model gets, and what each pins: `rr` partition over the CUT, `rrf` fuse over the cut,
+ *  `rrk` partition over windows (the shipped default). ONE writer: the live run builds reranker arms from this and
+ *  armConfigFor labels them from it. Runs 6b and 6c ran `rr` with the knob blank, which was the cut then too. */
 const RERANK_ARM_KINDS = {
-  rr: { suffix: 'partition', env: {}, knob: null },
-  rrf: { suffix: 'fuse', env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/ },
+  rr: { suffix: 'partition · cut', env: { GATHERLIGHT_RERANK_CHUNKING: 'off' }, knob: /rerank chunking = off \(/ },
+  rrf: { suffix: 'fuse · cut', env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse', GATHERLIGHT_RERANK_CHUNKING: 'off' },
+    knob: [/verdict combination = Fuse/, /rerank chunking = off \(/] },
   rrk: { suffix: 'partition · chunked', env: { GATHERLIGHT_RERANK_CHUNKING: 'on' }, knob: /rerank chunking = on \(/ },
 };
 // THE PRODUCT'S LAUNCH NUMBERS, restated here because the bench writes its own router preset — and GUARDED against the

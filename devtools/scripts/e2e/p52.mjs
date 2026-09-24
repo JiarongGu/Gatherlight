@@ -30,9 +30,11 @@
 //      a reason other than its ordering is told apart, quoting the server.
 //   6. A reranker AT WORK, on a server that booted bound to one: a fact write makes no chat call to
 //      llama.cpp and is tagged by the CLI on the CLI's model, and a recall sends the query AND each
-//      candidate's CONTENT to /v1/rerank. 6b: a long fact is capped at 1,000 characters. 6c: a catalogued
-//      reranker whose row declares a 512-token window is sent only pairs that fit it, the query included;
-//      BGE, declaring none, keeps the 1,000-character cap and an uncut query.
+//      candidate's CONTENT to /v1/rerank. 6b: a long fact reaches it as several WINDOWS of at most 1,000
+//      characters, its tail included, while a short fact in the same call is sent exactly as written. 6c: a
+//      catalogued reranker whose row declares a 512-token window is sent only pairs that fit it, the query included,
+//      a long fact in windows of that budget and a short one whole; BGE, declaring none, gets 1,000-character
+//      windows and an uncut query. Both confirmed to FAIL with GATHERLIGHT_RERANK_CHUNKING=off (the cut).
 //   7. Whether a reranker's TAGGING is happening — it goes to the CLI, and a signed-out CLI means none — is
 //      said in the 判断 row, the bind toast and the startup warning, each paired with a signed-in control.
 //      7b: a measurement knob set at startup reaches state/logs, not only stdout.
@@ -638,10 +640,14 @@ try {
     reranked().some((h) => h.body.includes('zzrerankquery') && h.body.includes('zzrerankcontent')),
     JSON.stringify(hits.slice(beforeRecall6).map((h) => `${h.path} ${h.model} ${h.body.slice(0, 160)}`)));
 
-  // --- 6b. a LONG fact is capped before it reaches the reranker ------------------------------------------
+  // --- 6b. a LONG fact is scored in WINDOWS — its tail included — and a short one exactly as written ------------
   // Measured on the real llama-server: one (query, document) pair past the router's 4096-token batch fails the
-  // WHOLE /v1/rerank call with a 500, and the verifier is fail-open — so one long fact turned every recall that
-  // surfaced it into no verdict at all. ~3,200 characters of Chinese is ~2,700 tokens; the cap is 1,000.
+  // WHOLE /v1/rerank call with a 500, and the verifier is fail-open — so every pair is bounded: 1,000 characters for a
+  // reranker declaring no window (~3,200 characters of Chinese is ~2,700 tokens). Until Run 6b the bound was a CUT, and
+  // docs/judge-bench.md Run 6 measured what the cut costs when the answer is past it: the note scores like filler and is
+  // pushed OFF the page. So a long candidate is scored in overlapping WINDOWS of that same bound, the last at its tail,
+  // in the same call, keeping its best window's score (ChunkedScoreProvider); a candidate that fits one window is sent
+  // exactly as before. Confirmed to FAIL with GATHERLIGHT_RERANK_CHUNKING=off (the cut: one head-only document).
   const longContent = 'zzlonghead 天文社每周五晚上在楼顶观测。' + '观测记录与器材清单。'.repeat(320) + ' zzlongtail';
   const wroteLong = await c3.call('remember_fact', {
     kind: 'household', topic: 'zzlongtopic 天文社', content: longContent,
@@ -649,17 +655,25 @@ try {
   });
   ok('(fixture) a long fact is stored whole', wroteLong.status === 200 && wroteLong.result?.ok === true,
     JSON.stringify(wroteLong.result));
+  const shortContent = 'The zzrerankcontent swim lane is booked every Thursday evening at the leisure centre.';
   const beforeLong = hits.length;
-  await c3.call('recall_facts', { query: 'zzlongquery 天文社每周五晚上在楼顶观测', limit: 5 });
+  // The query names both facts' words, so the long note AND case 6's short fact are candidates of ONE call.
+  await c3.call('recall_facts', { query: 'zzlongquery 天文社每周五晚上在楼顶观测 swim lane Thursday evening', limit: 5 });
   const longDocs = () => hits.slice(beforeLong)
     .filter((h) => h.path === '/v1/rerank' && h.body.includes('zzlongquery'))
     .flatMap((h) => { try { return JSON.parse(h.body).documents ?? []; } catch { return []; } })
     .map(String);
   await until(() => longDocs().some((d) => d.includes('zzlonghead')), 60000).catch(() => {});
-  const sentLong = longDocs().filter((d) => d.includes('zzlonghead'));
-  ok('THE POINT: the reranker is sent the long fact CAPPED — its head, never its tail, at most 1000 characters',
-    sentLong.length > 0 && sentLong.every((d) => d.length <= 1000 && !d.includes('zzlongtail')),
-    JSON.stringify(sentLong.map((d) => ({ length: d.length, tail: d.includes('zzlongtail') }))));
+  // Every document cut from the long note: each carries its repeated body, its head or its tail.
+  const sentLong = longDocs().filter((d) => d.includes('器材清单') || d.includes('zzlonghead') || d.includes('zzlongtail'));
+  const longShape = JSON.stringify(sentLong.map((d) => ({ length: d.length, head: d.includes('zzlonghead'), tail: d.includes('zzlongtail') })));
+  ok('THE POINT: the long fact reaches the reranker as several WINDOWS of at most 1,000 characters — its head in one, its TAIL in another',
+    sentLong.length >= 2 && sentLong.every((d) => d.length <= 1000 && longContent.includes(d))
+      && sentLong.some((d) => d.includes('zzlonghead')) && sentLong.some((d) => d.includes('zzlongtail')),
+    longShape);
+  const shortSent = longDocs().filter((d) => d.includes('zzrerankcontent'));
+  ok('…and a SHORT fact in the same call is sent exactly as written, once — one window is the fact itself',
+    shortSent.length === 1 && shortSent[0] === shortContent, JSON.stringify(shortSent));
 
   // --- 6c. a reranker with a 512-token WINDOW is sent what fits it — the query included --------------------
   // mMiniLMv2 serves 512-token slots, and one (query, document) pair past that fails the WHOLE /v1/rerank call:
@@ -668,7 +682,9 @@ try {
   // long fact would go unverified and nothing would say so. Its catalogue row declares the window, and the input is
   // fitted per PAIR: on this tokenizer family a text costs at most its characters + 1 in tokens, plus 4 special
   // tokens around the pair, so query + document ≤ 512 − 6 = 506 characters is a hard bound — with the query held to
-  // half of it. BGE's row declares no window: it keeps the 1,000-character cap and an unbounded query (the control).
+  // half of it. BGE's row declares no window: it keeps the 1,000-character bound and an unbounded query (the control).
+  // A fact longer than its bound is read in WINDOWS of it, its tail included (docs/judge-bench.md Run 6c), and every
+  // window is a pair that must fit; a short fact beside it is sent whole, as before.
   windowedServer = startServer({ dataDir: windowedDir, port: WINDOWED_PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
   unwindowedServer = startServer({ dataDir: unwindowedDir, port: UNWINDOWED_PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
   const winBase = `http://127.0.0.1:${WINDOWED_PORT}`;
@@ -688,6 +704,9 @@ try {
   // returns the fact as a candidate.
   const miniFact = 'zzminihead 天文社每周五晚上在楼顶观测。' + '观测记录与器材清单。'.repeat(120) + ' zzminitail';
   const miniQuery = ['zzminiquery', ...Array(14).fill('天文社每周五晚上在楼顶观测 观测记录与器材清单')].join(' ');
+  // …and a SHORT one beside it (no compatibility characters, so its NFKC form is itself): it fits one window and must
+  // be sent exactly as before chunking — whole.
+  const miniShort = 'zzminishort 天文社每周五晚上在楼顶观测 带上望远镜';
   for (const [name, cl] of [['windowed', cWin], ['BGE', cUnwin]]) {
     const wrote = await cl.call('remember_fact', {
       kind: 'household', topic: 'zzminitopic 天文社', content: miniFact,
@@ -695,6 +714,12 @@ try {
     });
     ok(`(fixture) the long fact is stored whole on the ${name} server`, wrote.status === 200 && wrote.result?.ok === true,
       JSON.stringify(wrote.result));
+    const wroteShort = await cl.call('remember_fact', {
+      kind: 'household', topic: 'zzminishorttopic 天文社', content: miniShort,
+      source: 'https://example.test/zzminishort', confidence: 0.8,
+    });
+    ok(`(fixture) the short fact is stored on the ${name} server`, wroteShort.status === 200 && wroteShort.result?.ok === true,
+      JSON.stringify(wroteShort.result));
   }
   const beforeMini = hits.length;
   await Promise.all([cWin.call('recall_facts', { query: miniQuery, limit: 5 }), cUnwin.call('recall_facts', { query: miniQuery, limit: 5 })]);
@@ -716,16 +741,27 @@ try {
   ok('…the QUERY is bounded too — to half the budget, its head kept',
     win.length > 0 && win.every((b) => String(b.query).length <= 253 && miniQuery.startsWith(String(b.query))),
     JSON.stringify(win.map((b) => String(b.query).length)));
-  const cutFact = pairs.filter((p) => p.d.includes('zzminihead'));
-  ok('…and the long fact keeps its head and loses its tail',
-    cutFact.length > 0 && cutFact.every((p) => !p.d.includes('zzminitail')), shape(cutFact));
+  // Every document cut from the long fact carries its repeated body, its head or its tail.
+  const ofMini = (d) => d.includes('器材清单') || d.includes('zzminihead') || d.includes('zzminitail');
+  const miniWindows = pairs.filter((p) => ofMini(p.d));
+  ok('…and the long fact is sent as several WINDOWS, each fitting beside the query — its head in one, its TAIL in another',
+    miniWindows.length >= 2 && miniWindows.some((p) => p.d.includes('zzminihead')) && miniWindows.some((p) => p.d.includes('zzminitail'))
+      && miniWindows.every((p) => miniFact.includes(p.d)),
+    shape(miniWindows));
+  const miniShortSent = pairs.filter((p) => p.d.includes('zzminishort'));
+  ok('…while the SHORT fact beside it is sent whole, once — exactly what it was sent before chunking',
+    miniShortSent.length === 1 && miniShortSent[0].d === miniShort, JSON.stringify(miniShortSent.map((p) => p.d)));
 
   const bge = rerankOf(UNWINDOWED_RERANK);
-  const bgeLong = bge.flatMap((b) => b.documents ?? []).map(String).filter((d) => d.includes('zzminihead'));
-  ok('(control) BGE, whose row declares no window, still gets the long fact at the 1,000-character cap — and the query uncut',
-    bgeLong.length > 0 && bgeLong.every((d) => d.length === 1000 && !d.includes('zzminitail'))
+  const bgeLong = bge.flatMap((b) => b.documents ?? []).map(String).filter(ofMini);
+  ok('(control) BGE, whose row declares no window, gets the long fact in windows of at most 1,000 characters — its tail included — and the query uncut',
+    bgeLong.length >= 2 && bgeLong.every((d) => d.length <= 1000 && miniFact.includes(d))
+      && bgeLong.some((d) => d.includes('zzminihead')) && bgeLong.some((d) => d.includes('zzminitail'))
       && bge.every((b) => String(b.query ?? '').length > 253),
-    JSON.stringify({ docs: bgeLong.map((d) => d.length), queries: bge.map((b) => String(b.query ?? '').length) }));
+    JSON.stringify({ docs: bgeLong.map((d) => d.length), tail: bgeLong.some((d) => d.includes('zzminitail')),
+      queries: bge.map((b) => String(b.query ?? '').length) }));
+  const bgeShort = bge.flatMap((b) => b.documents ?? []).map(String).filter((d) => d.includes('zzminishort'));
+  ok('(control) …and its short fact whole, once', bgeShort.length === 1 && bgeShort[0] === miniShort, JSON.stringify(bgeShort));
 
   // 6c, COMPATIBILITY CHARACTERS: the character bound holds for text the tokenizer does not EXPAND. XLM-R normalises
   // with nmt_nfkc first, so ℃ → °C, ㎡ → m2, ㎏ → kg, ㍿ → 株式会社 — measured on the real mMiniLMv2, a pair of 506 raw
@@ -761,12 +797,15 @@ try {
     compatPairs.length > 0 && compatPairs.every((p) => p.q === nfkc(p.q) && p.d === nfkc(p.d)
       && nfkc(p.q).length + nfkc(p.d).length <= 506),
     compatShape(compatPairs));
-  ok('…and the fact still keeps its head, and loses its tail',
-    compatPairs.some((p) => p.d.includes('zzcompathead')) && compatPairs.every((p) => !p.d.includes('zzcompattail')),
-    compatShape(compatPairs.filter((p) => p.d.includes('zzcompathead'))));
-  const bgeCompat = compatOf(UNWINDOWED_RERANK).flatMap((b) => b.documents ?? []).map(String).filter((d) => d.includes('zzcompathead'));
-  ok('(control) BGE, declaring no window, is sent the fact as WRITTEN — not normalised, ㍿ and ℃ intact',
-    bgeCompat.length > 0 && bgeCompat.every((d) => d.includes('㍿') && d.includes('℃') && compatFact.startsWith(d)),
+  // The windows are cut from the NORMALISED text, so each is a piece of it — head and tail both reached.
+  const compatWindows = compatPairs.filter((p) => nfkc(compatFact).includes(p.d));
+  ok('…and the fact is read in windows of its normalised text — its head in one, its tail in another',
+    compatWindows.length >= 2 && compatWindows.some((p) => p.d.includes('zzcompathead')) && compatWindows.some((p) => p.d.includes('zzcompattail')),
+    compatShape(compatWindows));
+  const bgeCompat = compatOf(UNWINDOWED_RERANK).flatMap((b) => b.documents ?? []).map(String).filter((d) => compatFact.includes(d) && d.length > 100);
+  ok('(control) BGE, declaring no window, is sent the fact as WRITTEN — not normalised, ㍿ and ℃ intact, head and tail both',
+    bgeCompat.length > 0 && bgeCompat.every((d) => d.includes('㍿') && d.includes('℃'))
+      && bgeCompat.some((d) => d.includes('zzcompathead')) && bgeCompat.some((d) => d.includes('zzcompattail')),
     JSON.stringify(bgeCompat.map((d) => d.slice(0, 40))));
   windowedServer.stop(); windowedServer = null;
   unwindowedServer.stop(); unwindowedServer = null;

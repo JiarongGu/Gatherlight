@@ -2,11 +2,14 @@ using Lyntai.Inference;
 
 namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 
-/// <summary>Whether a reranker scores a long candidate in WINDOWS (<see cref="ChunkedScoreProvider"/>) — read ONCE at
-/// startup from the measurement knob <c>GATHERLIGHT_RERANK_CHUNKING</c>: <c>on</c> or <c>off</c>, anything else (and
-/// unset) meaning the default, which is OFF until <c>docs/judge-bench.md</c> Run 6b's pre-registered rule is applied.
-/// Announced at startup whenever it is SET, raw value beside what it resolved to, on the console (what judge-bench
-/// reads) and through the logger at Warning (what state/logs keeps) — the pattern every measurement knob follows.</summary>
+/// <summary>Whether a reranker scores a long candidate in WINDOWS (<see cref="ChunkedScoreProvider"/>) — ON by default
+/// since 2026-09-24, when <c>docs/judge-bench.md</c> Run 6c's pre-registered rule held. Read ONCE at startup from the
+/// measurement knob <c>GATHERLIGHT_RERANK_CHUNKING</c>: <c>on</c> or <c>off</c>, anything else (and unset) meaning the
+/// default. <b>The knob is KEPT</b>, as <c>GATHERLIGHT_JUDGE_INPUT</c> was when its default flipped: <c>off</c> reproduces
+/// the cut every reranker was measured under in Runs 2–6, so judge-bench pins it on its <c>rr</c>/<c>rrf</c> arms and
+/// those runs re-launch as they ran. Announced at startup whenever it is SET, raw value beside what it resolved to, on
+/// the console (what judge-bench reads) and through the logger at Warning (what state/logs keeps) — the pattern every
+/// measurement knob follows. It is a benchmark setting, not a household one.</summary>
 public static class RerankChunking
 {
     /// <summary>The knob's name.</summary>
@@ -15,8 +18,8 @@ public static class RerankChunking
     /// <summary>What the knob was set to, or null.</summary>
     public static readonly string? Raw = Environment.GetEnvironmentVariable(KnobName);
 
-    /// <summary>The default when the knob is unset or unrecognised.</summary>
-    public const bool Default = false;
+    /// <summary>The default when the knob is unset or unrecognised: ON (Run 6c).</summary>
+    public const bool Default = true;
 
     /// <summary>Whether chunking is on for this process.</summary>
     public static readonly bool On = (Raw ?? "").Trim().ToLowerInvariant() switch
@@ -36,7 +39,10 @@ public static class RerankChunking
 /// candidates it scores highest and promotes them ahead of the rest, so a note whose answer it cannot see scores like
 /// filler and is pushed OFF a page the engine would have given it — mMiniLMv2 (512-token window) found the answer at the
 /// END of a ~900-character note 4 times in 60, against 29 with no judge at all; BGE and LAMAR, past their own
-/// 1,000-character cap, 3 and 4 against 30.</para>
+/// 1,000-character cap, 3 and 4 against 30. Run 6c measured this class against the cut under a pre-registered rule, and
+/// it became the default: 4 → 44 of 60 there on mMiniLMv2, 3 → 51 / 52 past 1,000 characters on BGE / LAMAR, no
+/// significant loss where the cut already read the answer, and byte-identical results on short facts
+/// (<see cref="RerankInputCap"/>'s last paragraph has the configuration and the cost).</para>
 ///
 /// <para><b>What it does.</b> Each document of a <see cref="ScoreRequest"/> is split by <see cref="RerankInputCap.Windows"/>
 /// into windows of the SAME budget the cut uses (<see cref="RerankInputCap.PerCandidate"/>, from the fitted query the
@@ -58,7 +64,9 @@ public static class RerankChunking
 ///
 /// <para><b>What it costs.</b> Every window is a pair the model scores, so a recall costs roughly the characters it sends:
 /// a candidate needing two windows costs about twice what its cut prefix did, and at most
-/// <see cref="RerankInputCap.MaxWindows"/> times. Short candidates cost nothing extra.</para></summary>
+/// <see cref="RerankInputCap.MaxWindows"/> times; a call carries at most <see cref="RerankInputCap.MaxWindowsPerCall"/>
+/// windows. Measured on 60 notes of ~900–1,200 characters: a recall's serial median went 2.0 → 3.2 s on BGE and
+/// 0.5 → 1.2 s on mMiniLMv2. Short candidates cost nothing extra.</para></summary>
 public sealed class ChunkedScoreProvider : IScoreProvider
 {
     private readonly IScoreProvider _inner;
