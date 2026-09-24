@@ -4457,6 +4457,35 @@ beyond·ja       1/1/4        0/0/4        1/1/4        1/1/4        1/1/4      
 
 The English 0/16s of Run 6 are gone: the windows are still character-bounded, but the answer is inside one of them.
 
+### mMiniLMv2 against BGE, both chunked — POST HOC, descriptive (added 2026-09-25)
+
+Not registered before the run, and not read by its rule: computed after it, for a review that asked whether
+mMiniLMv2's parity with BGE — Run 4's found@8 199 against 204, "no significant difference" — holds on long notes. The
+numbers are the bench's own "every reranker against every other" block, re-printed from the saved rows with no model
+called (`judge-bench --report-only=devtools/_judge-bench-long/results-2026-09-24T111707.456Z.json`). Both arms are
+`rrk` (each note read in windows), same run, same 240 questions. `b` = BGE hit & mMiniLMv2 miss, `c` = the reverse.
+
+| position | found@8 BGE / mMiniLMv2 | b/c, p | top-1 BGE / mMiniLMv2 | b/c, p |
+|---|---|---|---|---|
+| start | 47 / 50 | 3/6, 0.508 | 18 / 19 | 3/4, 1.000 |
+| middle | 53 / 50 | 5/2, 0.453 | 20 / 20 | 3/3, 1.000 |
+| end | 50 / 44 | 8/2, 0.109 | 21 / 22 | 4/5, 1.000 |
+| beyond | 51 / 38 | 17/4, 0.007, −21.7pp [−34.8, −7.1] | 28 / 18 | 12/2, 0.013, −16.7pp [−27.7, −4.6] |
+| **all** (of 240) | **201 / 182** | **33/14, p = 0.008, −7.9pp [−13.4, −2.3]** | 87 / 79 | 22/14, p = 0.243, −3.3pp [−8.2, +1.6] |
+
+By question set, found@8 on `all`: same 13/0 (p < 0.001), cross 8/4 (0.388), third 6/8 (0.791), mixed 6/2 (0.289) —
+none against BGE, so under the bench's finding rule the `all` row reads "YES (arm worse)"; top-1 reads "no".
+
+- **The parity is a short-fact result.** On these long notes mMiniLMv2 brings the answer onto the page significantly
+  less often than BGE, and the gap sits mostly where the answer is past 1,000 characters (`beyond`: −13 of the −19),
+  where mMiniLMv2 reads each note in 3–4 windows of 253–506 characters with the answer in the last, and BGE in two —
+  the "mMiniLMv2 `beyond` stays short of BGE and LAMAR" line above, now paired.
+- **How to weigh it.** The `all` row is this pair's one test under the bench's rule. The eight position cells are
+  descriptive: with eight of them, a single p near 0.05 would mean little, and only `beyond` is below 0.05 on either
+  metric. The whole table is one constructed fixture, one GPU, and was chosen for reading after the run.
+- **What changed because of it**: mMiniLMv2's catalogue note qualifies its parity with BGE as 「(事实都很短时)」 and adds
+  this found@8 row and `beyond`, labelled 「测完后另算的比较」.
+
 ### Latency
 
 Serial medians over 12 queries, warm, one GPU, three models resident; verdict-carrying recalls only (every recall carried
@@ -4548,7 +4577,10 @@ one).
     `RerankPace` now times each rerank call (ms per pair character, query plus document), and a chunked call carries only
     the windows it predicts will be scored in half the 60 s verification deadline — fewer per long candidate on a slow
     machine, down to one, the cut. Seeded with this GPU's figure, so on it nothing changes. Unmeasured on a CPU-only
-    machine; `e2e-p52` case 6e drives it with a fake that answers in time proportional to what it is sent.
+    machine; `e2e-p52` case 6e drives it with a fake that answers in time proportional to what it is sent. (Reviewed
+    again 2026-09-25: it now counts pair TOKENS by script rather than characters, needs a slow call twice before
+    believing it, and is never lowered by a short-fact call — `RerankPace`'s comment; and the bench guards against it,
+    "The bench and the pace" at the end of this file.)
   - **The tests now check what came BACK.** Cases 6b and 6c assert the recall carried a verdict (a fault in the windowing
     is fail-open, and those cases stayed green under a provider that threw), and case 6d puts a long note whose only
     rewarded text is in its tail window among 11 candidates for a page of 8. It is on the page only when that window's
@@ -4818,6 +4850,13 @@ node devtools/dev.mjs judge-bench --claude-stub --reuse-seed --tag-seed=Qwen3-0.
 
 - **The build.** The bench is `7d34527`'s, unmodified (`git diff HEAD` empty for the script). No product code changed; the
   server binary is the branch's current build.
+- **The seeds' build** (added 2026-09-25, on review). The tag and replay seeds were built at 12:41:17Z–12:42:17Z
+  (`builtWith`, `createdAt`), BEFORE `7d34527` was committed at 12:45:16Z, which is why their `seed.json` records
+  `appHead` `dcd23e3`, HEAD at the time. They were built from the working tree later committed as `7d34527`,
+  unchanged: the session's tool log shows the script's last edit at 12:41:02Z, the seed build starting at 12:41:10Z
+  (`node --check` of the script, then the build), and no tool call writing the script between then and the
+  `git add` + commit at 12:45:15Z; no other session made any tool call in that window. `7d34527` changes only
+  `judge-bench.mjs`, so the server's code was `dcd23e3`'s, as recorded.
 - **Timing.** 12:48:22Z–12:55:13Z, exit 0 on the first attempt.
 - **Order and arms.** Order seed 12345 (240 queries, 0 same-fact adjacencies), eight arms in parallel, latency sample 12.
 - **The seeds.** All three were reused and re-verified at startup: rows, the pairing preconditions, and tags unchanged
@@ -5235,3 +5274,30 @@ replies capped at 512 tokens are among them. Coverage is stated with every outco
   the build output, in `devtools/_run7/seed-build.txt`;
 - the smoke: `devtools/_judge-bench/results-2026-09-24T124250.791Z.json` and `devtools/_run7/smoke.txt`;
 - the scratch checkers: `devtools/_run7/guards7.mjs`, `reuse.mjs` and `discord.mjs`.
+
+## The bench and the pace (2026-09-25)
+
+Since `06d9590` a chunked reranker sizes each rerank call to the time this machine has been taking (`RerankPace`): a long
+candidate is read in fewer windows when calls have run slow. Runs 1–7 all ran before it existed. For this bench it is
+a confound the tables cannot show. Arms run in parallel on one GPU, so an arm's calls slow down when the others
+contend; if the pace fires, what an arm SENDS depends on that timing, and two arms meant to differ only in their
+configuration differ in their windows too.
+
+**The guard.** After both passes, judge-bench counts the pace's Information line — `window(s) per long candidate
+instead of` — in every arm's `state/logs`, saves the counts in the results file (`rerankPace`, only when a reranker
+ran), and the analysis VOIDS a run in which any count is above 0: a WARNING per arm, a `VOID:` banner after the
+warnings, exit 1, the rows still saved. `--report-only` applies the same judgement to a saved run; a run saved before
+the guard carries no counts and re-analyses exactly as it did.
+
+**Why a guard, not a pinned no-pace mode.** A knob that disables the pace would make every arm deterministic again, but
+it would measure a configuration no household runs, and it would be one more measurement knob every arm must pin and
+announce. On the GPU this bench runs on, the seed allows more than the 480-window ceiling, so the pace sizes a call only
+after calls there ran far slower than the seed — heavy contention, which is exactly the run that should not be read.
+
+**Verified.** All 28 saved results re-analyse byte-identically with the guard in place, text and written JSON (Runs 1–7
+included), compared against the previous bench by the scratch `devtools/_reanalyse-compare.mjs`. A copy of Run 6c's
+long results carrying a count of 3 on `rrk:bge-reranker-v2-m3-Q5_K_M` printed that arm's WARNING and the VOID banner and
+exited 1; a copy carrying zeros printed exactly what the original prints. A live smoke (long fixture, 4 facts, `formula`
+and `rrk` on mMiniLMv2) saved zero counts and exited 0 — which also showed the first draft writing its verdict over the
+saved counts, so a re-analysis of a void run would have read clean; the verdict is `paceGuard` now, and the smoke was
+repeated on the fix. The smoke's files were removed and the long work folder restored byte for byte.

@@ -288,8 +288,10 @@ is not cut to that bound but scored in several windows of it, in the same call (
 `docs/judge-bench.md` Runs 6 and 6c measured the cut pushing a long note off the page). One call carrying 2 000 such
 windows was served whole, and took 77–79 s on BGE and LAMAR — hence at most 480 windows per call. That count is only
 right for this GPU, so it is a ceiling: below it, `RerankPace` times each rerank call the provider makes (ms per pair
-character) and a chunked call carries only the windows it predicts will be scored within half the 60 s verification
-deadline — fewer per long candidate on a slower machine, down to one, the cut. Not yet run on a CPU-only machine.
+token, each character counted at the rate measured above for its script — 0.83 for CJK, 0.25 for English — so a pace
+learned on English does not under-predict Chinese) and a chunked call carries only the windows it predicts will be
+scored within half the 60 s verification deadline — fewer per long candidate on a slower machine, down to one, the
+cut. Not yet run on a CPU-only machine.
 
 **An upgrade stripped every vector from an install on 语义 · llama.cpp — reproduced, then fixed** (same build,
 2026-09-24). Lyntai's graph engine does not fail a write whose embed fails: `GraphMemoryEngine.SearchAsync` logs

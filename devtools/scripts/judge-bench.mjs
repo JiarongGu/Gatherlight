@@ -33,6 +33,16 @@
 //     chat-judge arm whose llama.cpp chat calls (`router: llamacpp`) never succeeded is one too.
 //   - Every arm PINS both measurement knobs (blank = unset), a knob-less arm must print no `[measurement]`
 //     line, and the 判断 switch is read BACK after it is set — so no arm silently duplicates another.
+//   - THE PACE MUST NOT HAVE MOVED (docs/judge-bench.md, "The bench and the pace"). A chunked reranker sizes each call
+//     to the time this machine takes (RerankPace), so on a contended or slow machine what an arm SENDS depends on
+//     timing — on the other arms running beside it — and two arms meant to differ only in their configuration would
+//     differ in their windows too. The bench counts the pace's Information line ("window(s) per long candidate
+//     instead of") in every arm's log after the run and saves the counts; any count above 0 VOIDS the run — a loud
+//     banner and exit 1, the rows still saved. Chosen over a pinned no-pace mode, which would measure a product
+//     nobody runs and add a knob to verify; on the GPU this bench runs on, the seed allows more than the count
+//     ceiling, so the pace sizes a call only after calls there ran far slower than the seed — heavy contention,
+//     exactly the run this guard voids. Runs saved before the guard carry no counts and re-analyse exactly as they
+//     did.
 //   - The questions are SHUFFLED with a seeded PRNG (mulberry32, --seed) and a fact's four questions are
 //     never asked back to back; every arm gets the SAME order. (The fixture has no cluster ids — its
 //     near-duplicates sit next to each other in file order, and the shuffle is what separates them.)
@@ -422,6 +432,10 @@ const readLogs = (dataDir) => {
   if (!fs.existsSync(dir)) return '';
   return fs.readdirSync(dir).filter((f) => f.endsWith('.log')).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
 };
+// ChunkedScoreProvider's Information line when RerankPace gives a long candidate fewer windows than the count ceiling
+// would — the one trace of the pace changing what a call sends (the header's pace guard).
+const PACE_LINE = /window\(s\) per long candidate instead of/g;
+const paceCutsIn = (dataDir) => (readLogs(dataDir).match(PACE_LINE) ?? []).length;
 // Lyntai's TextRouter logs one `router: <provider> (model …) → <verdict>` line per attempt. `claude-cli` is the
 // CLI; `llamacpp` is LlamaCppSource's CHAT provider (its embedder and reranker register as `llamacpp-embed` and
 // `llamacpp-rerank`, which the trailing space keeps out of this count).
@@ -644,6 +658,9 @@ const loadRun = (json, source) => {
       rerankProxy: json.rerankProxy ?? null,
       // The second seed a `<arm>@tags` arm started from, and its tag statistics (Run 7); null before it.
       tagSeed: json.tagSeed ?? null,
+      // The pace guard's per-arm counts; ABSENT (not null) on a run saved before the guard, so a re-analysis of one
+      // writes exactly what it wrote before.
+      ...(json.rerankPace ? { rerankPace: json.rerankPace } : {}),
     },
     arms,
     notes,
@@ -1216,6 +1233,17 @@ const analyse = (run, { baseline = null } = {}) => {
     if (l.errors > 0)
       out.warnings.push(`arm ${arm.key} — ${l.errors}/${arm.latencyRows.length} latency recalls errored (left out of its serial median)`);
   }
+  // THE PACE GUARD (header): a run in which RerankPace sized any call is VOID. Only a run that saved the counts is
+  // judged; one saved before the guard prints nothing new.
+  let paceVoid = null;
+  if (meta.rerankPace) {
+    const fired = Object.entries(meta.rerankPace).filter(([, n]) => n > 0);
+    // Its own name: the saved counts stay `rerankPace` in the file, and a re-analysis must read those, not this.
+    out.paceGuard = { void: fired.length > 0, fired: Object.fromEntries(fired) };
+    for (const [k, n] of fired)
+      out.warnings.push(`arm ${k} — RerankPace sized ${n} rerank call(s) below the count ceiling (its log: "window(s) per long candidate instead of …"): what the arm sent depended on this machine's timing`);
+    if (fired.length) paceVoid = fired.map(([k, n]) => `${k} (${n})`).join(', ');
+  }
   if (out.warnings.length > 0) {
     console.log('');
     for (const w of out.warnings) console.log(`WARNING: ${w}`);
@@ -1223,6 +1251,11 @@ const analyse = (run, { baseline = null } = {}) => {
   if (out.notes.length > 0) {
     console.log('');
     for (const n of out.notes) console.log(`NOTE: ${n}`);
+  }
+  if (paceVoid) {
+    console.log(`\nVOID: RerankPace changed what an arm sent — ${paceVoid}. Paired arms no longer differ only in their `
+      + 'configuration, so no table above may be read. Re-run on an idle machine, or with fewer arms in parallel.');
+    process.exitCode = 1;
   }
   return out;
 };
@@ -2319,6 +2352,8 @@ const live = async () => {
       arm.routerTotal = routerOutcomes(arm.dir);
       if (arm.chatJudge) arm.localTotal = routerOutcomes(arm.dir, LLAMA_CHAT_PROVIDER);
     }
+    // THE PACE GUARD: how many rerank calls the pace sized below the count ceiling, per arm, over both passes.
+    for (const arm of arms) arm.paceCuts = paceCutsIn(arm.dir);
 
     // RECONCILE what the proxies forwarded with what the router received: every /v1/rerank forward must appear in the
     // router's log as a request proxied to that model's child. Run 6b found its two abstentions exactly this way — a
@@ -2391,6 +2426,8 @@ const live = async () => {
           routerProxied,
         },
       } : {}),
+      // The pace guard's counts (header) — only when a reranker ran, the only arms a pace exists for.
+      ...(arms.some((a) => a.reranker) ? { rerankPace: Object.fromEntries(arms.map((a) => [a.key, a.paceCuts])) } : {}),
       rows: Object.fromEntries(arms.map((a) => [a.key, a.rows])),
       latencyRows: Object.fromEntries(arms.map((a) => [a.key, a.latencyRows])),
     };

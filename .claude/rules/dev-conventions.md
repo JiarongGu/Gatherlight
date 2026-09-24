@@ -396,7 +396,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   |---|---|---|
   | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost. On the 240-question bilingual fixture (`docs/judge-bench.md`): top-1 79/240, found@8 125/240, ~0.23 s per recall |
   | **判断 · Claude CLI** | subject handles on every write; judges which candidates answered, and promotes those to the front | **top-1 79 → 130/240 (+21.3pp, p < 0.001, 95% [+15.9, +26.3]pp), each of the four sets significant on its own; found@8 125 → 131, not a finding (p = 0.210)** — `docs/judge-bench.md` Run 1, 2026-09-23, its `contentonly` arm: the judge reading each fact's CONTENT alone, the input that ships since 2026-09-24. Its `content` arm — topic — content, the 1.3.0 input — read top-1 132 (+22.1pp, [+16.6, +27.2]pp) and found@8 133 (p = 0.096), and the two were measured equivalent. Costs **~8.7 s per recall** there (serial median; ~9.5 s for topic — content; 8.7–11.7 s across Run 1's judge arms; **9–17 s** measured earlier on the household's own facts) — a CLI spawn per call. Before the content fix, on the household's own facts: +2 facts in each multilingual probe, 0 same-language |
-  | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 125 → 208 (LAMAR) / 203 (BGE) of 240 (+34.6 / +32.5pp, both p < 0.001) — cross-language 6 → 49 / 48 of 60; top-1 79 → 86 / 90 (+2.9pp p = 0.039 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 2, 2026-09-23. ~0.47–0.49 s per recall, warm, on one GPU, ≤60 candidates. **mMiniLMv2** (133 MB, `docs/judge-bench.md` Run 4, 2026-09-24, same fixture, 语义 off, page of 8): found@8 125 → 199 (+30.8pp) and top-1 79 → 99 (+8.3pp), both p < 0.001; against the SAME run's BGE (204) no significant difference and not equivalent (7/2, p = 0.180, [−4.6, +0.5]pp), against LAMAR (208) a measured loss (9/0, p = 0.004); ~0.31 s per recall against the run's formula 0.24 s, measured under a 4096 launch (the product launches it at its declared 512; the rerank call was re-measured under both, no difference). LAMAR vs BGE: no finding either way — found@8 leans LAMAR 5–0 (p = 0.063, interval excluding zero); BGE is `RecommendedReranker` by the smaller-file tie-break registered before the run, and by nothing else. Lyntai, on ITS English LoCoMo corpus (`docs/memory-measurements.md` there, evidence-hit, n = 200), in ONE run — 2026-09-10, `embeddinggemma-300M` embedder, base 85.5%, a perfect judge +7.0: BGE Q8 +5.5, LAMAR Q8 +5.5, LAMAR Q5 (our file) +6.0. Its 2026-09-15 run read LAMAR Q5 at +9.0 of 9.5 over `nomic-embed-text` (base 83.0%); Lyntai's own rule is that a reranker's delta belongs to the configuration, so quote the base and embedder with it or not at all — the household notes quote neither |
+  | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 125 → 208 (LAMAR) / 203 (BGE) of 240 (+34.6 / +32.5pp, both p < 0.001) — cross-language 6 → 49 / 48 of 60; top-1 79 → 86 / 90 (+2.9pp p = 0.039 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 2, 2026-09-23. ~0.47–0.49 s per recall, warm, on one GPU, ≤60 candidates, on facts of at most 101 characters — on 60 long notes of 883–1,241 characters (Run 6c, each read in windows) a recall took 3.2 s on BGE and LAMAR and 1.2 s on mMiniLMv2. **mMiniLMv2** (133 MB, `docs/judge-bench.md` Run 4, 2026-09-24, same fixture, 语义 off, page of 8): found@8 125 → 199 (+30.8pp) and top-1 79 → 99 (+8.3pp), both p < 0.001; against the SAME run's BGE (204) no significant difference and not equivalent (7/2, p = 0.180, [−4.6, +0.5]pp), against LAMAR (208) a measured loss (9/0, p = 0.004); ~0.31 s per recall against the run's formula 0.24 s (facts of at most 101 characters), measured under a 4096 launch (the product launches it at its declared 512; the rerank call was re-measured under both, no difference). LAMAR vs BGE: no finding either way — found@8 leans LAMAR 5–0 (p = 0.063, interval excluding zero); BGE is `RecommendedReranker` by the smaller-file tie-break registered before the run, and by nothing else. Lyntai, on ITS English LoCoMo corpus (`docs/memory-measurements.md` there, evidence-hit, n = 200), in ONE run — 2026-09-10, `embeddinggemma-300M` embedder, base 85.5%, a perfect judge +7.0: BGE Q8 +5.5, LAMAR Q8 +5.5, LAMAR Q5 (our file) +6.0. Its 2026-09-15 run read LAMAR Q5 at +9.0 of 9.5 over `nomic-embed-text` (base 83.0%); Lyntai's own rule is that a reranker's delta belongs to the configuration, so quote the base and embedder with it or not at all — the household notes quote neither |
   | **判断 · llama.cpp chat model** | BOTH halves locally — subject handles on every write, and judges which candidates answered (partition, like the Claude judge); no account quota | Same 240-question fixture, 语义 off, content-only judge input, one chat model per run beside 公式 (and BGE in Run 5b). **Gemma 3 1B is WORSE than no judge**: top-1 79 → 33 (−19.2pp, p < 0.001), found@8 125 → 111 (−5.8pp, p = 0.003) — `docs/judge-bench.md` Run 3, 2026-09-24; verdict coverage 202/234. **Qwen3 0.6B is BETTER on both**: top-1 79 → 110 (+12.9pp, p < 0.001), found@8 125 → 148 (+9.6pp, p < 0.001) — Run 5b, 2026-09-24, thinking off and the 512-token cap as the product launches it (context uncapped in that run; the 16,384 cap is far above any fixture prompt); coverage 226/234. Adds ~0.18 s (Gemma: 403 ms against the run's formula 219) and ~0.16 s (Qwen3: 381 against 220) per recall, serial medians, warm, one GPU. Those figures are over tags the Claude CLI wrote. **Qwen3's OWN tags were measured in Run 7** (2026-09-24, the same fixture and settings, a seed tagged by Qwen3 paired within the run against Claude's tags replayed through the same path): no significant difference — top-1 104 vs 114 (−4.2pp, p = 0.143, 95% [−9.2, +0.9]), found@8 155 vs 152 (+1.3pp, p = 0.736, [−3.6, +6.1]) — and NOT equivalent (neither interval inside ±3pp); still significantly better than no judge over the same tags (+10.8 / +14.6pp, p < 0.001). Its tags COLLAPSE unrelated facts (`parent` on 12; 29 of 78 handle assignments reused only across groups, against Claude's 7 of 65), which a fixture of one-fact questions barely exercises — the model note says so. Gemma's own tags are unmeasured. Qwen3's child and the router took +2,472 MiB of GPU memory at the chat context cap, +5,175 MiB uncapped (launch item (5)) |
   | **语义 · Claude CLI** | stores other wordings of a fact, **≥1 in another language** | capability proven directly: an English question retrieves a Chinese-only fact. Aggregate effect NOT measured — see the rule below on why this tool cannot |
 
@@ -653,26 +653,34 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   The `n-predict` and `ctx-size` caps beside it are NOT part of this workaround and stay: they are our own launch
   contract (`LlamaServerRuntime.ChatMaxTokens` — the memory seams send no `max_tokens`, and the router does not stop
   a child's generation when the app abandons a request; `LlamaServerRuntime.ChatContextTokens` — launch item (5)).
-  **(6) `ChunkedScoreProvider` (with `RerankPace`) ↔ Lyntai `docs/task-archive.md` Part 287 / D177 — CLOSED upstream,
-  NOT released (no version promised).** Lyntai 3.2.0 has no way to score a document longer than a reranker's window
-  except to send it whole (one over-window pair fails the WHOLE call) or cut it, and Run 6 measured the cut pushing a
-  long note off the page; so the app scores each long candidate in windows and keeps its best (the reranker bullet
-  below). D177 adds opt-in SEGMENTATION on a provider: `HttpModelOptions.MaxInputChars` plus `InputSegmentation`
-  (`Overflow` Segment or Truncate, `Overlap` 0.15), a document over the bound scored
-  as its best piece (MaxP), every piece in one request, an input within the bound sent exactly as before. That
-  DUPLICATES this class's job, and it is not a drop-in. **Ours is QUERY-AWARE** — the budget is what the fitted query
-  leaves (`RerankInputCap.PerCandidate`), where D177's HTTP bound is a fixed character count per document that never
-  counts the query (Lyntai's advice: the window minus your longest query, with margin); ours counts the NFKC-normalised
-  text; overlaps windows by at least a quarter (D177: 0.15, ending at a paragraph/sentence/word boundary); anchors the
-  last window at the tail; caps windows per candidate (5) and per call (480, and below that what `RerankPace` predicts
-  fits half the verification deadline — D177 caps neither); and passes a request whose every document fits one window
-  through byte for byte. **On the bump**: measure D177 against ours on Run 6's long fixture WITHIN ONE RUN — the rule:
-  not significantly worse at `end` or `beyond`, and identical on short facts. If it holds, delete `ChunkedScoreProvider`,
-  configure `MaxInputChars`/`Segmentation` on the `llamacpp-rerank` registration (`LlamaCppSource.Register`), keep
-  `RerankInputCap`'s query fit, and decide what bounds a call's TIME, since D177 bounds none (keep `RerankPace`'s sizing
-  on top, or ask Lyntai for a per-call bound). If it does not hold, keep ours and tell Lyntai why, with the run. **The
-  Lyntai half is incomplete**: Part 287's outcome does not name `ChunkedScoreProvider` as the adopter's copy to remove,
-  so a release closing the gap would not tell anyone reading only Lyntai that this class exists.
+  **(6) `ChunkedScoreProvider` (with `RerankPace`) ↔ Lyntai `docs/task-archive.md` Part 287 / D177, with Part 289
+  closed into it — CLOSED upstream, NOT released (no version promised; read at Lyntai commit `e6fa579b`).** Lyntai
+  3.2.0 has no way to score a document longer than a reranker's window except to send it whole (one over-window pair
+  fails the WHOLE call) or cut it, and Run 6 measured the cut pushing a long note off the page; so the app scores each
+  long candidate in windows and keeps its best (the reranker bullet below). D177 as it stands at that commit: a
+  provider given `HttpModelOptions.MaxInputChars` SEGMENTS an over-long input (`InputSegmentation`) and scores a
+  document as its best piece (MaxP), every piece in one request; on a Score registration that bound is the PAIR
+  window, the query keeping at most (1 − `MinDocumentShare`, default 0.5) of it, cut ONCE per call at a word boundary;
+  characters are counted after NFKC, per text element, while the ORIGINAL text is sent; `MaxPiecesPerInput` on
+  `InputSegmentation` caps an input's pieces — the first, the last anchored at the tail, the rest spread evenly
+  between; `Overlap` defaults to 0.15 and is configurable. It explicitly REJECTS a per-call cap and a latency budget as
+  library policy — "fitting a call to a latency budget is a policy for the deployment that measured it". So D177 now
+  does what our budget does under a declared window — and ours is query-aware ONLY there: for BGE and LAMAR, which
+  declare none, `RerankInputCap.PerCandidate` is 1,000 characters whatever the query (the query itself is capped at
+  2,045 characters since 2026-09-25, half the 4,096-token batch). **What remains ours**: consecutive windows overlap by
+  AT LEAST a quarter (settable in D177 as an `Overlap` of 0.25, where it is an upper bound — the next piece restarts at
+  the earliest sentence end or space inside it, else where the last one ended); under a declared window we SEND the
+  NFKC text, where D177 counts NFKC and sends the original (the tokenizer normalises either way — identical token ids
+  but for 95 scalars newer than the model's table); and the call sized by TIME (`RerankPace`). **D177 cannot carry
+  `RerankPace`**: its piece cap is fixed at registration, so no decorator can vary a call's pieces per request, and
+  deleting `ChunkedScoreProvider` deletes the pace. **On the bump**: measure D177 against ours on Run 6's long fixture
+  WITHIN ONE RUN — the rule, unchanged: not significantly worse at `end` or `beyond`, and identical on short facts.
+  What follows is then an OWNER decision, informed by that comparison: keep `ChunkedScoreProvider` for the pace, or
+  configure `MaxInputChars`/`Segmentation` on the `llamacpp-rerank` registration (`LlamaCppSource.Register`) with a
+  fixed piece cap and lose time-sizing. If D177 fails the rule, keep ours and tell Lyntai why, with the run. **Both
+  halves are recorded**: Part 289's outcome names "an app-side segmenting score-provider decorator" as the adopter's
+  copy to remove when D177 releases — by its role, not its class name, as a library that names no adopter must — and
+  Lyntai's `docs/memory-measurements.md` records our Run 6c as `rerank-segmented-adopter-long-notes`.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
@@ -1107,7 +1115,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   per pair — 96 long documents in one call scored, and 2,000 windows in one call were served), and the scoring
   verifier is fail-open, so one long fact made every recall that surfaced it unverified. `RerankInputCap` bounds every
   pair: at most 1,000 characters of document, ~830 tokens at the worst rate measured (0.83 per UTF-16 unit, common
-  CJK); `p51` pins `ctx-size = 4096` on the preset.
+  CJK); `p51` pins `ctx-size = 4096` on the preset. Beside a reranker that declares no window (BGE, LAMAR, anything
+  dropped in) the QUESTION is capped too, at 2,045 characters — half the pair budget of that 4,096-token batch, the
+  declared-window rule applied to it (`RerankInputCap.UndeclaredQueryMaxChars`, reading `LlamaServerRuntime.RerankBatch`).
+  It went uncut until 2026-09-25, argued from recall queries being short; the agent writes them, and one long enough
+  would have refused every call it was in, silently. `e2e-p52` case 6c sends 2,812 characters and asserts 2,045, the
+  question's head; confirmed to FAIL without the cap.
   **A CUT IS WORSE THAN NO JUDGE for the note it cuts, so a long candidate is scored in windows** (2026-09-24,
   `docs/judge-bench.md` Runs 6 and 6c). The bound used to be a cut, argued as "better than a refused call" — true for
   the recall's OTHER candidates, false for the cut one: under partition the reranker endorses its eight best and
@@ -1128,15 +1141,29 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   time where notes are long: 2.0 → 3.2 s per recall on BGE, 0.5 → 1.2 s on mMiniLMv2, on those notes, one GPU.
   **A call is sized by TIME, not only by count.** 480 windows per call was measured on one GPU (~20 s on BGE/LAMAR);
   on a CPU-only machine the same call can outlast the 60 s verification deadline — NoOpinion after a minute, logged at
-  Warning only. So 480 is a CEILING, and below it `RerankPace` — one per verifier, learned from every rerank call the
-  provider makes, pass-through ones included — predicts a call's time in ms per PAIR character (query plus document;
-  per window would learn a 60-character fact's cost and apply it to a 1,000-character window) and gives each long
-  candidate only the windows that fit half the deadline, down to one, the cut. A slower call is believed at once, a
-  faster one halfway, a call a deadline cut off raises it to what it proved, and a failed answer teaches nothing;
-  seeded with the GPU figure, so on that GPU nothing changes. The household note says what a slow machine does. Its
-  behaviour on a real CPU-only machine is UNMEASURED. Proof: `e2e-p52` case 6e (a fake answering in 0.7 ms per pair
-  character, the deadline knob at 6 s: the first recall sends all 5 windows, the same recall then 4, still a verdict),
-  confirmed to FAIL with the pace ignored.
+  Warning only. So 480 is a CEILING, and below it `RerankPace` — one per verifier, learned from the rerank calls the
+  provider makes — predicts a call's time in ms per PAIR TOKEN (query plus document; per window would learn a
+  60-character fact's cost and apply it to a 1,000-character window), each character counted at its script's measured
+  rate — 0.83 from U+2E80 up, 0.25 below, one writer (`RerankPace.Tokens`) shared by the timing and the sizing — and
+  gives each long candidate only the windows that fit half the deadline, down to one, the cut. It counted CHARACTERS
+  until review (2026-09-25), which let a pace learned on English under-predict Chinese by ~3.3×, past the margin.
+  **Its rules, each a judgement stated as one**: a call a deadline cut off raises it at once to what that call proved; a
+  slower ANSWERED call is believed at once only on a repeat (the call before it slow too, or cut off) — alone it moves
+  the estimate halfway in log space, because one outlier (a model reloading, a moment of contention) would otherwise
+  cut every long note of the next recalls to its first window; a faster call lowers it halfway, but only a CHUNKED one —
+  a pass-through call (every document one window) may raise it and never lowers it, since short pairs cost less per
+  token and a household of short facts pulled the estimate down on every recall; a failed answer teaches nothing.
+  Seeded with the GPU figure, so on that GPU nothing changes. The household note says what a slow machine does, that
+  the first recall after a launch with too many long facts can still wait the full minute and come back unjudged, and
+  that none of it is measured on a CPU-only machine — and so are the per-script rates beyond English and CJK, and
+  whether rerank time follows tokens at all off a GPU. Proof: `e2e-p52` 6e (the deadline knob at 12 s, a fake answering
+  in 1.6 ms per pair token: all 5 windows, all 5 again — the lone slow call not believed — then 4, and still 4 after a
+  fast short-only recall), 6f (6 s, 1.8 ms: the first recall cut at the deadline and unjudged, the next 2 windows and a
+  verdict — the cut-off path), 6g (12 s, 3 ms: a pace learned on an English note sizes a Chinese one by its tokens —
+  fewer windows and a verdict, where per-character counting sends all 5 and is cut). Each was confirmed to FAIL with
+  its own rule removed, and only its own assertion. The bench cannot see the pace in its tables, so judge-bench counts
+  the pace's Information line in every arm's log and VOIDS a run in which it fired (`docs/judge-bench.md`, "The bench
+  and the pace").
   `GATHERLIGHT_RERANK_CHUNKING=off` (`RerankChunking`) is KEPT as a measurement knob so the bench can reproduce the cut
   Runs 2–6 measured; judge-bench's `rr`/`rrf` arms pin it off and `rrk` on. **Two traps met measuring it**: llama.cpp's
   scores drift in the third decimal between identical calls, so an A/B that must be byte-identical needs identical

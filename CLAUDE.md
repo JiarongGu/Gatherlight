@@ -90,7 +90,8 @@ reranker's id. Measured: it puts the answer on the 8-row page far more often tha
 vs 131 of 240), but first far less often (86–90 vs 130), at ~0.5 s against ~8.7 s — the Claude figures from Run
 1's content-only arm, the judge input that ships (its topic — content arm, the 1.3.0 input, read 133 / 132 /
 ~9.5 s and was measured equivalent). Those are Run 2's two rerankers; with mMiniLMv2 (Run 4) the picker's three span
-199–208 / 86–99 / 0.31–0.49 s. A llama.cpp CHAT judge does both halves locally: Qwen3 0.6B beats no judge on both
+199–208 / 86–99 / 0.31–0.49 s — every one of those figures on facts of at most 101 characters; on long notes
+(883–1,241 characters, Run 6c, read in windows) a recall runs 1.2–3.2 s. A llama.cpp CHAT judge does both halves locally: Qwen3 0.6B beats no judge on both
 metrics (Run 5b) — over its own tags too, not significantly different from over Claude's though its tags collapse
 unrelated facts (Run 7) — and Gemma 3 1B loses to it (Run 3). The rules for it — the
 binding screen, the per-pair cap and the windows a long candidate is read in, the router restart limits — are in `.claude/rules/dev-conventions.md`.
