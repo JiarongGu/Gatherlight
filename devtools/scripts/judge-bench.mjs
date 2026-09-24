@@ -110,6 +110,29 @@
 // candidate at the page boundary; the memo removes that noise BETWEEN arms, so two arms that send the same bytes get the
 // same verdicts, and an arm that sends different bytes shows it. The serial latency pass is never memoised.
 //
+// THE LOCAL-TAG SEEDS (`--tag-seed=<chat model>`, docs/judge-bench.md Run 7). Two more seeds of the bilingual fixture,
+// written through the product's own write path with 判断 on and bound to a local llama.cpp CHAT model (settings.json, as a
+// household's binding is), the router launched with the product's chat preset (thinking off, the generation and context
+// caps), every server on the claude STUB:
+//   - the TAG seed (devtools/_judge-bench-seed-tags-<model>/), whose subject tags that model wrote;
+//   - its CONTROL, the REPLAY seed (devtools/_judge-bench-seed-replay-<model>/), written the same way except that a
+//     recording proxy answers every annotation request with the tags CLAUDE wrote for that fact in the default seed.
+// Why the control: the default seed was written on 2026-09-23 by an older build whose decay clock advanced one unit per
+// write; today's advances by 1/n. A seed written today differs from it in the clock AS WELL AS the tags, so the tag
+// seed is paired with the replay, which differs from it ONLY in the tags (checked table by table), while the replay
+// differs from the default seed only in the clock (its subjects and subject edges are checked identical).
+// Both are built together, on their own (`--build-tag-seed --seed-only`), so the router log, the preset and a record of
+// every chat request (chat-requests.jsonl) are their evidence. The build refuses to finish unless 0 claude-cli calls were
+// made, every write was annotated exactly once (by the model on the tag seed, by the replay on the other), every forward
+// reached the model's child, and the child was spawned with thinking off. The binding is then REMOVED from each seed
+// (settings.json restored, resource stand-ins deleted), so an arm on it is configured exactly as on the default seed.
+// `--tag-seed-arms=<arm keys>` runs those arms again on both, keyed `<arm>@replay` and `<arm>@tags`, in the same run, so
+// all three are paired per query; the formula digest is kept PER SEED (`formula`, `formula@replay`, `formula@tags`), and
+// --baseline compares each seed's digest with its own. The TAG STATISTICS — handles per fact, vocabulary, reuse within
+// the fixture's near-duplicate groups, overlap with Claude's handles for the same fact — are descriptive, printed at the
+// seed step and saved with the seeds and the run. `--chat-arms=` picks which arms each `--chat-judges=` model gets
+// (`lc`, `lcb`; default both), as `--rerank-arms=` does for rerankers.
+//
 // Usage:
 //   node devtools/dev.mjs judge-bench                     # formula, formula2, topic, content, content2, contentonly, fuse
 //   node devtools/dev.mjs judge-bench --arms=formula,content --n=20 --reuse-seed
@@ -120,8 +143,11 @@
 //   node devtools/dev.mjs judge-bench --fixture=long --seed-only --resources=devtools/_rr-res
 //   node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 --rerankers=… --resources=devtools/_rr-res
 //   node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 --rerankers=… --rerank-arms=rr,rrk --rerank-memo --resources=devtools/_rr-res
-// Flags: --arms= --rerankers= --rerank-arms=rr,rrf,rrk --chat-judges= --n= --port-base= --llama-port= --resources= --seed=
-//        --latency-sample=   --fixture=bilingual|long   --reuse-seed | --reseed   --seed-only   --claude-stub   --rerank-memo
+//   node devtools/dev.mjs judge-bench --claude-stub --reuse-seed --tag-seed=Qwen3-0.6B-Q8_0 --build-tag-seed --seed-only --arms=formula --resources=devtools/_rr-res
+//   node devtools/dev.mjs judge-bench --claude-stub --reuse-seed --tag-seed=Qwen3-0.6B-Q8_0 --arms=formula --chat-judges=Qwen3-0.6B-Q8_0 --chat-arms=lc --tag-seed-arms=formula,lc:Qwen3-0.6B-Q8_0 --resources=devtools/_rr-res
+// Flags: --arms= --rerankers= --rerank-arms=rr,rrf,rrk --chat-judges= --chat-arms=lc,lcb --n= --port-base= --llama-port= --resources=
+//        --seed= --latency-sample=   --fixture=bilingual|long   --reuse-seed | --reseed   --seed-only   --claude-stub   --rerank-memo
+//        --tag-seed=<chat model>   --build-tag-seed   --tag-seed-arms=<arm keys>
 //        --report-only=<results.json | rows-*.jsonl>   --baseline=<results.json>:<arm>
 import fs from 'node:fs';
 import path from 'node:path';
@@ -134,8 +160,9 @@ import { resolveClaude, QUESTION_SETS } from './recall-questions.mjs';
 import { expectedLongBytes, POSITIONS } from './judge-bench-long-fixture.mjs';
 
 // ---- flags: known ones only ------------------------------------------------------------------------------
-const VALUED = ['arms', 'rerankers', 'rerank-arms', 'chat-judges', 'n', 'port-base', 'llama-port', 'resources', 'seed', 'latency-sample', 'report-only', 'baseline', 'fixture'];
-const BOOLEAN = ['reuse-seed', 'reseed', 'seed-only', 'claude-stub', 'rerank-memo'];
+const VALUED = ['arms', 'rerankers', 'rerank-arms', 'chat-judges', 'chat-arms', 'n', 'port-base', 'llama-port', 'resources', 'seed',
+  'latency-sample', 'report-only', 'baseline', 'fixture', 'tag-seed', 'tag-seed-arms'];
+const BOOLEAN = ['reuse-seed', 'reseed', 'seed-only', 'claude-stub', 'rerank-memo', 'build-tag-seed'];
 const die = (msg) => { console.error(`judge-bench: ${msg}`); process.exit(2); };
 const KNOWN = `known flags: ${[...VALUED.map((k) => `--${k}=…`), ...BOOLEAN.map((k) => `--${k}`)].join(' ')}`;
 const opts = {};
@@ -217,6 +244,26 @@ const RUN_STAMP = RUN_AT.replace(/:/g, '');
 const SET_KEYS = QUESTION_SETS.map((s) => s.key);
 const SETS = [...SET_KEYS, 'all'];
 const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
+
+// THE LOCAL-TAG SEEDS (docs/judge-bench.md Run 7): two more seeds of the bilingual fixture, built TOGETHER through the
+// product's write path with 判断 bound to one local chat model — `tags`, which that model tagged, and `replay`, its
+// CONTROL, whose every annotation request was answered with the tags CLAUDE wrote for that fact in the default seed. The
+// two differ only in the tags. The replay exists because the default seed was written on 2026-09-23 by an older build,
+// whose decay clock advanced one unit per write (stability 20 on every node); today's advances by 1/n (position H₆₀
+// after 60 writes, stability 20/√n), so an arm on the default seed and one on a seed written today differ in the clock
+// as well as the tags. An arm run on one of them is keyed `<arm>@tags` / `<arm>@replay`; every other arm runs on the
+// default seed (Claude's tags, or none on the long fixture).
+const TAG_MODEL = opts['tag-seed'] ?? null;
+const EXTRA_SEEDS = ['replay', 'tags'];
+const seedRootOf = (seed) => (seed === 'default' ? SEED_ROOT : path.join(repo, 'devtools', `${VARIANTS[VARIANT].seed}-${seed}-${TAG_MODEL}`));
+const seedDataOf = (seed) => path.join(seedRootOf(seed), 'data');
+const seedMetaOf = (seed) => path.join(seedRootOf(seed), 'seed.json');
+const SEED_NAME = { default: 'the default seed', tags: 'the tag seed', replay: 'the replay seed' };
+/** Which seed an arm key ran on: 'tags' for `<arm>@tags`, 'replay' for `<arm>@replay`, else 'default'. */
+const seedOfKey = (key) => /@(tags|replay)$/.exec(key)?.[1] ?? 'default';
+const baseKeyOf = (key) => key.replace(/@(tags|replay)$/, '');
+/** The formula arm whose digest vouches for a seed's starting state. */
+const formulaKeyFor = (seed) => (seed === 'default' ? 'formula' : `formula@${seed}`);
 
 // Every arm pins BOTH knobs; the server treats a blank value as unset. Without the pin, a knob exported in
 // the shell that launched the bench would leak into every arm that did not set it.
@@ -421,6 +468,121 @@ const checkpoint = async (dataDir) => {
 const positionsDigest = (rows) => crypto.createHash('sha256')
   .update(rows.map((r) => `${r.fact}/${r.set}:${r.error === null ? r.pos : 'error'}`).join('\n')).digest('hex').slice(0, 12);
 
+// ---- THE SAME-SUBJECT GROUPS and the TAG STATISTICS (docs/judge-bench.md Run 7) ----------------------------------
+// The fixture has no cluster field. It marks its near-duplicate clusters by a SHARED ID PREFIX, written next to each
+// other (mkt-east / mkt-west / mkt-harbor, museum-adult / museum-adult-old / museum-child, …), and its three utility
+// bills by a shared `-bill` suffix (power-bill / water-bill / gas-bill). That is the grouping used here — on the
+// committed fixture 12 groups of 2–3 facts, 29 facts in all — and every other fact is a group of its own. Same-ENTITY
+// facts the ids do not mark (the family cat's two facts, say) stay apart: the ids are the only grouping the fixture states.
+const prefixOf = (id) => id.split('-')[0];
+const PREFIX_COUNT = FIXTURE.facts.reduce((m, f) => m.set(prefixOf(f.id), (m.get(prefixOf(f.id)) ?? 0) + 1), new Map());
+const groupOf = (id) => (/-bill$/.test(id) ? '*-bill' : PREFIX_COUNT.get(prefixOf(id)) > 1 ? `${prefixOf(id)}-*` : id);
+const CJK = /[぀-ヿ㐀-鿿豈-﫿]/;
+const scriptOf = (s) => (CJK.test(s) ? 'CJK' : 'Latin');
+
+/** fact id → its subject handles, as the engine stored them, read from a seed's database. */
+const handlesOf = (dataDir, idOf) => {
+  const conn = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'), { readOnly: true });
+  try {
+    const refOf = new Map(conn.prepare('SELECT id, graph_ref FROM knowledge').all().map((r) => [Number(r.id), r.graph_ref]));
+    const byNode = new Map();
+    for (const s of conn.prepare('SELECT node_id, subject FROM lyntai_memory_subject').all()) {
+      if (!byNode.has(Number(s.node_id))) byNode.set(Number(s.node_id), []);
+      byNode.get(Number(s.node_id)).push(s.subject);
+    }
+    return Object.fromEntries(FIXTURE.facts.map((f) => {
+      const node = Number((/#(\d+)$/.exec(refOf.get(Number(idOf[f.id])) ?? '') ?? [])[1]);
+      return [f.id, [...(byNode.get(node) ?? [])].sort()];
+    }));
+  } finally { conn.close(); }
+};
+
+/** What a seed's tags look like, in Lyntai's annotation-drift spirit (../Lyntai/docs/memory-measurements.md): how many
+ *  handles, how many distinct, whether the facts of one near-duplicate group share one, how far a handle reaches across
+ *  groups — and, against a REFERENCE seed's tags (Claude's), how often the two name the same fact the same way.
+ *  Descriptive only: nothing here decides anything. Writes happen in fixture order, so a group's FIRST fact is the one
+ *  written first — Lyntai's drift anchor. */
+const tagStatsOf = (tags, reference = null) => {
+  const ids = FIXTURE.facts.map((f) => f.id);
+  const contentOf = new Map(FIXTURE.facts.map((f) => [f.id, f.content]));
+  const shares = (a, b) => tags[a].some((h) => tags[b].includes(h));
+  const counts = ids.map((id) => tags[id].length);
+  const factsOf = new Map();
+  for (const id of ids) for (const h of tags[id]) factsOf.set(h, [...(factsOf.get(h) ?? []), id]);
+  const groups = new Map();
+  for (const id of ids) groups.set(groupOf(id), [...(groups.get(groupOf(id)) ?? []), id]);
+  const multi = [...groups.values()].filter((g) => g.length > 1);
+  const grouped = multi.flat();
+  const later = multi.flatMap((g) => g.slice(1).map((id) => [g[0], id]));
+  const widest = [...factsOf.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))[0] ?? null;
+  const out = {
+    facts: ids.length,
+    tagged: counts.filter((n) => n > 0).length,
+    handles: counts.reduce((a, n) => a + n, 0),
+    perFactMean: counts.reduce((a, n) => a + n, 0) / ids.length,
+    perFact: Object.fromEntries([0, 1, 2, 3, 4].map((k) => [k, counts.filter((n) => (k === 4 ? n >= 4 : n === k)).length])),
+    distinct: factsOf.size,
+    onTwoOrMore: [...factsOf.values()].filter((fs) => fs.length >= 2).length,
+    widest: widest ? { handle: widest[0], facts: widest[1] } : null,
+    groups: { count: multi.length, facts: grouped.length, laterMembers: later.length },
+    // A grouped fact that shares at least one handle with another member of its own group.
+    sharesInGroup: grouped.filter((id) => groups.get(groupOf(id)).some((o) => o !== id && shares(id, o))),
+    // Lyntai's DRIFT: a later-written member that shares no handle with its group's first-written member.
+    drifted: later.filter(([a, id]) => !shares(a, id)).map(([, id]) => id),
+    // Every later member shares a handle with the first.
+    connectedGroups: multi.filter((g) => g.slice(1).every((id) => shares(g[0], id))).map((g) => groupOf(g[0])),
+    // A handle on facts of two or more groups (a singleton is its own group) — the "collapse" side of drift, though
+    // here it can also be a real shared entity (one family member on three unrelated facts).
+    spanning: [...factsOf.entries()].filter(([, fs]) => new Set(fs.map(groupOf)).size > 1).map(([h, fs]) => ({ handle: h, facts: fs })),
+    sharesOutsideGroup: ids.filter((id) => ids.some((o) => groupOf(o) !== groupOf(id) && shares(id, o))),
+    // A handle not in the script of the fact it tags — the prompt asks for subjects "in the SAME LANGUAGE as the fact".
+    offScript: ids.filter((id) => tags[id].some((h) => scriptOf(h) !== scriptOf(contentOf.get(id)))),
+  };
+  if (reference) {
+    const either = ids.filter((id) => tags[id].length + reference[id].length > 0);
+    const jac = (id) => {
+      const u = new Set([...tags[id], ...reference[id]]);
+      return u.size ? tags[id].filter((h) => reference[id].includes(h)).length / u.size : 0;
+    };
+    out.vsReference = {
+      identical: ids.filter((id) => tags[id].some((h) => reference[id].includes(h))),
+      // Lyntai's MemorySubject.Matches reads containment for a spaceless script; reported beside exact identity.
+      containment: ids.filter((id) => tags[id].some((h) => reference[id].some((r) => r.includes(h) || h.includes(r)))),
+      meanJaccard: either.length ? either.reduce((a, id) => a + jac(id), 0) / either.length : null,
+      over: either.length,
+      sharedVocabulary: [...factsOf.keys()].filter((h) => ids.some((id) => reference[id].includes(h))).length,
+    };
+  }
+  return out;
+};
+
+/** The tag statistics, side by side, one column per seed. */
+const printTagStats = (columns) => {
+  const W = 58, C = 34;
+  const f = (xs, n) => `${xs.length}/${n}`;
+  const rows = [
+    ['facts with ≥ 1 handle', (s) => `${s.tagged}/${s.facts}`],
+    ['handles per fact: mean (0 / 1 / 2 / 3 / ≥4)', (s) => `${s.perFactMean.toFixed(2)} (${[0, 1, 2, 3, 4].map((k) => s.perFact[k]).join(' / ')})`],
+    ['handle vocabulary (distinct handles)', (s) => `${s.distinct} (${s.onTwoOrMore} on ≥ 2 facts)`],
+    ['widest handle', (s) => (s.widest ? `${s.widest.handle} (${s.widest.facts.length} facts)` : '—')],
+    ['grouped facts sharing a handle within their group', (s) => f(s.sharesInGroup, s.groups.facts)],
+    ['drift: later members sharing none with the first', (s) => f(s.drifted, s.groups.laterMembers)],
+    ['groups whose later members all share one with the first', (s) => f(s.connectedGroups, s.groups.count)],
+    ['handles spanning ≥ 2 groups', (s) => String(s.spanning.length)],
+    ['facts sharing a handle with another group\'s fact', (s) => f(s.sharesOutsideGroup, s.facts)],
+    ['facts with a handle not in the fact\'s script', (s) => f(s.offScript, s.facts)],
+    ['vs Claude: facts with ≥ 1 identical handle', (s) => (s.vsReference ? f(s.vsReference.identical, s.facts) : '—')],
+    ['vs Claude: facts with ≥ 1 handle contained in the other', (s) => (s.vsReference ? f(s.vsReference.containment, s.facts) : '—')],
+    ['vs Claude: mean Jaccard (facts either tagged)', (s) => (s.vsReference?.meanJaccard == null ? '—' : `${s.vsReference.meanJaccard.toFixed(3)} (over ${s.vsReference.over})`)],
+    ['vs Claude: handles also in Claude\'s vocabulary', (s) => (s.vsReference ? `${s.vsReference.sharedVocabulary}/${s.distinct}` : '—')],
+  ];
+  const g = columns[0]?.stats.groups;
+  console.log(`\nTAG STATISTICS — descriptive; groups = the fixture's near-duplicate clusters (shared id prefix, and the three`
+    + ` \`-bill\` facts): ${g?.count ?? '?'} groups, ${g?.facts ?? '?'} facts; a group's first fact is the first written`);
+  console.log(pad('', W) + columns.map((c) => pad(c.name, C)).join(''));
+  for (const [label, fn] of rows) console.log(pad(label, W) + columns.map((c) => pad(fn(c.stats), C)).join(''));
+};
+
 // =============================================================================================================
 // ANALYSIS — shared by the live run and --report-only. Both hand it the SAME shape: a results file as saved.
 // =============================================================================================================
@@ -442,6 +604,8 @@ const loadRun = (json, source) => {
       judgeInput: a.judgeInput ?? known.judgeInput ?? null,
       reranker: a.reranker ?? known.reranker ?? null,
       chatJudge: a.chatJudge ?? known.chatJudge ?? null,
+      // Which seed the arm started from (Run 7); every run before it had one seed, the default.
+      seed: a.seed ?? seedOfKey(a.key),
       knobs: a.knobs ?? null,
       judgeOn: a.judgeOn ?? null, judgeSource: a.judgeSource ?? null, judgeModel: a.judgeModel ?? null,
       migrationWarnings: a.migrationWarnings ?? null,
@@ -475,6 +639,8 @@ const loadRun = (json, source) => {
       positions: json.positions ?? null,
       // `--rerank-memo`'s proxy (Run 6b): whether identical rerank bodies shared a response, and what each arm sent.
       rerankProxy: json.rerankProxy ?? null,
+      // The second seed a `<arm>@tags` arm started from, and its tag statistics (Run 7); null before it.
+      tagSeed: json.tagSeed ?? null,
     },
     arms,
     notes,
@@ -493,10 +659,22 @@ const checkBaseline = (run, baseRun, armKey) => {
     problems.push(`fact count ${run.meta.facts ?? 'unrecorded'} ≠ baseline ${baseRun.meta.facts ?? 'unrecorded'}`);
   if (run.meta.orderSeed === null || run.meta.orderSeed !== baseRun.meta.orderSeed)
     problems.push(`order seed ${run.meta.orderSeed ?? 'unrecorded'} ≠ baseline ${baseRun.meta.orderSeed ?? 'unrecorded'}`);
-  const fa = run.arms.find((a) => a.key === 'formula'), fb = baseRun.arms.find((a) => a.key === 'formula');
-  if (!fa || !fb) problems.push(`formula digest cannot be compared — no formula arm in ${!fa ? 'this run' : 'the baseline run'}`);
-  else if (positionsDigest(fa.rows) !== positionsDigest(fb.rows))
-    problems.push(`formula digest ${positionsDigest(fa.rows)} ≠ baseline ${positionsDigest(fb.rows)} — the runs did not start from equivalent state`);
+  // THE DIGEST IS PER SEED (Run 7): every seed either side of the pairing started an arm from — the baseline arm's, and
+  // each of this run's — must carry a formula arm in BOTH runs whose digests agree. A local-tag seed must also be the
+  // SAME seed (its model and when it was made), since two tag seeds of one model are two different annotations.
+  const seeds = [...new Set([arm ? arm.seed : null, ...run.arms.map((a) => a.seed)].filter(Boolean))];
+  for (const seed of seeds) {
+    const key = formulaKeyFor(seed);
+    const fa = run.arms.find((a) => a.key === key), fb = baseRun.arms.find((a) => a.key === key);
+    if (!fa || !fb) problems.push(`${SEED_NAME[seed]}'s formula digest cannot be compared — no ${key} arm in ${!fa ? 'this run' : 'the baseline run'}`);
+    else if (positionsDigest(fa.rows) !== positionsDigest(fb.rows))
+      problems.push(`${key} digest ${positionsDigest(fa.rows)} ≠ baseline ${positionsDigest(fb.rows)} — the runs did not start from equivalent state`);
+    if (seed !== 'default') {
+      const id = (m) => (m?.[seed] ? `${m.model} @ ${m[seed].createdAt}` : 'none');
+      if (id(run.meta.tagSeed) === 'none' || id(run.meta.tagSeed) !== id(baseRun.meta.tagSeed))
+        problems.push(`${SEED_NAME[seed]}s differ (${id(run.meta.tagSeed)} ≠ baseline ${id(baseRun.meta.tagSeed)})`);
+    }
+  }
   return { problems, arm };
 };
 
@@ -748,6 +926,10 @@ const analyse = (run, { baseline = null } = {}) => {
     out.armStats[arm.key] = { latency, positionsDigest: positionsDigest(arm.rows) };
   }
   if (base) out.formulaDigest = { digest: out.armStats.formula.positionsDigest, queries: meta.queries, orderSeed: meta.orderSeed, facts: meta.facts };
+  // One digest PER SEED (Run 7): the default seed's `formula`, and each local-tag seed's `formula@<seed>` when it ran.
+  const extraFormulas = EXTRA_SEEDS.map((s) => find(formulaKeyFor(s))).filter(Boolean);
+  if (extraFormulas.length) out.formulaDigests = { default: out.formulaDigest?.digest ?? null,
+    ...Object.fromEntries(extraFormulas.map((a) => [a.seed, out.armStats[a.key].positionsDigest])) };
 
   // ---- the paired tests ----
   for (const baseKey of ['content', 'formula']) {
@@ -794,22 +976,42 @@ const analyse = (run, { baseline = null } = {}) => {
   // docs/judge-bench.md Run 5: a local chat judge beside ANOTHER local model — against each reranker under partition
   // (the reference) and against every other chat model shown the same input (the first listed is the control). Both
   // are within-run pairs, and neither exists in a run with one chat model and no reranker, so Runs 2–4 re-analyse
-  // exactly as they did.
+  // exactly as they did. Both stay within ONE seed: a pair across seeds changes the tags as well as the judge, and the
+  // tag-seed block below is where that pairing is read.
   const cjArms = arms.filter((a) => chatKey(a));
   const cjVsRr = [];
   for (const c of cjArms)
-    for (const r of arms.filter((a) => /^rr:/.test(a.key))) cjVsRr.push({ key: `${c.key} vs ${r.key}`, label: `${c.key} vs ${r.key}`, arm: c, base: r });
+    for (const r of arms.filter((a) => /^rr:/.test(a.key) && a.seed === c.seed)) cjVsRr.push({ key: `${c.key} vs ${r.key}`, label: `${c.key} vs ${r.key}`, arm: c, base: r });
   if (cjVsRr.length > 0) out.paired.chatJudgesVsRerankers = printPaired('PAIRED — each local chat judge against each reranker under partition;'
     + ' b = reranker hit & chat-judge miss, c = the reverse', cjVsRr);
   const cjAcross = [];
   for (const input of ['lc', 'lcb']) {
-    const same = cjArms.filter((a) => chatKey(a)[1] === input);
+    const same = cjArms.filter((a) => chatKey(a)[1] === input && a.seed === 'default');
     for (let i = 0; i < same.length; i++)
       for (let j = i + 1; j < same.length; j++)
         cjAcross.push({ key: `${same[j].key} vs ${same[i].key}`, label: `${same[j].key} vs ${same[i].key}`, arm: same[j], base: same[i] });
   }
   if (cjAcross.length > 0) out.paired.chatJudgesAcross = printPaired('PAIRED — every local chat judge against every other, same input;'
     + ' b = right-hand hit & left-hand miss, c = the reverse', cjAcross);
+  // THE LOCAL-TAG SEEDS' QUESTION (docs/judge-bench.md Run 7). Each arm on the TAG seed against the same arm on the
+  // REPLAY seed — the pair that differs ONLY in the tags (the model's, against Claude's written the same way) — and
+  // every arm on either against the same arm on the default seed (the replay's pair differs only in the decay clock)
+  // and against its own seed's formula (what the judge adds over those tags). Paired by KEY, so a saved or recovered
+  // run pairs the same way.
+  const tagComps = [];
+  const pair = (arm, base) => base && base !== arm && tagComps.push({ key: `${arm.key} vs ${base.key}`, label: `${arm.key} vs ${base.key}`, arm, base });
+  for (const seed of ['tags', 'replay'])
+    for (const t of arms.filter((a) => a.seed === seed)) {
+      if (seed === 'tags') pair(t, find(`${baseKeyOf(t.key)}@replay`));
+      pair(t, find(baseKeyOf(t.key)));
+      pair(t, find(formulaKeyFor(seed)));
+    }
+  if (tagComps.length > 0) out.paired.tagSeed = printPaired(`PAIRED — the local-tag seeds${meta.tagSeed ? ` (tags by ${meta.tagSeed.model})` : ''}:`
+    + ' @tags against @replay differ ONLY in the tags; @replay against the default seed only in the decay clock; b = right-hand hit & left-hand miss', tagComps);
+  if (meta.tagSeed?.stats) printTagStats([
+    { name: 'Claude (default and replay seeds)', stats: meta.tagSeed.stats.default },
+    { name: `${meta.tagSeed.model} (tag seed)`, stats: meta.tagSeed.stats.tags },
+  ]);
   if (baseline) {
     const { problems, arm: bArm } = checkBaseline(run, baseline.run, baseline.arm);
     out.crossRun = { baseline: { file: rel(baseline.file), arm: baseline.arm, at: baseline.run.meta.at }, refused: problems.length ? problems : null, paired: null };
@@ -860,6 +1062,9 @@ const analyse = (run, { baseline = null } = {}) => {
 
   if (out.formulaDigest) console.log(`\nformula positions digest: ${out.formulaDigest.digest} (${meta.queries} queries, ${meta.facts ?? '?'} facts,`
     + ` order seed ${meta.orderSeed ?? 'unrecorded'}) — equal digests across runs mean identical formula rows, the precondition for comparing runs`);
+  if (out.formulaDigests) for (const seed of EXTRA_SEEDS) if (out.formulaDigests[seed])
+    console.log(`${formulaKeyFor(seed)} positions digest: ${out.formulaDigests[seed]} — ${SEED_NAME[seed]}'s own; compared only with another`
+      + ` run's ${formulaKeyFor(seed)} on the same seed`);
 
   console.log(`\nlatency (ms) — parallel: mean over the accuracy pass, ${meta.concurrency} arm(s) at once; serial median: one arm at a time,`
     + ` first ${meta.latencySample ?? '?'} queries, judge arms counting only recalls that carried a verdict`);
@@ -1058,6 +1263,11 @@ const queryOrder = (facts, seed) => {
  *  `rr:`/`rrf:`/`rrk:` a reranker under partition/fuse/partition-chunked, `lc:`/`lcb:` a llama.cpp chat judge reading content alone (the
  *  shipped default) or "topic — content". ONE writer: the live run builds those arms from this too. */
 const armConfigFor = (key) => {
+  // `<arm>@tags` / `<arm>@replay` is the same arm started from a local-tag seed (Run 7) — its own label says so.
+  if (seedOfKey(key) !== 'default') {
+    const base = armConfigFor(baseKeyOf(key));
+    return { ...base, label: `${base.label} · on ${SEED_NAME[seedOfKey(key)]}`, seed: seedOfKey(key) };
+  }
   if (ARMS[key]) return { label: ARMS[key].label, enrichment: ARMS[key].enrichment, judgeInput: ARMS[key].judgeInput ?? null, reranker: null, chatJudge: null };
   const m = /^(rr[fk]?):(.+)$/.exec(key);
   if (m) return { label: `reranker ${m[2]} · ${RERANK_ARM_KINDS[m[1]].suffix}`, enrichment: true, judgeInput: null, reranker: m[2], chatJudge: null };
@@ -1215,14 +1425,33 @@ const live = async () => {
   const chatJudges = list('chat-judges', '');
   const both = chatJudges.find((m) => rerankers.includes(m));
   if (both) die(`'${both}' is in both --rerankers and --chat-judges — a GGUF is one kind, and the router's preset gives it one`);
+  const chatKinds = list('chat-arms', 'lc,lcb');
+  for (const k of chatKinds) if (k !== 'lc' && k !== 'lcb') die(`--chat-arms: unknown kind '${k}' — one of lc, lcb`);
   for (const m of chatJudges) {
-    arms.push({ key: `lc:${m}`, ...armConfigFor(`lc:${m}`), env: {} });
-    arms.push({ key: `lcb:${m}`, ...armConfigFor(`lcb:${m}`), env: { GATHERLIGHT_JUDGE_INPUT: 'both' }, knob: /judge input = both \(/ });
+    if (chatKinds.includes('lc')) arms.push({ key: `lc:${m}`, ...armConfigFor(`lc:${m}`), env: {} });
+    if (chatKinds.includes('lcb')) arms.push({ key: `lcb:${m}`, ...armConfigFor(`lcb:${m}`), env: { GATHERLIGHT_JUDGE_INPUT: 'both' }, knob: /judge input = both \(/ });
   }
+  // THE LOCAL-TAG SEEDS (Run 7): each listed arm runs TWICE more, started from the replay seed (`<arm>@replay`) and from
+  // the tag seed (`<arm>@tags`). Nothing else about them changes — same knobs, same binding — so the @tags/@replay pair
+  // differs only in the tags.
+  const tagArmKeys = list('tag-seed-arms', '');
+  if (!TAG_MODEL && (tagArmKeys.length || opts['build-tag-seed'])) die('--tag-seed-arms and --build-tag-seed need --tag-seed=<chat model>');
+  for (const seed of EXTRA_SEEDS)
+    for (const k of tagArmKeys) {
+      const base = arms.find((a) => a.key === k);
+      if (!base) die(`--tag-seed-arms: '${k}' is not one of this run's arms (${arms.map((a) => a.key).join(', ')})`);
+      arms.push({ ...base, key: `${k}@${seed}`, seed });
+    }
+  for (const a of arms) a.seed = a.seed ?? 'default';
   // The model a local-model arm binds 判断 to, whichever kind it is.
   for (const a of arms) a.llamaModel = a.reranker ?? a.chatJudge ?? null;
   // The long seed is written with 判断 off, so its formula arm has NO tags to recall over — say so in the label.
   if (LONG) for (const a of arms) a.label = a.label.replace('(seed tags present)', '(seed has no tags)');
+  // With the local-tag seeds in the run, EVERY label names whose tags its arm recalls over, and how they were written.
+  if (TAG_MODEL && tagArmKeys.length) for (const a of arms) {
+    const whose = { default: 'Claude tags, 2026-09-23 seed', replay: 'Claude tags replayed', tags: `${TAG_MODEL} tags` }[a.seed];
+    a.label = a.label.includes('(seed tags present)') ? a.label.replace('(seed tags present)', `(${whose})`) : `${a.label} · ${whose}`;
+  }
   if (arms.length === 0) die('no arms selected');
   for (const a of arms) a.pinned = { ...PINNED, ...a.env };
 
@@ -1238,6 +1467,30 @@ const live = async () => {
   } else if (!RESEED && fs.existsSync(SEED_ROOT) && fs.readdirSync(SEED_ROOT).length > 0) {
     const when = fs.existsSync(SEED_META) ? JSON.parse(fs.readFileSync(SEED_META, 'utf8')).createdAt : 'an interrupted seeding (no seed.json)';
     die(`a seed exists from ${when}; pass --reuse-seed to use it or --reseed to replace it`);
+  }
+  // THE TAG SEED's preconditions (Run 7). It is paired against the Claude seed, which a tag-seed run never rebuilds
+  // (that costs ~60 real annotation calls), and it is written against the STUB, so no quota can be spent by accident.
+  // It is BUILT on its own (--seed-only), so its router log and chat-request record are nobody else's.
+  const BUILD_TAG = opts['build-tag-seed'] === true;
+  const extraMeta = {};   // seed → its seed.json, for the local-tag seeds
+  if (TAG_MODEL) {
+    if (LONG) die('--tag-seed is for the bilingual fixture — the long seed is written with 判断 off, on purpose');
+    if (opts['claude-stub'] !== true) die('--tag-seed needs --claude-stub: the local-tag seeds are written, and their arms run, against the claude stub');
+    if (!REUSE_SEED) die('--tag-seed needs --reuse-seed: the Claude-tagged seed the replay copies is never rebuilt by a tag-seed run');
+    if (rerankers.includes(TAG_MODEL)) die(`--tag-seed=${TAG_MODEL} is a reranker, which scores and never writes a tag — name a chat model`);
+    if (BUILD_TAG && !SEED_ONLY) die('--build-tag-seed needs --seed-only: the local-tag seeds are built on their own, so their router log is their own evidence');
+    if (!BUILD_TAG) for (const seed of EXTRA_SEEDS) {
+      const root = seedRootOf(seed);
+      if (!fs.existsSync(seedMetaOf(seed)) || !fs.existsSync(seedDataOf(seed))) die(`no ${seed} seed at ${rel(root)} — build both with --build-tag-seed --seed-only`);
+      const m = JSON.parse(fs.readFileSync(seedMetaOf(seed), 'utf8'));
+      if (m.fixtureHash !== FIXTURE_HASH) die(`${SEED_NAME[seed]} was made from another fixture (${m.fixtureHash.slice(0, 12)}) — rebuild it`);
+      if (m.boundModel !== TAG_MODEL) die(`${SEED_NAME[seed]} at ${rel(root)} was written with 判断 bound to ${m.boundModel}, not ${TAG_MODEL}`);
+      if (m.guards?.held !== true) die(`${SEED_NAME[seed]} at ${rel(root)} did not pass its build guards — rebuild it`);
+      extraMeta[seed] = m;
+    }
+    if (!BUILD_TAG && extraMeta.tags.builtWith !== extraMeta.replay.builtWith) die('the tag seed and the replay seed were not built together — rebuild both');
+  } else if (opts['claude-stub'] === true && RESEED && !LONG) {
+    die('--claude-stub with --reseed would tag the bilingual seed with the STUB — the Claude seed is built with the real CLI');
   }
   // What CAN be checked before an hour is spent is checked now; the formula digest needs this run's rows.
   let baseline = null;
@@ -1287,16 +1540,67 @@ const live = async () => {
     }
     try { router.kill(); } catch { /* best effort */ }
   };
+  const extraProxies = [];
   const stopAll = () => {
     for (const s of servers) try { s.stop(); } catch { /* best effort */ }
-    for (const a of arms) if (a.proxy) try { a.proxy.server.closeAllConnections(); a.proxy.server.close(); } catch { /* best effort */ }
+    for (const p of [...arms.map((a) => a.proxy).filter(Boolean), ...extraProxies])
+      try { p.server.closeAllConnections(); p.server.close(); } catch { /* best effort */ }
     stopRouter();
+  };
+  /** ONE real router for every llama.cpp model the caller names, launched as the product launches them; its preset and
+   *  log go to `dir` — the work dir for a run, the tag seed's own folder for a tag-seed build (Run 7). */
+  const startRouter = async (rerankerModels, chatModels, dir) => {
+    const models = [...rerankerModels, ...chatModels];
+    const exe = path.join(RESOURCES, 'llama-cpp', 'llama-server.exe');
+    const gguf = path.join(RESOURCES, 'gguf');
+    if (!fs.existsSync(exe)) throw new Error(`no llama-server at ${exe} — download llama.cpp in 资源 first`);
+    // Both layouts ResourceProvisioner.InstalledGgufIds reads: flat gguf/<m>.gguf, or gguf/<m>/<any>.gguf
+    // (how 资源 installs them). The router takes the models dir either way and names both by <m>.
+    const installed = (m) => fs.existsSync(path.join(gguf, `${m}.gguf`))
+      || (fs.existsSync(path.join(gguf, m)) && fs.statSync(path.join(gguf, m)).isDirectory()
+        && fs.readdirSync(path.join(gguf, m)).some((f) => f.toLowerCase().endsWith('.gguf')));
+    for (const m of models)
+      if (!installed(m)) throw new Error(`${m} is in neither ${gguf}/${m}.gguf nor ${gguf}/${m}/*.gguf — download it in 资源 first`);
+    // THE PRODUCT'S PRESET, per kind — LlamaServerRuntime.WritePresets, mirrored line for line, because a bench
+    // that launches a model differently measures a product we do not ship. Every kind gets n-gpu-layers (launch
+    // CONTRACT: without it the CPU runs the model, silently ~30× slower); a reranker adds `reranking` and its window
+    // as ctx/batch/ubatch (a pair must fit one batch) — 4096, or the window its catalogue row DECLARES (DECLARED_WINDOW,
+    // the bench's copy of GgufCatalog.DeclaredWindow: mMiniLMv2's 512, since Run 4 found llama.cpp serving it 512 slots
+    // whatever 4096 the preset claimed); a CHAT model gets its context cap (CHAT_CONTEXT_TOKENS), and never `embeddings`
+    // or `reranking`, either of which restricts the child to one route and refuses chat. mirrorGuard holds all three
+    // numbers to the C#.
+    // A CHAT section gets `reasoning = off` and `n-predict = 512`, exactly as WritePresets writes it since round 2's
+    // Task P (LlamaServerRuntime.ChatMaxTokens). Run 5 wrote `reasoning = off` alone, ahead of the product: Lyntai's
+    // OpenAI-shaped payload drops TextReasoning.Suppress, and llama-server's default `--reasoning auto` then opens a
+    // thinking block for any template that supports one (Qwen3, and Qwen3.5 against its own default). The key
+    // renders the template's pre-closed think block and leaves a template without thinking byte-identical (gemma-3),
+    // so Run 3's control was unchanged by it. `reasoning-budget = 0` is NOT equivalent: the template stays in
+    // thinking mode and the model writes its reasoning into the reply. `n-predict` caps a runaway reply (Run 5: an
+    // uncapped one filled its child's shared context, and llama-server keeps decoding a request nobody waits for).
+    // Runs 2–5b re-analyse identically: a preset is a launch setting, and no saved row depends on this text.
+    mirrorGuard();
+    const windowOf = (m) => DECLARED_WINDOW[m] ?? RERANK_WINDOW;
+    const presetSection = (m, kind) => [`[${m}]`, 'n-gpu-layers = 99',
+      ...(kind === 'reranking'
+        ? ['reranking = true', `ctx-size = ${windowOf(m)}`, `batch-size = ${windowOf(m)}`, `ubatch-size = ${windowOf(m)}`]
+        : ['reasoning = off', `n-predict = ${CHAT_MAX_TOKENS}`, `ctx-size = ${CHAT_CONTEXT_TOKENS}`]),
+      ''].join('\n');
+    const preset = path.join(dir, 'presets.ini');
+    fs.writeFileSync(preset, [...rerankerModels.map((m) => presetSection(m, 'reranking')),
+      ...chatModels.map((m) => presetSection(m, 'chat'))].join('\n'));
+    const logFd = fs.openSync(path.join(dir, 'router.log'), 'w');
+    // --models-max holds every model the arms bind at once, so no arm's model is evicted by another's mid-run.
+    router = spawn(exe, ['--models-dir', gguf, '--models-preset', preset, '--models-max', String(Math.max(2, models.length)),
+      '--host', '127.0.0.1', '--port', String(LLAMA_PORT)], { cwd: path.dirname(exe), stdio: ['ignore', logFd, logFd] });
+    fs.closeSync(logFd);
+    await until(async () => (await fetch(`http://127.0.0.1:${LLAMA_PORT}/v1/models`)).ok, 60000);
   };
 
   try {
     // ---- 0. per-run cleanup: the arm folders only; earlier rows-*.jsonl and results-*.json are kept ----------
+    // A --seed-only invocation starts no arm, so it leaves the last run's arm folders (its evidence) alone.
     fs.mkdirSync(WORK, { recursive: true });
-    for (const e of fs.readdirSync(WORK)) if (/^arm-\d+$/.test(e)) fs.rmSync(path.join(WORK, e), { recursive: true, force: true });
+    if (!SEED_ONLY) for (const e of fs.readdirSync(WORK)) if (/^arm-\d+$/.test(e)) fs.rmSync(path.join(WORK, e), { recursive: true, force: true });
     const ROWS = path.join(WORK, `rows-${RUN_STAMP}.jsonl`);
     const emit = (row) => fs.appendFileSync(ROWS, JSON.stringify({ run: RUN_AT, ...row }) + '\n');
 
@@ -1305,8 +1609,10 @@ const live = async () => {
     /** The long seed's database, checked rather than trusted: one knowledge row per fact holding EXACTLY its note (a
      *  truncated note would move the answer), and each on its own graph node (a merged node would make one fact's
      *  recall return another's row). Returns what it found. */
-    const verifyLongSeed = (ids) => {
-      const conn = new DatabaseSync(path.join(SEED_DATA, 'state', 'gatherlight.db'));
+    const verifyLongSeed = (ids) => verifySeedRows(SEED_DATA, ids, 'the long seed');
+    /** Any seed's knowledge rows, checked the same way (the long seed, and the tag seed of Run 7). */
+    const verifySeedRows = (dataDir, ids, what) => {
+      const conn = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'));
       try {
         const rows = conn.prepare('SELECT id, kind, topic, content, graph_ref FROM knowledge').all();
         const byId = new Map(rows.map((r) => [Number(r.id), r]));
@@ -1320,7 +1626,7 @@ const live = async () => {
         }
         const refs = rows.map((r) => r.graph_ref).filter(Boolean);
         if (new Set(refs).size !== refs.length) problems.push(`${refs.length - new Set(refs).size} graph node(s) shared by two facts`);
-        if (problems.length) throw new Error(`the long seed is not what the fixture says: ${problems.join('; ')}`);
+        if (problems.length) throw new Error(`${what} is not what the fixture says: ${problems.join('; ')}`);
         return { rows: rows.length, graphNodes: new Set(refs).size };
       } finally { conn.close(); }
     };
@@ -1384,8 +1690,374 @@ const live = async () => {
     }
     const idOf = new Map(Object.entries(seedMeta.idOf));
     for (const f of facts) if (!idOf.has(f.id)) throw new Error(`seed has no id for fact ${f.id}`);
+
+    // ---- 1b. THE LOCAL-TAG SEEDS (docs/judge-bench.md Run 7): built through the product's write path, or re-verified -
+    /** Two seeds' databases, table by table. Everything that can move a recall is compared: the rows, the graph's nodes
+     *  (every column but the timestamps, and which columns differ), its positions, its subjects and subject edges, its
+     *  other edges, stored vectors and the review log. The caller decides which of them must be equal. */
+    const compareSeeds = (dataA, idsA, dataB, idsB) => {
+      const open = (d) => new DatabaseSync(path.join(d, 'state', 'gatherlight.db'), { readOnly: true });
+      const a = open(dataA), b = open(dataB);
+      try {
+        const q = (conn, sql) => JSON.stringify(conn.prepare(sql).all().map((r) => Object.values(r)));
+        const same = (sql) => q(a, sql) === q(b, sql);
+        const NODE_COLUMNS = ['engine', 'task_key', 'scope', 'headline', 'content', 'content_hash', 'grade', 'metadata',
+          'last_recalled_position', 'recall_count', 'stability', 'signals', 'salience', 'encoding_ordinal', 'encoding_chars',
+          'provenance_retrievability', 'provenance_salience', 'difficulty'];
+        const nodeColumnsDiffering = NODE_COLUMNS.filter((c) => !same(`SELECT id, ${c} FROM lyntai_memory_node ORDER BY id`));
+        const count = (conn, sql) => conn.prepare(sql).get().n;
+        return {
+          idsEqual: FIXTURE.facts.every((f) => Number(idsA[f.id]) === Number(idsB[f.id])),
+          knowledge: same('SELECT id, kind, topic, content, source, confidence, hits, graph_ref, aka FROM knowledge ORDER BY id'),
+          nodes: nodeColumnsDiffering.length === 0 && same('SELECT COUNT(*) FROM lyntai_memory_node'),
+          nodeColumnsDiffering,
+          positions: same('SELECT engine, position, ordinal, chars FROM lyntai_memory_position ORDER BY engine'),
+          subjects: same('SELECT node_id, subject FROM lyntai_memory_subject ORDER BY node_id, subject'),
+          subjectEdges: same("SELECT from_id, to_id, weight FROM lyntai_memory_edge WHERE kind = 'subject' ORDER BY from_id, to_id"),
+          nonSubjectEdges: same("SELECT from_id, to_id, kind, weight FROM lyntai_memory_edge WHERE kind <> 'subject' ORDER BY from_id, to_id, kind"),
+          vectors: same('SELECT COUNT(*) FROM lyntai_vector'),
+          reviews: same('SELECT COUNT(*) FROM lyntai_memory_review'),
+          counts: {
+            subjects: [count(a, 'SELECT COUNT(*) n FROM lyntai_memory_subject'), count(b, 'SELECT COUNT(*) n FROM lyntai_memory_subject')],
+            subjectEdges: [count(a, "SELECT COUNT(*) n FROM lyntai_memory_edge WHERE kind = 'subject'"),
+              count(b, "SELECT COUNT(*) n FROM lyntai_memory_edge WHERE kind = 'subject'")],
+            otherEdges: [count(a, "SELECT COUNT(*) n FROM lyntai_memory_edge WHERE kind <> 'subject'"),
+              count(b, "SELECT COUNT(*) n FROM lyntai_memory_edge WHERE kind <> 'subject'")],
+            position: [a.prepare('SELECT position FROM lyntai_memory_position').get()?.position ?? null,
+              b.prepare('SELECT position FROM lyntai_memory_position').get()?.position ?? null],
+          },
+        };
+      } finally { a.close(); b.close(); }
+    };
+    const mustEqual = (found, keys, what) => {
+      const bad = keys.filter((k) => found[k] !== true);
+      if (bad.length) throw new Error(`${what}: ${bad.join(', ')} differ — see ${rel(seedMetaOf('tags'))}`);
+    };
+    /** Each chat child's spawn arguments, from a router log: the proof that thinking was off and the caps were set. */
+    const childArgsOf = (logFile, model) => {
+      const log = fs.readFileSync(logFile, 'utf8').split(/\r?\n/);
+      const spawns = [];
+      for (let i = 0; i < log.length; i++) {
+        const m = /spawning server instance with name=(\S+) on port (\d+)/.exec(log[i]);
+        if (!m || m[1] !== model) continue;
+        const args = [];
+        for (let j = i + 2; j < log.length && /load:\s{2,}\S/.test(log[j]) && !/spawning/.test(log[j]); j++) args.push(log[j].replace(/^.*load:\s+/, '').trim());
+        spawns.push(args);
+      }
+      const val = (args, k) => (args.includes(k) ? args[args.indexOf(k) + 1] : null);
+      return { spawns: spawns.length, reasoning: spawns[0] ? val(spawns[0], '--reasoning') : null,
+        nPredict: spawns[0] ? val(spawns[0], '--n-predict') : null, ctxSize: spawns[0] ? val(spawns[0], '--ctx-size') : null };
+    };
+    /** Requests the router proxied to `model`'s child, read once the count stops moving (the router logs via a queue). */
+    const routerProxiedTo = async (logFile, model) => {
+      let last = -1;
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const n = [...fs.readFileSync(logFile, 'utf8').matchAll(/proxying request to model (\S+) on/g)].filter((m) => m[1] === model).length;
+        if (n === last) return n;
+        last = n;
+      }
+      return last;
+    };
+    /** A RECORDING proxy between a local-tag seed's server and the router. Every request is written to `file` — what kind
+     *  it is (an annotation, recognised by the annotator's own system prompt; the startup warm; anything else), the fact
+     *  it labelled, and the reply: status, finish reason, tokens generated, the text, and any reasoning the child returned
+     *  (with thinking off there must be none). Everything is forwarded untouched, on a fresh connection — EXCEPT, when
+     *  `replay` (fact content → handles) is given, an annotation request, which is answered here with those handles as
+     *  a chat completion of the shape llama-server returns, and never reaches the model. */
+    const startChatRecorder = (file, replay = null) => new Promise((resolve) => {
+      const state = { forwarded: 0, annotations: 0, replayed: 0, warms: 0, other: 0, failed: 0 };
+      const agent = new http.Agent({ keepAlive: false });
+      const once = (req, body) => new Promise((ok, fail) => {
+        const up = http.request({ host: '127.0.0.1', port: LLAMA_PORT, method: req.method, path: req.url, agent,
+          headers: { ...req.headers, host: `127.0.0.1:${LLAMA_PORT}`, 'content-length': body.length, connection: 'close' } }, (r) => {
+          const out = [];
+          r.on('data', (c) => out.push(c));
+          r.on('end', () => ok({ status: r.statusCode, headers: r.headers, body: Buffer.concat(out) }));
+          r.on('error', fail);
+        });
+        up.on('error', fail);
+        up.end(body);
+      });
+      /** A chat reply's text, finish reason, generated tokens and reasoning — JSON, or an SSE stream folded together. */
+      const readReply = (buf) => {
+        const text = buf.toString('utf8');
+        try {
+          const j = JSON.parse(text);
+          const c = j.choices?.[0] ?? {};
+          return { content: c.message?.content ?? null, finish: c.finish_reason ?? null,
+            completionTokens: j.usage?.completion_tokens ?? null, reasoning: c.message?.reasoning_content ?? null };
+        } catch {
+          const parts = text.split(/\r?\n/).filter((l) => l.startsWith('data:') && !l.includes('[DONE]'))
+            .map((l) => { try { return JSON.parse(l.slice(5)); } catch { return null; } }).filter(Boolean);
+          if (!parts.length) return { content: null, finish: null, completionTokens: null, reasoning: null, unparsed: text.slice(0, 200) };
+          const delta = (k) => parts.map((p) => p.choices?.[0]?.delta?.[k] ?? '').join('');
+          return { content: delta('content'), finish: parts.map((p) => p.choices?.[0]?.finish_reason).filter(Boolean).pop() ?? null,
+            completionTokens: parts.map((p) => p.usage?.completion_tokens).filter((x) => x != null).pop() ?? null,
+            reasoning: delta('reasoning_content') || null };
+        }
+      };
+      const server = http.createServer((req, res) => {
+        const chunks = [];
+        req.on('data', (c) => chunks.push(c));
+        req.on('end', async () => {
+          const body = Buffer.concat(chunks);
+          let parsed = null;
+          try { parsed = JSON.parse(body.toString('utf8')); } catch { /* not JSON: recorded as such */ }
+          const msgs = Array.isArray(parsed?.messages) ? parsed.messages : [];
+          const system = String(msgs.find((m) => m.role === 'system')?.content ?? '');
+          const user = msgs.filter((m) => m.role === 'user').map((m) => String(m.content)).join('\n');
+          const kind = req.method !== 'POST' ? 'probe'
+            : /^\s*You label a fact with the entities or topics it is about/.test(system) ? 'annotation'
+              : msgs.length === 1 && user === 'hi' ? 'warm' : 'other';
+          if (kind === 'annotation') state.annotations++;
+          else if (kind === 'warm') state.warms++;
+          else if (kind === 'other') state.other++;
+          const rec = { at: new Date().toISOString(), method: req.method, url: req.url, kind, model: parsed?.model ?? null };
+          if (kind === 'annotation') {
+            rec.fact = user.split('Fact:\n').pop();
+            const known = /Existing subjects[^\n]*\n((?:- [^\n]*\n?)*)/.exec(user);
+            rec.knownOffered = known ? known[1].split('\n').filter((l) => l.startsWith('- ')).length : 0;
+          }
+          const send = (status, headers, buf) => {
+            const h = { ...headers, 'content-length': buf.length };
+            delete h['transfer-encoding'];
+            res.writeHead(status, h);
+            res.end(buf);
+          };
+          if (kind === 'annotation' && replay) {
+            const handles = replay.get(rec.fact);
+            if (!handles) {
+              state.failed++;
+              fs.appendFileSync(file, JSON.stringify({ ...rec, replayed: true, status: 500, error: 'no recorded handles for this fact' }) + '\n');
+              send(500, { 'content-type': 'application/json' }, Buffer.from(JSON.stringify({ error: { code: 500, message: 'judge-bench replay: no recorded handles for this fact' } })));
+              return;
+            }
+            state.replayed++;
+            const content = JSON.stringify({ subjects: handles });
+            const reply = { id: `judge-bench-replay-${state.replayed}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000),
+              model: parsed?.model ?? TAG_MODEL, choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }],
+              usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
+            fs.appendFileSync(file, JSON.stringify({ ...rec, replayed: true, status: 200, content, finish: 'stop', completionTokens: 0, reasoning: null }) + '\n');
+            send(200, { 'content-type': 'application/json' }, Buffer.from(JSON.stringify(reply)));
+            return;
+          }
+          if (req.method === 'POST' && parsed?.model === TAG_MODEL) state.forwarded++;
+          let reply;
+          try { reply = await once(req, body); } catch {
+            try { reply = await once(req, body); } catch (e2) {
+              state.failed++;
+              fs.appendFileSync(file, JSON.stringify({ ...rec, status: null, error: String(e2?.message ?? e2) }) + '\n');
+              send(502, { 'content-type': 'application/json' }, Buffer.from(JSON.stringify({ error: { code: 502, message: `judge-bench recorder: ${e2?.message ?? e2}` } })));
+              return;
+            }
+          }
+          if (kind !== 'probe') Object.assign(rec, { status: reply.status, ...readReply(reply.body) });
+          else rec.status = reply.status;
+          fs.appendFileSync(file, JSON.stringify(rec) + '\n');
+          send(reply.status, reply.headers, reply.body);
+        });
+      });
+      server.keepAliveTimeout = 10 * 60 * 1000;
+      server.headersTimeout = server.keepAliveTimeout + 1000;
+      server.listen(0, '127.0.0.1', () => resolve({ server, state, port: server.address().port }));
+    });
+
+    /** ONE local-tag seed, written through the product's write path: a fresh fixture folder, 判断 bound to TAG_MODEL the
+     *  way a household's binding is (settings.json, read at DI registration, plus EMPTY stand-ins for the runtime and the
+     *  model, which is all IsConfigured asks — the server then ADOPTS the router, through the recorder), every write
+     *  annotated by the product's own LlmMemoryAnnotationPolicy. Then the binding comes OFF (settings restored, stand-ins
+     *  deleted), so an arm on the seed is configured exactly as one on the default seed. Returns the ids and the record. */
+    const writeLocalSeed = async (seed, replay) => {
+      const root = seedRootOf(seed), data = seedDataOf(seed), routerLog = path.join(seedRootOf('tags'), 'router.log');
+      if (seed !== 'tags') { fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(root, { recursive: true }); }
+      const made = makeTestData(data);
+      if (made.status !== 0) throw new Error(`make-test-data exited ${made.status ?? made.error?.message}`);
+      const settingsPath = path.join(data, 'state', 'settings.json');
+      const resourcesDir = path.join(data, 'state', 'resources');
+      if (!fs.existsSync(settingsPath)) throw new Error(`make-test-data left no state/settings.json in ${data}`);
+      if (fs.existsSync(resourcesDir)) throw new Error('make-test-data wrote state/resources, so the stand-ins could not be removed cleanly afterwards');
+      const settingsBefore = fs.readFileSync(settingsPath);
+      fs.mkdirSync(path.join(resourcesDir, 'llama-cpp'), { recursive: true });
+      fs.mkdirSync(path.join(resourcesDir, 'gguf'), { recursive: true });
+      fs.writeFileSync(path.join(resourcesDir, 'llama-cpp', 'llama-server.exe'), '');
+      fs.writeFileSync(path.join(resourcesDir, 'gguf', `${TAG_MODEL}.gguf`), '');
+      const bound = JSON.parse(settingsBefore.toString('utf8'));
+      bound.memory = { ...(bound.memory ?? {}), judgeSource: 'llama-cpp', judgeModel: TAG_MODEL };
+      fs.writeFileSync(settingsPath, JSON.stringify(bound, null, 2));
+
+      const requestsFile = path.join(root, 'chat-requests.jsonl');
+      const recorder = await startChatRecorder(requestsFile, replay);
+      extraProxies.push(recorder);
+      const proxiedBefore = await routerProxiedTo(routerLog, TAG_MODEL);
+      const srv = startServer({ dataDir: data, port: PORT_BASE,
+        env: { GATHERLIGHT_CLAUDE_CMD: claude, ...PINNED, GATHERLIGHT_LLAMACPP_URL: `http://127.0.0.1:${recorder.port}` } });
+      servers.push(srv);
+      await waitHealthy(srv.base);
+      const sc = makeClient(srv.base);
+      const cli = () => routerOutcomes(data);
+      const chat = () => routerOutcomes(data, LLAMA_CHAT_PROVIDER);
+      if (cli().ok + cli().failed > 0) throw new Error(`${SEED_NAME[seed]}: ${cli().ok + cli().failed} claude-cli call(s) before any write`);
+      // RECORDED, not refused: a fresh fixture folder's first boot always warns about the plans/INDEX.md it generates
+      // (settleSeedRepo commits it, below), exactly as the default seed's first boot did. The arms' own startup check —
+      // no warning at all — runs on the settled copy.
+      const startupWarnings = (await sc.getJson('/api/migration/status')).warnings ?? [];
+      if (/warming 判断 model .* failed/.test(readLogs(data) + srv.log())) throw new Error(`${SEED_NAME[seed]}: warming the 判断 model failed`);
+      // 判断 is ON by default and is READ, not written, so the seed's app_config stays as the default seed's was made.
+      const judge = await judgeLayer(sc);
+      if (judge?.on !== true || judge?.activeSource !== 'llama-cpp' || judge?.activeModel !== TAG_MODEL)
+        throw new Error(`${SEED_NAME[seed]}: 判断 reads back ${judge?.on ? 'on' : 'off'} · ${judge?.activeSource} · ${judge?.activeModel}, not on · llama-cpp · ${TAG_MODEL}`);
+      const before = { chat: chat(), annotations: recorder.state.annotations };
+      if (before.annotations !== 0) throw new Error(`${SEED_NAME[seed]}: ${before.annotations} annotation request(s) before any write`);
+      console.log(`  writing ${SEED_NAME[seed]}: 判断 reads back on · llama-cpp · ${TAG_MODEL}${replay ? ', every annotation answered with Claude\'s recorded tags' : ''}; claude stub`);
+      const ids = {};
+      for (const [i, f] of FIXTURE.facts.entries()) {
+        const w = await sc.call('remember_fact', {
+          kind: f.kind, topic: f.topic, content: f.content, source: `https://example.test/${f.id}`, confidence: 0.8,
+        });
+        if (w.result?.ok !== true) throw new Error(`${SEED_NAME[seed]}: ${f.id} → ${JSON.stringify(w.result)}`);
+        ids[f.id] = Number(w.result.id);
+        process.stdout.write(`\r  ${seed}: writing ${i + 1}/${FIXTURE.facts.length}   `);
+      }
+      process.stdout.write('\n');
+      srv.stop();
+      servers.splice(servers.indexOf(srv), 1);
+      await until(async () => { try { await fetch(`${srv.base}/api/health`); return false; } catch { return true; } }, 60000);
+      // Counted AFTER the server exited (every line it wrote is in its log) and with the router still up (its log queue).
+      const cliCalls = cli(), chatCalls = chat();
+      const proxied = (await routerProxiedTo(routerLog, TAG_MODEL)) - proxiedBefore;
+      recorder.server.closeAllConnections();
+      recorder.server.close();
+      const records = fs.readFileSync(requestsFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      const annotations = records.filter((r) => r.kind === 'annotation');
+      const n = FIXTURE.facts.length;
+      const replies = {
+        answered200: annotations.filter((r) => r.status === 200).length,
+        replayed: annotations.filter((r) => r.replayed).length,
+        cappedAtLength: annotations.filter((r) => r.finish === 'length').length,
+        withReasoning: annotations.filter((r) => r.reasoning).length,
+        withThinkTag: annotations.filter((r) => /<think>/i.test(r.content ?? '')).length,
+        maxCompletionTokens: Math.max(0, ...annotations.map((r) => r.completionTokens ?? 0)),
+        medianCompletionTokens: median(annotations.map((r) => r.completionTokens).filter((x) => x != null)),
+        eachFactOnce: FIXTURE.facts.every((f) => annotations.filter((r) => r.fact === f.content).length === 1),
+      };
+      // THE BUILD GUARDS (Run 7): no CLI; one annotation per write, each answered, each through the router's log; every
+      // forward seen by the router; the tag seed's annotations all from the model (none replayed), the replay seed's all
+      // replayed (none reaching the model); no reasoning returned.
+      const guards = {
+        noClaudeCli: cliCalls.ok + cliCalls.failed === 0,
+        oneAnnotationPerWrite: annotations.length === n && replies.eachFactOnce,
+        everyAnnotationAnswered: replies.answered200 === n && recorder.state.failed === 0,
+        everyAnnotationThroughTheRouterLog: chatCalls.ok - before.chat.ok === n && chatCalls.failed === 0,
+        routerSawEveryForward: proxied === recorder.state.forwarded,
+        noOtherChatRequest: recorder.state.other === 0,
+        annotatedBy: replay ? replies.replayed === n && recorder.state.forwarded === recorder.state.warms
+          : replies.replayed === 0 && recorder.state.forwarded === n + recorder.state.warms,
+        noReasoningReturned: replies.withReasoning === 0 && replies.withThinkTag === 0,
+      };
+      console.log(`  ${seed}: claude-cli ${cliCalls.ok}/${cliCalls.failed} (ok/failed); llama.cpp chat calls in the seed server's log`
+        + ` ${chatCalls.ok - before.chat.ok}/${chatCalls.failed} during the writes; annotation requests ${annotations.length}`
+        + ` (${replies.answered200} answered 200, ${replies.replayed} replayed, ${replies.cappedAtLength} capped at ${CHAT_MAX_TOKENS},`
+        + ` ${replies.withReasoning} with reasoning); warm ${recorder.state.warms}; forwarded ${recorder.state.forwarded} to ${TAG_MODEL},`
+        + ` the router proxied ${proxied}`);
+      fs.writeFileSync(settingsPath, settingsBefore);
+      fs.rmSync(resourcesDir, { recursive: true, force: true });
+      settleSeedRepo(data);
+      await checkpoint(data);
+      const v = verifySeedRows(data, ids, SEED_NAME[seed]);
+      return { ids, record: {
+        idOf: ids, fixtureHash: FIXTURE_HASH, fixture: FIXTURE_REL, claudeVersion, appHead, appVersion, createdAt: new Date().toISOString(),
+        boundModel: TAG_MODEL, annotatedBy: replay ? 'replay of the default seed\'s Claude tags' : `llama-cpp · ${TAG_MODEL}`,
+        judge: 'on', startupWarnings, claudeCalls: cliCalls,
+        llamaChatCalls: { ok: chatCalls.ok, failed: chatCalls.failed, beforeWrites: before.chat },
+        requests: { ...recorder.state, routerProxied: proxied }, replies, guards, rows: v.rows, graphNodes: v.graphNodes,
+      } };
+    };
+
+    const extraIds = {};
+    if (TAG_MODEL && BUILD_TAG) {
+      // THE BUILD: the tag seed, then its control, on ONE router launched with the product's chat preset for TAG_MODEL.
+      const tagsRoot = seedRootOf('tags');
+      fs.rmSync(tagsRoot, { recursive: true, force: true });
+      fs.mkdirSync(tagsRoot, { recursive: true });
+      await startRouter([], [TAG_MODEL], tagsRoot);
+      const claudeHandles = handlesOf(SEED_DATA, seedMeta.idOf);
+      const replay = new Map(FIXTURE.facts.map((f) => [f.content, claudeHandles[f.id]]));
+      const builtWith = new Date().toISOString();
+      const tags = await writeLocalSeed('tags', null);
+      const rep = await writeLocalSeed('replay', replay);
+      const args = childArgsOf(path.join(tagsRoot, 'router.log'), TAG_MODEL);
+      stopRouter();
+      // What the two builds share: the one router, its child's launch, the model file.
+      const routerGuards = {
+        childSpawnedOnce: args.spawns === 1,
+        thinkingOffInArgv: args.reasoning === 'off',
+        capsInArgv: args.nPredict === String(CHAT_MAX_TOKENS) && args.ctxSize === String(CHAT_CONTEXT_TOKENS),
+      };
+      const file = path.join(RESOURCES, 'gguf', `${TAG_MODEL}.gguf`);
+      const annotator = { source: 'llama-cpp', model: TAG_MODEL, file: rel(file), bytes: fs.statSync(file).size,
+        sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+        preset: fs.readFileSync(path.join(tagsRoot, 'presets.ini'), 'utf8'), childArgs: args };
+      // THE PAIRING PRECONDITIONS: the two new seeds equal beyond the tags; the replay equal to the default seed in
+      // everything the tags decide (the same subjects on the same nodes, the same subject edges) — so it differs from it
+      // only in the decay clock, which is recorded (which node columns, and the engine's position).
+      const tagsVsReplay = compareSeeds(seedDataOf('replay'), rep.ids, seedDataOf('tags'), tags.ids);
+      const replayVsDefault = compareSeeds(SEED_DATA, seedMeta.idOf, seedDataOf('replay'), rep.ids);
+      const { stats, claude, local } = (() => {
+        const c = handlesOf(SEED_DATA, seedMeta.idOf), l = handlesOf(seedDataOf('tags'), tags.ids);
+        return { claude: c, local: l, stats: { default: tagStatsOf(c), tags: tagStatsOf(l, c) } };
+      })();
+      for (const [seed, built] of [['tags', tags], ['replay', rep]]) {
+        const guards = { ...built.record.guards, ...routerGuards };
+        guards.held = Object.values(guards).every((x) => x === true);
+        extraMeta[seed] = { ...built.record, builtWith, annotator, guards, tagsVsReplay, replayVsDefault, stats };
+        fs.writeFileSync(seedMetaOf(seed), JSON.stringify(extraMeta[seed], null, 2));
+        extraIds[seed] = built.ids;
+      }
+      fs.writeFileSync(path.join(tagsRoot, 'tags.json'), JSON.stringify(Object.fromEntries(FIXTURE.facts.map((f) =>
+        [f.id, { group: groupOf(f.id), claude: claude[f.id], [TAG_MODEL]: local[f.id] }])), null, 2));
+      console.log(`  router: ${TAG_MODEL}'s child spawned ${args.spawns}× with --reasoning ${args.reasoning} --n-predict ${args.nPredict}`
+        + ` --ctx-size ${args.ctxSize}`);
+      console.log(`  tags vs replay: ${JSON.stringify({ ...tagsVsReplay, counts: undefined })}`);
+      console.log(`  replay vs default: ${JSON.stringify({ ...replayVsDefault, counts: undefined })}; counts ${JSON.stringify(replayVsDefault.counts)}`);
+      const failed = EXTRA_SEEDS.flatMap((s) => Object.entries(extraMeta[s].guards).filter(([k, x]) => k !== 'held' && x !== true).map(([k]) => `${s}.${k}`));
+      if (failed.length) throw new Error(`the local-tag seeds FAILED their build guards: ${failed.join(', ')} — see their seed.json and chat-requests.jsonl`);
+      mustEqual(tagsVsReplay, ['idsEqual', 'knowledge', 'nodes', 'positions', 'nonSubjectEdges', 'vectors', 'reviews'],
+        'the tag seed and the replay seed differ beyond their tags');
+      mustEqual(replayVsDefault, ['idsEqual', 'knowledge', 'subjects', 'subjectEdges', 'nonSubjectEdges', 'vectors', 'reviews'],
+        'the replay seed does not carry the default seed\'s tags exactly');
+      console.log('  local-tag seeds: every guard held; the tag and replay seeds are equal beyond their tags, and the replay carries'
+        + ' the default seed\'s tags exactly');
+    } else if (TAG_MODEL) {
+      // REUSE: re-verified, never trusted — the rows, the pairing preconditions, and that no seed's tags moved.
+      for (const seed of EXTRA_SEEDS) {
+        const m = extraMeta[seed];
+        console.log(`  reusing ${SEED_NAME[seed]} from ${m.createdAt} (built with ${m.builtWith}): ${m.annotatedBy}, 判断 bound to`
+          + ` ${m.boundModel}, app ${m.appHead} v${m.appVersion}; its build: ${m.claudeCalls.ok + m.claudeCalls.failed} claude-cli call(s),`
+          + ` ${m.requests.annotations} annotation request(s) (${m.replies.replayed} replayed), the router proxied ${m.requests.routerProxied}`);
+        settleSeedRepo(seedDataOf(seed));
+        await checkpoint(seedDataOf(seed));
+        verifySeedRows(seedDataOf(seed), m.idOf, SEED_NAME[seed]);
+        extraIds[seed] = m.idOf;
+      }
+      const tagsVsReplay = compareSeeds(seedDataOf('replay'), extraIds.replay, seedDataOf('tags'), extraIds.tags);
+      const replayVsDefault = compareSeeds(SEED_DATA, seedMeta.idOf, seedDataOf('replay'), extraIds.replay);
+      if (JSON.stringify(tagsVsReplay) !== JSON.stringify(extraMeta.tags.tagsVsReplay)
+        || JSON.stringify(replayVsDefault) !== JSON.stringify(extraMeta.tags.replayVsDefault))
+        throw new Error('the local-tag seeds no longer compare as they did when built — rebuild them');
+      const stats = { default: tagStatsOf(handlesOf(SEED_DATA, seedMeta.idOf)),
+        tags: tagStatsOf(handlesOf(seedDataOf('tags'), extraIds.tags), handlesOf(SEED_DATA, seedMeta.idOf)) };
+      if (JSON.stringify(stats) !== JSON.stringify(extraMeta.tags.stats)) throw new Error('the seeds\' tags changed since they were built — rebuild them');
+      console.log('  local-tag seeds re-verified: rows, pairing preconditions and tags unchanged since the build');
+    }
+    if (TAG_MODEL) printTagStats([{ name: 'Claude (default and replay seeds)', stats: extraMeta.tags.stats.default },
+      { name: `${TAG_MODEL} (tag seed)`, stats: extraMeta.tags.stats.tags }]);
+    const idMapOf = { default: idOf, ...Object.fromEntries(Object.entries(extraIds).map(([s, ids]) => [s, new Map(Object.entries(ids))])) };
+    for (const [s, map] of Object.entries(idMapOf)) for (const f of facts) if (!map.has(f.id)) throw new Error(`${SEED_NAME[s]} has no id for fact ${f.id}`);
+
     if (SEED_ONLY) {
-      console.log(`  --seed-only: the seed at ${rel(SEED_ROOT)} (fixture ${FIXTURE_HASH.slice(0, 12)}) is ready; no arm was started`);
+      console.log(`  --seed-only: the seed at ${rel(SEED_ROOT)} (fixture ${FIXTURE_HASH.slice(0, 12)}) is ready`
+        + `${TAG_MODEL ? `, and the local-tag seeds at ${rel(seedRootOf('tags'))} and ${rel(seedRootOf('replay'))}` : ''}; no arm was started`);
       return;
     }
 
@@ -1393,51 +2065,7 @@ const live = async () => {
     // Each arm's own resources get EMPTY stand-ins for the runtime and the model, which is all IsConfigured asks;
     // the arm then ADOPTS this router at GATHERLIGHT_LLAMACPP_URL (EnsureServingAsync probes before it spawns).
     const llamaModels = [...rerankers, ...chatJudges];
-    if (llamaModels.length > 0) {
-      const exe = path.join(RESOURCES, 'llama-cpp', 'llama-server.exe');
-      const gguf = path.join(RESOURCES, 'gguf');
-      if (!fs.existsSync(exe)) throw new Error(`no llama-server at ${exe} — download llama.cpp in 资源 first`);
-      // Both layouts ResourceProvisioner.InstalledGgufIds reads: flat gguf/<m>.gguf, or gguf/<m>/<any>.gguf
-      // (how 资源 installs them). The router takes the models dir either way and names both by <m>.
-      const installed = (m) => fs.existsSync(path.join(gguf, `${m}.gguf`))
-        || (fs.existsSync(path.join(gguf, m)) && fs.statSync(path.join(gguf, m)).isDirectory()
-          && fs.readdirSync(path.join(gguf, m)).some((f) => f.toLowerCase().endsWith('.gguf')));
-      for (const m of llamaModels)
-        if (!installed(m)) throw new Error(`${m} is in neither ${gguf}/${m}.gguf nor ${gguf}/${m}/*.gguf — download it in 资源 first`);
-      // THE PRODUCT'S PRESET, per kind — LlamaServerRuntime.WritePresets, mirrored line for line, because a bench
-      // that launches a model differently measures a product we do not ship. Every kind gets n-gpu-layers (launch
-      // CONTRACT: without it the CPU runs the model, silently ~30× slower); a reranker adds `reranking` and its window
-      // as ctx/batch/ubatch (a pair must fit one batch) — 4096, or the window its catalogue row DECLARES (DECLARED_WINDOW,
-      // the bench's copy of GgufCatalog.DeclaredWindow: mMiniLMv2's 512, since Run 4 found llama.cpp serving it 512 slots
-      // whatever 4096 the preset claimed); a CHAT model gets its context cap (CHAT_CONTEXT_TOKENS), and never `embeddings`
-      // or `reranking`, either of which restricts the child to one route and refuses chat. mirrorGuard holds all three
-      // numbers to the C#.
-      // A CHAT section gets `reasoning = off` and `n-predict = 512`, exactly as WritePresets writes it since round 2's
-      // Task P (LlamaServerRuntime.ChatMaxTokens). Run 5 wrote `reasoning = off` alone, ahead of the product: Lyntai's
-      // OpenAI-shaped payload drops TextReasoning.Suppress, and llama-server's default `--reasoning auto` then opens a
-      // thinking block for any template that supports one (Qwen3, and Qwen3.5 against its own default). The key
-      // renders the template's pre-closed think block and leaves a template without thinking byte-identical (gemma-3),
-      // so Run 3's control was unchanged by it. `reasoning-budget = 0` is NOT equivalent: the template stays in
-      // thinking mode and the model writes its reasoning into the reply. `n-predict` caps a runaway reply (Run 5: an
-      // uncapped one filled its child's shared context, and llama-server keeps decoding a request nobody waits for).
-      // Runs 2–5b re-analyse identically: a preset is a launch setting, and no saved row depends on this text.
-      mirrorGuard();
-      const windowOf = (m) => DECLARED_WINDOW[m] ?? RERANK_WINDOW;
-      const presetSection = (m, kind) => [`[${m}]`, 'n-gpu-layers = 99',
-        ...(kind === 'reranking'
-          ? ['reranking = true', `ctx-size = ${windowOf(m)}`, `batch-size = ${windowOf(m)}`, `ubatch-size = ${windowOf(m)}`]
-          : ['reasoning = off', `n-predict = ${CHAT_MAX_TOKENS}`, `ctx-size = ${CHAT_CONTEXT_TOKENS}`]),
-        ''].join('\n');
-      const preset = path.join(WORK, 'presets.ini');
-      fs.writeFileSync(preset, [...rerankers.map((m) => presetSection(m, 'reranking')),
-        ...chatJudges.map((m) => presetSection(m, 'chat'))].join('\n'));
-      const logFd = fs.openSync(path.join(WORK, 'router.log'), 'w');
-      // --models-max holds every model the arms bind at once, so no arm's model is evicted by another's mid-run.
-      router = spawn(exe, ['--models-dir', gguf, '--models-preset', preset, '--models-max', String(Math.max(2, llamaModels.length)),
-        '--host', '127.0.0.1', '--port', String(LLAMA_PORT)], { cwd: path.dirname(exe), stdio: ['ignore', logFd, logFd] });
-      fs.closeSync(logFd);
-      await until(async () => (await fetch(`http://127.0.0.1:${LLAMA_PORT}/v1/models`)).ok, 60000);
-    }
+    if (llamaModels.length > 0) await startRouter(rerankers, chatJudges, WORK);
 
     // ---- 2b. `--rerank-memo`: one proxy per local-model arm, in front of the router --------------------------
     // Everything passes through untouched, except a /v1/rerank POST during the ACCURACY pass: its body is hashed and
@@ -1542,7 +2170,10 @@ const live = async () => {
     // ---- 3. one snapshot + one server per arm ----------------------------------------------------------------
     for (const [i, arm] of arms.entries()) {
       arm.dir = path.join(WORK, `arm-${i}`);
-      fs.cpSync(SEED_DATA, arm.dir, { recursive: true });
+      // Each arm starts from ITS seed (Run 7): `<arm>@tags` / `<arm>@replay` from a local-tag seed, the default otherwise.
+      if (!idMapOf[arm.seed]) throw new Error(`arm ${arm.key}: no ${arm.seed} seed — pass --tag-seed=<chat model>`);
+      arm.idMap = idMapOf[arm.seed];
+      fs.cpSync(arm.seed === 'default' ? SEED_DATA : seedDataOf(arm.seed), arm.dir, { recursive: true });
       fs.rmSync(path.join(arm.dir, 'state', 'logs'), { recursive: true, force: true });
       const env = { GATHERLIGHT_CLAUDE_CMD: claude, ...arm.pinned };
       if (arm.llamaModel) {
@@ -1607,7 +2238,7 @@ const live = async () => {
     // ---- 4. identical questions, identical SHUFFLED order, every arm in parallel ------------------------------
     const { queries, adjacentSameFact } = queryOrder(facts, ORDER_SEED);
 
-    const recall = async (c, x) => {
+    const recall = async (c, x, idMap) => {
       const t0 = Date.now();
       try {
         const r = await c.call('recall_facts', { query: x.q, limit: LIMIT });
@@ -1618,7 +2249,7 @@ const live = async () => {
         return {
           status: r.status, ranked: r.result.ranked ?? null, returned: ids.length,
           answered: typeof r.result.answered === 'boolean' ? r.result.answered : null,
-          error: null, pos: ids.indexOf(idOf.get(x.fact)), ms,
+          error: null, pos: ids.indexOf(idMap.get(x.fact)), ms,
           // The whole page, in order — the fingerprint two arms must share to have given the same verdicts (Run 6b).
           page: ids,
         };
@@ -1633,7 +2264,7 @@ const live = async () => {
       arm.rows = [];
       for (const [seq, x] of queries.entries()) {
         if (arm.proxy) arm.proxy.state.seq = seq;
-        const result = await recall(c, x);
+        const result = await recall(c, x, arm.idMap);
         const row = { arm: arm.key, pass: 'accuracy', seq, ...x, ...result, ...rerankOf(arm, seq) };
         arm.rows.push(row);
         emit(row);
@@ -1651,7 +2282,7 @@ const live = async () => {
       const c = makeClient(arm.srv.base);
       arm.latencyRows = [];
       for (const [seq, x] of sample.entries()) {
-        const row = { arm: arm.key, pass: 'latency', seq, ...x, ...(await recall(c, x)) };
+        const row = { arm: arm.key, pass: 'latency', seq, ...x, ...(await recall(c, x, arm.idMap)) };
         arm.latencyRows.push(row);
         emit(row);
       }
@@ -1696,12 +2327,23 @@ const live = async () => {
         appHead: seedMeta.appHead ?? null, appVersion: seedMeta.appVersion ?? null, reused: REUSE_SEED,
         ...(seedMeta.judge ? { judge: seedMeta.judge, claudeCalls: seedMeta.claudeCalls, graphNodes: seedMeta.graphNodes } : {}),
       },
+      // The local-tag seeds (Run 7): what made each, its build guards, how the seeds compare, the tag statistics.
+      ...(TAG_MODEL ? {
+        tagSeed: {
+          model: TAG_MODEL, annotator: extraMeta.tags.annotator, builtWith: extraMeta.tags.builtWith,
+          ...Object.fromEntries(EXTRA_SEEDS.map((s) => {
+            const { idOf: _ids, annotator: _a, stats: _s, tagsVsReplay: _t, replayVsDefault: _r, ...record } = extraMeta[s];
+            return [s, { folder: rel(seedRootOf(s)), ...record }];
+          })),
+          tagsVsReplay: extraMeta.tags.tagsVsReplay, replayVsDefault: extraMeta.tags.replayVsDefault, stats: extraMeta.tags.stats,
+        },
+      } : {}),
       order: { seed: ORDER_SEED, queries: queries.length, adjacentSameFact },
       concurrency: arms.length,
       latencySample: sample.length,
       arms: arms.map((a) => ({
         key: a.key, label: a.label, enrichment: a.enrichment, judgeInput: a.judgeInput ?? null, reranker: a.reranker ?? null,
-        chatJudge: a.chatJudge ?? null,
+        chatJudge: a.chatJudge ?? null, seed: a.seed,
         knobs: a.pinned, judgeOn: a.judgeOn, judgeSource: a.judgeSource, judgeModel: a.judgeModel,
         migrationWarnings: a.migrationWarnings,
         router: { startup: a.routerStartup, accuracy: a.routerAccuracy, total: a.routerTotal },
