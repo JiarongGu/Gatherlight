@@ -76,8 +76,8 @@
 // `--chat-judges=<m,…>` adds `lc:<m>` (content alone — the shipped default, no knob) and `lcb:<m>`
 // (`GATHERLIGHT_JUDGE_INPUT=both`, "topic — content") per llama.cpp CHAT model, paired against each other — the
 // question docs/judge-bench.md Run 3 asks — as well as against `formula`. All of them share ONE real router,
-// launched with the preset section the product writes for each model's kind, plus `reasoning = off` on a chat
-// section, which the product does not write yet (see presetSection and docs/judge-bench.md Run 5).
+// launched with the preset section the product writes for each model's kind — for a chat model, `reasoning = off`
+// and the `n-predict` generation cap (see presetSection and docs/judge-bench.md Runs 5 and 5b).
 //
 // PRIVACY. The fixture is invented and committed; this touches no household data. Local-model arms READ the
 // llama.cpp binary and GGUFs from --resources and nothing else there. Its default is local/state/resources —
@@ -172,7 +172,11 @@ const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
 // GATHERLIGHT_JUDGE_INPUT is deleted on the Lyntai bump that ships ContentChars, and these arms change with it —
 // `topic`/`contentonly` go, `content`/`content2` become knob-less content-only arms, `fuse` keeps one knob. The
 // full list is JudgeSeesContentPolicy's class comment, "ON THE BUMP"; after it, `both` cannot be reproduced.
-const PINNED = { GATHERLIGHT_JUDGE_INPUT: '', GATHERLIGHT_VERDICT_COMBINATION: '' };
+// GATHERLIGHT_JUDGE_DEADLINE_SECONDS (VerificationDeadlinePolicy's test knob) is pinned blank for the same reason, so
+// every arm runs the product's default verification deadline; startup below refuses an arm that announces it.
+const PINNED = { GATHERLIGHT_JUDGE_INPUT: '', GATHERLIGHT_VERDICT_COMBINATION: '', GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '' };
+// LlamaServerRuntime.ChatMaxTokens — the chat child's generation cap, mirrored into the shared router's preset.
+const CHAT_MAX_TOKENS = 512;
 const ARMS = {
   formula: { label: '公式 · no verification (seed tags present)', enrichment: false, env: {} },
   formula2: { label: '公式 · no verification · A/A twin', enrichment: false, env: {} },
@@ -1054,17 +1058,18 @@ const live = async () => {
       // CONTRACT: without it the CPU runs the model, silently ~30× slower); a reranker adds `reranking` and the
       // 4096 ctx/batch/ubatch (a pair must fit one batch); a CHAT model gets no ctx-size, and never `embeddings` or
       // `reranking`, either of which restricts the child to one route and refuses chat.
-      // ONE DEPARTURE, on purpose (docs/judge-bench.md Run 5): a chat section also gets `reasoning = off`, which the
-      // product does NOT write yet. The verifier asks for no reasoning (TextReasoning.Suppress), but Lyntai's
-      // OpenAI-shaped payload drops that field, and llama-server's default `--reasoning auto` then OPENS a thinking
-      // block for any template that supports one — Qwen3 by its own default, Qwen3.5 against its own default — so
-      // as shipped such a model spends seconds per verdict thinking. `reasoning = off` renders the template's
-      // pre-closed think block (measured on b10549, router preset and dedicated server alike) and leaves a template
-      // without thinking byte-identical (gemma-3: the same rendered prompt with and without it), so Run 3's control
-      // is unchanged. `reasoning-budget = 0` is NOT equivalent: it leaves the template thinking and cuts the
-      // thinking short, and the model then writes its reasoning into the reply as prose.
+      // A CHAT section gets `reasoning = off` and `n-predict = 512`, exactly as WritePresets writes it since round 2's
+      // Task P (LlamaServerRuntime.ChatMaxTokens). Run 5 wrote `reasoning = off` alone, ahead of the product: Lyntai's
+      // OpenAI-shaped payload drops TextReasoning.Suppress, and llama-server's default `--reasoning auto` then opens a
+      // thinking block for any template that supports one (Qwen3, and Qwen3.5 against its own default). The key
+      // renders the template's pre-closed think block and leaves a template without thinking byte-identical (gemma-3),
+      // so Run 3's control was unchanged by it. `reasoning-budget = 0` is NOT equivalent: the template stays in
+      // thinking mode and the model writes its reasoning into the reply. `n-predict` caps a runaway reply (Run 5: an
+      // uncapped one filled its child's shared context, and llama-server keeps decoding a request nobody waits for).
+      // Runs 2–5 re-analyse identically: a preset is a launch setting, and no saved row depends on this text.
       const presetSection = (m, kind) => [`[${m}]`, 'n-gpu-layers = 99',
-        ...(kind === 'reranking' ? ['reranking = true', 'ctx-size = 4096', 'batch-size = 4096', 'ubatch-size = 4096'] : ['reasoning = off']),
+        ...(kind === 'reranking' ? ['reranking = true', 'ctx-size = 4096', 'batch-size = 4096', 'ubatch-size = 4096']
+          : ['reasoning = off', `n-predict = ${CHAT_MAX_TOKENS}`]),
         ''].join('\n');
       const preset = path.join(WORK, 'presets.ini');
       fs.writeFileSync(preset, [...rerankers.map((m) => presetSection(m, 'reranking')),
@@ -1121,6 +1126,9 @@ const live = async () => {
       const knobs = arm.knob ? (Array.isArray(arm.knob) ? arm.knob : [arm.knob]) : [];
       for (const k of knobs) if (!k.test(log)) throw new Error(`arm ${arm.key}: its knob did not announce itself (${k})`);
       if (knobs.length === 0 && announced.length > 0) throw new Error(`arm ${arm.key}: sets no knob, yet the server printed: ${announced.join(' | ')}`);
+      // The deadline knob is pinned blank; one announcing itself means the product default did not apply.
+      if (/Test knob set: judge verification deadline/.test(log + readLogs(arm.dir)))
+        throw new Error(`arm ${arm.key}: the verification-deadline test knob is set — this arm would not run the product's deadline`);
       arm.migrationWarnings = (await c.getJson('/api/migration/status')).warnings ?? [];
       if (arm.llamaModel) {
         const judge = await judgeLayer(c);
