@@ -3527,3 +3527,231 @@ above are.
 results file, router log, `presets.ini`, arm logs and `settings.json`, and its `guards.txt`. `devtools/_lc5b/driver.log`
 is the sequence. The results files are also in `devtools/_judge-bench/`: `results-2026-09-24T053912.631Z.json`,
 `…054422.547Z.json` and `…055101.569Z.json`.
+
+## Run 6 — the input fit on long facts (design)
+
+Written and committed BEFORE the run; the results section that follows names this commit. The fixture, its measured
+lengths, the seed and a plumbing smoke came first, because this design quotes them.
+
+**The question.** mMiniLMv2 is catalogued with a declared 512-token window, so `RerankInputCap.Fit` cuts every pair to
+fit it:
+
+- the query is NFKC-normalised and cut to 253 characters;
+- each candidate is cut to 506 − |query| characters of its NFKC text, at most 1,000.
+
+For this fixture's questions (16–164 characters) that is **342–490 characters of each candidate**. BGE and LAMAR declare
+no window: they read up to `RerankInputCap.MaxChars` = 1,000 characters, raw.
+
+Every fact in the bilingual fixture is ≤ 101 characters, so no run could show what cutting a LONG fact costs, and the
+mMiniLMv2 catalogue note says so: 「这样截短对长事实的检索影响有多大还没有量过(测试集里的事实都很短)」. **When a fact's answer
+sits past mMiniLMv2's cut, does it lose recall against BGE, which reads the same note up to 1,000 characters?**
+
+### The instrument — a long-fact fixture
+
+`devtools/fixtures/recall-bilingual-long.json`, sha256 `1f48f1be7f49785ece34390b9f1a881fd34d08314f586cac94f1d87bf91a4f17`.
+It is written by `devtools/scripts/judge-bench-long-fixture.mjs` (committed in `ef6cdef`), deterministically and with no
+model, and the bench refuses a committed copy that is not byte-for-byte what the generator writes.
+
+- **Same facts, same questions.** The 60 facts keep their id, kind and topic, and the 240 questions are byte-identical
+  (the generator asserts both). Only `content` changes: each becomes a note of **883–1,241 characters** with the
+  original content, the answer-bearing text, at a controlled POSITION.
+- **Positions, 15 facts each.** They are assigned by cycling start → middle → end → beyond through each language's
+  facts in fixture order: zh 10, en 4 and ja 1 per position. A near-duplicate cluster, adjacent in the fixture, is
+  therefore split across positions. The assignment is written into the fixture, so committing it pre-registers it.
+
+| position | where the answer sits | facts |
+|---|---|---|
+| **start** | offset 0 | mkt-east, mkt-harbor, museum-child, pharm-local, school-pickup, allergy-shellfish, car-inspection, rest-sushi, hotel-mountain, gym, vet, water-bill, hospital, anniversary, summer-camp |
+| **middle** | offset 540–600, with about as much text after it | mkt-west, lib-weekday, pool-north, passport, school-dropoff, rest-noodle, train-express, trash-day, cat-food, gas-bill, internet, bank, onsen, flu-shot, ski |
+| **end** | the last text of an 880–960-character note | museum-adult, lib-weekend, pool-south, visa, allergy-peanut, rest-noodle2, train-local, dentist, plant, parking, airport, grandma-bday, ramen, zoo, laundry |
+| **beyond** | offset 1,060–1,120, the last text of the note | museum-adult-old, pharm-24h, id-card, school-lunch, car-insurance, hotel-lake, piano, swim-class, power-bill, bike, post, hotpot, konbini, babysitter, movie |
+
+**The padding, and why it is not other facts' content.** The plan asked for notes "made of other fixture facts". Copied
+verbatim, that cannot be unambiguous: every one of the 60 facts is questioned, so putting fact Y's content into fact X's
+note makes note X a SECOND correct answer to Y's four questions. A "miss" on Y could then be the answer landing on the
+page inside X. So the padding carries no fact's answer, by construction:
+
+1. **Other fixture facts, by TOPIC only.** Each note names up to three other facts in its own language, at fixed strides
+   through the language's facts, which never land on a near-duplicate neighbour. Each is named in a sentence that
+   states nothing about it: 「…这件事另外有一条记录,这里不重复。」 / "Still to double-check: …" / 「…の件は、まだ確認していない。」.
+   - A topic is a headline and carries no value.
+   - The four topics that DO carry part of their own answer are never mentioned: 二十四小时药店, 花生过敏, Shellfish allergy
+     and 火锅店排队.
+   - Every other fact is mentioned exactly 3 times. 48 notes carry 3 mentions and 12 carry 2.
+   - This makes a note "one that mentions many things": a question's subject appears in notes that do not answer it.
+2. **Neutral household filler**, invented and fictional: chores, repairs, family routines. The pools hold 104 zh, 58 en
+   and 46 ja sentences, and no sentence repeats inside a note. Every pool sentence is checked against `SUBJECT_TERMS`
+   (166 zh, 148 en and 102 ja terms). That list covers every fact's subject words in all three languages, plus the
+   opening-hours, price and booking vocabulary the questions are made of. The build fails on a hit.
+
+The generator's `validate` asserts, and the build fails otherwise:
+
+- every fact's original content occurs **exactly once in the whole corpus**, in its own note, at its declared offset;
+- NFKC preserves every note's length, so one offset serves both the raw 1,000-character cap and mMiniLMv2's
+  normalised fit;
+- **per question**:
+  - at `start` the answer lies wholly inside mMiniLMv2's budget;
+  - at `middle`, `end` and `beyond` it starts at or after that budget;
+  - at `middle` and `end` it ends within 1,000 characters;
+  - at `beyond` it starts after 1,000.
+
+**Measured lengths.** Measured with `judge-bench-long-fixture.mjs --measure`: dedicated CPU `llama-server`s (b10549),
+each loading the catalogue's pinned file (`mmarco-mMiniLMv2-L12-H384-v1-Q8_0` `91d70301…`, `bge-reranker-v2-m3-Q5_K_M`
+`1a212007…`), and `/tokenize` on each note. mMiniLMv2 and BGE tokenize **identically**: every count below is the same for
+both, because they share the XLM-R SentencePiece vocabulary. Characters are UTF-16 units, which here equal NFKC units.
+Token offsets are the prefix before, and through, the answer.
+
+| position | lang | n | answer starts, chars | answer ends, chars | answer starts, tokens | answer ends, tokens | note, tokens |
+|---|---|---|---|---|---|---|---|
+| start | zh | 10 | 0 | 20–35 | 0 | 16–29 | 754–779 |
+| start | en | 4 | 0 | 76–101 | 0 | 18–25 | 230–251 |
+| start | ja | 1 | 0 | 31 | 0 | 24 | 644 |
+| middle | zh | 10 | 541–558 | 567–590 | 432–458 | 452–477 | 844–888 |
+| middle | en | 4 | 566–582 | 642–659 | 140–153 | 159–173 | 297–312 |
+| middle | ja | 1 | 563 | 593 | 367 | 385 | 722 |
+| end | zh | 10 | 850–878 | 883–899 | 681–709 | 700–727 | 700–727 |
+| end | en | 4 | 796–840 | 884–939 | 188–206 | 211–230 | 211–230 |
+| end | ja | 1 | 866 | 895 | 573 | 588 | 588 |
+| beyond | zh | 10 | 1,070–1,081 | 1,091–1,116 | 851–866 | 869–886 | 869–886 |
+| beyond | en | 4 | 1,062–1,108 | 1,143–1,193 | 263–275 | 283–294 | 283–294 |
+| beyond | ja | 1 | 1,075 | 1,108 | 716 | 731 | 731 |
+
+Against each model's cut:
+
+| position | mMiniLMv2 reads (chars, per question) | the answer, for mMiniLMv2 | BGE and LAMAR read | the answer, for BGE and LAMAR |
+|---|---|---|---|---|
+| start | 359–490 | wholly inside, every question | 1,000 | wholly inside |
+| middle | 342–487 | wholly past the cut, every question | 1,000 | wholly inside (ends ≤ 659) |
+| end | 354–488 | wholly past the cut, every question | 1,000 | wholly inside (ends ≤ 939) |
+| beyond | 376–488 | wholly past the cut, every question | 1,000 | wholly past the cap (starts ≥ 1,062) |
+
+- **What the fit sends mMiniLMv2**: every (question, candidate) pair of the run, the question fitted and each note cut
+  to the budget that question leaves, plus the 4 special tokens. That is **14,400 pairs, 0 over 512 tokens, the largest
+  425.** No call can be refused for length, so a missing verdict would be a fault, not the fit.
+- **The fit counts characters, not tokens.** On English notes the `end` answer sits at 188–206 tokens and the `middle`
+  answer at 140–153, well inside 512 tokens, yet past the character budget. So on English facts, part of any cost is
+  the character bound's conservatism rather than the window itself. That is reported by language, descriptively.
+  The rule reads all languages together.
+
+### The seed
+
+`devtools/_judge-bench-seed-long/`, built by `judge-bench --fixture=long --reseed --seed-only` at 2026-09-24T09:18:53Z,
+app `ef6cdef` (v1.3.0; no product code changed since the build).
+
+- **判断 OFF.** The seed server switched it off and read it back before its first write. No write was annotated:
+  `lyntai_memory_subject` holds 0 rows, and `memory.enrichment.enabled` = 0.
+- **Against the e2e claude stub**, so no quota could be spent even by accident. The seed server's log holds **0
+  `router: claude-cli` lines**.
+- **Each note exactly once.** 60 `knowledge` rows each hold exactly their note, and each sits on its own graph node: 60
+  distinct `graph_ref`s, and every `lyntai_memory_node` content equals a note.
+- 语义 is unbound: no embedder, no vector store.
+
+The bench re-verifies all of it at `--reuse-seed`. It also refuses a seed not written with 判断 off, or written from a
+different fixture hash. This seed is `devtools/_judge-bench-seed-long/`, never Runs 1–5b's `devtools/_judge-bench-seed/`.
+
+### A different base from Runs 1–5b — within-run comparisons only
+
+**Every arm recalls over NO subject tags** (Runs 1–5b recalled over CLI-written ones), over long notes, with the CLI
+stubbed. So:
+
+- the formula digest cannot equal `f661eb6a056e`;
+- the bench refuses `--baseline` against any earlier run, because the fixture hashes differ;
+- no number here may be set beside another run's.
+
+Every comparison below is paired within this run.
+
+### Arms, command and configuration
+
+```
+node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M,LAMAR-600m.Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-Q8_0 \
+  --resources=devtools/_rr-res --port-base=6200 --llama-port=6240 > devtools/_judge-bench-long-run6.txt 2>&1
+```
+
+Eight arms run in ONE run:
+
+- `formula`, and its engine A/A twin `formula2`;
+- `rr:` (partition) and `rrf:` (fuse) for each of BGE, LAMAR and mMiniLMv2. The bench adds `rrf:` with every reranker.
+
+**Configuration:**
+
+- **mMiniLMv2 binds its CATALOGUED id**, `mmarco-mMiniLMv2-L12-H384-v1-Q8_0`: the upstream stem, not Run 4's renamed copy.
+  So the product applies its declared window: the preset gives ctx/batch/ubatch = 512 (the bench's `DECLARED_WINDOW`,
+  held to `GgufCatalog` by its mirror guard), and `RerankInputCap` fits each pair with NFKC. The file in
+  `devtools/_rr-res/gguf/` is a hard link to Run 4's bytes, sha256 `91d70301…`, which equals the catalogue pin.
+- **BGE and LAMAR declare no window**: a 4096 preset, the 1,000-character cap, and raw text.
+- **Everything else is as in Runs 2–5b**:
+  - base: this run's `formula`, over a seed with no tags;
+  - embedder: none;
+  - `EndorseCount` 8 = the page;
+  - candidates: ≤ 60;
+  - partition (`rr:`) and fuse (`rrf:`);
+  - the product's 60 s verification deadline (knob pinned blank).
+- **Every server points at the claude stub.** Any `router: claude-cli` line is a WARNING, and it would cost nothing.
+- **Ports.** 6200–6208 and 6240 sit off every tcp range Windows had reserved that day, off Runs 1–5b's ports and off the
+  e2e fleet's.
+
+**Measured.** Everything the bench prints for Runs 2–5b: the four sets and `all`, paired vs `formula`, every reranker
+against every other, the engine A/A, the serial median over 12 queries and the parallel mean, and claude-cli calls per
+arm. New with this fixture is a **BY POSITION** block:
+
+- per position (60 queries: 15 facts × 4 sets): each arm's top-1, found@8, and judged-of-graph (verdict coverage);
+- paired, McNemar exact with the Agresti–Min 95% interval: each arm against `formula`, and every reranker against every
+  other.
+
+### Decision rule
+
+Verbatim from the plan: **the fit "costs" if mMiniLMv2's found@8 on end-position facts is significantly worse than
+BGE's (paired, p < 0.05) — then its catalogue note must say so with the number; otherwise record the result and keep
+the note's wording or tighten it to what was measured.**
+
+- **The one test.** `rr:mmarco-mMiniLMv2-L12-H384-v1-Q8_0 vs rr:bge-reranker-v2-m3-Q5_K_M`, found@8, position `end`: 60
+  queries, paired, partition against partition (the product's combination). It **costs** if and only if the exact
+  McNemar p < 0.05 AND c − b < 0, where b = BGE hit & mMiniLMv2 miss. It is one pre-registered test, so there is no
+  multiplicity correction, and nothing else decides.
+- **If it costs**, the note must carry: mMiniLMv2's and BGE's found@8 on end-position facts (each of 60), the net pp and
+  its 95% interval, the configuration (no tags, no embedder, `EndorseCount` 8, answer past mMiniLMv2's cut but inside
+  1,000 characters), and what the household should conclude (a long note whose answer is not near its start is found
+  less often than with BGE).
+- **If it does not cost**, the note's 「还没有量过」 is no longer true either way. It is replaced by the measured result, in
+  words no stronger than the interval allows: "no significant difference" quotes the loss the interval cannot rule out,
+  and "equivalent" is not claimed from 60 pairs.
+- **Product code is not changed in this run.** The sentence is reported to the owner and routed by the round's controller.
+
+**Reported beside the rule, outside it (descriptive):**
+
+- **`middle`**: the same cut, with text after the answer;
+- **`start`**: the control, where both models read the answer. A difference there is not the fit;
+- **`beyond`**: both blind. BGE's own cap shows here, read against `formula` within the position;
+- top-1 per position; LAMAR; the `rrf:` arms; each reranker against `formula`;
+- the by-language split of the `end` and `middle` results, computed from the saved rows;
+- serial latency and coverage.
+
+### Guards, checked before the rule is read
+
+1. **The instrument.** The bench accepted the fixture (generator check) and re-verified the seed: 判断 off, 0 calls, 60
+   exact notes, 60 graph nodes.
+2. **The engine A/A.** `formula` against `formula2` is quiet on `all` (p ≥ 0.05).
+3. **Every reranker arm's startup.** It reads back `llama-cpp · <id>`, raises no startup warning, and makes 0
+   claude-cli calls at startup and over the whole run.
+4. **The router log.** Each of the three models spawns once. mMiniLMv2's child logs `n_ctx_slot = 512`, and its largest
+   processed pair is ≤ 512 tokens. There is no error line and no truncation.
+5. **Coverage.** `judged` = `graph` in every position of every reranker arm. A reranker abstains only on a fault, and
+   every abstention is traced. **An abstention from over-long input would mean the fit failed**: that is a finding in
+   itself, and the rule is then not read.
+6. **Can the instrument express the effect? Yes, by construction.** The answer is inside mMiniLMv2's input for every
+   question at `start`, and outside it for every question at `middle`/`end`/`beyond` (validated per question). BGE reads
+   it at `middle`/`end`. No pair can be refused.
+
+**Plumbing smoke, before this design.** One smoke ran: 2 facts × 4 questions, `formula` plus mMiniLMv2 at its
+catalogued id. It used the fixture as first generated, before one filler word was replaced (the same offsets), on a
+seed built from that fixture. It checked:
+
+- the router served mMiniLMv2 with `n_ctx_slot = 512`;
+- the binding read back;
+- 0 claude-cli calls;
+- positions are saved and the BY POSITION block prints;
+- the largest pair it sent was 417 tokens.
+
+Its accuracy numbers (8 queries) inform nothing here. An earlier attempt at the same smoke exited 127 before any arm
+started, with no message and no orphaned process. It did not recur, and it is noted in case the run shows it again.
