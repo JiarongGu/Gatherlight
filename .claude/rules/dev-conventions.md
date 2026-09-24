@@ -679,7 +679,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `llm.model.validate`, so a cortex row is not a second writer of anything. Proof lives in `e2e-p16`
   (listed + settable + round-trips) and `e2e-p14` (a bundle carrying `llm.model.validate` imports it, now
   that `validate` is tunable and travels in the bundle — see the `JudgeScopedModelRoutingStore` class doc's
-  D176 bump note for what stays true on the Lyntai bump).
+  D176 bump note for what stays true on the Lyntai bump). **A stated gap:** no suite drives a validate PASS —
+  it runs only when a committed diff touches `.claude/`, and every suite that puts files there plants them on
+  disk instead of committing them through a turn — so nothing asserts the `--model` the spawned CLI receives
+  for this consumer. The value is proven to reach the key `ClaudeValidateService` reads; the key-to-argv step
+  is the same `ClaudeAgentOptions.Model` plumbing `chat` and `extract` use, and is unasserted for `validate`.
 - **Meaning-based fact recall is a GRAPH OPTION and ONE SCOPE — not a second engine member.** Both halves
   were got wrong first, both failed silently, and neither was visible from any API response, so the
   reasoning is on the record. (1) With an embedder + vector store registered, `UseGraph()` already embeds
