@@ -4543,3 +4543,242 @@ one).
   `devtools/_judge-bench-short-run6c.txt`; the deviating first run is `results-2026-09-24T115739.129Z.json`,
   `router-run6c-pinned-off.log` and `devtools/_judge-bench-short-run6c-pinned-off.txt`;
 - the scratch `devtools/_run6c-drive.sh` and `devtools/_run6b-analyse.mjs`.
+
+## Run 7 — Qwen3-0.6B's own tagging (design)
+
+Written and committed BEFORE the run; the results section that follows names this commit. The bench support
+(`7d34527`), the two new seeds and a plumbing smoke came first, because this design quotes them.
+
+**The question** (the plan's). Does a fully local 判断 — Qwen3-0.6B tagging every write AND verifying every recall — recall
+as well as Qwen3-0.6B verifying over subject tags Claude wrote (Run 5b's configuration)? Tags matter because the subject
+channel seeds recall from them, and because matching tags link facts at write time. The catalogue's Qwen3-0.6B note says
+today: 「它自己写的主题标注好不好没有量过 —— 测试集里的主题标注是 Claude 写的。」
+
+### The instrument — three seeds of the same 60 facts
+
+Every seed holds the bilingual fixture (sha256 `9680443e…f555`), the 60 facts written in fixture order through
+`remember_fact`, one knowledge row and one graph node each, no embedder.
+
+| seed | folder | written | tags |
+|---|---|---|---|
+| **default** | `devtools/_judge-bench-seed/` | 2026-09-23T08:55:21Z, app v1.2.0 (its own `app.lastRanVersion`), 判断 on the real CLI | Claude's (claude 2.1.280): 65 subjects on 59 facts, 32 subject edges |
+| **replay** | `devtools/_judge-bench-seed-replay-Qwen3-0.6B-Q8_0/` | 2026-09-24T12:42:17Z, app `dcd23e3` v1.3.0 | Claude's, **replayed**: the same 65 subjects on the same nodes, the same 32 subject edges |
+| **tags** | `devtools/_judge-bench-seed-tags-Qwen3-0.6B-Q8_0/` | 2026-09-24T12:41:54Z, app `dcd23e3` v1.3.0 | **Qwen3-0.6B's own**: 78 subjects on 60 facts, 142 subject edges |
+
+**Why three, not the two the plan names.** Building the Qwen3 seed exposed a difference between the default seed and any
+seed written today that has nothing to do with tags: the graph's DECAY CLOCK.
+
+- The default seed was written by an older build whose clock advanced one unit per write: its engine position is 60, and
+  every node has stability 20.
+- Today's build advances by 1/n: the position after 60 writes is H₆₀ = 4.6799, and a node's stability is 20/√n.
+- The long seed of Runs 6–6c, written today with 判断 off, has exactly today's clock. So this is the build version, not
+  the tagging.
+
+A pair of arms across the default seed and a seed written today would therefore mix the tag effect with the clock effect.
+The replay seed removes the confound:
+
+- **tags vs replay differ ONLY in the tags.** The bench checked it table by table: equal knowledge rows, equal graph nodes
+  (every column but the timestamps), equal positions, no other edges, no vectors and no reviews in either. Only the
+  subjects and the subject edges differ.
+- **replay vs default differ ONLY in the clock.** They hold the same subjects on the same nodes, the same subject edges
+  and equal rows. They differ in two node columns (`stability`, `last_recalled_position`) and the engine position.
+
+**How the two new seeds were built.** Together, by
+`node devtools/dev.mjs judge-bench --claude-stub --reuse-seed --tag-seed=Qwen3-0.6B-Q8_0 --build-tag-seed --seed-only
+--arms=formula --resources=devtools/_rr-res --port-base=6400 --llama-port=6440`, built with 2026-09-24T12:41:17Z:
+
+- **Through the product's own write path.** 判断 was bound to `llama-cpp · Qwen3-0.6B-Q8_0` the way a household's binding
+  is: `settings.json`, read at DI registration, plus empty stand-ins for the runtime and the GGUF, which is all
+  `IsConfigured` asks.
+  - The server adopted one router, through a recording proxy.
+  - 判断 was read back on, never written.
+  - Every write was annotated by the shipped `LlmMemoryAnnotationPolicy` on the `llamacpp` client, with the GGUF id as
+    its model.
+- **The router was launched as the product launches a chat model.**
+  - Preset: `n-gpu-layers = 99`, `reasoning = off`, `n-predict = 512`, `ctx-size = 16384`.
+  - The child was spawned once, with `--reasoning off --n-predict 512 --ctx-size 16384`.
+  - The GGUF is `devtools/_rr-res/gguf/Qwen3-0.6B-Q8_0.gguf`: 639,446,688 B, sha256 `9465e63a…b031`, which is the
+    catalogue pin. llama.cpp b10549.
+- **No Claude.** Every server pointed at the e2e claude stub. The seed servers' logs hold **0 `router: claude-cli`
+  lines** (0 ok and 0 failed in each build).
+- **The tag seed: every annotation on the Qwen3 child.**
+  - 60 annotation requests, one per fact, each fact's text exactly once, recognised by the annotator's own system
+    prompt. All 60 were answered 200.
+  - 60 `router: llamacpp → Ok` lines in the seed server's log during the writes, and 0 failed.
+  - 61 requests forwarded to the model (60, plus the startup warm), and **61 proxied by the router** to its child.
+  - 0 replies capped at 512 tokens, and 0 carrying reasoning or a `<think>` block. The median reply was 15 generated
+    tokens, the longest 76.
+- **The replay seed: every annotation answered from Claude's record.**
+  - 60 annotation requests. The proxy answered each with the subjects the default seed stores for that fact, as a chat
+    completion in llama-server's shape.
+  - 60 `router: llamacpp → Ok` lines.
+  - Only the startup warm reached the model: 1 forwarded, 1 proxied.
+- **The binding then came off each seed.** `settings.json` was restored byte for byte and the stand-ins were deleted, so
+  an arm on either seed is configured exactly as one on the default seed.
+- **Evidence** (gitignored):
+  - each seed's `seed.json` and `chat-requests.jsonl` (every request and reply);
+  - in the tag seed's folder, the router log, the preset, and `tags.json` (every fact's handles from both annotators, side
+    by side);
+  - the build output, `devtools/_run7/seed-build.txt`.
+
+The bench re-verifies all of it at `--reuse-seed`: the rows, both comparisons, and that no seed's tags moved. It refuses a
+local-tag seed that was not built together with its partner, or one whose build guards did not hold.
+
+**Recorded, not refused, at the build.** Each new seed's first boot warned 「数据仓库有 1 处未提交改动」. That warning is
+the `plans/INDEX.md` every fresh fixture folder generates, and the bench commits it (`settleSeedRepo`), as it did for the
+default seed. The arms' own startup check allows no warning at all, and it runs on the settled copies.
+
+### Arms, command and configuration
+
+```
+node devtools/dev.mjs judge-bench --claude-stub --reuse-seed --tag-seed=Qwen3-0.6B-Q8_0 --arms=formula,formula2 \
+  --chat-judges=Qwen3-0.6B-Q8_0 --chat-arms=lc --rerankers=bge-reranker-v2-m3-Q5_K_M --rerank-arms=rr \
+  --tag-seed-arms=formula,lc:Qwen3-0.6B-Q8_0 --resources=devtools/_rr-res --port-base=6400 --llama-port=6440 \
+  > devtools/_judge-bench-run7.txt 2>&1
+```
+
+Eight arms run in ONE run, every one paired per query over the same 240 questions (order seed 12345, latency sample 12):
+
+| seed | arms |
+|---|---|
+| default (Claude's tags, the 2026-09-23 seed) | `formula`, `formula2` (the engine A/A), `lc:Qwen3-0.6B-Q8_0` (Run 5b's configuration), `rr:bge-reranker-v2-m3-Q5_K_M` (the reference) |
+| replay (Claude's tags, written today) | `formula@replay`, `lc:Qwen3-0.6B-Q8_0@replay` |
+| tags (Qwen3-0.6B's tags, written today) | `formula@tags`, `lc:Qwen3-0.6B-Q8_0@tags` (**fully local**) |
+
+- **Configuration, as Run 5b's.**
+  - `lc:` = content alone, the shipped input;
+  - thinking off, at most 512 generated tokens, context 16,384 (the product's chat preset);
+  - the product's 60 s verification deadline (knob pinned blank);
+  - no embedder (语义 off), partition, `EndorseCount`/page 8, at most 60 candidates.
+- **BGE** runs over the cut (`rr`), as in Run 5b. On this fixture's facts (≤ 101 characters) the cut and the shipped
+  chunked input send byte-identical requests (Run 6c, rule (c)).
+- **Every server points at the claude stub.** No arm judges with Claude, and a reused seed writes nothing, so nothing
+  should reach the stub at all.
+- **Ports.** The arms take 6401–6408 and the router 6440; 6400 is unused by the run. All of them sit off every tcp range
+  Windows had reserved that day (5458–5557, 5768–5967, 8270 and up) and off the e2e fleet's ports.
+- **Retry.** A run that exits 127 before any arm starts is re-run unchanged, as in Runs 6b and 6c.
+
+**Plumbing smoke, before this design.** All eight arms ran over 4 facts × 4 sets, with a latency sample of 2
+(`devtools/_judge-bench/results-2026-09-24T124250.791Z.json`). It checked that:
+
+- all three seeds were re-verified at startup;
+- every arm read back its judge (`llama-cpp · <id>` for the local ones), with no startup warning;
+- no server made a claude-cli call;
+- Qwen3's child spawned once, with `--reasoning off --n-predict 512 --ctx-size 16384`;
+- the three-seed pairs, the per-seed digests and the tag statistics printed;
+- `--report-only` re-analyses it identically;
+- `--baseline` refuses a different tag seed.
+
+Its 16 queries inform nothing. The smoke would overwrite Run 6c's short-run `router.log`, `presets.ini` and `arm-*`, so they
+were first copied to `devtools/_judge-bench/kept-run6c-short/`.
+
+### Measured
+
+**Accuracy.** Per set and on `all`: top-1, found@8, MRR and `judged`/`graph` for every arm.
+
+**Paired.** McNemar's exact p and the Agresti–Min 95% net interval, within the run:
+
+| pair | what it isolates |
+|---|---|
+| **`lc@tags` vs `lc@replay`** | **the tags, with the judge held fixed (the rule's first test)** |
+| **`lc@tags` vs `formula@tags`** | **the judge, over Qwen3's tags (the rule's second test)** |
+| `formula@tags` vs `formula@replay` | the tags, with no judge |
+| `lc@replay` vs `formula@replay` | the judge over Claude's tags, on today's clock |
+| `formula@replay` vs `formula`; `lc@replay` vs `lc` | the clock alone |
+| `lc@tags` vs `lc`; `formula@tags` vs `formula` | tags and clock together, against Run 5b's seed (the plan's pairing) |
+| every arm vs `formula`; `lc` vs `rr:` BGE | Run 5b's readings, repeated |
+
+**Cost.** The serial latency over 12 queries, llama.cpp chat calls per pass, and coverage.
+
+**The tag statistics.** These are descriptive, in the spirit of Lyntai's annotation-drift records
+(`../Lyntai/docs/memory-measurements.md`), for Claude's tags and Qwen3-0.6B's:
+
+- handles per fact, and the facts with none;
+- the handle vocabulary, and the widest handle (the most facts one handle is on);
+- **reuse within a same-subject group**:
+  - The fixture has no cluster field. It marks its near-duplicate clusters by a shared id prefix, written next to each
+    other (`mkt-*`, `museum-*`, `lib-*`, `pool-*`, `pharm-*`, `school-*`, `allergy-*`, `car-*`, `rest-*`, `train-*`,
+    `hotel-*`), and its three utility bills by the `-bill` suffix. That gives 12 groups and 29 facts; the other 31
+    facts are groups of one.
+  - Same-entity facts the ids do not mark, such as the family cat's two facts, stay apart.
+  - Reported: the grouped facts sharing a handle with another member; Lyntai's DRIFT (a later-written member sharing no
+    handle with its group's first-written one, of 17); and the groups whose later members all share one.
+- how far handles reach across groups. That is the COLLAPSE side of drift, although a real shared entity (one family
+  member on three unrelated facts) counts too;
+- handles not in the fact's script (the annotator is told to write in the fact's language);
+- **overlap with Claude's handles for the same fact**:
+  - facts with an identical handle;
+  - facts where one handle contains the other (Lyntai's `MemorySubject.Matches` reads containment for a spaceless
+    script);
+  - the mean Jaccard;
+  - how much of the vocabulary Claude also used.
+
+The seed build printed them, before this design. They decide nothing.
+
+### Decision rule
+
+Verbatim from the plan: **"if the fully-local arm is significantly worse than Qwen3-over-Claude-tags on top-1 or found@8,
+the Qwen3 note must say tagging costs recall, with the number; if it is also not better than `formula`, the note must say
+the fully-local configuration does not beat no judge. Otherwise the note's "unmeasured" becomes the result."**
+
+It is read as follows, fixed before the run.
+
+- **The fully-local arm** is `lc:Qwen3-0.6B-Q8_0@tags`.
+- **"Qwen3-over-Claude-tags"** is `lc:Qwen3-0.6B-Q8_0@replay`: Qwen3 verifying over Claude's tags, on a seed written the
+  same way, so the pair differs only in the tags.
+  - `lc:Qwen3-0.6B-Q8_0` on the 2026-09-23 seed is Run 5b's exact seed. It differs in the clock as well, so its pairing
+    is reported beside the rule and does not decide.
+- **"Significantly worse"**: on `all`, over 240 pairs, the exact McNemar p < 0.05 AND c − b < 0, with b = `@replay` hit &
+  `@tags` miss.
+  - There are two tests (top-1 and found@8), each at 0.05 with no correction, and either one is enough.
+  - The per-set veto does not apply, as in Run 5b.
+- **`formula`** means the fully-local arm's own seed's formula arm, `formula@tags`.
+  - "Not better" means NOT significantly better on EITHER metric: not (p < 0.05 AND c − b > 0) on top-1 or on found@8,
+    with b = `formula@tags` hit & `@tags` miss.
+  - It is read in every case, and reported.
+- **Outcomes:**
+  - *worse, and not better than `formula@tags`*: the note says tagging costs recall, with the number(s), and that the
+    fully-local configuration does not beat no judge;
+  - *worse, but better than `formula@tags`*: the note says tagging costs recall, with the number(s), and what the
+    fully-local configuration still gains over no judge;
+  - *not worse*: 「没有量过」 becomes the result, in words no stronger than the interval allows. That is **equivalent**
+    (95% interval inside ±3pp), **no significant difference** (quoting the loss the interval cannot rule out) or
+    **significantly better**, and the comparison with no judge is stated the same way.
+- **Coverage** (`judged`/`graph` on `all`) is stated beside every outcome.
+- **Product code and the catalogue are not changed in this run.** The sentence is reported to the owner and routed by the
+  round's controller.
+
+### Guards, checked before the rule is read
+
+The scratch `devtools/_run7/guards7.mjs` checks them against the results file and the run's router log and arm logs; it
+was run on the smoke's evidence first. **A failed guard leaves the rule unread. It is reported, not worked around.**
+
+1. **The instrument.**
+   - The default seed is reused (fixture `9680443e…`), and `formula`'s digest is Runs 1–6c's **`f661eb6a056e`**.
+   - Both local-tag seeds are re-verified at startup: their rows; tags vs replay equal beyond the tags; the replay
+     carrying the default seed's subjects and subject edges exactly; and tags unchanged since the build.
+   - The `formula@replay` and `formula@tags` digests are recorded. There is one digest PER SEED, and `--baseline`
+     compares each only with the same seed's.
+2. **The engine A/A.** `formula` against `formula2` is quiet on `all` (p ≥ 0.05).
+3. **0 claude-cli calls.** None in either seed build (held: 0/0 each), none from any arm at startup or over the whole
+   run, and no `router: claude-cli` line in any arm's log.
+4. **Every annotation on the llama.cpp chat child.** On the tag seed, all 60, by the router's own log. On the replay seed,
+   all 60 were replayed and none reached the model. Both held at the build, and the run writes nothing.
+5. **Thinking off in argv.**
+   - The run's router spawns Qwen3's child once, with `--reasoning off --n-predict 512 --ctx-size 16384`, and BGE's once.
+   - There is no unload, eviction or out-of-memory line, and no chat task over 512 tokens. Capped replies are counted and
+     reported.
+   - The build's child held the same.
+6. **Completion and startup.**
+   - Every arm has 240 accuracy rows and 12 latency rows.
+   - Every local arm reads back `llama-cpp · <its id>` with no startup warning, and the deadline knob is not announced.
+     The bench enforces both.
+   - No arm's log has an FTS fallback, and no llama.cpp chat call failed.
+
+**What a pairing across seeds can and cannot say.**
+
+- The seeds were verified to differ only where named.
+- The judge samples at llama-server's default temperature, so each `lc` arm's verdicts are one draw. That wander is
+  symmetric in expectation: it costs the exact test power, not validity.
+- No chat-judge A/A twin runs. Run 5's control pair put a sampling 1B judge's run-to-run wander at 25 discordant top-1
+  queries.
