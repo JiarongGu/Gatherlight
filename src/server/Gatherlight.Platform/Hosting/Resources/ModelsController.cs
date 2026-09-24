@@ -40,10 +40,6 @@ public sealed class ModelsController : ControllerBase
     /// Built here rather than passed around because both this controller's questions want the same pair.</summary>
     private MemorySourceSettings Settings() => new(_config.Current.Memory, _platform.ResourcesPath);
 
-    /// <summary>Approximate size of the suggested chat model, for the row that offers it. A figure the
-    /// household reads before committing to a download, not one anything computes with.</summary>
-    private const long SuggestedJudgeBytes = 3_300_000_000L;
-
     /// <summary>The fixture and WHEN, for the footnote under the comparison table.
     ///
     /// <para>Derived from the rows rather than written here, because a literal was a second writer of one
@@ -244,29 +240,41 @@ public sealed class ModelsController : ControllerBase
     /// and the line went on recommending a model they already had.</para>
     ///
     /// <para>Order of preference: the measured GGUF embedder, then the built-in one (same weights, no
-    /// runtime needed), then a chat model — which is the gap that actually BLOCKS something, since 判断 can
-    /// be bound to llama.cpp with no completion model to bind it to, and both memory policies are
-    /// fail-open, so that surfaces as a judge which silently never runs.</para></summary>
+    /// runtime needed), then <see cref="GgufCatalog.RecommendedReranker"/> for 判断 — and NOTHING after that.
+    /// 判断's pick was the Gemma 3 1B chat model until docs/judge-bench.md Run 3 (2026-09-24) measured it
+    /// significantly WORSE than no judge (top-1 79 → 33 of 240); a reranker is the local judge that measured
+    /// better. The two fallbacks that followed went with it — "any embedder", then "whatever is smallest" — because
+    /// once the three above are in, the smallest row left is a model nobody chose to recommend (the 1B, or a
+    /// reranker kept off the badge), and a badge on it would be a claim no measurement stands behind. Null then is
+    /// the honest answer: nothing left to advise.</para></summary>
     private static object? Recommend(IReadOnlyList<ModelRowView> models)
     {
         var offers = models.Where(m => !m.Installed).ToList();
         var pick = offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedEmbedder)
             ?? offers.FirstOrDefault(o => o.Id == BuiltInSemanticSource.ModelId)
-            ?? offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedJudge)
-            ?? offers.FirstOrDefault(o => o.Capability == "embedding")
-            ?? offers.FirstOrDefault();
+            ?? offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedReranker);
         if (pick is null) return null;
+
+        if (pick.Capability == "embedding")
+            return new
+            {
+                id = pick.Id,
+                reason = "「语义」那一层用它 —— 这几个里只有它在本应用自己的 10 题检索基准上量过。",
+                caution = (string?)null,
+            };
 
         return new
         {
             id = pick.Id,
-            reason = pick.Capability == "embedding"
-                ? "「语义」那一层用它 —— 这几个里只有它在本应用自己的 10 题检索基准上量过。"
-                : "「判断」那一层用它 —— 你已经有嵌入模型了,缺的是一个对话模型;没有它,判断可以绑到 llama.cpp"
-                  + "却一次也跑不起来,而且不会报错。",
-            caution = pick.Measured is null
-                ? "「判断」那一层的质量还没有按模型实测过,所以这一行只有延迟和体积,没有质量分。"
-                : null,
+            // What binding it MOVES, because a reranker is half a judge: the checking comes local, the tagging goes
+            // to the Claude CLI — the clause the toast, the cost line and the model note all carry.
+            reason = "「判断」那一层在本机用它核对检索结果 —— 本应用双语测试集上,它让答案进前八的次数比不开判断多得多"
+                + "(数字和测法见这一行的说明)。写入事实时的主题标注由 Claude CLI 完成("
+                + MemorySources.CliTaggingCost + ")。",
+            // The 检索质量 column holds the embedders' 10-query score only, so this row reads 未实测 there — which,
+            // beside a line recommending it, would read as a recommendation nobody measured.
+            caution = "「检索质量」一列只放嵌入模型的 10 题检索分,所以它那一格是「未实测」;"
+                + "它作为判断的实测在另一套测试上,数字在这一行的说明里。",
         };
     }
 

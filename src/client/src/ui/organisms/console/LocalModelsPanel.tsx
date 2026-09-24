@@ -301,9 +301,12 @@ export function LocalModelsPanel(
       </div>
 
       <div className="mem-fine">
+        {/* The 判断 half said 「判断」那一层的质量还没有按模型实测过 until docs/judge-bench.md measured the
+            rerankers and the 1B chat model. Those figures are top-1/found@8 over 240 questions — not this column's
+            shape — so they live in each row's note, and 未实测 in this column means "not on THIS test". */}
         已装 {held.length} 个 · 占用 {mb(onDisk)}。检索质量为实测:{inv.measuredOn}。样本不大 —— 它足以分辨
-        「能用」与「不能用」,不足以在前几名之间排座次;速度与体积则按你自己的机器换算。「判断」那一层的质量还没有
-        按模型实测过,所以对话模型只列延迟与体积,不给质量分 —— 没量过就说没量过。
+        「能用」与「不能用」,不足以在前几名之间排座次;速度与体积则按你自己的机器换算。这一列只放嵌入模型的这套检索分;
+        「判断」用的模型在本应用的双语测试集(240 道提问)上量过的,数字写在它自己的说明里 —— 说明里没有数字的,就是没量过。
       </div>
       <div className="mem-fine">
         这是一份<b>固定</b>的清单:这些模型由应用按仓库、提交和 sha256 下载,所以只能是我们钉过的那几个。

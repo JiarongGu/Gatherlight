@@ -1217,6 +1217,85 @@ try {
     }
   }
 
+  // ---- 判断's LOCAL DEFAULT IS THE RERANKER; A CHAT MODEL MEASURED WORSE IS DESCRIBED, NOT RECOMMENDED ----
+  //
+  // docs/judge-bench.md Run 3 measured Gemma 3 1B as a local chat 判断 significantly WORSE than no judge (top-1
+  // 79 → 33 of 240). It had been the catalogue's recommended judge: 推荐 in its name, 「判断质量没有单独实测过」
+  // in its note, the model 资源's 推荐 badge moved to once an embedder was in, and the download the 判断 row
+  // suggested. All four went false with the measurement. It stays SELECTABLE — "worse" is a reason to describe an
+  // option, not to remove it — and 判断's local default is the recommended RERANKER, the local judge that measured
+  // better. Nothing here downloads: the rows come from the catalogue, and "installed" is an empty planted file.
+  {
+    const res = path.join(dir, 'state', 'resources');
+    const ggufDir = path.join(res, 'gguf');
+    const builtinDir = path.join(res, 'embed-model');
+    const stubExe = path.join(res, 'llama-cpp', 'llama-server.exe');
+    const RERANKER = 'bge-reranker-v2-m3-Q5_K_M';
+    const GEMMA_1B = 'gemma-3-1b-it-Q4_K_M';
+    // MemorySources.CliTaggingCost, pinned as the exact clause for the reason p52 case 5 gives.
+    const TAGGING_COST = '每条事实一次调用,消耗账号额度,事实内容会发给 Claude';
+    const rowOf = (shelf, id) => (shelf.models ?? []).find((m) => m.id === id);
+    try {
+      const shelf = await getJson('/api/manage/models');
+      const gemma = rowOf(shelf, GEMMA_1B);
+      ok('Gemma 3 1B is still on the shelf as a chat model — described, not removed',
+        !!gemma && gemma.capability === 'completion', JSON.stringify(gemma ?? null));
+      ok('THE POINT: its name carries no 推荐', !!gemma && !/推荐/.test(String(gemma.name)), String(gemma?.name));
+      // WITH its configuration: the base it is read against (no judge: 79 / 125 of 240) and the result.
+      const gemmaNote = String(gemma?.note ?? '');
+      ok('…and its note states the measurement — worse than no judge, 79 → 33 of 240 on top-1, 125 → 111 on found@8',
+        /比不开判断/.test(gemmaNote) && /240/.test(gemmaNote) && /79/.test(gemmaNote) && /33/.test(gemmaNote)
+          && /125/.test(gemmaNote) && /111/.test(gemmaNote) && !/没有单独实测/.test(gemmaNote), gemmaNote);
+      // The 资源 row that downloads it is generated from the same catalogue row — asserted, not assumed.
+      const resources = (await getJson('/api/manage/resources')).resources ?? [];
+      const gemmaRes = resources.find((r) => r.id === `gguf-${GEMMA_1B}`);
+      ok('…and the 资源 row that downloads it carries no 推荐 either',
+        !!gemmaRes && !/推荐/.test(String(gemmaRes.name)), JSON.stringify(gemmaRes?.name ?? null));
+      const big = rowOf(shelf, 'gemma-3-4b-it-Q4_K_M');
+      ok('the 4B chat model says it was not measured here, rather than guessing from the 1B',
+        /没有在这里实测过/.test(String(big?.note ?? '')), String(big?.note));
+
+      // THE BADGE. It recommends only what is not installed, embedders first — so both embedders go in (empty
+      // files: the GGUF by its id, the built-in by the two files OnnxEmbedder.IsPresent checks) and the badge
+      // has to move on to 判断.
+      fs.mkdirSync(ggufDir, { recursive: true });
+      fs.writeFileSync(path.join(ggufDir, 'embeddinggemma-300M-Q8_0.gguf'), '');
+      fs.mkdirSync(path.join(builtinDir, 'onnx'), { recursive: true });
+      fs.writeFileSync(path.join(builtinDir, 'onnx', 'model_q4.onnx'), '');
+      fs.writeFileSync(path.join(builtinDir, 'tokenizer.model'), '');
+      const withEmbedders = await getJson('/api/manage/models');
+      ok('(fixture) both embedders read as installed, so the badge moves on to 判断',
+        (withEmbedders.models ?? []).filter((m) => m.capability === 'embedding').every((m) => m.installed),
+        JSON.stringify((withEmbedders.models ?? []).filter((m) => m.capability === 'embedding').map((m) => [m.id, m.installed])));
+      const rec = withEmbedders.recommendation;
+      ok('THE POINT: 资源 then recommends the RERANKER for 判断 — never the 1B chat model',
+        rec?.id === RERANKER, JSON.stringify(rec ?? null));
+      ok('…and its reason says what binding it moves: the checking is local, the tagging goes to the Claude CLI on the account',
+        /Claude CLI/.test(String(rec?.reason)) && String(rec?.reason ?? '').includes(TAGGING_COST), String(rec?.reason));
+
+      // THE 判断 ROW'S SUGGESTION: runtime present, no model 判断 can use (the embedder is the wrong kind), so its
+      // sentence names a download — and that download is the reranker's.
+      fs.mkdirSync(path.dirname(stubExe), { recursive: true });
+      fs.writeFileSync(stubExe, 'not a real binary');
+      const llamaJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
+      ok('THE POINT: the 判断 row, runtime in and no judge model, suggests downloading the reranker',
+        llamaJudge?.suggest === `gguf-${RERANKER}`,
+        JSON.stringify({ suggest: llamaJudge?.suggest, reason: llamaJudge?.reason }));
+
+      // …AND NOTHING AFTER IT. The badge used to fall through to "any embedder", then "whatever is smallest" —
+      // which, with these in, is a model nobody chose to recommend.
+      fs.writeFileSync(path.join(ggufDir, `${RERANKER}.gguf`), '');
+      const allIn = await getJson('/api/manage/models');
+      ok('…and once it is in, nothing else is recommended — not the 1B, not whichever file is smallest',
+        allIn.recommendation == null, JSON.stringify(allIn.recommendation ?? null));
+    } finally {
+      // As the next block expects: it plants its own binary and models, and asserts on the preset they produce.
+      fs.rmSync(builtinDir, { recursive: true, force: true });
+      fs.rmSync(path.join(res, 'llama-cpp'), { recursive: true, force: true });
+      fs.rmSync(ggufDir, { recursive: true, force: true });
+    }
+  }
+
   // ---- THE LLAMA LAUNCH CONTRACT IS WRITTEN DOWN, NOT ASSUMED --------------------------------
   //
   // `--n-gpu-layers` is the one setting whose absence is invisible: llama-server silently runs on the

@@ -231,11 +231,14 @@ public static class MemoryGroups
         Cli => "用已登录的 Claude 账号:不在这台机器上跑模型,不用下载任何东西 —— "
              + "代价是消耗账号额度,每次调用都要启动一次 CLI。",
         Managed when layer == MemoryLayers.Judge =>
-            // NOT 「都实测排过名」: on this layer only the rerankers were measured (docs/judge-bench.md); the chat
-            // models' own notes say their judging quality never was. A group sentence is true of every member.
+            // NOT 「都实测排过名」: a group sentence is true of every member. docs/judge-bench.md measured the
+            // catalogued rerankers (Runs 2 and 4) and ONE chat model, Gemma 3 1B (Run 3) — worse than no judge. It
+            // said "not measured per model" for every chat model until that run made it false; now it says what
+            // the measured one did, and that the others (the 4B, a household's own file) were not measured.
             "由应用下载、启动和管理的模型(llama.cpp),占磁盘、不用填地址,模型在「资源 · Resources」面板下载。"
-             + "对话模型:判断整个在本机完成,不消耗账号额度,判断质量还没有按模型实测过。"
-             + "重排模型:在本应用的双语测试集上实测过,只有检索时的核对在本机 —— "
+             + "对话模型:判断整个在本机完成,不消耗账号额度;实测过的只有 Gemma 3 1B,在本应用的双语测试集上"
+             + "比不开判断更差,其他对话模型没有实测过。"
+             + "重排模型:应用提供的都在同一测试集上实测过,只有检索时的核对在本机 —— "
              // The tagging clause is MemorySources.CliTaggingCost, like the toast, cost line and model note.
              + $"写入事实时的主题标注由 Claude CLI 完成 —— {MemorySources.CliTaggingCost}。",
         Managed => "由应用下载、启动和管理的模型,两种跑法:llama.cpp 起一个常驻服务,或者「内置」—— "

@@ -47,6 +47,9 @@ const ALLOWED = new Map([
   ['.claude/rules/dev-conventions.md::GitCliService.GitExe',
     'the rotted reference this check was built after, quoted as the example — the same sentence names the '
     + 'real member, LocateGit'],
+  ['.claude/rules/dev-conventions.md::GgufCatalog.RecommendedJudge',
+    'RETIRED on 2026-09-24 when Run 3 measured its model worse than no judge; the rule names it to say what '
+    + 'it claimed and why it went — the same sentence names its replacement, RecommendedReranker'],
   ['docs/DEPLOYMENT.md::IncludeNativeLibrariesForSelfExtract',
     'an MSBuild property quoted while explaining why the shipped host is framework-dependent and does '
     + 'NOT use it'],

@@ -440,9 +440,12 @@ try {
   const judgeManaged = String(groupOf(rrLayer, 'managed').description ?? '');
   ok('…and so does the 本机模型 group sentence on 判断: a reranker\'s tagging goes to Claude',
     /重排/.test(judgeManaged) && /发给 Claude/.test(judgeManaged), judgeManaged);
-  // …and it claims measurement only where there is some: the chat models' judging never was measured.
-  ok("…and does not claim every model on 判断 was measured — the chat models' judging was not",
-    !/都实测排过名/.test(judgeManaged) && /还没有按模型实测/.test(judgeManaged), judgeManaged);
+  // …and it claims measurement only where there is some. ONE chat model's judging was measured (docs/judge-bench.md
+  // Run 3) and came out worse than no judge; the sentence said none had been, which the measurement made false. It
+  // must now say both: what the measured one did, and that the others were not measured.
+  ok("…and does not claim every model on 判断 was measured — and says the chat model that was did worse than none",
+    !/都实测排过名/.test(judgeManaged) && /没有实测过/.test(judgeManaged) && /比不开判断更差/.test(judgeManaged),
+    judgeManaged);
   // What the 判断 picker SHOWS for each model: it listed raw file ids, so a reranker and a chat model read
   // alike although binding one moves only the checking. A catalogued model shows the catalogue's name (which
   // says 重排); a household-dropped one keeps its raw id with its kind marked.

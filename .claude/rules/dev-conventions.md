@@ -771,6 +771,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   A model row saying "you do not need this" is the same error in miniature: state the trade-off, and say
   when it is unmeasured. And a removed capability needs a test asserting the household can still do it —
   both removals above passed every check, because nothing asserted the ability existed (`p51` now does).
+  **Measured WORSE is still described — and never recommended** (2026-09-24). `docs/judge-bench.md` Run 3
+  measured Gemma 3 1B as a local chat 判断 significantly worse than no judge (top-1 79 → 33 of 240, found@8
+  125 → 111; 语义 off, content-only input). It was `GgufCatalog.RecommendedJudge`: 推荐 in its name,
+  「判断质量没有单独实测过」 in its note, the model 资源's 推荐 badge moved to and the download the 判断 row
+  suggested — four claims, all false once it was measured. It stays selectable with the result and its
+  configuration in its note; the constant is retired, and 判断's local default (badge and suggestion) is
+  `GgufCatalog.RecommendedReranker`, the local judge that measured better. The badge's fallbacks ("any
+  embedder", then "whatever is smallest") went too: past the three recommended ids the smallest row left is a
+  model nobody chose to recommend, so nothing is. The 判断 group sentence says what the measured chat model
+  did and that the others were not measured, rather than "not measured per model". `p51` asserts the name, the
+  note, the badge and the suggestion; `p52` case 5 the group sentence — each confirmed to FAIL on the code
+  before.
 
 - **VOCABULARY, because this area had none and the gap cost a whole design conversation.** FOUR words, and
   they are not interchangeable. A **LAYER** is a job (公式 · 判断 · 语义). A **BACKEND** is *where the model

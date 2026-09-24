@@ -287,6 +287,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // NAME the resource to download, both layers. `Suggest` is what lets the panel point at a row
             // instead of at itself, and it has to be the resource id the provisioner actually knows — a
             // stale literal here would render a button that fetches nothing.
+            //
+            // 判断's is the RERANKER. It was the Gemma 3 1B chat model until docs/judge-bench.md Run 3 measured that
+            // judge worse than no judge; the button beside this sentence should fetch the one that measured better.
             return new SourceStatus(false,
                 _layer == MemoryLayers.Semantic
                     ? "运行时已就绪,但还没有嵌入模型 —— 在「资源 · Resources」面板下载一个。"
@@ -294,7 +297,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                     : "运行时已就绪,但还没有对话模型或重排模型 —— 在「资源 · Resources」面板下载一个。",
                 GgufCatalog.ResourceIdFor(_layer == MemoryLayers.Semantic
                     ? GgufCatalog.RecommendedEmbedder
-                    : GgufCatalog.RecommendedJudge));
+                    : GgufCatalog.RecommendedReranker));
 
         // Present and has a model: ready to BIND. Whether the process happens to be up right now is not the
         // household's problem — starting it is ours.

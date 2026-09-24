@@ -52,23 +52,24 @@ public sealed record GgufModel(
 ///
 /// <para><b>Measurements are per model and honestly sparse.</b> Only the embedder has been scored on the
 /// 10-query fixture (9/10 top-1, 25 ms/query through the app, 2026-08-22 — the same instrument as every
-/// number in <see cref="EmbeddingCatalog"/>). The two rerankers have been scored AS 判断 on the 240-question
-/// bilingual fixture (<c>docs/judge-bench.md</c>, Run 2, 2026-09-23) — top-1 and found@8, which is not the
-/// shape of <see cref="EmbeddingMeasurement"/> (top-3 of 10 queries), so those figures live in the note and
-/// <see cref="GgufModel.Measured"/> stays null rather than carrying a found@8 in a top-3 slot. The chat
-/// models carry latency observations rather than recall scores, because no local chat judge has been
-/// measured per model on this corpus; claiming otherwise is the failure this whole area keeps
-/// correcting.</para>
+/// number in <see cref="EmbeddingCatalog"/>). The rerankers and the 1B chat model have been scored AS 判断 on
+/// the 240-question bilingual fixture (<c>docs/judge-bench.md</c>: Run 2 for LAMAR and BGE, Run 3 for Gemma 3
+/// 1B) — top-1 and found@8, which is not the shape of <see cref="EmbeddingMeasurement"/> (top-3 of 10 queries),
+/// so those figures live in the note and <see cref="GgufModel.Measured"/> stays null rather than carrying a
+/// found@8 in a top-3 slot. The 4B chat model has no measurement at all, and its note says so; claiming
+/// otherwise is the failure this whole area keeps correcting.</para>
+///
+/// <para><b>There is no recommended CHAT judge, and that is a measurement, not an omission.</b> Gemma 3 1B
+/// was <c>RecommendedJudge</c> — 推荐 in its name, 「判断质量没有单独实测过」 in its note, the model 资源's 推荐
+/// badge fell to and the download the 判断 row suggested — until Run 3 (2026-09-24) measured it significantly
+/// WORSE than no judge. It stays selectable and says so; the constant is gone, and 判断's local default is
+/// <see cref="RecommendedReranker"/>, the local judge that measured better.</para>
 /// </summary>
 public static class GgufCatalog
 {
     /// <summary>The embedder 语义 uses. Same weights as Ollama's recommended model, a different
     /// quantisation, and measured as an equal on retrieval at half the size.</summary>
     public const string RecommendedEmbedder = "embeddinggemma-300M-Q8_0";
-
-    /// <summary>The chat model 判断 gets by default — the smaller of the two, because 判断 sits on the path
-    /// of every recall and a judge that is slow is a judge a household turns off.</summary>
-    public const string RecommendedJudge = "gemma-3-1b-it-Q4_K_M";
 
     /// <summary>The reranker the bilingual bench recommends (docs/judge-bench.md, Run 2) — by the tie rule
     /// declared before the run, and by NOTHING measured. Paired on the same 240 questions, LAMAR and BGE were
@@ -81,9 +82,13 @@ public static class GgufCatalog
     /// re-picking after seeing which way the data leaned would be worse than a tie-break that runs against the
     /// lean. It is a tie-break, and <see cref="RerankerPair"/> says that where the household reads it.</para>
     ///
-    /// <para>Its display name carries no 推荐 (unlike <see cref="RecommendedJudge"/>'s), and the console's 推荐
-    /// badge does not read it: either would claim a preference the measurement cannot see. Re-run
-    /// <c>dev.mjs judge-bench</c> before treating it as more.</para></summary>
+    /// <para><b>It is also 判断's local DEFAULT</b> (owner decision, 2026-09-24): the model 资源's 推荐 badge offers
+    /// once the embedders are in, and the download the 判断 row suggests when llama.cpp holds no judge model. That
+    /// job was the Gemma 3 1B chat model's until Run 3 measured it worse than no judge; a reranker is the local
+    /// judge that measured BETTER (Runs 2 and 4). Which reranker is still the tie-break above, and the note says
+    /// so where the badge points. Its display name carries no 推荐 — no row's does — because a name is read in
+    /// every picker, long after the advice has been taken. Re-run <c>dev.mjs judge-bench</c> before treating the
+    /// choice between rerankers as more than the tie-break.</para></summary>
     public const string RecommendedReranker = "bge-reranker-v2-m3-Q5_K_M";
 
     /// <summary>What every reranker row says, because it is the one thing that differs from a chat judge:
@@ -150,21 +155,32 @@ public static class GgufCatalog
             + "(10 题中 9 对 8),代价是多一个运行时(约 35 MB)和一个常驻服务。",
             new EmbeddingMeasurement(9, 10, 25, 10, "2026-08-22")),
 
+        // DESCRIBED BY ITS MEASUREMENT, NOT RECOMMENDED (docs/judge-bench.md Run 3, 2026-09-24). Every figure carries
+        // the configuration it was measured in — the 240-question fixture, 语义 off (no embedder), the default
+        // content-only judge input, and the no-judge base (79 / 125) it is read against — because a number without
+        // them cannot be weighed. Content only is the arm quoted since it is what ships; `topic — content` read
+        // 44 / 121, also worse on top-1. Its speed and quota facts stay: they are true, and they are the trade-off a
+        // household is weighing against the result.
         new GgufModel(
-            RecommendedJudge, "Gemma 3 1B(Q4 · 判断 · 推荐)", GgufCapability.Completion,
+            "gemma-3-1b-it-Q4_K_M", "Gemma 3 1B(Q4 · 判断)", GgufCapability.Completion,
             "ggml-org/gemma-3-1b-it-GGUF", "f9c28bcd85737ffc5aef028638d3341d49869c27",
             "gemma-3-1b-it-Q4_K_M.gguf",
             "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135", 806_058_240,
-            "判断用。实测每次判断约 0.15–0.20 秒(Claude CLI 那条实测每次检索 9–17 秒),而且不消耗账号额度。"
-            + "小模型,判断质量没有单独实测过 —— 这一层的质量还没有在这个家庭的资料上按模型量过。"),
+            "判断用的对话模型:写入时的主题标注和检索时的判断都在本机完成,不消耗账号额度,每次判断约 0.15–0.20 秒"
+            + "(Claude CLI 那条实测每次检索 9–17 秒)。但实测它让检索比不开判断更差:本应用双语测试集 240 道提问、"
+            + "不开语义、判断按默认只读事实内容,答案排第一从不开判断的 79 题降到 33 题,带进前八从 125 题降到 111 题,"
+            + "两项都是显著变差。量的是检索时的判断,它自己写的主题标注没有量过。"
+            + "要在本机做判断,重排模型在同一测试集上让检索变好(见它们的说明)。"),
 
+        // UNMEASURED HERE, and not a candidate we mean to recommend — said plainly, and without borrowing the 1B's
+        // result in either direction: Run 3 measured one model at one size.
         new GgufModel(
             "gemma-3-4b-it-Q4_K_M", "Gemma 3 4B(Q4 · 判断 · 更大)", GgufCapability.Completion,
             "ggml-org/gemma-3-4b-it-GGUF", "d0976223747697cb51e056d85c532013931fe52e",
             "gemma-3-4b-it-Q4_K_M.gguf",
             "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863", 2_489_757_856,
-            "同样用于判断,参数量是上一个的四倍,占用也是 —— 判断质量可能更好,但没有实测数据支持这句话;"
-            + "显存不够时它会明显更慢。"),
+            "同样用于判断,参数量和占用都是 1B 的四倍:更大、更慢,显存不够时会明显更慢。"
+            + "判断质量没有在这里实测过 —— 1B 的实测结果说明不了它会怎样;我们也不打算推荐它。"),
 
         new GgufModel(
             "LAMAR-600m.Q5_K_M", "LAMAR 600M(Q5 · 判断 · 重排)", GgufCapability.Reranking,
