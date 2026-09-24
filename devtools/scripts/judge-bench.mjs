@@ -76,8 +76,9 @@
 // `--chat-judges=<m,…>` adds `lc:<m>` (content alone — the shipped default, no knob) and `lcb:<m>`
 // (`GATHERLIGHT_JUDGE_INPUT=both`, "topic — content") per llama.cpp CHAT model, paired against each other — the
 // question docs/judge-bench.md Run 3 asks — as well as against `formula`. All of them share ONE real router,
-// launched with the preset section the product writes for each model's kind — for a chat model, `reasoning = off`
-// and the `n-predict` generation cap (see presetSection and docs/judge-bench.md Runs 5 and 5b).
+// launched with the preset section the product writes for each model's kind — for a chat model, `reasoning = off`,
+// the `n-predict` generation cap and the `ctx-size` context cap; for a reranker, its declared window or 4096 (see
+// presetSection, mirrorGuard, and docs/judge-bench.md Runs 5 and 5b).
 //
 // PRIVACY. The fixture is invented and committed; this touches no household data. Local-model arms READ the
 // llama.cpp binary and GGUFs from --resources and nothing else there. Its default is local/state/resources —
@@ -175,8 +176,47 @@ const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
 // GATHERLIGHT_JUDGE_DEADLINE_SECONDS (VerificationDeadlinePolicy's test knob) is pinned blank for the same reason, so
 // every arm runs the product's default verification deadline; startup below refuses an arm that announces it.
 const PINNED = { GATHERLIGHT_JUDGE_INPUT: '', GATHERLIGHT_VERDICT_COMBINATION: '', GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '' };
-// LlamaServerRuntime.ChatMaxTokens — the chat child's generation cap, mirrored into the shared router's preset.
+// THE PRODUCT'S LAUNCH NUMBERS, restated here because the bench writes its own router preset — and GUARDED against the
+// C# they restate (mirrorGuard, below, before anything starts), because a bench that launches a model differently
+// measures a product we do not ship.
+// LlamaServerRuntime.ChatMaxTokens — the chat child's generation cap.
 const CHAT_MAX_TOKENS = 512;
+// LlamaServerRuntime.ChatContextTokens — the chat child's context (2026-09-24). Runs 3–5b launched chat children
+// UNCAPPED (their training context); the cap sits far above every fixture prompt (60 candidates, ~1.7k tokens), so a
+// re-run measures the same verdicts — the setting moves GPU memory, not what the judge is shown.
+const CHAT_CONTEXT_TOKENS = 16384;
+// The window a reranker is launched with when its catalogue row DECLARES one — GgufCatalog.DeclaredWindow is the source
+// of truth (the row's ContextTokens, read through RerankInputCap.UsableWindow); everything else gets 4096. Keyed by the
+// id the arm BINDS, exactly as the product keys it: the catalogued upstream stem gets its row's window, while Run 4's
+// renamed `mmarco-mMiniLMv2-L12-H384-v1-rerank-Q8_0` has no row and so launches at 4096 — as Run 4 ran it, and as the
+// product launches such a dropped-in file. So every reranker arm of Runs 2–5b re-launches exactly as it ran (a chat arm
+// now gets the context cap, which it did not have — see CHAT_CONTEXT_TOKENS), and re-analysis never launches at all.
+const DECLARED_WINDOW = { 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0': 512 };
+const RERANK_WINDOW = 4096;   // LlamaServerRuntime.RerankBatch
+/** Fails the bench before anything starts when a restated launch number no longer matches the C# it restates. Reads
+ *  the SOURCE, not a build: a cheap, dependency-free parse of constants and catalogue rows, which is all it needs. */
+function mirrorGuard() {
+  const src = (rel) => fs.readFileSync(path.join(repo, 'src', 'server', 'Gatherlight.Platform', 'Agent', 'Llm', 'Services', rel), 'utf8');
+  const runtime = src('LlamaServerRuntime.cs');
+  const constOf = (name) => Number((new RegExp(`const int ${name} = (\\d+);`).exec(runtime) ?? [])[1]);
+  const drift = [];
+  if (constOf('ChatMaxTokens') !== CHAT_MAX_TOKENS) drift.push(`ChatMaxTokens ${constOf('ChatMaxTokens')} ≠ ${CHAT_MAX_TOKENS}`);
+  if (constOf('ChatContextTokens') !== CHAT_CONTEXT_TOKENS) drift.push(`ChatContextTokens ${constOf('ChatContextTokens')} ≠ ${CHAT_CONTEXT_TOKENS}`);
+  if (constOf('RerankBatch') !== RERANK_WINDOW) drift.push(`RerankBatch ${constOf('RerankBatch')} ≠ ${RERANK_WINDOW}`);
+  // Every catalogue row that declares ContextTokens, by its literal id. A declaring row whose id is not a literal cannot
+  // be checked here, so it is drift too rather than a silent pass. UsableWindow's floor (> 6) is applied as the C# does.
+  const declared = {};
+  for (const row of src('GgufCatalog.cs').split('new GgufModel(').slice(1)) {
+    const window = Number((/ContextTokens:\s*(\d+)/.exec(row) ?? [])[1]);
+    if (!window) continue;
+    const id = (/^\s*"([^"]+)"/.exec(row) ?? [])[1];
+    if (!id) { drift.push('a GgufCatalog row declares ContextTokens under a non-literal id'); continue; }
+    if (window > 6) declared[id] = window;
+  }
+  if (JSON.stringify(Object.entries(declared).sort()) !== JSON.stringify(Object.entries(DECLARED_WINDOW).sort()))
+    drift.push(`declared windows ${JSON.stringify(declared)} ≠ ${JSON.stringify(DECLARED_WINDOW)}`);
+  if (drift.length) die(`the bench's launch numbers drifted from the product's — update them together: ${drift.join('; ')}`);
+}
 const ARMS = {
   formula: { label: '公式 · no verification (seed tags present)', enrichment: false, env: {} },
   formula2: { label: '公式 · no verification · A/A twin', enrichment: false, env: {} },
@@ -1055,9 +1095,12 @@ const live = async () => {
         if (!installed(m)) throw new Error(`${m} is in neither ${gguf}/${m}.gguf nor ${gguf}/${m}/*.gguf — download it in 资源 first`);
       // THE PRODUCT'S PRESET, per kind — LlamaServerRuntime.WritePresets, mirrored line for line, because a bench
       // that launches a model differently measures a product we do not ship. Every kind gets n-gpu-layers (launch
-      // CONTRACT: without it the CPU runs the model, silently ~30× slower); a reranker adds `reranking` and the
-      // 4096 ctx/batch/ubatch (a pair must fit one batch); a CHAT model gets no ctx-size, and never `embeddings` or
-      // `reranking`, either of which restricts the child to one route and refuses chat.
+      // CONTRACT: without it the CPU runs the model, silently ~30× slower); a reranker adds `reranking` and its window
+      // as ctx/batch/ubatch (a pair must fit one batch) — 4096, or the window its catalogue row DECLARES (DECLARED_WINDOW,
+      // the bench's copy of GgufCatalog.DeclaredWindow: mMiniLMv2's 512, since Run 4 found llama.cpp serving it 512 slots
+      // whatever 4096 the preset claimed); a CHAT model gets its context cap (CHAT_CONTEXT_TOKENS), and never `embeddings`
+      // or `reranking`, either of which restricts the child to one route and refuses chat. mirrorGuard holds all three
+      // numbers to the C#.
       // A CHAT section gets `reasoning = off` and `n-predict = 512`, exactly as WritePresets writes it since round 2's
       // Task P (LlamaServerRuntime.ChatMaxTokens). Run 5 wrote `reasoning = off` alone, ahead of the product: Lyntai's
       // OpenAI-shaped payload drops TextReasoning.Suppress, and llama-server's default `--reasoning auto` then opens a
@@ -1066,10 +1109,13 @@ const live = async () => {
       // so Run 3's control was unchanged by it. `reasoning-budget = 0` is NOT equivalent: the template stays in
       // thinking mode and the model writes its reasoning into the reply. `n-predict` caps a runaway reply (Run 5: an
       // uncapped one filled its child's shared context, and llama-server keeps decoding a request nobody waits for).
-      // Runs 2–5 re-analyse identically: a preset is a launch setting, and no saved row depends on this text.
+      // Runs 2–5b re-analyse identically: a preset is a launch setting, and no saved row depends on this text.
+      mirrorGuard();
+      const windowOf = (m) => DECLARED_WINDOW[m] ?? RERANK_WINDOW;
       const presetSection = (m, kind) => [`[${m}]`, 'n-gpu-layers = 99',
-        ...(kind === 'reranking' ? ['reranking = true', 'ctx-size = 4096', 'batch-size = 4096', 'ubatch-size = 4096']
-          : ['reasoning = off', `n-predict = ${CHAT_MAX_TOKENS}`]),
+        ...(kind === 'reranking'
+          ? ['reranking = true', `ctx-size = ${windowOf(m)}`, `batch-size = ${windowOf(m)}`, `ubatch-size = ${windowOf(m)}`]
+          : ['reasoning = off', `n-predict = ${CHAT_MAX_TOKENS}`, `ctx-size = ${CHAT_CONTEXT_TOKENS}`]),
         ''].join('\n');
       const preset = path.join(WORK, 'presets.ini');
       fs.writeFileSync(preset, [...rerankers.map((m) => presetSection(m, 'reranking')),

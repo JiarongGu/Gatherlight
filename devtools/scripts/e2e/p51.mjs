@@ -1287,6 +1287,12 @@ try {
         qwenNote);
       ok('…and says its TAGGING was not measured, and its licence',
         /主题标注好不好没有量过/.test(qwenNote) && /Apache-2\.0/.test(qwenNote), qwenNote);
+      // A 640 MB download whose child held +5,175 MiB of GPU memory uncapped and +2,472 MiB at the chat cap
+      // (docs/self-managed-llm-runtime.md, 2026-09-24): the footprint is part of the trade, so the note states it —
+      // with the context it was measured at, which is the launch setting that decides it.
+      ok('…and states its measured GPU footprint with the context it was taken at — not only its download size',
+        /显存却约 2\.6 GB/.test(qwenNote) && /16,384 个词元/.test(qwenNote) && /40,960 个词元/.test(qwenNote)
+          && /约 5\.4 GB/.test(qwenNote), qwenNote);
 
       // 判断's WHAT-IT-DOES SENTENCE quotes a range for "the local rerankers" — so it must cover EVERY catalogued one.
       // It read 203–208 / 7–11 until mMiniLMv2 (199, +20) was catalogued, which made both ends false while every check
@@ -1454,11 +1460,25 @@ try {
     ok('THE POINT: every model gets n-gpu-layers — without it recall is ~30x slower, silently',
       allSections.every((id) => /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf(id))),
       JSON.stringify(Object.fromEntries(allSections.map((id) => [id, sectionOf(id)]))));
-    // …and ctx-size ONLY where the pair-in-one-batch contract needs it. A chat or embedding child takes its model's
-    // own training context; a ctx-size written there would silently cap what a chat judge can be shown.
-    ok('chat and embedder sections carry NO ctx-size — only a reranker\'s whole-pair contract sets one',
-      !/ctx-size/.test(sectionOf('zztest-chat-model')) && !/ctx-size/.test(sectionOf('zztest-embed-model')),
-      JSON.stringify({ chat: sectionOf('zztest-chat-model'), embed: sectionOf('zztest-embed-model') }));
+    // …and a CHAT section's context is capped (LlamaServerRuntime.ChatContextTokens, 2026-09-24). Unset, a chat child
+    // takes its model's whole TRAINING context and llama.cpp reserves the KV cache for all of it up front: Qwen3-0.6B,
+    // 40,960 tokens, 4,480 MiB of KV for a 604 MiB model — +5,175 MiB of GPU memory on the real binary, +2,472 MiB at
+    // the cap (docs/self-managed-llm-runtime.md). 16,384 holds the measured worst prompt (400 fixture candidates,
+    // ≤ 10,395 tokens, + the 512-token reply) with a third to spare. SILENT without it: nothing fails, the GPU just holds
+    // gigabytes for nothing, and on a smaller one llama.cpp quietly shrinks the window to whatever is left.
+    ok('THE POINT: a chat section launches with its context capped at 16,384 tokens — exactly one ctx-size line',
+      /^ctx-size\s*=\s*16384\s*$/m.test(sectionOf('zztest-chat-model'))
+        && (sectionOf('zztest-chat-model').match(/^ctx-size/gm) ?? []).length === 1,
+      JSON.stringify({ chat: sectionOf('zztest-chat-model') }));
+    // …and ONLY there: an embedder takes its own window (nobody measured it under another), and a reranker keeps its
+    // whole-pair window — asserted below as its OWN value and here as its ONLY ctx-size line, so a chat cap written onto
+    // every section (two values for one key, whichever the router then honours) cannot pass as "the reranker still says
+    // 4096".
+    ok('…and ONLY a chat section: the embedder carries no ctx-size, and each reranker exactly one — its own',
+      !/ctx-size/.test(sectionOf('zztest-embed-model'))
+        && ['zztest-rerank-model', WINDOWED].every((id) => (sectionOf(id).match(/^ctx-size/gm) ?? []).length === 1)
+        && ['zztest-embed-model', 'zztest-rerank-model', WINDOWED].every((id) => !/16384/.test(sectionOf(id))),
+      JSON.stringify({ embed: sectionOf('zztest-embed-model'), rerank: sectionOf('zztest-rerank-model'), windowed: sectionOf(WINDOWED) }));
 
     // A CHAT child launches with thinking OFF and a generation cap. Without the first, a thinking-capable template
     // thinks on every judgement (Lyntai's OpenAI-shaped wire drops TextReasoning.Suppress — its TASKS.md Part 288;
@@ -1470,10 +1490,11 @@ try {
         && /^n-predict\s*=\s*512\s*$/m.test(sectionOf('zztest-chat-model'))
         && /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf('zztest-chat-model')),
       JSON.stringify({ chat: sectionOf('zztest-chat-model') }));
-    ok('…and so does the catalogued Qwen3 0.6B — thinking off, the cap, offloaded, and none of another kind\'s keys',
+    ok('…and so does the catalogued Qwen3 0.6B — thinking off, both caps, offloaded, and none of another kind\'s keys',
       /^reasoning\s*=\s*off\s*$/m.test(sectionOf(QWEN3)) && /^n-predict\s*=\s*512\s*$/m.test(sectionOf(QWEN3))
         && /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf(QWEN3))
-        && !/ctx-size|embeddings|reranking/.test(sectionOf(QWEN3)),
+        && /^ctx-size\s*=\s*16384\s*$/m.test(sectionOf(QWEN3))
+        && !/batch-size|embeddings|reranking/.test(sectionOf(QWEN3)),
       JSON.stringify({ qwen3: sectionOf(QWEN3) }));
     // …and ONLY there: an embedder or a reranker never generates, and a key its child does not need is a key whose
     // meaning for that kind nobody measured.

@@ -630,13 +630,20 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   section, which the router passes to the child as `--reasoning off` (read back from the child's argv on the real
   binary, 2026-09-24); it is byte-neutral for Gemma 3, whose template has nothing to turn off. NOT
   `reasoning-budget = 0`, which leaves the template thinking and puts the reasoning in the content (4 of 6 replies
-  unparseable). Part 288's own text names this preset and says the adopter should be told when it ships — and its
-  design question is that hosted OpenAI-shaped APIs may reject an unknown field, so the fix may be an option the
-  ADOPTER turns on rather than a field always sent. **On that bump**: enable whatever option the closing Part adds
-  (if any), delete the `reasoning = off` line and p51's assertion of it, and re-check on the real binary that a Qwen
-  judge's reply carries no `<think>` — the wire has to do what the preset did. The `n-predict` cap beside it is NOT part of
-  this workaround and stays: it is our own launch contract (`LlamaServerRuntime.ChatMaxTokens` — the memory seams
-  send no `max_tokens`, and the router does not stop a child's generation when the app abandons a request).
+  unparseable). Part 288's own text names this preset and says the adopter should be told when it ships. Its **owner
+  ruling (2026-09-24) is CONFIGURED fields**: a registration option holding JSON that Lyntai merges into the request
+  only when a call asks `Suppress` — like `DocumentPrefix`, the library knows no vendor's spelling and ships NO
+  default, because hosted OpenAI-shaped APIs may reject an unknown field. So the bump turns nothing on by itself.
+  **On that bump, in this order**: (1) configure llama-server's spelling on the `llamacpp` registration
+  (`AddLlamaProvider` in `LlamaCppSource.Register`) — e.g. `chat_template_kwargs: {"enable_thinking": false}`, which
+  is TEMPLATE-specific (a template reading another key ignores it) and was tried only as a dedicated server's
+  `--chat-template-kwargs` flag, never as a request field or a preset key (docs/judge-bench.md, Run 5's screen);
+  (2) verify EACH catalogued chat model on the real binary with the preset line removed — no `<think>`, no
+  `reasoning_content`, replies as short as under the preset (6–21 tokens); (3) only then delete the `reasoning = off`
+  line and p51's assertion of it. The other order puts every Qwen judge back to thinking on every call, silently.
+  The `n-predict` and `ctx-size` caps beside it are NOT part of this workaround and stay: they are our own launch
+  contract (`LlamaServerRuntime.ChatMaxTokens` — the memory seams send no `max_tokens`, and the router does not stop
+  a child's generation when the app abandons a request; `LlamaServerRuntime.ChatContextTokens` — launch item (5)).
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
@@ -930,6 +937,26 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   thinking and is cut before any verdict or subject list, so it verifies nothing and tags nothing on every call —
   fail-open, no error — where uncapped it would at least have been visibly slow. None in the catalogue does; the cure
   for one is a row measured on the bench, not a bigger cap.
+  **(5) A CHAT section's context is capped at 16,384 tokens** (`ctx-size`, `LlamaServerRuntime.ChatContextTokens`,
+  2026-09-24, owner-approved), and nothing else's changes. Unset, a chat child takes its model's TRAINING context and
+  llama.cpp reserves the KV cache for all of it up front: Qwen3-0.6B's 40,960 tokens, full attention on all 28 layers,
+  are 4,480 MiB of KV for a 604 MiB model, and the router plus that child took **+5,175 MiB** of GPU memory by
+  nvidia-smi — **+2,472 MiB** at the cap (KV 1,792 MiB; b10549, Vulkan, one RTX 4080 Laptop GPU;
+  `docs/self-managed-llm-runtime.md`). Silent either way: nothing fails, the GPU just holds gigabytes. **16,384 is the
+  measured worst prompt with a third to spare**, counted by the server on each model's own tokenizer and template with
+  prompts built as Lyntai 3.2.0 builds them: 400 candidates (the deepest verification) of the fixture's facts is
+  ≤ 10,395 tokens, + the 512-token reply; the deepest annotation 604–3,132. What does NOT fit — 400 candidates averaging
+  more than ~45–50 Chinese characters, or 400 at the 400-character cap (114k–124k, past the models' own training windows
+  too) — is refused whole (HTTP 400 `exceed_context_size_error`) and fails open: NoOpinion for a verdict, no subjects for
+  an annotation. **Two things it changes beyond memory, both measured and accepted**: llama.cpp's default `--fit on`
+  shrinks only an UNSET context (uncapped, on a simulated short GPU it cut Qwen3 to 12,032 to leave 1 GiB free, logged at
+  verbosity 4 only) — with the cap it leaves it alone, so the footprint is the same on every machine and a GPU without
+  room for it is unmeasured, as for every model here since `n-gpu-layers` was set; and the 16,384 cells are SHARED by
+  the child's 4 slots, so two DEEP verifications in flight at once (~10.5k each) both fail (HTTP 500, ~1.6 s, the child
+  fine afterwards) where a deep one beside an annotation or a 96-candidate page is answered. Gemma 3 1B, whose
+  sliding-window layers kept its cache small anyway, went 183 → 119 MiB of KV and answered as before. `p51` pins the
+  line on chat sections and its absence from embedder and reranker sections (a reranker keeps exactly ONE `ctx-size`,
+  its own); confirmed to FAIL with the line removed and with it written on every section.
   Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
   (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
   already there" is not on the table. And `LlamaServerRuntime` deliberately does **not** search PATH: a

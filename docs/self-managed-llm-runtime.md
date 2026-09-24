@@ -444,3 +444,78 @@ dedicated `llama-server --reranking --n-gpu-layers 99` per part, one laptop GPU.
   12 questions × 3 rounds after a warm-up, serial. First run: median 75.1 ms at 4096, 76.3 ms at 512, 79.3 ms at
   4096 again. The script's run: 75.2, 71.7 and 71.8 ms. There is no difference beyond the 4096 launch's own
   run-to-run spread, so the row's 0.31 s per recall and +0.08 s over no judge stand, said as measured at 4096.
+
+### 2026-09-24 — a CHAT child's context: capped at 16,384, and what the cap costs
+
+`WritePresets` wrote no `ctx-size` on a chat section, so a chat child took its model's TRAINING context and llama.cpp
+reserved the KV cache for all of it when the child loaded. For Qwen3-0.6B that is 40,960 tokens with full attention on
+all 28 layers. A chat section now carries `ctx-size = 16384` (`LlamaServerRuntime.ChatContextTokens`); rerankers keep
+their whole-pair window and embedders their own. Same build as above (b10549, Vulkan), one RTX 4080 Laptop GPU (12,282
+MiB) shared with other resident processes, the pinned GGUFs. Scratch scripts, not committed; the method is here.
+
+**How big the prompts get.** Built exactly as Lyntai 3.2.0's verifier and annotator build them: its system prompts
+verbatim, candidates as the app's content-only judge input renders them (one line, at most
+`JudgeSeesContentPolicy.MaxChars` = 400 characters plus "…"), numbered. Counted by the server as `usage.prompt_tokens`
+(template included) with `max_tokens: 1`, or read from its refusal past the window. "Fixture facts" are the bench's 60
+invented household facts (median 29 characters, at most 101), cycled; the question is the bench's longest (164
+characters).
+
+| prompt | Qwen3-0.6B | Gemma 3 1B |
+|---|---|---|
+| verification, 96 fixture facts (the default page's depth) | 2,523 | 2,634 |
+| verification, 400 fixture facts (the deepest: a kind, or a limit ≥ 34) | 9,993 | 10,395 |
+| verification, 400 × 100 English characters | 12,565 | 12,830 |
+| verification, 100 × 400 Chinese characters (at the cap) | 28,698 | 31,134 |
+| verification, 400 × 100 Chinese characters | 30,819 | 32,941 (refused at its own 32,768) |
+| verification, 400 × 400 Chinese characters | 114,476 (refused) | 124,166 (refused) |
+| annotation: 24 known subjects, 8 earlier fixture facts, the write | 604 | 606 |
+| annotation: the same with every fact at 400 Chinese characters | 2,909 | 3,132 |
+| annotation: the same at 1,000 Chinese characters | 6,676 | 7,242 |
+
+The worst fixture-shaped request, 10,395 tokens plus the 512-token reply cap, is 10,907: 16,384 leaves a third to
+spare. Past the window llama-server refuses the prompt whole, before generating anything: HTTP 400
+`exceed_context_size_error`, in 0.15–0.5 s. Both memory seams fail open on that, verification to NoOpinion and
+annotation to no subjects. At 16,384, a verification overflows when 400 candidates average more than ~45–50 Chinese
+characters (~130 English). An annotation overflows when the 8 earlier facts and the write total ~20,000 Chinese
+characters. 400 candidates at the 400-character cap exceed both models' own training windows, so no cap would hold
+them.
+
+**Memory, with the app writing the preset.** Two data folders, each with the real binary and GGUFs hard-linked and 判断
+bound to Qwen3-0.6B. The app was started, its warm step loaded Qwen3, and GPU memory was read by nvidia-smi (median of
+five) before the app started and after. Then Gemma 3 1B was loaded as the router's second resident. Buffer sizes come
+from a router started on the SAME app-written preset with `verbosity = 4` added to the two chat sections, the only
+change.
+
+| | before (uncapped) | after (16,384) |
+|---|---|---|
+| Qwen3 child argv | `--n-predict 512 --n-gpu-layers 99 --reasoning off` | `--ctx-size 16384 --n-predict 512 --n-gpu-layers 99 --reasoning off` |
+| Qwen3 KV cache | 4,480 MiB (40,960 cells, K 2,240 + V 2,240) | **1,792 MiB** (16,384 cells) |
+| Qwen3 model / compute buffers | 604 / 66 MiB | 604 / 42 MiB |
+| Qwen3 projected by `--fit` | 5,150 MiB | 2,438 MiB |
+| router + Qwen3 child, nvidia-smi | **+5,175 MiB** | **+2,472 MiB** |
+| Gemma 3 1B KV cache (global + sliding window) | 128 + 55 MiB | 64 + 55 MiB |
+| Gemma 3 1B child, nvidia-smi | +1,108 MiB | +1,026 MiB |
+
+**Function, at the cap, against the router the app started.** A verification of 400 fixture facts was answered on
+Qwen3 (9,979 / 9,993 prompt tokens, HTTP 200, 5.1–6.1 s). Its replies ran into the 512-token cap, as they did uncapped
+(finish `length` on all six app-driven calls, three before and three after). A small judge shown 400 candidates
+endorses most of them. The 96-candidate page was answered too. Gemma 3 1B answered 96 and 400 candidates capped, as it
+did uncapped (HTTP 200 on every call, 0.2–4.5 s, the first call including the load). 400 × 100 Chinese characters was
+refused by both (HTTP 400). Uncapped, Qwen3 had answered that one in 16.5 s, into the reply cap.
+
+**Two things the cap changes besides memory**, both measured:
+
+- **llama.cpp's `--fit` no longer shrinks the window.** Its default `--fit on` adjusts only what a launch left UNSET.
+  With less free memory, simulated with a `fit-target` margin, an uncapped Qwen3 child logged `context size reduced
+  from 40960 to 12032` to leave 1 GiB free. That line appears only at verbosity 4, so the window a household got
+  depended on what else held the GPU at load time. With the cap and the same margin, the child logged `context size
+  set by user to 16384 -> no change`. It then logged `failed to fit params ... n_gpu_layers already set by user to 99,
+  abort` and loaded as asked. The footprint is now the same on every machine. A GPU without room for it is not
+  measured. Every model here was already in that position, since `n-gpu-layers` has always been set.
+- **The window is shared by the child's 4 slots** (`n_slots = 4`, `kv_unified = true`). At the cap, a deep verification
+  (400 fixture facts) was answered with any of these in flight beside it: a fixture-sized annotation, an annotation at
+  400 Chinese characters a fact, or a 96-candidate verification. So were two 96-candidate verifications at once. TWO
+  deep verifications at once (~10.5k tokens each) do not fit together. llama.cpp shrank its batch down to 1, logged
+  `Context size has been exceeded`, and failed BOTH with HTTP 500 in ~1.6 s. The same happened for three at once, on
+  both models. The child served the next request normally. Uncapped, by the same arithmetic, it would take four at
+  once (not measured).

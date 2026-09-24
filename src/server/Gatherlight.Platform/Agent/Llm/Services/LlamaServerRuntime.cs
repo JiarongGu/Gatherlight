@@ -108,10 +108,11 @@ public interface ILlamaServerRuntime
 /// <see cref="ResourceProvisioner.GgufKind"/> — exact for what we provision, a stated name
 /// heuristic for a GGUF the household dropped in themselves, and ONE writer either way.</para>
 ///
-/// <para><b>Chat models launch with thinking OFF and a generation cap</b> (<c>reasoning = off</c>,
-/// <c>n-predict</c> — chat sections only). Both fail SILENTLY without it: a thinking-capable template thinks on every
-/// judgement, and a small model's runaway fills its whole context; neither is an error, both are seconds on the path
-/// of every recall and write. See <see cref="WritePresets"/> and <see cref="ChatMaxTokens"/>.</para>
+/// <para><b>Chat models launch with thinking OFF, a generation cap and a context cap</b> (<c>reasoning = off</c>,
+/// <c>n-predict</c>, <c>ctx-size</c> — chat sections only). All three fail SILENTLY without it: a thinking-capable
+/// template thinks on every judgement, a small model's runaway fills its whole context, and an uncapped child reserves
+/// its model's whole TRAINING context in GPU memory up front; none is an error. See <see cref="WritePresets"/>,
+/// <see cref="ChatMaxTokens"/> and <see cref="ChatContextTokens"/>.</para>
 /// </summary>
 public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 {
@@ -173,6 +174,56 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// same router answered a verification-shaped request (Lyntai's verifier prompt, 60 fixture notes, 1,632 prompt
     /// tokens) in 93–276 ms with 13–19 completion tokens and no reasoning at all.</para></summary>
     private const int ChatMaxTokens = 512;
+
+    /// <summary>The context a CHAT child launches with — written as <c>ctx-size</c>, on chat sections only. Unset, a
+    /// child takes its model's TRAINING context and llama.cpp reserves the whole KV cache for it up front. For
+    /// Qwen3-0.6B that is 40,960 tokens with full attention on all 28 layers: 4,480 MiB of KV cache for a 604 MiB model,
+    /// and the app's router plus that child took +5,175 MiB of GPU memory by nvidia-smi — for prompts that measure a
+    /// quarter of it (docs/self-managed-llm-runtime.md, 2026-09-24).
+    ///
+    /// <para><b>Why 16,384: the MEASURED worst case, with margin.</b> Prompts built exactly as Lyntai 3.2.0's verifier
+    /// and annotator build them, counted by llama-server b10549 on each model's own tokenizer and chat template
+    /// (Qwen3-0.6B / Gemma 3 1B; 2026-09-24). The deepest verification shows the judge 400 candidates (4 × what
+    /// <c>FactIndex.RankAsync</c> asks for: a recall naming a kind, or asking for 34 or more), each line capped at
+    /// <see cref="JudgeSeesContentPolicy.MaxChars"/>. 400 of the bench fixture's facts (household-shaped, median 29
+    /// characters) with its longest question: 9,993 / 10,395 tokens; with the <see cref="ChatMaxTokens"/> reply, at most
+    /// 10,907 — a third of the window to spare. 400 candidates of 100 ENGLISH characters: 12,565 / 12,830. The deepest
+    /// annotation (Lyntai's 24 known subjects and 8 earlier facts, then the write): 604 / 606 tokens with fixture facts,
+    /// 2,909 / 3,132 with every fact at 400 Chinese characters.</para>
+    ///
+    /// <para><b>What does not fit, and what happens then.</b> 400 candidates of 100 CHINESE characters is 30,819 /
+    /// 32,941 tokens, and 400 at the 400-character cap 114,476 / 124,166 — past both models' own training windows too,
+    /// so no cap holds that (uncapped, Gemma 3 1B already refused the first). llama-server refuses an over-long prompt
+    /// whole — HTTP 400 <c>exceed_context_size_error</c>, nothing generated — and both seams fail open: verification to
+    /// NoOpinion (the engine's page stands), annotation to no subjects (the fact is indexed without them, and an
+    /// indexed row is never revisited). At 16,384 a verification overflows when 400 candidates average more than ~45–50
+    /// Chinese characters (~130 English), or fewer run longer (100 at the cap is 28,698); an annotation when the 8
+    /// earlier facts and the write run ~20,000 Chinese characters between them. Accepted, because a small judge shown
+    /// that much is already past its use: at 400 fixture candidates Qwen3-0.6B's replies either ran into
+    /// <see cref="ChatMaxTokens"/> (finish <c>length</c>: unparsed, NoOpinion — all six app-driven calls, capped or not)
+    /// or endorsed well over a hundred candidates, Lyntai's own failure signal. And a household fact is granular.</para>
+    ///
+    /// <para><b>Measured on the real binary under the preset the app writes</b> (2026-09-24, b10549, Vulkan, one RTX 4080
+    /// Laptop GPU; <c>docs/self-managed-llm-runtime.md</c>): Qwen3-0.6B's KV cache 4,480 → 1,792 MiB, its projected
+    /// footprint 5,150 → 2,438 MiB, and the app's router plus that child +5,175 → +2,472 MiB by nvidia-smi; the
+    /// 400-candidate verification still answered (9,979 prompt tokens, HTTP 200). Gemma 3 1B, whose sliding-window
+    /// layers already kept its cache small, went 183 → 119 MiB of KV (+1,108 → +1,026 MiB) and answered as before.</para>
+    ///
+    /// <para><b>It also takes away llama.cpp's own shrinking, knowingly.</b> Its default <c>--fit on</c> adjusts only
+    /// what the launch left UNSET: uncapped on a GPU short of room, it cut Qwen3's context to leave 1 GiB free
+    /// (simulated with <c>fit-target</c>: 40,960 → 12,032, logged only at verbosity 4), so the window a household got
+    /// depended on what else held the GPU at load time. With the cap set it logs "context size set by user → no change"
+    /// and — <c>n-gpu-layers</c> being set too, as it always was — "abort", and loads as asked. So the footprint is now
+    /// the same on every machine, and a GPU without that much room is where it goes unmeasured: the position every
+    /// model here was already in, <c>n-gpu-layers</c> having always been set.</para>
+    ///
+    /// <para><b>The window is SHARED by requests in flight at once</b> — the child runs 4 slots over one unified cache.
+    /// Measured at the cap: a deep verification with an annotation (fixture-sized, or every fact at 400 Chinese
+    /// characters) in flight beside it, or with a default 96-candidate verification, all answered. TWO deep
+    /// verifications at once (~10.5k each) do not fit together, and llama.cpp then fails BOTH — HTTP 500 "Context size
+    /// has been exceeded" in ~1.6 s — so both leave the engine's page; the child serves the next request normally.
+    /// Uncapped, by the same arithmetic, it would take four (not measured).</para></summary>
+    private const int ChatContextTokens = 16384;
 
     /// <summary>How long a freshly spawned router has to answer before it is killed as never-ours.</summary>
     private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(20);
@@ -316,7 +367,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 case GgufCapability.Embedding:
                     sb.AppendLine("embeddings = true");
                     break;
-                // A CHAT child — the only kind that generates — launches with thinking OFF and a generation cap.
+                // A CHAT child — the only kind that generates — launches with thinking OFF, a generation cap and a
+                // context cap.
                 //
                 // `reasoning = off` IS A WORKAROUND FOR A LYNTAI GAP, recorded on both sides (dev-conventions: open
                 // workaround (5)). Both memory seams ask for no reasoning (TextReasoning.Suppress), and Lyntai 3.2.0's
@@ -327,16 +379,30 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 // the child as `--reasoning off`; the template then renders its pre-closed think block, and replies ran
                 // 6–21 tokens. For a template with nothing to turn off (Gemma 3) the rendered prompt is byte-identical.
                 // NOT `reasoning-budget = 0`: the template stays in thinking mode, the model writes its reasoning into
-                // the content, and 4 of 6 replies did not parse. KEEP THIS LINE UNTIL PART 288 CLOSES. Part 288's own
-                // design question is that hosted OpenAI-shaped APIs may reject an unknown field, so the fix may well be
-                // an option the ADOPTER sets rather than a field always sent. On that bump: turn on whatever option the
-                // closing Part adds (if any), delete this line and p51's assertion of it, and re-check on the real
-                // binary that a Qwen judge's reply carries no `<think>` — the wire has to do what the preset did.
+                // the content, and 4 of 6 replies did not parse. KEEP THIS LINE UNTIL PART 288 SHIPS — and even then it
+                // goes LAST. Part 288's owner ruling (2026-09-24) is CONFIGURED fields: a registration option holding JSON
+                // that Lyntai merges into the request only when a call asks Suppress; like DocumentPrefix, the library
+                // knows no vendor's spelling and ships no default. So the bump wires nothing by itself. In order:
+                // (1) configure llama-server's spelling on the `llamacpp` registration (AddLlamaProvider in
+                // LlamaCppSource.Register) — e.g. `chat_template_kwargs: {"enable_thinking": false}`, which is
+                // TEMPLATE-specific (a template reading another key ignores it) and was tried only as a dedicated
+                // server's `--chat-template-kwargs` flag, never as a request field or a preset key; (2) verify EACH
+                // catalogued chat model on the real binary with this line removed: no `<think>`, no reasoning_content,
+                // replies as short as they ran under this line (6–21 tokens); (3) only then delete this line and p51's
+                // assertion of it. The other order puts every Qwen judge back to thinking on every call, silently.
                 //
                 // `n-predict` is our own launch contract, not a workaround — see ChatMaxTokens.
+                //
+                // `ctx-size` is launch contract too — see ChatContextTokens. Unset, the child reserves its model's whole
+                // TRAINING context (Qwen3-0.6B: 40,960 tokens, 4,480 MiB of KV for a 604 MiB model; +5,175 MiB of GPU
+                // memory with the router, measured); 16,384 holds the measured worst prompt with a third to spare, and
+                // took the same child to +2,472 MiB on the real binary (docs/self-managed-llm-runtime.md, 2026-09-24).
+                // Chat sections ONLY: a reranker's window is its whole-pair contract (below) and an embedder takes its
+                // own — neither was measured under any other. p51 pins all three halves.
                 case GgufCapability.Completion:
                     sb.AppendLine("reasoning = off");
                     sb.AppendLine($"n-predict = {ChatMaxTokens}");
+                    sb.AppendLine($"ctx-size = {ChatContextTokens}");
                     break;
                 // `reranking` restricts it to /v1/rerank, and the pair must fit one batch — see RerankBatch. A row
                 // that DECLARES a smaller window gets that instead (GgufCatalog.DeclaredWindow — the read

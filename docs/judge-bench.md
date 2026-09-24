@@ -2017,7 +2017,8 @@ preset and `--models-max 5`, warmed in arm order, then asked fresh prompts):
 - All five load and stay resident, with no eviction and no error. The chat preset writes no `ctx-size`, so every child
   takes its model's training context: 4,096 for BGE (its preset), 32,768 for both Gemmas, 40,960 for Qwen3 and 262,144
   for Qwen3.5. By nvidia-smi, the Qwen3 child alone is ~5.1 GB, nearly all of it KV cache. This is a product property
-  worth knowing, not a bench one.
+  worth knowing, not a bench one. (The product has capped a chat child at 16,384 tokens since 2026-09-24, and the
+  bench mirrors it; `docs/self-managed-llm-runtime.md` has the measurement. Runs 3–5b ran uncapped.)
 - With all five resident the RTX 4080 Laptop GPU (12,282 MiB, ~3.5 GB of it held by other processes including the
   unrelated resident llama-server) had 1.3 GB free.
 - Prompt processing for the two Qwens was 4–6× slower than alone: Qwen3 3,054–3,155 against 17,157 tokens/s, Qwen3.5

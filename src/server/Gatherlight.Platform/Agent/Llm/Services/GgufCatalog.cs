@@ -232,6 +232,14 @@ public static class GgufCatalog
         // (+9.6pp, p < 0.001) against no judge; against BGE in the same run, top-1 +8.3pp (p = 0.002) and found@8
         // 148 against 203 (−22.9pp). Serial median 381 ms against the run's 公式 220 ms. Coverage 226/234.
         //
+        // ITS FOOTPRINT IS NOT ITS DOWNLOAD, and the note says so (docs/self-managed-llm-runtime.md, 2026-09-24). Its
+        // training window is 40,960 tokens with full attention on all 28 layers, and an uncapped llama.cpp child reserves
+        // the KV cache for all of it: +5,175 MiB of GPU memory for the router plus this child (nvidia-smi, b10549, one RTX
+        // 4080 Laptop GPU) — 「约 5.4 GB」 — against a 639 MB file. The app launches chat models at 16,384
+        // (LlamaServerRuntime.ChatContextTokens): +2,472 MiB on the same machine, 「约 2.6 GB」, both decimal GB like
+        // every size in these notes. Run 5b launched it uncapped; the cap sits far above every fixture prompt (60
+        // candidates, ~1.7k tokens), so its figures stand.
+        //
         // Its TAGGING is unmeasured, and the note says so: the fixture's subject tags were written by the Claude CLI
         // when the seed was built, so no run has scored the tags this model writes. Why a household might still pick
         // it is the other half of the same fact — tagging and checking both stay on the machine, no account quota.
@@ -249,6 +257,8 @@ public static class GgufCatalog
             + "两项都显著变好。和同一轮的 BGE 重排模型比:它把答案排在第一的次数更多(多 8.3 个百分点,显著),"
             + "BGE 把答案带进前八的次数多得多(203 对 148)。每次检索约 0.38 秒,同一轮不开判断约 0.22 秒"
             + "(串行中位数,模型已加载、在显卡上)。"
+            + "文件约 640 MB,运行时 llama.cpp 为它预留的显存却约 2.6 GB(应用按 16,384 个词元的上下文启动它,"
+            + "在一块显卡上实测、含服务本身;不设上限时会按它训练时的 40,960 个词元预留,约 5.4 GB)。"
             + "它自己写的主题标注好不好没有量过 —— 测试集里的主题标注是 Claude 写的。"
             + "许可:Apache-2.0(Qwen 的官方仓库写明)。"),
 
