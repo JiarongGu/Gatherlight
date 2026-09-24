@@ -1272,6 +1272,18 @@ try {
           && /4\/60/.test(String(mini.note)) && /29\/60/.test(String(mini.note)) && /44\/60/.test(String(mini.note))
           && !/截短对长事实的检索影响有多大还没有量过/.test(String(mini.note)) && /199\/240/.test(String(mini.note)),
         JSON.stringify({ name: mini?.name, note: mini?.note }));
+      // …where unread stretches BEGIN: past five window-lengths (5 × 253–506), not four — the sentence was one window early.
+      ok('…and says a fact goes partly unread only past 5 windows — 1,265–2,530 characters — and how much',
+        /1,265–2,530 字以上/.test(String(mini?.note)) && /约一半读不到/.test(String(mini?.note))
+          && !/1,000–2,000 字以上/.test(String(mini?.note)), String(mini?.note));
+      // EVERY catalogued reranker says what a SLOW machine does (a call sized to the verification deadline by the measured
+      // pace, down to reading only the first window — RerankPace) and that mixed long/short recalls are unmeasured. The
+      // mixed clause was in mMiniLMv2's note alone, and the slow-machine clause nowhere.
+      const rerankerNotes = [RERANKER, 'LAMAR-600m.Q5_K_M', MMINILM].map((id) => [id, String(rowOf(shelf, id)?.note ?? '')]);
+      ok('every catalogued reranker\'s note says what a slow machine does — fewer windows, down to the first, within the one-minute wait — and that mixed recalls are unmeasured',
+        rerankerNotes.every(([, n]) => /只有 CPU 等较慢的机器上/.test(n) && /少分几段/.test(n) && /最少只读开头一段/.test(n)
+          && /一分钟/.test(n) && /长短事实混在一起的检索还没有量过/.test(n)),
+        JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('BGE 与 LAMAR 每次检索约 3.2 秒'), n.indexOf('BGE 与 LAMAR 每次检索约 3.2 秒') + 160)])));
 
       // QWEN3 0.6B (docs/judge-bench.md Run 5b): the first CHAT judge measured better than no judge on both metrics —
       // catalogued, described by its measurement with its configuration, and NOT recommended (BGE stays the default).

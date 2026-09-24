@@ -100,11 +100,14 @@
 // gets: `rr` (partition) and `rrf` (fuse), each over the CUT (GATHERLIGHT_RERANK_CHUNKING=off), and `rrk` (partition with
 // the knob on — each long candidate scored in windows, its best window's score kept; ChunkedScoreProvider). Chunking is
 // the product DEFAULT since Run 6c, so `rrk` is what ships; `rr`/`rrf` pin the cut so Runs 2–6 re-launch as they ran, and
-// every reranker arm must announce the knob it sets. The default stays `rr,rrf`.
+// every reranker arm must announce the knob it sets. The default stays `rr,rrf`, so the registered commands of Runs 2–7
+// re-launch as they ran; a run with rerankers and no arm measuring what ships (read from RerankChunking.Default) prints a
+// WARNING before any arm starts.
 // `--claude-stub` points every server at the e2e claude STUB on ANY fixture (the long fixture always does), refusing a
 // Claude-judge arm, so a reranker-only run on the bilingual seed cannot spend quota even by accident.
 // `--rerank-memo` puts a small proxy in front of the router for each local-model arm: during the ACCURACY pass an
-// identical /v1/rerank request body gets the identical response — the first one computed — whichever arm sent it, and
+// identical /v1/rerank request body gets the identical response — the first 2xx one computed; a failure is never shared —
+// whichever arm sent it, and
 // every request's body hash, document count and whether the target's answer text was among the documents is recorded on
 // the row. llama.cpp's scores drift in the third decimal between identical calls (Run 4's screen), which can flip a
 // candidate at the page boundary; the memo removes that noise BETWEEN arms, so two arms that send the same bytes get the
@@ -1415,6 +1418,23 @@ const live = async () => {
   const rerankers = list('rerankers', '');
   const rerankKinds = list('rerank-arms', 'rr,rrf');
   for (const k of rerankKinds) if (!RERANK_ARM_KINDS[k]) die(`--rerank-arms: unknown kind '${k}' — one of ${Object.keys(RERANK_ARM_KINDS).join(', ')}`);
+  // WHAT SHIPS. The default stays `rr,rrf` so every registered command of Runs 2–7 re-launches as it ran — but those two
+  // pin the CUT, and the product scores long candidates in windows since Run 6c. So a run naming rerankers with no arm
+  // that measures the shipped scoring says so before it starts, reading the C# default rather than restating it. Printed
+  // here, in the live run only: the analysis `--report-only` shares is untouched, so every saved run re-analyses as it did.
+  if (rerankers.length > 0) {
+    const chunkingSrc = fs.readFileSync(path.join(repo, 'src', 'server', 'Gatherlight.Platform', 'Agent', 'Llm', 'Services',
+      'ChunkedScoreProvider.cs'), 'utf8');
+    const shipsChunked = /public const bool Default = (true|false);/.exec(chunkingSrc)?.[1];
+    if (shipsChunked === undefined) die('could not read RerankChunking.Default from ChunkedScoreProvider.cs — the bench cannot tell which arm ships');
+    const shipped = shipsChunked === 'true' ? 'rrk' : 'rr';
+    if (!rerankKinds.includes(shipped))
+      console.log(`WARNING: no reranker arm measures what ships — the product ${shipped === 'rrk'
+        ? 'scores a long candidate in windows (RerankChunking.Default = true), which is rrk'
+        : 'cuts a long candidate to its first window (RerankChunking.Default = false), which is rr'}; this run's --rerank-arms=${
+        rerankKinds.join(',')} measures only ${rerankKinds.map((k) => `${k} (${RERANK_ARM_KINDS[k].suffix})`).join(', ')}. `
+        + `Add ${shipped} to --rerank-arms to measure the product.`);
+  }
   for (const m of rerankers)
     for (const k of rerankKinds) {
       const kind = RERANK_ARM_KINDS[k];
@@ -2133,9 +2153,19 @@ const live = async () => {
               if (!state.records.has(state.seq)) state.records.set(state.seq, []);
               state.records.get(state.seq).push(rec);
               if (MEMO) {
-                if (memo.has(hash)) state.memoHits++;
-                else memo.set(hash, forward(req, body).catch((e) => { memo.delete(hash); throw e; }));
-                reply = await memo.get(hash);
+                // ONLY A 2xx IS SHARED. A refusal or a server error is one moment's failure, and memoising it handed the
+                // same failure to every later arm sending these bytes — a no-verdict that was never that arm's. So a
+                // reply that is not 2xx is evicted when it arrives (a failed forward already was), and a request that
+                // joined one still in flight and got a failure back forwards its own once.
+                const is2xx = (r) => r.status >= 200 && r.status < 300;
+                const shared = memo.get(hash);
+                if (shared) state.memoHits++;
+                const pending = shared ?? forward(req, body).then(
+                  (r) => { if (!is2xx(r) && memo.get(hash) === pending) memo.delete(hash); return r; },
+                  (e) => { if (memo.get(hash) === pending) memo.delete(hash); throw e; });
+                if (!shared) memo.set(hash, pending);
+                reply = await pending;
+                if (shared && !is2xx(reply)) { state.memoHits--; reply = await forward(req, body); }
               } else reply = await forward(req, body);
             } else reply = await forward(req, body);
             const headers = { ...reply.headers, 'content-length': reply.body.length };

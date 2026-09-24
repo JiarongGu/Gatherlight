@@ -34,7 +34,12 @@
 //      characters, its tail included, while a short fact in the same call is sent exactly as written. 6c: a
 //      catalogued reranker whose row declares a 512-token window is sent only pairs that fit it, the query included,
 //      a long fact in windows of that budget and a short one whole; BGE, declaring none, gets 1,000-character
-//      windows and an uncut query. Both confirmed to FAIL with GATHERLIGHT_RERANK_CHUNKING=off (the cut).
+//      windows and an uncut query. Both confirmed to FAIL with GATHERLIGHT_RERANK_CHUNKING=off (the cut). Each of
+//      6b/6c also asserts the recall came back as a VERDICT (`answered`), because a fault in the windowing is fail-open.
+//      6d: the windows' scores are credited to the right candidate — a long note whose rewarded text is only in its
+//      TAIL window makes a full page of 8 among 11, which fails under the cut, a first-window mapping and a mapping
+//      off by one window. 6e: on a slow reranker a long note is read in FEWER windows once a call has been timed,
+//      sized to half the verification deadline (RerankPace).
 //   7. Whether a reranker's TAGGING is happening — it goes to the CLI, and a signed-out CLI means none — is
 //      said in the 判断 row, the bind toast and the startup warning, each paired with a signed-in control.
 //      7b: a measurement knob set at startup reaches state/logs, not only stdout.
@@ -151,6 +156,11 @@ const plantBoundReranker = (suffix, model) => {
 };
 const windowedDir = plantBoundReranker('windowed', WINDOWED_RERANK);
 const unwindowedDir = plantBoundReranker('unwindowed', UNWINDOWED_RERANK);
+// Case 6e: a server bound to a reranker the fake answers SLOWLY, so the app's pace estimate has something to learn.
+// "rerank" in the name types it a reranker; no catalogue row, so its windows are 1,000 characters.
+const SLOW_RERANK = 'zzslow-rerank';
+const PACE_PORT = 5424;
+const paceDir = plantBoundReranker('pace', SLOW_RERANK);
 
 const plantTaggingFixture = (suffix) => {
   const dir = dataDirFor(`p52-${suffix}`);
@@ -202,8 +212,10 @@ let modelsHung = 0;
 // Case 3b: a chat judge that never answers — each held response is kept, and released when the case ends.
 let hangChat = false;
 const heldChats = [];
+// Case 6e: how long the slow reranker takes per pair character; 0 answers at once (its startup warm included).
+let slowMsPerChar = 0;
 const served = new Set([JUDGE_MODEL, EMBED_MODEL, RERANK_MODEL, LEXICAL_RERANK, BACKWARDS_RERANK, BROKEN_RERANK, SHORT_RERANK,
-  WINDOWED_RERANK, UNWINDOWED_RERANK]);
+  WINDOWED_RERANK, UNWINDOWED_RERANK, SLOW_RERANK]);
 const fake = http.createServer((req, res) => {
   const send = (obj) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
   if (req.method === 'GET' && req.url === '/v1/models') {
@@ -242,7 +254,8 @@ const fake = http.createServer((req, res) => {
       // The share of the query's distinct letters a document contains — overlap and nothing else.
       const queryChars = [...new Set([...String(json.query ?? '')].filter((ch) => /\p{L}/u.test(ch)))];
       const overlap = (d) => queryChars.filter((ch) => d.includes(ch)).length / (queryChars.length || 1);
-      const answerAware = (d) => (answers(d) ? 3.2 : -2.1);
+      // A THIRD level for case 6d only: `zzmapbest` outscores any answer, so the mapping test never rests on a tie.
+      const answerAware = (d) => (d.includes('zzmapbest') ? 9.0 : answers(d) ? 3.2 : -2.1);
       const score = json.model === LEXICAL_RERANK ? overlap
         : json.model === BACKWARDS_RERANK ? (d) => -answerAware(d)
         : answerAware;
@@ -256,6 +269,13 @@ const fake = http.createServer((req, res) => {
       }
       // One result for two documents: the ANSWER alone, ranked first. Unusable — not a failed ordering.
       if (json.model === SHORT_RERANK) { send({ model: json.model, results: results.slice(0, 1) }); return; }
+      // Case 6e: a reranker on a slow machine — it answers in time proportional to the PAIR characters it is sent (the
+      // query beside each document), which is what a cross-encoder reads.
+      if (json.model === SLOW_RERANK && slowMsPerChar > 0) {
+        const pairChars = docs.reduce((a, d) => a + String(json.query ?? '').length + d.length, 0);
+        setTimeout(() => { if (!res.destroyed) send({ model: json.model, results }); }, Math.round(pairChars * slowMsPerChar));
+        return;
+      }
       send({ model: json.model, results });
       return;
     }
@@ -283,6 +303,7 @@ let goneServer = null;
 let goneOutServer = null;
 let windowedServer = null;
 let unwindowedServer = null;
+let paceServer = null;
 try {
   // The verification deadline shortened to 2 s (case 3b) — the knob can only shorten it, and every other judge call
   // on this server is answered by the fake at once.
@@ -658,7 +679,7 @@ try {
   const shortContent = 'The zzrerankcontent swim lane is booked every Thursday evening at the leisure centre.';
   const beforeLong = hits.length;
   // The query names both facts' words, so the long note AND case 6's short fact are candidates of ONE call.
-  await c3.call('recall_facts', { query: 'zzlongquery 天文社每周五晚上在楼顶观测 swim lane Thursday evening', limit: 5 });
+  const longRecall = await c3.call('recall_facts', { query: 'zzlongquery 天文社每周五晚上在楼顶观测 swim lane Thursday evening', limit: 5 });
   const longDocs = () => hits.slice(beforeLong)
     .filter((h) => h.path === '/v1/rerank' && h.body.includes('zzlongquery'))
     .flatMap((h) => { try { return JSON.parse(h.body).documents ?? []; } catch { return []; } })
@@ -674,6 +695,66 @@ try {
   const shortSent = longDocs().filter((d) => d.includes('zzrerankcontent'));
   ok('…and a SHORT fact in the same call is sent exactly as written, once — one window is the fact itself',
     shortSent.length === 1 && shortSent[0] === shortContent, JSON.stringify(shortSent));
+  // What reached /v1/rerank is half of it: the windows' scores must come BACK as one verdict per candidate. The scoring
+  // policy is fail-open, so a fault in ChunkedScoreProvider (a window count the scores do not match, an exception)
+  // becomes NoOpinion with the engine's page standing — every assertion above green. Lyntai 3.2.0 sets `answered` only
+  // when a verdict was judged (case 3b asserts its absence for the opposite).
+  ok('THE POINT: …and the windowed call came back as a VERDICT — a graph page the reranker judged',
+    longRecall.status === 200 && longRecall.result?.ranked === 'graph' && longRecall.result?.answered === true,
+    `${longRecall.status} ${JSON.stringify({ ranked: longRecall.result?.ranked, answered: longRecall.result?.answered })}`);
+
+  // --- 6d. the windows' scores come back to the RIGHT candidate — its best window, wherever that window sits ----------
+  // 6b proves the windows reach /v1/rerank and a verdict comes back; this proves the verdict is PAIRED with them. Ten
+  // fillers and one long note all name zzmapshared, so the recall shows the reranker at least 11 candidates for a page of
+  // 8 — choosing 8 must leave some out, and under partition the page IS the endorsed 8. The fake scores a document
+  // holding `zzmapbest` 9.0, one holding a digit 3.2, anything else −2.1. Each filler is two windows with its digit in the
+  // FIRST only; the long note is five windows with `zzmapbest` in its TAIL only.
+  //   - Max over the right windows: the long note scores 9.0, is endorsed, and is on the page.
+  //   - The cut (GATHERLIGHT_RERANK_CHUNKING=off), or a mapping that keeps each candidate's FIRST window: −2.1, below all
+  //     ten fillers' 3.2 — off the page.
+  //   - A mapping off by one window that credits each candidate with the window BEFORE its own: its tail goes to the next
+  //     candidate, and it gets its predecessor's last window — a filler's second, digit-free — so −2.1 again, off the page.
+  // No tie is relied on: Lyntai ranks scores with a stable sort, so a tie would test the engine's order, not the mapping.
+  const MAP_PAD = '泳池规则与更衣室须知。';
+  const mapFillers = [...'abcdefghij'].map((id, i) => ({
+    id, content: `zzmapfill${id} zzmapshared 泳道开放:第${i + 1}号泳道每周开放。` + MAP_PAD.repeat(95),
+  }));
+  const mapTarget = 'zzmaptarget zzmapshared 泳道开放时间的完整说明。' + MAP_PAD.repeat(300) + ' zzmapbest';
+  for (const f of mapFillers) {
+    const w = await c3.call('remember_fact', {
+      kind: 'household', topic: `zzmaptopic${f.id} 泳道`, content: f.content,
+      source: `https://example.test/zzmap${f.id}`, confidence: 0.8,
+    });
+    if (!(w.status === 200 && w.result?.ok === true)) fail(`(fixture) filler ${f.id} not stored: ${JSON.stringify(w.result)}`);
+  }
+  const wroteTarget = await c3.call('remember_fact', {
+    kind: 'household', topic: 'zzmaptopic 泳道开放时间', content: mapTarget,
+    source: 'https://example.test/zzmaptarget', confidence: 0.8,
+  });
+  ok('(fixture) ten fillers and the long note are stored', wroteTarget.status === 200 && wroteTarget.result?.ok === true,
+    JSON.stringify(wroteTarget.result));
+  const beforeMap = hits.length;
+  const mapRecall = await c3.call('recall_facts', { query: 'zzmapquery zzmapshared 泳道开放', limit: 8 });
+  const mapDocs = hits.slice(beforeMap)
+    .filter((h) => h.path === '/v1/rerank' && h.model === RERANK_MODEL && h.body.includes('zzmapquery'))
+    .flatMap((h) => { try { return JSON.parse(h.body).documents ?? []; } catch { return []; } })
+    .map(String);
+  // Candidates the reranker was SHOWN: each filler's first window carries its id; the long note is one more.
+  const shown = new Set(mapDocs.flatMap((d) => [...d.matchAll(/zzmapfill([a-j])/g)].map((m) => m[1])));
+  const targetShown = mapDocs.some((d) => d.includes('zzmaptarget') || d.includes('zzmapbest'));
+  ok('(non-vacuity) the reranker was shown the long note and at least 8 fillers — more candidates than the page holds',
+    targetShown && shown.size >= 8, JSON.stringify({ fillers: [...shown].sort().join(''), target: targetShown, documents: mapDocs.length }));
+  ok('(non-vacuity) the long note\'s TAIL window — the only place zzmapbest is — was among what was sent',
+    mapDocs.some((d) => d.includes('zzmapbest')) && !mapDocs.some((d) => d.includes('zzmaptarget') && d.includes('zzmapbest')),
+    JSON.stringify(mapDocs.filter((d) => d.includes('zzmaptarget') || d.includes('zzmapbest')).map((d) => ({ length: d.length,
+      head: d.includes('zzmaptarget'), tail: d.includes('zzmapbest') }))));
+  const mapPage = mapRecall.result?.facts ?? [];
+  ok('(non-vacuity) the page is full — 8 of the 11 — and was judged',
+    mapRecall.status === 200 && mapRecall.result?.ranked === 'graph' && mapRecall.result?.answered === true && mapPage.length === 8,
+    `${mapRecall.status} ${JSON.stringify({ ranked: mapRecall.result?.ranked, answered: mapRecall.result?.answered, n: mapPage.length })}`);
+  ok('THE POINT: the long note whose only rewarded text is in its TAIL window is ON the page — its best window was credited to it',
+    mapPage.some((f) => String(f.content ?? '').includes('zzmaptarget')),
+    JSON.stringify(mapPage.map((f) => String(f.content ?? '').slice(0, 12))));
 
   // --- 6c. a reranker with a 512-token WINDOW is sent what fits it — the query included --------------------
   // mMiniLMv2 serves 512-token slots, and one (query, document) pair past that fails the WHOLE /v1/rerank call:
@@ -722,7 +803,8 @@ try {
       JSON.stringify(wroteShort.result));
   }
   const beforeMini = hits.length;
-  await Promise.all([cWin.call('recall_facts', { query: miniQuery, limit: 5 }), cUnwin.call('recall_facts', { query: miniQuery, limit: 5 })]);
+  const [winRecall, unwinRecall] = await Promise.all([
+    cWin.call('recall_facts', { query: miniQuery, limit: 5 }), cUnwin.call('recall_facts', { query: miniQuery, limit: 5 })]);
   const rerankOf = (model) => hits.slice(beforeMini)
     .filter((h) => h.path === '/v1/rerank' && h.model === model && h.body.includes('zzminiquery'))
     .map((h) => { try { return JSON.parse(h.body); } catch { return null; } })
@@ -762,6 +844,11 @@ try {
       queries: bge.map((b) => String(b.query ?? '').length) }));
   const bgeShort = bge.flatMap((b) => b.documents ?? []).map(String).filter((d) => d.includes('zzminishort'));
   ok('(control) …and its short fact whole, once', bgeShort.length === 1 && bgeShort[0] === miniShort, JSON.stringify(bgeShort));
+  // …and on both servers the windows' scores came back as a verdict (see 6b: a fault in the windowing is NoOpinion).
+  const judgedPage = (r) => r.status === 200 && r.result?.ranked === 'graph' && r.result?.answered === true;
+  const verdictShape = (r) => `${r.status} ${JSON.stringify({ ranked: r.result?.ranked, answered: r.result?.answered })}`;
+  ok('THE POINT: …and each windowed recall came back as a VERDICT — on the 512-token reranker and on BGE',
+    judgedPage(winRecall) && judgedPage(unwinRecall), `windowed ${verdictShape(winRecall)} · BGE ${verdictShape(unwinRecall)}`);
 
   // 6c, COMPATIBILITY CHARACTERS: the character bound holds for text the tokenizer does not EXPAND. XLM-R normalises
   // with nmt_nfkc first, so ℃ → °C, ㎡ → m2, ㎏ → kg, ㍿ → 株式会社 — measured on the real mMiniLMv2, a pair of 506 raw
@@ -779,7 +866,8 @@ try {
       JSON.stringify(wrote.result));
   }
   const beforeCompat = hits.length;
-  await Promise.all([cWin.call('recall_facts', { query: compatQuery, limit: 5 }), cUnwin.call('recall_facts', { query: compatQuery, limit: 5 })]);
+  const [winCompat, unwinCompat] = await Promise.all([
+    cWin.call('recall_facts', { query: compatQuery, limit: 5 }), cUnwin.call('recall_facts', { query: compatQuery, limit: 5 })]);
   const compatOf = (model) => hits.slice(beforeCompat)
     .filter((h) => h.path === '/v1/rerank' && h.model === model && h.body.includes('zzcompatquery'))
     .map((h) => { try { return JSON.parse(h.body); } catch { return null; } })
@@ -807,8 +895,73 @@ try {
     bgeCompat.length > 0 && bgeCompat.every((d) => d.includes('㍿') && d.includes('℃'))
       && bgeCompat.some((d) => d.includes('zzcompathead')) && bgeCompat.some((d) => d.includes('zzcompattail')),
     JSON.stringify(bgeCompat.map((d) => d.slice(0, 40))));
+  ok('…and both compatibility-dense recalls came back as a VERDICT',
+    judgedPage(winCompat) && judgedPage(unwinCompat), `windowed ${verdictShape(winCompat)} · BGE ${verdictShape(unwinCompat)}`);
   windowedServer.stop(); windowedServer = null;
   unwindowedServer.stop(); unwindowedServer = null;
+
+  // --- 6e. on a SLOW machine a long note is read in fewer windows — as many as the verification has time for ----------
+  // The per-call ceiling (480 windows) is a count tuned on one GPU. On a CPU-only machine the same call can outlast the
+  // verification deadline, and a verification cut off there is NoOpinion after a minute's wait, reported nowhere a
+  // household looks. So a chunked call is sized by TIME (RerankPace): the provider times each call it makes, in ms per
+  // PAIR character, and gives a long candidate only the windows its budget — half the verification deadline — predicts
+  // this machine can score. Here the deadline knob is 6 s (a 3 s budget) and the fake answers in 0.7 ms per pair
+  // character. The first recall, before anything was timed, is sized by the GPU seed: 5 windows, ~5,100 pair characters,
+  // ~3.6 s — over the budget, inside the deadline — and it teaches the pace. The same recall again must fit the budget:
+  // fewer windows, the head and the tail still read, and still a verdict.
+  paceServer = startServer({
+    dataDir: paceDir, port: PACE_PORT,
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '6' },
+  });
+  const paceBase = `http://127.0.0.1:${PACE_PORT}`;
+  await waitHealthy(paceBase);
+  const cPace = makeClient(paceBase);
+  const paceJudge = layerOf(await cPace.getJson('/api/manage/memory'), 'judge');
+  ok('(fixture) 判断 runs on the slow reranker',
+    paceJudge.activeSource === 'llama-cpp' && paceJudge.activeModel === SLOW_RERANK,
+    JSON.stringify({ active: paceJudge.activeSource, activeModel: paceJudge.activeModel }));
+  const paceLong = 'zzpacehead 读书会每月第一个周六在图书馆见面。' + '读书会的书单与讨论记录。'.repeat(330) + ' zzpacetail';
+  const wrotePace = await cPace.call('remember_fact', {
+    kind: 'household', topic: 'zzpacetopic 读书会', content: paceLong,
+    source: 'https://example.test/zzpace', confidence: 0.8,
+  });
+  ok('(fixture) the long note is stored', wrotePace.status === 200 && wrotePace.result?.ok === true, JSON.stringify(wrotePace.result));
+  const paceQuery = 'zzpacequery 读书会每月第一个周六在图书馆见面';
+  const paceWindows = (from) => hits.slice(from)
+    .filter((h) => h.path === '/v1/rerank' && h.model === SLOW_RERANK && h.body.includes('zzpacequery'))
+    .flatMap((h) => { try { return JSON.parse(h.body).documents ?? []; } catch { return []; } })
+    .map(String).filter((d) => d.length > 100 && paceLong.includes(d));
+  const windowShape = (list) => JSON.stringify({ windows: list.length, head: list.some((d) => d.includes('zzpacehead')),
+    tail: list.some((d) => d.includes('zzpacetail')) });
+  slowMsPerChar = 0.7;
+  const beforeFirstPace = hits.length;
+  const firstStarted = Date.now();
+  const firstPace = await cPace.call('recall_facts', { query: paceQuery, limit: 5 });
+  const firstMs = Date.now() - firstStarted;
+  const firstWindows = paceWindows(beforeFirstPace);
+  const beforeSecondPace = hits.length;
+  const secondStarted = Date.now();
+  const secondPace = await cPace.call('recall_facts', { query: paceQuery, limit: 5 });
+  slowMsPerChar = 0;
+  const secondMs = Date.now() - secondStarted;
+  const secondWindows = paceWindows(beforeSecondPace);
+  ok('(non-vacuity) before anything was timed, the long note went as all 5 windows — and that slow call still came back as a verdict',
+    firstWindows.length === 5 && judgedPage(firstPace), `${windowShape(firstWindows)} ${verdictShape(firstPace)} in ${firstMs} ms`);
+  ok('THE POINT: once the provider has timed a call, the same recall reads the long note in FEWER windows — its head and tail still',
+    secondWindows.length >= 2 && secondWindows.length < firstWindows.length
+      && secondWindows.some((d) => d.includes('zzpacehead')) && secondWindows.some((d) => d.includes('zzpacetail')),
+    `first ${windowShape(firstWindows)} · second ${windowShape(secondWindows)}`);
+  // A verdict, not a speed-up: the time is printed, never asserted — two recalls a second apart differ by noise too.
+  ok('…and that recall is still a verdict',
+    judgedPage(secondPace), `${verdictShape(secondPace)} in ${secondMs} ms (the first took ${firstMs} ms)`);
+  const paceLog = () => {
+    const dir = path.join(paceDir, 'state', 'logs');
+    return fs.existsSync(dir) ? fs.readdirSync(dir).map((n) => fs.readFileSync(path.join(dir, n), 'utf8')).join('\n') : '';
+  };
+  ok('…and state/logs says why: fewer windows per long candidate, to fit the time the call has',
+    /window\(s\) per long candidate instead of 5, so the call fits ~3 s/.test(paceLog()),
+    paceLog().split('\n').filter((l) => /per long candidate/.test(l)).slice(-2).join(' | ') || '(no such line)');
+  paceServer.stop(); paceServer = null;
 
   // --- 7. whether a reranker's TAGGING is happening, said where it is decided ---------------------------
   // A reranker hands tagging to the Claude CLI, and a CLI that is signed out means NO tagging — the annotation
@@ -1152,6 +1305,7 @@ try {
   try { goneServer?.stop(); } catch {}
   try { windowedServer?.stop(); } catch {}
   try { unwindowedServer?.stop(); } catch {}
+  try { paceServer?.stop(); } catch {}
   fake.closeAllConnections();
   await new Promise((r) => fake.close(r));
 }

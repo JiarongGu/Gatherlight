@@ -1093,13 +1093,26 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   characters, 3 of 60 on BGE and LAMAR against 30. `ChunkedScoreProvider` decorates the reranker's own score provider
   (applied where `LlamaCppSource.Wiring` builds the verifier, registered nowhere): each document is split by
   `RerankInputCap.Windows` into windows of the SAME budget the bound uses (`RerankInputCap.PerCandidate`, NFKC under a
-  declared window) — at most 5, overlapping by a quarter, the last at the tail, at most 480 per call (past that, fewer
-  per candidate, down to the cut) — all windows go in ONE call, and each document keeps its MAX window score, so
+  declared window) — at most 5, overlapping by a quarter, the last at the tail; unread stretches appear only past FIVE
+  window-lengths, 1 − 5 × window ÷ length of the text — all windows go in ONE call, and each document keeps its MAX window score, so
   `ScoringVerificationPolicy` still sees one score per candidate and `EndorseCount` still counts candidates. A request
   whose documents all fit one window passes through untouched. Run 6c's pre-registered rule held and it is the default:
   end-position answers 4 → 44 of 60 on mMiniLMv2 (0/40, p < 0.001), beyond-1,000 answers 3 → 51 / 52 on BGE / LAMAR,
-  no reranker significantly worse at the start, and every row byte-identical on the ≤ 101-character fixture. It costs
+  no reranker significantly worse at the start, and every row byte-identical on the ≤ 101-character fixture — though
+  where the cut already read the answer every difference leans against chunking (found@8 8 losses to 1 gain, post hoc;
+  mMiniLMv2's top-1 at the start 24 → 19), so quote "not significantly worse", never "nothing lost". It costs
   time where notes are long: 2.0 → 3.2 s per recall on BGE, 0.5 → 1.2 s on mMiniLMv2, on those notes, one GPU.
+  **A call is sized by TIME, not only by count.** 480 windows per call was measured on one GPU (~20 s on BGE/LAMAR);
+  on a CPU-only machine the same call can outlast the 60 s verification deadline — NoOpinion after a minute, logged at
+  Warning only. So 480 is a CEILING, and below it `RerankPace` — one per verifier, learned from every rerank call the
+  provider makes, pass-through ones included — predicts a call's time in ms per PAIR character (query plus document;
+  per window would learn a 60-character fact's cost and apply it to a 1,000-character window) and gives each long
+  candidate only the windows that fit half the deadline, down to one, the cut. A slower call is believed at once, a
+  faster one halfway, a call a deadline cut off raises it to what it proved, and a failed answer teaches nothing;
+  seeded with the GPU figure, so on that GPU nothing changes. The household note says what a slow machine does. Its
+  behaviour on a real CPU-only machine is UNMEASURED. Proof: `e2e-p52` case 6e (a fake answering in 0.7 ms per pair
+  character, the deadline knob at 6 s: the first recall sends all 5 windows, the same recall then 4, still a verdict),
+  confirmed to FAIL with the pace ignored.
   `GATHERLIGHT_RERANK_CHUNKING=off` (`RerankChunking`) is KEPT as a measurement knob so the bench can reproduce the cut
   Runs 2–6 measured; judge-bench's `rr`/`rrf` arms pin it off and `rrk` on. **Two traps met measuring it**: llama.cpp's
   scores drift in the third decimal between identical calls, so an A/B that must be byte-identical needs identical
@@ -1107,8 +1120,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   agent, lost one request in each run (of ~780 and ~1,500) before the router saw it — each an abstention that voided
   Run 6b — found only by
   reconciling the proxy's forwards with the router log's `proxying request to model` lines, which the bench now does
-  itself. Proof: `e2e-p52` cases 6b/6c (a long fact reaches `/v1/rerank` as windows, tail included; a short one exactly
-  as written), confirmed to FAIL with the knob off.
+  itself. The memo shares only a 2xx: it once shared refusals too, handing one arm's failure to every later arm sending
+  the same bytes. Proof: `e2e-p52` cases 6b/6c (a long fact reaches `/v1/rerank` as windows, tail included; a short one
+  exactly as written), confirmed to FAIL with the knob off. **What reaches `/v1/rerank` is half a test**: a fault in the
+  provider (a window count the scores do not match, an exception) is fail-open, so the engine's page stands and every
+  window assertion stays green — confirmed by making the provider throw. So 6b/6c also assert the recall came back
+  judged (`answered`, which Lyntai 3.2.0 sets only when a verdict was judged), and case 6d asserts the MAPPING: a long
+  note whose only rewarded text is in its TAIL window, among 11 candidates for a page of 8, is on the page only when
+  that window's score is credited to it — confirmed to fail under the cut, a first-window mapping and a mapping off by
+  one window. The fake scores it 9.0 against the fillers' 3.2 so no tie is relied on (Lyntai's score ranking is a
+  stable sort, so a tie would test the engine's order instead). When chunking is ON and `LlamaCppSource.RerankProviders`
+  finds nothing to wrap, building the verifier THROWS — the cap no longer cuts, so a silent miss would send long
+  candidates whole; not drivable in e2e (it needs the registration and the wrapper to disagree), a stated gap.
   **The limit is PER MODEL, and it comes from the model's catalogue row** (2026-09-24). mMiniLMv2
   (`docs/judge-bench.md` Run 4) serves 512-token slots, and at the 1,000-character cap dense Chinese is 781 tokens:
   the whole call is refused — 400 under the 4096 preset, 500 「too large to process … batch size 512」 under its
@@ -1141,7 +1164,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   before; named without it — this model's other quants included — `GgufKind` types it CHAT, so it is never used as
   a reranker; either way the fix is a measured row, not a guess from its file name; the character bound does NOT
   transfer to a byte-level tokenizer; and the windows (above) are measured on notes of one length band only — long
-  and short notes mixed in one recall, notes past five windows, and a CPU-only machine are not. The row's id is the UPSTREAM file stem, with no "rerank" in it, on purpose: a catalogued
+  and short notes mixed in one recall (every reranker's note says so), notes past five window-lengths, and a CPU-only
+  machine are not. The row's id is the UPSTREAM file stem, with no "rerank" in it, on purpose: a catalogued
   id is typed by its row, and the upstream stem also catches a household who drops the file in under its own name
   — an id of ours containing "rerank" would leave that file uncatalogued and typed CHAT, the hazard that made Run 4
   rename it. Proof: `e2e-p52` case 6c (every pair at the fake router fits, query included, windows too; BGE,

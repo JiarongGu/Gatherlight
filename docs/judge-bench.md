@@ -4480,9 +4480,14 @@ one).
 - **Scoring a long note in windows gives the reranker back its view of the whole note.** Where the cut hid the answer,
   chunking recovers nearly all of it: mMiniLMv2 at `middle`/`end` 8/4 → 50/44, BGE and LAMAR past 1,000 characters
   3/3 → 51/52. The recall that the cut pushed BELOW no judge is now above it.
-- **Where the cut already read the answer, nothing measurable was lost.** At `start` every found@8 difference is 0–2
-  queries and every top-1 difference 0–6, none significant. The obvious risk there — later windows of OTHER notes,
-  which name the question's subject in passing, outscoring the answer — did not show at this size.
+- **Where the cut already read the answer, no reranker was significantly worse — but every loss there leans the same
+  way.** At `start` every found@8 difference is 0–2 queries and every top-1 difference 0–6, none significant on its own
+  (rule (b)). Read descriptively, post hoc and never registered: over the cells where the cut already read the answer
+  (BGE and LAMAR at `start`, `middle` and `end`; mMiniLMv2 at `start`), chunking's found@8 went 8 losses to 1 gain; at
+  `start` alone, pooled over the three rerankers, found@8 was 5/0 (exact p = 0.0625) and top-1 9/2 (p ≈ 0.065), and
+  mMiniLMv2's top-1 there went 24 → 19. The likely mechanism is the obvious risk: later windows of OTHER notes, which name
+  the question's subject in passing, outscoring the answer. So "nothing was lost" is too strong — the cost is small,
+  one-directional and below significance here, and a larger fixture could show it.
 - **Short facts are untouched**, byte for byte, for all three rerankers.
 - **The price is time on long notes**: 1.4–1.6× the cut's recall on BGE and LAMAR and 2.2× on mMiniLMv2 here.
 
@@ -4494,8 +4499,12 @@ one).
 - **Every candidate in a recall was long, or every one was short.** A household mixes them. A long note's best window
   has up to five chances to score high where a short fact has one, so in a mixed recall MaxP may favour long notes.
   That is unmeasured.
-- **Notes past five windows** (4,000 characters for BGE and LAMAR, ~1,000–2,000 for mMiniLMv2 depending on the query)
-  are read with gaps between windows. Unmeasured; no note here needed more than four.
+- **Notes past five window-lengths** (5,000 characters for BGE and LAMAR; 1,265–2,530 for mMiniLMv2, five times its
+  253–506-character windows, depending on the query) are read with gaps between windows: 1 − 5 × window ÷ length of the
+  note goes unread — a sixth at six window-lengths, half at ten. Up to four window-lengths the five windows overlap by at
+  least a quarter, and up to five they still cover the note with less. Unmeasured; no note here needed more than four
+  windows. (This line said gaps begin at four window-lengths — 4,000 and ~1,000–2,000 — one window early; corrected
+  2026-09-24.)
 - **A recall of more than 96 long candidates** gets fewer windows per candidate (480 per call at most). The per-call
   cap is measured for time (above and in the design), not for accuracy.
 - **No embedder, a page of 8, ≤ 60 candidates, no subject tags on the long seed.** A CPU-only machine is unmeasured, and
@@ -4534,6 +4543,19 @@ one).
   call is sent whole, exactly as written. With `GATHERLIGHT_RERANK_CHUNKING=off` exactly the four window assertions fail
   (the cut: one head-only document) and the short-fact ones pass. `p51` asserts the mMiniLMv2 note carries 4/60, 29/60
   and 44/60 and no longer says the cost is unmeasured.
+- **After review, the same day.** Four things changed after this run, none of them what it measured:
+  - **The per-call cap became a ceiling, sized by time below it.** 480 windows per call was a count tuned on this GPU;
+    `RerankPace` now times each rerank call (ms per pair character, query plus document), and a chunked call carries only
+    the windows it predicts will be scored in half the 60 s verification deadline — fewer per long candidate on a slow
+    machine, down to one, the cut. Seeded with this GPU's figure, so on it nothing changes. Unmeasured on a CPU-only
+    machine; `e2e-p52` case 6e drives it with a fake that answers in time proportional to what it is sent.
+  - **The tests now check what came BACK.** Cases 6b and 6c assert the recall carried a verdict (a fault in the windowing
+    is fail-open, and those cases stayed green under a provider that threw), and case 6d puts a long note whose only
+    rewarded text is in its tail window among 11 candidates for a page of 8. It is on the page only when that window's
+    score is credited to it: confirmed to fail under the cut, a first-window mapping and a mapping off by one window.
+  - **The household strings** say where gaps begin (past five window-lengths, not four), carry the mixed long/short caveat
+    on all three rerankers rather than mMiniLMv2 alone, and say what a slow machine does.
+  - **What it cost at `start`** is stated in "What it says" above, rather than "nothing measurable was lost".
 
 **Evidence, local only** (gitignored):
 

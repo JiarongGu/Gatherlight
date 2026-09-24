@@ -122,7 +122,8 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // is the one the catalogue row DECLARES (the same read the preset makes), never a branch on the id; a
             // model with none keeps the 1,000-character cap. CHUNKED when RerankChunking is on: the reranker's own
             // provider is wrapped so a long candidate is scored in windows of that same budget (ChunkedScoreProvider),
-            // and the cap then prepares candidates without cutting them.
+            // and the cap then prepares candidates without cutting them — which is why RerankProviders throws when it
+            // finds nothing to wrap.
             : new JudgeWiring(null, AnnotationModel(ctx.Model), sp =>
             {
                 var window = GgufCatalog.DeclaredWindow(ctx.Model);
@@ -140,16 +141,33 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// <summary>The providers the reranker's verifier chooses from — every registered one, with the reranker's own
     /// (<see cref="RerankProviderId"/>) wrapped in a <see cref="ChunkedScoreProvider"/> when chunking is on. Wrapped HERE,
     /// where the verifier is built, and registered nowhere: the wrapper is part of how this judge scores, not a backend
-    /// anything else may route to.</summary>
+    /// anything else may route to. Its time budget is half the verification deadline (<see cref="RerankPace"/>).
+    ///
+    /// <para><b>Chunking on and nothing wrapped THROWS</b>, as <c>ScoringVerificationPolicy</c> throws for a
+    /// <c>ProviderId</c> it cannot resolve. The two halves are coupled: with chunking on, <see cref="RerankInputCap"/> stops
+    /// cutting candidates because the wrapper windows them, so a registration the wrapper does not recognise — the id
+    /// renamed, or a provider that no longer implements <c>IScoreProvider</c> after a Lyntai upgrade — would send every
+    /// long candidate WHOLE, and one past the model's window fails every call it is in, fail-open and silent.</para></summary>
     private static IEnumerable<Lyntai.Inference.IModelProvider> RerankProviders(IServiceProvider sp, int? window, bool chunked)
     {
-        var all = sp.GetServices<Lyntai.Inference.IModelProvider>();
+        var all = sp.GetServices<Lyntai.Inference.IModelProvider>().ToList();
         if (!chunked) return all;
         var log = sp.GetService<ILogger<ChunkedScoreProvider>>();
-        return [.. all.Select(p => p is Lyntai.Inference.IScoreProvider score
-            && string.Equals(p.Id, RerankProviderId, StringComparison.OrdinalIgnoreCase)
-                ? new ChunkedScoreProvider(score, window, log)
-                : p)];
+        var wrapped = 0;
+        var providers = all.Select(p =>
+        {
+            if (p is not Lyntai.Inference.IScoreProvider score
+                || !string.Equals(p.Id, RerankProviderId, StringComparison.OrdinalIgnoreCase)) return p;
+            wrapped++;
+            return new ChunkedScoreProvider(score, window, new RerankPace(VerificationDeadlinePolicy.Configured / 2), log);
+        }).ToList();
+        if (wrapped == 0)
+            throw new InvalidOperationException(
+                $"{RerankChunking.KnobName} is on, but no registered backend is a score provider with the id '{RerankProviderId}' "
+                + $"({(all.Count == 0 ? "(none)" : string.Join(", ", all.Select(p => $"{p.Id}{(p is Lyntai.Inference.IScoreProvider ? "" : " (not a score provider)")}")))}) "
+                + "— so nothing would window a long candidate, and the input cap no longer cuts one: one past the model's "
+                + "window would fail every rerank call it is in.");
+        return providers;
     }
 
     /// <summary>A reranker's id must never reach the CLI, which would be asked for a model it has never heard

@@ -154,12 +154,25 @@ public static class GgufCatalog
     /// the default since 2026-09-24), each window a pair the model scores, so the same recall on 60 notes of 883–1,241
     /// characters — the same GPU, warm, serial medians — took 3.2 s on BGE and LAMAR (3,150 / 3,156 ms) and 1.2 s on
     /// mMiniLMv2 (1,155 ms), against 2.0 / 2.2 / 0.5 s when each note was cut to its first window. The clause names those
-    /// figures and their notes, because 「事实很长时更慢」 alone would not let a household weigh it.</para></summary>
+    /// figures and their notes, because 「事实很长时更慢」 alone would not let a household weigh it.</para>
+    ///
+    /// <para><b>What happens on a SLOW machine</b> (2026-09-24): the per-call window count was tuned on that GPU, so a
+    /// chunked call is now sized by the speed this process measures (<see cref="RerankPace"/>) to fit half the 60-second
+    /// verification deadline — fewer windows per long candidate, down to one, the cut, whose cost Run 6 measured (an answer
+    /// past the first window is not read). The clause says exactly that, and 尽量 rather than a promise: the pace starts
+    /// from the GPU figure and learns from the calls it times, and nothing about it has run on a CPU-only machine.</para>
+    ///
+    /// <para><b>Mixed recalls are unmeasured, for every reranker</b>: Runs 6 and 6c showed each reranker recalls where every
+    /// candidate was long or every one was short, and a long note's best window has up to five chances to score high where a
+    /// short fact has one. It was in mMiniLMv2's note only; it belongs to all three.</para></summary>
     private const string RerankerLatencyCaveat =
         "(模型已加载、在显卡上、每次不超过 60 条候选、事实都很短时测得;只有 CPU 的机器、候选更多或事实很长的检索,"
         + "都可能慢得多 —— 默认每次取 8 条时候选最多 96 条,限定类别或一次要 34 条以上时可达 400 条;"
         + "较长的事实会分段打分、每段都要算一次,在 60 条约 900–1,200 字的长笔记上,"
-        + "BGE 与 LAMAR 每次检索约 3.2 秒,mMiniLMv2 约 1.2 秒)";
+        + "BGE 与 LAMAR 每次检索约 3.2 秒,mMiniLMv2 约 1.2 秒。"
+        + "在只有 CPU 等较慢的机器上,应用会按实测的速度让长事实少分几段来读(最少只读开头一段,那时写在后面的答案就读不到),"
+        + "尽量让判断在它最多等待的一分钟内做完;长短事实混在一起的检索还没有量过"
+        + "(长事实取几段里最高的一段,得高分的机会比只有一段的短事实多))";
 
     /// <summary>LAMAR against BGE, ONE sentence shared by both rows — the same comparison read from either side,
     /// so the two notes cannot tell it differently. It used to say only that the fixture could not separate
@@ -318,8 +331,12 @@ public static class GgufCatalog
         // cut to its first window, a note whose answer sat at its END reached the page 4 times in 60 — worse than no judge
         // (29) — and scored in windows (ChunkedScoreProvider, the default since 2026-09-24) 44 times; at the START, 52 and
         // 50, no significant difference. The note says both, with the configuration, and what is still unmeasured; its
-        // long-note latency is RerankerLatencyCaveat's. The note said 「这样截短…还没有量过」 until then, which Run 6 made
-        // false. Licence: the model card says Apache-2.0; its training set, mMARCO, is
+        // long-note latency, what a slow machine does and the mixed-recall caveat are RerankerLatencyCaveat's, shared with
+        // BGE and LAMAR. The note said 「这样截短…还没有量过」 until then, which Run 6 made false. Its unread-gap sentence
+        // said gaps begin at FOUR window-lengths (「约 1,000–2,000 字以上」) — one window early: five windows at a quarter's
+        // overlap cover four, and still cover five with the overlap shrinking to none (RerankInputCap.MaxWindows), so gaps
+        // begin past 5 × 253–506 = 1,265–2,530 characters and take 1 − 5 × window ÷ length of the text.
+        // Licence: the model card says Apache-2.0; its training set, mMARCO, is
         // a translation of MS MARCO, whose terms are non-commercial; the GGUF repo declares none — so the note says
         // what the CARD says rather than what the model "is".
         //
@@ -344,8 +361,8 @@ public static class GgufCatalog
             + "相邻两段有重叠,一条最多 5 段 —— 各段分别打分、取最高的一段。这是量过才改的:在 60 条约 900–1,200 字的长笔记上"
             + "(240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页),答案在笔记末尾时,只读开头的旧做法把答案带进前八"
             + "只有 4/60,比不开判断(29/60)还差;分段读之后是 44/60。答案在开头时两种做法没有显著差别(52/60 与 50/60)。"
-            + "还没有量过的:长短事实混在一起时会怎样;还有长到 5 段读不完的事实(约 1,000–2,000 字以上,提问越长、每段越短),"
-            + "段与段之间会有读不到的部分。"
+            + "5 段也读不完的事实(1,265–2,530 字以上,提问越长、每段越短)还没有量过:段与段之间会有读不到的部分,"
+            + "事实越长读不到的越多 —— 长到 5 段总长的两倍时,约一半读不到。"
             + "许可:模型卡写的是 Apache-2.0(下载用的 GGUF 仓库没有写明许可),但训练它用的 MS MARCO 数据只许非商业使用。",
             ContextTokens: 512),
     };

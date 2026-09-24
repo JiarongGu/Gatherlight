@@ -400,15 +400,17 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// this class prepares candidates (NFKC under a window) and fits the query exactly as before but does NOT cut the
 /// candidates: <see cref="ChunkedScoreProvider"/> scores each in windows of this same budget (<see cref="Windows"/>:
 /// at most <see cref="MaxWindows"/>, overlapping by a quarter, the last at the tail; at most
-/// <see cref="MaxWindowsPerCall"/> per call) and keeps its best window's score. Run 6c's pre-registered rule held:
+/// <see cref="MaxWindowsPerCall"/> per call, and fewer on a machine <see cref="RerankPace"/> measures too slow to score them
+/// in half the verification deadline) and keeps its best window's score. Run 6c's pre-registered rule held:
 /// in the same run, the end-position answers went 4 → 44 of 60 on mMiniLMv2 (0/40, p &lt; 0.001), beyond-1,000 answers
 /// 3 → 51 on BGE and 3 → 52 on LAMAR, no reranker was significantly worse where the cut already read the answer
 /// (start: 49 → 47, 55 → 54, 52 → 50), and on the ≤ 101-character fixture every row of every reranker was
 /// byte-identical, because a candidate that fits one window is sent exactly as before. The cost is time, where notes
 /// are long: serial medians on those notes 2.0 → 3.2 s (BGE), 2.2 → 3.2 s (LAMAR), 0.5 → 1.2 s (mMiniLMv2); unchanged
 /// on short facts. Unmeasured: long and short notes mixed in one recall (a note's best window has more chances to
-/// score high than a short fact's only one), notes past five windows (the stretches between windows go unread), real
-/// household notes, a CPU-only machine.</para></summary>
+/// score high than a short fact's only one), notes past five window-lengths (the stretches between windows go unread),
+/// real household notes, a CPU-only machine — where <see cref="RerankPace"/> gives a long note fewer windows by design,
+/// down to the cut, but neither what that costs nor how soon the pace settles has been measured.</para></summary>
 public sealed class RerankInputCap : IMemoryVerificationPolicy
 {
     /// <summary>The most one candidate's text may run, in UTF-16 units. See the class comment.</summary>
@@ -418,11 +420,13 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
     /// special tokens llama.cpp wraps an XLM-RoBERTa pair in, plus at most one leading <c>▁</c> for each text.</summary>
     public const int PairOverheadTokens = 6;
 
-    /// <summary>The most WINDOWS one candidate is scored in when chunking is on (<see cref="Windows"/>). Five windows of
-    /// a quarter's overlap read a candidate WHOLE up to four window-lengths — 4,000 characters at the 1,000-character
-    /// cap, 1,012–1,960 for mMiniLMv2's fitted budgets — and past that they are spread evenly from its first character
-    /// to its last, so its start, its end and three points between are always read. A cap, because the whole call
-    /// costs what every window costs: a recall showing the reranker 96 long candidates sends up to 480 pairs.</summary>
+    /// <summary>The most WINDOWS one candidate is scored in when chunking is on (<see cref="Windows"/>). They are spread
+    /// evenly from its first character to its last, so its start, its end and three points between are always read.
+    /// Five windows keep at least a quarter's overlap up to four window-lengths, and still read the candidate WHOLE —
+    /// the overlap shrinking toward none — up to five: 5,000 characters at the 1,000-character cap, 1,265–2,530 for
+    /// mMiniLMv2's fitted budgets of 253–506. Only past five window-lengths do stretches between windows go unread —
+    /// 1 − 5 × window ÷ length of the text: a sixth of it at six window-lengths, half at ten. A cap, because the whole
+    /// call costs what every window costs: a recall showing the reranker 96 long candidates sends up to 480 pairs.</summary>
     public const int MaxWindows = 5;
 
     /// <summary>Consecutive windows overlap by at least this fraction of a window (1/<see cref="OverlapDivisor"/>) while
@@ -486,22 +490,32 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
             ? Math.Min(MaxChars, tokens - PairOverheadTokens - fittedQuery.Length)
             : MaxChars;
 
-    /// <summary>The most windows ONE rerank call may carry — <see cref="MaxWindows"/> for each of the 96 candidates a recall
-    /// at the default page shows the verifier (4 × min(3 × 8, 100), Lyntai's verification depth over
-    /// <c>FactIndex.RankAsync</c>'s over-ask). A larger recall — one naming a kind, or asking for 34 or more, shows up to
-    /// 400 — gets fewer windows per candidate instead (<see cref="WindowsPerDocument"/>), down to one: today's cut. Measured
+    /// <summary>The most windows ONE rerank call may carry, however fast the machine — <see cref="MaxWindows"/> for each of
+    /// the 96 candidates a recall at the default page shows the verifier (4 × min(3 × 8, 100), Lyntai's verification depth
+    /// over <c>FactIndex.RankAsync</c>'s over-ask). A larger recall — one naming a kind, or asking for 34 or more, shows up
+    /// to 400 — gets fewer windows per candidate instead (<see cref="WindowsPerDocument"/>), down to one: the cut. Measured
     /// on the real llama-server (b10549, one GPU, dense Chinese windows, <c>docs/judge-bench.md</c> Run 6b): 480 full
     /// 1,000-character windows took ~20 s on BGE and LAMAR, and 2,000 took 77–79 s — past the 60-second verification
-    /// deadline, so without this cap such a recall would wait a minute and then go unverified.</summary>
+    /// deadline, so without this cap such a recall would wait a minute and then go unverified. <b>A count is right only
+    /// for the GPU it was measured on</b>, so it is a CEILING: below it, a call carries only what
+    /// <see cref="RerankPace"/> predicts this machine scores in half the deadline.</summary>
     public const int MaxWindowsPerCall = 480;
 
     /// <summary>How many windows each document of one call may use: <see cref="MaxWindows"/>, lowered — the same for
-    /// every document — until the call's windows fit <see cref="MaxWindowsPerCall"/>, never below one.</summary>
-    public static int WindowsPerDocument(IReadOnlyList<string> documents, int size)
+    /// every document — until the call's windows fit <see cref="MaxWindowsPerCall"/> AND its pair characters (the query
+    /// beside each window: <paramref name="queryLength"/> plus the window's own length) fit
+    /// <paramref name="pairCharBudget"/> (<see cref="RerankPace.PairCharBudget"/>). Never below one, which is the cut —
+    /// sent even when it does not fit either limit, since fewer windows than candidates would leave one unscored.</summary>
+    public static int WindowsPerDocument(IReadOnlyList<string> documents, int size, int queryLength = 0,
+        long pairCharBudget = long.MaxValue)
     {
-        var needed = documents.Select(d => WindowsNeeded(d.Length, size)).ToList();
+        var needed = documents.Select(d => (Windows: WindowsNeeded(d.Length, size), Chars: Math.Min(d.Length, Math.Max(size, 0))))
+            .ToList();
         var k = MaxWindows;
-        while (k > 1 && needed.Sum(n => Math.Min(n, k)) > MaxWindowsPerCall) k--;
+        while (k > 1
+               && (needed.Sum(n => Math.Min(n.Windows, k)) > MaxWindowsPerCall
+                   || needed.Sum(n => (long)Math.Min(n.Windows, k) * (queryLength + n.Chars)) > pairCharBudget))
+            k--;
         return k;
     }
 
@@ -518,14 +532,18 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
     /// (<paramref name="size"/> characters or fewer — so a short fact is sent exactly as without chunking), otherwise
     /// windows of <paramref name="size"/> characters, the first at its start and the last at its END, spaced evenly
     /// between. While the text needs at most <paramref name="maxWindows"/> (a stride of three quarters of a window), the
-    /// spacing is at most that stride, so consecutive windows overlap by at least a quarter; past it,
-    /// <paramref name="maxWindows"/> windows are spread over the whole text and the stretches between them go unread.
+    /// spacing is at most that stride, so consecutive windows overlap by at least a quarter. Past it the
+    /// <paramref name="maxWindows"/> windows spread further apart: the overlap shrinks, reaching none at
+    /// <paramref name="maxWindows"/> window-lengths, and only beyond that do stretches between them go unread —
+    /// 1 − <paramref name="maxWindows"/> × <paramref name="size"/> ÷ length of the text.
     /// With <paramref name="maxWindows"/> = 1 it is the cut: the text's first <paramref name="size"/> characters.
     /// Windows never split a surrogate pair (a boundary moves inward by one unit instead), so a window can run one
-    /// short of <paramref name="size"/>, never over.</summary>
+    /// short of <paramref name="size"/>, never over. A <paramref name="size"/> of zero or less gives no window to cut:
+    /// the text whole, as one — <see cref="ChunkedScoreProvider"/> passes such a request through rather than score
+    /// empty strings as if they were the candidates.</summary>
     public static IReadOnlyList<string> Windows(string text, int size, int maxWindows = MaxWindows)
     {
-        if (size <= 0) return [""];
+        if (size <= 0) return [text];
         if (text.Length <= size) return [text];
         var n = Math.Clamp(WindowsNeeded(text.Length, size), 1, Math.Max(1, maxWindows));
         if (n == 1) return [Cap(text, size)];
