@@ -4198,3 +4198,81 @@ off, and the same sentences are corrected with Run 6's numbers instead.
 6. **Can the instrument express the effect? Yes, by construction** (the windows table): mMiniLMv2's answer is outside
    its cut at `middle`/`end`/`beyond` for every question, and inside some window for every question at every position.
    The live record of what reached the reranker is reported, not a guard, because the target is not always a candidate.
+
+## Run 6b — chunked reranker scoring (2026-09-24, llama.cpp b10549; claude never called — every server on the stub) — RULE NOT READ
+
+**Commands**, exactly as registered, run in order by the scratch driver `devtools/_run6b-drive.sh`. The design was
+committed as `200c8c5` before either run, and both runs' app HEAD is that commit (v1.3.0; the server binary built from
+`d64fcea`, which `200c8c5` changes only in `docs/`).
+
+- **Long**: 10:27:17Z–11:07:39Z, exit 0 on the first attempt. Seed re-verified (判断 off, 0 claude-cli calls, 60
+  exact notes, 60 graph nodes). Formula digest `976af4663b6e`, equal to Run 6's.
+- **Short**: 11:07:39Z–11:10:42Z, exit 0 on the first attempt. Formula digest **`f661eb6a056e`**, Runs 1–5b's.
+
+### Guard 5 failed in both runs, and the fault is the bench's
+
+Guard 5 required `judged` = `graph` for every reranker arm, and registered that "an abstention on a chunked arm … is a
+finding in itself, and the rule is then not read". Each run had ONE abstention on a chunked arm:
+
+- **long**, `rrk:mmarco-mMiniLMv2-L12-H384-v1-Q8_0`, seq 202 (`vet`, `third`): 1 of 240 graph recalls. The proxy
+  recorded the call (185 windows, the target's answer among them); the recall took 393 ms, far from any deadline;
+- **short**, `rrk:LAMAR-600m.Q5_K_M` AND `rr:LAMAR-600m.Q5_K_M`, seq 60 (`school-pickup`, `cross`): 1 of 234. Both arms
+  sent the IDENTICAL body (hash `a6077bc7…`), so the memo gave both the same reply.
+
+**Traced**: the router never received either request. Every `/v1/rerank` request that reaches a model is logged by the
+router as `proxying request to model <m>`, and the proxy's own record reconciles with those lines exactly, except at
+the one place each run abstained:
+
+| run | model | forwarded by the proxies (accuracy − shared + latency + 1 warm per arm) | proxied by the router |
+|---|---|---|---|
+| long | BGE | 505 | 505 |
+| long | LAMAR | 505 | 505 |
+| long | **mMiniLMv2** | **506** | **505** |
+| short | BGE | 260 | 260 |
+| short | **LAMAR** | **260** | **259** |
+| short | mMiniLMv2 | 260 | 260 |
+
+Neither router log holds an error or truncation line; the largest task was 429 tokens on mMiniLMv2 (long) and 72
+(short), each model spawned once, and `n_ctx_slot` was 512 for mMiniLMv2. So each request was lost between the proxy,
+which recorded it, and the router, which never saw it. The proxy forwarded through Node's default HTTP agent, which
+keeps sockets alive (Node 24's global agent: `keepAlive: true`); the likely mechanism is a reused socket the router had
+just closed for idleness, which kills the request before the router reads it. The proxy then answered 502, which the
+arm reads as no verdict, and the memo held that failed reply, which is why the short run's two LAMAR arms abstained
+together. The fault is in the instrument added for this run, and it hit an UNCHUNKED arm as well.
+
+**As registered, the rule is NOT read.** Nothing ships from this run. The proxy is fixed (a fresh connection per
+forward, one retry of a request the router never answered, a failed forward never memoised, every failure counted and
+warned on) and it now reconciles its forwards with the router log itself. Run 6c re-runs both commands under a new
+pre-registration.
+
+### What the run measured (descriptive only)
+
+Long run, by position, found@8 of 60 (`rr` = the cut, `rrk` = chunked):
+
+| position | 公式 | BGE rr → rrk | LAMAR rr → rrk | mMiniLMv2 rr → rrk |
+|---|---|---|---|---|
+| start | 21 | 49 → 47 | 55 → 54 | 52 → 49 |
+| middle | 24 | 53 → 53 | 53 → 54 | 8 → 50 |
+| end | 29 | 50 → 50 | 52 → 49 | 4 → 44 |
+| beyond | 30 | 3 → 51 | 3 → 52 | 7 → 38 |
+| `all` (of 240), found@8 · top-1 | 104 · 68 | 155 → 201 · 65 → 87 | 163 → 209 · 54 → 76 | 71 → 181 · 31 → 79 |
+
+- The short run's identity check read **YES for all three rerankers** (240/240 rows, pages and bodies compared), and each
+  pair's `all` rows were equal: BGE 90 / 203, LAMAR 86 / 207, mMiniLMv2 99 / 199.
+- Serial medians, long: 公式 204 ms; BGE 2,055 → 3,127; LAMAR 2,073 → 3,220; mMiniLMv2 507 → 1,168. Short: BGE
+  396 → 386, LAMAR 408 → 388, mMiniLMv2 289 → 297, 公式 221.
+- The chunked arms sent 74–78 windows per call on BGE and LAMAR (at most 91) and 161 on mMiniLMv2 (at most 245), none
+  longer than its budget.
+
+These numbers decide nothing. Run 6c does.
+
+**Evidence, local only** (gitignored): `devtools/_judge-bench-long/results-2026-09-24T102717.361Z.json` and
+`devtools/_judge-bench/results-2026-09-24T110739.901Z.json` with their `rows-*.jsonl`; the bench output in
+`devtools/_judge-bench-long-run6b.txt` and `devtools/_judge-bench-short-run6b.txt`; the short run's router log, kept as
+`devtools/_judge-bench/router-run6b.log`. The bench keeps ONE work dir per fixture and a new run rewrites its
+`router.log`, `presets.ini` and `arm-*` folders, so:
+
+- the long run's router log and arm folders were overwritten by the proxy fix's smoke, after the reconciliation and
+  router checks above had been taken from them (scratch `devtools/_run6b-analyse.mjs`);
+- **Run 6's** `router.log`, `presets.ini` and `arm-*`, which its evidence list names, were overwritten by this round's
+  first plumbing smoke. Run 6's results and rows files are intact, and every Run 6 number is recomputable from them.
