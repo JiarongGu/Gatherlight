@@ -507,7 +507,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Lyntai's source on 2026-09-24 and switched to `FilePathOf` there — `ToolDetail`'s OWN copy of the same
   fallback chain stays, because it takes a parsed `JsonElement` for a UI label, not the `ToolCall` `FilePathOf`
   takes, so only one of the two copies is gone.
-  **Five are open today, and each says what ends it.**
+  **Six are open today, and each says what ends it.**
   **(1) `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170.** Lyntai's LLM judge
   rendered each candidate as its headline alone, and our headline is the fact's TOPIC, so the judge decided
   "did this answer?" from topics; the decorator shows it the content. Upstream closed the gap with
@@ -626,8 +626,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   flag and its check — nothing else in the bridge depends on it — and keep `e2e-p43` green: it counts the stored
   `system` rows against a stub that really emits those progress events, so it fails if the upstream fix did not
   land (the stub bullet under *LLM / process spawning* records the stub's half).
-  **(5) `reasoning = off` on every CHAT preset section ↔ Lyntai `TASKS.md` Part 288, "the OpenAI-shaped wire drops
-  `TextReasoning.Suppress`".** Both memory seams ask for no reasoning, and Lyntai 3.2.0's OpenAI-shaped payload
+  **(5) `reasoning = off` on every CHAT preset section ↔ Lyntai `docs/task-archive.md` Part 288 / D179 — CLOSED
+  upstream, NOT released (no version promised).** Both memory seams ask for no reasoning, and Lyntai 3.2.0's OpenAI-shaped payload
   (`OpenAiPayload.Build`) never reads the field while its Ollama payload maps it to `think: false` — so against
   llama-server's default `--reasoning auto`, a thinking-capable template thinks on every verification and
   annotation: Qwen3-0.6B at 1.3–7.5 s per verdict, Qwen3.5-0.8B at 17.5 s and then past a 300 s timeout
@@ -635,20 +635,44 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   section, which the router passes to the child as `--reasoning off` (read back from the child's argv on the real
   binary, 2026-09-24); it is byte-neutral for Gemma 3, whose template has nothing to turn off. NOT
   `reasoning-budget = 0`, which leaves the template thinking and puts the reasoning in the content (4 of 6 replies
-  unparseable). Part 288's own text names this preset and says the adopter should be told when it ships. Its **owner
-  ruling (2026-09-24) is CONFIGURED fields**: a registration option holding JSON that Lyntai merges into the request
-  only when a call asks `Suppress` — like `DocumentPrefix`, the library knows no vendor's spelling and ships NO
-  default, because hosted OpenAI-shaped APIs may reject an unknown field. So the bump turns nothing on by itself.
-  **On that bump, in this order**: (1) configure llama-server's spelling on the `llamacpp` registration
-  (`AddLlamaProvider` in `LlamaCppSource.Register`) — e.g. `chat_template_kwargs: {"enable_thinking": false}`, which
-  is TEMPLATE-specific (a template reading another key ignores it) and was tried only as a dedicated server's
-  `--chat-template-kwargs` flag, never as a request field or a preset key (docs/judge-bench.md, Run 5's screen);
-  (2) verify EACH catalogued chat model on the real binary with the preset line removed — no `<think>`, no
-  `reasoning_content`, replies as short as under the preset (6–21 tokens); (3) only then delete the `reasoning = off`
-  line and p51's assertion of it. The other order puts every Qwen judge back to thinking on every call, silently.
+  unparseable). Part 288's outcome names this preset: "When this ships, the adopter can drop its server-side
+  `reasoning = off` preset." **D179 is CONFIGURED fields**: `HttpModelOptions.SuppressReasoningFields`, a JSON object
+  Lyntai merges into a `chat/completions` body only when the call asks `Suppress` — like `DocumentPrefix`, the library
+  knows no vendor's spelling and ships NO default, because hosted OpenAI-shaped APIs may reject an unknown field; a
+  member the wire sets itself is refused, and a merge never overwrites. Every OpenAI-shaped preset gained an
+  options-action overload (`AddLlamaProvider(id, o => …)`) to reach it. So the bump turns nothing on by itself.
+  **On that bump, in this order**: (1) set `SuppressReasoningFields = {"chat_template_kwargs":{"enable_thinking":false}}`
+  on the `llamacpp` chat registration — the `AddLlamaProvider` line in `LlamaCppSource.Register`, whose comment names
+  this item, moved to the options-action overload — a spelling that is TEMPLATE-specific (a template reading another
+  key ignores it) and was tried only as a dedicated server's `--chat-template-kwargs` flag, never as a request field or
+  a preset key (docs/judge-bench.md, Run 5's screen); (2) verify EACH catalogued chat model on the real binary with the
+  preset line removed — no `<think>`, no `reasoning_content`, replies as short as under the preset (6–21 tokens);
+  (3) only then delete the `reasoning = off` line and p51's assertion of it. The other order puts every Qwen judge back
+  to thinking on every call, silently. Lyntai's own recipe warns that a value the server rejects fails the call, which
+  a judge with no fallback turns into no verdict — so step (2) is also where a rejection would show.
   The `n-predict` and `ctx-size` caps beside it are NOT part of this workaround and stay: they are our own launch
   contract (`LlamaServerRuntime.ChatMaxTokens` — the memory seams send no `max_tokens`, and the router does not stop
   a child's generation when the app abandons a request; `LlamaServerRuntime.ChatContextTokens` — launch item (5)).
+  **(6) `ChunkedScoreProvider` (with `RerankPace`) ↔ Lyntai `docs/task-archive.md` Part 287 / D177 — CLOSED upstream,
+  NOT released (no version promised).** Lyntai 3.2.0 has no way to score a document longer than a reranker's window
+  except to send it whole (one over-window pair fails the WHOLE call) or cut it, and Run 6 measured the cut pushing a
+  long note off the page; so the app scores each long candidate in windows and keeps its best (the reranker bullet
+  below). D177 adds opt-in SEGMENTATION on a provider: `HttpModelOptions.MaxInputChars` plus `InputSegmentation`
+  (`Overflow` Segment or Truncate, `Overlap` 0.15), a document over the bound scored
+  as its best piece (MaxP), every piece in one request, an input within the bound sent exactly as before. That
+  DUPLICATES this class's job, and it is not a drop-in. **Ours is QUERY-AWARE** — the budget is what the fitted query
+  leaves (`RerankInputCap.PerCandidate`), where D177's HTTP bound is a fixed character count per document that never
+  counts the query (Lyntai's advice: the window minus your longest query, with margin); ours counts the NFKC-normalised
+  text; overlaps windows by at least a quarter (D177: 0.15, ending at a paragraph/sentence/word boundary); anchors the
+  last window at the tail; caps windows per candidate (5) and per call (480, and below that what `RerankPace` predicts
+  fits half the verification deadline — D177 caps neither); and passes a request whose every document fits one window
+  through byte for byte. **On the bump**: measure D177 against ours on Run 6's long fixture WITHIN ONE RUN — the rule:
+  not significantly worse at `end` or `beyond`, and identical on short facts. If it holds, delete `ChunkedScoreProvider`,
+  configure `MaxInputChars`/`Segmentation` on the `llamacpp-rerank` registration (`LlamaCppSource.Register`), keep
+  `RerankInputCap`'s query fit, and decide what bounds a call's TIME, since D177 bounds none (keep `RerankPace`'s sizing
+  on top, or ask Lyntai for a per-call bound). If it does not hold, keep ours and tell Lyntai why, with the run. **The
+  Lyntai half is incomplete**: Part 287's outcome does not name `ChunkedScoreProvider` as the adopter's copy to remove,
+  so a release closing the gap would not tell anyone reading only Lyntai that this class exists.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
@@ -1135,7 +1159,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   **The limit is PER MODEL, and it comes from the model's catalogue row** (2026-09-24). mMiniLMv2
   (`docs/judge-bench.md` Run 4) serves 512-token slots, and at the 1,000-character cap dense Chinese is 781 tokens:
   the whole call is refused — 400 under the 4096 preset, 500 「too large to process … batch size 512」 under its
-  own — fail-open, so every recall surfacing a long fact would go unverified in silence. `GgufModel.ContextTokens`
+  own — fail-open, so every recall surfacing a long fact would go unverified in silence. (Lyntai 3.2.0 reads that 400's
+  「larger than the max context size」 as a HOST fault, `Failed`, counted toward benching the reranker for every caller,
+  logged at Debug; its next release reads it as `ContextWindowExceeded`, which advances without blame, and logs a
+  failure that will repeat at Warning — Lyntai `docs/FIXES.md` 2026-09-24, unreleased. The call is refused either way.)
+  `GgufModel.ContextTokens`
   declares the window, and `GgufCatalog.DeclaredWindow` is the ONE read behind both halves of the contract: the
   preset launches the model with that `ctx-size`/`batch-size`/`ubatch-size`, and `RerankInputCap` fits every pair
   to it. Never a branch on the id. On this tokenizer family (XLM-R SentencePiece, no byte fallback) an

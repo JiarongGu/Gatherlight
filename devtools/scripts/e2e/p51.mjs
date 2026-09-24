@@ -1496,7 +1496,9 @@ try {
       JSON.stringify({ embed: sectionOf('zztest-embed-model'), rerank: sectionOf('zztest-rerank-model'), windowed: sectionOf(WINDOWED) }));
 
     // A CHAT child launches with thinking OFF and a generation cap. Without the first, a thinking-capable template
-    // thinks on every judgement (Lyntai's OpenAI-shaped wire drops TextReasoning.Suppress — its TASKS.md Part 288;
+    // thinks on every judgement (Lyntai 3.2.0's OpenAI-shaped wire drops TextReasoning.Suppress — its
+    // docs/task-archive.md Part 288, closed as D179 and not yet released; this assertion goes only on that bump, after
+    // each catalogued chat model is verified on the real binary — dev-conventions open workaround (5);
     // measured 1.3–17.5 s per verdict and past a 300 s timeout, docs/judge-bench.md Run 5's screen); without the
     // second a small model's runaway fills its whole context. Both SILENT: no error, only seconds. Verified in the
     // child's own argv on the real binary (--reasoning off --n-predict 512).

@@ -372,24 +372,26 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 //
                 // `reasoning = off` IS A WORKAROUND FOR A LYNTAI GAP, recorded on both sides (dev-conventions: open
                 // workaround (5)). Both memory seams ask for no reasoning (TextReasoning.Suppress), and Lyntai 3.2.0's
-                // OpenAI-shaped payload drops the field — Lyntai TASKS.md Part 288, "the OpenAI-shaped wire drops
-                // TextReasoning.Suppress". llama-server's default `--reasoning auto` then opens a thinking block for any
+                // OpenAI-shaped payload drops the field — Lyntai docs/task-archive.md Part 288, "the OpenAI-shaped wire
+                // drops TextReasoning.Suppress", CLOSED upstream as D179 but NOT released (no version promised).
+                // llama-server's default `--reasoning auto` then opens a thinking block for any
                 // template that supports one: Qwen3-0.6B thought on every call (1.3–7.5 s), Qwen3.5-0.8B for 17.5 s and
                 // then past a 300 s client timeout (docs/judge-bench.md, Run 5's screen). The router passes this key to
                 // the child as `--reasoning off`; the template then renders its pre-closed think block, and replies ran
                 // 6–21 tokens. For a template with nothing to turn off (Gemma 3) the rendered prompt is byte-identical.
                 // NOT `reasoning-budget = 0`: the template stays in thinking mode, the model writes its reasoning into
-                // the content, and 4 of 6 replies did not parse. KEEP THIS LINE UNTIL PART 288 SHIPS — and even then it
-                // goes LAST. Part 288's owner ruling (2026-09-24) is CONFIGURED fields: a registration option holding JSON
-                // that Lyntai merges into the request only when a call asks Suppress; like DocumentPrefix, the library
-                // knows no vendor's spelling and ships no default. So the bump wires nothing by itself. In order:
-                // (1) configure llama-server's spelling on the `llamacpp` registration (AddLlamaProvider in
-                // LlamaCppSource.Register) — e.g. `chat_template_kwargs: {"enable_thinking": false}`, which is
-                // TEMPLATE-specific (a template reading another key ignores it) and was tried only as a dedicated
-                // server's `--chat-template-kwargs` flag, never as a request field or a preset key; (2) verify EACH
-                // catalogued chat model on the real binary with this line removed: no `<think>`, no reasoning_content,
-                // replies as short as they ran under this line (6–21 tokens); (3) only then delete this line and p51's
-                // assertion of it. The other order puts every Qwen judge back to thinking on every call, silently.
+                // the content, and 4 of 6 replies did not parse. KEEP THIS LINE UNTIL D179 SHIPS — and even then it goes
+                // LAST. D179 is CONFIGURED fields: HttpModelOptions.SuppressReasoningFields, a JSON object Lyntai merges
+                // into a chat request only when the call asks Suppress; like DocumentPrefix, the library knows no vendor's
+                // spelling and ships no default. So the bump wires nothing by itself. In order:
+                // (1) set SuppressReasoningFields = {"chat_template_kwargs":{"enable_thinking":false}} on the `llamacpp`
+                // registration — the AddLlamaProvider line in LlamaCppSource.Register, through the preset's options-action
+                // overload D179 added — a spelling that is TEMPLATE-specific (a template reading another key ignores it)
+                // and was tried only as a dedicated server's `--chat-template-kwargs` flag, never as a request field or a
+                // preset key; (2) verify EACH catalogued chat model on the real binary with this line removed: no
+                // `<think>`, no reasoning_content, replies as short as they ran under this line (6–21 tokens); (3) only
+                // then delete this line and p51's assertion of it. The other order puts every Qwen judge back to thinking
+                // on every call, silently.
                 //
                 // `n-predict` is our own launch contract, not a workaround — see ChatMaxTokens.
                 //

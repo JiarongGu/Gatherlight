@@ -322,6 +322,17 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         // never re-guessed from the URL. On our router server the model name is a SELECTOR, not a label.
         // A named client narrows BOTH the provider pool and the candidate list since Lyntai 3.1 (its D87),
         // so the global candidate list no longer has to be widened to include this provider.
+        //
+        // THE SITE OF OPEN WORKAROUND (5) (dev-conventions). Lyntai 3.2.0's OpenAI-shaped wire drops the memory seams'
+        // TextReasoning.Suppress, so a thinking-capable chat template thinks on every call, and the preset's
+        // `reasoning = off` (LlamaServerRuntime.WritePresets) is what stops it. Lyntai closed the gap as
+        // docs/task-archive.md Part 288 / D179 — committed, NOT released: HttpModelOptions.SuppressReasoningFields, JSON
+        // merged into a request only when the call asks Suppress, no library default. On the bump, in this order: switch
+        // this line to the preset's options-action overload and set
+        // o.SuppressReasoningFields = """{"chat_template_kwargs":{"enable_thinking":false}}""" here (Qwen3's template
+        // variable — template-specific, so a template reading another key ignores it); verify EACH catalogued chat model
+        // on the real binary with the preset line removed (no <think>, no reasoning_content, replies of 6–21 tokens);
+        // only then drop `reasoning = off` from the preset and p51's assertion of it.
         b.AddLlamaProvider(ctx.Endpoint, ctx.Model, ProviderId)
          .AddTextClient(ClientId, c => c.UseProviders(ProviderId));
     }

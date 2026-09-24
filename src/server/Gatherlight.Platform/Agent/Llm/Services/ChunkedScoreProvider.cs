@@ -71,7 +71,23 @@ public static class RerankChunking
 /// median went 2.0 → 3.2 s on BGE and 0.5 → 1.2 s on mMiniLMv2, on one GPU. Short candidates cost nothing extra. A call
 /// carries at most <see cref="RerankInputCap.MaxWindowsPerCall"/> windows — a COUNT tuned on that GPU — and, below it, only
 /// as many as <see cref="RerankPace"/> predicts will be scored within half the verification deadline on THIS machine:
-/// fewer windows per candidate on a slow one, down to one, which is the cut.</para></summary>
+/// fewer windows per candidate on a slow one, down to one, which is the cut.</para>
+///
+/// <para><b>A WORKAROUND FOR A LYNTAI GAP, recorded on both sides</b> (dev-conventions: open workaround (6)). Lyntai has
+/// closed the gap upstream — <c>docs/task-archive.md</c> Part 287 / D177, committed and NOT released, no version
+/// promised: a provider given <c>HttpModelOptions.MaxInputChars</c> SEGMENTS an over-long input
+/// (<c>InputSegmentation</c>) and scores a document as its best piece, as here. It is not a drop-in. D177's HTTP bound is
+/// a FIXED character count per document that never counts the query (Lyntai's advice: the window minus your longest
+/// query, with margin), and it caps neither pieces per document nor pieces per call. This class's budget is QUERY-AWARE
+/// — what the fitted query leaves (<see cref="RerankInputCap.PerCandidate"/>) — and counted on the NFKC-normalised text;
+/// its windows overlap by at least a quarter (D177: 0.15, ending at a boundary), the last is anchored at the tail, a
+/// candidate gets at most five windows and a call at most what <see cref="RerankPace"/> allows; and a request whose every
+/// document fits one window is passed through byte for byte. <b>On the bump</b>: measure D177 against this class on
+/// Run 6's long fixture within ONE run — the rule: not significantly worse at <c>end</c> or <c>beyond</c>, and identical on
+/// short facts. If it holds, delete this class, configure <c>MaxInputChars</c>/<c>Segmentation</c> on the
+/// <c>llamacpp-rerank</c> registration (<c>LlamaCppSource.Register</c>), keep <see cref="RerankInputCap"/>'s query fit, and
+/// decide what bounds a call's TIME, since D177 bounds none (keep <see cref="RerankPace"/>'s sizing, or ask Lyntai for
+/// one). If it does not hold, keep this class and tell Lyntai why.</para></summary>
 public sealed class ChunkedScoreProvider : IScoreProvider
 {
     private readonly IScoreProvider _inner;
