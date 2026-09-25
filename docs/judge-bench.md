@@ -6311,3 +6311,252 @@ at ~24% of the machine), and Ollama's own runner (a `llama-server` that is not o
 `devtools/_run9/load-split.log`) records the machine's busy share, the GPU's utilisation and memory, and the five busiest
 processes about once a minute; the record states, per run, what else ran beside it. Two reranker arms per run is a third
 of the VOID attempt's GPU contention; guard 7 is what would show that it was still too much.
+
+## Run 9 — long and short facts in one recall, one run per reranker (2026-09-25, llama.cpp b10549; claude never called — every server on the stub)
+
+**Commands**, exactly as amended in `e644bcf`, which is the three runs' app HEAD (v1.3.0). They were run in order by the
+scratch driver `devtools/_run9/drive-split.sh`, each exit 0 on the first attempt:
+
+| run | from – to (UTC) | results |
+|---|---|---|
+| BGE | 07:34:08 – 07:46:18 | `results-2026-09-25T073408.146Z.json` |
+| LAMAR | 07:46:22 – 07:58:55 | `results-2026-09-25T074622.458Z.json` |
+| mMiniLMv2 | 07:58:58 – 08:04:58 | `results-2026-09-25T075858.903Z.json` |
+
+- **The build** was W2's, not rebuilt: fingerprint `d6553bdc3fdfeb92` / `92ab3dd3a0a8ac9f` / `2b8bf73223aa209c`
+  (Platform / Planner / Server), the same before and after every run.
+- **The seed** was `devtools/_judge-bench-seed-mixed/`, reused and re-verified by each run; order seed 12345, 240
+  queries, 0 same-fact adjacencies; four arms in parallel per run.
+- **`formula` gave the same rows in all three runs**: digest **`7b64a4488202`** each time, which is also the VOID attempt's.
+
+**Every guard held, in every run** (scratch `devtools/_run9/guards9.mjs`; its output is kept per run as
+`devtools/_run9/split-<m>/guards.txt`):
+
+| guard | BGE | LAMAR | mMiniLMv2 |
+|---|---|---|---|
+| 1. instrument | fixture `e1c9b4d5…` accepted; seed re-verified (判断 off, 0 claude-cli calls, 60 exact texts, 60 graph nodes) | the same | the same |
+| 2. engine A/A | `formula`/`formula2` byte-identical, p = 1.000 | the same | the same |
+| 3. startup | both reranker arms read back `llama-cpp · <id>`, no startup warning, knob as the kind says (`rr` off, `rrk` on), 0 claude-cli calls at startup and over the run | the same | the same |
+| 4. router log | spawned once, `n_ctx_slot` 4096, 25,407 tasks, largest 848 tokens, 0 truncated, 0 error lines | once, 4096, 27,913 tasks, largest 849, 0, 0 | once, **512**, 37,148 tasks, largest **428** (≤ 512), 0, 0 |
+| 5. coverage | `judged` = `graph` = 120 in short and in long (60 in `end` and in `beyond`), both arms | the same | the same |
+| 6. every request reached the model | forwarded = proxied 499/499; 0 retries, 0 failures | 501/501; 0, 0 | 501/501; 0, 0 |
+| 7. the pace did not act | 0 pace lines in every arm | 0 | 0 |
+| 8. one build | fingerprint unchanged | unchanged | unchanged |
+
+The bench printed **no WARNING and no NOTE line** in any of the three.
+
+### The headline — chunked against the cut, by the target's length
+
+Each reranker is paired within its own run. `b` = cut hit & chunked miss, `c` = the reverse. Short = the 120 questions
+whose target is a short fact; long = the 120 whose target is a long note.
+
+| reranker | target | found@8 cut → chunked | b/c | p | net, 95% | top-1 cut → chunked | b/c | p |
+|---|---|---|---|---|---|---|---|---|
+| BGE | **short** | **94 → 91** | **3/0** | **0.250** | **−2.5pp [−5.6, +0.7]** | 37 → 37 | 0/0 | 1.000 |
+| | long | 73 → 103 | 6/36 | < 0.001 | +25.0pp [+15.0, +34.2] | 27 → 39 | 2/14 | 0.004 |
+| | all (240) | 167 → 194 | 9/36 | < 0.001 | +11.3pp [+5.8, +16.5] | 64 → 76 | 2/14 | 0.004 |
+| LAMAR | **short** | **101 → 99** | **2/0** | **0.500** | **−1.7pp [−4.4, +1.1]** | 43 → 43 | 1/1 | 1.000 |
+| | long | 54 → 104 | 0/50 | < 0.001 | +41.7pp [+32.1, +49.9] | 18 → 38 | 1/21 | < 0.001 |
+| | all | 155 → 203 | 2/50 | < 0.001 | +20.0pp [+14.5, +25.2] | 61 → 81 | 2/22 | < 0.001 |
+| mMiniLMv2 | **short** | **98 → 97** | **2/1** | **1.000** | **−0.8pp [−4.0, +2.4]** | 49 → 43 | 7/1 | 0.070 |
+| | long | 18 → 87 | 3/72 | < 0.001 | +57.5pp [+46.8, +66.3] | 6 → 36 | 2/32 | < 0.001 |
+| | all | 116 → 184 | 5/73 | < 0.001 | +28.3pp [+21.8, +34.4] | 55 → 79 | 9/33 | < 0.001 |
+
+`formula` (no judge) in every run: short 32 / 50 (top-1 / found@8), long 33 / 57, `all` 65 / 107.
+
+### The decision rule, applied
+
+The pairs are `rrk:<m>` against `rr:<m>`, found@8, on the 120 short-target queries of that reranker's run. "Costs short
+facts" means p < 0.05 AND c − b < 0.
+
+| reranker | short-target found@8 | b/c | exact p | significantly worse? |
+|---|---|---|---|---|
+| BGE | 94 → 91 | 3/0 | 0.250 | no |
+| LAMAR | 101 → 99 | 2/0 | 0.500 | no |
+| mMiniLMv2 | 98 → 97 | 2/1 | 1.000 | no |
+
+**No reranker triggers it, so chunking does not "cost short facts" by the registered rule.** As registered, the notes'
+「长短事实混在一起的检索还没有量过」 becomes this result. The words must be no stronger than the intervals: **no
+significant difference**, with a loss up to 5.6pp (BGE), 4.4pp (LAMAR) and 4.0pp (mMiniLMv2) not ruled out. No interval
+lies inside ±3 pp, so "no cost" and "equivalent" are not claimed. The sentence is proposed in "What the household
+sentences can now say" below, and routed by the round's controller; no product code or catalogue text was changed here.
+
+### Accuracy by target and position (cells: top-1 / found@8 / judged-of-graph)
+
+```
+arm                        short (n=120)     long (n=120)      end (n=60)        beyond (n=60)
+公式 (every run)            32 / 50 / 0-120   33 / 57 / 0-120   15 / 25 / 0-60    18 / 32 / 0-60
+BGE, cut                   37 / 94 / 120     27 / 73 / 120     17 / 56 / 60      10 / 17 / 60
+BGE, chunked               37 / 91 / 120     39 / 103 / 120    16 / 51 / 60      23 / 52 / 60
+LAMAR, cut                 43 / 101 / 120    18 / 54 / 120     17 / 51 / 60      1 / 3 / 60
+LAMAR, chunked             43 / 99 / 120     38 / 104 / 120    16 / 51 / 60      22 / 53 / 60
+mMiniLMv2, cut             49 / 98 / 120     6 / 18 / 120      2 / 9 / 60        4 / 9 / 60
+mMiniLMv2, chunked         43 / 97 / 120     36 / 87 / 120     16 / 42 / 60      20 / 45 / 60
+```
+
+**Chunked against cut, by position** (found@8 b/c, p; descriptive):
+
+| reranker | `end` | `beyond` |
+|---|---|---|
+| BGE | 5/0, 0.063 (56 → 51) | 1/36, < 0.001 (17 → 52) |
+| LAMAR | 0/0 (51 → 51) | 0/50, < 0.001 (3 → 53) |
+| mMiniLMv2 | 0/33, < 0.001 (9 → 42) | 3/39, < 0.001 (9 → 45) |
+
+**Against `formula`, found@8** (b = formula hit & arm miss; descriptive):
+
+| arm | short | long | `all` |
+|---|---|---|---|
+| BGE cut / chunked | 0/44 / 0/41 | 22/38 (p = 0.052) / 0/46 | 22/82 / 0/87 |
+| LAMAR cut / chunked | 0/51 / 0/49 | 29/26 (p = 0.788) / 1/48 | 29/77 / 1/97 |
+| mMiniLMv2 cut / chunked | 0/48 / 1/48 | **50/11 (below no judge)** / 11/41 | 50/59 (p = 0.444) / 12/89 |
+
+- The cut is **below having no judge** for every model on the long notes whose answer it cannot see: mMiniLMv2 on all
+  long notes (−32.5pp), BGE and LAMAR at `beyond` (22/7 and 29/0). That is the same mechanism as Runs 6 and 6c, now with
+  short facts beside the notes.
+- Chunked, every arm is above `formula` on both target types.
+
+**What reached the reranker** (the memo proxy's record: recalls whose rerank call carried the target's answer text, of
+those that made one): short targets 94 / 91 (BGE cut / chunked), 101 / 99 (LAMAR) and 98 / 97 (mMiniLMv2); long targets
+56 → 104, 55 → 112 and **0** → 108. The cut never showed mMiniLMv2 a long note's answer, and never showed BGE or LAMAR a
+`beyond` answer (0 of 60), as the design's table says.
+
+### What moved on the short targets — POST HOC, descriptive
+
+The rows below were not registered, and the rule does not read them. They are computed from the saved rows with no model
+called (scratch `devtools/_run9/analyse9.mjs`; output per run as `split-<m>/analyse9.txt`).
+
+- **The short-target changes lean one way.** Summed over the three runs, b/c on short targets is 7/1 — seven losses to
+  one gain. Pooling three separate runs is itself descriptive (exact p = 0.070).
+- **BGE's one-window targets.** For BGE, a short fact and an `end` note are each one window in both arms; only the
+  `beyond` notes gained a window. Pooling short and `end` targets, BGE lost **8 and gained 0** (exact p = 0.008, post
+  hoc).
+  - 7 of the 8 were `third`-set questions: Japanese-worded questions about Chinese or English facts.
+  - In 5 of the 8, the page that replaced the target now held **konbini**, the one Japanese `beyond` note, whose tail
+    window chunking added. It came alongside other Japanese facts.
+  - So a long note in the question's own script, given its extra window, can crowd out a target that is shorter or reads
+    in another language. It is a small effect at this size: 8 of 180 one-window targets, found on one fixture, after the
+    fact.
+- **LAMAR's two losses** (short) were water-bill and pharm-local. The second's page gained pharm-24h, its own `beyond`
+  near-duplicate — the case the fixture was built to allow.
+- **mMiniLMv2's top-1 on short targets** leans to the cut: 49 → 43, 7/1. Exact p = 0.070, and the Agresti–Min interval is
+  [−9.7, −0.2]pp. Run 6c saw the same lean at `start`, where the answer was inside the cut (6/1).
+- **Long notes on the page**, for short-target questions (mean of 8):
+  - BGE 6.18 cut → 5.97 chunked;
+  - LAMAR 2.87 → 3.17;
+  - mMiniLMv2 3.77 → **4.93**.
+  
+  On mMiniLMv2, chunking puts about one more long note on each page. The slots it takes were mostly other short facts',
+  not the target's: short-target found@8 moved by one query.
+
+### By fact language — descriptive
+
+Each cell is top-1 / found@8 / n.
+
+```
+target·lang   formula     BGE cut     BGE chunked  LAMAR cut   LAMAR chunked  mMiniLMv2 cut  mMiniLMv2 chunked
+short·zh      18/31/80    24/59/80    24/58/80     28/66/80    27/64/80       30/64/80       24/64/80
+short·en      13/17/32    12/29/32    12/28/32     13/29/32    13/29/32       18/28/32       18/27/32
+short·ja      1/2/8       1/6/8       1/5/8        2/6/8       3/6/8          1/6/8          1/6/8
+long·zh       22/37/80    21/54/80    27/72/80     12/38/80    26/74/80       6/15/80        25/58/80
+long·en       10/18/32    6/15/32     11/26/32     6/14/32     11/27/32       0/0/32         9/23/32
+long·ja       1/2/8       0/4/8       1/5/8        0/2/8       1/3/8          0/3/8          2/6/8
+```
+
+mMiniLMv2's top-1 lean on short targets is all in Chinese facts (30 → 24); found@8 there is unchanged (64 → 64).
+
+### Latency
+
+The serial medians are over 12 queries, verdict-carrying recalls only. Every recall carried a verdict. The run was warm,
+on one GPU, with one model resident.
+
+| run | 公式 (serial) | cut | chunked | documents per call, cut → chunked (mean / max) |
+|---|---|---|---|---|
+| BGE | 493 ms | 1,440 ms | **1,947 ms** | 44.6 / 59 → 54.8 / 74 |
+| LAMAR | 409 ms | 1,333 ms | **2,038 ms** | 48.2 / 59 → 61.5 / 74 |
+| mMiniLMv2 | 463 ms | 715 ms | **1,086 ms** | 44.5 / 58 → 101.2 / 149 |
+
+- On this mix, chunking costs about 0.5–0.7 s per recall on BGE and LAMAR, and 0.4 s on mMiniLMv2. No document was
+  longer than its budget (1,000 and 490 characters).
+- These medians were taken while another session held the machine's CPU ~85% busy (below). 公式's own serial median here
+  (0.41–0.49 s) is about twice Run 6c's (0.23 s, another run, descriptive), so the absolute times are likely inflated.
+  The cut-to-chunked difference is within one run.
+
+### The load
+
+The sampler (scratch `devtools/_run9/load-sampler.ps1`, output `devtools/_run9/load-split.log`) took 29 samples, about
+one a minute.
+
+| run | samples | machine busy, median [range] | GPU utilisation, median [range] | GPU memory | busiest other processes (peak share of the machine) |
+|---|---|---|---|---|---|
+| BGE | 12 | 84.9% [21.3–91.0] | 39% [2–98] | 3.4–3.8 GB | vbcscompiler 44.1, dotnet 42.4, testhost 23.6, csc 12.4 |
+| LAMAR | 11 | 84.9% [21.7–91.3] | 54% [38–87] | 3.8 GB | dotnet 31.4, vbcscompiler 19.3, testhost 17.7 |
+| mMiniLMv2 | 6 | 81.2% [38.0–91.4] | 40% [3–56] | 3.4 GB | testhost 34.2, vbcscompiler 28.8, dotnet 24.6 |
+
+- Another session was compiling and testing .NET code (Lyntai) throughout.
+- Ollama's runner, resident when the amendment was written (~8.4 GB of GPU memory), had unloaded by the time the runs
+  started: 3.4–3.8 GB was in use during them, the router's model included.
+- The GPU was far from the VOID attempt's 96–99%, and the pace never acted (guard 7).
+
+### Across runs — descriptive only (measuring rule 2)
+
+- **Against the VOID attempt.** The split runs reproduced its cells exactly on every group of LAMAR and mMiniLMv2, and on
+  BGE's except one long-target query (73 → 103 here, 73 → 102 there). That query is seq 97 (train-local, `beyond`), the
+  recall the pace sized to one window per long candidate there. It missed there and was found at position 2 here.
+- **Against Run 6c** (the long fixture): its chunked arms put the answer on the page 201 / 209 / 182 times of 240 (BGE /
+  LAMAR / mMiniLMv2). This fixture's long half was built the same way, but it is a different corpus, and no number here
+  sits beside that one.
+
+### What it says
+
+- **On this mixed fixture, scoring long notes in windows did not significantly cost the short facts beside them, for any
+  of the three rerankers.**
+  - Short-target found@8 moved 94 → 91 (BGE), 101 → 99 (LAMAR) and 98 → 97 (mMiniLMv2) of 120.
+  - A loss of up to 4–6 per 100 is not ruled out.
+  - The changes lean one way (seven losses to one gain over the three), and BGE's one-window targets, pooled after the
+    fact, lost 8 and gained 0.
+  - So "nothing lost" is too strong. The cost, if it is real, is small and was not detected by the registered test.
+- **On the long notes in the same recalls, chunking recovers what the cut hides**, as it did when every candidate was
+  long: +25.0pp (BGE), +41.7pp (LAMAR) and +57.5pp (mMiniLMv2) on long-target found@8.
+- **The cut is worse than no judge wherever it hides the answer**, now also beside short facts: mMiniLMv2 on every long
+  note, and BGE and LAMAR past 1,000 characters.
+
+### What it does NOT say
+
+- **One constructed fixture, one GPU, one run per reranker.** Short facts are ≤ 101 characters and long notes 880–1,217,
+  with nothing between. The long half's answers sit at the end or past 1,000 characters, never at the start, where the
+  cut and chunking read the same.
+  - In a household the long notes' share, their lengths and where their answers sit are unknown.
+  - A corpus where far more long notes than short facts compete was not measured.
+- **Each long note names up to three other facts by topic, and a short fact is named by two long notes.** That was built
+  in to let the effect show. Real notes may name the subjects of other facts more often or less.
+- **The effect sizes on one-window targets are small against 120 pairs.** A cost of a few per 100 would need a larger
+  fixture to show or to rule out. The post-hoc 8/0 is a reason to look, not a finding.
+- **No embedder, a page of 8, ≤ 60 candidates, no subject tags, partition.** Nothing here was run on a CPU; Run 8 is the
+  CPU record, on long notes only.
+- **The run is on W2's build**, which sends what `70234f3` sent when the pace is inactive: checked in code, on the wire,
+  and by guard 7 in every run. The pace itself was not exercised here.
+- **The machine was shared**, and its CPU was ~85% busy with another session's builds. Latency is therefore an upper
+  estimate. The accuracy pairs are within each run.
+
+### What the household sentences can now say (routed; not changed here)
+
+The clause 「长短事实混在一起的检索还没有量过(长事实取几段里最高的一段,得高分的机会比只有一段的短事实多)」 in
+`GgufCatalog.RerankerLatencyCaveat` (shared by all three rerankers) may be replaced by what was measured. It should say:
+
+- the configuration first: on the GPU; 30 short facts mixed with 30 long notes of about 900–1,200 characters; 240
+  questions; no 语义; no subject tags; a page of 8 chosen by the reranker;
+- short-target found@8 cut → chunked: 94 → 91 (BGE), 101 → 99 (LAMAR), 98 → 97 (mMiniLMv2), of 120 — no significant
+  difference, with a loss of up to about 6% (BGE) and 4% (LAMAR, mMiniLMv2) not ruled out;
+- long-target found@8 cut → chunked: +30, +50 and +69 of 120.
+
+**Evidence, local only** (gitignored):
+
+- `devtools/_run9/split-bge/`, `split-lamar/` and `split-minilm/`. Each holds the run's results and rows, `router.log`,
+  `presets.ini`, `arm-0` … `arm-3` (each arm's `state/logs`), `output.txt` (the bench's output), `guards.txt` and
+  `analyse9.txt`.
+- The bench outputs as written: `devtools/_judge-bench-mixed-run9-bge.txt`, `…-lamar.txt` and `…-minilm.txt`.
+- The driver's log `devtools/_run9/split-drive.log`, and the load `devtools/_run9/load-split.log`.
+- The smoke on W2's build: `devtools/_judge-bench-mixed/results-2026-09-25T072928.629Z.json`, output
+  `devtools/_run9/smoke-split.txt`.
+- The pattern check: `devtools/_run9/pace-patterns.mjs`.
+- The VOID attempt's evidence, as the amendment lists it.
