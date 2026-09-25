@@ -165,7 +165,7 @@ public sealed class RerankDeviceMeter
                 var r = await OneAsync(exe, modelId, modelFile, device, name, warm, timed, reserved, ct).ConfigureAwait(false);
                 lock (_gate) if (_aborted) return null;
                 var attempts = (previous?.Results.FirstOrDefault(p => p.Device == device)?.AttemptsSpent ?? 0) + 1;
-                r = r with { Attempts = attempts };
+                r = r with { Attempts = attempts, MeasuredAt = DateTimeOffset.UtcNow };
                 if (r.Valid)
                     _log.LogInformation(
                         "rerank device measurement: {Model} on {Device} ({Name}): {Ms} ms for {Tokens:0} pair tokens — {Rate:0.###} ms per 1,000",
@@ -232,8 +232,9 @@ public sealed class RerankDeviceMeter
                 _child = proc;
             }
             if (proc is null) return Excluded(device, name, "没能启动 llama-server");
-            // Dies with this process however this process dies — see MeasurementJob.
-            if (!MeasurementJob.Assign(proc))
+            // Dies with this process however this process dies — see MeasurementJob. A child that has already exited
+            // cannot be assigned, and has nothing left to leave behind: no warning for it (its exit is reported below).
+            if (!MeasurementJob.Assign(proc) && !proc.HasExited)
                 _log.LogWarning("rerank device measurement: could not put the child (pid {Pid}) in the kill-on-close job; "
                     + "a forced end of the app during this measurement would leave it running", proc.Id);
             // Drained, not read — a filled pipe blocks the child.

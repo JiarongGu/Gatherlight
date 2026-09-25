@@ -150,7 +150,7 @@ public sealed class ModelsController : ControllerBase
             // The device state from the last FULL probe, and only while the runtime is installed — null ("not known")
             // otherwise, which keeps today's suggestion and claims nothing about the machine.
             recommendation = Recommend(models, probe.Installed, probe.Installed ? _llama.Gpu : null,
-                _pace?.RecentSkips ?? (0, 0), BgeMeasuredTooSlow()),
+                _pace?.RecentSkips ?? (0, 0), BgeMeasuredTooSlow(), adopted: probe.Serving && !probe.Ours),
             // The sample size travels with the numbers, here as everywhere: "9/10" invites the right
             // question where a bare adjective does not.
             measuredOn = MeasuredOnLabel(),
@@ -257,9 +257,13 @@ public sealed class ModelsController : ControllerBase
 
     /// <summary>BGE's current device measurement on this machine and its reference-page admission, when that admission is
     /// NOT a send — i.e. BGE measured too slow here (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>). Null when BGE is
-    /// not installed, not measured under the current key, or fast enough.</summary>
+    /// not installed, not measured under the current key, or fast enough — and while its measurement still has an excluded
+    /// device with attempts LEFT (<see cref="RerankDeviceMeasurement.Retryable"/>): one RTX busy at the first start would
+    /// otherwise recommend a 133 MB download that the next start's retry may reverse (review, 2026-09-26). It flips once
+    /// no retry is pending — every device measured, or its attempts spent.</summary>
     private (RerankDeviceMeasurement M, double PredictedMs, double LimitMs)? BgeMeasuredTooSlow() =>
         _llama.RerankDevice(GgufCatalog.RecommendedReranker)?.Measurement is { } m
+        && m.Retryable.Count == 0
         && RerankDeviceVerdict.ReferenceAdmission(m) is { TooSlow: true } a
             ? (m, a.PredictedMs, a.LimitMs)
             : null;
@@ -317,14 +321,17 @@ public sealed class ModelsController : ControllerBase
     /// (<paramref name="bgeTooSlow"/>, owner decision 2026-09-26 after Run 8b: its fastest device on this machine would
     /// not be sent the default page's one-window call — <see cref="RerankDeviceVerdict.ReferenceAdmission"/>, the runtime's
     /// own admission — and ONLY BGE's: a LAMAR or mMiniLMv2 measured too slow moves nothing, because the question the
-    /// owner asked is whether this machine is too slow for BGE, the default, and the badge never names LAMAR); (3) the device
+    /// owner asked is whether this machine is too slow for BGE, the default, and the badge never names LAMAR — and only once
+    /// no retry of an excluded device is pending, see <c>BgeMeasuredTooSlow</c>); (3) the device
     /// probe answered with no GPU; else BGE. The 判断 row reads the same writer
     /// (<see cref="GgufCatalog.RecommendedRerankerFor"/>). <b>A limitation, said in the reasons</b>: a measurement exists
     /// only for a model on disk, taken at the next router start the app performs — so on an iGPU-only machine the badge
     /// still offers BGE first, and moves to mMiniLMv2 once BGE has been downloaded and measured. Proof: <c>e2e-p52</c>
-    /// case 6h (skips), <c>e2e-p53</c> (the measurement).</para></summary>
+    /// case 6h (skips), <c>e2e-p53</c> (the measurement). <paramref name="adopted"/>: the router answering now is not one
+    /// this process started, so the lead never promises a retry "at the app's next start" as if it were imminent.</para></summary>
     private static object? Recommend(IReadOnlyList<ModelRowView> models, bool llamaRuntimeInstalled, bool? gpu,
-        (int Skipped, int Recalls) skips, (RerankDeviceMeasurement M, double PredictedMs, double LimitMs)? bgeTooSlow)
+        (int Skipped, int Recalls) skips, (RerankDeviceMeasurement M, double PredictedMs, double LimitMs)? bgeTooSlow,
+        bool adopted = false)
     {
         var offers = models.Where(m => !m.Installed).ToList();
         var builtInIsIn = models.Any(m => m.Installed && m.Id == BuiltInSemanticSource.ModelId);
@@ -384,7 +391,7 @@ public sealed class ModelsController : ControllerBase
                           ? $"最近 {skips.Recalls} 次检索里有 {skips.Skipped} 次因为这台机器太慢跳过了判断,所以推荐这个更小的重排模型:"
                             + run8 + "只有集成显卡的机器两者都还没有量过。"
                           : bgeTooSlow is { } slow
-                          ? RerankDeviceNotes.TooSlowLead(slow.M, slow.PredictedMs, slow.LimitMs) + "它在只用 CPU 的笔记本上的实测见它那一行的说明;"
+                          ? RerankDeviceNotes.TooSlowLead(slow.M, slow.PredictedMs, slow.LimitMs, adopted) + "它在只用 CPU 的笔记本上的实测见它那一行的说明;"
                             + "它在这台机器上多快,下载后应用下一次自己启动 llama.cpp 时同样会测。"
                           : "llama.cpp 在这台机器上用不了任何显卡,所以推荐这个更小的重排模型,而不是 BGE:" + run8
                             + "llama.cpp 能用显卡、BGE 下载后在这台机器上也没有测出太慢时,推荐的是 BGE;"
@@ -492,21 +499,22 @@ public sealed class ModelsController : ControllerBase
     [HttpPost("api/manage/models/llama/start")]
     public async Task<IActionResult> LlamaStart()
     {
-        // Did THIS start measure a reranker's devices (RerankDeviceMeter)? Compared by sequence, before and after — the
-        // runtime's report, a field read — so the answer can say why the button was busy that long.
-        var before = _llama.LastMeasurement?.Sequence;
-        if (!await _llama.EnsureServingAsync()) return NotRunning(await _llama.ProbeAsync(refresh: true));
-        var ran = _llama.LastMeasurement is { } report && report.Sequence != before ? report : null;
-        var measured = ran is null ? null
-            : $"启动前先测了 {string.Join("、", ran.Models)} 在哪个设备上最快(用了 {RerankDeviceNotes.Seconds((long)ran.Took.TotalMilliseconds)} 秒),"
-              + "结果写在下面各自那一行。";
+        // What THIS start measured (RerankDeviceMeter) — returned by the start itself, so a measurement another caller ran
+        // while this one waited for the lock is never claimed, and a start that then FAILS still says the time went on
+        // measuring (review, 2026-09-26).
+        var start = await _llama.StartAsync();
+        var measured = start.Measured is { } ran
+            ? $"启动前先测了 {string.Join("、", ran.Models)} 在哪个设备上最快(用了 {RerankDeviceNotes.Seconds((long)ran.Took.TotalMilliseconds)} 秒),"
+              + "结果写在下面各自那一行。"
+            : null;
+        if (!start.Ok) return NotRunning(await _llama.ProbeAsync(refresh: true), measured);
 
         var state = await _llama.ProbeAsync(refresh: true);
         // It answered a moment ago and does not now: a router that died, or one holding the port without answering.
         // Not running either way, so this is the start failing, in the probe's own words (HELD names the port and
         // whose it is) — a 200 reading 「已在运行」 would have been false. Past this line `state.Models` is what the
         // router LISTS: a probe that did not answer reports the files on disk instead.
-        if (!state.Serving) return NotRunning(state);
+        if (!state.Serving) return NotRunning(state, measured);
 
         var warmed = new List<string>();
         var cold = new List<(string Layer, string Model, string Cause, string Cure)>();
@@ -544,9 +552,10 @@ public sealed class ModelsController : ControllerBase
         });
     }
 
-    /// <summary>The start failing — before the router answered, or after it stopped — in the probe's own words.</summary>
-    private ObjectResult NotRunning(LlamaServerState state) =>
-        StatusCode(409, new { error = state.Problem ?? "无法启动 llama-server。" });
+    /// <summary>The start failing — before the router answered, or after it stopped — in the probe's own words, and what the
+    /// start measured before it failed, if anything: the time went there, and the result stands.</summary>
+    private ObjectResult NotRunning(LlamaServerState state, string? measured = null) =>
+        StatusCode(409, new { error = (state.Problem ?? "无法启动 llama-server。") + (measured ?? ""), measured });
 
     /// <summary>Delete a model, freeing its disk.
     /// <para>Refused for one a layer is BOUND to, even when that binding is not running yet: recall is

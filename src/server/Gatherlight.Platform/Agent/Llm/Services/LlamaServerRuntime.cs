@@ -96,9 +96,6 @@ public interface ILlamaServerRuntime
     /// i/n 个 …」), or null — read by the migration overlay's step line. A field read, never an await.</summary>
     string? MeasuringNow { get; }
 
-    /// <summary>The last reranker device measurement this process ran — models and duration, with a sequence number a
-    /// caller compares before and after a start to know whether that start measured anything. Null when none has run.</summary>
-    RerankMeasurementReport? LastMeasurement { get; }
 
     /// <summary>The state a BINDING decision needs: is it installed, is it answering, what models are on
     /// disk. Never spawns anything.
@@ -114,6 +111,12 @@ public interface ILlamaServerRuntime
 
     /// <summary>Make sure the router is answering, starting it only if the port is silent.</summary>
     Task<bool> EnsureServingAsync(CancellationToken ct = default);
+
+    /// <summary><see cref="EnsureServingAsync"/>, and what THIS call measured on the way — a reranker device measurement
+    /// runs inside a start the app performs (<see cref="RerankDeviceMeter"/>) — or null when it measured nothing. Only
+    /// this call's: a start that waited behind another caller's measurement did not run it. Set whether or not the router
+    /// then came up, because the measurement took its time either way.</summary>
+    Task<RouterStart> StartAsync(CancellationToken ct = default);
 
     /// <summary>Make sure the router is answering AND knows <paramref name="modelId"/> — null when it does,
     /// otherwise the sentence a household reads. A model downloaded after OUR router started restarts it — only
@@ -329,13 +332,14 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <see cref="MeasureRerankersAsync"/>. Held here so <see cref="Dispose"/> can kill a measurement child.</summary>
     private readonly RerankDeviceMeter _meter;
 
-    /// <summary>Measurements this process took and could NOT save (<see cref="RerankDeviceStore.Save"/> threw), by model:
-    /// the router it started runs with them, so a reader must see them — <see cref="RerankDevice"/> answers from here with
-    /// <c>Saved = false</c>. Never read to SKIP a measurement: the next start finds no stored one and measures again.</summary>
+    /// <summary>Measurements this process took and could NOT save (<see cref="RerankDeviceStore.Save"/> threw), by model.
+    /// They are the NEWEST under their key by construction, so everything in this process reads them first: the router it
+    /// started runs with them, <see cref="RerankDevice"/> answers from here with <c>Saved = false</c>, and the next start
+    /// retries from them (their attempts advance) and tries the save again. Memory only: after an app restart the store
+    /// holds none, so the model is measured again from scratch — which is what the row says.</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, RerankDeviceMeasurement> _unsaved =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private RerankMeasurementReport? _lastMeasurement;
 
     public LlamaServerRuntime(IPlatformContext platform, IHttpClientFactory http,
         ILogger<LlamaServerRuntime> log, ILlamaRestartPolicy? restartPolicy = null)
@@ -525,7 +529,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// is used for this start and kept in <see cref="_unsaved"/> for the readers. A throw measuring one model is logged and
     /// the next model measured; the caller contains anything else.</summary>
     private async Task<IReadOnlyDictionary<string, string>> MeasureRerankersAsync(LlamaServerState state,
-        IReadOnlyList<string> models, CancellationToken ct)
+        IReadOnlyList<string> models, CancellationToken ct, MeasurementSink? sink = null)
     {
         var chosen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var rerankers = models.Where(m => ResourceProvisioner.GgufKind(m) == GgufCapability.Reranking).ToList();
@@ -548,13 +552,22 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             {
                 var file = ResourceProvisioner.GgufFile(_platform.ResourcesPath, id);
                 if (RerankDeviceKey.For(id, file, build, state.Devices) is not { } key) continue;
-                var m = RerankDeviceStore.Current(_platform.ResourcesPath, key);
+                // This process's unsaved measurement first — newer by construction — then the stored one.
+                var m = Unsaved(id, key) ?? RerankDeviceStore.Current(_platform.ResourcesPath, key);
+                // What is known already names the device FIRST, so a throw in the retry below cannot cost this start the
+                // device key a valid stored result gives it (review, 2026-09-26).
+                if (m?.Fastest is { } known) chosen[id] = known.Device;
+                var save = m is not null && _unsaved.ContainsKey(id);   // an earlier save failed: try it again
                 if (m is null || m.Retryable.Count > 0)
                 {
                     var taken = await _meter.MeasureAsync(exe, id, file!, key, m, Reserved, ct);
                     if (taken is null) break;   // Dispose ended it: nothing is saved, and nothing is started after it
                     m = taken;
                     measured.Add(id);
+                    save = true;
+                }
+                if (save)
+                {
                     try
                     {
                         RerankDeviceStore.Save(_platform.ResourcesPath, m);
@@ -562,21 +575,20 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     {
-                        // Used for THIS start all the same, and shown as unsaved; the next start measures again.
+                        // Used for THIS start all the same, and shown as unsaved; the next start tries the save again.
                         _log.LogWarning(ex, "rerank device measurement for {Model} could not be saved", id);
                         _unsaved[id] = m;
                     }
                 }
                 if (m.Fastest is { } best) chosen[id] = best.Device;
+                else chosen.Remove(id);
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
-                _log.LogWarning(ex, "rerank device measurement for {Model} failed; it launches where llama.cpp puts it", id);
+                _log.LogWarning(ex, "rerank device measurement for {Model} failed; it keeps the device it already had, if any", id);
             }
         }
-        if (measured.Count > 0)
-            lock (_gate)
-                _lastMeasurement = new RerankMeasurementReport((_lastMeasurement?.Sequence ?? 0) + 1, measured, clock.Elapsed);
+        if (measured.Count > 0 && sink is not null) sink.Report = new RerankMeasurementReport(measured, clock.Elapsed);
         return chosen;
     }
 
@@ -613,15 +625,18 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         }
         var key = RerankDeviceKey.For(modelId, ResourceProvisioner.GgufFile(_platform.ResourcesPath, modelId), build, devices);
         if (key is null) return null;
-        if (RerankDeviceStore.Current(_platform.ResourcesPath, key) is { } stored) return new RerankDeviceLookup(key, stored);
-        return _unsaved.TryGetValue(modelId, out var unsaved) && key.Matches(unsaved)
-            ? new RerankDeviceLookup(key, unsaved, Saved: false)
-            : new RerankDeviceLookup(key, null);
+        // The unsaved one FIRST: it is newer than anything stored under this key by construction (a merged retry whose save
+        // failed sits beside the older measurement it was merged from), and it is what the router was started with.
+        if (Unsaved(modelId, key) is { } unsaved) return new RerankDeviceLookup(key, unsaved, Saved: false);
+        return new RerankDeviceLookup(key, RerankDeviceStore.Current(_platform.ResourcesPath, key));
     }
+
+    /// <summary>This process's unsaved measurement of <paramref name="modelId"/>, when it is under <paramref name="key"/>.</summary>
+    private RerankDeviceMeasurement? Unsaved(string modelId, RerankDeviceKey key) =>
+        _unsaved.TryGetValue(modelId, out var u) && key.Matches(u) ? u : null;
 
     public string? MeasuringNow => _meter.Now;
 
-    public RerankMeasurementReport? LastMeasurement { get { lock (_gate) return _lastMeasurement; } }
 
     /// <summary>Is anything accepting connections on our port, answered within a bounded time?
     ///
@@ -845,18 +860,24 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         return state;
     }
 
-    public async Task<bool> EnsureServingAsync(CancellationToken ct = default)
+    public async Task<bool> EnsureServingAsync(CancellationToken ct = default) => (await StartAsync(ct)).Ok;
+
+    public async Task<RouterStart> StartAsync(CancellationToken ct = default)
     {
+        var sink = new MeasurementSink();
         await _lifecycle.WaitAsync(ct);
-        try { return (await EnsureServingCoreAsync(ct)).Ok; }
+        try { return new RouterStart((await EnsureServingCoreAsync(ct, sink)).Ok, sink.Report); }
         finally { _lifecycle.Release(); }
     }
+
+    /// <summary>Where a measurement reports what it did, for the one call that asked (<see cref="StartAsync"/>).</summary>
+    private sealed class MeasurementSink { public RerankMeasurementReport? Report; }
 
     /// <summary>Probe, and spawn only if the port is silent. Callers hold <see cref="_lifecycle"/> — the public
     /// door takes it, and the restart in <see cref="EnsureServesAsync"/> calls this while holding it already.
     /// <para><c>Held</c> is the probe's sentence when the port is HELD, so a caller can pass the real cause on
     /// instead of 「没能启动」.</para></summary>
-    private async Task<(bool Ok, string? Held)> EnsureServingCoreAsync(CancellationToken ct)
+    private async Task<(bool Ok, string? Held)> EnsureServingCoreAsync(CancellationToken ct, MeasurementSink? sink = null)
     {
         if (_disposed) return (false, null);
         var state = await ProbeAsync(refresh: true, ct);
@@ -870,14 +891,14 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 new Uri(BaseUrl).Port);
             return (false, state.Problem);
         }
-        return (await SpawnAsync(state, ct), null);
+        return (await SpawnAsync(state, ct, sink), null);
     }
 
     /// <summary>Start a router on a port the probe found SILENT, and wait for it to answer. Every installed reranker
     /// without a current device measurement is measured FIRST (<see cref="MeasureRerankersAsync"/>), so the preset
     /// written next names the device each one is fastest on. Only here: this is the one path that starts a router of OURS
     /// — a start or a restart, both under <see cref="_lifecycle"/> — and never one we adopted, whose presets are not ours.</summary>
-    private async Task<bool> SpawnAsync(LlamaServerState state, CancellationToken ct)
+    private async Task<bool> SpawnAsync(LlamaServerState state, CancellationToken ct, MeasurementSink? sink = null)
     {
         if (state.Executable is null) return false;
 
@@ -892,7 +913,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         // it precedes (review, 2026-09-26) — the router then starts with no device keys, as before. Only the caller's
         // cancellation propagates.
         IReadOnlyDictionary<string, string> devices;
-        try { devices = await MeasureRerankersAsync(state, models, ct); }
+        try { devices = await MeasureRerankersAsync(state, models, ct, sink); }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             _log.LogWarning(ex, "rerank device measurement failed; the router starts with no device keys");

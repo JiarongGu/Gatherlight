@@ -17,18 +17,22 @@
 //      and its process killed
 //   B  retries: at the next start ONLY the excluded devices are measured again, valid results kept — a device valid now
 //      takes over — and a device that keeps failing is tried MaxAttempts (3) times and then left, the row saying which;
-//      the same start once more measures nothing; a device list whose FREE MEMORY moved measures nothing
+//      with the store unwritable meanwhile, the row and the next retry read the NEWER unsaved measurement, attempts still
+//      advance, and the save is tried again at the next start; the start's answer names only what IT measured, even when
+//      the start fails; a device list whose FREE MEMORY moved measures nothing
 //   C  the key: a device list whose DEVICES changed re-measures (the dGPU hidden, as GGML_VK_VISIBLE_DEVICES does); so
 //      do a changed model file and a changed build; and the recommendation flips: BGE measured too slow for the default
-//      page's one-window call on every device → 资源 recommends mMiniLMv2 beside the installed BGE, saying why
+//      page's one-window call on every device → 资源 recommends mMiniLMv2 beside the installed BGE, saying why — but NOT
+//      while a retry of an excluded device is still pending
 //   D  a CPU section: `device = none` beside `n-gpu-layers = 99` (harmless — verified on the real binary, see
 //      LlamaServerRuntime.LaunchKeys); a declared window (mMiniLMv2, 512) is the window it is measured under; a
-//      measurement that could not be SAVED is still what the preset names, the row says so, and the next start measures
-//      it again from scratch
+//      measurement that could not be SAVED is still what the preset names, the row says so, and the next start retries
+//      from it and saves it
 //   E  the pace seed, counted at the ROUTER: a second life of a folder where BGE was measured slow adopts a fake router, and
 //      a recall of long notes sends it NOTHING (skipped at the measured rate); the control — measured with no valid device
 //      — sends it the call. A never-measured reranker's row, beside a router the app did not start, says it is not
-//      measured while that router is not ours. The overlay's step line showed the measurement's progress
+//      measured while that router is not ours, and an excluded device's retry is promised only for the app's own start.
+//      The overlay's step line showed the measurement's progress
 //   F  the kill-on-close job: the app TerminateProcess'd while a measurement child is running — the child dies with it
 //
 // CONFIRMED TO FAIL with their half removed (2026-09-26, each on a build of its own; devtools/_dm/mutate.mjs, scratch):
@@ -39,11 +43,15 @@
 // without devices / without the file / without the build (C's three), and — added with the retries — retries off (B's
 // retry and the attempts after it), retries unbounded (B's attempts), the warm call sent byte for byte as the timed one (A's
 // different documents), the save failure hidden (D's unsaved row), the adopted router ignored (E's row), no progress line
-// (E's step line) and the job off (F).
+// (E's step line) and the job off (F); and with the re-review — the store read before the unsaved measurement in the lookup
+// (B's row and B's third start) and in the retry (B's four), the flip while a retry is pending (C's two), the adopted
+// clause ignored (E's retry row), the failed start's sentence dropped (A's and B's), one clause for all excluded devices in
+// the lead (C's reason) and the save not retried (B's two).
 //
 // NOT DRIVEN: Dispose killing a measurement child (the harness stops a server with TerminateProcess, which skips Dispose
 // — F drives the job, which covers that kill too); the router's port band refused when the OS offers it (the OS cannot be
-// made to); the start button's `measured` sentence (its router, more.com, never comes up here — seen on the real binary).
+// made to); a throw inside a retry keeping the stored device key (nothing in the measurement can be made to throw there);
+// a start that waited behind ANOTHER caller's measurement not claiming it (the two cannot be interleaved on demand).
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -140,6 +148,10 @@ try {
   const bgeStarts = starts1.filter((e) => e.model === BGE);
   ok('(fixture) the start measured before it tried the router — which, being more.com, did not come up',
     start1.status === 409 && starts1.length === 6, JSON.stringify({ status: start1.status, starts: starts1.map((e) => `${e.model}@${e.device}`) }));
+  ok('THE POINT: …and the FAILED start still says the time went on measuring, and on what — what THIS start measured',
+    /^启动前先测了 bge-reranker-v2-m3-Q5_K_M、LAMAR-600m\.Q5_K_M 在哪个设备上最快\(用了 \d+\.\d+ 秒\),结果写在下面各自那一行。$/.test(start1.body?.measured ?? '')
+      && String(start1.body?.error ?? '').endsWith(start1.body?.measured ?? '\u0000'),
+    JSON.stringify(start1.body));
   ok('THE POINT: BGE was timed on the CPU and on EVERY listed device, in that order — the device list says nothing about which is fast',
     JSON.stringify(bgeStarts.map((e) => e.device)) === JSON.stringify(['none', 'Vulkan0', 'Vulkan1']),
     JSON.stringify(bgeStarts.map((e) => e.device)));
@@ -225,37 +237,52 @@ try {
 
   // ---- B · retries -------------------------------------------------------------------------------------------------
   // An exclusion is often TRANSIENT, so the next start measures the excluded devices again — ONLY those. Here the dGPU
-  // has come good and the iGPU now exits at once (as a child that cannot bind or load does).
+  // has come good and the iGPU now exits at once (as a child that cannot bind or load does). And the store cannot be
+  // WRITTEN meanwhile (a directory where it writes its temporary file): the merged measurement is what runs, and what the
+  // row, the next retry and the save retried all read — never the OLDER one still stored under the same key.
   configure(f, {
     [BGE]: { none: 0.4, Vulkan0: 1.0, Vulkan1: 0.05 },
     [LAMAR]: { none: 0.05, Vulkan0: 'exit', Vulkan1: 0.02 },
   });
+  const blocker = path.join(f.gguf, 'rerank-devices.json.tmp');
+  fs.mkdirSync(blocker, { recursive: true });
   const b1 = startsOf(f).length;
-  await post('/api/manage/models/llama/start');
+  const start2 = await post('/api/manage/models/llama/start');
   const retry1 = startsOf(f).slice(b1);
   ok('THE POINT: the next start measures ONLY the devices excluded last time — LAMAR\'s iGPU and dGPU — never a valid result again',
     JSON.stringify(retry1.map((e) => `${e.model}@${e.device}`)) === JSON.stringify([`${LAMAR}@Vulkan0`, `${LAMAR}@Vulkan1`]),
     JSON.stringify(retry1.map((e) => `${e.model}@${e.device}`)));
-  const lamar2 = resultsOf(f, LAMAR);
-  ok('…a device valid now takes over: the dGPU gave a result and is faster than the CPU, so the preset names it',
-    lamar2.Vulkan1?.elapsedMs > 0 && lamar2.Vulkan1?.attempts === 2 && lamar2.none?.attempts === 1
-      && /^device\s*=\s*Vulkan1\s*$/m.test(sectionOf(readPreset(f), LAMAR)),
-    JSON.stringify({ results: entryOf(f, LAMAR)?.results, section: sectionOf(readPreset(f), LAMAR) }));
-  ok('…and the one still failing counts its attempts', lamar2.Vulkan0?.attempts === 2 && /退出码 3/.test(lamar2.Vulkan0?.error ?? ''),
-    JSON.stringify(lamar2.Vulkan0 ?? null));
+  ok('…and its answer says it measured LAMAR — only what THIS start measured', /^启动前先测了 LAMAR-600m\.Q5_K_M 在哪个设备上最快/.test(start2.body?.measured ?? ''),
+    JSON.stringify(start2.body?.measured ?? null));
+  ok('(fixture) the merged measurement could not be saved — the store still holds the older one',
+    resultsOf(f, LAMAR).Vulkan1?.elapsedMs == null && resultsOf(f, LAMAR).Vulkan1?.attempts === 1, JSON.stringify(entryOf(f, LAMAR)?.results));
+  const lamarRowB1 = String(rowOf(await getJson('/api/manage/models'), LAMAR)?.deviceNote ?? '');
+  ok('THE POINT: a device valid now takes over — the preset names the dGPU — and the ROW shows that NEWER, unsaved measurement, not the older stored one',
+    /^device\s*=\s*Vulkan1\s*$/m.test(sectionOf(readPreset(f), LAMAR))
+      && /测出结果的设备里最快的是 zzfake dGPU,所以应用启动 llama\.cpp 时让它在 zzfake dGPU 上运行/.test(lamarRowB1)
+      && /zzfake iGPU 没有测出结果\(进程在载入模型时退出了\(退出码 3\);第 2 次\),应用下一次自己启动 llama\.cpp 时会再测/.test(lamarRowB1)
+      && /这次的结果没能保存:应用下一次自己启动 llama\.cpp 时会再试着保存;要是应用重启时还没保存上,重启后会重新测。/.test(lamarRowB1),
+    lamarRowB1);
   const b2 = startsOf(f).length;
   await post('/api/manage/models/llama/start');
   const retry2 = startsOf(f).slice(b2);
-  ok('…the third start tries the iGPU a third time, and nothing else',
-    JSON.stringify(retry2.map((e) => `${e.model}@${e.device}`)) === JSON.stringify([`${LAMAR}@Vulkan0`]) && resultsOf(f, LAMAR).Vulkan0?.attempts === 3,
-    JSON.stringify({ starts: retry2.map((e) => `${e.model}@${e.device}`), vulkan0: resultsOf(f, LAMAR).Vulkan0 }));
+  ok('THE POINT: the third start retries from the UNSAVED measurement — the iGPU a third time, and nothing else: attempts advance though nothing was saved',
+    JSON.stringify(retry2.map((e) => `${e.model}@${e.device}`)) === JSON.stringify([`${LAMAR}@Vulkan0`])
+      && /zzfake iGPU 3 次都没有测出结果/.test(rowOf(await getJson('/api/manage/models'), LAMAR)?.deviceNote ?? ''),
+    JSON.stringify({ starts: retry2.map((e) => `${e.model}@${e.device}`) }));
+  fs.rmSync(blocker, { recursive: true, force: true });
   const b3 = startsOf(f).length;
-  await post('/api/manage/models/llama/start');
-  ok('THE POINT: after 3 attempts the exclusion STANDS — the next start measures nothing', startsOf(f).length === b3,
-    `${startsOf(f).length - b3} new start(s)`);
+  const start4 = await post('/api/manage/models/llama/start');
+  ok('THE POINT: after 3 attempts the exclusion STANDS — the next start measures nothing, and says nothing about measuring',
+    startsOf(f).length === b3 && start4.body?.measured == null, `${startsOf(f).length - b3} new start(s); ${JSON.stringify(start4.body?.measured ?? null)}`);
+  const lamar3 = resultsOf(f, LAMAR);
+  ok('…and the SAVE was tried again at that start: the store now holds the merged measurement',
+    lamar3.Vulkan1?.elapsedMs > 0 && lamar3.Vulkan1?.attempts === 2 && lamar3.Vulkan0?.attempts === 3 && lamar3.none?.attempts === 1,
+    JSON.stringify(entryOf(f, LAMAR)?.results));
   const lamarNote3 = String(rowOf(await getJson('/api/manage/models'), LAMAR)?.deviceNote ?? '');
-  ok('…and LAMAR\'s row says so, naming what would measure it again — and that a driver update does not',
-    /zzfake iGPU 3 次都没有测出结果\(最近一次:进程在载入模型时退出了\(退出码 3\)\),除非模型文件、llama\.cpp 版本或设备列表变了\(更新显卡驱动不算\),不会再测/.test(lamarNote3),
+  ok('…and LAMAR\'s row says so, naming what would measure it again — and that a driver update does not — with no 「没能保存」 left',
+    /zzfake iGPU 3 次都没有测出结果\(最近一次:进程在载入模型时退出了\(退出码 3\)\),除非模型文件、llama\.cpp 版本或设备列表变了\(更新显卡驱动不算\),不会再测/.test(lamarNote3)
+      && !/没能保存/.test(lamarNote3),
     lamarNote3);
   ok('…and the preset still names the measured devices', /^device\s*=\s*Vulkan1\s*$/m.test(sectionOf(readPreset(f), BGE))
     && /^device\s*=\s*Vulkan1\s*$/m.test(sectionOf(readPreset(f), LAMAR)),
@@ -271,10 +298,12 @@ try {
     startsOf(f).length === b4, `${startsOf(f).length - b4} new start(s)`);
 
   // ---- C · the dGPU hidden: a new device list re-measures, and BGE is now too slow here ----------------------------
+  // The iGPU EXITS: a retryable exclusion, so the badge must NOT flip yet — the next start's retry could still find a device
+  // fast enough. It flips once the iGPU's attempts are spent, naming it with its own clause.
   answer(f, { devices: IGPU_ONLY });
   await getJson('/api/manage/models/llama?refresh=true');
   configure(f, {
-    [BGE]: { none: 2.0, Vulkan0: 3.0 },
+    [BGE]: { none: 2.0, Vulkan0: 'exit' },
     [LAMAR]: { none: 0.05, Vulkan0: 0.3 },
   });
   const c1 = startsOf(f).length;
@@ -284,21 +313,21 @@ try {
     JSON.stringify(starts2.map((e) => `${e.model}@${e.device}`)) === JSON.stringify([`${BGE}@none`, `${BGE}@Vulkan0`, `${LAMAR}@none`, `${LAMAR}@Vulkan0`])
       && Object.values(resultsOf(f, LAMAR)).every((r) => r.attempts === 1),
     JSON.stringify(starts2.map((e) => `${e.model}@${e.device}`)));
-  const preset2 = readPreset(f);
-  ok('THE POINT (D): the iGPU measured SLOWER than the CPU, so BGE\'s section says `device = none` — with n-gpu-layers = 99 beside it',
-    /^device\s*=\s*none\s*$/m.test(sectionOf(preset2, BGE)) && /^n-gpu-layers\s*=\s*99\s*$/m.test(sectionOf(preset2, BGE)),
-    JSON.stringify(sectionOf(preset2, BGE)));
-  ok('…and LAMAR, the CPU fastest too, likewise', /^device\s*=\s*none\s*$/m.test(sectionOf(preset2, LAMAR)),
-    JSON.stringify(sectionOf(preset2, LAMAR)));
-
+  ok('THE POINT: BGE too slow on the CPU, but a retry of the iGPU is PENDING → no flip yet (a busy GPU once must not recommend a download)',
+    (await getJson('/api/manage/models')).recommendation == null && resultsOf(f, BGE).Vulkan0?.attempts === 1,
+    JSON.stringify((await getJson('/api/manage/models')).recommendation ?? null));
+  await post('/api/manage/models/llama/start');
+  ok('…still none after the second attempt', (await getJson('/api/manage/models')).recommendation == null && resultsOf(f, BGE).Vulkan0?.attempts === 2,
+    JSON.stringify({ rec: (await getJson('/api/manage/models')).recommendation ?? null, vulkan0: resultsOf(f, BGE).Vulkan0 }));
+  await post('/api/manage/models/llama/start');
   const shelf2 = await getJson('/api/manage/models');
   const rec2 = shelf2.recommendation;
-  ok('THE POINT: BGE measured too slow for the default page on EVERY device here → 资源 recommends mMiniLMv2, beside the installed BGE',
-    rec2?.id === MMINILM && rowOf(shelf2, BGE)?.installed === true, JSON.stringify(rec2 ?? null));
-  ok('…and its reason says why, from the measurement: the fastest device that gave a result, its time, 96 LONG candidates, the 48 s limit, the skip — and that short facts take far less',
-    /BGE 在这台机器上实测过:测出结果的设备里最快的是 CPU/.test(rec2?.reason ?? '')
+  ok('THE POINT: attempts spent, no retry pending, BGE too slow for the default page on every device that gave a result → 资源 recommends mMiniLMv2, beside the installed BGE',
+    rec2?.id === MMINILM && rowOf(shelf2, BGE)?.installed === true && resultsOf(f, BGE).Vulkan0?.attempts === 3, JSON.stringify(rec2 ?? null));
+  ok('…and its reason says why, from the measurement: the fastest device that gave a result, the excluded one with ITS clause, its time, 96 LONG candidates, the 48 s limit, the skip — and that short facts take far less',
+    /BGE 在这台机器上实测过:测出结果的设备里最快的是 CPU\(没有测出结果的:zzfake iGPU 3 次都没有测出结果\(最近一次:进程在载入模型时退出了\(退出码 3\)\),除非模型文件、llama\.cpp 版本或设备列表变了\(更新显卡驱动不算\),不会再测\)/.test(rec2?.reason ?? '')
       && /96 条候选、每条都是长事实只读一段\(约 1,000 字\)/.test(rec2?.reason ?? '') && /48\.0 秒上限/.test(rec2?.reason ?? '')
-      && /跳过判断\(事实短时花的时间少得多\)/.test(rec2?.reason ?? '')
+      && /跳过判断\(事实短时花的时间少得多\)/.test(rec2?.reason ?? '') && !/时会再测/.test(rec2?.reason ?? '')
       && /下载后应用下一次自己启动 llama\.cpp 时同样会测/.test(rec2?.reason ?? '') && /Claude CLI/.test(rec2?.reason ?? ''),
     String(rec2?.reason));
   ok('…and BGE\'s own row says a default recall of long facts would be skipped at this speed',
@@ -322,13 +351,19 @@ try {
   const starts4 = startsOf(f).slice(c3);
   ok('THE POINT: a changed llama.cpp BUILD re-measures every reranker', starts4.length === 4 && entryOf(f, BGE)?.build === 'b10550',
     JSON.stringify({ starts: starts4.map((e) => `${e.model}@${e.device}`), build: entryOf(f, BGE)?.build }));
+  const preset2 = readPreset(f);
+  ok('THE POINT (D): the iGPU measured SLOWER than the CPU, so BGE\'s section says `device = none` — with n-gpu-layers = 99 beside it',
+    resultsOf(f, BGE).Vulkan0?.elapsedMs > resultsOf(f, BGE).none?.elapsedMs
+      && /^device\s*=\s*none\s*$/m.test(sectionOf(preset2, BGE)) && /^n-gpu-layers\s*=\s*99\s*$/m.test(sectionOf(preset2, BGE)),
+    JSON.stringify({ results: entryOf(f, BGE)?.results, section: sectionOf(preset2, BGE) }));
+  ok('…and LAMAR, the CPU fastest too, likewise', /^device\s*=\s*none\s*$/m.test(sectionOf(preset2, LAMAR)),
+    JSON.stringify(sectionOf(preset2, LAMAR)));
 
   // ---- D · a declared window; a measurement that could not be SAVED ------------------------------------------------
-  // A DIRECTORY where the store writes its temporary file makes the save throw (access denied).
-  const blocker = path.join(f.gguf, 'rerank-devices.json.tmp');
+  // The store cannot be written again (the same directory where it writes its temporary file).
   fs.mkdirSync(blocker, { recursive: true });
   fs.writeFileSync(path.join(f.gguf, `${MMINILM}.gguf`), 'x');
-  configure(f, { [MMINILM]: { none: 0.05, Vulkan0: 0.3 } });
+  configure(f, { [MMINILM]: { none: 0.05, Vulkan0: 'exit' } });
   const d1 = startsOf(f).length;
   await post('/api/manage/models/llama/start');
   const starts5 = startsOf(f).slice(d1);
@@ -338,23 +373,22 @@ try {
     starts5.every((e) => /--ctx-size 512/.test(e.argv.join(' ')) && /--ubatch-size 512/.test(e.argv.join(' '))),
     JSON.stringify(starts5.map((e) => e.argv.join(' '))));
   ok('(fixture) its measurement could not be saved', entryOf(f, MMINILM) == null, JSON.stringify(entryOf(f, MMINILM)));
-  ok('THE POINT: …the preset still names the device it measured — the CPU — and its row says the result was not saved and will be measured again',
-    /^device\s*=\s*none\s*$/m.test(sectionOf(readPreset(f), MMINILM))
-      && /让它在 CPU 上运行/.test(rowOf(await getJson('/api/manage/models'), MMINILM)?.deviceNote ?? '')
-      && /这次的结果没能保存,应用下一次自己启动 llama\.cpp 时会重新测/.test(rowOf(await getJson('/api/manage/models'), MMINILM)?.deviceNote ?? ''),
-    String(rowOf(await getJson('/api/manage/models'), MMINILM)?.deviceNote));
+  const mmRow = String(rowOf(await getJson('/api/manage/models'), MMINILM)?.deviceNote ?? '');
+  ok('THE POINT: …the preset still names the device it measured — the CPU — and its row says the result was not saved, and what happens to it',
+    /^device\s*=\s*none\s*$/m.test(sectionOf(readPreset(f), MMINILM)) && /让它在 CPU 上运行/.test(mmRow)
+      && /这次的结果没能保存:应用下一次自己启动 llama\.cpp 时会再试着保存;要是应用重启时还没保存上,重启后会重新测。/.test(mmRow),
+    mmRow);
+  ok('…a device whose process EXITS before it answers is excluded with its exit code', /zzfake iGPU 没有测出结果\(进程在载入模型时退出了\(退出码 3\);第 1 次\)/.test(mmRow),
+    mmRow);
   fs.rmSync(blocker, { recursive: true, force: true });
-  configure(f, { [MMINILM]: { none: 0.05, Vulkan0: 'exit' } });
   const d2 = startsOf(f).length;
   await post('/api/manage/models/llama/start');
   const starts6 = startsOf(f).slice(d2);
-  ok('…and the next start measures it again from scratch — every device, not only a retry — and saves it',
-    JSON.stringify(starts6.map((e) => `${e.model}@${e.device}`)) === JSON.stringify([`${MMINILM}@none`, `${MMINILM}@Vulkan0`])
-      && entryOf(f, MMINILM) != null,
-    JSON.stringify(starts6.map((e) => `${e.model}@${e.device}`)));
-  ok('…a device whose process EXITS before it answers is excluded with its exit code, and the valid CPU is named in its section',
-    /退出码 3/.test(resultsOf(f, MMINILM).Vulkan0?.error ?? '') && /^device\s*=\s*none\s*$/m.test(sectionOf(readPreset(f), MMINILM)),
-    JSON.stringify({ vulkan0: resultsOf(f, MMINILM).Vulkan0, section: sectionOf(readPreset(f), MMINILM) }));
+  ok('…and the next start retries from the UNSAVED measurement — the iGPU only — and saves it this time',
+    JSON.stringify(starts6.map((e) => `${e.model}@${e.device}`)) === JSON.stringify([`${MMINILM}@Vulkan0`])
+      && resultsOf(f, MMINILM).Vulkan0?.attempts === 2 && resultsOf(f, MMINILM).none?.elapsedMs > 0
+      && /^device\s*=\s*none\s*$/m.test(sectionOf(readPreset(f), MMINILM)),
+    JSON.stringify({ starts: starts6.map((e) => `${e.model}@${e.device}`), stored: entryOf(f, MMINILM)?.results }));
   ok('(control) with mMiniLMv2 installed there is nothing to recommend', (await getJson('/api/manage/models')).recommendation == null,
     JSON.stringify((await getJson('/api/manage/models')).recommendation ?? null));
   srv.stop();
@@ -456,6 +490,11 @@ try {
     ctl.r.status === 200 && ctl.sent >= 1, JSON.stringify({ status: ctl.r.status, sent: ctl.sent }));
   ok('(control) …and its preset names no device', !/device/.test(sectionOf(readPreset(ctl.g), BGE)),
     JSON.stringify(sectionOf(readPreset(ctl.g), BGE)));
+  const ctlRow = String(rowOf(ctl.shelf, BGE)?.deviceNote ?? '');
+  ok('THE POINT: beside a router the app did NOT start, an excluded device with attempts left is promised a retry only when the APP starts llama.cpp — never "next start" as if it were this one',
+    /CPU 没有测出结果\(预热:只给 4 段里的 3 段打了分;第 1 次\),等应用自己启动 llama\.cpp 时会再测\(现在运行的 llama\.cpp 不是应用这次启动的\)/.test(ctlRow)
+      && !/应用下一次自己启动 llama\.cpp 时会再测/.test(ctlRow),
+    ctlRow);
   ctl.s2.stop();
 
   // ---- F · a measurement child dies with the app, however the app dies ----------------------------------------------

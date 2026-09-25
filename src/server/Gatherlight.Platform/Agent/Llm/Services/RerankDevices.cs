@@ -77,8 +77,11 @@ public static class RerankReply
 /// port race — so an excluded device is measured again at each router start the app performs, up to
 /// <see cref="RerankDeviceMeter.MaxAttempts"/>; a valid result stands as it is. Absent in a file written before retries
 /// existed, which reads as one.</param>
+/// <param name="MeasuredAt">When THIS device was last measured. A retry re-measures only the excluded devices, so the
+/// results of one measurement can come from different starts; the row gives their dates rather than the latest alone.
+/// Absent in a file written before retries existed: the measurement's own date then stands for it.</param>
 public sealed record RerankDeviceResult(string Device, string Name, long? ElapsedMs, double? MsPerToken, string? Error,
-    int Attempts = 1)
+    int Attempts = 1, DateTimeOffset? MeasuredAt = null)
 {
     [JsonIgnore] public bool Valid => ElapsedMs is not null && MsPerToken is not null && Error is null;
 
@@ -393,7 +396,8 @@ public static class RerankDeviceNotes
 
     /// <summary>For an INSTALLED reranker: its measurement when one is current, or what happens until there is one.</summary>
     /// <param name="saved">False: this process measured it and could not save it (<see cref="RerankDeviceLookup.Saved"/>).</param>
-    /// <param name="adopted">The router answering now is not one this process started — it is never measured for.</param>
+    /// <param name="adopted">The router answering now is not one this process started — nothing is measured for it, so no
+    /// sentence may promise a measurement "at the app's next start" as if that were the start in progress.</param>
     public static string Row(RerankDeviceMeasurement? m, bool saved = true, bool adopted = false)
     {
         if (m is null)
@@ -406,10 +410,13 @@ public static class RerankDeviceNotes
 
         var timings = string.Join("、", m.Results.Select(r => r.Valid
             ? $"{r.Name} {Seconds(r.ElapsedMs!.Value)} 秒"
-            : ExcludedClause(r)));
-        var head = $"在这台机器上实测过({m.MeasuredAt.ToLocalTime():yyyy-MM-dd},llama.cpp {m.Build}):"
+            : ExcludedClause(r, adopted)));
+        var head = $"在这台机器上实测过({When(m)},llama.cpp {m.Build}):"
             + $"同一批 {m.Documents} 段、共 {m.Characters.ToString("N0", CultureInfo.InvariantCulture)} 字的打分,{timings}。";
-        var unsaved = saved ? "" : "这次的结果没能保存,应用下一次自己启动 llama.cpp 时会重新测。";
+        // True of the runtime: an unsaved measurement is kept in memory and read first, the next start tries the save again,
+        // and after an app restart the store holds none, so it is measured again.
+        var unsaved = saved ? ""
+            : "这次的结果没能保存:应用下一次自己启动 llama.cpp 时会再试着保存;要是应用重启时还没保存上,重启后会重新测。";
         if (m.Fastest is not { } best)
             return head + "没有一个设备测出可用的结果,所以仍由 llama.cpp 自己选设备。" + unsaved + OnlyRerankers;
 
@@ -423,22 +430,36 @@ public static class RerankDeviceNotes
         return head + fastest + $"应用启动 llama.cpp 时让它在 {best.Name} 上运行。" + slow + unsaved + OnlyRerankers;
     }
 
+    /// <summary>The date the figures were taken — one date, or the first and last when a retry measured some devices on a
+    /// later start than the others (<see cref="RerankDeviceResult.MeasuredAt"/>).</summary>
+    private static string When(RerankDeviceMeasurement m)
+    {
+        var dates = m.Results.Select(r => (r.MeasuredAt ?? m.MeasuredAt).ToLocalTime().Date).Distinct().OrderBy(d => d).ToList();
+        return dates.Count <= 1
+            ? m.MeasuredAt.ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : $"{dates[0].ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)} 至 {dates[^1].ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}";
+    }
+
     /// <summary>An excluded device, and whether it will be measured again: at the next router start the app performs while
-    /// attempts remain, otherwise only when the key changes.</summary>
-    public static string ExcludedClause(RerankDeviceResult r) =>
+    /// attempts remain — which, beside a router the app did not start, is not the start in progress, and the clause says so
+    /// — otherwise only when the key changes.</summary>
+    public static string ExcludedClause(RerankDeviceResult r, bool adopted = false) =>
         r.AttemptsSpent < RerankDeviceMeter.MaxAttempts
-            ? $"{r.Name} 没有测出结果({r.Error};第 {r.AttemptsSpent} 次),应用下一次自己启动 llama.cpp 时会再测"
+            ? adopted
+                ? $"{r.Name} 没有测出结果({r.Error};第 {r.AttemptsSpent} 次),等应用自己启动 llama.cpp 时会再测"
+                  + "(现在运行的 llama.cpp 不是应用这次启动的)"
+                : $"{r.Name} 没有测出结果({r.Error};第 {r.AttemptsSpent} 次),应用下一次自己启动 llama.cpp 时会再测"
             : $"{r.Name} {r.AttemptsSpent} 次都没有测出结果(最近一次:{r.Error}),{KeyHalves},不会再测";
 
-    /// <summary>The lead of 资源's 推荐 line when BGE measured too slow — the fastest device THAT GAVE A RESULT, its time
-    /// for the batch, what that rate predicts for the default page's one-window call of long facts against the limit the
-    /// runtime sends one under, and the devices that gave no result, named.</summary>
-    public static string TooSlowLead(RerankDeviceMeasurement m, double predictedMs, double limitMs)
+    /// <summary>The lead of 资源's 推荐 line when BGE measured too slow — the fastest device THAT GAVE A RESULT, the devices
+    /// that gave none (each with its own clause: whether it will be measured again depends on ITS attempts), its time for the
+    /// batch, and what that rate predicts for the default page's one-window call of long facts against the limit the runtime
+    /// sends one under.</summary>
+    public static string TooSlowLead(RerankDeviceMeasurement m, double predictedMs, double limitMs, bool adopted = false)
     {
         var best = m.Fastest!;
         var excluded = m.Excluded.Count == 0 ? ""
-            : $"(没有测出结果的:{string.Join("、", m.Excluded.Select(r => r.Name))} —— "
-              + (m.Retryable.Count > 0 ? "应用下一次自己启动 llama.cpp 时会再测)" : $"{KeyHalves},不会再测)");
+            : $"(没有测出结果的:{string.Join(";", m.Excluded.Select(r => ExcludedClause(r, adopted)))})";
         return $"BGE 在这台机器上实测过:测出结果的设备里最快的是 {best.Name}{excluded},同一批 {m.Documents} 段、共 "
             + $"{m.Characters.ToString("N0", CultureInfo.InvariantCulture)} 字的打分用了 {Seconds(best.ElapsedMs!.Value)} 秒;"
             + $"按这个速度推算,默认一次检索最多给判断看的 {RerankDeviceVerdict.ReferenceCandidates} 条候选、每条都是长事实只读一段"
@@ -455,7 +476,10 @@ public static class RerankDeviceNotes
         (ms / 1000.0).ToString(ms < 10_000 ? "0.00" : "0.0", CultureInfo.InvariantCulture);
 }
 
-/// <summary>What the last reranker device measurement in this process did: which models it measured (all devices, or the
-/// excluded ones again), how long it took, and a sequence number that grows with each measuring start — so a caller can
-/// tell whether the start IT asked for measured anything (资源's start button says so).</summary>
-public sealed record RerankMeasurementReport(int Sequence, IReadOnlyList<string> Models, TimeSpan Took);
+/// <summary>What one start's reranker device measurement did: which models it measured (all devices, or the excluded ones
+/// again) and how long it took — returned to the call that asked (<see cref="ILlamaServerRuntime.StartAsync"/>), so 资源's
+/// start button says what ITS start measured, never another caller's.</summary>
+public sealed record RerankMeasurementReport(IReadOnlyList<string> Models, TimeSpan Took);
+
+/// <summary>What <see cref="ILlamaServerRuntime.StartAsync"/> did: whether the router answers, and what that call measured.</summary>
+public sealed record RouterStart(bool Ok, RerankMeasurementReport? Measured);

@@ -1020,21 +1020,29 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (`RerankReply`) is excluded with a household reason (the exception to the log, never into a row). The preset names the
   fastest device THAT GAVE A RESULT (`device = Vulkan0`, or `none`) and nothing else gets a device key; with no valid
   result, no key — llama.cpp chooses, as before. The measurement is CONTAINED: anything it throws is logged and the router
-  starts with no device keys — it is an optimisation, and must never be why llama.cpp did not start.
+  starts anyway — a reranker whose retry threw keeps the device its stored result names, and one with nothing stored gets
+  no key: it is an optimisation, and must never be why llama.cpp did not start, nor why a known device is forgotten.
   **An exclusion is RETRIED, a bounded number of times** (review, 2026-09-26). Most are transient — a cold shader cache or
   a virus scan of a fresh `llama-server` at the first start of a new build (exactly when the key changes), a game or
   another llama-server holding VRAM, contention, a lost port race — and saved as final, one busy moment would have put a
   reranker on the CPU for good while the badge said 「它最快的设备是 CPU」. So at each start the app performs, a current
   measurement's excluded devices — and only those — are measured again and merged, up to `RerankDeviceMeter.MaxAttempts`
   (3) each; valid results stand, and the start's preset uses the stored ones meanwhile. After that the exclusion stands
-  until the key changes, and the row says which of the two applies to each device.
+  until the key changes, and the row says which of the two applies to EACH device — so does the badge's lead, per device
+  (one clause for all of them was false for any whose attempts were spent). Beside a router the app did not start, a
+  retry is promised only for the app's own start, since nothing is measured for an adopted router. Each result carries the
+  date it was taken, and the row gives the first and last when a retry measured some devices on a later start.
   **The key** (`RerankDeviceKey`) is the model file (id, size, time), the build tag and the device list's ids AND names —
   its free-memory figures stripped, or every boot re-measures; the names because `GGML_VK_VISIBLE_DEVICES` can hand the id
   `Vulkan0` to a different GPU. **A GPU DRIVER update is not in it**, so it re-measures nothing — the row's "won't be
   measured again" sentence says so (「更新显卡驱动不算」); what a driver changes is unmeasured. It lives in
   `rerank-devices.json` beside the GGUFs, under `state/`, which the backup does not carry: a device choice belongs to one
-  machine. A measurement that cannot be SAVED is still what this start's preset names; the runtime keeps it in memory so
-  the row says what is running (「这次的结果没能保存…会重新测」), and the next start measures from scratch. The batch is
+  machine. A measurement that cannot be SAVED is still what this start's preset names, and the runtime keeps it in memory
+  and reads it FIRST — it is newer than anything stored under the same key by construction (a merged retry sits beside the
+  older measurement it was merged from; read store-first, the row showed the older one while the router ran the merged,
+  and the attempts stopped advancing). The row, the next retry and the pace seed read it; each start tries the save again;
+  and after an app restart it is gone and the model is measured again — which is what the row says
+  (「这次的结果没能保存:…会再试着保存;要是应用重启时还没保存上,重启后会重新测」). The batch is
   four documents of invented bilingual prose, each a full window of the model's own budget (`RerankInputCap.Fit`), counted
   by `RerankPace.PairTokens` and read through `RerankPace.RateOf` — the pace's unit, one counting.
   **Nothing outlives it** — a measurement child on a random port is adopted by nothing, and holds RAM or VRAM until a
@@ -1054,6 +1062,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   call — 96 candidates (`recall_facts`' 8 → `FactIndex.RankLimit`'s 24 → Lyntai's 4× verification depth; the bench's
   "≤ 60" is its fixture's size), each a long fact read in one full window of the batch's prose — the runtime's own
   admission (`RerankDeviceVerdict.ReferenceAdmission`); the lead says it is long facts, and that short ones take far less.
+  **Not while a retry is pending**: a BGE measurement that still has an excluded device with attempts left moves nothing —
+  one RTX busy at the first start would otherwise recommend a 133 MB download the next start's retry may reverse; it flips
+  once every device has a result or has spent its attempts.
   **Only BGE's measurement moves it**: a LAMAR or mMiniLMv2 measured too slow changes nothing, because the question is
   whether this machine is too slow for BGE, the default. Precedence: recent skips → BGE measured too slow → no GPU → BGE.
   And the reranker's ROW says where it runs and what was measured (`RerankDeviceNotes`), including that embedders and
@@ -1063,7 +1074,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   iGPU-only machine the badge offers BGE first and moves to mMiniLMv2 once BGE is measured. **Who waits**: the migration
   overlay — whose step line shows 「正在测重排模型 … 第 i/n 个」 while it runs (`ILlamaServerRuntime.MeasuringNow`, polled) —
   or a bind's restart and 资源's start button, which no server or client timeout bounds, the start button's answer then
-  saying a measurement ran and how long it took — worst case 105 s per device per unmeasured reranker, and per retried
+  saying what THAT start measured and how long it took (`ILlamaServerRuntime.StartAsync` returns it: a measurement another
+  caller ran while this one waited for the lock is never claimed, and a start that then FAILS still says it, since the time
+  went there) — worst case 105 s per device per unmeasured reranker, and per retried
   device. Inside a restart the router stays down for the measurement too; `ILlamaRestartPolicy` already refuses a restart
   while anything WRITES through the router, so what that longer window can cost is a reranker's verification, which fails
   open. Measured: 77 s for both rerankers on this laptop's three devices, and nothing on the next start
@@ -1076,17 +1089,21 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   it is sent, per model and device; the precedent is `GATHERLIGHT_CLAUDE_CMD`) and the cap knob
   `GATHERLIGHT_RERANK_MEASURE_CAP_SECONDS`, which only shortens: the choice, one device at a time, the launch keys,
   different warm and timed documents, validity, the cap and the kill, retries and their bound, the key's four halves, the
-  flip, a CPU section, an unsaved measurement, the overlay's progress line, and — counted at a fake ROUTER, not read from
+  flip and no flip while a retry is pending, a CPU section, an unsaved measurement read first and saved again, the start's
+  own measurement sentence on a failed start, the overlay's progress line, and — counted at a fake ROUTER, not read from
   a log — the pace seed against a control with no valid measurement, and the kill-on-close job (the app TerminateProcess'd
   under a running child). **Confirmed to FAIL** (each on a build of its own, 2026-09-26): no device key in `LaunchKeys`, the
   preset not given the devices, validity off, the free-memory figures kept in the key, the flip off, the seed not wired,
   devices measured in parallel, no kill, the store ignored, the key without devices / the file / the build, the badge's
   limitation sentence removed, a device key on every section, the old seed sentence restored (`p51`), and with the review
   round retries off, retries unbounded, the timed call identical to the warm one, the save failure hidden, the adopted
-  router ignored, no progress line and the job off. **Gaps**: `Dispose` killing a child is asserted by nothing (the
+  router ignored, no progress line and the job off; and with the re-review the store read before the unsaved measurement
+  (in the lookup, and in the retry), the flip allowed while a retry is pending, the adopted clause ignored, the failed
+  start's sentence dropped, one clause for all excluded devices in the lead, and the save not retried. **Gaps**: `Dispose`
+  killing a child is asserted by nothing (the
   harness stops a server with TerminateProcess, which skips Dispose — the job covers that kill too); the router's band
-  refused when the OS offers it is not drivable; the start button's sentence was seen on the real binary only (the suite's
-  router never comes up); a driver update re-measures nothing; whether an embedder or a chat model would be faster on
+  refused when the OS offers it is not drivable; so are a throw inside a retry (nothing in the measurement can be made to
+  throw there) and a start that waited behind another caller's measurement; a driver update re-measures nothing; whether an embedder or a chat model would be faster on
   another device is unmeasured; and one laptop is the only hardware measured.
   Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
   (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
