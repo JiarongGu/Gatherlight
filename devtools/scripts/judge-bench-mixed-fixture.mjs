@@ -13,9 +13,11 @@
 // THE ASSIGNMENT, pre-registered by being committed (each fact carries its `position` and its near-duplicate `group`):
 //   - short/long ALTERNATES through each language's facts in fixture order, so each language is half short, half long
 //     (zh 20/20, en 8/8, ja 2/2). A near-duplicate group sits next to itself in the fixture, so alternation splits it
-//     and a short fact competes with its own group's long note. zh and ja start SHORT and en starts LONG (PHASE): that
-//     is the phase that splits all twelve groups — with en starting short, the allergy pair (zh 花生过敏, en Shellfish
-//     allergy) would both be short. The build fails unless every group has a short AND a long member.
+//     and a short fact competes with its own group's long note. zh and en must start on OPPOSITE lengths (PHASE): the
+//     allergy pair (zh 花生过敏, en Shellfish allergy) is one fact in each, both at an even index, so otherwise it falls on
+//     one length. zh starts SHORT, as plain alternation would, en LONG, and ja SHORT (either splits its group). Four of
+//     the eight phase choices split all twelve groups; this is one. The build fails unless every group has a short AND a
+//     long member.
 //   - each language's LONG facts cycle end → beyond in fixture order: 15 each (zh 10/10, en 4/4, ja 1/1).
 //   - a long note is `longNote(fact, position, mentionsOf(facts))` — byte for byte the note Run 6's generator builds for
 //     that fact at that position: the same filler pool shuffled by the same seed, the same mentions of other facts BY
@@ -52,7 +54,7 @@ export const MIXED_FIXTURE = path.join(repo, 'devtools', 'fixtures', 'recall-bil
 /** Where a fact's answer sits: its whole short text, or a long note's end / past 1,000 characters. */
 export const MIXED_POSITIONS = ['short', 'end', 'beyond'];
 const LONG_POSITIONS = ['end', 'beyond'];
-/** The length each language's FIRST fact gets; the rest alternate. See the header: the phase that splits every group. */
+/** The length each language's FIRST fact gets; the rest alternate. zh and en opposite, so every group is split (the header). */
 const PHASE = { zh: 'short', en: 'long', ja: 'short' };
 
 /** The fixture's near-duplicate groups exactly as judge-bench reads them (its `groupOf`, Run 7): a shared id prefix
