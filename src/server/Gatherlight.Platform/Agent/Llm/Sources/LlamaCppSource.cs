@@ -363,7 +363,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         var lookup = sp.GetService<ILlamaServerRuntime>()?.RerankDevice(model);
         var seed = RerankDeviceVerdict.PaceSeed(lookup?.Measurement);
         var log = sp.GetService<ILogger<RerankPace>>();
-        if (seed is { } s && lookup?.Measurement?.Fastest is { } best)
+        if (seed is { } s && lookup?.Measurement?.Pinned is { } best)
             log?.LogInformation(
                 "{Model}: the rerank pace starts from {Seed:0.###} ms per 1,000 pair tokens — this machine's measurement on {Device} ({Name}), {Rate:0.###}, never below the GPU figure {Gpu:0.###}",
                 model, s * 1000, best.Device, best.Name, best.MsPerToken * 1000, RerankPace.SeedMsPerToken * 1000);
@@ -373,6 +373,8 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                 model, RerankPace.SeedMsPerToken * 1000,
                 lookup is null ? "no device-measurement key yet (the binary's build and device list are not known in this process)"
                 : lookup.Measurement is null ? "this reranker has no current device measurement on this machine"
+                : !lookup.Measurement.Complete
+                    ? $"its device measurement is not complete ({lookup.Measurement.Retryable.Count} excluded device(s) will be measured again), so llama.cpp chooses the device"
                 : "its measurement found no device that scored the batch");
         return seed;
     }

@@ -256,7 +256,8 @@ public sealed class ModelsController : ControllerBase
         MeasuredView? Measured, string ResourceId, string? DeviceNote);
 
     /// <summary>What an integrated GPU did, in one pointer: on one laptop's Arc both rerankers were slower than its CPU
-    /// (docs/judge-bench.md Run 8b, descriptive; the device measurement, docs/self-managed-llm-runtime.md, 2026-09-26). The
+    /// (the device measurement, docs/self-managed-llm-runtime.md, 2026-09-26, within each run; docs/judge-bench.md Run 8b,
+    /// an UNREAD run, descriptive, pointed the same way). The
     /// figures and their configuration are mMiniLMv2's row's (GgufCatalog). It said 「只有集成显卡的机器两者都还没有量过」.</summary>
     private const string IntegratedGpuPointer =
         "在同一台笔记本的集成显卡上,两者都比它的 CPU 慢(实测和设置见 mMiniLMv2 那一行的说明)。";
@@ -267,11 +268,11 @@ public sealed class ModelsController : ControllerBase
     /// device with attempts LEFT (<see cref="RerankDeviceMeasurement.Retryable"/>): one RTX busy at the first start would
     /// otherwise recommend a 133 MB download that the next start's retry may reverse (review, 2026-09-26). It flips once
     /// no retry is pending — every device measured, or its attempts spent.</summary>
-    private (RerankDeviceMeasurement M, double PredictedMs, double LimitMs)? BgeMeasuredTooSlow() =>
+    private (RerankDeviceMeasurement M, double PredictedMs, double LimitMs, bool LowerBound)? BgeMeasuredTooSlow() =>
         _llama.RerankDevice(GgufCatalog.RecommendedReranker)?.Measurement is { } m
-        && m.Retryable.Count == 0
+        && m.Complete
         && RerankDeviceVerdict.ReferenceAdmission(m) is { TooSlow: true } a
-            ? (m, a.PredictedMs, a.LimitMs)
+            ? (m, a.PredictedMs, a.LimitMs, a.LowerBound)
             : null;
 
     /// <summary>Which model to put the 推荐 badge on, or null when there is nothing left to advise.
@@ -280,8 +281,9 @@ public sealed class ModelsController : ControllerBase
     /// the first thing a household installs — so the moment they took the advice the badge matched no row
     /// and the line went on recommending a model they already had.</para>
     ///
-    /// <para>Order of preference: the measured GGUF embedder, then the built-in one (same weights, no
-    /// runtime needed), then <see cref="GgufCatalog.RecommendedReranker"/> for 判断 — and NOTHING after that.
+    /// <para>Order of preference: a REPAIR first — mMiniLMv2 when this machine's judge skipped recalls or BGE measured too
+    /// slow here (the two exceptions below; final review) — then the measured GGUF embedder, then the built-in one (same
+    /// weights, no runtime needed), then <see cref="GgufCatalog.RecommendedReranker"/> for 判断 — and NOTHING after that.
     /// 判断's pick was the Gemma 3 1B chat model until docs/judge-bench.md Run 3 (2026-09-24) measured it
     /// significantly WORSE than no judge (top-1 79 → 33 of 240); a reranker is a local judge that measured
     /// better. So is the Qwen3 0.6B chat judge (Run 5b), and it is never suggested here: the owner kept the reranker as
@@ -320,8 +322,12 @@ public sealed class ModelsController : ControllerBase
     /// <para><b>…with TWO exceptions, each a reranker this machine is too slow for.</b> An installed reranker ends the
     /// suggestion because "any installed reranker is a local judge that measured better than none" — which two things can
     /// refute on THIS machine, and then mMiniLMv2 is recommended even beside an installed reranker, whatever the device
-    /// probe says (never when mMiniLMv2 is itself installed — it is then no download). Precedence, which is also which
-    /// reason is given: (1) the running judge's pace SKIPPED recent recalls (<paramref name="skips"/>; review,
+    /// probe says (never when mMiniLMv2 is itself installed — it is then no download) — and AHEAD of the embedder: a
+    /// household with no embedder in used to be offered the embedder while its judge skipped, and the 判断 row's promise
+    /// that 资源 recommends mMiniLMv2 was false until they had installed one (final review; <c>e2e-p53</c> case C and
+    /// <c>e2e-p52</c> case 6h, each with no embedder installed). Only the runtime-missing suggestion above comes first: a
+    /// reranker needs that runtime too. Precedence among the reasons, which is also which reason is given: (1) the running
+    /// judge's pace SKIPPED recent recalls (<paramref name="skips"/>; review,
     /// 2026-09-25 — the device probe reads an integrated GPU as a GPU, so on nearly every laptop it keeps BGE while the
     /// judge skipped recall after recall, fail-open and unreported); (2) BGE was MEASURED too slow here
     /// (<paramref name="bgeTooSlow"/>, owner decision 2026-09-26 after Run 8b: its fastest device on this machine would
@@ -336,7 +342,7 @@ public sealed class ModelsController : ControllerBase
     /// case 6h (skips), <c>e2e-p53</c> (the measurement). <paramref name="adopted"/>: the router answering now is not one
     /// this process started, so the lead never promises a retry "at the app's next start" as if it were imminent.</para></summary>
     private static object? Recommend(IReadOnlyList<ModelRowView> models, bool llamaRuntimeInstalled, bool? gpu,
-        (int Skipped, int Recalls) skips, (RerankDeviceMeasurement M, double PredictedMs, double LimitMs)? bgeTooSlow,
+        (int Skipped, int Recalls) skips, (RerankDeviceMeasurement M, double PredictedMs, double LimitMs, bool LowerBound)? bgeTooSlow,
         bool adopted = false)
     {
         var offers = models.Where(m => !m.Installed).ToList();
@@ -358,11 +364,18 @@ public sealed class ModelsController : ControllerBase
         var aRerankerIsIn = models.Any(m => m.Installed && m.Capability == "reranking");
         var skipped = skips.Skipped > 0;
         var slowBge = bgeTooSlow is not null;
-        var pick = (anEmbedderIsIn ? null
+        // A REPAIR outranks the embedder (final review): the skips and BGE measured too slow are this machine refusing the
+        // judge the household already runs or chose, and the 判断 row and mMiniLMv2's own note promise that 资源 then
+        // recommends it — a promise the embedder suggestion used to break for as long as no embedder was in. Only among
+        // OFFERS, i.e. not installed — so neither repair ever recommends mMiniLMv2 beside itself.
+        var repair = skipped || slowBge
+            ? offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedRerankerFor(gpu, skipped, slowBge))
+            : null;
+        var pick = repair
+            ?? (anEmbedderIsIn ? null
                 : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedEmbedder)
                   ?? offers.FirstOrDefault(o => o.Id == BuiltInSemanticSource.ModelId))
-            // Only among OFFERS, i.e. not installed — so neither exception ever recommends mMiniLMv2 beside itself.
-            ?? (aRerankerIsIn && !skipped && !slowBge ? null
+            ?? (aRerankerIsIn ? null
                 : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedRerankerFor(gpu, skipped, slowBge)));
         if (pick is null) return null;
 
@@ -398,7 +411,7 @@ public sealed class ModelsController : ControllerBase
                           ? $"最近 {skips.Recalls} 次检索里有 {skips.Skipped} 次因为这台机器太慢跳过了判断,所以推荐这个更小的重排模型:"
                             + run8 + IntegratedGpuPointer
                           : bgeTooSlow is { } slow
-                          ? RerankDeviceNotes.TooSlowLead(slow.M, slow.PredictedMs, slow.LimitMs, adopted) + "它在只用 CPU 的笔记本上的实测见它那一行的说明;"
+                          ? RerankDeviceNotes.TooSlowLead(slow.M, slow.PredictedMs, slow.LimitMs, slow.LowerBound, adopted) + "它在只用 CPU 的笔记本上的实测见它那一行的说明;"
                             + "它在这台机器上多快,下载后应用下一次自己启动 llama.cpp 时同样会测。"
                           : "llama.cpp 在这台机器上用不了任何显卡,所以推荐这个更小的重排模型,而不是 BGE:" + run8
                             + "llama.cpp 能用显卡、BGE 下载后在这台机器上也没有测出太慢时,推荐的是 BGE;"
@@ -510,10 +523,7 @@ public sealed class ModelsController : ControllerBase
         // while this one waited for the lock is never claimed, and a start that then FAILS still says the time went on
         // measuring (review, 2026-09-26).
         var start = await _llama.StartAsync();
-        var measured = start.Measured is { } ran
-            ? $"启动前先测了 {string.Join("、", ran.Models)} 在哪个设备上最快(用了 {RerankDeviceNotes.Seconds((long)ran.Took.TotalMilliseconds)} 秒),"
-              + "结果写在下面各自那一行。"
-            : null;
+        var measured = start.Measured is { } ran ? RerankDeviceNotes.MeasuredBeforeStart(ran, bind: false) : null;
         if (!start.Ok) return NotRunning(await _llama.ProbeAsync(refresh: true), measured);
 
         var state = await _llama.ProbeAsync(refresh: true);

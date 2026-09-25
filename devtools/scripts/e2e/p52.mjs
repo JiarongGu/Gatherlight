@@ -1348,6 +1348,12 @@ try {
   const s2Line = skipLines().at(-1) ?? '';
   const judgeAfterSkip = layerOf(await cSkip.getJson('/api/manage/memory'), 'judge');
   const shelfAfterSkip = await cSkip.getJson('/api/manage/models');
+  // The same, with NO embedder installed (final review): the skip is a repair, and it outranks the embedder suggestion —
+  // which used to come first, so the 判断 row's promise that 资源 recommends mMiniLMv2 was false until one was installed.
+  const skipEmbedder = path.join(skipDir, 'state', 'resources', 'gguf', 'embeddinggemma-300M-Q8_0.gguf');
+  fs.rmSync(skipEmbedder);
+  const shelfSkipNoEmbedder = await cSkip.getJson('/api/manage/models');
+  fs.writeFileSync(skipEmbedder, '');
   // Step 3: ~1 s before the presumption the skip line stated runs out.
   const presumptionEnds = s2At + (queueLeft(s2Line) || 6) * 1000;
   await sleep(presumptionEnds - 1000 - Date.now());
@@ -1397,6 +1403,12 @@ try {
       && !String(skipRec?.reason ?? '').includes('还没有量过')
       && /一分多钟到两分钟/.test(String(skipRec?.reason)),
     JSON.stringify(skipRec ?? null));
+  ok('THE POINT (final review): …and with NO embedder installed it is STILL mMiniLMv2 — the repair outranks the embedder suggestion',
+    shelfSkipNoEmbedder.models?.find((m) => m.id === 'embeddinggemma-300M-Q8_0')?.installed === false
+      && shelfSkipNoEmbedder.recommendation?.id === MMINILM
+      && /次因为这台机器太慢跳过了判断/.test(String(shelfSkipNoEmbedder.recommendation?.reason)),
+    JSON.stringify({ embedder: shelfSkipNoEmbedder.models?.find((m) => m.id === 'embeddinggemma-300M-Q8_0')?.installed,
+      rec: shelfSkipNoEmbedder.recommendation ?? null }));
   ok('THE POINT: with ~1 s of the presumed queue left, a SHORT-fact recall — tiny, so queue plus prediction fit the budget — is still skipped: nothing is sent while the router is presumed busy',
     rerankCalls(sQueued).length === 0 && sQueued.result.status === 200 && sQueued.result.result?.answered === undefined
       && sQueued.ms < 1500,

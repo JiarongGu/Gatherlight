@@ -417,8 +417,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// child that fails to spawn. Each section is <see cref="LaunchKeys"/> — the ONE writer of the launch contract,
     /// which the reranker device measurement launches its standalone children with too.
     /// <para><paramref name="devices"/>: the device each MEASURED reranker runs on (<see cref="RerankDeviceMeter"/>) — the
-    /// fastest of its current measurement, <c>none</c> for the CPU. A reranker without one, and every other kind, gets no
-    /// device key: llama.cpp chooses, as it always did.</para></summary>
+    /// fastest of its current, COMPLETE measurement (<see cref="RerankDeviceMeasurement.Pinned"/>), <c>none</c> for the CPU.
+    /// A reranker without one — never measured, or a retry still pending — and every other kind, gets no device key:
+    /// llama.cpp chooses, as it always did.</para></summary>
     private string WritePresets(IReadOnlyList<string> models, IReadOnlyDictionary<string, string> devices)
     {
         var path = Path.Combine(ModelsDir(), "presets.ini");
@@ -525,7 +526,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// (<see cref="RerankDeviceMeasurement.Retryable"/>); the rest read from the store. Needs the binary's build tag and a
     /// device list it ANSWERED (<see cref="LlamaServerState.DevicesListed"/>): without either there is no key to measure
     /// under, nothing is measured, and no reranker gets a device key — today's launch. A reranker whose measurement found no
-    /// valid device gets none either. Persisted as each finishes; one ended by Dispose is not; one that could not be saved
+    /// valid device gets none either, and neither does one whose measurement still has excluded devices with attempts left
+    /// (<see cref="RerankDeviceMeasurement.Pinned"/>): one exclusion is often transient, and pinning the fastest device that
+    /// DID answer would move the reranker off a GPU llama.cpp's own choice would have used (final review). Persisted as each finishes; one ended by Dispose is not; one that could not be saved
     /// is used for this start and kept in <see cref="_unsaved"/> for the readers. A throw measuring one model is logged and
     /// the next model measured; the caller contains anything else.</summary>
     private async Task<IReadOnlyDictionary<string, string>> MeasureRerankersAsync(LlamaServerState state,
@@ -555,8 +558,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 // This process's unsaved measurement first — newer by construction — then the stored one.
                 var m = Unsaved(id, key) ?? RerankDeviceStore.Current(_platform.ResourcesPath, key);
                 // What is known already names the device FIRST, so a throw in the retry below cannot cost this start the
-                // device key a valid stored result gives it (review, 2026-09-26).
-                if (m?.Fastest is { } known) chosen[id] = known.Device;
+                // device key a valid stored result gives it (review, 2026-09-26) — only a COMPLETE one, though; while a
+                // retry is pending llama.cpp chooses.
+                if (m?.Pinned is { } known) chosen[id] = known.Device;
                 var save = m is not null && _unsaved.ContainsKey(id);   // an earlier save failed: try it again
                 if (m is null || m.Retryable.Count > 0)
                 {
@@ -580,7 +584,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                         _unsaved[id] = m;
                     }
                 }
-                if (m.Fastest is { } best) chosen[id] = best.Device;
+                if (m.Pinned is { } best) chosen[id] = best.Device;
                 else chosen.Remove(id);
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -588,7 +592,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 _log.LogWarning(ex, "rerank device measurement for {Model} failed; it keeps the device it already had, if any", id);
             }
         }
-        if (measured.Count > 0 && sink is not null) sink.Report = new RerankMeasurementReport(measured, clock.Elapsed);
+        if (measured.Count > 0) sink?.Add(new RerankMeasurementReport(measured, clock.Elapsed));
         return chosen;
     }
 
@@ -870,8 +874,17 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         finally { _lifecycle.Release(); }
     }
 
-    /// <summary>Where a measurement reports what it did, for the one call that asked (<see cref="StartAsync"/>).</summary>
-    private sealed class MeasurementSink { public RerankMeasurementReport? Report; }
+    /// <summary>Where a measurement reports what it did, for the one call that asked (<see cref="StartAsync"/>, and
+    /// <see cref="EnsureServesAsync"/>, which can start or restart the router twice in one call — so reports add up).</summary>
+    private sealed class MeasurementSink
+    {
+        public RerankMeasurementReport? Report;
+
+        public void Add(RerankMeasurementReport r) =>
+            Report = Report is not { } had ? r
+                : new RerankMeasurementReport(had.Models.Concat(r.Models).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                    had.Took + r.Took);
+    }
 
     /// <summary>Probe, and spawn only if the port is silent. Callers hold <see cref="_lifecycle"/> — the public
     /// door takes it, and the restart in <see cref="EnsureServesAsync"/> calls this while holding it already.
@@ -1041,10 +1054,13 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// </summary>
     public async Task<string?> EnsureServesAsync(string modelId, CancellationToken ct = default)
     {
+        // What a start or restart here measures goes to the caller's capture, if it opened one — a bind does
+        // (RerankMeasurementCapture), so its toast can say where the time went, on a refusal too.
+        var sink = new MeasurementSink();
         await _lifecycle.WaitAsync(ct);
         try
         {
-            var start = await EnsureServingCoreAsync(ct);
+            var start = await EnsureServingCoreAsync(ct, sink);
             if (!start.Ok) return start.Held ?? "llama.cpp 没能启动 —— 请看「日志」里的原因。";
             var live = await IsServingAsync(ct);
             if (!live.Serving) return "llama.cpp 正在运行,但这次没有及时回应 —— 稍后再试。";
@@ -1082,7 +1098,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                          + LlamaRestartPolicy.ReselectAfterRestart;
                 // Only now, with the port FREE, is it probed — so a router we just killed is never reported as a
                 // stranger holding the port; that case is the sentence above.
-                restarted = await EnsureServingCoreAsync(ct);
+                restarted = await EnsureServingCoreAsync(ct, sink);
             }
             // Cleared on EVERY exit, WITH the cached probe: any 「应用正在重启」 computed in the window — by a panel probe,
             // or by the re-probe above — is false once the restart has returned, whether the new router is ours (then
@@ -1112,7 +1128,11 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 });
             return null;
         }
-        finally { _lifecycle.Release(); }
+        finally
+        {
+            _lifecycle.Release();
+            if (sink.Report is { } ran) RerankMeasurementCapture.Current?.Add(ran);
+        }
     }
 
     /// <summary>The models the router currently holds LOADED — <c>status.value == "loaded"</c> in its

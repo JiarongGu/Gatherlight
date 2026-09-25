@@ -530,6 +530,32 @@ public sealed class MemoryRecallController : ControllerBase
     [HttpPost("api/manage/memory/layer/{layer}")]
     public async Task<IActionResult> Bind(string layer, [FromBody] BindRequest body)
     {
+        // A bind can start llama.cpp — or restart it, to load a model downloaded after it started — and a start the app
+        // performs measures a reranker's devices first, a minute or more (RerankDeviceMeter). The household waited through
+        // it, so the toast says where the time went: on the note, and on a refusal too — the results stand either way
+        // (final review; the start button's clause, one writer).
+        using var capture = RerankMeasurementCapture.Begin();
+        var result = await BindCoreAsync(layer, body);
+        return capture.Report is { } ran ? WithMeasured(result, RerankDeviceNotes.MeasuredBeforeStart(ran, bind: true)) : result;
+    }
+
+    /// <summary><paramref name="result"/> with <paramref name="measured"/> appended to the sentence the console shows —
+    /// <c>note</c> on success, <c>error</c> on a refusal — and carried as <c>measured</c>, as the start button does.</summary>
+    private static IActionResult WithMeasured(IActionResult result, string measured)
+    {
+        if (result is not ObjectResult { Value: { } value } o
+            || System.Text.Json.JsonSerializer.SerializeToNode(value, WireJson) is not System.Text.Json.Nodes.JsonObject body)
+            return result;
+        var field = o.StatusCode is null or < 300 ? "note" : "error";
+        body[field] = (body[field]?.GetValue<string>() ?? "") + measured;
+        body["measured"] = measured;
+        return new ObjectResult(body) { StatusCode = o.StatusCode };
+    }
+
+    private static readonly System.Text.Json.JsonSerializerOptions WireJson = new(System.Text.Json.JsonSerializerDefaults.Web);
+
+    private async Task<IActionResult> BindCoreAsync(string layer, BindRequest? body)
+    {
         var model = body?.Model?.Trim();
         var ctx = Context();
 

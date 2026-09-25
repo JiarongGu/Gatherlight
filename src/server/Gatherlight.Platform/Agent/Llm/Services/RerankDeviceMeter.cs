@@ -12,10 +12,11 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// llama.cpp's default puts it (owner decision, 2026-09-26, after <c>docs/judge-bench.md</c> Run 8b).
 ///
 /// <para><b>Why measured, not guessed.</b> On this laptop (Core Ultra 9 185H, RTX 4080 Laptop + Intel Arc iGPU, llama.cpp
-/// b10549) the Arc is 3–7× SLOWER than the CPU for the two rerankers measured — BGE 9.6 s per 1,000 pair tokens against
-/// 3.35–3.58 on the CPU, mMiniLMv2 1.44 against 0.22–0.24 (<c>docs/self-managed-llm-runtime.md</c>, 2026-09-26; Run 8b
-/// read 3–5× across runs). And llama.cpp's own default puts the child on the Arc when it is the only GPU it can see (Run
-/// 8b, the RTX hidden); with the RTX visible too, the default child used the RTX alone (log-verbosity 4, same date).
+/// b10549) the Arc is SLOWER than the CPU for both rerankers measured, within each run — BGE 2.9× and 2.7× (9.6 s per 1,000
+/// pair tokens against 3.35 and 3.58 on the CPU), mMiniLMv2 6.0× and 6.7× (1.44 against 0.24 and 0.22)
+/// (<c>docs/self-managed-llm-runtime.md</c>, 2026-09-26; <c>docs/judge-bench.md</c> Run 8b, an UNREAD run, pointed the same
+/// way). And llama.cpp's own default puts the child on the Arc when it is the only GPU it can see (Run 8b, the RTX hidden);
+/// with the RTX visible too, the default child used the RTX alone (log-verbosity 4, same date).
 /// <c>--list-devices</c> prints the two alike ("Vulkan0: NVIDIA …", "Vulkan1: Intel(R) Arc(TM) Graphics"), so the list
 /// cannot say which is integrated, and a name-based rule would be a guess about hardware nobody here has run. A few
 /// seconds per device at the first start answers it for THIS machine.</para>
@@ -94,8 +95,11 @@ public sealed class RerankDeviceMeter
     private static TimeSpan Capped(TimeSpan d) =>
         KnobSeconds is { } k ? TimeSpan.FromSeconds(Math.Min(k, d.TotalSeconds)) : d;
 
-    /// <summary>How many ports the OS may offer before the measurement gives up on finding one outside the router's band.</summary>
-    private const int PortTries = 20;
+    /// <summary>How many ports the OS may offer before the measurement gives up on finding one outside the router's band —
+    /// MORE than the band is wide (64 ports), because this machine's OS hands out bind-to-zero ports in SEQUENCE: with 20
+    /// tries, a start whose sequence had just reached the band excluded two devices with 「没能找到一个可用的端口」 before the
+    /// third was offered a port past it (<c>e2e-p53</c>, 2026-09-26, final review). See <see cref="FreeLoopbackPort"/>.</summary>
+    private const int PortTries = 128;
 
     private readonly IHttpClientFactory _http;
     private readonly ILogger _log;
@@ -185,9 +189,11 @@ public sealed class RerankDeviceMeter
             ? targets.Select(t => fresh[t.Device]).ToList()
             : previous.Results.Select(p => fresh.TryGetValue(p.Device, out var n) ? n : p).ToList();
         var m = new RerankDeviceMeasurement(key.Model, key.ModelBytes, key.ModelWriteTicks, key.Build, key.Devices,
-            DateTimeOffset.UtcNow, timed.Documents.Count, timed.Characters, timed.PairTokens, results);
+            DateTimeOffset.UtcNow, timed.Documents.Count, timed.Characters, timed.PairTokens, results, key.Shape);
         _log.LogInformation("rerank device measurement: {Model} → {Chosen}", modelId,
-            m.Fastest is { } f ? $"{f.Device} ({f.Name}), the fastest that gave a result" : "no device gave a valid result; the preset names none");
+            m.Pinned is { } f ? $"{f.Device} ({f.Name}), the fastest that gave a result"
+            : m.Fastest is { } p ? $"none yet — {p.Device} ({p.Name}) is the fastest so far, but {m.Retryable.Count} excluded device(s) will be measured again; llama.cpp chooses until then"
+            : "no device gave a valid result; the preset names none");
         return m;
     }
 
@@ -266,12 +272,17 @@ public sealed class RerankDeviceMeter
             }
 
             // 2. Warm — a batch of the same size, so the timed call pays no first-call set-up for its shape.
+            // A call that ran out of time leaves a LOWER BOUND on the device's rate (LowerBound) — the warm one's too: it is
+            // the same size as the timed one, and on the slowest machines it is the call that times out, so the timed call
+            // is never reached.
             var warm = await CallAsync(http, baseUrl, modelId, device, warmBatch, linked.Token).ConfigureAwait(false);
-            if (warm.Error is { } warmWhy) return Excluded(device, name, "预热:" + warmWhy);
+            if (warm.Error is { } warmWhy)
+                return Excluded(device, name, "预热:" + warmWhy) with { LowerBoundMsPerToken = LowerBound(warm.TimedOut, warmBatch) };
 
             // 3. Timed — different documents, so no prompt cache can answer it from the warm call.
             var timed = await CallAsync(http, baseUrl, modelId, device, timedBatch, linked.Token).ConfigureAwait(false);
-            if (timed.Error is { } why) return Excluded(device, name, why);
+            if (timed.Error is { } why)
+                return Excluded(device, name, why) with { LowerBoundMsPerToken = LowerBound(timed.TimedOut, timedBatch) };
             return new RerankDeviceResult(device, name, (long)timed.Elapsed.TotalMilliseconds,
                 RerankPace.RateOf(timed.Elapsed, timedBatch.PairTokens), null);
         }
@@ -295,9 +306,17 @@ public sealed class RerankDeviceMeter
         }
     }
 
+    /// <summary>For a call that ran out of <see cref="CallTimeout"/>: the rate it would have needed to answer at the cap, in
+    /// the pace's unit (<see cref="RerankPace.RateOf"/> of the cap over the batch's pair tokens) — the device's rate is at
+    /// least this (<see cref="RerankDeviceResult.LowerBoundMsPerToken"/>). Null for any other failure, which says nothing
+    /// about speed.</summary>
+    private static double? LowerBound(bool timedOut, MeasurementBatch batch) =>
+        timedOut ? RerankPace.RateOf(CallTimeout, batch.PairTokens) : null;
+
     /// <summary>One <c>/v1/rerank</c> of <paramref name="batch"/>, capped at <see cref="CallTimeout"/>: its wall-clock
-    /// time, or why it is not a result — a household sentence; the exception, if any, goes to the log.</summary>
-    private async Task<(TimeSpan Elapsed, string? Error)> CallAsync(HttpClient http, string baseUrl, string modelId,
+    /// time, or why it is not a result — a household sentence; the exception, if any, goes to the log. <c>TimedOut</c>:
+    /// it ran out of the cap, so its time is a lower bound.</summary>
+    private async Task<(TimeSpan Elapsed, string? Error, bool TimedOut)> CallAsync(HttpClient http, string baseUrl, string modelId,
         string device, MeasurementBatch batch, CancellationToken ct)
     {
         using var cap = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -313,19 +332,19 @@ public sealed class RerankDeviceMeter
             using var res = await http.PostAsync($"{baseUrl}/v1/rerank", content, cap.Token).ConfigureAwait(false);
             var text = await res.Content.ReadAsStringAsync(cap.Token).ConfigureAwait(false);
             clock.Stop();
-            if (!res.IsSuccessStatusCode) return (clock.Elapsed, $"打分失败(HTTP {(int)res.StatusCode})");
+            if (!res.IsSuccessStatusCode) return (clock.Elapsed, $"打分失败(HTTP {(int)res.StatusCode})", false);
             if (RerankReply.Scores(text, batch.Documents.Count) is null)
-                return (clock.Elapsed, $"只给 {batch.Documents.Count} 段里的 {RerankReply.Scored(text, batch.Documents.Count)} 段打了分");
-            return (clock.Elapsed, null);
+                return (clock.Elapsed, $"只给 {batch.Documents.Count} 段里的 {RerankReply.Scored(text, batch.Documents.Count)} 段打了分", false);
+            return (clock.Elapsed, null, false);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return (clock.Elapsed, $"{CallTimeout.TotalSeconds:0} 秒内没有打完分");
+            return (clock.Elapsed, $"{CallTimeout.TotalSeconds:0} 秒内没有打完分", true);
         }
         catch (HttpRequestException ex)
         {
             _log.LogWarning(ex, "rerank device measurement: a /v1/rerank call to {Model} on {Device} failed", modelId, device);
-            return (clock.Elapsed, "打分请求没有得到回应(原因写在「日志」里)");
+            return (clock.Elapsed, "打分请求没有得到回应(原因写在「日志」里)", false);
         }
     }
 
@@ -336,19 +355,34 @@ public sealed class RerankDeviceMeter
     /// (<see cref="LlamaServerRuntime.PortFor"/>, 11435–11498): a port refused now is free, and handing the router's port to
     /// a measurement child would make the router spawned right after it fail to bind — so such a port is refused and
     /// another asked for. A port taken between this check and the child's bind makes the child exit, an exclusion like
-    /// any other, retried at the next start.</summary>
+    /// any other, retried at the next start. The refused ports stay BOUND until the search ends, so the OS cannot offer
+    /// one twice, and the search runs past the whole band (<see cref="PortTries"/>): the OS here walks its range in
+    /// sequence, so a search that starts at the band's first port is refused 64 times in a row. Nothing listens in the band
+    /// meanwhile — the measurement runs before the router is spawned — and the held ports are released before the child
+    /// starts.</summary>
     private static int? FreeLoopbackPort(Func<int, bool> reserved)
     {
-        for (var i = 0; i < PortTries; i++)
+        var held = new List<TcpListener>();
+        try
         {
-            var l = new TcpListener(IPAddress.Loopback, 0);
-            l.Start();
-            int port;
-            try { port = ((IPEndPoint)l.LocalEndpoint).Port; }
-            finally { l.Stop(); }
-            if (!reserved(port)) return port;
+            for (var i = 0; i < PortTries; i++)
+            {
+                var l = new TcpListener(IPAddress.Loopback, 0);
+                l.Start();
+                var port = ((IPEndPoint)l.LocalEndpoint).Port;
+                if (!reserved(port))
+                {
+                    l.Stop();
+                    return port;
+                }
+                held.Add(l);
+            }
+            return null;
         }
-        return null;
+        finally
+        {
+            foreach (var l in held) l.Stop();
+        }
     }
 
     /// <summary>The executable and leading arguments: the provisioned binary, or the <see cref="CommandSeam"/> command.</summary>
