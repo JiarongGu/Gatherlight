@@ -172,6 +172,15 @@
 // pace's activity is what they measure — and says so per arm; every other arm keeps it. Per recall the row carries the
 // deadline cut and the pace line the product logged during it, read from the arm's own log by timestamp.
 //
+// iGPU-ONLY ARMS (`--igpu-rerankers=<m,…>`, docs/judge-bench.md Run 8b). The same machinery as the CPU-only arms, on this
+// machine's INTEGRATED GPU instead: each arm keyed `igpu-<kind>:<m>` runs alone on a fresh router of its own, launched
+// with the product's own preset (`n-gpu-layers = 99`) and one addition that changes only logging (`log-verbosity = 4`, so
+// the child prints the device it loaded onto), with GGML_VK_VISIBLE_DEVICES=`--igpu-visible=` in its environment — the
+// Vulkan loader's raw index of the iGPU's NATIVE driver, so that device is the only one llama.cpp can see, as on a machine
+// whose only GPU is integrated. Its routers take ports from `--cpu-llama-port=` on, after any CPU-only arm's. Everything a
+// CPU-only arm gets — one at a time, the record-only proxy, the per-recall log lines, the exemption from the pace guard —
+// an iGPU-only arm gets too ("solo" arms below), and its router record adds the device the child named.
+//
 // Usage:
 //   node devtools/dev.mjs judge-bench                     # formula, formula2, topic, content, content2, contentonly, fuse
 //   node devtools/dev.mjs judge-bench --arms=formula,content --n=20 --reuse-seed
@@ -190,6 +199,7 @@
 //        --seed= --latency-sample=   --fixture=bilingual|long|mixed   --reuse-seed | --reseed   --seed-only   --claude-stub   --rerank-memo
 //        --tag-seed=<chat model>   --build-tag-seed   --tag-seed-arms=<arm keys>
 //        --cpu-rerankers=<m,…>   --cpu-rerank-arms=rr,rrf,rrk   --cpu-llama-port=
+//        --igpu-rerankers=<m,…>   --igpu-rerank-arms=rr,rrf,rrk   --igpu-visible=<raw Vulkan device index>
 //        --report-only=<results.json | rows-*.jsonl>   --baseline=<results.json>:<arm>
 import fs from 'node:fs';
 import path from 'node:path';
@@ -205,7 +215,7 @@ import { expectedMixedBytes } from './judge-bench-mixed-fixture.mjs';
 // ---- flags: known ones only ------------------------------------------------------------------------------
 const VALUED = ['arms', 'rerankers', 'rerank-arms', 'chat-judges', 'chat-arms', 'n', 'port-base', 'llama-port', 'resources', 'seed',
   'latency-sample', 'report-only', 'baseline', 'fixture', 'tag-seed', 'tag-seed-arms', 'cpu-rerankers', 'cpu-rerank-arms',
-  'cpu-llama-port'];
+  'cpu-llama-port', 'igpu-rerankers', 'igpu-rerank-arms', 'igpu-visible'];
 const BOOLEAN = ['reuse-seed', 'reseed', 'seed-only', 'claude-stub', 'rerank-memo', 'build-tag-seed'];
 const die = (msg) => { console.error(`judge-bench: ${msg}`); process.exit(2); };
 const KNOWN = `known flags: ${[...VALUED.map((k) => `--${k}=…`), ...BOOLEAN.map((k) => `--${k}`)].join(' ')}`;
@@ -280,6 +290,11 @@ const LLAMA_PORT = int('llama-port', 5660, 1);
 // The CPU-only routers' first port (Run 8): one fresh router per CPU arm, the n-th CPU arm's on CPU_LLAMA_PORT + n — a
 // port of its own, never one a killed router just left.
 const CPU_LLAMA_PORT = int('cpu-llama-port', LLAMA_PORT + 1, 1);
+// Run 8b: the iGPU's raw Vulkan device index (GGML_VK_VISIBLE_DEVICES), or null.
+const IGPU_VISIBLE = opts['igpu-visible'] === undefined ? null : int('igpu-visible', 0, 0);
+/** A SOLO arm (Runs 8 and 8b) runs alone, after every other arm, on a fresh router of its own — CPU-only or iGPU-only. */
+const solo = (a) => Boolean(a.cpu || a.igpu);
+const soloName = (a) => (a.igpu ? 'iGPU' : 'CPU');
 const ORDER_SEED = int('seed', 12345, 0);
 const LATENCY_SAMPLE = int('latency-sample', 12, 0);
 const REUSE_SEED = opts['reuse-seed'] === true;
@@ -694,6 +709,8 @@ const loadRun = (json, source) => {
       // record. Present only when saved, so a run saved before them re-analyses exactly as it did.
       ...(a.llamaRouter ? { llamaRouter: a.llamaRouter } : {}),
       ...((a.cpu ?? known.cpu) ? { cpu: true, cpuRecord: a.cpuRecord ?? null } : {}),
+      // Run 8b: an iGPU-only arm, the same record under the same name.
+      ...((a.igpu ?? known.igpu) ? { igpu: true, cpuRecord: a.cpuRecord ?? null } : {}),
       rows: (json.rows[a.key] ?? []).filter((r) => (r.pass ?? 'accuracy') === 'accuracy'),
       latencyRows: json.latencyRows?.[a.key] ?? null,
     };
@@ -729,6 +746,7 @@ const loadRun = (json, source) => {
       ...(json.rerankPace ? { rerankPace: json.rerankPace } : {}),
       // Run 8: the CPU-only arms, run one at a time after the parallel ones; absent on every earlier run.
       ...(json.cpuSerial ? { cpuSerial: json.cpuSerial } : {}),
+      ...(json.igpuSerial ? { igpuSerial: json.igpuSerial } : {}),
     },
     arms,
     notes,
@@ -866,11 +884,11 @@ const printPaired = (title, comps) => {
 
 /** Each reranker run both unchunked (`rr:`) and chunked (`rrk:`) in one run — Run 6b's pairs, by key, so a saved run
  *  pairs the same way. */
-const chunkingPairs = (arms) => arms.filter((a) => /^(cpu-)?rr:/.test(a.key))
+const chunkingPairs = (arms) => arms.filter((a) => /^(cpu-|igpu-)?rr:/.test(a.key))
   .map((rr) => {
-    // Run 8: a CPU-only arm pairs with its own CPU-only twin, never with the GPU one.
-    const [, pre = '', model] = /^(cpu-)?rr:(.+)$/.exec(rr.key);
-    return { model: pre ? `${model} (CPU)` : model, rr, rrk: arms.find((a) => a.key === `${pre}rrk:${model}`) };
+    // Run 8: a CPU-only arm pairs with its own CPU-only twin, never with the GPU one (Run 8b: an iGPU-only arm likewise).
+    const [, pre = '', model] = /^(cpu-|igpu-)?rr:(.+)$/.exec(rr.key);
+    return { model: pre ? `${model} (${pre === 'igpu-' ? 'iGPU' : 'CPU'})` : model, rr, rrk: arms.find((a) => a.key === `${pre}rrk:${model}`) };
   })
   .filter((p) => p.rrk);
 
@@ -1046,8 +1064,10 @@ const printMixedRule = (run) => {
  *  CPU — the pairs Run 8's rule reads. Printed only for a run that has CPU-only arms, so every earlier run re-analyses as
  *  it did. Returns what goes into the results file. */
 const printCpu = (run) => {
-  const cpuArms = run.arms.filter((a) => a.cpu);
+  const cpuArms = run.arms.filter(solo);
   if (!cpuArms.length) return null;
+  // Run 8b: a run with iGPU-only arms says so; a run with CPU-only arms alone prints exactly what it printed.
+  const anyIgpu = cpuArms.some((a) => a.igpu);
   const out = { arms: {} };
   const pct = (xs, p) => {
     if (!xs.length) return null;
@@ -1062,7 +1082,9 @@ const printCpu = (run) => {
     ? ((r.rerank.callMs - PACE.overheadMs) / r.rerank.pairTokens) * 1000 : null);
   const sym = (r) => (r.error !== null ? 'x' : r.answered !== null ? 'v' : r.deadlineCut === true ? 'C' : r.skip ? 'S'
     : !(r.rerank?.calls > 0) ? 'f' : '?');
-  console.log('\nCPU-ONLY ARMS (Run 8) — each alone on a fresh CPU-only router, one arm at a time; its accuracy pass is the serial pass.');
+  console.log(anyIgpu
+    ? '\nSOLO ARMS (Runs 8 and 8b) — each alone on a fresh router of its own (CPU-only or iGPU-only), one arm at a time; its accuracy pass is the serial pass.'
+    : '\nCPU-ONLY ARMS (Run 8) — each alone on a fresh CPU-only router, one arm at a time; its accuracy pass is the serial pass.');
   console.log('Per recall, in the order asked: v = a verdict · C = cut by the 60 s verification deadline (NoOpinion: the engine\'s own'
     + ' page) · S = skipped by the pace (nothing, or only a probe, sent: NoOpinion at once) · f = no rerank call (FTS, or nothing'
     + ' to judge) · x = the recall errored · ? = no verdict, no cut and no skip (a fault)');
@@ -1105,9 +1127,21 @@ const printCpu = (run) => {
         cutMedian: median(cuts.map((r) => r.ms)) },
       router: arm.cpuRecord ?? null,
     };
+    // Run 8b: the pace's SKIPS, counted (a skip is an explained abstention) — printed for a run with iGPU-only arms, or
+    // one with a skip, so a run saved before skips existed re-analyses byte for byte.
+    const skips = rows.filter((r) => r.skip && r.answered === null);
+    if (skips.length || anyIgpu) {
+      x.skips = skips.length;
+      x.skipsByQuarter = [0, 1, 2, 3].map((i) => quarter(i).filter((r) => r.skip && r.answered === null).length);
+      x.cutsByQuarter = [0, 1, 2, 3].map((i) => quarter(i).filter((r) => r.deadlineCut === true).length);
+      x.remeasured = rows.filter((r) => r.remeasured).length;
+      x.cutOrSkipped = rows.filter((r) => r.answered === null && (r.deadlineCut === true || r.skip)).length;
+    }
     out.arms[arm.key] = x;
     console.log(`\n${arm.key} — ${rows.length} recalls, ${withCall.length} with a rerank call: ${all.verdicts} verdict(s), ${x.cuts} deadline cut(s)`
-      + `${x.cuts ? ` (first at seq ${x.firstCut}, last at ${x.lastCut}; ${runs} run(s) of consecutive cuts, the longest ${longest})` : ''}`);
+      + `${x.cuts ? ` (first at seq ${x.firstCut}, last at ${x.lastCut}; ${runs} run(s) of consecutive cuts, the longest ${longest})` : ''}`
+      + (x.skips !== undefined ? `; ${x.skips} skipped by the pace (by quarter ${x.skipsByQuarter.join(' / ')}), cuts by quarter`
+        + ` ${x.cutsByQuarter.join(' / ')}, ${x.remeasured} re-measure probe(s); cut or skipped ${x.cutOrSkipped}/${rows.length}` : ''));
     for (let i = 0; i < strip.length; i += 60) console.log(`  seq ${pad(i, 4)} ${strip.slice(i, i + 60)}`);
     console.log('  ' + pad('part of the run', 18) + pad('recalls', 9) + pad('verdicts', 10) + pad('cuts', 6) + pad('windows/call', 14)
       + pad('notes/call', 12) + pad('windows/note', 14) + pad('max w/note', 12) + pad('median ms', 11) + 'ms per 1k pair tokens (answered, median)');
@@ -1130,9 +1164,33 @@ const printCpu = (run) => {
         + ` child ${r.childArgs ? `--device ${r.device ?? '(absent)'} --n-gpu-layers ${r.nGpuLayers ?? '(absent)'}` : 'args unread'},`
         + ` n_threads ${r.nThreads ?? '?'}, ${r.tasks ?? '?'} tasks (largest ${r.maxTaskTokens ?? '?'} tokens, ${r.truncated ?? '?'} truncated),`
         + ` ${r.cancelled ?? '?'} "Connection handling canceled", ${r.errorLines ?? '?'} error line(s)`);
+      // Run 8b: the device the child itself named, and how many layers it put there.
+      if (arm.igpu)
+        console.log(`  child's device: ${r.usingDevice ?? '(not logged)'}; ${r.offloaded ?? '(no offload line)'}; env GGML_VK_VISIBLE_DEVICES=${r.visible ?? '(unset)'};`
+          + ` lines naming the NVIDIA GPU: ${r.nvidiaLines}`);
     }
   }
   // THE RULE'S PAIRS: each reranker chunked against itself cut, both on the CPU. b = cut hit & chunked miss.
+  // Run 8b first: the iGPU-only arms' own pairs and rule, printed only when they ran.
+  const ipairs = chunkingPairs(run.arms).filter((p) => p.rr.igpu && p.rrk.igpu);
+  if (ipairs.length) out.paired8b = printPaired('iGPU — each reranker chunked (igpu-rrk) against itself cut (igpu-rr), both on the iGPU;'
+    + ' b = cut hit & chunked miss, c = the reverse', ipairs.map((p) => ({ key: `${p.rrk.key} vs ${p.rr.key}`, label: `${p.rrk.key} vs ${p.rr.key}`, arm: p.rrk, base: p.rr })));
+  const iBge = run.arms.find((a) => a.igpu && /^igpu-rrk:bge-/.test(a.key)), iMini = run.arms.find((a) => a.igpu && /^igpu-rrk:mmarco-mMiniLMv2/.test(a.key));
+  if (iBge && iMini) {
+    // RUN 8b's RULE (docs/judge-bench.md): BGE chunked against mMiniLMv2 chunked on `all` found@8 (b = mMiniLMv2 hit & BGE
+    // miss), and each chunked arm's share of recalls cut or skipped.
+    const cmp = printPaired('iGPU — BGE chunked against mMiniLMv2 chunked; b = mMiniLMv2 hit & BGE miss, c = the reverse',
+      [{ key: `${iBge.key} vs ${iMini.key}`, label: `${iBge.key} vs ${iMini.key}`, arm: iBge, base: iMini }]);
+    const f = cmp[`${iBge.key} vs ${iMini.key}`].all.found;
+    const share = (a) => a.rows.filter((r) => r.answered === null && (r.deadlineCut === true || r.skip)).length / a.rows.length;
+    const worse = f.p < 0.05 && f.c - f.b < 0;
+    const bgeOver = share(iBge) > 0.10, miniOver = share(iMini) > 0.10;
+    out.rule8b = { found: { b: f.b, c: f.c, p: f.p, netPp: f.netPp, interval95Pp: f.interval95Pp, worse },
+      cutOrSkipped: { bge: share(iBge), mini: share(iMini) }, clause2: bgeOver && !miniOver, triggers: worse || (bgeOver && !miniOver) };
+    console.log(`RUN 8b RULE — BGE chunked ${worse ? 'IS' : 'is NOT'} significantly worse than mMiniLMv2 chunked on all found@8 (b/c ${f.b}/${f.c},`
+      + ` p ${pv(f.p)}, net ${signed(f.netPp, 1)}pp); cut or skipped: BGE ${(100 * share(iBge)).toFixed(1)}%, mMiniLMv2 ${(100 * share(iMini)).toFixed(1)}%`
+      + ` → ${out.rule8b.triggers ? 'TRIGGERS (owner decision)' : 'does not trigger'}`);
+  }
   const pairs = chunkingPairs(run.arms).filter((p) => p.rr.cpu && p.rrk.cpu);
   if (pairs.length) {
     out.paired = printPaired('CPU — each reranker chunked (cpu-rrk) against itself cut (cpu-rr), both on the CPU; b = cut hit & chunked miss,'
@@ -1161,7 +1219,8 @@ const analyse = (run, { baseline = null } = {}) => {
 
   console.log(`\n${meta.facts ?? '?'} facts × ${QUESTION_SETS.length} sets = ${meta.queries} queries per arm, order seed ${meta.orderSeed ?? 'unrecorded'}`
     + `${meta.adjacentSameFact === null ? '' : ` (${meta.adjacentSameFact} same-fact adjacencies left)`}, ${meta.concurrency} arms in parallel`
-    + `${meta.cpuSerial ? `, then ${meta.cpuSerial.length} CPU-only arm(s) one at a time (${meta.cpuSerial.join(', ')})` : ''}`);
+    + `${meta.cpuSerial ? `, then ${meta.cpuSerial.length} CPU-only arm(s) one at a time (${meta.cpuSerial.join(', ')})` : ''}`
+    + `${meta.igpuSerial ? `, then ${meta.igpuSerial.length} iGPU-only arm(s) one at a time (${meta.igpuSerial.join(', ')})` : ''}`);
   for (const set of SETS) {
     console.log(`\n== ${set} ==`);
     console.log(pad('arm', LABEL_W) + COLS.map(([h, w]) => pad(h, w)).join('') + 'Δ vs 公式 (top-1 / found / MRR)');
@@ -1188,7 +1247,7 @@ const analyse = (run, { baseline = null } = {}) => {
     }
     // Run 8: a CPU-only arm's accuracy pass ran ONE ARM AT A TIME, so it is the serial pass — over EVERY recall, since a
     // recall the deadline cut is the cost being measured, not a failed-open judge looking cheap.
-    if (arm.cpu) {
+    if (solo(arm)) {
       latency.serialMedian = median(arm.rows.filter((r) => r.error === null).map((r) => r.ms));
       latency.serialFrom = 'accuracy pass, every recall';
     }
@@ -1348,6 +1407,8 @@ const analyse = (run, { baseline = null } = {}) => {
       + pad(r(arm.router?.accuracy), 26) + pad(r(arm.router?.total), 23)
       + `${arm.judgeOn === null ? '?' : arm.judgeOn ? 'on' : 'off'} · ${arm.judgeSource ?? '—'} · ${arm.judgeModel ?? '—'}`);
   }
+  if (arms.some((a) => a.igpu))
+    console.log('  (*) an iGPU-only arm (Run 8b): the same as a CPU-only arm, below.');
   if (arms.some((a) => a.cpu))
     console.log('  (*) a CPU-only arm (Run 8): no latency pass — its accuracy pass ran one arm at a time, so it IS the serial pass;'
       + ' the median is over every recall, a deadline cut included (the CPU block below splits it). Its "ms (parallel)" is that'
@@ -1373,12 +1434,12 @@ const analyse = (run, { baseline = null } = {}) => {
         forwarded: p.forwarded ?? null, retried: p.retried ?? null, errors: p.errors ?? null,
       };
       // A CPU-only arm's proxy never memoises, and counts the requests its client ABANDONED (the verification deadline).
-      if (arm.cpu) x.abandoned = p.abandoned ?? null;
+      if (solo(arm)) x.abandoned = p.abandoned ?? null;
       out.rerankSent[arm.key] = x;
       console.log(pad(arm.label, LABEL_W) + pad(x.calls, 8) + pad(x.shared ?? '—', 8) + pad(x.docsMean === null ? '—' : x.docsMean.toFixed(1), 18)
         + pad(x.docsMax ?? '—', 17) + pad(x.longest, 21)
         + (x.forwarded === null ? 'unrecorded' : `${x.forwarded} · ${x.retried} · ${x.errors}`)
-        + (arm.cpu ? ` · ${x.abandoned ?? '?'} abandoned by the client (CPU arm, no memo)` : ''));
+        + (solo(arm) ? ` · ${x.abandoned ?? '?'} abandoned by the client (${soloName(arm)} arm, no memo)` : ''));
       // A request the proxy failed to deliver reads to the arm as a 502 — no verdict — and says nothing about the judge.
       if (x.errors > 0) out.warnings.push(`arm ${arm.key} — the rerank proxy failed to deliver ${x.errors} request(s): those recalls carry no verdict for a reason that is the bench's, not the judge's`);
     }
@@ -1387,8 +1448,8 @@ const analyse = (run, { baseline = null } = {}) => {
     const seen = meta.rerankProxy.routerProxied;
     if (seen && !seen.error) {
       out.rerankReconciled = {};
-      for (const model of [...new Set(arms.filter((a) => a.reranker && !a.cpu && meta.rerankProxy.arms?.[a.key]).map((a) => a.reranker))]) {
-        const sent = arms.filter((a) => a.reranker === model && !a.cpu).reduce((s, a) => s + (meta.rerankProxy.arms[a.key]?.forwarded ?? 0), 0);
+      for (const model of [...new Set(arms.filter((a) => a.reranker && !solo(a) && meta.rerankProxy.arms?.[a.key]).map((a) => a.reranker))]) {
+        const sent = arms.filter((a) => a.reranker === model && !solo(a)).reduce((s, a) => s + (meta.rerankProxy.arms[a.key]?.forwarded ?? 0), 0);
         out.rerankReconciled[model] = { forwarded: sent, routerSaw: seen[model] ?? 0 };
         console.log(`  ${pad(model, LABEL_W - 2)}forwarded ${sent} rerank requests, the router proxied ${seen[model] ?? 0} to this model's child`);
         if (sent !== (seen[model] ?? 0))
@@ -1396,14 +1457,14 @@ const analyse = (run, { baseline = null } = {}) => {
       }
     } else if (seen?.error) out.notes.push(`router log not reconciled: ${seen.error}`);
     // Run 8: each CPU-only arm against ITS OWN router's log.
-    for (const arm of arms.filter((a) => a.cpu && meta.rerankProxy.arms?.[a.key])) {
+    for (const arm of arms.filter((a) => solo(a) && meta.rerankProxy.arms?.[a.key])) {
       const p = meta.rerankProxy.arms[arm.key];
       const saw = p.routerProxied;
       if (saw === null || saw === undefined || typeof saw !== 'number') { out.notes.push(`${arm.key}: its CPU router's log was not reconciled (${saw?.error ?? 'no count saved'})`); continue; }
       (out.rerankReconciled ??= {})[arm.key] = { forwarded: p.forwarded, routerSaw: saw };
-      console.log(`  ${pad(arm.key, LABEL_W - 2)}forwarded ${p.forwarded} rerank requests, its own CPU router proxied ${saw} to the child`);
+      console.log(`  ${pad(arm.key, LABEL_W - 2)}forwarded ${p.forwarded} rerank requests, its own ${soloName(arm)} router proxied ${saw} to the child`);
       if (p.forwarded !== saw)
-        out.warnings.push(`${arm.key} — its proxy forwarded ${p.forwarded} rerank requests and its CPU router saw ${saw}: some request never reached the model`);
+        out.warnings.push(`${arm.key} — its proxy forwarded ${p.forwarded} rerank requests and its ${soloName(arm)} router saw ${saw}: some request never reached the model`);
     }
   }
   const chatArms = arms.filter((a) => a.chatJudge);
@@ -1478,7 +1539,7 @@ const analyse = (run, { baseline = null } = {}) => {
     // Run 8: on a CPU-only arm a recall the verification DEADLINE cut is the thing measured, not a fault — so there the
     // guard is that every abstention IS a traced deadline cut (the product's own Warning logged during that recall), and
     // that no recall carrying a verdict was also cut.
-    if (arm.cpu) {
+    if (solo(arm)) {
       // A pace SKIP explains an abstention too (2026-09-25) — the product's own line, placed on the recall like a cut's.
       const unexplained = arm.rows.filter((r) => r.error === null && r.ranked === 'graph' && r.answered === null && r.deadlineCut !== true
         && !r.skip);
@@ -1523,13 +1584,13 @@ const analyse = (run, { baseline = null } = {}) => {
   let paceVoid = null;
   if (meta.rerankPace) {
     // Run 8: a CPU-only arm is EXEMPT — the pace's activity is what it measures — and says so; every other arm is judged.
-    const cpuKeys = new Set(arms.filter((a) => a.cpu).map((a) => a.key));
+    const cpuKeys = new Set(arms.filter(solo).map((a) => a.key));
     const fired = Object.entries(meta.rerankPace).filter(([k, n]) => n > 0 && !cpuKeys.has(k));
     const exempt = Object.entries(meta.rerankPace).filter(([k]) => cpuKeys.has(k));
     // Its own name: the saved counts stay `rerankPace` in the file, and a re-analysis must read those, not this.
     out.paceGuard = { void: fired.length > 0, fired: Object.fromEntries(fired), ...(exempt.length ? { exempt: Object.fromEntries(exempt) } : {}) };
     if (exempt.length)
-      console.log(`\nPACE GUARD — exempt, as designated CPU-only arms (the pace is what they measure): ${exempt.map(([k, n]) => `${k} (${n} line${n === 1 ? '' : 's'})`).join(', ')};`
+      console.log(`\nPACE GUARD — exempt, as designated ${arms.some((a) => a.igpu) ? 'solo (CPU-only or iGPU-only)' : 'CPU-only'} arms (the pace is what they measure): ${exempt.map(([k, n]) => `${k} (${n} line${n === 1 ? '' : 's'})`).join(', ')};`
         + ` judged: ${Object.keys(meta.rerankPace).filter((k) => !cpuKeys.has(k)).join(', ') || 'none'}`);
     for (const [k, n] of fired)
       out.warnings.push(`arm ${k} — RerankPace sized, skipped or re-measured ${n} rerank call(s) (its log: "window(s) per long candidate instead of …" or "re-measured this machine"): what the arm sent depended on this machine's timing`);
@@ -1604,6 +1665,10 @@ const armConfigFor = (key) => {
   const cpu = /^cpu-(rr[fk]?):(.+)$/.exec(key);
   if (cpu) return { label: `reranker ${cpu[2]} · ${RERANK_ARM_KINDS[cpu[1]].suffix} · CPU-only router`, enrichment: true, judgeInput: null,
     reranker: cpu[2], chatJudge: null, cpu: true };
+  // Run 8b: the same on an iGPU-only router.
+  const igpu = /^igpu-(rr[fk]?):(.+)$/.exec(key);
+  if (igpu) return { label: `reranker ${igpu[2]} · ${RERANK_ARM_KINDS[igpu[1]].suffix} · iGPU-only router`, enrichment: true, judgeInput: null,
+    reranker: igpu[2], chatJudge: null, igpu: true };
   const c = /^(lcb?):(.+)$/.exec(key);
   if (c) return { label: `local chat judge ${c[2]} · ${c[1] === 'lcb' ? 'topic — content' : 'content only'}`, enrichment: true,
     judgeInput: c[1] === 'lcb' ? 'both' : 'content', reranker: null, chatJudge: c[2] };
@@ -1784,8 +1849,21 @@ const live = async () => {
       const kind = RERANK_ARM_KINDS[k];
       arms.push({ key: `cpu-${k}:${m}`, ...armConfigFor(`cpu-${k}:${m}`), env: { ...kind.env }, ...(kind.knob ? { knob: kind.knob } : {}) });
     }
+  // Run 8b: the iGPU-only arms (header).
+  const igpuRerankers = list('igpu-rerankers', '');
+  const igpuKinds = list('igpu-rerank-arms', 'rr,rrk');
+  for (const k of igpuKinds) if (!RERANK_ARM_KINDS[k]) die(`--igpu-rerank-arms: unknown kind '${k}' — one of ${Object.keys(RERANK_ARM_KINDS).join(', ')}`);
+  if (!igpuRerankers.length && (opts['igpu-rerank-arms'] || opts['igpu-visible'])) die('--igpu-rerank-arms and --igpu-visible need --igpu-rerankers');
+  if (igpuRerankers.length && IGPU_VISIBLE === null) die('--igpu-rerankers needs --igpu-visible=<the iGPU\'s raw Vulkan device index> — find it with GGML_VK_VISIBLE_DEVICES=<i> llama-server --list-devices');
+  if (igpuRerankers.length && opts['tag-seed']) die('--igpu-rerankers is not for a local-tag seed run');
+  if (igpuRerankers.length) paceMirror();
+  for (const m of igpuRerankers)
+    for (const k of igpuKinds) {
+      const kind = RERANK_ARM_KINDS[k];
+      arms.push({ key: `igpu-${k}:${m}`, ...armConfigFor(`igpu-${k}:${m}`), env: { ...kind.env }, ...(kind.knob ? { knob: kind.knob } : {}) });
+    }
   const chatJudges = list('chat-judges', '');
-  if (chatJudges.find((m) => cpuRerankers.includes(m))) die('a model is in both --cpu-rerankers and --chat-judges — a GGUF is one kind');
+  if (chatJudges.find((m) => cpuRerankers.includes(m) || igpuRerankers.includes(m))) die('a model is in both --cpu-rerankers and --chat-judges — a GGUF is one kind');
   const both = chatJudges.find((m) => rerankers.includes(m));
   if (both) die(`'${both}' is in both --rerankers and --chat-judges — a GGUF is one kind, and the router's preset gives it one`);
   const chatKinds = list('chat-arms', 'lc,lcb');
@@ -1920,7 +1998,7 @@ const live = async () => {
    *  log go to `dir` — the work dir for a run, the tag seed's own folder for a tag-seed build (Run 7). With `cpu` (Run 8)
    *  it is a CPU-only router instead: `n-gpu-layers = 0` and `device = none` in place of the product's `n-gpu-layers =
    *  99`, on `port`, its preset and log named with `tag` — and it is not THE router, so the caller kills it. */
-  const startRouter = async (rerankerModels, chatModels, dir, { cpu = false, port = LLAMA_PORT, tag = '' } = {}) => {
+  const startRouter = async (rerankerModels, chatModels, dir, { cpu = false, igpu = null, port = LLAMA_PORT, tag = '' } = {}) => {
     const models = [...rerankerModels, ...chatModels];
     const exe = path.join(RESOURCES, 'llama-cpp', 'llama-server.exe');
     const gguf = path.join(RESOURCES, 'gguf');
@@ -1955,7 +2033,8 @@ const live = async () => {
     // then runs a big batch's matrix work on any GPU it can see — measured before Run 8, a 48-note BGE call took ~5 s with
     // `n-gpu-layers = 0` alone and 143–197 s with `device = none` as well. A machine with no GPU has only the CPU backend,
     // and `device = none` is what gives this one the same.
-    const devices = cpu ? ['n-gpu-layers = 0', 'device = none'] : ['n-gpu-layers = 99'];
+    // Run 8b's iGPU-only launch: the product's preset, plus a log verbosity high enough for the child to name its device.
+    const devices = cpu ? ['n-gpu-layers = 0', 'device = none'] : igpu !== null ? ['n-gpu-layers = 99', 'log-verbosity = 4'] : ['n-gpu-layers = 99'];
     const presetSection = (m, kind) => [`[${m}]`, ...devices,
       ...(kind === 'reranking'
         ? ['reranking = true', `ctx-size = ${windowOf(m)}`, `batch-size = ${windowOf(m)}`, `ubatch-size = ${windowOf(m)}`]
@@ -1969,9 +2048,11 @@ const live = async () => {
     const logFd = fs.openSync(log, 'w');
     // --models-max holds every model the arms bind at once, so no arm's model is evicted by another's mid-run.
     const child = spawn(exe, ['--models-dir', gguf, '--models-preset', preset, '--models-max', String(Math.max(2, models.length)),
-      '--host', '127.0.0.1', '--port', String(port)], { cwd: path.dirname(exe), stdio: ['ignore', logFd, logFd] });
+      '--host', '127.0.0.1', '--port', String(port)], { cwd: path.dirname(exe), stdio: ['ignore', logFd, logFd],
+      // Run 8b: only the iGPU's native Vulkan driver visible, to the router and so to every child it spawns.
+      ...(igpu !== null ? { env: { ...process.env, GGML_VK_VISIBLE_DEVICES: String(igpu) } } : {}) });
     fs.closeSync(logFd);
-    if (cpu) cpuRouters.push(child); else router = child;
+    if (cpu || igpu !== null) cpuRouters.push(child); else router = child;
     await until(async () => (await fetch(`http://127.0.0.1:${port}/v1/models`)).ok, 60000);
     return { child, port, preset, presetText, log };
   };
@@ -2605,7 +2686,7 @@ const live = async () => {
           documents: recs.reduce((a, r) => a + r.documents, 0), maxChars: recs.reduce((m, r) => Math.max(m, r.maxChars), 0),
           answerSent: recs.length === 0 || recs.every((r) => r.answerSent === null) ? null : recs.some((r) => r.answerSent === true),
           // Run 8, a CPU-only arm: the notes the windows came from, the pair tokens, the call time, and the abandonment.
-          ...(arm.cpu ? {
+          ...(solo(arm) ? {
             candidates: recs.reduce((a, r) => a + r.candidates, 0), unmatched: recs.reduce((a, r) => a + r.unmatched, 0),
             pairTokens: Math.round(recs.reduce((a, r) => a + r.pairTokens, 0) * 100) / 100,
             callMs: recs.reduce((a, r) => a + (r.ms ?? 0), 0), aborted: recs.some((r) => r.aborted === true),
@@ -2649,7 +2730,7 @@ const live = async () => {
         settings.memory = { ...(settings.memory ?? {}), judgeSource: 'llama-cpp', judgeModel: arm.llamaModel };
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
         // A CPU-only arm always gets its RECORD-ONLY proxy (never memoised); every other arm one only with --rerank-memo.
-        if (arm.cpu) arm.proxy = await startProxy({ upstreamPort: llamaPort, memo: false, cpu: true });
+        if (solo(arm)) arm.proxy = await startProxy({ upstreamPort: llamaPort, memo: false, cpu: true });
         else if (MEMO) arm.proxy = await startProxy();
         env.GATHERLIGHT_LLAMACPP_URL = `http://127.0.0.1:${arm.proxy ? arm.proxy.port : llamaPort}`;
       }
@@ -2697,10 +2778,10 @@ const live = async () => {
       arm.judgeSource = judge.activeSource ?? null;
       arm.judgeModel = judge.activeModel ?? null;
     };
-    for (const [i, arm] of arms.entries()) if (!arm.cpu) await setupArm(arm, i, LLAMA_PORT);
-    for (const arm of arms) if (!arm.cpu) await checkArm(arm);
+    for (const [i, arm] of arms.entries()) if (!solo(arm)) await setupArm(arm, i, LLAMA_PORT);
+    for (const arm of arms) if (!solo(arm)) await checkArm(arm);
     // Which router, and which preset section, each local-model arm ran on (Run 8; a CPU-only arm's is set in its turn).
-    for (const arm of arms) if (arm.llamaModel && !arm.cpu && gpuRouter)
+    for (const arm of arms) if (arm.llamaModel && !solo(arm) && gpuRouter)
       arm.llamaRouter = { kind: 'gpu', port: LLAMA_PORT, preset: sectionOf(gpuRouter.presetText, arm.llamaModel), log: rel(gpuRouter.log) };
 
     // ---- 4. identical questions, identical SHUFFLED order: every arm in parallel, then each CPU-only arm alone --------
@@ -2736,14 +2817,14 @@ const live = async () => {
         const result = await recall(c, x, arm.idMap);
         // A CPU-only arm's abandoned call is closed at the proxy a moment after the product gave up on it — its record
         // (time, abandonment) is complete only then.
-        if (arm.cpu) await until(() => (arm.proxy.state.records.get(seq) ?? []).every((r) => r.ms !== undefined), 5000, 20).catch(() => {});
+        if (solo(arm)) await until(() => (arm.proxy.state.records.get(seq) ?? []).every((r) => r.ms !== undefined), 5000, 20).catch(() => {});
         const row = { arm: arm.key, pass: 'accuracy', seq, ...x, ...result, ...rerankOf(arm, seq), t0 };
         arm.rows.push(row);
         emit(row);
       }
     };
 
-    const parallel = arms.filter((a) => !a.cpu);
+    const parallel = arms.filter((a) => !solo(a));
     for (const arm of parallel) if (arm.proxy) arm.proxy.state.phase = 'accuracy';
     await Promise.all(parallel.map(accuracyPass));
     for (const arm of parallel) if (arm.proxy) arm.proxy.state.phase = 'latency';
@@ -2850,18 +2931,26 @@ const live = async () => {
         cancelled: (text.match(/Connection handling canceled/g) ?? []).length,
         errorLines: lines.filter((l) => level(l) === 'E' && !/Connection handling canceled/.test(l)).length,
         vulkanLines: lines.filter((l) => /vulkan/i.test(l)).length,
+        // Run 8b: the device the child loaded onto, in its own words (printed at log-verbosity 4), and every line naming
+        // the discrete GPU this run hides.
+        usingDevice: /using device (.+?) \(unknown id\)/.exec(text)?.[1] ?? /using device (.+?) - /.exec(text)?.[1] ?? null,
+        offloaded: /offloaded \d+\/\d+ layers to GPU/.exec(text)?.[0] ?? null,
+        nvidiaLines: lines.filter((l) => /NVIDIA|GeForce/i.test(l)).length,
       };
     };
     let cpuSlot = 0;
     for (const [i, arm] of arms.entries()) {
-      if (!arm.cpu) continue;
+      if (!solo(arm)) continue;
       if (JSON.stringify(binaryPrint()) !== JSON.stringify(serverBinary))
         throw new Error(`arm ${arm.key}: the server binary changed since the run began (${JSON.stringify(serverBinary)} → ${JSON.stringify(binaryPrint())}) — its arms would not run one build`);
       const port = CPU_LLAMA_PORT + cpuSlot++;
       const startedAt = new Date().toISOString();
-      console.log(`  ${arm.key}: its own CPU-only router on ${port}, then its server — ${queries.length} recalls, alone`);
-      const r = await startRouter([arm.reranker], [], WORK, { cpu: true, port, tag: `-cpu-${i}` });
-      arm.llamaRouter = { kind: 'cpu', port, preset: sectionOf(r.presetText, arm.reranker), log: rel(r.log) };
+      console.log(`  ${arm.key}: its own ${soloName(arm)}-only router on ${port}, then its server — ${queries.length} recalls, alone`);
+      const r = arm.igpu
+        ? await startRouter([arm.reranker], [], WORK, { igpu: IGPU_VISIBLE, port, tag: `-igpu-${i}` })
+        : await startRouter([arm.reranker], [], WORK, { cpu: true, port, tag: `-cpu-${i}` });
+      arm.llamaRouter = { kind: arm.igpu ? 'igpu' : 'cpu', port, preset: sectionOf(r.presetText, arm.reranker), log: rel(r.log),
+        ...(arm.igpu ? { env: { GGML_VK_VISIBLE_DEVICES: String(IGPU_VISIBLE) } } : {}) };
       await setupArm(arm, i, port);
       await checkArm(arm);
       arm.proxy.state.phase = 'accuracy';
@@ -2876,7 +2965,8 @@ const live = async () => {
       const events = attachCpuEvents(arm);
       // Reconciled with its OWN router's log, before that router goes (it logs through a queue).
       arm.cpuProxied = await routerProxiedTo(r.log, arm.reranker);
-      arm.cpuRecord = { ...cpuRouterRecord(r.log, arm.reranker), port, startedAt, accuracyFrom, accuracyTo, events };
+      arm.cpuRecord = { ...cpuRouterRecord(r.log, arm.reranker), port, startedAt, accuracyFrom, accuracyTo, events,
+        ...(arm.igpu ? { visible: String(IGPU_VISIBLE) } : {}) };
       killTree(r.child);
       await until(async () => { try { await fetch(`http://127.0.0.1:${port}/v1/models`); return false; } catch { return true; } }, 30000).catch(() => {});
       console.log(`  ${arm.key}: ${arm.rows.filter((x) => x.answered !== null).length}/${arm.rows.length} with a verdict, `
@@ -2938,6 +3028,7 @@ const live = async () => {
       // The arms that ran in PARALLEL; the CPU-only arms (Run 8) ran one at a time after them.
       concurrency: parallel.length,
       ...(arms.some((a) => a.cpu) ? { cpuSerial: arms.filter((a) => a.cpu).map((a) => a.key), serverBinary } : {}),
+      ...(arms.some((a) => a.igpu) ? { igpuSerial: arms.filter((a) => a.igpu).map((a) => a.key), serverBinary } : {}),
       latencySample: sample.length,
       arms: arms.map((a) => ({
         key: a.key, label: a.label, enrichment: a.enrichment, judgeInput: a.judgeInput ?? null, reranker: a.reranker ?? null,
@@ -2949,6 +3040,7 @@ const live = async () => {
         // Run 8: the llama.cpp router and preset section each local-model arm ran on; a CPU-only arm's own router record.
         ...(a.llamaRouter ? { llamaRouter: a.llamaRouter } : {}),
         ...(a.cpu ? { cpu: true, cpuRecord: a.cpuRecord ?? null } : {}),
+        ...(a.igpu ? { igpu: true, cpuRecord: a.cpuRecord ?? null } : {}),
       })),
       ...(arms.some((a) => a.proxy) ? {
         rerankProxy: {
@@ -2959,7 +3051,7 @@ const live = async () => {
             // once; errors = a forward that still failed, which the arm read as a 502.
             forwarded: a.proxy.state.forwarded, retried: a.proxy.state.retried, errors: a.proxy.state.errors,
             // A CPU-only arm's (Run 8): never memoised; the requests its client abandoned; and what its OWN router proxied.
-            ...(a.cpu ? { memo: false, abandoned: a.proxy.state.abandoned, routerProxied: a.cpuProxied ?? null } : {}),
+            ...(solo(a) ? { memo: false, abandoned: a.proxy.state.abandoned, routerProxied: a.cpuProxied ?? null } : {}),
           }])),
           routerProxied,
         },
