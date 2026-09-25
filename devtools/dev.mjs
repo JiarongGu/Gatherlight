@@ -20,7 +20,7 @@
 //   node devtools/dev.mjs check-tool-docs   - assert every registered tool is one the agent is TOLD about
 //   node devtools/dev.mjs check-host-actions - assert the desktop host's actions and lib/host.ts agree
 //   node devtools/dev.mjs embed-bench [models…] - measure embedding models on this app's own recall job
-//   node devtools/dev.mjs judge-bench [--arms=…] [--rerankers=…] [--chat-judges=…] [--n=…] [--fixture=long] [--seed-only] - what each way of judging a recall is worth (docs/judge-bench.md)
+//   node devtools/dev.mjs judge-bench [--arms=…] [--rerankers=…] [--chat-judges=…] [--n=…] [--fixture=long|mixed] [--seed-only] - what each way of judging a recall is worth (docs/judge-bench.md)
 //   node devtools/dev.mjs rerank-window [--resources=…] [--model=…] [--skip-sweep|--skip-pairs|--skip-latency] - re-measure what mMiniLMv2's 512-token window rests on
 import { spawnSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';

@@ -321,19 +321,18 @@ const fill = (pool, cursor, lo, hi, join, forced = []) => {
 };
 
 // ---- the build -----------------------------------------------------------------------------------------------------
-/** The long fixture, from the bilingual fixture's parsed JSON and its raw bytes. Pure: same input, same output. */
-export function buildLongFixture(base, baseBytes) {
-  const facts = base.facts;
+/** The fixture's facts by language, each list in fixture order. */
+export const byLanguage = (facts) => {
   const byLang = { zh: [], en: [], ja: [] };
   for (const f of facts) byLang[languageOf(f)].push(f);
+  return byLang;
+};
 
-  // Position: cycle start → middle → end → beyond through each language's facts in fixture order.
-  const position = new Map();
-  for (const group of Object.values(byLang)) group.forEach((f, i) => position.set(f.id, POSITIONS[i % POSITIONS.length]));
-
-  // Mentions: each note names up to three other same-language facts, by topic, at fixed strides.
+/** fact id → the other facts its note names by topic: up to three same-language facts, at fixed strides through the
+ *  language's facts in fixture order (never itself, never a MENTION_EXCLUDED topic). */
+export const mentionsOf = (facts) => {
   const mentions = new Map();
-  for (const [lang, group] of Object.entries(byLang)) {
+  for (const [lang, group] of Object.entries(byLanguage(facts))) {
     group.forEach((f, i) => {
       const ms = STRIDES[lang].map((s, k) => ({ other: group[(i + s) % group.length], k }))
         .filter(({ other }) => other.id !== f.id && !MENTION_EXCLUDED.includes(other.id))
@@ -341,44 +340,65 @@ export function buildLongFixture(base, baseBytes) {
       mentions.set(f.id, ms);
     });
   }
+  return mentions;
+};
+
+/** ONE fact's long note: its original content (the answer) at `pos`, padded with neutral filler drawn from the fact's own
+ *  shuffle of its language's pool and with `ms` — the mentions `mentionsOf` gives it. Returns the note and the answer's
+ *  offset. Pure: the same fact, position and mentions give the same note, in any fixture that builds it. */
+export function longNote(f, pos, ms) {
+  const lang = languageOf(f);
+  const C = f.content;
+  const L = C.length;
+  const join = JOIN[lang];
+  const pool = shuffled(FILLER[lang], seedOf(f.id));
+  const cursor = { i: 0 };
+  const [olo, ohi] = TIER[pos].offset(L);
+
+  // Mentions are spread over the note: in the padding BEFORE the answer for end/beyond, AFTER it for start, and
+  // split for middle (the first before, the rest after), each placed at an even fraction of its run.
+  const place = (list, runLo) => list.map((m, k) => ({ text: m.text, at: Math.floor(((k + 0.5) / list.length) * runLo * 0.9) }));
+  let before = { text: '', len: 0 }, after = { text: '', len: 0 };
+  let offset;
+  if (pos === 'start') {
+    offset = 0;
+    const [tlo, thi] = TIER.start.total(L);
+    const lo = tlo - L - join.length, hi = thi - L - join.length;
+    after = fill(pool, cursor, lo, hi, join, place(ms, lo));
+  } else {
+    const beforeMs = pos === 'middle' ? ms.slice(0, 1) : ms;
+    const afterMs = pos === 'middle' ? ms.slice(1) : [];
+    // The run BEFORE the answer ends with a separator, so the answer's offset is the run's length plus it.
+    before = fill(pool, cursor, olo - join.length, ohi - join.length, join, place(beforeMs, olo - join.length));
+    offset = before.len + (before.len ? join.length : 0);
+    if (pos === 'middle') {
+      const [tlo, thi] = TIER.middle.total(L, offset);
+      const lo = tlo - offset - L - join.length, hi = thi - offset - L - join.length;
+      after = fill(pool, cursor, lo, hi, join, place(afterMs, lo));
+    }
+  }
+  return { note: [before.text, C, after.text].filter(Boolean).join(join), offset };
+}
+
+/** The long fixture, from the bilingual fixture's parsed JSON and its raw bytes. Pure: same input, same output. */
+export function buildLongFixture(base, baseBytes) {
+  const facts = base.facts;
+  const byLang = byLanguage(facts);
+
+  // Position: cycle start → middle → end → beyond through each language's facts in fixture order.
+  const position = new Map();
+  for (const group of Object.values(byLang)) group.forEach((f, i) => position.set(f.id, POSITIONS[i % POSITIONS.length]));
+
+  // Mentions: each note names up to three other same-language facts, by topic, at fixed strides.
+  const mentions = mentionsOf(facts);
 
   const out = facts.map((f) => {
-    const lang = languageOf(f);
     const pos = position.get(f.id);
-    const C = f.content;
-    const L = C.length;
-    const join = JOIN[lang];
-    const pool = shuffled(FILLER[lang], seedOf(f.id));
-    const cursor = { i: 0 };
     const ms = mentions.get(f.id);
-    const [olo, ohi] = TIER[pos].offset(L);
-
-    // Mentions are spread over the note: in the padding BEFORE the answer for end/beyond, AFTER it for start, and
-    // split for middle (the first before, the rest after), each placed at an even fraction of its run.
-    const place = (list, runLo) => list.map((m, k) => ({ text: m.text, at: Math.floor(((k + 0.5) / list.length) * runLo * 0.9) }));
-    let before = { text: '', len: 0 }, after = { text: '', len: 0 };
-    let offset;
-    if (pos === 'start') {
-      offset = 0;
-      const [tlo, thi] = TIER.start.total(L);
-      const lo = tlo - L - join.length, hi = thi - L - join.length;
-      after = fill(pool, cursor, lo, hi, join, place(ms, lo));
-    } else {
-      const beforeMs = pos === 'middle' ? ms.slice(0, 1) : ms;
-      const afterMs = pos === 'middle' ? ms.slice(1) : [];
-      // The run BEFORE the answer ends with a separator, so the answer's offset is the run's length plus it.
-      before = fill(pool, cursor, olo - join.length, ohi - join.length, join, place(beforeMs, olo - join.length));
-      offset = before.len + (before.len ? join.length : 0);
-      if (pos === 'middle') {
-        const [tlo, thi] = TIER.middle.total(L, offset);
-        const lo = tlo - offset - L - join.length, hi = thi - offset - L - join.length;
-        after = fill(pool, cursor, lo, hi, join, place(afterMs, lo));
-      }
-    }
-    const note = [before.text, C, after.text].filter(Boolean).join(join);
+    const { note, offset } = longNote(f, pos, ms);
     return {
       id: f.id, kind: f.kind, topic: f.topic, content: note, questions: f.questions,
-      position: pos, answer: { text: C, offset, length: L },
+      position: pos, answer: { text: f.content, offset, length: f.content.length },
       mentions: ms.map((m) => m.id),
     };
   });
@@ -438,7 +458,19 @@ export function validate(base, fixture) {
       if (!f.content.includes(baseById.get(id).topic)) fail(`${f.id}: mention of ${id} is not in the note`);
     }
   }
-  // The filler names no fixture subject — checked on the POOL, so a sentence nobody drew is checked too.
+  validatePools(fail);
+  // Positions are balanced: 15 each, and within each language equal counts.
+  for (const p of POSITIONS) {
+    const n = fixture.facts.filter((f) => f.position === p).length;
+    if (n !== fixture.facts.length / POSITIONS.length) fail(`${n} facts at ${p}`);
+  }
+  // Every fact's content is distinct from every note but its own — including as a note's whole text.
+  if (new Set(notes).size !== notes.length) fail('two notes are identical');
+}
+
+/** The filler names no fixture subject — checked on the POOL, so a sentence nobody drew is checked too — and neither
+ *  does a mention template's own wording. Shared by every fixture built from these pools. */
+export function validatePools(fail) {
   for (const [lang, pool] of Object.entries(FILLER)) {
     const dup = pool.find((s, i) => pool.indexOf(s) !== i);
     if (dup) fail(`duplicate ${lang} filler sentence: ${dup}`);
@@ -452,16 +484,9 @@ export function validate(base, fixture) {
       if (hits.length) fail(`${lang} mention template names a fixture subject (${hits.join(', ')})`);
     }
   }
-  // Positions are balanced: 15 each, and within each language equal counts.
-  for (const p of POSITIONS) {
-    const n = fixture.facts.filter((f) => f.position === p).length;
-    if (n !== fixture.facts.length / POSITIONS.length) fail(`${n} facts at ${p}`);
-  }
-  // Every fact's content is distinct from every note but its own — including as a note's whole text.
-  if (new Set(notes).size !== notes.length) fail('two notes are identical');
 }
 
-const serialise = (fixture) => JSON.stringify(fixture, null, 2) + '\n';
+export const serialise = (fixture) => JSON.stringify(fixture, null, 2) + '\n';
 export const readBase = () => {
   const bytes = fs.readFileSync(BASE_FIXTURE);
   return { base: JSON.parse(bytes.toString('utf8')), bytes };
@@ -486,7 +511,11 @@ function printCharReport(fixture) {
 }
 
 // ---- --measure: tokens, on dedicated CPU llama-servers ------------------------------------------------------------
-async function measure(fixture) {
+/** Tokenize every note of `fixture` (written at `fixtureFile`) on dedicated CPU llama-servers and report, per position
+ *  in `positions`, where each answer lands in tokens; the record goes to `dir`, a gitignored scratch folder. Shared with
+ *  the mixed fixture's generator (docs/judge-bench.md Run 9). */
+export async function measure(fixture, { fixtureFile = LONG_FIXTURE, positions = POSITIONS,
+  dir = path.join(repo, 'devtools', '_judge-bench-long') } = {}) {
   const arg = (name, dflt) => (process.argv.find((a) => a.startsWith(`--${name}=`)) ?? `--${name}=${dflt ?? ''}`).slice(name.length + 3);
   const resources = arg('resources', '');
   if (!resources) throw new Error('--measure needs --resources=<a folder holding llama-cpp/ and gguf/> (never a household data folder)');
@@ -498,7 +527,7 @@ async function measure(fixture) {
     { key: 'minilm', id: 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0', normalise: true },
     { key: 'bge', id: 'bge-reranker-v2-m3-Q5_K_M', normalise: false },
   ];
-  const out = { date: new Date().toISOString(), fixtureSha256: crypto.createHash('sha256').update(fs.readFileSync(LONG_FIXTURE)).digest('hex'), models: {}, notes: {} };
+  const out = { date: new Date().toISOString(), fixtureSha256: crypto.createHash('sha256').update(fs.readFileSync(fixtureFile)).digest('hex'), models: {}, notes: {} };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (const [i, m] of models.entries()) {
     const file = path.join(res, 'gguf', `${m.id}.gguf`);
@@ -559,16 +588,15 @@ async function measure(fixture) {
     }
   }
   console.log('\nposition  answer offset, tokens (mMiniLMv2 · BGE)                   answer end, tokens (mMiniLMv2 · BGE)                    note, tokens (mMiniLMv2 · BGE)');
-  for (const p of POSITIONS) {
+  for (const p of positions) {
     const rs = Object.values(out.notes).filter((r) => r.position === p);
     const col = (k, f) => summarise(rs.map((r) => r[k][f]));
     console.log(`${p.padEnd(9)} ${`${col('minilm', 'offset')} · ${col('bge', 'offset')}`.padEnd(57)} ${`${col('minilm', 'end')} · ${col('bge', 'end')}`.padEnd(55)} ${col('minilm', 'total')} · ${col('bge', 'total')}`);
   }
-  const dir = path.join(repo, 'devtools', '_judge-bench-long');
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `lengths-${out.date.replace(/:/g, '')}.json`);
-  fs.writeFileSync(file, JSON.stringify(out, null, 2));
-  console.log(`\nlengths: ${path.relative(repo, file).split(path.sep).join('/')}`);
+  const record = path.join(dir, `lengths-${out.date.replace(/:/g, '')}.json`);
+  fs.writeFileSync(record, JSON.stringify(out, null, 2));
+  console.log(`\nlengths: ${path.relative(repo, record).split(path.sep).join('/')}`);
 }
 
 // ---- CLI -----------------------------------------------------------------------------------------------------------

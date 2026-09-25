@@ -1,0 +1,1342 @@
+{
+  "generatedBy": "devtools/scripts/judge-bench-mixed-fixture.mjs",
+  "derivedFrom": {
+    "file": "devtools/fixtures/recall-bilingual.json",
+    "sha256": "9680443e206495ca8bcd067f80f4705cff5e31a365504fbac438413002ecf555"
+  },
+  "sets": [
+    "same",
+    "cross",
+    "third",
+    "mixed"
+  ],
+  "positions": {
+    "short": "the fact's original text (≤ 101 characters): one window for every reranker, read whole, sent as it is",
+    "end": "a long note whose answer is its last text, at 880–960 characters — past mMiniLMv2's cut (≤ 490 characters) for every question, inside the 1,000-character cap",
+    "beyond": "a long note whose answer starts at 1,060–1,120 characters and is its last text — past every reranker's cut"
+  },
+  "assignment": "short and long alternate through each language's facts in fixture order — zh and ja start short, en starts long, the phase that splits every near-duplicate group; each language's long facts cycle end → beyond; a long note is judge-bench-long-fixture.mjs's note for that fact at that position",
+  "mentionExcluded": [
+    "pharm-24h",
+    "allergy-peanut",
+    "allergy-shellfish",
+    "hotpot"
+  ],
+  "facts": [
+    {
+      "id": "mkt-east",
+      "kind": "venue",
+      "topic": "东门农贸市场营业时间",
+      "content": "东门农贸市场每周六、周日早上七点开门,中午十二点收摊,周一到周五不开。",
+      "questions": {
+        "same": "东门那个菜市场周末几点开门、几点收摊,平时工作日营业吗?",
+        "cross": "What time does the East Gate farmers market open and close on weekends, and is it open on weekdays?",
+        "third": "東門の市場は週末何時から何時まで開いていて、平日は営業していますか?",
+        "mixed": "东门那个 farmers market 周末几点 open、几点 close,weekday 有没有营业啊?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "东门农贸市场每周六、周日早上七点开门,中午十二点收摊,周一到周五不开。",
+        "offset": 0,
+        "length": 35
+      },
+      "mentions": [],
+      "group": "mkt-*"
+    },
+    {
+      "id": "mkt-west",
+      "kind": "venue",
+      "topic": "西街夜市营业时间",
+      "content": "玄关的鞋柜太满了,旧鞋挑出来一批送人。周末去外婆家,记得带上那箱橙子。洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。老二的自然作业要观察豆芽,每天记录长了多高。厨房窗户的纱窗破了个小洞,先用胶布补上。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。老二的橡皮擦和铅笔总是丢,干脆一次买了一整盒。小区门口药店这件事另外有一条记录,这里不重复。相册里缺了去年秋天那次爬山的照片,要从手机里导出来。周五晚上是全家的桌游之夜,这周轮到老大选游戏。爷爷每天早上在楼下的小花园打太极拳。今年的春联还没买,打算自己写。家里的剪刀总是找不到,决定在厨房专门放一把。业主群里在讨论楼道灯改成声控的,费用按户平摊。楼道里堆的纸箱被物业提醒了,周末清掉。客厅的窗户缝漏风,买了密封条准备贴上。爸爸说今年要把老照片全部扫描存档。老二想养一只仓鼠,全家还在商量。老二的积木零件散落一地,准备按颜色分装。湖边酒店取消政策还要再核实一下,先不写结论。周日下午全家一起拼那盒一千片的星空拼图,拼了一半。周三晚上开家庭会议,讨论下半年的家务分工。外婆在织一条灰色的围巾,说冬至前能织完。爷爷的老花镜放在茶几上的眼镜盒里。家里的充电线太多太乱,每根都贴上了标签。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。客厅的时钟慢了五分钟,记得调一下。老大和同学约好周六下午在家里做手工。家里的体重秤没电了,用的是纽扣电池。外婆的收音机坏了,爸爸说周末拆开看看。门铃的电池换过了,声音比以前大。厨房抽油烟机的油盒满了,记得倒掉再擦一下。关于小区停车,等有空再问清楚。冰箱冷冻室结了一层厚霜,周末找时间断电除霜。老二这周负责给乌龟换水,换三分之一就行。客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。这个月的家庭开支表做好了,放在共享文件夹里。老二最近迷上了画恐龙,画纸用得很快。卫生间的龙头有点滴漏,已经约了师傅周四来看。老大在学做蛋炒饭,已经会自己掌握火候了。外婆寄来一箱自己晒的柿饼,分了一半给邻居。书桌的抽屉滑轨坏了,拉的时候要轻一点。周末想把衣柜换季整理,夏天的衣服收起来。西街夜市只在周五和周六晚上营业,从傍晚六点开到十一点。",
+      "questions": {
+        "same": "西街那边晚上摆摊的集市一般几点开、几点收,是不是每天晚上都有?",
+        "cross": "Which days of the week and what hours is the West Street night market open?",
+        "third": "西通りのナイトマーケットは何曜日の何時から何時までやっていますか?",
+        "mixed": "西街那个night market一般是周几营业啊,几点open几点close?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "西街夜市只在周五和周六晚上营业,从傍晚六点开到十一点。",
+        "offset": 868,
+        "length": 27
+      },
+      "mentions": [
+        "pharm-local",
+        "hotel-lake",
+        "parking"
+      ],
+      "group": "mkt-*"
+    },
+    {
+      "id": "mkt-harbor",
+      "kind": "venue",
+      "topic": "Harbor fish market hours",
+      "content": "The youngest wants a hamster, and the family vote has been postponed until next month. There is a slow drip under the kitchen sink; a plumber is coming on Thursday. See the separate note on Express train fare to the coast; it is not repeated here. Keep the living room quiet after ten; the flat downstairs has a newborn. The drawer runners on the desk are broken, so pull it out gently. Still to double-check: Gym membership renewal. The eldest and a friend are building a model rocket on Saturday afternoon. The kitchen extractor fan filter is overdue for a wash; soak it in hot soapy suds overnight. The kitchen knives need sharpening; the whetstone is in the second tray of the toolbox. Nothing new this week about Elm Street post office. Dad is learning photography and spends Sunday mornings practising in the courtyard. The harbor fish market opens at 5 a.m. on weekdays and is closed on Sundays.",
+      "questions": {
+        "same": "What time does the seafood market down at the docks open on weekdays, and does it open on Sundays?",
+        "cross": "海港鱼市平时几点开门?周日营业吗?",
+        "third": "漁港の魚市場は平日何時に開店しますか?日曜日は休みですか?",
+        "mixed": "harbor那个fish market工作日几点open啊,Sunday是不是closed?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "The harbor fish market opens at 5 a.m. on weekdays and is closed on Sundays.",
+        "offset": 826,
+        "length": 76
+      },
+      "mentions": [
+        "train-express",
+        "gym",
+        "post"
+      ],
+      "group": "mkt-*"
+    },
+    {
+      "id": "museum-adult",
+      "kind": "price",
+      "topic": "市立博物馆成人票价",
+      "content": "市立博物馆成人门票现在是六十元,2026年7月起执行。",
+      "questions": {
+        "same": "咱们市里那家博物馆,现在大人进去参观要多少钱?",
+        "cross": "How much does an adult ticket to the city museum cost now?",
+        "third": "市の博物館の大人の入場料は今いくらですか?",
+        "mixed": "市里那个博物馆的adult ticket现在涨到多少钱了?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "市立博物馆成人门票现在是六十元,2026年7月起执行。",
+        "offset": 0,
+        "length": 27
+      },
+      "mentions": [],
+      "group": "museum-*"
+    },
+    {
+      "id": "museum-adult-old",
+      "kind": "price",
+      "topic": "市立博物馆旧票价",
+      "content": "老二想养一只仓鼠,全家还在商量。外婆把旧毛衣拆了线,打算织两副手套。爷爷每天早上在楼下的小花园打太极拳。晚上睡前全家一起读十分钟书,这周读的是一本童话。空调滤网每个季度洗一次,上次是八月底洗的。老大想要一个新书包,先等旧的真的坏了再说。家里的体重秤没电了,用的是纽扣电池。晚上十点以后不要在客厅大声放音乐,楼下有小宝宝。日本签证有效期这件事另外有一条记录,这里不重复。地板上周打过蜡,这周先别用湿拖把。这个月家里的零食预算超了,下个月少买点。老二的毛绒玩具太多,挑几只送给表妹。周末大扫除的分工:爸爸擦窗户,老大拖地,老二整理玩具。书房的台灯换了暖光,晚上看书眼睛舒服多了。老大想把卧室的墙刷成浅蓝色,先买一小罐试色。老大的作文写了家里的那盆多肉,得了好评。老二这周负责给乌龟换水,换三分之一就行。客厅的窗户缝漏风,买了密封条准备贴上。老二的橡皮擦和铅笔总是丢,干脆一次买了一整盒。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。老大在学做蛋炒饭,已经会自己掌握火候了。垃圾分类投放时间还要再核实一下,先不写结论。厨房窗户的纱窗破了个小洞,先用胶布补上。今年的家庭出游照片挑了二十张,准备洗出来。旧报纸攒了一摞,可以拿来包易碎的碗盘。冰箱冷冻室结了一层厚霜,周末找时间断电除霜。门铃的电池换过了,声音比以前大。周末想把衣柜换季整理,夏天的衣服收起来。外婆的收音机坏了,爸爸说周末拆开看看。书架最上面一层的旧杂志整理出来了,准备送给楼上的邻居。外婆寄来一箱自己晒的柿饼,分了一半给邻居。老大想学下围棋,先看几集入门视频。周六早上楼里停电两小时,冰箱里别放太多东西。卫生间的龙头有点滴漏,已经约了师傅周四来看。周五晚上是全家的桌游之夜,这周轮到老大选游戏。电梯下周二上午停运检修,搬重东西要避开那天。冰箱门上的便签纸快用完了,顺手记在购物清单上。关于儿科专家号,等有空再问清楚。卧室窗外的晾衣绳松了,找时间重新系紧。爸爸说今年要把老照片全部扫描存档。晚饭后轮流洗碗,这周轮到爸爸。老二的积木零件散落一地,准备按颜色分装。老大的钢笔漏墨了,换了一支新的笔囊。家里的手电筒放在电视柜下面的抽屉里。今年的春联还没买,打算自己写。热水器显示屏偶尔报错,重启一下就好了,先观察。家里的门垫太旧了,换一块吸水好一点的。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。客厅的空气净化器滤芯该换了,指示灯已经变红。老二最近迷上了画恐龙,画纸用得很快。窗台上的绿萝长得太长了,剪下几枝插在瓶子里。2026年7月之前,市立博物馆成人门票是四十五元,这个价格已经不用了。",
+      "questions": {
+        "same": "市里那家博物馆调价以前,大人的门票卖多少钱一张?",
+        "cross": "What was the adult admission fee at the city museum before it was changed in 2026?",
+        "third": "市の博物館の大人の入場料は、変更前はいくらだったの?",
+        "mixed": "市里博物馆之前那个adult ticket price是多少钱啊,涨价前的?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "2026年7月之前,市立博物馆成人门票是四十五元,这个价格已经不用了。",
+        "offset": 1081,
+        "length": 35
+      },
+      "mentions": [
+        "visa",
+        "trash-day",
+        "hospital"
+      ],
+      "group": "museum-*"
+    },
+    {
+      "id": "museum-child",
+      "kind": "price",
+      "topic": "市立博物馆儿童票",
+      "content": "身高一米二以下的儿童进市立博物馆免费,一米二到一米四半价。",
+      "questions": {
+        "same": "市里那家博物馆小朋友进去怎么收费?多高以下免费,多高算半价?",
+        "cross": "What are the height requirements for free and half-price children's tickets at the city museum?",
+        "third": "市の博物館の子供料金は、身長何センチまで無料で、何センチから半額ですか?",
+        "mixed": "市里博物馆的children ticket是怎么算的?身高多少可以free entry,多少是half price?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "身高一米二以下的儿童进市立博物馆免费,一米二到一米四半价。",
+        "offset": 0,
+        "length": 29
+      },
+      "mentions": [],
+      "group": "museum-*"
+    },
+    {
+      "id": "lib-weekday",
+      "kind": "venue",
+      "topic": "Riverside Library weekday hours",
+      "content": "Riverside Library is open 9 a.m. to 8 p.m. Monday through Friday.",
+      "questions": {
+        "same": "What time does the library by the river open and close Monday to Friday?",
+        "cross": "河畔图书馆周一到周五几点开门几点关门?",
+        "third": "川沿いの図書館は平日何時から何時まで開いていますか?",
+        "mixed": "河边那个library周一到周五的open hours是几点到几点?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "Riverside Library is open 9 a.m. to 8 p.m. Monday through Friday.",
+        "offset": 0,
+        "length": 65
+      },
+      "mentions": [],
+      "group": "lib-*"
+    },
+    {
+      "id": "lib-weekend",
+      "kind": "venue",
+      "topic": "Riverside Library weekend hours",
+      "content": "The filter light on the air purifier has turned red, so a replacement is due. Dad is learning photography and spends Sunday mornings practising in the courtyard. See the separate note on Swimming lessons; it is not repeated here. The shoe rack by the front door is overflowing; the outgrown pairs go to the cousins. The living room rug curls up at one corner; double-sided tape is holding it for now. The upstairs neighbours are renovating until the end of the month, so mornings will be noisy. Still to double-check: Getting to the airport. The kitchen knives need sharpening; the whetstone is in the second tray of the toolbox. The eldest is writing a story about the old armchair for a writing contest. Someone keeps leaving the lid off the toothpaste. Board game night is on Fridays, and this week it is the eldest who chooses the game. Nothing new this week about Flu vaccine. A draught comes in around the living room window, so sealing strip is on the list. The window screen in the kitchen has a small tear; tape will do for now. The sofa covers were washed last week and still need to go back on. On Saturdays Riverside Library closes early at 4 p.m., and it is closed all day Sunday.",
+      "questions": {
+        "same": "What time does the library by the river shut its doors on Saturdays, and is it open at all on Sundays?",
+        "cross": "河滨图书馆周六几点提前打烊,周日是不是全天不开门?",
+        "third": "川沿いの図書館は土曜日は何時に閉まりますか、また日曜日は休館ですか?",
+        "mixed": "河边那个library是不是Saturday会提前close啊,Sunday是不是整天都不开?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "On Saturdays Riverside Library closes early at 4 p.m., and it is closed all day Sunday.",
+        "offset": 1106,
+        "length": 87
+      },
+      "mentions": [
+        "swim-class",
+        "airport",
+        "flu-shot"
+      ],
+      "group": "lib-*"
+    },
+    {
+      "id": "pool-north",
+      "kind": "venue",
+      "topic": "北区游泳馆休息日",
+      "content": "老二这周负责给乌龟换水,换三分之一就行。老二在练习系鞋带,每天出门前自己系一次。楼上邻居装修到月底,白天会比较吵。衣柜顶上的行李箱落了灰,用之前要擦一遍。客厅的插线板开关有点松,先别插大功率的电器。家里的剪刀总是找不到,决定在厨房专门放一把。周末想把旧玩具摆出来义卖,收入捐给街道的爱心基金。放学接孩子时间这件事另外有一条记录,这里不重复。老大在学做蛋炒饭,已经会自己掌握火候了。客厅茶几的玻璃有道裂纹,先垫了一块桌布。晚饭少放点盐,爷爷最近血压有点高。客厅的地毯边角翘起来了,先用双面胶粘住。今年的春联还没买,打算自己写。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。卧室窗帘的遮光效果不好,早上五点就被照醒。这个月的家庭开支表做好了,放在共享文件夹里。厨房抽油烟机的油盒满了,记得倒掉再擦一下。晚上十点以后不要在客厅大声放音乐,楼下有小宝宝。钢琴课还要再核实一下,先不写结论。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。周日晚上把下周的晚饭安排写好,贴在冰箱上。老大的作文写了家里的那盆多肉,得了好评。外婆把旧毛衣拆了线,打算织两副手套。客厅的空气净化器滤芯该换了,指示灯已经变红。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。老大想要一个新书包,先等旧的真的坏了再说。客厅的时钟慢了五分钟,记得调一下。晚上睡前全家一起读十分钟书,这周读的是一本童话。家里的备用灯泡放在储物间的鞋盒里。老二的自然作业要观察豆芽,每天记录长了多高。关于长辈生日,等有空再问清楚。相册里缺了去年秋天那次爬山的照片,要从手机里导出来。老二的毛绒玩具太多,挑几只送给表妹。热水器显示屏偶尔报错,重启一下就好了,先观察。客厅的吊灯有一个灯泡不亮了,买的时候注意是小螺口的。周五晚上吃什么还没定,可能在家包馄饨。外婆在织一条灰色的围巾,说冬至前能织完。厨房的刀该磨了,磨刀石在工具箱第二层。家里的门垫太旧了,换一块吸水好一点的。旧报纸攒了一摞,可以拿来包易碎的碗盘。厨房窗户的纱窗破了个小洞,先用胶布补上。北区游泳馆每周二闭馆做水质消毒,其他日子早上六点开门。",
+      "questions": {
+        "same": "城北那家游泳馆星期几不开放,平时几点开门?",
+        "cross": "Which day is the North District swimming pool closed, and what time does it open on other days?",
+        "third": "北区プールの休館日は何曜日で、他の日は何時に開きますか?",
+        "mixed": "北区swimming pool每周几是closed day,平时早上几点open?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "北区游泳馆每周二闭馆做水质消毒,其他日子早上六点开门。",
+        "offset": 867,
+        "length": 27
+      },
+      "mentions": [
+        "school-pickup",
+        "piano",
+        "grandma-bday"
+      ],
+      "group": "pool-*"
+    },
+    {
+      "id": "pool-south",
+      "kind": "venue",
+      "topic": "南湖露天泳池开放时间",
+      "content": "南湖游泳馆是露天泳池,只在六月到九月开放,每天下午一点到晚上八点。",
+      "questions": {
+        "same": "南湖那边户外的游泳池一年里哪几个月开放,每天几点到几点能进去游?",
+        "cross": "During which months and what daily hours can you swim at the South Lake pool?",
+        "third": "南湖プールはどの季節に営業していて、毎日何時から何時まで利用できますか?",
+        "mixed": "南湖那个swimming pool是不是只在summer才open啊,每天几点到几点算business hours?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "南湖游泳馆是露天泳池,只在六月到九月开放,每天下午一点到晚上八点。",
+        "offset": 0,
+        "length": 33
+      },
+      "mentions": [],
+      "group": "pool-*"
+    },
+    {
+      "id": "pharm-24h",
+      "kind": "venue",
+      "topic": "二十四小时药店",
+      "content": "爸爸说今年要把老照片全部扫描存档。客厅的吊灯有一个灯泡不亮了,买的时候注意是小螺口的。冰箱门上的便签纸快用完了,顺手记在购物清单上。楼上邻居装修到月底,白天会比较吵。衣柜顶上的行李箱落了灰,用之前要擦一遍。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。外婆种的小葱长出来了,做饭时可以直接掐。玄关的鞋柜太满了,旧鞋挑出来一批送人。客厅的窗户缝漏风,买了密封条准备贴上。外婆教老二包饺子,包出来的形状千奇百怪。客厅的插线板开关有点松,先别插大功率的电器。外婆寄来一箱自己晒的柿饼,分了一半给邻居。猫粮口味还要再核实一下,先不写结论。爸爸的眼镜腿松了,找了个小螺丝刀拧紧。这个月家里的零食预算超了,下个月少买点。下个月爷爷要来住两周,客房的床单先晒一晒。周末想把旧玩具摆出来义卖,收入捐给街道的爱心基金。爷爷把常用的电话号码抄在一张卡片上,贴在门后。卧室窗外的晾衣绳松了,找时间重新系紧。周日晚上把下周的晚饭安排写好,贴在冰箱上。外婆在织一条灰色的围巾,说冬至前能织完。老大想要一个新书包,先等旧的真的坏了再说。家里的雨伞只剩一把好的了,出门前看看天气预报。周三晚上开家庭会议,讨论下半年的家务分工。外婆的收音机坏了,爸爸说周末拆开看看。窗台上的绿萝长得太长了,剪下几枝插在瓶子里。老二想养一只仓鼠,全家还在商量。客厅沙发套上周拆下来洗了,还没装回去。卧室窗帘的遮光效果不好,早上五点就被照醒。客厅茶几的玻璃有道裂纹,先垫了一块桌布。周日下午全家一起拼那盒一千片的星空拼图,拼了一半。储物间的圣诞装饰放在最里面的两个纸箱里。今年的家庭出游照片挑了二十张,准备洗出来。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。家里的剪刀总是找不到,决定在厨房专门放一把。关于夏令营报名,等有空再问清楚。门铃的电池换过了,声音比以前大。客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。饮水机该清洗了,上次清洗是三个月前。周五晚上吃什么还没定,可能在家包馄饨。家里的充电线太多太乱,每根都贴上了标签。周末去外婆家,记得带上那箱橙子。客厅的时钟慢了五分钟,记得调一下。家里的手电筒放在电视柜下面的抽屉里。周末想把衣柜换季整理,夏天的衣服收起来。爸爸最近在学拍照,周末总拿着相机在楼下转。家里的门垫太旧了,换一块吸水好一点的。厨房水槽下面的柜子有点潮,放了两包干燥剂。晚饭后轮流洗碗,这周轮到爸爸。老二的橡皮擦和铅笔总是丢,干脆一次买了一整盒。书架最上面一层的旧杂志整理出来了,准备送给楼上的邻居。周末早餐轮流做,这周是煎饼配豆浆。老大在学做蛋炒饭,已经会自己掌握火候了。火车站旁边的健民药房二十四小时营业,半夜也能买到退烧药。",
+      "questions": {
+        "same": "车站附近哪家药店是通宵开着的,大半夜发烧了能去那儿买药吗?",
+        "cross": "Is there a pharmacy near the train station that stays open through the night where I could grab something for a fever at midnight?",
+        "third": "駅のそばで夜通し開いている薬局はありますか?真夜中でも解熱剤を買えますか?",
+        "mixed": "车站附近有没有那种通宵开着的pharmacy啊,大半夜发烧了能买到medicine吗?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "火车站旁边的健民药房二十四小时营业,半夜也能买到退烧药。",
+        "offset": 1073,
+        "length": 28
+      },
+      "mentions": [
+        "cat-food",
+        "summer-camp"
+      ],
+      "group": "pharm-*"
+    },
+    {
+      "id": "pharm-local",
+      "kind": "venue",
+      "topic": "小区门口药店",
+      "content": "小区门口的药店晚上九点就关门,周日下午不营业。",
+      "questions": {
+        "same": "我们住的地方大门旁边那家药店,晚上几点关门?周日下午开不开?",
+        "cross": "What time does the pharmacy near my apartment complex close at night, and is it open on Sunday afternoons?",
+        "third": "近所のマンション入口にある薬局は夜何時に閉まりますか、日曜の午後はやっていますか?",
+        "mixed": "我们小区大门边那个pharmacy晚上几点close啊,Sunday下午会不会开门?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "小区门口的药店晚上九点就关门,周日下午不营业。",
+        "offset": 0,
+        "length": 23
+      },
+      "mentions": [],
+      "group": "pharm-*"
+    },
+    {
+      "id": "passport",
+      "kind": "household",
+      "topic": "护照有效期",
+      "content": "老大和同学约好周六下午在家里做手工。冬天的厚被子从柜子顶上拿下来晒过了。卧室的暖气片摸着不太热,可能要放一下气。爸爸的眼镜腿松了,找了个小螺丝刀拧紧。客厅的地毯边角翘起来了,先用双面胶粘住。家里的体重秤没电了,用的是纽扣电池。家里的雨伞只剩一把好的了,出门前看看天气预报。车辆年检这件事另外有一条记录,这里不重复。热水器显示屏偶尔报错,重启一下就好了,先观察。客厅墙上的挂画歪了,钉子要往左移两厘米。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。周末大扫除的分工:爸爸擦窗户,老大拖地,老二整理玩具。衣柜顶上的行李箱落了灰,用之前要擦一遍。旧报纸攒了一摞,可以拿来包易碎的碗盘。饮水机该清洗了,上次清洗是三个月前。卫生间的龙头有点滴漏,已经约了师傅周四来看。地板上周打过蜡,这周先别用湿拖把。家里的充电线太多太乱,每根都贴上了标签。周五晚上是全家的桌游之夜,这周轮到老大选游戏。电费缴纳还要再核实一下,先不写结论。老大想把卧室的墙刷成浅蓝色,先买一小罐试色。客厅的吊灯有一个灯泡不亮了,买的时候注意是小螺口的。卧室窗外的晾衣绳松了,找时间重新系紧。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。周日下午全家一起拼那盒一千片的星空拼图,拼了一半。今年的家庭出游照片挑了二十张,准备洗出来。家里的备用灯泡放在储物间的鞋盒里。老大在学做蛋炒饭,已经会自己掌握火候了。客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。晚饭少放点盐,爷爷最近血压有点高。关于楼下干洗店,等有空再问清楚。楼道里堆的纸箱被物业提醒了,周末清掉。相册里缺了去年秋天那次爬山的照片,要从手机里导出来。窗台上的绿萝长得太长了,剪下几枝插在瓶子里。老二想养一只仓鼠,全家还在商量。爸爸在研究怎么修那把摇晃的餐椅,买了一小罐木胶。晚饭后轮流洗碗,这周轮到爸爸。家里的手电筒放在电视柜下面的抽屉里。爸爸说今年要把老照片全部扫描存档。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。业主群里在讨论楼道灯改成声控的,费用按户平摊。家长A的护照2027年3月到期,出国前要确认剩余有效期超过六个月。",
+      "questions": {
+        "same": "家长A的护照大概是哪年哪月过期,出发去国外之前要不要确认一下离失效还剩超过半年?",
+        "cross": "When does Parent A's passport actually expire, and do we need to make sure more than six months are left on it before traveling internationally?",
+        "third": "親Aのパスポートはいつ切れる予定で、海外に出発する前に残りの期限が半年以上あるか確認しておくべきですか?",
+        "mixed": "家长A的passport什么时候expire啊,出国前是不是得double check一下还有没有超过6个月的validity?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "家长A的护照2027年3月到期,出国前要确认剩余有效期超过六个月。",
+        "offset": 862,
+        "length": 33
+      },
+      "mentions": [
+        "car-inspection",
+        "power-bill",
+        "laundry"
+      ],
+      "group": "passport"
+    },
+    {
+      "id": "visa",
+      "kind": "household",
+      "topic": "日本签证有效期",
+      "content": "家长B的日本多次往返签证有效期到2028年1月,每次停留不超过三十天。",
+      "questions": {
+        "same": "家长B的日本签证能用到什么时候,每次入境最多可以待多久?",
+        "cross": "Until when is Parent B's Japan visa valid, and how long can each stay last?",
+        "third": "親Bの日本ビザはいつまで有効で、一回の滞在は最大何日までですか?",
+        "mixed": "家长B的Japan visa能用到什么时候,每次入境最多能stay几天啊?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "家长B的日本多次往返签证有效期到2028年1月,每次停留不超过三十天。",
+        "offset": 0,
+        "length": 35
+      },
+      "mentions": [],
+      "group": "visa"
+    },
+    {
+      "id": "id-card",
+      "kind": "household",
+      "topic": "孩子身份证换领",
+      "content": "这个月的家庭开支表做好了,放在共享文件夹里。爸爸的眼镜腿松了,找了个小螺丝刀拧紧。老大在学做蛋炒饭,已经会自己掌握火候了。下个月爷爷要来住两周,客房的床单先晒一晒。周末早餐轮流做,这周是煎饼配豆浆。今年的家庭出游照片挑了二十张,准备洗出来。厨房水槽下面的柜子有点潮,放了两包干燥剂。厨房的刀该磨了,磨刀石在工具箱第二层。新街面馆这件事另外有一条记录,这里不重复。冰箱冷冻室结了一层厚霜,周末找时间断电除霜。外婆种的小葱长出来了,做饭时可以直接掐。饮水机该清洗了,上次清洗是三个月前。老二的积木零件散落一地,准备按颜色分装。卧室窗帘的遮光效果不好,早上五点就被照醒。家里的剪刀总是找不到,决定在厨房专门放一把。外婆把旧毛衣拆了线,打算织两副手套。家里的充电线太多太乱,每根都贴上了标签。晚饭少放点盐,爷爷最近血压有点高。老二的橡皮擦和铅笔总是丢,干脆一次买了一整盒。今年的春联还没买,打算自己写。周五晚上是全家的桌游之夜,这周轮到老大选游戏。客厅的窗户缝漏风,买了密封条准备贴上。热水器显示屏偶尔报错,重启一下就好了,先观察。老二在练习系鞋带,每天出门前自己系一次。燃气费还要再核实一下,先不写结论。家里的指甲刀放在卫生间的镜柜里。客厅的插线板开关有点松,先别插大功率的电器。卧室窗外的晾衣绳松了,找时间重新系紧。洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。家里的门垫太旧了,换一块吸水好一点的。家里的手电筒放在电视柜下面的抽屉里。老大想要一个新书包,先等旧的真的坏了再说。业主群里在讨论楼道灯改成声控的,费用按户平摊。老大的作文写了家里的那盆多肉,得了好评。家里的备用灯泡放在储物间的鞋盒里。过年要带回老家的礼物清单:茶叶两盒、围巾一条。书桌的抽屉滑轨坏了,拉的时候要轻一点。客厅沙发套上周拆下来洗了,还没装回去。旧报纸攒了一摞,可以拿来包易碎的碗盘。外婆教老二包饺子,包出来的形状千奇百怪。关于东门农贸市场营业时间,等有空再问清楚。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。家里的雨伞只剩一把好的了,出门前看看天气预报。家里的备用钥匙放在玄关抽屉的蓝色小盒子里。玄关的鞋柜太满了,旧鞋挑出来一批送人。客厅的地毯边角翘起来了,先用双面胶粘住。爸爸最近在学拍照,周末总拿着相机在楼下转。书房的台灯换了暖光,晚上看书眼睛舒服多了。老二最近晚上总踢被子,换了一床带扣子的睡袋。周末大扫除的分工:爸爸擦窗户,老大拖地,老二整理玩具。衣柜顶上的行李箱落了灰,用之前要擦一遍。外婆的收音机坏了,爸爸说周末拆开看看。储物间的圣诞装饰放在最里面的两个纸箱里。孩子的身份证明年五月到期,需要本人去派出所拍照换领。",
+      "questions": {
+        "same": "孩子的证件什么时候到期?去换新的时候本人要不要亲自到场?",
+        "cross": "When does my child's ID document expire, and do I need to take them in person to get a new photo taken for it?",
+        "third": "子供の身分証はいつ期限が切れますか?更新には本人が行く必要がありますか?",
+        "mixed": "孩子的ID什么时候expire啊,renew的时候是不是得带他本人去police station拍个photo?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "孩子的身份证明年五月到期,需要本人去派出所拍照换领。",
+        "offset": 1073,
+        "length": 26
+      },
+      "mentions": [
+        "rest-noodle2",
+        "gas-bill",
+        "mkt-east"
+      ],
+      "group": "id-card"
+    },
+    {
+      "id": "school-pickup",
+      "kind": "schedule",
+      "topic": "放学接孩子时间",
+      "content": "小学周一到周四下午三点半放学,周五提前到两点四十。",
+      "questions": {
+        "same": "小学生平时下午几点放学,周五是不是会提前一些?",
+        "cross": "What time does elementary school end for pickup on regular days, and is Friday earlier?",
+        "third": "小学校の下校時刻は普段何時で、金曜日だけ早く終わりますか?",
+        "mixed": "问一下,elementary school 平时下午几点放学接娃,Friday 是不是会提前?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "小学周一到周四下午三点半放学,周五提前到两点四十。",
+        "offset": 0,
+        "length": 25
+      },
+      "mentions": [],
+      "group": "school-*"
+    },
+    {
+      "id": "school-dropoff",
+      "kind": "schedule",
+      "topic": "早上送孩子时间",
+      "content": "老二最近晚上总踢被子,换了一床带扣子的睡袋。家里的体重秤没电了,用的是纽扣电池。洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。周日下午全家一起拼那盒一千片的星空拼图,拼了一半。老二这周负责给乌龟换水,换三分之一就行。客厅的插线板开关有点松,先别插大功率的电器。山顶民宿取消政策这件事另外有一条记录,这里不重复。爸爸在研究怎么修那把摇晃的餐椅,买了一小罐木胶。家里的备用钥匙放在玄关抽屉的蓝色小盒子里。周末想把衣柜换季整理,夏天的衣服收起来。老大和同学约好周六下午在家里做手工。老二想养一只仓鼠,全家还在商量。厨房窗户的纱窗破了个小洞,先用胶布补上。业主群里在讨论楼道灯改成声控的,费用按户平摊。玄关的鞋柜太满了,旧鞋挑出来一批送人。冰箱冷冻室结了一层厚霜,周末找时间断电除霜。窗台上的绿萝长得太长了,剪下几枝插在瓶子里。下个月爷爷要来住两周,客房的床单先晒一晒。客厅的窗户缝漏风,买了密封条准备贴上。共享单车月卡还要再核实一下,先不写结论。外婆的收音机坏了,爸爸说周末拆开看看。周末大扫除的分工:爸爸擦窗户,老大拖地,老二整理玩具。周三晚上开家庭会议,讨论下半年的家务分工。周六早上楼里停电两小时,冰箱里别放太多东西。相册里缺了去年秋天那次爬山的照片,要从手机里导出来。周五晚上吃什么还没定,可能在家包馄饨。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。过年要带回老家的礼物清单:茶叶两盒、围巾一条。老大的作文写了家里的那盆多肉,得了好评。卧室的暖气片摸着不太热,可能要放一下气。客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。关于市立博物馆成人票价,等有空再问清楚。今年的家庭出游照片挑了二十张,准备洗出来。晚饭少放点盐,爷爷最近血压有点高。储物间的圣诞装饰放在最里面的两个纸箱里。这个月家里的零食预算超了,下个月少买点。外婆寄来一箱自己晒的柿饼,分了一半给邻居。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。客厅的空气净化器滤芯该换了,指示灯已经变红。客厅的吊灯有一个灯泡不亮了,买的时候注意是小螺口的。家里的工具箱缺一把小号的扳手。早上七点四十之前必须送到校门口,迟到要登记。",
+      "questions": {
+        "same": "孩子每天早晨最晚几点前必须到学校门口,超过这个点算不算迟到还要登记?",
+        "cross": "By what time in the morning does my child need to arrive at school before it's marked as being late and logged?",
+        "third": "朝、子供は何時までに学校の門に着かないと遅刻として記録されてしまいますか?",
+        "mixed": "早上送娃最晚几点得到school门口啊,迟了是不是要register登记?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "早上七点四十之前必须送到校门口,迟到要登记。",
+        "offset": 868,
+        "length": 22
+      },
+      "mentions": [
+        "hotel-mountain",
+        "bike",
+        "museum-adult"
+      ],
+      "group": "school-*"
+    },
+    {
+      "id": "school-lunch",
+      "kind": "price",
+      "topic": "School lunch payment",
+      "content": "School lunch is paid monthly through the parents' app, 280 yuan per month.",
+      "questions": {
+        "same": "How do we pay for the kids' school meals, and how much is it each month?",
+        "cross": "校餐费是通过什么方式支付的,每个月多少钱?",
+        "third": "給食費は毎月いくらで、どうやって支払いますか?",
+        "mixed": "学校的lunch费用怎么pay,一个月要多少钱?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "School lunch is paid monthly through the parents' app, 280 yuan per month.",
+        "offset": 0,
+        "length": 74
+      },
+      "mentions": [],
+      "group": "school-*"
+    },
+    {
+      "id": "allergy-peanut",
+      "kind": "health",
+      "topic": "花生过敏",
+      "content": "小的那个孩子对花生严重过敏,外出吃饭要提前告诉店家,随身带肾上腺素笔。",
+      "questions": {
+        "same": "家里两个孩子中比较小的那个,是不是对某样食物特别敏感,出门吃饭前需要先跟餐厅打招呼吗?",
+        "cross": "Does the younger child have a serious food allergy that means we need to warn restaurants ahead of time and carry emergency medication?",
+        "third": "下の子は特定の食べ物に強く反応する体質で、外食のときはお店に前もって伝えたり、いざという時の注射薬を持ち歩いたりする必要がありますか?",
+        "mixed": "那个比较小的kid是不是对某种food有很严重的allergy,去restaurant之前要不要提前打招呼,身上还得带着急救用的injection笔?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "小的那个孩子对花生严重过敏,外出吃饭要提前告诉店家,随身带肾上腺素笔。",
+        "offset": 0,
+        "length": 35
+      },
+      "mentions": [],
+      "group": "allergy-*"
+    },
+    {
+      "id": "allergy-shellfish",
+      "kind": "health",
+      "topic": "Shellfish allergy",
+      "content": "The doorbell chime was replaced and is now much louder than before. Board game night is on Fridays, and this week it is the eldest who chooses the game. See the separate note on Home internet plan; it is not repeated here. The guest towels are in the linen cupboard on the second shelf. The bookshelf in the study is overloaded, and the old magazines are going to the neighbours. Still to double-check: Wedding anniversary. The eldest and a friend are building a model rocket on Saturday afternoon. The dining chair with the wobbly leg has been glued and should be left alone for a day. The radiator in the small bedroom barely warms up and may need bleeding. Nothing new this week about Babysitter rates. The filter light on the air purifier has turned red, so a replacement is due. The youngest wants a hamster, and the family vote has been postponed until next month. One grandparent is allergic to shellfish — shrimp and crab cause hives, but fish is fine.",
+      "questions": {
+        "same": "Which grandparent breaks out in a rash after eating crustaceans, even though other seafood doesn't bother them?",
+        "cross": "家里哪位祖父母吃甲壳类海鲜会起疹子,但吃其他海鲜没事?",
+        "third": "祖父母の中で、甲殻類の海鮮を食べると発疹が出るけれど、他の魚介類なら平気なのは誰ですか?",
+        "mixed": "家里哪个grandparent对shellfish过敏,吃shrimp和crab会起hives,但吃fish没问题?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "One grandparent is allergic to shellfish — shrimp and crab cause hives, but fish is fine.",
+        "offset": 871,
+        "length": 89
+      },
+      "mentions": [
+        "internet",
+        "anniversary",
+        "babysitter"
+      ],
+      "group": "allergy-*"
+    },
+    {
+      "id": "car-insurance",
+      "kind": "household",
+      "topic": "车险续保",
+      "content": "晚上十点以后不要在客厅大声放音乐,楼下有小宝宝。家里的工具箱缺一把小号的扳手。老二这周负责给乌龟换水,换三分之一就行。客厅沙发套上周拆下来洗了,还没装回去。老二想养一只仓鼠,全家还在商量。卫生间的龙头有点滴漏,已经约了师傅周四来看。老二最近晚上总踢被子,换了一床带扣子的睡袋。窗台上的绿萝长得太长了,剪下几枝插在瓶子里。牙齿矫正复诊这件事另外有一条记录,这里不重复。空调滤网每个季度洗一次,上次是八月底洗的。家里的体重秤没电了,用的是纽扣电池。爸爸的眼镜腿松了,找了个小螺丝刀拧紧。老大的作文写了家里的那盆多肉,得了好评。家里的剪刀总是找不到,决定在厨房专门放一把。今年的春联还没买,打算自己写。老大想把卧室的墙刷成浅蓝色,先买一小罐试色。外婆在织一条灰色的围巾,说冬至前能织完。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。晚上睡前全家一起读十分钟书,这周读的是一本童话。今年的家庭出游照片挑了二十张,准备洗出来。周末想把旧玩具摆出来义卖,收入捐给街道的爱心基金。周日下午全家一起拼那盒一千片的星空拼图,拼了一半。家里的充电线太多太乱,每根都贴上了标签。银行周末营业还要再核实一下,先不写结论。地板上周打过蜡,这周先别用湿拖把。周五晚上是全家的桌游之夜,这周轮到老大选游戏。爷爷把常用的电话号码抄在一张卡片上,贴在门后。卧室的暖气片摸着不太热,可能要放一下气。老大的钢笔漏墨了,换了一支新的笔囊。周日晚上把下周的晚饭安排写好,贴在冰箱上。爸爸最近在学拍照,周末总拿着相机在楼下转。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。外婆寄来一箱自己晒的柿饼,分了一半给邻居。门铃的电池换过了,声音比以前大。书桌的抽屉滑轨坏了,拉的时候要轻一点。客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。业主群里在讨论楼道灯改成声控的,费用按户平摊。爷爷的老花镜放在茶几上的眼镜盒里。储物间的圣诞装饰放在最里面的两个纸箱里。关于市立博物馆儿童票,等有空再问清楚。晚饭后轮流洗碗,这周轮到爸爸。饮水机该清洗了,上次清洗是三个月前。家里的雨伞只剩一把好的了,出门前看看天气预报。玄关的鞋柜太满了,旧鞋挑出来一批送人。厨房水槽下面的柜子有点潮,放了两包干燥剂。周末早餐轮流做,这周是煎饼配豆浆。冰箱冷冻室结了一层厚霜,周末找时间断电除霜。老二最近迷上了画恐龙,画纸用得很快。家里的手电筒放在电视柜下面的抽屉里。老大和同学约好周六下午在家里做手工。洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。周六早上楼里停电两小时,冰箱里别放太多东西。家里的车险每年十月十五号到期,去年是在线上续的,保费四千二。",
+      "questions": {
+        "same": "家里那辆车的保险每年到期日是几号?去年是怎么办理的,花了多少钱?",
+        "cross": "When does our family's car insurance come up for renewal each year, how was it handled last time, and what did it cost?",
+        "third": "我が家の車の保険は毎年いつ更新時期で、去年はどうやって手続きして、いくらかかった?",
+        "mixed": "家里的car insurance每年到期日是哪天啊?去年是怎么renew的,premium花了多少?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "家里的车险每年十月十五号到期,去年是在线上续的,保费四千二。",
+        "offset": 1079,
+        "length": 30
+      },
+      "mentions": [
+        "dentist",
+        "bank",
+        "museum-child"
+      ],
+      "group": "car-*"
+    },
+    {
+      "id": "car-inspection",
+      "kind": "household",
+      "topic": "车辆年检",
+      "content": "车辆年检是每两年一次,下一次在2027年6月之前办完。",
+      "questions": {
+        "same": "车子多久要去验一次车?下次最晚得在什么时候之前弄好?",
+        "cross": "How often does the vehicle need to pass inspection, and by when is the next one due?",
+        "third": "車検はどのくらいの頻度で受ける必要がありますか?次回はいつまでに終わらせればいいですか?",
+        "mixed": "咱这车的年检是每隔几年办一次啊,下次的deadline是什么时候?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "车辆年检是每两年一次,下一次在2027年6月之前办完。",
+        "offset": 0,
+        "length": 27
+      },
+      "mentions": [],
+      "group": "car-*"
+    },
+    {
+      "id": "rest-noodle",
+      "kind": "venue",
+      "topic": "老街面馆",
+      "content": "客厅的空气净化器滤芯该换了,指示灯已经变红。爷爷的老花镜放在茶几上的眼镜盒里。爸爸的眼镜腿松了,找了个小螺丝刀拧紧。储物间的圣诞装饰放在最里面的两个纸箱里。书架最上面一层的旧杂志整理出来了,准备送给楼上的邻居。客厅的窗户缝漏风,买了密封条准备贴上。业主群里在讨论楼道灯改成声控的,费用按户平摊。客厅的吊灯有一个灯泡不亮了,买的时候注意是小螺口的。老大想要一个新书包,先等旧的真的坏了再说。猫咪疫苗这件事另外有一条记录,这里不重复。外婆在织一条灰色的围巾,说冬至前能织完。周三晚上开家庭会议,讨论下半年的家务分工。爷爷把常用的电话号码抄在一张卡片上,贴在门后。相册里缺了去年秋天那次爬山的照片,要从手机里导出来。老二最近迷上了画恐龙,画纸用得很快。周六早上楼里停电两小时,冰箱里别放太多东西。周末想把衣柜换季整理,夏天的衣服收起来。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。空调滤网每个季度洗一次,上次是八月底洗的。老大在学做蛋炒饭,已经会自己掌握火候了。爸爸说今年要把老照片全部扫描存档。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。玄关的鞋柜太满了,旧鞋挑出来一批送人。客厅茶几的玻璃有道裂纹,先垫了一块桌布。老二的自然作业要观察豆芽,每天记录长了多高。客厅的地毯边角翘起来了,先用双面胶粘住。老大的作文写了家里的那盆多肉,得了好评。老二这周负责给乌龟换水,换三分之一就行。关于南湖露天泳池开放时间,等有空再问清楚。老二在练习系鞋带,每天出门前自己系一次。衣柜顶上的行李箱落了灰,用之前要擦一遍。周日晚上把下周的晚饭安排写好,贴在冰箱上。周五晚上吃什么还没定,可能在家包馄饨。厨房抽油烟机的油盒满了,记得倒掉再擦一下。卧室窗外的晾衣绳松了,找时间重新系紧。今年的春联还没买,打算自己写。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。厨房的刀该磨了,磨刀石在工具箱第二层。客厅的插线板开关有点松,先别插大功率的电器。客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。爸爸最近在学拍照,周末总拿着相机在楼下转。老街面馆周一休息,牛肉面二十八元一碗,晚上八点以后不接新客。",
+      "questions": {
+        "same": "老街那家面馆哪天不开门?牛肉面一碗卖多少钱?晚上几点以后就不再接待新顾客了?",
+        "cross": "Which day is Old Street Noodle House closed, how much does a bowl of beef noodles cost there, and after what time in the evening do they stop seating new customers?",
+        "third": "古い通りにある麺屋の定休日はいつですか、牛肉麺は一杯いくらですか、夜何時以降は新しいお客さんを受け付けなくなりますか?",
+        "mixed": "老街那家noodle shop是每周哪天closed啊,beef noodles一碗多少钱,晚上几点以后就不accept new customers了?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "老街面馆周一休息,牛肉面二十八元一碗,晚上八点以后不接新客。",
+        "offset": 857,
+        "length": 30
+      },
+      "mentions": [
+        "vet",
+        "pool-south"
+      ],
+      "group": "rest-*"
+    },
+    {
+      "id": "rest-noodle2",
+      "kind": "venue",
+      "topic": "新街面馆",
+      "content": "新街面馆全年无休,招牌是番茄鸡蛋面,可以提前电话订座。",
+      "questions": {
+        "same": "新街那家面馆是不是一年到头都不关门,他们家最有名的是哪种口味的面,能不能提前打电话订位子?",
+        "cross": "Does the New Street noodle shop stay open every single day of the year, what's their most famous noodle dish, and can you call ahead to reserve a table?",
+        "third": "新しい通りの麺屋は一年中休まず営業していますか、一番人気の麺料理は何で、事前に電話で席を予約できますか?",
+        "mixed": "新街那家noodle shop是不是天天都open、不放假的,他们的signature noodle dish是什么口味,能不能先call过去reserve个位?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "新街面馆全年无休,招牌是番茄鸡蛋面,可以提前电话订座。",
+        "offset": 0,
+        "length": 27
+      },
+      "mentions": [],
+      "group": "rest-*"
+    },
+    {
+      "id": "rest-sushi",
+      "kind": "venue",
+      "topic": "駅前の寿司屋",
+      "content": "駅前の寿司屋は水曜日が定休日で、ランチは十一時半から二時まで。",
+      "questions": {
+        "same": "駅の前にあるお寿司屋さん、休みの曜日とお昼に営業している時間を教えてもらえますか?",
+        "cross": "Which day is the sushi place by the station closed, and what hours does it serve lunch?",
+        "third": "车站旁边那家寿司店每周哪天不营业?中午几点到几点能去吃?",
+        "mixed": "那家车站前面的sushi店是哪天closed的,还有lunch time是几点到几点?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "駅前の寿司屋は水曜日が定休日で、ランチは十一時半から二時まで。",
+        "offset": 0,
+        "length": 31
+      },
+      "mentions": [],
+      "group": "rest-*"
+    },
+    {
+      "id": "train-express",
+      "kind": "travel",
+      "topic": "Express train fare to the coast",
+      "content": "The express train to the coast costs 120 yuan one way and takes 55 minutes.",
+      "questions": {
+        "same": "What's a single ticket on the fast train to the seaside, and how long is the ride?",
+        "cross": "去海边的快车单程票价是多少,坐车要花多长时间?",
+        "third": "海辺行きの急行列車の片道運賃はいくらで、所要時間はどのくらいですか?",
+        "mixed": "去海边那趟express train,一趟票价多少钱,大概坐多久能到?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "The express train to the coast costs 120 yuan one way and takes 55 minutes.",
+        "offset": 0,
+        "length": 75
+      },
+      "mentions": [],
+      "group": "train-*"
+    },
+    {
+      "id": "train-local",
+      "kind": "travel",
+      "topic": "Local train fare to the coast",
+      "content": "The holiday decorations are in the two boxes at the very back of the storage room. Weekend breakfast rotates around the family; this week it is pancakes. The radiator in the small bedroom barely warms up and may need bleeding. See the separate note on Elm Street post office; it is not repeated here. Only one umbrella in the stand still works; check the forecast before heading out. The blender lid cracked, so smoothies are on hold until a new one arrives. Board game night is on Fridays, and this week it is the eldest who chooses the game. Still to double-check: Zoo tickets. The eldest is writing a story about the old armchair for a writing contest. The winter duvets came down from the top shelf and were aired out on Saturday. The wardrobe needs its seasonal swap: summer clothes into the boxes under the bed. Nothing new this week about Riverside Library weekday hours. The storm shutter on the back window rattles because one latch is loose. The garden hose has a split near the tap end and needs a new connector. Every charging cable now has a label, so everyone can find their own. The local train to the coast is only 35 yuan but takes two and a half hours with many stops.",
+      "questions": {
+        "same": "How much is the slow stopping train to the seaside, and how long does the journey take?",
+        "cross": "去海边的慢车票价是多少,要坐多久啊?",
+        "third": "海辺までの普通列車の運賃はいくらで、どのくらい時間がかかりますか?",
+        "mixed": "去海边那趟local train票价多少,得坐多长时间啊?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "The local train to the coast is only 35 yuan but takes two and a half hours with many stops.",
+        "offset": 1094,
+        "length": 92
+      },
+      "mentions": [
+        "post",
+        "zoo",
+        "lib-weekday"
+      ],
+      "group": "train-*"
+    },
+    {
+      "id": "hotel-lake",
+      "kind": "policy",
+      "topic": "湖边酒店取消政策",
+      "content": "周五晚上吃什么还没定,可能在家包馄饨。老大的钢笔漏墨了,换了一支新的笔囊。老二的橡皮擦和铅笔总是丢,干脆一次买了一整盒。外婆教老二包饺子,包出来的形状千奇百怪。老二在练习系鞋带,每天出门前自己系一次。老大和同学约好周六下午在家里做手工。书架最上面一层的旧杂志整理出来了,准备送给楼上的邻居。电梯下周二上午停运检修,搬重东西要避开那天。阳台柠檬树浇水这件事另外有一条记录,这里不重复。周五晚上是全家的桌游之夜,这周轮到老大选游戏。书房的台灯换了暖光,晚上看书眼睛舒服多了。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。周末想把衣柜换季整理,夏天的衣服收起来。晚饭少放点盐,爷爷最近血压有点高。今年的家庭出游照片挑了二十张,准备洗出来。晚上睡前全家一起读十分钟书,这周读的是一本童话。老二想养一只仓鼠,全家还在商量。外婆寄来一箱自己晒的柿饼,分了一半给邻居。周三晚上开家庭会议,讨论下半年的家务分工。晚上十点以后不要在客厅大声放音乐,楼下有小宝宝。客厅的时钟慢了五分钟,记得调一下。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。滑雪场租雪具还要再核实一下,先不写结论。这个月家里的零食预算超了,下个月少买点。旧报纸攒了一摞,可以拿来包易碎的碗盘。客厅的空气净化器滤芯该换了,指示灯已经变红。老大想要一个新书包,先等旧的真的坏了再说。家里的工具箱缺一把小号的扳手。相册里缺了去年秋天那次爬山的照片,要从手机里导出来。周六早上楼里停电两小时,冰箱里别放太多东西。老大的作文写了家里的那盆多肉,得了好评。老大想把卧室的墙刷成浅蓝色,先买一小罐试色。空调滤网每个季度洗一次,上次是八月底洗的。周末想把旧玩具摆出来义卖,收入捐给街道的爱心基金。储物间的圣诞装饰放在最里面的两个纸箱里。饮水机该清洗了,上次清洗是三个月前。外婆种的小葱长出来了,做饭时可以直接掐。关于小区门口药店,等有空再问清楚。爸爸说今年要把老照片全部扫描存档。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。老大想学下围棋,先看几集入门视频。老二最近迷上了画恐龙,画纸用得很快。热水器显示屏偶尔报错,重启一下就好了,先观察。周末去外婆家,记得带上那箱橙子。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。卧室窗帘的遮光效果不好,早上五点就被照醒。客厅的插线板开关有点松,先别插大功率的电器。老二这周负责给乌龟换水,换三分之一就行。客厅的地毯边角翘起来了,先用双面胶粘住。卧室窗外的晾衣绳松了,找时间重新系紧。家里的充电线太多太乱,每根都贴上了标签。湖边酒店入住前三天可以免费取消,之后取消扣一晚房费。",
+      "questions": {
+        "same": "湖旁边那家酒店,提前多少天退订不用付钱?",
+        "cross": "What is the cancellation policy for Lakeside Hotel?",
+        "third": "湖畔のホテルは、いつからキャンセル料がかかりますか?",
+        "mixed": "Lakeside Hotel的cancellation policy是怎样的,几天前cancel不收费?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "湖边酒店入住前三天可以免费取消,之后取消扣一晚房费。",
+        "offset": 1071,
+        "length": 26
+      },
+      "mentions": [
+        "plant",
+        "ski",
+        "pharm-local"
+      ],
+      "group": "hotel-*"
+    },
+    {
+      "id": "hotel-mountain",
+      "kind": "policy",
+      "topic": "山顶民宿取消政策",
+      "content": "山顶民宿订了就不能退,但可以免费改期一次。",
+      "questions": {
+        "same": "山上那家客栈订完以后还能取消吗?",
+        "cross": "Can I get a refund if I cancel my mountaintop guesthouse booking, or only reschedule it?",
+        "third": "山頂の民宿は予約後にキャンセルできますか、それとも日程変更しかできませんか?",
+        "mixed": "山顶那家民宿的booking订了之后是不是不能cancel,只能免费reschedule一次?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "山顶民宿订了就不能退,但可以免费改期一次。",
+        "offset": 0,
+        "length": 21
+      },
+      "mentions": [],
+      "group": "hotel-*"
+    },
+    {
+      "id": "trash-day",
+      "kind": "schedule",
+      "topic": "垃圾分类投放时间",
+      "content": "这个月的家庭开支表做好了,放在共享文件夹里。周末去外婆家,记得带上那箱橙子。厨房抽油烟机的油盒满了,记得倒掉再擦一下。晚上十点以后不要在客厅大声放音乐,楼下有小宝宝。旧报纸攒了一摞,可以拿来包易碎的碗盘。老二这周负责给乌龟换水,换三分之一就行。相册里缺了去年秋天那次爬山的照片,要从手机里导出来。水费这件事另外有一条记录,这里不重复。家里的指甲刀放在卫生间的镜柜里。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。客厅的时钟慢了五分钟,记得调一下。周日下午全家一起拼那盒一千片的星空拼图,拼了一半。老二的毛绒玩具太多,挑几只送给表妹。洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。爸爸说今年要把老照片全部扫描存档。周末大扫除的分工:爸爸擦窗户,老大拖地,老二整理玩具。家里的体重秤没电了,用的是纽扣电池。家里的充电线太多太乱,每根都贴上了标签。外婆教老二包饺子,包出来的形状千奇百怪。电影院会员日还要再核实一下,先不写结论。书架最上面一层的旧杂志整理出来了,准备送给楼上的邻居。楼上邻居装修到月底,白天会比较吵。老二的积木零件散落一地,准备按颜色分装。客厅的地毯边角翘起来了,先用双面胶粘住。门铃的电池换过了,声音比以前大。外婆在织一条灰色的围巾,说冬至前能织完。衣柜顶上的行李箱落了灰,用之前要擦一遍。周末想把衣柜换季整理,夏天的衣服收起来。储物间的圣诞装饰放在最里面的两个纸箱里。今年的家庭出游照片挑了二十张,准备洗出来。窗台上的绿萝长得太长了,剪下几枝插在瓶子里。外婆的收音机坏了,爸爸说周末拆开看看。关于日本签证有效期,等有空再问清楚。这个月家里的零食预算超了,下个月少买点。电梯下周二上午停运检修,搬重东西要避开那天。热水器显示屏偶尔报错,重启一下就好了,先观察。卧室窗外的晾衣绳松了,找时间重新系紧。今年的春联还没买,打算自己写。卫生间的龙头有点滴漏,已经约了师傅周四来看。老大和同学约好周六下午在家里做手工。家里的雨伞只剩一把好的了,出门前看看天气预报。冬天的厚被子从柜子顶上拿下来晒过了。老大想学下围棋,先看几集入门视频。可回收垃圾每周三早上收,厨余垃圾每天晚上七点到九点投放。",
+      "questions": {
+        "same": "废品类垃圾要星期几早上拿到楼下,剩菜剩饭又该在晚饭后什么时间段倒掉?",
+        "cross": "What day and time should recyclable trash be set out, and during which evening hours can food scraps be discarded?",
+        "third": "リサイクルごみは何曜日の朝に出せばいいですか?生ごみは毎晩何時から何時までの間に捨てればいいですか?",
+        "mixed": "recyclables 是不是要等到星期三早上才能拿出去,food waste 又该卡在晚上几点到几点之间倒掉?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "可回收垃圾每周三早上收,厨余垃圾每天晚上七点到九点投放。",
+        "offset": 867,
+        "length": 28
+      },
+      "mentions": [
+        "water-bill",
+        "movie",
+        "visa"
+      ],
+      "group": "trash-day"
+    },
+    {
+      "id": "dentist",
+      "kind": "health",
+      "topic": "牙齿矫正复诊",
+      "content": "大孩子的牙齿矫正每六周复诊一次,下次在十一月八号上午。",
+      "questions": {
+        "same": "大孩子的牙套多久要复查一次,下一次预约是哪天上午?",
+        "cross": "How often does the older kid go back for his braces checkup, and when's the next appointment?",
+        "third": "上の子の歯列矯正の通院間隔はどのくらいで、次回はいつですか?",
+        "mixed": "大孩子的braces多久要回去check一次,next appointment是几号?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "大孩子的牙齿矫正每六周复诊一次,下次在十一月八号上午。",
+        "offset": 0,
+        "length": 27
+      },
+      "mentions": [],
+      "group": "dentist"
+    },
+    {
+      "id": "piano",
+      "kind": "schedule",
+      "topic": "钢琴课",
+      "content": "楼道里堆的纸箱被物业提醒了,周末清掉。老大想要一个新书包,先等旧的真的坏了再说。老二的积木零件散落一地,准备按颜色分装。书架最上面一层的旧杂志整理出来了,准备送给楼上的邻居。电梯下周二上午停运检修,搬重东西要避开那天。书房的台灯换了暖光,晚上看书眼睛舒服多了。爸爸的眼镜腿松了,找了个小螺丝刀拧紧。厨房水槽下面的柜子有点潮,放了两包干燥剂。小区停车这件事另外有一条记录,这里不重复。周五晚上是全家的桌游之夜,这周轮到老大选游戏。爸爸说今年要把老照片全部扫描存档。周末想把衣柜换季整理,夏天的衣服收起来。周日晚上把下周的晚饭安排写好,贴在冰箱上。家里的备用钥匙放在玄关抽屉的蓝色小盒子里。洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。客厅的时钟慢了五分钟,记得调一下。空调滤网每个季度洗一次,上次是八月底洗的。门铃的电池换过了,声音比以前大。老二在练习系鞋带,每天出门前自己系一次。业主群里在讨论楼道灯改成声控的,费用按户平摊。老二这周负责给乌龟换水,换三分之一就行。晚饭后轮流洗碗,这周轮到爸爸。老大的钢笔漏墨了,换了一支新的笔囊。老大的作文写了家里的那盆多肉,得了好评。西街夜市营业时间还要再核实一下,先不写结论。家里的剪刀总是找不到,决定在厨房专门放一把。老二的毛绒玩具太多,挑几只送给表妹。卫生间的龙头有点滴漏,已经约了师傅周四来看。下个月爷爷要来住两周,客房的床单先晒一晒。老大在学做蛋炒饭,已经会自己掌握火候了。周末早餐轮流做,这周是煎饼配豆浆。客厅的插线板开关有点松,先别插大功率的电器。爷爷把常用的电话号码抄在一张卡片上,贴在门后。家里的手电筒放在电视柜下面的抽屉里。晚上十点以后不要在客厅大声放音乐,楼下有小宝宝。晚饭少放点盐,爷爷最近血压有点高。书桌的抽屉滑轨坏了,拉的时候要轻一点。家里的工具箱缺一把小号的扳手。玄关的鞋柜太满了,旧鞋挑出来一批送人。家里的门垫太旧了,换一块吸水好一点的。关于放学接孩子时间,等有空再问清楚。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。老大想学下围棋,先看几集入门视频。这个月家里的零食预算超了,下个月少买点。外婆教老二包饺子,包出来的形状千奇百怪。老二的橡皮擦和铅笔总是丢,干脆一次买了一整盒。外婆在织一条灰色的围巾,说冬至前能织完。老二的自然作业要观察豆芽,每天记录长了多高。热水器显示屏偶尔报错,重启一下就好了,先观察。衣柜顶上的行李箱落了灰,用之前要擦一遍。冬天的厚被子从柜子顶上拿下来晒过了。爸爸在研究怎么修那把摇晃的餐椅,买了一小罐木胶。卧室窗帘的遮光效果不好,早上五点就被照醒。钢琴课每周六下午两点,一节课一百八十元,请假要提前一天说。",
+      "questions": {
+        "same": "弹钢琴的课一般在星期几、几点上,一节多少钱,要是不能去得提前多久跟老师说?",
+        "cross": "What day and time are the piano lessons, how much is each session, and how far in advance do I need to cancel?",
+        "third": "ピアノのレッスンは何曜日の何時にあって、1回いくらで、休むときはどのくらい前に連絡すればいいですか?",
+        "mixed": "piano lesson一般是星期几几点上,一节课多少钱,要cancel的话得提前几天跟老师说?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "钢琴课每周六下午两点,一节课一百八十元,请假要提前一天说。",
+        "offset": 1071,
+        "length": 29
+      },
+      "mentions": [
+        "parking",
+        "mkt-west",
+        "school-pickup"
+      ],
+      "group": "piano"
+    },
+    {
+      "id": "swim-class",
+      "kind": "schedule",
+      "topic": "Swimming lessons",
+      "content": "The kids' swimming lessons run on Tuesday evenings and the term costs 1,200 yuan.",
+      "questions": {
+        "same": "What night do the kids have their swim class, and what does a term of it cost?",
+        "cross": "孩子们的游泳课是星期几上的?这学期学费多少钱?",
+        "third": "子供たちの水泳教室は何曜日にありますか?今学期の授業料はいくらですか?",
+        "mixed": "孩子的swimming lessons是哪天晚上的,这个term的费用是多少钱?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "The kids' swimming lessons run on Tuesday evenings and the term costs 1,200 yuan.",
+        "offset": 0,
+        "length": 81
+      },
+      "mentions": [],
+      "group": "swim-class"
+    },
+    {
+      "id": "gym",
+      "kind": "policy",
+      "topic": "Gym membership renewal",
+      "content": "The household budget spreadsheet for this month is in the shared folder. A list of family phone numbers is taped inside the pantry door. See the separate note on Flu vaccine; it is not repeated here. The eldest wants to repaint the bedroom pale green and is testing sample pots first. A draught comes in around the living room window, so sealing strip is on the list. Still to double-check: Harbor fish market hours. The blender lid cracked, so smoothies are on hold until a new one arrives. The kitchen knives need sharpening; the whetstone is in the second tray of the toolbox. Someone keeps leaving the lid off the toothpaste. Nothing new this week about School lunch payment. The toolbox is missing a small adjustable spanner; it is on the hardware list. The window screen in the kitchen has a small tear; tape will do for now. The gym membership renews automatically every January; cancel before December 20 to avoid the charge.",
+      "questions": {
+        "same": "When does my fitness club subscription roll over each year, and what's the last day I can cancel without paying?",
+        "cross": "健身房会员卡是什么时候自动续费的?要在几号之前取消才能避免扣费?",
+        "third": "ジムの会員は自動的にいつ更新されますか?料金が発生しないようにするには何日までに解約すればいいですか?",
+        "mixed": "我的gym membership是automatically renew的对吧,得在12月几号之前cancel才能避免被charge啊?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "The gym membership renews automatically every January; cancel before December 20 to avoid the charge.",
+        "offset": 832,
+        "length": 101
+      },
+      "mentions": [
+        "flu-shot",
+        "mkt-harbor",
+        "school-lunch"
+      ],
+      "group": "gym"
+    },
+    {
+      "id": "vet",
+      "kind": "health",
+      "topic": "猫咪疫苗",
+      "content": "家里的猫每年三月打一次三联疫苗,狂犬疫苗是九月。",
+      "questions": {
+        "same": "家里的猫每年要打哪些预防针,分别安排在什么时候?",
+        "cross": "What vaccinations does our cat get every year, and in which months are they scheduled?",
+        "third": "うちの猫は毎年どんな予防接種を受けていて、それぞれいつ行いますか?",
+        "mixed": "家里猫的vaccine schedule是怎样的,rabies那一针一般是几月打?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "家里的猫每年三月打一次三联疫苗,狂犬疫苗是九月。",
+        "offset": 0,
+        "length": 24
+      },
+      "mentions": [],
+      "group": "vet"
+    },
+    {
+      "id": "cat-food",
+      "kind": "household",
+      "topic": "猫粮口味",
+      "content": "家里的雨伞只剩一把好的了,出门前看看天气预报。客厅的地毯边角翘起来了,先用双面胶粘住。玄关的鞋柜太满了,旧鞋挑出来一批送人。洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。家里的备用钥匙放在玄关抽屉的蓝色小盒子里。老大在学做蛋炒饭,已经会自己掌握火候了。外婆把旧毛衣拆了线,打算织两副手套。晚饭后轮流洗碗,这周轮到爸爸。客厅的插线板开关有点松,先别插大功率的电器。厨房抽油烟机的油盒满了,记得倒掉再擦一下。儿科专家号这件事另外有一条记录,这里不重复。外婆的收音机坏了,爸爸说周末拆开看看。晚饭少放点盐,爷爷最近血压有点高。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。家里的充电线太多太乱,每根都贴上了标签。这个月家里的零食预算超了,下个月少买点。饮水机该清洗了,上次清洗是三个月前。老二的自然作业要观察豆芽,每天记录长了多高。冰箱门上的便签纸快用完了,顺手记在购物清单上。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。老二这周负责给乌龟换水,换三分之一就行。爸爸的眼镜腿松了,找了个小螺丝刀拧紧。老二的橡皮擦和铅笔总是丢,干脆一次买了一整盒。过年要带回老家的礼物清单:茶叶两盒、围巾一条。卧室的暖气片摸着不太热,可能要放一下气。厨房窗户的纱窗破了个小洞,先用胶布补上。储物间的圣诞装饰放在最里面的两个纸箱里。周日晚上把下周的晚饭安排写好,贴在冰箱上。市立博物馆旧票价还要再核实一下,先不写结论。老二最近晚上总踢被子,换了一床带扣子的睡袋。客厅墙上的挂画歪了,钉子要往左移两厘米。外婆在织一条灰色的围巾,说冬至前能织完。下个月爷爷要来住两周,客房的床单先晒一晒。老二在练习系鞋带,每天出门前自己系一次。空调滤网每个季度洗一次,上次是八月底洗的。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。老大想把卧室的墙刷成浅蓝色,先买一小罐试色。爸爸最近在学拍照,周末总拿着相机在楼下转。周末大扫除的分工:爸爸擦窗户,老大拖地,老二整理玩具。爷爷把常用的电话号码抄在一张卡片上,贴在门后。家里的猫只吃鸡肉味的干粮,换牌子会拉肚子。",
+      "questions": {
+        "same": "我们家猫能吃什么口味的猫粮?换别的牌子会怎么样?",
+        "cross": "What flavor of dry food will our cat eat, and what happens if we switch brands?",
+        "third": "うちの猫はどんな味のドライフードなら食べますか?ブランドを変えるとどうなりますか?",
+        "mixed": "我家猫能吃什么flavor的dry food啊,换个brand会不会有问题?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "家里的猫只吃鸡肉味的干粮,换牌子会拉肚子。",
+        "offset": 859,
+        "length": 21
+      },
+      "mentions": [
+        "hospital",
+        "museum-adult-old"
+      ],
+      "group": "cat-food"
+    },
+    {
+      "id": "plant",
+      "kind": "household",
+      "topic": "阳台柠檬树浇水",
+      "content": "阳台的柠檬树夏天每两天浇一次水,冬天一周一次。",
+      "questions": {
+        "same": "露台上养的柠檬树,不同季节大概隔多久要浇一次水?",
+        "cross": "How often should the lemon tree on the balcony be watered in summer versus winter?",
+        "third": "ベランダのレモンの木は季節によってどのくらいの頻度で水やりが必要ですか?",
+        "mixed": "我balcony上那棵lemon tree,summer跟winter分别要隔多久water一次啊?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "阳台的柠檬树夏天每两天浇一次水,冬天一周一次。",
+        "offset": 0,
+        "length": 23
+      },
+      "mentions": [],
+      "group": "plant"
+    },
+    {
+      "id": "power-bill",
+      "kind": "household",
+      "topic": "电费缴纳",
+      "content": "洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。门铃的电池换过了,声音比以前大。老大和同学约好周六下午在家里做手工。老二想养一只仓鼠,全家还在商量。空调滤网每个季度洗一次,上次是八月底洗的。地板上周打过蜡,这周先别用湿拖把。今年的春联还没买,打算自己写。这个月家里的零食预算超了,下个月少买点。衣柜顶上的行李箱落了灰,用之前要擦一遍。长辈生日这件事另外有一条记录,这里不重复。业主群里在讨论楼道灯改成声控的,费用按户平摊。外婆寄来一箱自己晒的柿饼,分了一半给邻居。老大想把卧室的墙刷成浅蓝色,先买一小罐试色。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。晚饭少放点盐,爷爷最近血压有点高。爸爸的眼镜腿松了,找了个小螺丝刀拧紧。爷爷把常用的电话号码抄在一张卡片上,贴在门后。爸爸说今年要把老照片全部扫描存档。家里的工具箱缺一把小号的扳手。晚饭后轮流洗碗,这周轮到爸爸。卧室窗帘的遮光效果不好,早上五点就被照醒。晚上十点以后不要在客厅大声放音乐,楼下有小宝宝。客厅的时钟慢了五分钟,记得调一下。外婆在织一条灰色的围巾,说冬至前能织完。储物间的圣诞装饰放在最里面的两个纸箱里。北区游泳馆休息日还要再核实一下,先不写结论。爸爸最近在学拍照,周末总拿着相机在楼下转。玄关的鞋柜太满了,旧鞋挑出来一批送人。周末想把衣柜换季整理,夏天的衣服收起来。卫生间的龙头有点滴漏,已经约了师傅周四来看。书架最上面一层的旧杂志整理出来了,准备送给楼上的邻居。老二的橡皮擦和铅笔总是丢,干脆一次买了一整盒。家里的体重秤没电了,用的是纽扣电池。冰箱冷冻室结了一层厚霜,周末找时间断电除霜。爷爷每天早上在楼下的小花园打太极拳。爸爸在研究怎么修那把摇晃的餐椅,买了一小罐木胶。客厅的地毯边角翘起来了,先用双面胶粘住。冰箱门上的便签纸快用完了,顺手记在购物清单上。周日下午全家一起拼那盒一千片的星空拼图,拼了一半。楼上邻居装修到月底,白天会比较吵。关于车辆年检,等有空再问清楚。家里的充电线太多太乱,每根都贴上了标签。老二的自然作业要观察豆芽,每天记录长了多高。厨房的刀该磨了,磨刀石在工具箱第二层。窗台上的绿萝长得太长了,剪下几枝插在瓶子里。今年的家庭出游照片挑了二十张,准备洗出来。客厅墙上的挂画歪了,钉子要往左移两厘米。客厅沙发套上周拆下来洗了,还没装回去。厨房窗户的纱窗破了个小洞,先用胶布补上。冬天的厚被子从柜子顶上拿下来晒过了。旧报纸攒了一摞,可以拿来包易碎的碗盘。外婆种的小葱长出来了,做饭时可以直接掐。外婆把旧毛衣拆了线,打算织两副手套。书房的台灯换了暖光,晚上看书眼睛舒服多了。电费每月二十号自动扣款,绑定的是工资卡。",
+      "questions": {
+        "same": "电费每月固定在哪天从卡里划走,用的是我哪张卡?",
+        "cross": "What day of the month does my electricity bill get paid automatically, and which card does it draw from?",
+        "third": "電気代は毎月何日に自動的に支払われ、どのカードから引き落とされますか?",
+        "mixed": "电费是不是每个月固定从我的 salary card 里 auto-deduct,大概是哪一天?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "电费每月二十号自动扣款,绑定的是工资卡。",
+        "offset": 1078,
+        "length": 20
+      },
+      "mentions": [
+        "grandma-bday",
+        "pool-north",
+        "car-inspection"
+      ],
+      "group": "*-bill"
+    },
+    {
+      "id": "water-bill",
+      "kind": "household",
+      "topic": "水费",
+      "content": "水费两个月收一次,上次交的是一百一十元。",
+      "questions": {
+        "same": "水费大概多久缴一次,最近一次缴了多少钱?",
+        "cross": "How often does the water bill get charged, and how much was the last payment?",
+        "third": "水道料金はどのくらいの間隔で請求され、前回はいくら支払いましたか?",
+        "mixed": "水费是每隔几个月charge一次的,上次payment交了多少钱?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "水费两个月收一次,上次交的是一百一十元。",
+        "offset": 0,
+        "length": 20
+      },
+      "mentions": [],
+      "group": "*-bill"
+    },
+    {
+      "id": "gas-bill",
+      "kind": "household",
+      "topic": "燃气费",
+      "content": "玄关的鞋柜太满了,旧鞋挑出来一批送人。爸爸最近在学拍照,周末总拿着相机在楼下转。老二最近迷上了画恐龙,画纸用得很快。衣柜顶上的行李箱落了灰,用之前要擦一遍。楼道里堆的纸箱被物业提醒了,周末清掉。外婆种的小葱长出来了,做饭时可以直接掐。老二的自然作业要观察豆芽,每天记录长了多高。冬天的厚被子从柜子顶上拿下来晒过了。业主群里在讨论楼道灯改成声控的,费用按户平摊。厨房水槽下面的柜子有点潮,放了两包干燥剂。夏令营报名这件事另外有一条记录,这里不重复。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。热水器显示屏偶尔报错,重启一下就好了,先观察。爸爸在研究怎么修那把摇晃的餐椅,买了一小罐木胶。周末去外婆家,记得带上那箱橙子。电梯下周二上午停运检修,搬重东西要避开那天。家里的剪刀总是找不到,决定在厨房专门放一把。厨房的刀该磨了,磨刀石在工具箱第二层。老大想学下围棋,先看几集入门视频。过年要带回老家的礼物清单:茶叶两盒、围巾一条。老二的毛绒玩具太多,挑几只送给表妹。客厅沙发套上周拆下来洗了,还没装回去。爸爸说今年要把老照片全部扫描存档。家里的工具箱缺一把小号的扳手。爷爷的老花镜放在茶几上的眼镜盒里。窗台上的绿萝长得太长了,剪下几枝插在瓶子里。晚上睡前全家一起读十分钟书,这周读的是一本童话。今年的家庭出游照片挑了二十张,准备洗出来。爷爷把常用的电话号码抄在一张卡片上,贴在门后。关于新街面馆,等有空再问清楚。老二这周负责给乌龟换水,换三分之一就行。冰箱冷冻室结了一层厚霜,周末找时间断电除霜。地板上周打过蜡,这周先别用湿拖把。晚饭后轮流洗碗,这周轮到爸爸。家里的备用灯泡放在储物间的鞋盒里。周末早餐轮流做,这周是煎饼配豆浆。客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。楼上邻居装修到月底,白天会比较吵。今年的春联还没买,打算自己写。老大的作文写了家里的那盆多肉,得了好评。老大和同学约好周六下午在家里做手工。家里的雨伞只剩一把好的了,出门前看看天气预报。饮水机该清洗了,上次清洗是三个月前。老二想养一只仓鼠,全家还在商量。燃气费每三个月抄一次表,上次交的是二百四十元。",
+      "questions": {
+        "same": "家里用气的账单大概多久结算查看一次,最近一次缴纳的金额是多少?",
+        "cross": "How often is the gas meter checked, and how much was the last payment?",
+        "third": "ガスの検針はどのくらいの頻度で行われ、前回の支払い額はいくらでしたか?",
+        "mixed": "我们家的 gas meter 大概多久 read 一次,上次 payment 交了多少钱?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "燃气费每三个月抄一次表,上次交的是二百四十元。",
+        "offset": 863,
+        "length": 23
+      },
+      "mentions": [
+        "summer-camp",
+        "rest-noodle2"
+      ],
+      "group": "*-bill"
+    },
+    {
+      "id": "internet",
+      "kind": "household",
+      "topic": "Home internet plan",
+      "content": "The home internet plan is 500 Mbps and the contract ends in April 2027.",
+      "questions": {
+        "same": "How fast is our broadband at home, and when does the agreement run out?",
+        "cross": "家里的宽带套餐速率是多少,合同什么时候到期?",
+        "third": "自宅のインターネットプランの速度は何Mbpsで、契約はいつ終了しますか?",
+        "mixed": "咱家的home internet套餐是多少Mbps,contract到什么时候到期啊?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "The home internet plan is 500 Mbps and the contract ends in April 2027.",
+        "offset": 0,
+        "length": 71
+      },
+      "mentions": [],
+      "group": "internet"
+    },
+    {
+      "id": "parking",
+      "kind": "price",
+      "topic": "小区停车",
+      "content": "小区地下车位月租三百元,访客车只能停两个小时。",
+      "questions": {
+        "same": "小区地库车位每月要交多少钱,外来车辆临时停放最多允许多久?",
+        "cross": "How much does a monthly underground parking spot cost in the residential compound, and what's the maximum time a visitor's car is allowed to park there?",
+        "third": "団地の地下駐車場の月極料金はいくらで、来客用の車は最大何時間駐車できますか?",
+        "mixed": "我们小区的underground parking一个月租金多少钱,visitor的车最多能停几个hour?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "小区地下车位月租三百元,访客车只能停两个小时。",
+        "offset": 0,
+        "length": 23
+      },
+      "mentions": [],
+      "group": "parking"
+    },
+    {
+      "id": "bike",
+      "kind": "price",
+      "topic": "共享单车月卡",
+      "content": "周日下午全家一起拼那盒一千片的星空拼图,拼了一半。空调滤网每个季度洗一次,上次是八月底洗的。储物间的圣诞装饰放在最里面的两个纸箱里。老大的作文写了家里的那盆多肉,得了好评。客厅的地毯边角翘起来了,先用双面胶粘住。家里的门垫太旧了,换一块吸水好一点的。卫生间的龙头有点滴漏,已经约了师傅周四来看。下个月爷爷要来住两周,客房的床单先晒一晒。楼下干洗店这件事另外有一条记录,这里不重复。冰箱门上的便签纸快用完了,顺手记在购物清单上。旧报纸攒了一摞,可以拿来包易碎的碗盘。老大在学做蛋炒饭,已经会自己掌握火候了。今年的春联还没买,打算自己写。晚上十点以后不要在客厅大声放音乐,楼下有小宝宝。晚上睡前全家一起读十分钟书,这周读的是一本童话。爷爷把常用的电话号码抄在一张卡片上,贴在门后。外婆种的小葱长出来了,做饭时可以直接掐。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。家里的充电线太多太乱,每根都贴上了标签。周六早上楼里停电两小时,冰箱里别放太多东西。客厅的时钟慢了五分钟,记得调一下。老二在练习系鞋带,每天出门前自己系一次。外婆寄来一箱自己晒的柿饼,分了一半给邻居。护照有效期还要再核实一下,先不写结论。卧室窗帘的遮光效果不好,早上五点就被照醒。周五晚上吃什么还没定,可能在家包馄饨。客厅的窗户缝漏风,买了密封条准备贴上。老大想学下围棋,先看几集入门视频。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。厨房窗户的纱窗破了个小洞,先用胶布补上。外婆把旧毛衣拆了线,打算织两副手套。老二的积木零件散落一地,准备按颜色分装。外婆在织一条灰色的围巾,说冬至前能织完。地板上周打过蜡,这周先别用湿拖把。老二的自然作业要观察豆芽,每天记录长了多高。家里的雨伞只剩一把好的了,出门前看看天气预报。老二的毛绒玩具太多,挑几只送给表妹。书架最上面一层的旧杂志整理出来了,准备送给楼上的邻居。周三晚上开家庭会议,讨论下半年的家务分工。关于山顶民宿取消政策,等有空再问清楚。客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。冰箱冷冻室结了一层厚霜,周末找时间断电除霜。老大想把卧室的墙刷成浅蓝色,先买一小罐试色。外婆教老二包饺子,包出来的形状千奇百怪。厨房抽油烟机的油盒满了,记得倒掉再擦一下。周五晚上是全家的桌游之夜,这周轮到老大选游戏。家里的手电筒放在电视柜下面的抽屉里。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。晚饭后轮流洗碗,这周轮到爸爸。洗手间的镜子容易起雾,买了一瓶防雾喷剂试试。饮水机该清洗了,上次清洗是三个月前。门铃的电池换过了,声音比以前大。共享单车月卡十五元,每次骑行前两小时免费。",
+      "questions": {
+        "same": "街边扫码骑的自行车,包月要多少钱?每次骑多久以内不收钱?",
+        "cross": "How much does a bike-share monthly pass cost, and how many hours of each ride are free before charges start?",
+        "third": "シェア自転車の月額パスはいくらで、1回の利用で何時間まで無料なの?",
+        "mixed": "扫码骑的那种bike办monthly pass多少钱啊,每次ride前几个小时是free的?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "共享单车月卡十五元,每次骑行前两小时免费。",
+        "offset": 1070,
+        "length": 21
+      },
+      "mentions": [
+        "laundry",
+        "passport",
+        "hotel-mountain"
+      ],
+      "group": "bike"
+    },
+    {
+      "id": "airport",
+      "kind": "travel",
+      "topic": "Getting to the airport",
+      "content": "Only one umbrella in the stand still works; check the forecast before heading out. The shoe rack by the front door is overflowing; the outgrown pairs go to the cousins. See the separate note on Babysitter rates; it is not repeated here. The printer ran out of ink again; the cartridge model is written on the side panel. The toolbox is missing a small adjustable spanner; it is on the hardware list. The family photo albums are being scanned, one album per weekend, starting with the oldest. Still to double-check: Riverside Library weekend hours. The storm shutter on the back window rattles because one latch is loose. Mum is unravelling an old sweater to knit two pairs of mittens. Grandpa keeps his reading glasses in the case on the coffee table, not in the kitchen drawer. Someone keeps leaving the lid off the toothpaste. Nothing new this week about Express train fare to the coast. The garden hose has a split near the tap end and needs a new connector. Weekend breakfast rotates around the family; this week it is pancakes. The eldest wants to repaint the bedroom pale green and is testing sample pots first. A taxi to the airport takes about 50 minutes and costs around 150 yuan; the airport bus is 30 yuan.",
+      "questions": {
+        "same": "How long does a cab ride to the terminal take, and how does the fare compare to taking the shuttle?",
+        "cross": "打车到机场要花多长时间、多少钱?乘坐机场巴士又要多少钱?",
+        "third": "空港までタクシーで行くとどのくらい時間とお金がかかりますか?リムジンバスの料金はいくらですか?",
+        "mixed": "坐taxi去机场大概要多久,车费多少钱啊?那个airport bus票价又是多少?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "A taxi to the airport takes about 50 minutes and costs around 150 yuan; the airport bus is 30 yuan.",
+        "offset": 1118,
+        "length": 99
+      },
+      "mentions": [
+        "babysitter",
+        "lib-weekend",
+        "train-express"
+      ],
+      "group": "airport"
+    },
+    {
+      "id": "hospital",
+      "kind": "health",
+      "topic": "儿科专家号",
+      "content": "儿童医院的专家号每天早上八点在手机上放号,几分钟就会抢完。",
+      "questions": {
+        "same": "儿科的名医号每天几点能在app上抢,是不是一会儿就没了?",
+        "cross": "What time do pediatric specialist appointment slots at children's hospitals open up on the app each morning, and how quickly do they get booked up?",
+        "third": "小児病院の専門医の予約は毎朝何時にアプリで公開され、どれくらい早く埋まってしまいますか?",
+        "mixed": "儿童医院的pediatric specialist appointment slot一般几点在手机app上放出来啊,是不是几分钟就被人约满了?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "儿童医院的专家号每天早上八点在手机上放号,几分钟就会抢完。",
+        "offset": 0,
+        "length": 29
+      },
+      "mentions": [],
+      "group": "hospital"
+    },
+    {
+      "id": "bank",
+      "kind": "venue",
+      "topic": "银行周末营业",
+      "content": "楼上邻居装修到月底,白天会比较吵。老二想养一只仓鼠,全家还在商量。储物间的圣诞装饰放在最里面的两个纸箱里。老大的作文写了家里的那盆多肉,得了好评。旧报纸攒了一摞,可以拿来包易碎的碗盘。厨房抽油烟机的油盒满了,记得倒掉再擦一下。电梯下周二上午停运检修,搬重东西要避开那天。东门农贸市场营业时间这件事另外有一条记录,这里不重复。家里的备用钥匙放在玄关抽屉的蓝色小盒子里。爷爷的老花镜放在茶几上的眼镜盒里。老二最近晚上总踢被子,换了一床带扣子的睡袋。客厅墙上的挂画歪了,钉子要往左移两厘米。客厅沙发套上周拆下来洗了,还没装回去。家里的体重秤没电了,用的是纽扣电池。饮水机该清洗了,上次清洗是三个月前。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。老大的钢笔漏墨了,换了一支新的笔囊。爸爸在研究怎么修那把摇晃的餐椅,买了一小罐木胶。客厅的吊灯有一个灯泡不亮了,买的时候注意是小螺口的。孩子身份证换领还要再核实一下,先不写结论。周三晚上开家庭会议,讨论下半年的家务分工。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。老大在学做蛋炒饭,已经会自己掌握火候了。家里的指甲刀放在卫生间的镜柜里。外婆的收音机坏了,爸爸说周末拆开看看。地板上周打过蜡,这周先别用湿拖把。老大和同学约好周六下午在家里做手工。书桌的抽屉滑轨坏了,拉的时候要轻一点。家里的工具箱缺一把小号的扳手。周六早上楼里停电两小时,冰箱里别放太多东西。冰箱门上的便签纸快用完了,顺手记在购物清单上。关于牙齿矫正复诊,等有空再问清楚。卧室窗帘的遮光效果不好,早上五点就被照醒。爸爸的眼镜腿松了,找了个小螺丝刀拧紧。书房的台灯换了暖光,晚上看书眼睛舒服多了。业主群里在讨论楼道灯改成声控的,费用按户平摊。客厅的地毯边角翘起来了,先用双面胶粘住。周末大扫除的分工:爸爸擦窗户,老大拖地,老二整理玩具。老二在练习系鞋带,每天出门前自己系一次。卧室的暖气片摸着不太热,可能要放一下气。外婆种的小葱长出来了,做饭时可以直接掐。客厅的窗户缝漏风,买了密封条准备贴上。附近的银行支行周末只开半天,上午九点到十二点。",
+      "questions": {
+        "same": "附近那家银行周六周日几点开门,开到几点?",
+        "cross": "What are the weekend hours for the nearby bank branch?",
+        "third": "近所の銀行支店の週末の営業時間は何時から何時までですか?",
+        "mixed": "附近的bank branch周末营业时间是几点到几点啊?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "附近的银行支行周末只开半天,上午九点到十二点。",
+        "offset": 875,
+        "length": 23
+      },
+      "mentions": [
+        "mkt-east",
+        "id-card",
+        "dentist"
+      ],
+      "group": "bank"
+    },
+    {
+      "id": "post",
+      "kind": "venue",
+      "topic": "Elm Street post office",
+      "content": "The post office on Elm Street handles international parcels only on weekday mornings.",
+      "questions": {
+        "same": "When does the local post office take packages going overseas?",
+        "cross": "Elm街邮局什么时候可以寄国际包裹?",
+        "third": "エルム通りの郵便局はいつ国際小包を受け付けていますか?",
+        "mixed": "我们这边那个post office什么时候能寄overseas的parcel啊?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "The post office on Elm Street handles international parcels only on weekday mornings.",
+        "offset": 0,
+        "length": 85
+      },
+      "mentions": [],
+      "group": "post"
+    },
+    {
+      "id": "grandma-bday",
+      "kind": "household",
+      "topic": "长辈生日",
+      "content": "家里长辈的生日是农历八月初三,每年要提前订好蛋糕。",
+      "questions": {
+        "same": "家中老人家的诞辰是阴历几月初几,每年是不是得提前把甜点准备好?",
+        "cross": "What lunar calendar date is the family elder's birthday on, and what needs to be arranged ahead of time every year?",
+        "third": "家族の年長者の誕生日は旧暦で何月何日ですか?毎年前もって何を用意しておく必要がありますか?",
+        "mixed": "家里长辈的birthday是lunar calendar哪天呀,每年要提前准备什么?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "家里长辈的生日是农历八月初三,每年要提前订好蛋糕。",
+        "offset": 0,
+        "length": 25
+      },
+      "mentions": [],
+      "group": "grandma-bday"
+    },
+    {
+      "id": "anniversary",
+      "kind": "household",
+      "topic": "Wedding anniversary",
+      "content": "We are planning a toy sale on the front steps, with the proceeds going to the neighbourhood fund. We agreed that screens go off at nine on weeknights. Only one umbrella in the stand still works; check the forecast before heading out. See the separate note on Riverside Library weekday hours; it is not repeated here. The printer ran out of ink again; the cartridge model is written on the side panel. The doorbell chime was replaced and is now much louder than before. The youngest wants a hamster, and the family vote has been postponed until next month. Nothing new this week about Swimming lessons. Mum is unravelling an old sweater to knit two pairs of mittens. The squeaky bedroom door hinge just needs a drop of oil. The clock in the living room runs five minutes slow and needs resetting. The eldest is writing a story about the old armchair for a writing contest. The wedding anniversary is on May 20th, and the tradition is dinner by the river.",
+      "questions": {
+        "same": "What day is our marriage anniversary, and how do we usually mark it?",
+        "cross": "结婚纪念日是几月几号?通常有什么庆祝的传统安排?",
+        "third": "結婚記念日は何月何日ですか?どんな習慣でお祝いしますか?",
+        "mixed": "我们的 wedding anniversary 是哪天呀,一般会有什么 tradition 来庆祝?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "The wedding anniversary is on May 20th, and the tradition is dinner by the river.",
+        "offset": 872,
+        "length": 81
+      },
+      "mentions": [
+        "lib-weekday",
+        "swim-class"
+      ],
+      "group": "anniversary"
+    },
+    {
+      "id": "hotpot",
+      "kind": "venue",
+      "topic": "火锅店排队",
+      "content": "老大的作文写了家里的那盆多肉,得了好评。晚上十点以后不要在客厅大声放音乐,楼下有小宝宝。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。老二最近晚上总踢被子,换了一床带扣子的睡袋。周末早餐轮流做,这周是煎饼配豆浆。厨房水槽下面的柜子有点潮,放了两包干燥剂。周六早上楼里停电两小时,冰箱里别放太多东西。周日下午全家一起拼那盒一千片的星空拼图,拼了一半。市立博物馆成人票价这件事另外有一条记录,这里不重复。晚上睡前全家一起读十分钟书,这周读的是一本童话。书房的台灯换了暖光,晚上看书眼睛舒服多了。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。客厅茶几的玻璃有道裂纹,先垫了一块桌布。客厅的时钟慢了五分钟,记得调一下。爸爸在研究怎么修那把摇晃的餐椅,买了一小罐木胶。衣柜顶上的行李箱落了灰,用之前要擦一遍。老大想学下围棋,先看几集入门视频。老大的钢笔漏墨了,换了一支新的笔囊。家里的体重秤没电了,用的是纽扣电池。爸爸说今年要把老照片全部扫描存档。爷爷的老花镜放在茶几上的眼镜盒里。外婆教老二包饺子,包出来的形状千奇百怪。周末大扫除的分工:爸爸擦窗户,老大拖地,老二整理玩具。早上送孩子时间还要再核实一下,先不写结论。今年的春联还没买,打算自己写。门铃的电池换过了,声音比以前大。家里的打印机缺墨了,黑色墨盒型号写在机器侧面。周五晚上吃什么还没定,可能在家包馄饨。卧室窗外的晾衣绳松了,找时间重新系紧。楼上邻居装修到月底,白天会比较吵。周五晚上是全家的桌游之夜,这周轮到老大选游戏。厨房的刀该磨了,磨刀石在工具箱第二层。卧室窗帘的遮光效果不好,早上五点就被照醒。客厅的吊灯有一个灯泡不亮了,买的时候注意是小螺口的。楼道里堆的纸箱被物业提醒了,周末清掉。晚饭少放点盐,爷爷最近血压有点高。老大在学做蛋炒饭,已经会自己掌握火候了。老二的积木零件散落一地,准备按颜色分装。周末想把旧玩具摆出来义卖,收入捐给街道的爱心基金。关于猫咪疫苗,等有空再问清楚。过年要带回老家的礼物清单:茶叶两盒、围巾一条。客厅墙上的挂画歪了,钉子要往左移两厘米。这个月的家庭开支表做好了,放在共享文件夹里。饮水机该清洗了,上次清洗是三个月前。卧室的暖气片摸着不太热,可能要放一下气。老二想养一只仓鼠,全家还在商量。外婆在织一条灰色的围巾,说冬至前能织完。爸爸最近在学拍照,周末总拿着相机在楼下转。爸爸的眼镜腿松了,找了个小螺丝刀拧紧。周日晚上把下周的晚饭安排写好,贴在冰箱上。厨房抽油烟机的油盒满了,记得倒掉再擦一下。外婆的收音机坏了,爸爸说周末拆开看看。冰箱门上的便签纸快用完了,顺手记在购物清单上。周末去那家火锅店要提前在小程序取号,一般要等一个小时。",
+      "questions": {
+        "same": "周六周日去吃那家火锅要等多久,得先在手机上拿号吗?",
+        "cross": "How long is the wait at that hotpot place on weekends, and do I need to grab a number in advance?",
+        "third": "週末にあの火鍋のお店に行くとどれくらい待ちますか?事前に整理券を取っておくべきですか?",
+        "mixed": "周末去吃那家火锅要不要提前在mini program上取个号,大概wait多久啊?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "周末去那家火锅店要提前在小程序取号,一般要等一个小时。",
+        "offset": 1081,
+        "length": 27
+      },
+      "mentions": [
+        "museum-adult",
+        "school-dropoff",
+        "vet"
+      ],
+      "group": "hotpot"
+    },
+    {
+      "id": "onsen",
+      "kind": "travel",
+      "topic": "温泉旅館の予約",
+      "content": "夜十時以降は居間で大きな音を出さないこと。下の階に赤ちゃんがいる。衣替えをして、夏物の服は衣装ケースにしまった。居間の時計が五分遅れているので、合わせておくこと。玄関マットが古くなったので、吸水のいいものに替える。長女は寝室の壁を薄い青に塗りたいらしく、まず試し塗りの小さな缶を買う。近所のラーメン屋については別のメモにあるので、ここには書かない。本棚の一番上の古い雑誌は、上の階のお隣さんに譲ることにした。充電ケーブルが多すぎるので、一本ずつ名前のシールを貼った。玄関のチャイムを新しくしたら、前よりずっと音が大きくなった。合鍵は玄関の引き出しの青い小箱に入れてある。長女は友だちと土曜の午後に家で工作をする約束をしている。廊下の額縁が傾いているので、釘を左に二センチずらす。台所の包丁を研がないといけない。砥石は工具箱の二段目にある。冷凍庫に霜がたまってきたので、連休の前に霜取りをする。コンビニでの荷物受け取りのことは、もう一度確かめてから書く。洗面所の鏡がすぐ曇るので、曇り止めスプレーを試してみる。祖母から手作りの干し柿が一箱届いたので、半分をお隣に分けた。居間の空気清浄機のフィルター交換ランプが赤くなった。寝る前に家族で十分だけ本を読む。今週は昔話の本。机の引き出しのレールが壊れているので、そっと引くこと。食卓のぐらぐらする椅子は接着剤で直したので、一日さわらないこと。おじいちゃんの老眼鏡は、居間のテーブルの眼鏡ケースにある。祖父は毎朝、下の小さな庭で体操をしている。駅前の寿司屋の件は、まだ確認していない。今月の家計簿は共有フォルダにまとめておいた。台所の網戸に小さな穴があいたので、とりあえずテープでふさいだ。祖父のラジオが壊れたので、父が週末に分解してみるそうだ。調味料の瓶にラベルを貼ったので、塩と砂糖を間違えなくなった。金曜の夜は家族でボードゲームをする日で、今週は長女が選ぶ番。母は古い家族写真を全部スキャンして残すと言っている。父は最近写真に凝っていて、日曜の朝はよく中庭で練習している。温泉旅館は二ヶ月前から予約でき、夕食付きプランは一人二万円。",
+      "questions": {
+        "same": "温泉宿の予約はどのくらい前の時期から入れられますか?また、夕飯が付く宿泊コースだと一人あたりの料金はいくらになりますか?",
+        "cross": "How many months in advance can you reserve a room at a hot spring inn, and how much per person does the package with dinner cost?",
+        "third": "泡温泉住的那种日式旅店最早能提前多久订房?含晚饭的套餐每人多少钱?",
+        "mixed": "温泉ryokan大概可以提前几个月开始book房间啊?附dinner的plan一个人大概要多少钱?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "温泉旅館は二ヶ月前から予約でき、夕食付きプランは一人二万円。",
+        "offset": 860,
+        "length": 30
+      },
+      "mentions": [
+        "ramen",
+        "konbini",
+        "rest-sushi"
+      ],
+      "group": "onsen"
+    },
+    {
+      "id": "ramen",
+      "kind": "venue",
+      "topic": "近所のラーメン屋",
+      "content": "近所のラーメン屋は深夜二時まで営業していて、替え玉は無料。",
+      "questions": {
+        "same": "家の近くのラーメン店って何時まで開いてる?あと替え玉って追加料金かかる?",
+        "cross": "How late is the ramen shop near me open, and is the extra noodle serving free?",
+        "third": "家附近那家日式拉面店晚上开到几点?加面要不要另外收钱?",
+        "mixed": "我家附近那家ramen店营业到几点啊,refill的noodles是不是free的?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "近所のラーメン屋は深夜二時まで営業していて、替え玉は無料。",
+        "offset": 0,
+        "length": 29
+      },
+      "mentions": [],
+      "group": "ramen"
+    },
+    {
+      "id": "konbini",
+      "kind": "household",
+      "topic": "コンビニでの荷物受け取り",
+      "content": "祖母から手作りの干し柿が一箱届いたので、半分をお隣に分けた。冷凍庫に霜がたまってきたので、連休の前に霜取りをする。物置に湿気がこもらないよう、ときどき扉を開けておく。上の階の部屋が月末まで改装工事なので、昼間は少しうるさい。台所の換気扇のフィルターを今月中に洗うこと。食卓のぐらぐらする椅子は接着剤で直したので、一日さわらないこと。駅前の寿司屋については別のメモにあるので、ここには書かない。寝る前に家族で十分だけ本を読む。今週は昔話の本。冬用の厚い布団を押し入れから出して、土曜日に干した。台所の網戸に小さな穴があいたので、とりあえずテープでふさいだ。今月の家計簿は共有フォルダにまとめておいた。居間の時計が五分遅れているので、合わせておくこと。廊下の額縁が傾いているので、釘を左に二センチずらす。週末の朝ごはんは交代で作る。今週はホットケーキ。物置のクリスマスの飾りは、奥の段ボール二箱に入っている。玄関マットが古くなったので、吸水のいいものに替える。衣替えをして、夏物の服は衣装ケースにしまった。母は古い家族写真を全部スキャンして残すと言っている。温泉旅館の予約のことは、もう一度確かめてから書く。祖父は毎朝、下の小さな庭で体操をしている。長女は寝室の壁を薄い青に塗りたいらしく、まず試し塗りの小さな缶を買う。二番目の子が恐竜の絵に夢中で、画用紙がすぐなくなる。洗面所の下の棚が少し湿っぽいので、除湿剤を二つ置いた。寝室のカーテンは遮光が弱く、朝早くから明るくなる。玄関の電球が切れかけているので、週末に取り替える。居間の空気清浄機のフィルター交換ランプが赤くなった。父は最近写真に凝っていて、日曜の朝はよく中庭で練習している。二番目の子は毎朝、出かける前に自分で靴ひもを結ぶ練習をしている。懐中電灯はテレビ台の下の引き出しに入れてある。調味料の瓶にラベルを貼ったので、塩と砂糖を間違えなくなった。近所のラーメン屋の件は、まだ確認していない。二番目の子のブロックを色ごとに箱に分けて片付けた。洗面所の鏡がすぐ曇るので、曇り止めスプレーを試してみる。玄関のチャイムを新しくしたら、前よりずっと音が大きくなった。本棚の一番上の古い雑誌は、上の階のお隣さんに譲ることにした。台所の包丁を研がないといけない。砥石は工具箱の二段目にある。おじいちゃんの老眼鏡は、居間のテーブルの眼鏡ケースにある。母が古いセーターをほどいて、手袋を二組編むつもりらしい。玄関の靴箱がいっぱいなので、小さくなった靴はいとこに譲る。合鍵は玄関の引き出しの青い小箱に入れてある。コンビニで荷物を受け取るときは、アプリのバーコードを見せればいい。",
+      "questions": {
+        "same": "コンビニで宅配便を引き取るとき、店員さんに何を見せればいいですか?",
+        "cross": "What do I need to show to pick up a package at a convenience store?",
+        "third": "去便利店取寄存的快递,需要拿出什么给店员核对?",
+        "mixed": "去convenience store取package的时候要出示什么啊?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "コンビニで荷物を受け取るときは、アプリのバーコードを見せればいい。",
+        "offset": 1075,
+        "length": 33
+      },
+      "mentions": [
+        "rest-sushi",
+        "onsen",
+        "ramen"
+      ],
+      "group": "konbini"
+    },
+    {
+      "id": "summer-camp",
+      "kind": "schedule",
+      "topic": "夏令营报名",
+      "content": "夏令营每年四月一号开始报名,名额满了就截止,费用三千八。",
+      "questions": {
+        "same": "夏令营一般从几月份开始可以申请,什么情况下会停止接收,费用大概要多少钱?",
+        "cross": "When does summer camp registration open each year, under what condition does it close, and roughly how much does it cost?",
+        "third": "サマーキャンプの申し込みは毎年いつから始まり、定員に達したらどうなりますか。料金はいくらですか。",
+        "mixed": "summer camp一般几月份开始能申请啊,是不是满员了就直接cutoff,大概多少tuition/fee?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "夏令营每年四月一号开始报名,名额满了就截止,费用三千八。",
+        "offset": 0,
+        "length": 28
+      },
+      "mentions": [],
+      "group": "summer-camp"
+    },
+    {
+      "id": "flu-shot",
+      "kind": "health",
+      "topic": "Flu vaccine",
+      "content": "Everyone in the family gets a flu shot in October at the community clinic, free for children.",
+      "questions": {
+        "same": "Where and when do we all get our yearly influenza vaccination, and do the kids have to pay?",
+        "cross": "全家每年十月去哪里打流感疫苗?小孩子打是免费的吗?",
+        "third": "家族は毎年10月にどこでインフルエンザの予防接種を受けますか?子供は無料ですか?",
+        "mixed": "我们家每年10月打flu shot是去哪个clinic啊,小孩子是不是free的?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "Everyone in the family gets a flu shot in October at the community clinic, free for children.",
+        "offset": 0,
+        "length": 93
+      },
+      "mentions": [],
+      "group": "flu-shot"
+    },
+    {
+      "id": "ski",
+      "kind": "travel",
+      "topic": "滑雪场租雪具",
+      "content": "家里的充电线太多太乱,每根都贴上了标签。门铃的电池换过了,声音比以前大。老大和同学约好周六下午在家里做手工。老二把彩笔的笔帽都弄丢了,找了个笔筒统一收好。家里的备用灯泡放在储物间的鞋盒里。周日晚上把下周的晚饭安排写好,贴在冰箱上。客厅的时钟慢了五分钟,记得调一下。市立博物馆儿童票这件事另外有一条记录,这里不重复。周五晚上吃什么还没定,可能在家包馄饨。周日下午全家一起拼那盒一千片的星空拼图,拼了一半。爸爸说今年要把老照片全部扫描存档。周末想把旧玩具摆出来义卖,收入捐给街道的爱心基金。老二最近晚上总踢被子,换了一床带扣子的睡袋。老大想要一个新书包,先等旧的真的坏了再说。厨房抽油烟机的油盒满了,记得倒掉再擦一下。晚上睡前全家一起读十分钟书,这周读的是一本童话。客厅的空气净化器滤芯该换了,指示灯已经变红。老大的钢笔漏墨了,换了一支新的笔囊。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。车险续保还要再核实一下,先不写结论。冰箱门上的便签纸快用完了,顺手记在购物清单上。家里的门垫太旧了,换一块吸水好一点的。老二想养一只仓鼠,全家还在商量。老大想把卧室的墙刷成浅蓝色,先买一小罐试色。饮水机该清洗了,上次清洗是三个月前。书房的台灯换了暖光,晚上看书眼睛舒服多了。爸爸在研究怎么修那把摇晃的餐椅,买了一小罐木胶。外婆教老二包饺子,包出来的形状千奇百怪。客厅的地毯边角翘起来了,先用双面胶粘住。旧报纸攒了一摞,可以拿来包易碎的碗盘。客厅的吊灯有一个灯泡不亮了,买的时候注意是小螺口的。关于阳台柠檬树浇水,等有空再问清楚。晚饭少放点盐,爷爷最近血压有点高。老大在学做蛋炒饭,已经会自己掌握火候了。卫生间的龙头有点滴漏,已经约了师傅周四来看。家里的工具箱缺一把小号的扳手。客厅的窗户缝漏风,买了密封条准备贴上。客厅的插线板开关有点松,先别插大功率的电器。客厅沙发套上周拆下来洗了,还没装回去。老二的积木零件散落一地,准备按颜色分装。周末大扫除的分工:爸爸擦窗户,老大拖地,老二整理玩具。卧室窗帘的遮光效果不好,早上五点就被照醒。滑雪场的雪具可以现场租,一天一百五十元,儿童教练要提前一周预约。",
+      "questions": {
+        "same": "滑雪场的装备现场能借到吗?一天大概要花多少钱,给孩子请教练需要提前多久预订?",
+        "cross": "Can ski gear be rented on site at the resort, what's the daily cost, and how far ahead do I need to arrange a kids' instructor?",
+        "third": "スキー場では現地で用具を借りられますか?1日の料金はどれくらいで、子供向けインストラクターは何日前に予約すればいいですか?",
+        "mixed": "滑雪场的ski equipment是不是可以on-site rent啊,一天大概多少钱,给孩子约instructor是不是得提前挺久book?"
+      },
+      "position": "end",
+      "answer": {
+        "text": "滑雪场的雪具可以现场租,一天一百五十元,儿童教练要提前一周预约。",
+        "offset": 861,
+        "length": 32
+      },
+      "mentions": [
+        "museum-child",
+        "car-insurance",
+        "plant"
+      ],
+      "group": "ski"
+    },
+    {
+      "id": "zoo",
+      "kind": "price",
+      "topic": "Zoo tickets",
+      "content": "The guest towels are in the linen cupboard on the second shelf. A draught comes in around the living room window, so sealing strip is on the list. The holiday decorations are in the two boxes at the very back of the storage room. See the separate note on School lunch payment; it is not repeated here. The bathroom mirror fogs up badly, so we are trying an anti-fog spray. The dining chair with the wobbly leg has been glued and should be left alone for a day. The eldest wants to repaint the bedroom pale green and is testing sample pots first. Still to double-check: Local train fare to the coast. The youngest wants a hamster, and the family vote has been postponed until next month. The freezer needs defrosting before the holidays; the ice is blocking the top drawer. Grandma sent a box of homemade dried persimmons, and some of it went to the neighbours. Nothing new this week about Home internet plan. The living room rug curls up at one corner; double-sided tape is holding it for now. We are planning a toy sale on the front steps, with the proceeds going to the neighbourhood fund. Zoo tickets are cheaper when bought online the day before — 80 yuan instead of 100.",
+      "questions": {
+        "same": "How much do we save on admission to the animal park by booking on the internet a day early?",
+        "cross": "动物园门票提前一天网上购买多少钱一张?",
+        "third": "動物園のチケットは前日にオンラインで買うといくらになりますか?",
+        "mixed": "动物园的ticket提前一天online买是不是能省钱,大概多少钱?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "Zoo tickets are cheaper when bought online the day before — 80 yuan instead of 100.",
+        "offset": 1092,
+        "length": 83
+      },
+      "mentions": [
+        "school-lunch",
+        "train-local",
+        "internet"
+      ],
+      "group": "zoo"
+    },
+    {
+      "id": "laundry",
+      "kind": "price",
+      "topic": "楼下干洗店",
+      "content": "楼下的干洗店洗一件大衣三十五元,三天后取。",
+      "questions": {
+        "same": "楼下那家洗衣店送洗一件外套多少钱,要等几天才能拿?",
+        "cross": "How much does the dry cleaner downstairs charge to clean a coat, and how many days until it's ready for pickup?",
+        "third": "階下のクリーニング店でコートを洗うといくらで、何日後に受け取れますか?",
+        "mixed": "楼下那家dry cleaner洗一件coat多少钱,几天后能pick up?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "楼下的干洗店洗一件大衣三十五元,三天后取。",
+        "offset": 0,
+        "length": 21
+      },
+      "mentions": [],
+      "group": "laundry"
+    },
+    {
+      "id": "babysitter",
+      "kind": "price",
+      "topic": "Babysitter rates",
+      "content": "The babysitter charges 50 yuan an hour and needs to be booked two days ahead.",
+      "questions": {
+        "same": "What's the sitter's hourly rate, and how far ahead do we need to reserve her?",
+        "cross": "保姆每小时收费多少钱?需要提前几天预约她?",
+        "third": "ベビーシッターの時給はいくらで、何日前に予約すればいいですか?",
+        "mixed": "babysitter一小时多少钱啊,要提前几天book她?"
+      },
+      "position": "short",
+      "answer": {
+        "text": "The babysitter charges 50 yuan an hour and needs to be booked two days ahead.",
+        "offset": 0,
+        "length": 77
+      },
+      "mentions": [],
+      "group": "babysitter"
+    },
+    {
+      "id": "movie",
+      "kind": "price",
+      "topic": "电影院会员日",
+      "content": "老大的作文写了家里的那盆多肉,得了好评。下个月爷爷要来住两周,客房的床单先晒一晒。厨房的保鲜盒盖子和盒身对不上了,要整理一下配套。家里的指甲刀放在卫生间的镜柜里。老大在学做蛋炒饭,已经会自己掌握火候了。厨房窗户的纱窗破了个小洞,先用胶布补上。外婆寄来一箱自己晒的柿饼,分了一半给邻居。家里的剪刀总是找不到,决定在厨房专门放一把。南湖露天泳池开放时间这件事另外有一条记录,这里不重复。热水器显示屏偶尔报错,重启一下就好了,先观察。老二的积木零件散落一地,准备按颜色分装。厨房的刀该磨了,磨刀石在工具箱第二层。晚饭后轮流洗碗,这周轮到爸爸。玄关的鞋柜太满了,旧鞋挑出来一批送人。卧室窗帘的遮光效果不好,早上五点就被照醒。老二的毛绒玩具太多,挑几只送给表妹。外婆在织一条灰色的围巾,说冬至前能织完。储物间的圣诞装饰放在最里面的两个纸箱里。冰箱冷冻室结了一层厚霜,周末找时间断电除霜。家里的手电筒放在电视柜下面的抽屉里。门铃的电池换过了,声音比以前大。外婆教老二包饺子,包出来的形状千奇百怪。周五晚上吃什么还没定,可能在家包馄饨。书架最上面一层的旧杂志整理出来了,准备送给楼上的邻居。老街面馆还要再核实一下,先不写结论。书房的台灯换了暖光,晚上看书眼睛舒服多了。老二的橡皮擦和铅笔总是丢,干脆一次买了一整盒。家里的门垫太旧了,换一块吸水好一点的。周末大扫除的分工:爸爸擦窗户,老大拖地,老二整理玩具。客厅的空气净化器滤芯该换了,指示灯已经变红。晚上睡前全家一起读十分钟书,这周读的是一本童话。老二最近晚上总踢被子,换了一床带扣子的睡袋。厨房的调料瓶贴上了标签,盐和糖再也不会拿错。晚饭少放点盐,爷爷最近血压有点高。家里的备用钥匙放在玄关抽屉的蓝色小盒子里。这个月家里的零食预算超了,下个月少买点。书桌的抽屉滑轨坏了,拉的时候要轻一点。冬天的厚被子从柜子顶上拿下来晒过了。客厅的地毯边角翘起来了,先用双面胶粘住。关于水费,等有空再问清楚。旧报纸攒了一摞,可以拿来包易碎的碗盘。电梯下周二上午停运检修,搬重东西要避开那天。老大想要一个新书包,先等旧的真的坏了再说。周末早餐轮流做,这周是煎饼配豆浆。客厅茶几的玻璃有道裂纹,先垫了一块桌布。老大和同学约好周六下午在家里做手工。今年的家庭出游照片挑了二十张,准备洗出来。地板上周打过蜡,这周先别用湿拖把。厨房抽油烟机的油盒满了,记得倒掉再擦一下。窗台上的绿萝长得太长了,剪下几枝插在瓶子里。爷爷的老花镜放在茶几上的眼镜盒里。周日下午全家一起拼那盒一千片的星空拼图,拼了一半。周日晚上把下周的晚饭安排写好,贴在冰箱上。商场里的电影院每周二是会员日,票价半价。",
+      "questions": {
+        "same": "商场里那家电影院,一周中哪天买票能便宜一半?",
+        "cross": "Which day of the week does the mall's cinema sell tickets at half off?",
+        "third": "モール内の映画館は何曜日にチケットが半額になりますか?",
+        "mixed": "商场那个cinema一般周几的ticket能便宜一半啊?"
+      },
+      "position": "beyond",
+      "answer": {
+        "text": "商场里的电影院每周二是会员日,票价半价。",
+        "offset": 1075,
+        "length": 20
+      },
+      "mentions": [
+        "pool-south",
+        "rest-noodle",
+        "water-bill"
+      ],
+      "group": "movie"
+    }
+  ]
+}
