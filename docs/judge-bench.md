@@ -6560,3 +6560,230 @@ The clause 「长短事实混在一起的检索还没有量过(长事实取几�
   `devtools/_run9/smoke-split.txt`.
 - The pattern check: `devtools/_run9/pace-patterns.mjs`.
 - The VOID attempt's evidence, as the amendment lists it.
+
+## Run 8b — the pace on this laptop's integrated GPU (design)
+
+Written and committed BEFORE the run; the results section that follows names this commit. Two probes, the bench support
+(`b24969c`) and a plumbing smoke came first, because this design quotes them.
+
+**The question.** Run 8's question, on this machine's INTEGRATED GPU instead of its CPU.
+
+- W2 (`26effcf`, `dfd4f21`, `964b95e`) recommends mMiniLMv2 only where llama.cpp can use no GPU at all.
+- The Vulkan build the app provisions LISTS integrated GPUs. This machine shows `Vulkan1: Intel(R) Arc(TM) Graphics`. So
+  nearly every x64 laptop reads "has a GPU" and is offered BGE, on hardware nobody has measured.
+- The household strings say so: 「只有集成显卡的机器上 mMiniLMv2 和 BGE 都还没有量过」.
+- **What do the shipped chunked scoring, its pace and W2's skip do on an iGPU, for each reranker?**
+- This is ONE iGPU — the Arc in this Core Ultra 9 185H, on one driver and one llama.cpp build — and not every iGPU.
+
+### The hardware, and how the iGPU router is launched
+
+| | |
+|---|---|
+| iGPU | Intel(R) Arc(TM) Graphics, the integrated GPU of the Intel Core Ultra 9 185H |
+| driver | 32.0.101.6790 (2025-04-28) |
+| memory | shared with the system. llama.cpp reports 37,162 MiB (48,040–48,045 MiB free); Windows' `AdapterRAM` field reads 2 GiB |
+| llama.cpp | b10549 (commit `b2e5e9b28`), the bench's `devtools/_rr-res/llama-cpp`, Vulkan backend |
+| system | 64 GB; Windows 11 Pro 10.0.26200; on mains, the Balanced plan. The CPU and the iGPU share one package, so CPU load elsewhere can slow the iGPU — the load is recorded |
+
+**Only the Arc, as on a machine whose only GPU is integrated.** The Vulkan loader here enumerates five physical devices:
+
+| raw index | device |
+|---|---|
+| 0 | the RTX 4080 Laptop, native driver |
+| 1 | the RTX 4080 Laptop through Microsoft's Direct3D12 layer |
+| 2 | **the Arc, native driver** |
+| 3 | the Arc through Microsoft's Direct3D12 layer |
+| 4 | the Basic Render Driver |
+
+(Checked with `GGML_VK_VISIBLE_DEVICES=<i> llama-server --list-devices` for each i. llama.cpp's own list drops the
+layered ones, which is why it normally shows two devices.)
+
+Each iGPU router is started with **`GGML_VK_VISIBLE_DEVICES=2`**, so the Arc's native driver is the only device
+llama.cpp can see. The RTX is never initialised, so neither layers nor op-offload can reach it.
+
+- **The preset is the product's own**: `n-gpu-layers = 99` (LlamaServerRuntime.WritePresets), `reranking = true`, and
+  the window (512 for mMiniLMv2, 4096 for BGE).
+- **Plus one key that changes only logging**, `log-verbosity = 4`. At the default verbosity the router's child does not
+  print which device it loaded onto; at 4 it does, and the guard below reads it.
+- **Verified before this design:**
+  - A standalone `llama-server` with the same environment logged `using device Vulkan0 (Intel(R) Arc(TM) Graphics)` and
+    `offloaded 13/13 layers to GPU` (mMiniLMv2). Its Vulkan0 buffers were 21.90 MiB for the model and 5.00 MiB for
+    compute; 98.03 MiB of the model (the token-embedding table) stays in host-visible memory, as llama.cpp keeps it.
+  - Its log has no line naming the NVIDIA GPU.
+  - During a 48-note call, Windows' per-process GPU-engine counter showed the child's compute engine busy on a single
+    adapter.
+  - In the smoke, every iGPU router's child printed the same device line (13/13 layers for mMiniLMv2, 25/25 for BGE).
+    Its argv carried `--n-gpu-layers 99 --log-verbosity 4` and no `--device`.
+
+### The probes: this Arc is SLOWER than this machine's CPU
+
+On the product's preset, only the Arc visible, with the long fixture's notes and one question of median length
+(scratch `devtools/_run8/probe-cpu.mjs igpu`):
+
+| | Arc | the same machine's CPU (Run 8's probe) |
+|---|---|---|
+| mMiniLMv2, 48 notes cut | 32.4 s and 24.9 s | 9.2 s and 7.3 s |
+| mMiniLMv2, the same 48 notes' 148 windows | 75.9 s | 49.6 s |
+| BGE, 48 notes cut | no answer within 300 s (the probe's client timeout); its first 4 tasks, ~2,630 tokens, took 35.7 s | 142.6 s and 196.8 s |
+
+The smoke's answered calls put a rate on it (per 1,000 pair tokens, as `RerankPace` counts them):
+
+| | Arc | the CPU (Run 8, median) | CPU speed ÷ Arc speed |
+|---|---|---|---|
+| mMiniLMv2 | ~1.3–1.5 s (early calls up to 4.8) | 0.30 s | ~5× |
+| BGE | ~9.0–9.9 s | 3.1 s | ~3× |
+
+So on this laptop the Arc is not a faster place to rerank than its CPU; it is several times slower. Why is not
+established here: the driver, the build's Vulkan kernels for this architecture, and the shared power budget are all
+candidates, and none is tested. At ~9 s per 1,000 pair tokens, a BGE recall of 40–60 long notes needs about 4–6 minutes
+even at one window per note.
+
+### The instrument
+
+**Run 6's fixture and seed, unchanged**: `devtools/fixtures/recall-bilingual-long.json` (sha256 `1f48f1be…4f17`), its seed
+`devtools/_judge-bench-seed-long/` (判断 off, no subject tags, re-verified at `--reuse-seed`), every server on the claude
+stub, the 240 questions in order seed 12345. No embedder, partition, `EndorseCount` 8 = the page, the product's 60 s
+verification deadline.
+
+**Six arms in ONE run**, every one paired per query:
+
+| arm | router | when |
+|---|---|---|
+| `formula`, `formula2` | — | in parallel, first (accuracy and 12-query latency passes) |
+| `igpu-rr:mmarco-mMiniLMv2-L12-H384-v1-Q8_0` (cut) | its own iGPU-only router, port 6541 | alone, 1st |
+| `igpu-rrk:mmarco-mMiniLMv2-L12-H384-v1-Q8_0` (chunked, the pace and the skip) | its own, 6542 | alone, 2nd |
+| `igpu-rr:bge-reranker-v2-m3-Q5_K_M` (cut) | its own, 6543 | alone, 3rd |
+| `igpu-rrk:bge-reranker-v2-m3-Q5_K_M` (chunked, the pace and the skip) | its own, 6544 | alone, 4th |
+
+- `rr` pins `GATHERLIGHT_RERANK_CHUNKING=off` and `rrk` pins it `on`, and each must announce its knob.
+- **The cut arms have no pace and no skip.** `RerankAdmission` and `RerankPace` are built only with chunking on. So a
+  cut arm's recall without a verdict can only be a deadline cut; it shows what the model itself can do in the minute.
+- **Everything else is Run 8's CPU machinery, per iGPU arm** (`b24969c`; judge-bench's header, "iGPU-ONLY ARMS"):
+  - one arm at a time, nothing else querying, so its accuracy pass is its serial latency;
+  - a fresh router of its own, killed by PID when the arm is done (llama-server keeps scoring abandoned batches — Run 8);
+  - a record-only proxy (never memoised; an abandoned request closed upstream), recording per call the windows, the notes
+    they came from, the pair tokens, the wall time and the abandonment;
+  - per recall, the product's own lines placed on it by timestamp: the deadline cut, the pace's sizing lines, W2's skip
+    ("0 window(s) … — the judge is skipped for this recall", with the presumed queue when there is one) and its re-measure
+    probe;
+  - the pace guard relaxed for these four arms only — their pace is what they measure — and printed as exempt.
+- **Back to back.** Each recall starts when the last returned, as in an agent turn that recalls several times.
+  - This matters more here than in Run 8. W2 skips a recall while the router is PRESUMED still busy with an abandoned
+    batch, and a skipped recall returns in well under a second.
+  - So after one cut, back-to-back recalls are skipped until the presumed queue has drained (the smoke: six in a row,
+    each 0.1–0.6 s, behind a presumed ~119 s).
+  - A household whose recalls are minutes apart would meet fewer of those skips. For it, the cut arm's per-recall
+    outcome and the answered calls' rates are the evidence, and the record will say which figure is which.
+- **The machine is shared.** Other sessions may build and test on it during the run. The same sampler as Run 8
+  (`devtools/_run8/load-sampler.ps1`) records the machine's busy share and its busiest processes to
+  `devtools/_run8/load8b.log`.
+- **One build.** W2's, not rebuilt: server fingerprint `d6553bdc3fdfeb92` / `92ab3dd3a0a8ac9f` / `2b8bf73223aa209c`, the
+  same as Run 9's. The bench refuses to start an iGPU arm on a different one.
+- **The full 240.** As in Run 8, candidate counts grow over a run, and a subset never reaches the late regime.
+- **Estimated time**, from the probes and the smoke: about 7–8 hours.
+  - mMiniLMv2 cut ~1.5 h, chunked ~2 h.
+  - BGE cut up to ~4 h (240 × 60 s, the worst case).
+  - BGE chunked perhaps minutes, if its recalls are mostly skipped behind a presumed queue.
+
+### Command
+
+```
+node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 \
+  --igpu-rerankers=mmarco-mMiniLMv2-L12-H384-v1-Q8_0,bge-reranker-v2-m3-Q5_K_M --igpu-rerank-arms=rr,rrk --igpu-visible=2 \
+  --resources=devtools/_rr-res --port-base=6500 --llama-port=6540 --cpu-llama-port=6541 \
+  > devtools/_judge-bench-long-run8b.txt 2>&1
+```
+
+Ports 6501–6506 (arms) and 6541–6544 (the iGPU routers) are checked against Windows' reserved tcp ranges and the ports
+in use just before the run; the shared router's 6540 is unused (no arm needs it). A run that exits 127 before any arm
+starts is re-run unchanged.
+
+### Measured
+
+- **found@8 and top-1**, on `all` and per position, every arm. Paired (McNemar exact, Agresti–Min 95%):
+  - the rule's pair, BGE chunked against mMiniLMv2 chunked;
+  - each reranker chunked against itself cut;
+  - each arm against `formula`, and every reranker arm against every other.
+- **Per iGPU arm, what stopped a judgement**: deadline cuts and W2's skips, by quarter of the run, with the first, the
+  runs of consecutive ones, and a per-recall strip; the skips split into those behind a presumed queue and those
+  predicted too slow on their own; re-measure probes.
+- **What each call sent, over the run**: windows per call, notes per call, windows per note, by quarter; every pace line;
+  the rate each answered call implies. Does the pace converge, and to what?
+- **Serial latency**: each arm's median, p90 and maximum over every recall, split into verdicts, cuts and skips.
+- **The router's own record**: the child's device and offload lines, argv, tasks, the largest, truncations, abandoned
+  requests, error lines.
+- **The concurrent load.**
+
+### Decision rule
+
+As written by the owner, **verbatim**: **"If on the Arc BGE chunked is significantly WORSE than mMiniLMv2 chunked on
+`all` found@8, OR BGE is cut or skipped on more than 10% of recalls while mMiniLMv2 is not, then the recommendation on an
+iGPU-only machine should become mMiniLMv2 (owner decision; bring the numbers). Otherwise, the strings replace
+「只有集成显卡的机器…都还没有量过」 with what was measured, and BGE stays recommended there."**
+
+It is read as follows, fixed before the run.
+
+- **"BGE chunked" and "mMiniLMv2 chunked"** are `igpu-rrk:bge-reranker-v2-m3-Q5_K_M` and
+  `igpu-rrk:mmarco-mMiniLMv2-L12-H384-v1-Q8_0` — what ships.
+- **Clause 1, "significantly worse on `all` found@8"**: over the 240 queries, b = mMiniLMv2 hit & BGE miss, c = the
+  reverse. Exact McNemar p < 0.05 AND c − b < 0. No per-set veto.
+- **Clause 2, "cut or skipped on more than 10% of recalls"**:
+  - Counted over the chunked arm's 240 accuracy recalls: those with no verdict that carry the product's deadline-cut
+    Warning or its skip line.
+  - "More than 10%" is more than 24 of 240, and "while mMiniLMv2 is not" is mMiniLMv2 chunked at 24 or fewer.
+  - Skips behind a presumed queue count, as the product makes them. The record reports how many there were, because
+    their number depends on how close together recalls come.
+- **Either clause triggers.** Then nothing in the product changes here: the owner gets the numbers — both clauses, the
+  cut arms, per position, the latency and the rates — and decides the iGPU recommendation.
+- **If neither triggers**, the strings replace 「只有集成显卡的机器…都还没有量过」 with what was measured on this iGPU, and
+  BGE stays recommended there. The sentences are proposed in the report and routed by the controller; no product code or
+  catalogue text changes in this run.
+
+**Reported beside the rule (descriptive):** the cut arms, each reranker chunked against itself cut, each arm against
+`formula`, positions, the strips, the pace, latency, the rates against Run 8's CPU (across runs, descriptive only), the
+load.
+
+### Guards, checked before the rule is read
+
+A failed guard leaves the rule unread. It is reported, not worked around.
+
+1. **The instrument.** The fixture is accepted and the seed re-verified. `formula`'s digest is expected to be Runs 6–8's
+   **`976af4663b6e`**; if it is not, the within-run comparisons still stand.
+2. **The engine A/A.** `formula` against `formula2` is quiet on `all` (p ≥ 0.05).
+3. **Startup.** Every reranker arm reads back `llama-cpp · <its id>`, raises no startup warning, announces its knob, and
+   makes 0 claude-cli calls over the run.
+4. **One build.** The server fingerprint above, unchanged at every iGPU arm's start.
+5. **iGPU-only, as launched.**
+   - Each router spawned its child exactly once, with `--n-gpu-layers 99` and `--log-verbosity 4` and no `--device`.
+   - The router ran with `GGML_VK_VISIBLE_DEVICES=2`.
+   - The child's log names `using device Vulkan0 (Intel(R) Arc(TM) Graphics)` and offloads every layer (13/13 or 25/25).
+   - No line in the router's log names the NVIDIA GPU.
+   - No truncated task; mMiniLMv2's largest task at most 512 tokens.
+   - No error line except `Connection handling canceled` and `Failed to read connection`, the latter each following a
+     request the deadline abandoned and pairing with a `stop: cancel task` burst from the child. That is Run 8's
+     guard 5 as amended after its data — registered here BEFORE this run.
+6. **Coverage.** Every graph recall of an iGPU arm without a verdict is explained: a deadline cut or a pace skip, traced to
+   the product's own line during that recall. No recall with a verdict carries either. No recall errored. Every log line
+   is placed on a recall.
+7. **Every request reached the model.** Per router, the proxy's forwarded `/v1/rerank` requests equal the router's
+   `proxying request to model` lines; no forward failed.
+8. **The pace guard where it applies.** The formula arms logged no pace line.
+
+### Plumbing smoke, before this design
+
+`--n=2` (8 questions), the same six arms and ports, run directly with `node`, 2026-09-25T09:45Z
+(`devtools/_judge-bench-long/results-2026-09-25T094517.872Z.json`, output `devtools/_run8/smoke8b.txt`). It checked that:
+
+- each iGPU router's child spawned once and named the Arc with every layer offloaded, and no line named the NVIDIA GPU;
+- every forward reached its router (9/9, 9/9, 9/9, 3/3);
+- the formula arms logged no pace line; the iGPU arms' lines were printed as exempt;
+- every abstention was traced:
+  - BGE cut: 4 deadline cuts of 8;
+  - BGE chunked: 1 cut, then 6 skips behind a presumed ~119 s queue, each recall back in 0.1–0.6 s;
+- mMiniLMv2 chunked's pace sized two calls to 2 windows per note, at ~1.44 s per 1,000 pair tokens;
+- no WARNING line; exit 0.
+
+Its accuracy numbers inform nothing: 8 questions, early in a run.
+
+The long work folder's `arm-*`, router logs and presets from Run 8 were copied to `devtools/_run8/evidence/` before
+this round, so the smoke overwriting them lost nothing.
