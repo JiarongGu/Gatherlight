@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -13,36 +14,52 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// <para><b>Why measured, not guessed.</b> On this laptop (Core Ultra 9 185H, RTX 4080 Laptop + Intel Arc iGPU, llama.cpp
 /// b10549) the Arc is 3–7× SLOWER than the CPU for the two rerankers measured — BGE 9.6 s per 1,000 pair tokens against
 /// 3.35–3.58 on the CPU, mMiniLMv2 1.44 against 0.22–0.24 (<c>docs/self-managed-llm-runtime.md</c>, 2026-09-26; Run 8b
-/// read 3–5× across runs). And llama.cpp's
-/// own default puts the child on the Arc when it is the only GPU it can see (Run 8b, the RTX hidden); with the RTX visible
-/// too, the default child used the RTX alone (log-verbosity 4, same date). <c>--list-devices</c> prints the two alike
-/// ("Vulkan0: NVIDIA …", "Vulkan1: Intel(R) Arc(TM) Graphics"), so the list cannot say which is integrated, and a
-/// name-based rule would be a guess about hardware nobody here has run. A few seconds per device at the first start
-/// answers it for THIS machine.</para>
+/// read 3–5× across runs). And llama.cpp's own default puts the child on the Arc when it is the only GPU it can see (Run
+/// 8b, the RTX hidden); with the RTX visible too, the default child used the RTX alone (log-verbosity 4, same date).
+/// <c>--list-devices</c> prints the two alike ("Vulkan0: NVIDIA …", "Vulkan1: Intel(R) Arc(TM) Graphics"), so the list
+/// cannot say which is integrated, and a name-based rule would be a guess about hardware nobody here has run. A few
+/// seconds per device at the first start answers it for THIS machine.</para>
 ///
 /// <para><b>How.</b> ONE device at a time — never two in parallel: two children contending for one package's power budget
 /// would each read slower than the machine is (Run 9's voided attempt ran routers side by side). For each: the provisioned
 /// <c>llama-server</c> spawned STANDALONE (not the router) with the reranker section's own launch keys
 /// (<see cref="LlamaServerRuntime.LaunchKeys"/>, the ones the preset writes — so what is measured is what runs) plus
-/// <c>--device</c>, on a loopback port the OS picks; wait for <c>/health</c>; one warm <c>/v1/rerank</c> of the SAME batch
-/// (the RTX's first call of a batch shape carried ~160 ms of set-up: 233 ms, then 71); then one timed call of it; then the
-/// process tree is killed. Every wait and call is capped (<see cref="LoadTimeout"/>, <see cref="CallTimeout"/>). A device
-/// that times out, fails, exits, or does not score every document (<see cref="RerankReply.Scores"/>) is excluded, and its
-/// reason is recorded.</para>
+/// <c>--device</c>, on a loopback port the OS picks (never one in the router's band — <see cref="MeasureAsync"/>); wait
+/// for <c>/health</c>; one warm <c>/v1/rerank</c> of a batch of the same size (the RTX's first call of a batch shape carried
+/// ~160 ms of set-up: 233 ms, then 71); then one timed call of different documents (<see cref="RerankDeviceBatch"/>); then
+/// the process tree is killed. Every wait and call is capped (<see cref="LoadTimeout"/>, <see cref="CallTimeout"/>). A
+/// device that times out, fails, exits, or does not score every document (<see cref="RerankReply.Scores"/>) is excluded,
+/// its reason recorded as a household sentence and the exception, if any, logged.</para>
+///
+/// <para><b>An exclusion is RETRIED, a bounded number of times</b> (review, 2026-09-26). Most are transient — a cold Vulkan
+/// shader cache, a virus scan of a fresh llama-server at the first start of a new build (exactly when the key changes), a
+/// game or another llama-server holding VRAM, contention, a lost port race — and one saved as final would put a reranker
+/// on the CPU for good because the RTX was busy once. So at each router start the app performs, a measurement that is
+/// current but has excluded devices re-measures THOSE devices only (<see cref="RerankDeviceMeasurement.Retryable"/>), up to
+/// <see cref="MaxAttempts"/> attempts each; valid results stay as they are, and this start's preset uses the stored ones
+/// meanwhile. After that the exclusion stands until the key changes — and a GPU DRIVER update is not part of the key
+/// (<see cref="RerankDeviceKey"/>), which the row says.</para>
 ///
 /// <para><b>Worst case, and who waits for it.</b> Per device at most <see cref="LoadTimeout"/> + 2 × <see cref="CallTimeout"/>
-/// (105 s); per reranker lacking a current measurement, that × (1 + GPUs). Measured on this laptop (2026-09-26, spawn to
-/// kill): BGE 16 s on the CPU, 6 s on the RTX, 36 s on the Arc; mMiniLMv2 5–8 s each — 77 s for both on three devices, the
-/// start button's request 79 s in all. It runs inside a router start the app performs — behind the
-/// migration overlay at boot (<c>LlamaWarmStep</c>, non-essential), or inside a bind or 资源's start button, whose requests
-/// no server or client timeout bounds (Kestrel's defaults set none on a request in progress, and the console's fetches set
-/// none): the household waits, with the button busy. Only once per model per key (<see cref="RerankDeviceKey"/>).</para>
+/// (105 s); per reranker lacking a current measurement, that × (1 + GPUs); a retry, that × the excluded devices. Measured
+/// on this laptop (2026-09-26, spawn to kill): BGE 16 s on the CPU, 6 s on the RTX, 36 s on the Arc; mMiniLMv2 5–8 s each —
+/// 77 s for both on three devices, the start button's request 79 s in all. It runs inside a router start the app performs
+/// — behind the migration overlay at boot (<c>LlamaWarmStep</c>, non-essential, which shows <see cref="Now"/> as the step's
+/// progress line), or inside a bind or 资源's start button, whose requests no server or client timeout bounds (Kestrel's
+/// defaults set none on a request in progress, and the console's fetches set none): the household waits, with the button
+/// busy, and the start button's answer then says a measurement ran.</para>
 ///
-/// <para><b>Nothing outlives it.</b> The running child is held here and <see cref="Abort"/> — which
-/// <see cref="LlamaServerRuntime.Dispose"/> calls BEFORE it waits for the lifecycle lock — kills it and refuses another, so a
-/// shutdown during a measurement cannot orphan a llama-server: the failure this runtime already fought. A child the
-/// caller's cancellation or a cap ends is killed too, in a <c>finally</c>. <b>Stated gap</b>: the Dispose path is asserted by
-/// nothing — the e2e harness stops a server with TerminateProcess, which skips Dispose — so it rests on reading.</para>
+/// <para><b>Nothing outlives it.</b> (1) Every measurement child is put in a Windows JOB OBJECT created with
+/// <c>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</c> and never closed by us (<see cref="MeasurementJob"/>): the OS closes the handle
+/// when THIS process ends, however it ends — a crash, a force-quit of a first-boot overlay stuck on a long measurement,
+/// TerminateProcess — and the child dies with it. Without it a child on a random port is adopted by nothing, and holds RAM
+/// or VRAM until a reboot (and could slow the next measurement). The ROUTER is deliberately NOT in the job: its orphan is
+/// adopted by the next start, by design. Verified on the real binary (docs/self-managed-llm-runtime.md, 2026-09-26): the
+/// server TerminateProcess'd mid-measurement, the child gone within a second; the same without the job, the child still
+/// running. The window between the spawn and the assignment is not covered — a stated limit, milliseconds wide. (2)
+/// <see cref="Abort"/> — which <see cref="LlamaServerRuntime.Dispose"/> calls BEFORE it waits for the lifecycle lock — kills
+/// the running child and refuses another; a child the caller's cancellation or a cap ends is killed in a <c>finally</c>.
+/// The Dispose path itself is asserted by nothing (the e2e harness stops a server with TerminateProcess, which skips it).</para>
 ///
 /// <para><b>Test seam</b>: <see cref="CommandSeam"/> names a command the measurement spawns INSTEAD of the provisioned
 /// binary, with the same arguments — the precedent is <c>GATHERLIGHT_CLAUDE_CMD</c>. Only the measurement uses it; the build
@@ -55,6 +72,10 @@ public sealed class RerankDeviceMeter
 
     /// <summary>The test knob that shortens <see cref="LoadTimeout"/> and <see cref="CallTimeout"/> — never lengthens.</summary>
     public const string CapKnob = "GATHERLIGHT_RERANK_MEASURE_CAP_SECONDS";
+
+    /// <summary>How many times an EXCLUDED device is measured under one key before the exclusion stands — the first
+    /// measurement and two retries, each at a router start the app performs. See the class comment.</summary>
+    public const int MaxAttempts = 3;
 
     private static readonly TimeSpan DefaultLoad = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan DefaultCall = TimeSpan.FromSeconds(30);
@@ -73,12 +94,16 @@ public sealed class RerankDeviceMeter
     private static TimeSpan Capped(TimeSpan d) =>
         KnobSeconds is { } k ? TimeSpan.FromSeconds(Math.Min(k, d.TotalSeconds)) : d;
 
+    /// <summary>How many ports the OS may offer before the measurement gives up on finding one outside the router's band.</summary>
+    private const int PortTries = 20;
+
     private readonly IHttpClientFactory _http;
     private readonly ILogger _log;
     private readonly object _gate = new();
     private readonly CancellationTokenSource _abort = new();
     private Process? _child;
     private bool _aborted;
+    private string? _now;
     private static int s_announced;
 
     public RerankDeviceMeter(IHttpClientFactory http, ILogger log)
@@ -86,6 +111,10 @@ public sealed class RerankDeviceMeter
         _http = http;
         _log = log;
     }
+
+    /// <summary>What is being measured right now, as a household progress line — null when nothing is. Read by the
+    /// migration overlay's step line; a field read, never an await.</summary>
+    public string? Now { get { lock (_gate) return _now; } }
 
     /// <summary>Kill the running child, if any, and refuse to start another — for <see cref="LlamaServerRuntime.Dispose"/>.</summary>
     public void Abort()
@@ -97,53 +126,83 @@ public sealed class RerankDeviceMeter
             child = _child;
         }
         try { _abort.Cancel(); } catch (ObjectDisposedException) { /* already torn down */ }
-        if (child is not null) KillTree(child);
+        if (child is not null) LlamaServerRuntime.KillProcessTree(child, _log, "rerank device measurement");
     }
 
-    /// <summary>Measure <paramref name="modelId"/> on the CPU and every device in <paramref name="key"/>, one at a time.
+    /// <summary>Measure <paramref name="modelId"/> on the CPU and every device in <paramref name="key"/>, one at a time —
+    /// or, given the <paramref name="previous"/> measurement under the same key, only its RETRYABLE excluded devices,
+    /// merged into it (each re-measured device's attempts counted up; the valid results kept as they are).
+    /// <paramref name="reserved"/> says which ports must not be offered to a child: the router's own and its band.
     /// Null when <see cref="Abort"/> ended it — a partial measurement is never returned, so never persisted. The caller's
     /// cancellation propagates, the running child killed first.</summary>
     public async Task<RerankDeviceMeasurement?> MeasureAsync(string exe, string modelId, string modelFile,
-        RerankDeviceKey key, CancellationToken ct)
+        RerankDeviceKey key, RerankDeviceMeasurement? previous, Func<int, bool> reserved, CancellationToken ct)
     {
         Announce();
-        var batch = RerankDeviceBatch.For(GgufCatalog.DeclaredWindow(modelId));
-        var targets = new List<(string Device, string Name)> { ("none", "CPU") };
-        targets.AddRange(key.Devices.Select(d => (RerankDeviceKey.DeviceId(d), RerankDeviceKey.DeviceName(d))));
+        var window = GgufCatalog.DeclaredWindow(modelId);
+        var warm = RerankDeviceBatch.Warm(window);
+        var timed = RerankDeviceBatch.Timed(window);
+        var all = new List<(string Device, string Name)> { ("none", "CPU") };
+        all.AddRange(key.Devices.Select(d => (RerankDeviceKey.DeviceId(d), RerankDeviceKey.DeviceName(d))));
+        var retry = previous?.Retryable.Select(r => r.Device).ToHashSet(StringComparer.Ordinal);
+        var targets = retry is null ? all : all.Where(t => retry.Contains(t.Device)).ToList();
 
         _log.LogInformation(
-            "rerank device measurement: {Model} on {Count} device(s) ({Devices}), one at a time — {Docs} documents, {Tokens:0} pair tokens",
-            modelId, targets.Count, string.Join(", ", targets.Select(t => t.Device)), batch.Documents.Count, batch.PairTokens);
-        var results = new List<RerankDeviceResult>();
-        foreach (var (device, name) in targets)
+            "rerank device measurement: {Model} on {Count} device(s) ({Devices}){Retry}, one at a time — {Docs} documents, {Tokens:0} pair tokens",
+            modelId, targets.Count, string.Join(", ", targets.Select(t => t.Device)),
+            retry is null ? "" : " — retrying the ones excluded last time", timed.Documents.Count, timed.PairTokens);
+        var fresh = new Dictionary<string, RerankDeviceResult>(StringComparer.Ordinal);
+        try
         {
-            lock (_gate) if (_aborted) return null;
-            var r = await OneAsync(exe, modelId, modelFile, device, name, batch, ct).ConfigureAwait(false);
-            lock (_gate) if (_aborted) return null;
-            if (r.Valid)
-                _log.LogInformation(
-                    "rerank device measurement: {Model} on {Device} ({Name}): {Ms} ms for {Tokens:0} pair tokens — {Rate:0.###} ms per 1,000",
-                    modelId, device, name, r.ElapsedMs, batch.PairTokens, r.MsPerToken * 1000);
-            else
-                _log.LogWarning("rerank device measurement: {Model} on {Device} ({Name}) excluded: {Why}",
-                    modelId, device, name, r.Error);
-            results.Add(r);
+            for (var i = 0; i < targets.Count; i++)
+            {
+                var (device, name) = targets[i];
+                lock (_gate)
+                {
+                    if (_aborted) return null;
+                    _now = $"正在测重排模型 {modelId} 在哪个设备上最快:第 {i + 1}/{targets.Count} 个({name})";
+                }
+                var r = await OneAsync(exe, modelId, modelFile, device, name, warm, timed, reserved, ct).ConfigureAwait(false);
+                lock (_gate) if (_aborted) return null;
+                var attempts = (previous?.Results.FirstOrDefault(p => p.Device == device)?.AttemptsSpent ?? 0) + 1;
+                r = r with { Attempts = attempts };
+                if (r.Valid)
+                    _log.LogInformation(
+                        "rerank device measurement: {Model} on {Device} ({Name}): {Ms} ms for {Tokens:0} pair tokens — {Rate:0.###} ms per 1,000",
+                        modelId, device, name, r.ElapsedMs, timed.PairTokens, r.MsPerToken * 1000);
+                else
+                    _log.LogWarning("rerank device measurement: {Model} on {Device} ({Name}) excluded, attempt {Attempt} of {Max}: {Why}",
+                        modelId, device, name, attempts, MaxAttempts, r.Error);
+                fresh[device] = r;
+            }
         }
+        finally
+        {
+            lock (_gate) _now = null;
+        }
+
+        var results = previous is null
+            ? targets.Select(t => fresh[t.Device]).ToList()
+            : previous.Results.Select(p => fresh.TryGetValue(p.Device, out var n) ? n : p).ToList();
         var m = new RerankDeviceMeasurement(key.Model, key.ModelBytes, key.ModelWriteTicks, key.Build, key.Devices,
-            DateTimeOffset.UtcNow, batch.Documents.Count, batch.Characters, batch.PairTokens, results);
+            DateTimeOffset.UtcNow, timed.Documents.Count, timed.Characters, timed.PairTokens, results);
         _log.LogInformation("rerank device measurement: {Model} → {Chosen}", modelId,
-            m.Fastest is { } f ? $"{f.Device} ({f.Name}), the fastest" : "no device gave a valid result; the preset names none");
+            m.Fastest is { } f ? $"{f.Device} ({f.Name}), the fastest that gave a result" : "no device gave a valid result; the preset names none");
         return m;
     }
 
     private async Task<RerankDeviceResult> OneAsync(string exe, string modelId, string modelFile, string device, string name,
-        (string Query, IReadOnlyList<string> Documents, int Characters, double PairTokens) batch, CancellationToken ct)
+        MeasurementBatch warmBatch, MeasurementBatch timedBatch, Func<int, bool> reserved, CancellationToken ct)
     {
         Process? proc = null;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _abort.Token);
         try
         {
-            var port = FreeLoopbackPort();
+            if (FreeLoopbackPort(reserved) is not { } port)
+            {
+                _log.LogWarning("rerank device measurement: no free loopback port outside the router's band after {Tries} tries", PortTries);
+                return Excluded(device, name, "没能找到一个可用的端口");
+            }
             var (file, lead) = Command(exe);
             var psi = new ProcessStartInfo(file)
             {
@@ -172,7 +231,11 @@ public sealed class RerankDeviceMeter
                 proc = Process.Start(psi);
                 _child = proc;
             }
-            if (proc is null) return Excluded(device, name, "没能启动");
+            if (proc is null) return Excluded(device, name, "没能启动 llama-server");
+            // Dies with this process however this process dies — see MeasurementJob.
+            if (!MeasurementJob.Assign(proc))
+                _log.LogWarning("rerank device measurement: could not put the child (pid {Pid}) in the kill-on-close job; "
+                    + "a forced end of the app during this measurement would leave it running", proc.Id);
             // Drained, not read — a filled pipe blocks the child.
             proc.OutputDataReceived += (_, _) => { };
             proc.ErrorDataReceived += (_, _) => { };
@@ -201,15 +264,15 @@ public sealed class RerankDeviceMeter
                 await Task.Delay(250, linked.Token).ConfigureAwait(false);
             }
 
-            // 2. Warm — the SAME batch, so the timed call pays no first-call set-up for its shape.
-            var warm = await CallAsync(http, baseUrl, modelId, batch, linked.Token).ConfigureAwait(false);
+            // 2. Warm — a batch of the same size, so the timed call pays no first-call set-up for its shape.
+            var warm = await CallAsync(http, baseUrl, modelId, device, warmBatch, linked.Token).ConfigureAwait(false);
             if (warm.Error is { } warmWhy) return Excluded(device, name, "预热:" + warmWhy);
 
-            // 3. Timed.
-            var timed = await CallAsync(http, baseUrl, modelId, batch, linked.Token).ConfigureAwait(false);
+            // 3. Timed — different documents, so no prompt cache can answer it from the warm call.
+            var timed = await CallAsync(http, baseUrl, modelId, device, timedBatch, linked.Token).ConfigureAwait(false);
             if (timed.Error is { } why) return Excluded(device, name, why);
             return new RerankDeviceResult(device, name, (long)timed.Elapsed.TotalMilliseconds,
-                RerankPace.RateOf(timed.Elapsed, batch.PairTokens), null);
+                RerankPace.RateOf(timed.Elapsed, timedBatch.PairTokens), null);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -217,23 +280,24 @@ public sealed class RerankDeviceMeter
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return Excluded(device, name, $"没能测:{ex.Message}");
+            _log.LogWarning(ex, "rerank device measurement: {Model} on {Device} failed", modelId, device);
+            return Excluded(device, name, "没能测(原因写在「日志」里)");
         }
         finally
         {
             lock (_gate) if (ReferenceEquals(_child, proc)) _child = null;
             if (proc is not null)
             {
-                KillTree(proc);
+                LlamaServerRuntime.KillProcessTree(proc, _log, "rerank device measurement");
                 proc.Dispose();
             }
         }
     }
 
-    /// <summary>One <c>/v1/rerank</c> of the batch, capped at <see cref="CallTimeout"/>: its wall-clock time, or why it is
-    /// not a result.</summary>
-    private static async Task<(TimeSpan Elapsed, string? Error)> CallAsync(HttpClient http, string baseUrl, string modelId,
-        (string Query, IReadOnlyList<string> Documents, int Characters, double PairTokens) batch, CancellationToken ct)
+    /// <summary>One <c>/v1/rerank</c> of <paramref name="batch"/>, capped at <see cref="CallTimeout"/>: its wall-clock
+    /// time, or why it is not a result — a household sentence; the exception, if any, goes to the log.</summary>
+    private async Task<(TimeSpan Elapsed, string? Error)> CallAsync(HttpClient http, string baseUrl, string modelId,
+        string device, MeasurementBatch batch, CancellationToken ct)
     {
         using var cap = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cap.CancelAfter(CallTimeout);
@@ -259,20 +323,31 @@ public sealed class RerankDeviceMeter
         }
         catch (HttpRequestException ex)
         {
-            return (clock.Elapsed, $"打分请求失败:{ex.Message}");
+            _log.LogWarning(ex, "rerank device measurement: a /v1/rerank call to {Model} on {Device} failed", modelId, device);
+            return (clock.Elapsed, "打分请求没有得到回应(原因写在「日志」里)");
         }
     }
 
     private static RerankDeviceResult Excluded(string device, string name, string why) => new(device, name, null, null, why);
 
-    /// <summary>A loopback port the OS picks — never a fixed or known one, and never the router's (that one is held
-    /// or refused already, and this runs before the router is spawned).</summary>
-    private static int FreeLoopbackPort()
+    /// <summary>A loopback port the OS picks — never a fixed or known one, and never one <paramref name="reserved"/>
+    /// names. On this machine the OS's dynamic range is 1024–15000, which covers the router's own band
+    /// (<see cref="LlamaServerRuntime.PortFor"/>, 11435–11498): a port refused now is free, and handing the router's port to
+    /// a measurement child would make the router spawned right after it fail to bind — so such a port is refused and
+    /// another asked for. A port taken between this check and the child's bind makes the child exit, an exclusion like
+    /// any other, retried at the next start.</summary>
+    private static int? FreeLoopbackPort(Func<int, bool> reserved)
     {
-        var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        try { return ((IPEndPoint)l.LocalEndpoint).Port; }
-        finally { l.Stop(); }
+        for (var i = 0; i < PortTries; i++)
+        {
+            var l = new TcpListener(IPAddress.Loopback, 0);
+            l.Start();
+            int port;
+            try { port = ((IPEndPoint)l.LocalEndpoint).Port; }
+            finally { l.Stop(); }
+            if (!reserved(port)) return port;
+        }
+        return null;
     }
 
     /// <summary>The executable and leading arguments: the provisioned binary, or the <see cref="CommandSeam"/> command.</summary>
@@ -313,18 +388,77 @@ public sealed class RerankDeviceMeter
             _log.LogWarning("Test knob set: {Knob} = {Seconds} — a device measurement's load and calls are capped at {Load:0.#} / {Call:0.#} s",
                 CapKnob, k, LoadTimeout.TotalSeconds, CallTimeout.TotalSeconds);
     }
+}
 
-    private void KillTree(Process proc)
+/// <summary>A Windows JOB OBJECT that kills every process in it when its last handle closes
+/// (<c>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</c>) — and the only handle is this process's, held for its whole life and never
+/// closed by us, so the OS closes it when this process ends, however it ends, and the measurement children die with it.
+/// Created lazily, once. On anything but Windows, or when the calls fail, <see cref="Assign"/> answers false and the
+/// caller logs that the protection is missing — the measurement itself goes on.</summary>
+internal static class MeasurementJob
+{
+    private const int JobObjectExtendedLimitInformation = 9;
+    private const uint JobObjectLimitKillOnJobClose = 0x2000;
+
+    private static readonly Lazy<IntPtr> Job = new(Create);
+
+    public static bool Assign(Process process)
     {
-        try
-        {
-            if (!proc.HasExited)
-            {
-                proc.Kill(entireProcessTree: true);
-                if (!proc.WaitForExit(5000))
-                    _log.LogWarning("rerank device measurement: llama-server (pid {Pid}) had not exited 5 s after it was killed", proc.Id);
-            }
-        }
-        catch (Exception ex) { _log.LogDebug("rerank device measurement: stopping a child: {Msg}", ex.Message); }
+        if (!OperatingSystem.IsWindows()) return false;
+        var job = Job.Value;
+        if (job == IntPtr.Zero) return false;
+        try { return AssignProcessToJobObject(job, process.Handle); }
+        catch (Exception) { return false; }
     }
+
+    private static IntPtr Create()
+    {
+        if (!OperatingSystem.IsWindows()) return IntPtr.Zero;
+        var job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero) return IntPtr.Zero;
+        var info = new JobObjectExtendedLimit { BasicLimitInformation = new JobObjectBasicLimit { LimitFlags = JobObjectLimitKillOnJobClose } };
+        return SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf<JobObjectExtendedLimit>())
+            ? job : IntPtr.Zero;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicLimit
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters
+    {
+        public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount;
+        public ulong ReadTransferCount, WriteTransferCount, OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectExtendedLimit
+    {
+        public JobObjectBasicLimit BasicLimitInformation;
+        public IoCounters IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateJobObject(IntPtr attributes, string? name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref JobObjectExtendedLimit info, uint length);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
 }

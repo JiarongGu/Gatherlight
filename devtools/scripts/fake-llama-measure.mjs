@@ -14,7 +14,8 @@
 // once scoring all documents but the last; "http500" refuses; "hang" accepts and never answers; "exit" exits before it
 // listens (code 3). A (model, device) with no entry answers at once.
 //
-// Every start, request and anomaly is appended to the log as one JSON line, so a suite asserts what the app actually
+// Every start (with its parent pid — the app, which a suite can end with TerminateProcess to prove the child dies with it),
+// request and anomaly is appended to the log as one JSON line, so a suite asserts what the app actually
 // launched — its argv, one device at a time, the batch it sent — rather than what the app reports about itself.
 // OVERLAP is detected here: a start that finds another fake of this kind still alive logs `overlap: true`.
 // A safety net, never relied on: the process exits by itself after 5 minutes.
@@ -43,7 +44,7 @@ if (registry) {
   overlap = still.length > 0;
   fs.writeFileSync(registry, [...still, process.pid].join('\n') + '\n');
 }
-log({ event: 'start', model, device, port, argv, overlap, behaviour });
+log({ event: 'start', model, device, port, argv, overlap, behaviour, ppid: process.ppid });
 if (behaviour === 'exit') { log({ event: 'exit', code: 3 }); process.exit(3); }
 setTimeout(() => process.exit(0), 5 * 60 * 1000).unref();
 
@@ -59,7 +60,7 @@ const server = http.createServer((req, res) => {
     const docs = Array.isArray(json.documents) ? json.documents.map(String) : [];
     const pairTokens = docs.reduce((a, d) => a + tokens(String(json.query ?? '')) + tokens(d), 0);
     log({ event: 'rerank', model: json.model, device, query: json.query, documents: docs.length,
-      characters: docs.reduce((a, d) => a + d.length, 0), pairTokens });
+      characters: docs.reduce((a, d) => a + d.length, 0), pairTokens, head: docs[0]?.slice(0, 24) ?? null });
     if (req.url !== '/v1/rerank') return send(404, { error: { code: 404, message: 'not found' } });
     if (behaviour === 'hang') return;   // accepted, never answered; the app's cap ends it and kills this process
     if (behaviour === 'http500') return send(500, { error: { code: 500, message: 'zzfake refused' } });

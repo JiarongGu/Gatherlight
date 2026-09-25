@@ -315,7 +315,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             var flat = Path.Combine(dir, modelId + ".gguf");
             return File.Exists(flat) ? flat : null;
         }
-        catch (IOException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
     }
 
     /// <summary>What a GGUF IS — the ONE writer of that answer. llama-server's <c>embeddings</c> and

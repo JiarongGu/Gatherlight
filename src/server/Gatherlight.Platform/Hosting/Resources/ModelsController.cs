@@ -119,7 +119,8 @@ public sealed class ModelsController : ControllerBase
             : await _llama.LiveAsync();
         var known = _llama.Cached;
         if (known is null) _ = _llama.ProbeAsync(ct: CancellationToken.None);
-        var models = Models(mem);
+        // Whose router answers matters to a reranker row: one the app did not start is never measured for.
+        var models = Models(mem, adopted: probe.Serving && !probe.Ours);
 
         return Ok(new
         {
@@ -158,9 +159,9 @@ public sealed class ModelsController : ControllerBase
 
     /// <summary>One row per model the app manages, in the order the choice is actually made: by what the
     /// model is FOR, then by what you already have.</summary>
-    private IReadOnlyList<ModelRowView> Models(MemorySourceSettings mem)
+    private IReadOnlyList<ModelRowView> Models(MemorySourceSettings mem, bool adopted = false)
     {
-        var rows = new List<ModelRowView>(GgufRows(MemorySources.BoundToLlamaCpp(mem))) { BuiltInRow(mem) };
+        var rows = new List<ModelRowView>(GgufRows(MemorySources.BoundToLlamaCpp(mem), adopted)) { BuiltInRow(mem) };
         return rows
             .OrderBy(r => r.Capability == "embedding" ? 0 : 1)
             .ThenByDescending(r => r.Installed)
@@ -187,7 +188,7 @@ public sealed class ModelsController : ControllerBase
             c.SizeBytes ?? 0, installed, inUse, c.Note ?? "",
             c.Measured is null ? null : new MeasuredView(
                 c.Measured.RecallTop1, c.Measured.RecallTop3, c.Measured.Queries, c.Measured.MsPerQuery),
-            BuiltInSemanticSource.ResourceId, Device: null);
+            BuiltInSemanticSource.ResourceId, DeviceNote: null);
     }
 
     /// <summary>Every GGUF — on disk and fetchable — from one pass.
@@ -196,7 +197,7 @@ public sealed class ModelsController : ControllerBase
     /// (repo, commit, checksum), so a model we have not pinned is a model we cannot verify. A file the
     /// household dropped into the directory themselves still gets a row, because it is on their disk and
     /// they may want the space back; it simply has no note and no measurement.</para></summary>
-    private IEnumerable<ModelRowView> GgufRows(IReadOnlyList<(string Layer, string Model)> bound)
+    private IEnumerable<ModelRowView> GgufRows(IReadOnlyList<(string Layer, string Model)> bound, bool adopted)
     {
         var dir = Services.ResourceProvisioner.ProvisionedGgufDir(_platform.ResourcesPath);
         var onDisk = Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath);
@@ -223,9 +224,10 @@ public sealed class ModelsController : ControllerBase
                 // WHERE it runs, for an installed reranker — the only kind whose device the app chooses (RerankDeviceMeter).
                 // Nothing when there is no key to ask with yet: this process holds no memo of the binary's build and device
                 // list (the panel re-asks while the build tag is unknown), or the binary does not answer — "not measured"
-                // there would promise a measurement that cannot happen.
-                Device: installed && kind == GgufCapability.Reranking && _llama.RerankDevice(id) is { } lookup
-                    ? RerankDeviceNotes.Row(lookup.Measurement)
+                // there would promise a measurement that cannot happen. Whether it was saved, and whether the router
+                // answering now is one the app started, change what the row may promise (RerankDeviceNotes.Row).
+                DeviceNote: installed && kind == GgufCapability.Reranking && _llama.RerankDevice(id) is { } lookup
+                    ? RerankDeviceNotes.Row(lookup.Measurement, lookup.Saved, adopted)
                     : null);
         }
     }
@@ -245,13 +247,13 @@ public sealed class ModelsController : ControllerBase
     /// (the only date a pinned GGUF carries) put two meanings in one field, so a freshly measured model
     /// would eventually render as an obsolete one. WHEN it was measured belongs with the sample size, in
     /// the footnote, which is where every other qualifier on these numbers already lives.</para>
-    /// <param name="Device">For an installed RERANKER: which device the app runs it on and that the choice was measured on
+    /// <param name="DeviceNote">For an installed RERANKER: which device the app runs it on and that the choice was measured on
     /// this machine, with the figures — or what happens until it is (<see cref="RerankDeviceNotes.Row"/>). Null for every
     /// other row.</param>
     private sealed record ModelRowView(
         string Id, string Name, string Runtime, string Capability,
         long SizeBytes, bool Installed, string? InUse, string Note,
-        MeasuredView? Measured, string ResourceId, string? Device);
+        MeasuredView? Measured, string ResourceId, string? DeviceNote);
 
     /// <summary>BGE's current device measurement on this machine and its reference-page admission, when that admission is
     /// NOT a send — i.e. BGE measured too slow here (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>). Null when BGE is
@@ -314,7 +316,9 @@ public sealed class ModelsController : ControllerBase
     /// judge skipped recall after recall, fail-open and unreported); (2) BGE was MEASURED too slow here
     /// (<paramref name="bgeTooSlow"/>, owner decision 2026-09-26 after Run 8b: its fastest device on this machine would
     /// not be sent the default page's one-window call — <see cref="RerankDeviceVerdict.ReferenceAdmission"/>, the runtime's
-    /// own admission); (3) the device probe answered with no GPU; else BGE. The 判断 row reads the same writer
+    /// own admission — and ONLY BGE's: a LAMAR or mMiniLMv2 measured too slow moves nothing, because the question the
+    /// owner asked is whether this machine is too slow for BGE, the default, and the badge never names LAMAR); (3) the device
+    /// probe answered with no GPU; else BGE. The 判断 row reads the same writer
     /// (<see cref="GgufCatalog.RecommendedRerankerFor"/>). <b>A limitation, said in the reasons</b>: a measurement exists
     /// only for a model on disk, taken at the next router start the app performs — so on an iGPU-only machine the badge
     /// still offers BGE first, and moves to mMiniLMv2 once BGE has been downloaded and measured. Proof: <c>e2e-p52</c>
@@ -380,7 +384,7 @@ public sealed class ModelsController : ControllerBase
                           ? $"最近 {skips.Recalls} 次检索里有 {skips.Skipped} 次因为这台机器太慢跳过了判断,所以推荐这个更小的重排模型:"
                             + run8 + "只有集成显卡的机器两者都还没有量过。"
                           : bgeTooSlow is { } slow
-                          ? BgeMeasuredLead(slow) + "它在只用 CPU 的笔记本上的实测见它那一行的说明;"
+                          ? RerankDeviceNotes.TooSlowLead(slow.M, slow.PredictedMs, slow.LimitMs) + "它在只用 CPU 的笔记本上的实测见它那一行的说明;"
                             + "它在这台机器上多快,下载后应用下一次自己启动 llama.cpp 时同样会测。"
                           : "llama.cpp 在这台机器上用不了任何显卡,所以推荐这个更小的重排模型,而不是 BGE:" + run8
                             + "llama.cpp 能用显卡、BGE 下载后在这台机器上也没有测出太慢时,推荐的是 BGE;"
@@ -396,20 +400,6 @@ public sealed class ModelsController : ControllerBase
             caution = "「检索质量」一列只放嵌入模型的 10 题检索分,所以它那一格是「未实测」;"
                 + "它作为判断的实测在另一套测试上,数字在这一行的说明里。",
         };
-    }
-
-    /// <summary>BGE measured too slow on this machine, as the badge says it: the fastest device and its time for the batch,
-    /// and what that rate predicts for the default page's one-window call against the limit the runtime sends one under —
-    /// the figures <see cref="RerankDeviceVerdict.ReferenceAdmission"/> decided on.</summary>
-    private static string BgeMeasuredLead((RerankDeviceMeasurement M, double PredictedMs, double LimitMs) slow)
-    {
-        var best = slow.M.Fastest!;
-        return $"BGE 在这台机器上实测过:它最快的设备是 {best.Name},同一批 {slow.M.Documents} 段、共 "
-            + $"{slow.M.Characters.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} 字的打分用了 "
-            + $"{RerankDeviceNotes.Seconds(best.ElapsedMs!.Value)} 秒;按这个速度推算,默认一次检索最多给判断看的 "
-            + $"{RerankDeviceVerdict.ReferenceCandidates} 条候选、每条只读一段时约要 {RerankDeviceNotes.Seconds((long)slow.PredictedMs)} 秒,"
-            + $"超过应用送出这样一次判断的 {RerankDeviceNotes.Seconds((long)slow.LimitMs)} 秒上限,这样的检索会跳过判断 —— "
-            + "所以推荐这个更小的重排模型。";
     }
 
     /// <summary>Which layer is holding a GGUF, if any — and it checks the BACKEND, not just the name.
@@ -502,7 +492,14 @@ public sealed class ModelsController : ControllerBase
     [HttpPost("api/manage/models/llama/start")]
     public async Task<IActionResult> LlamaStart()
     {
+        // Did THIS start measure a reranker's devices (RerankDeviceMeter)? Compared by sequence, before and after — the
+        // runtime's report, a field read — so the answer can say why the button was busy that long.
+        var before = _llama.LastMeasurement?.Sequence;
         if (!await _llama.EnsureServingAsync()) return NotRunning(await _llama.ProbeAsync(refresh: true));
+        var ran = _llama.LastMeasurement is { } report && report.Sequence != before ? report : null;
+        var measured = ran is null ? null
+            : $"启动前先测了 {string.Join("、", ran.Models)} 在哪个设备上最快(用了 {RerankDeviceNotes.Seconds((long)ran.Took.TotalMilliseconds)} 秒),"
+              + "结果写在下面各自那一行。";
 
         var state = await _llama.ProbeAsync(refresh: true);
         // It answered a moment ago and does not now: a router that died, or one holding the port without answering.
@@ -537,11 +534,13 @@ public sealed class ModelsController : ControllerBase
             ok = true, warmed,
             notWarmed = cold.Select(c => new { layer = c.Layer, model = c.Model, why = $"{c.Cause}。{c.Cure}" }),
             models = state.Models, devices = state.Devices,
+            measured,
             // The console toasts `note` when there is one and 「已完成」 otherwise — so this is null exactly when every
-            // bound model is warm. Each cure is said ONCE, after the models it applies to: both layers cold on one
-            // router share one.
-            note = cold.Count == 0 ? null : string.Concat(cold.GroupBy(c => c.Cure)
-                .Select(g => string.Join(";", g.Select(c => c.Cause)) + "。" + g.Key)),
+            // bound model is warm and nothing was measured. Each cure is said ONCE, after the models it applies to: both
+            // layers cold on one router share one. A measurement that ran is said after them.
+            note = cold.Count == 0 && measured is null ? null
+                : string.Concat(cold.GroupBy(c => c.Cure)
+                    .Select(g => string.Join(";", g.Select(c => c.Cause)) + "。" + g.Key)) + (measured ?? ""),
         });
     }
 

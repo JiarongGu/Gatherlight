@@ -139,7 +139,8 @@ public static class GgufCatalog
     /// badge and the 判断 row's suggestions read. <see cref="RerankerWithoutGpu"/> when recent recalls were skipped
     /// (<paramref name="skippedHere"/>), when BGE's fastest device on this machine would not be sent the default page's
     /// one-window call (<paramref name="bgeMeasuredTooSlow"/>, <see cref="RerankDeviceVerdict.ReferenceAdmission"/> — owner
-    /// decision 2026-09-26: the device list cannot tell an integrated GPU from a discrete one, so the app measures), or when
+    /// decision 2026-09-26: the device list cannot tell an integrated GPU from a discrete one, so the app measures — BGE's
+    /// measurement only; another reranker measured too slow moves nothing), or when
     /// the probe ANSWERED and listed no GPU (<paramref name="gpu"/> false) — that precedence is the order the badge's
     /// reason names them in. Otherwise — a GPU, no skips and no measurement saying otherwise, or no answer yet (null: the
     /// probe has not run, or the runtime is not installed) — <see cref="RecommendedReranker"/>, claiming nothing about the

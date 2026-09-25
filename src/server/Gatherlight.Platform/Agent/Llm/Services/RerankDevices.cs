@@ -70,10 +70,20 @@ public static class RerankReply
 /// <param name="MsPerToken">The same call in the PACE's unit (<see cref="RerankPace.RateOf"/>): ms per pair token, the
 /// pace's call-overhead allowance taken off and its floor applied.</param>
 /// <param name="Error">Why the device was excluded — its load, its warm call or its timed call failed or ran out of
-/// time, or it did not score every document. Null for a valid result.</param>
-public sealed record RerankDeviceResult(string Device, string Name, long? ElapsedMs, double? MsPerToken, string? Error)
+/// time, or it did not score every document — as a household sentence (the exception, if any, goes to the log). Null for
+/// a valid result.</param>
+/// <param name="Attempts">How many times this device has been measured under this key. An EXCLUSION is often transient —
+/// a cold shader cache or a virus scan at the first start of a new build, VRAM another program holds, contention, a lost
+/// port race — so an excluded device is measured again at each router start the app performs, up to
+/// <see cref="RerankDeviceMeter.MaxAttempts"/>; a valid result stands as it is. Absent in a file written before retries
+/// existed, which reads as one.</param>
+public sealed record RerankDeviceResult(string Device, string Name, long? ElapsedMs, double? MsPerToken, string? Error,
+    int Attempts = 1)
 {
     [JsonIgnore] public bool Valid => ElapsedMs is not null && MsPerToken is not null && Error is null;
+
+    /// <summary><see cref="Attempts"/>, never below one.</summary>
+    [JsonIgnore] public int AttemptsSpent => Math.Max(1, Attempts);
 }
 
 /// <summary>What makes a measurement CURRENT: the model file, the llama.cpp build, and the device list. Any of them
@@ -135,9 +145,12 @@ public sealed record RerankDeviceKey(
 
 /// <summary>A reranker's key on this machine now, and its CURRENT measurement — null when it has none under that key
 /// (never measured, or the model file, the build or the device list changed since).</summary>
-public sealed record RerankDeviceLookup(RerankDeviceKey Key, RerankDeviceMeasurement? Measurement);
+/// <param name="Saved">False when the measurement is one this process took and could not write to the store: it is
+/// what this process's router was started with, and the next start the app performs measures again.</param>
+public sealed record RerankDeviceLookup(RerankDeviceKey Key, RerankDeviceMeasurement? Measurement, bool Saved = true);
 
 /// <summary>One reranker's device measurement on this machine, as persisted (<see cref="RerankDeviceStore"/>).</summary>
+/// <param name="Documents">How many documents the batch had — <see cref="RerankDeviceBatch.DocumentCount"/>.</param>
 public sealed record RerankDeviceMeasurement(
     string Model, long ModelBytes, long ModelWriteTicks, string Build, IReadOnlyList<string> Devices,
     DateTimeOffset MeasuredAt, int Documents, int Characters, double PairTokens,
@@ -148,6 +161,16 @@ public sealed record RerankDeviceMeasurement(
     [JsonIgnore]
     public RerankDeviceResult? Fastest =>
         Results.Where(r => r.Valid).OrderBy(r => r.ElapsedMs).FirstOrDefault();
+
+    /// <summary>The devices excluded so far that the next router start the app performs measures AGAIN — fewer than
+    /// <see cref="RerankDeviceMeter.MaxAttempts"/> attempts spent. See <see cref="RerankDeviceResult.Attempts"/>.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<RerankDeviceResult> Retryable =>
+        Results.Where(r => !r.Valid && r.AttemptsSpent < RerankDeviceMeter.MaxAttempts).ToList();
+
+    /// <summary>Every device excluded so far, retryable or not.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<RerankDeviceResult> Excluded => Results.Where(r => !r.Valid).ToList();
 }
 
 /// <summary>The persisted measurements — <c>rerank-devices.json</c> in the provisioned models directory
@@ -223,15 +246,23 @@ public static class RerankDeviceStore
     private sealed record StoreFile(int Version, List<RerankDeviceMeasurement>? Measurements);
 }
 
+/// <summary>One call's batch: the question, the documents, their characters, and the pair tokens as
+/// <see cref="RerankPace.PairTokens"/> counts them.</summary>
+public sealed record MeasurementBatch(string Query, IReadOnlyList<string> Documents, int Characters, double PairTokens);
+
 /// <summary>The fixed batch every device is timed on — deterministic, bilingual, and sized to the model's OWN window.
 ///
-/// <para><b>What it is.</b> One question and <see cref="Documents"/> documents of mixed Chinese and English prose, each
-/// cut to the per-candidate budget <see cref="RerankInputCap.Fit"/> gives the model — 1,000 characters for a reranker
+/// <para><b>What it is.</b> One question and <see cref="DocumentCount"/> documents of mixed Chinese and English prose,
+/// each cut to the per-candidate budget <see cref="RerankInputCap.Fit"/> gives the model — 1,000 characters for a reranker
 /// that declares no window (BGE, LAMAR), what 512 tokens leave beside the question for mMiniLMv2 — so every pair is a
 /// FULL window, the shape of the chunked calls <see cref="RerankPace"/> sizes (a short pair costs less per token than a
 /// long one). Under a declared window the text is prepared exactly as a recall's is (<see cref="RerankInputCap.Prepare"/>).
 /// Its size is counted by <see cref="RerankPace.PairTokens"/>, the pace's own count, so the measurement and the pace speak
 /// one unit through one counting.</para>
+///
+/// <para><b>The warm call and the timed call are different documents of the same size</b> — parts 1–4 and parts 5–8 (the
+/// one-digit part number is all that differs, so their characters and pair tokens are equal). Sent byte for byte twice, a
+/// future llama.cpp rerank prompt cache could answer the timed call from the warm one's work and time nothing.</para>
 ///
 /// <para><b>Why four documents.</b> Small enough that the slowest device measured answers well inside
 /// <see cref="RerankDeviceMeter.CallTimeout"/> — BGE on this laptop's integrated GPU took 14.9 s for the batch's 1,550
@@ -242,7 +273,7 @@ public static class RerankDeviceStore
 /// <see cref="RerankDeviceVerdict.PaceSeed"/>. The text is invented (a community garden's notices), never a household's.</para></summary>
 public static class RerankDeviceBatch
 {
-    public const int Documents = 4;
+    public const int DocumentCount = 4;
 
     /// <summary>The question every pair carries.</summary>
     public const string Query = "社区花园什么时候浇水? When is the community garden watered?";
@@ -253,12 +284,17 @@ public static class RerankDeviceBatch
         + "Compost bins sit by the east fence and take only peelings and leaves. 借用的铁锹请在天黑前放回原处。"
         + "Borrowed spades go back on their hooks before dark. ";
 
-    /// <summary>The batch for a model whose declared window is <paramref name="window"/> (null: none declared).</summary>
-    public static (string Query, IReadOnlyList<string> Documents, int Characters, double PairTokens) For(int? window)
+    /// <summary>The warm call's batch (parts 1–4) for a model whose declared window is <paramref name="window"/>.</summary>
+    public static MeasurementBatch Warm(int? window) => Parts(window, 1);
+
+    /// <summary>The timed call's batch (parts 5–8): the same size as <see cref="Warm"/>, different text.</summary>
+    public static MeasurementBatch Timed(int? window) => Parts(window, 1 + DocumentCount);
+
+    private static MeasurementBatch Parts(int? window, int first)
     {
         var (query, per) = RerankInputCap.Fit(Query, window);
-        var docs = Enumerable.Range(1, Documents).Select(i => Document(i, per, window)).ToList();
-        return (query, docs, docs.Sum(d => d.Length), RerankPace.PairTokens(query, docs));
+        var docs = Enumerable.Range(first, DocumentCount).Select(i => Document(i, per, window)).ToList();
+        return new MeasurementBatch(query, docs, docs.Sum(d => d.Length), RerankPace.PairTokens(query, docs));
     }
 
     /// <summary>One document of exactly <paramref name="chars"/> characters (as prepared for the window).</summary>
@@ -304,16 +340,21 @@ public static class RerankDeviceVerdict
         return RerankPace.PairTokens(query, Enumerable.Repeat(one, ReferenceCandidates).ToList());
     }
 
-    /// <summary>Would the runtime SEND the reference page's one-window call at <paramref name="m"/>'s fastest device's
-    /// rate? A fresh <see cref="RerankPace"/> — the verifier's own budget, half the configured verification deadline —
-    /// seeded with that rate is asked to <see cref="RerankPace.Admit"/> it, so "too slow" is the admission the runtime
-    /// itself makes, never a threshold of this class: it is too slow exactly when that answer is not Send (its
-    /// <see cref="RerankPace.OneWindowLimit"/>, 48 s at the product's deadline). Null when no device gave a valid
-    /// result — nothing measured, nothing claimed.</summary>
+    /// <summary>The characters of one reference candidate for <paramref name="window"/> — the window a long fact is read
+    /// in (1,000 for BGE) — for the sentence that says what "too slow" was measured against.</summary>
+    public static int ReferenceWindowChars(int? window) => RerankInputCap.Fit(RerankDeviceBatch.Query, window).PerCandidate;
+
+    /// <summary>Would the runtime SEND the reference page's one-window call, starting from <paramref name="m"/>? A fresh
+    /// <see cref="RerankPace"/> — the verifier's own budget, half the configured verification deadline — seeded exactly as
+    /// the runtime seeds the verifier's pace from this measurement (<see cref="PaceSeed"/>), is asked to
+    /// <see cref="RerankPace.Admit"/> it. So "too slow" is the admission the runtime itself would make on its first recall,
+    /// never a threshold of this class: too slow exactly when that answer is not Send (its
+    /// <see cref="RerankPace.OneWindowLimit"/>, 48 s at the product's deadline). Null when no device gave a valid result —
+    /// nothing measured, nothing claimed.</summary>
     public static (bool TooSlow, double PredictedMs, double LimitMs)? ReferenceAdmission(RerankDeviceMeasurement m)
     {
-        if (m.Fastest is not { MsPerToken: { } rate }) return null;
-        var pace = new RerankPace(VerificationDeadlinePolicy.Configured / 2, rate);
+        if (PaceSeed(m) is not { } seed) return null;
+        var pace = new RerankPace(VerificationDeadlinePolicy.Configured / 2, seed);
         var plan = pace.Admit(ReferencePairTokens(GgufCatalog.DeclaredWindow(m.Model)));
         return (plan.Kind != RerankPace.Admission.Send, plan.PredictedMs, plan.LimitMs);
     }
@@ -324,19 +365,20 @@ public static class RerankDeviceVerdict
     /// <para><b>Why a floor.</b> The GPU seed is a measurement at the size the count ceiling was tuned on (480 windows of
     /// 1,000 characters, Run 6b); the four-document batch on a discrete GPU is mostly call overhead (BGE on this laptop's
     /// RTX: 66 ms in all, against the pace's 50 ms allowance, 0.011 ms per pair token; mMiniLMv2 18 ms, which reads the
-    /// pace's floor of 1e-4 ms per token — 2026-09-26). Seeded there, the pace would also stop learning: a call teaches only when its scoring at the current
-    /// estimate would take 4 × the overhead allowance (<see cref="RerankPace.MinSignalFactor"/>), which at the floor no
-    /// recall reaches. So a measurement only ever makes the pace MORE careful than the GPU figure — which is what it is
-    /// for: on this laptop's CPU, BGE's 3.35 ms per pair token is 67× the seed, and the first recall of long notes seeded at
-    /// the GPU figure was cut at the deadline (Run 8).</para></summary>
+    /// pace's floor of 1e-4 ms per token — 2026-09-26). Seeded there, the pace would also stop learning: a call teaches
+    /// only when its scoring at the current estimate would take 4 × the overhead allowance
+    /// (<see cref="RerankPace.MinSignalFactor"/>), which at the floor no recall reaches. So a measurement only ever makes the
+    /// pace MORE careful than the GPU figure — which is what it is for: on this laptop's CPU, BGE's 3.35 ms per pair token
+    /// is 67× the seed, and the first recall of long notes seeded at the GPU figure was cut at the deadline (Run 8).</para></summary>
     public static double? PaceSeed(RerankDeviceMeasurement? m) =>
         m?.Fastest is { MsPerToken: { } rate } ? Math.Max(RerankPace.SeedMsPerToken, rate) : null;
 }
 
-/// <summary>What 资源's model table says under a reranker's row about its device — ONE writer, so the sentence and the
-/// code that decides cannot drift apart. Every clause is a fact the code holds: the measurement's own figures, the device
-/// the preset names (<see cref="LlamaServerRuntime"/> writes <c>device = </c> from the same fastest result), and the
-/// reference-page admission (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>).</summary>
+/// <summary>What 资源 says about a reranker's device — its row, and the lead of the 推荐 line when BGE measured too slow.
+/// ONE writer, so the sentences and the code that decides cannot drift apart. Every clause is a fact the code holds: the
+/// measurement's own figures, the device the preset names (<see cref="LlamaServerRuntime"/> writes <c>device = </c> from
+/// the same fastest VALID result), each excluded device's attempts against <see cref="RerankDeviceMeter.MaxAttempts"/>, and
+/// the reference-page admission (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>).</summary>
 public static class RerankDeviceNotes
 {
     /// <summary>The clause that bounds the claim to rerankers — true of <see cref="LlamaServerRuntime.LaunchKeys"/>, which
@@ -345,32 +387,75 @@ public static class RerankDeviceNotes
     public const string OnlyRerankers =
         "只有重排模型按实测选设备;嵌入模型和对话模型仍由 llama.cpp 自己选,它们换个设备会不会更快没有量过。";
 
+    /// <summary>What re-measures a model whose attempts are spent — exactly the key's three halves
+    /// (<see cref="RerankDeviceKey"/>); a GPU driver update is not one of them, and the sentence says so.</summary>
+    public const string KeyHalves = "除非模型文件、llama.cpp 版本或设备列表变了(更新显卡驱动不算)";
+
     /// <summary>For an INSTALLED reranker: its measurement when one is current, or what happens until there is one.</summary>
-    public static string Row(RerankDeviceMeasurement? m)
+    /// <param name="saved">False: this process measured it and could not save it (<see cref="RerankDeviceLookup.Saved"/>).</param>
+    /// <param name="adopted">The router answering now is not one this process started — it is never measured for.</param>
+    public static string Row(RerankDeviceMeasurement? m, bool saved = true, bool adopted = false)
     {
         if (m is null)
-            return "还没有在这台机器上测过它在哪个设备上最快:应用下一次自己启动 llama.cpp 时会测(CPU 和每块显卡一个一个测,"
-                + "每个几秒到一分多钟),之后让它在最快的那个上运行;在那之前由 llama.cpp 自己选设备。" + OnlyRerankers;
+            return (adopted
+                    ? "还没有在这台机器上测过它在哪个设备上最快。现在运行的 llama.cpp 不是应用这次启动的,应用不会替它测;"
+                      + "等应用自己启动 llama.cpp 时才会测(CPU 和每块显卡一个一个测,每个几秒到一分多钟),"
+                    : "还没有在这台机器上测过它在哪个设备上最快:应用下一次自己启动 llama.cpp 时会测(CPU 和每块显卡一个一个测,"
+                      + "每个几秒到一分多钟),")
+                + "之后让它在最快的那个上运行;在那之前由 llama.cpp 自己选设备。" + OnlyRerankers;
 
         var timings = string.Join("、", m.Results.Select(r => r.Valid
             ? $"{r.Name} {Seconds(r.ElapsedMs!.Value)} 秒"
-            : $"{r.Name} 没有测出结果({r.Error})"));
+            : ExcludedClause(r)));
         var head = $"在这台机器上实测过({m.MeasuredAt.ToLocalTime():yyyy-MM-dd},llama.cpp {m.Build}):"
             + $"同一批 {m.Documents} 段、共 {m.Characters.ToString("N0", CultureInfo.InvariantCulture)} 字的打分,{timings}。";
+        var unsaved = saved ? "" : "这次的结果没能保存,应用下一次自己启动 llama.cpp 时会重新测。";
         if (m.Fastest is not { } best)
-            return head + "没有一个设备测出可用的结果,所以仍由 llama.cpp 自己选设备。" + OnlyRerankers;
+            return head + "没有一个设备测出可用的结果,所以仍由 llama.cpp 自己选设备。" + unsaved + OnlyRerankers;
 
         var admission = RerankDeviceVerdict.ReferenceAdmission(m);
         var slow = admission is { TooSlow: true } a
-            ? $"按这个速度推算,默认一次检索最多给判断看的 {RerankDeviceVerdict.ReferenceCandidates} 条候选、每条只读一段时约要 "
-              + $"{Seconds((long)a.PredictedMs)} 秒,超过应用送出这样一次判断的 {Seconds((long)a.LimitMs)} 秒上限,"
-              + "这样的检索会跳过判断(事实短时花的时间少得多)。"
+            ? $"按这个速度推算,默认一次检索最多给判断看的 {RerankDeviceVerdict.ReferenceCandidates} 条候选、每条都是长事实只读一段"
+              + $"(约 {ReferenceChars(m).ToString("N0", CultureInfo.InvariantCulture)} 字)时约要 {Seconds((long)a.PredictedMs)} 秒,"
+              + $"超过应用送出这样一次判断的 {Seconds((long)a.LimitMs)} 秒上限,这样的检索会跳过判断(事实短时花的时间少得多)。"
             : "";
-        return head + $"所以应用启动 llama.cpp 时让它在 {best.Name} 上运行。" + slow
-            + OnlyRerankers;
+        var fastest = m.Excluded.Count > 0 ? $"测出结果的设备里最快的是 {best.Name},所以" : "所以";
+        return head + fastest + $"应用启动 llama.cpp 时让它在 {best.Name} 上运行。" + slow + unsaved + OnlyRerankers;
     }
+
+    /// <summary>An excluded device, and whether it will be measured again: at the next router start the app performs while
+    /// attempts remain, otherwise only when the key changes.</summary>
+    public static string ExcludedClause(RerankDeviceResult r) =>
+        r.AttemptsSpent < RerankDeviceMeter.MaxAttempts
+            ? $"{r.Name} 没有测出结果({r.Error};第 {r.AttemptsSpent} 次),应用下一次自己启动 llama.cpp 时会再测"
+            : $"{r.Name} {r.AttemptsSpent} 次都没有测出结果(最近一次:{r.Error}),{KeyHalves},不会再测";
+
+    /// <summary>The lead of 资源's 推荐 line when BGE measured too slow — the fastest device THAT GAVE A RESULT, its time
+    /// for the batch, what that rate predicts for the default page's one-window call of long facts against the limit the
+    /// runtime sends one under, and the devices that gave no result, named.</summary>
+    public static string TooSlowLead(RerankDeviceMeasurement m, double predictedMs, double limitMs)
+    {
+        var best = m.Fastest!;
+        var excluded = m.Excluded.Count == 0 ? ""
+            : $"(没有测出结果的:{string.Join("、", m.Excluded.Select(r => r.Name))} —— "
+              + (m.Retryable.Count > 0 ? "应用下一次自己启动 llama.cpp 时会再测)" : $"{KeyHalves},不会再测)");
+        return $"BGE 在这台机器上实测过:测出结果的设备里最快的是 {best.Name}{excluded},同一批 {m.Documents} 段、共 "
+            + $"{m.Characters.ToString("N0", CultureInfo.InvariantCulture)} 字的打分用了 {Seconds(best.ElapsedMs!.Value)} 秒;"
+            + $"按这个速度推算,默认一次检索最多给判断看的 {RerankDeviceVerdict.ReferenceCandidates} 条候选、每条都是长事实只读一段"
+            + $"(约 {ReferenceChars(m).ToString("N0", CultureInfo.InvariantCulture)} 字)时约要 {Seconds((long)predictedMs)} 秒,"
+            + $"超过应用送出这样一次判断的 {Seconds((long)limitMs)} 秒上限,这样的检索会跳过判断(事实短时花的时间少得多)—— "
+            + "所以推荐这个更小的重排模型。";
+    }
+
+    private static int ReferenceChars(RerankDeviceMeasurement m) =>
+        RerankDeviceVerdict.ReferenceWindowChars(GgufCatalog.DeclaredWindow(m.Model));
 
     /// <summary>Seconds as a household reads them: two decimals under ten seconds, one above.</summary>
     public static string Seconds(long ms) =>
         (ms / 1000.0).ToString(ms < 10_000 ? "0.00" : "0.0", CultureInfo.InvariantCulture);
 }
+
+/// <summary>What the last reranker device measurement in this process did: which models it measured (all devices, or the
+/// excluded ones again), how long it took, and a sequence number that grows with each measuring start — so a caller can
+/// tell whether the start IT asked for measured anything (资源's start button says so).</summary>
+public sealed record RerankMeasurementReport(int Sequence, IReadOnlyList<string> Models, TimeSpan Took);

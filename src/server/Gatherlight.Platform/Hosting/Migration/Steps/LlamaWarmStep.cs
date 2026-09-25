@@ -47,7 +47,33 @@ public sealed class LlamaWarmStep : IMigrationStep
     public string Title => "启动本机模型运行时(llama.cpp)";
     public bool Essential => false;
 
+    /// <summary>The step, with the reranker device measurement's progress mirrored onto the overlay's step line while it
+    /// runs (<see cref="ILlamaServerRuntime.MeasuringNow"/> — a field read, polled; nothing here awaits a process for it). A
+    /// first start that measures two rerankers on three devices takes over a minute (docs/self-managed-llm-runtime.md,
+    /// 2026-09-26), and a step line saying only 「启动本机模型运行时」 for that long reads as stuck.</summary>
     public async Task RunAsync(CancellationToken ct)
+    {
+        using var watch = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var mirror = Task.Run(async () =>
+        {
+            string? shown = null;
+            while (!watch.IsCancellationRequested)
+            {
+                var now = _llama.MeasuringNow;
+                if (now != shown) { _state.SetStepDetail(Id, now); shown = now; }
+                try { await Task.Delay(250, watch.Token); } catch (OperationCanceledException) { break; }
+            }
+        });
+        try { await RunCoreAsync(ct); }
+        finally
+        {
+            watch.Cancel();
+            await mirror;
+            _state.SetStepDetail(Id, null);
+        }
+    }
+
+    private async Task RunCoreAsync(CancellationToken ct)
     {
         var settings = new MemorySourceSettings(_config.Current.Memory, _platform.ResourcesPath);
 
