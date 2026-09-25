@@ -531,8 +531,9 @@ refused by both (HTTP 400). Uncapped, Qwen3 had answered that one in 16.5 s, int
 
 ### 2026-09-26 — a reranker's device, measured on this machine
 
-`docs/judge-bench.md` Run 8b found this laptop's integrated GPU several times SLOWER than its CPU for both rerankers,
-while `--list-devices` prints the integrated GPU exactly like the discrete one. The owner's decision: at a router start
+`docs/judge-bench.md` Run 8b — recorded UNREAD, its rule not read, so descriptive only — found this laptop's integrated
+GPU several times SLOWER than its CPU for both rerankers (the within-run ratios below are the figures to quote: BGE 2.9×
+and 2.7×, mMiniLMv2 6.0× and 6.7×), while `--list-devices` prints the integrated GPU exactly like the discrete one. The owner's decision: at a router start
 the app performs, time each installed reranker on the CPU and on every listed device, run it on the fastest, and
 recommend mMiniLMv2 when even the fastest device is too slow for BGE (`RerankDeviceMeter`, `RerankDeviceVerdict`). Same
 build as above (b10549, Vulkan), this laptop: Intel Core Ultra 9 185H, an RTX 4080 Laptop GPU and the package's Intel
@@ -625,3 +626,14 @@ and the machine was busier then than in (a): BGE took 523 ms on the RTX, 6.4 s o
 mMiniLMv2 755 ms on the CPU. The ranking, and so the choice, did not change, but a single timed call is not a stable
 figure on a shared machine. That is one reason an EXCLUDED device is measured again at the next starts (up to three
 attempts) instead of being written off.
+
+**After the final review, same day: the port search, and what a pending retry pins.** An `e2e-p53` run excluded the CPU
+and the iGPU with 「没能找到一个可用的端口」 and gave the dGPU a port: the measurement asks the OS for a loopback port
+(bind to port 0) and refuses one inside the router's 64-port band (11435–11498), which the OS's dynamic range here
+(1024–15000) covers, and it gave up after 20 tries. The OS hands those ports out IN SEQUENCE — twelve binds in a row
+from Node gave 10,985, 10,986, … 10,996 — so a search that begins at the band's first port is refused 64 times running.
+It now tries up to 128 times, holding each refused port until the search ends; the next green `p53` run crossed the band
+(the sequence at 10,996 before it and 13,395 after) with no exclusion. The same review stopped a measurement with a
+retry pending from naming a device in the preset — llama.cpp chooses, as above, until every device has a result or has
+spent its attempts — and made a timed-out call a LOWER BOUND for the too-slow verdict (`dev-conventions.md` launch item
+(6)); neither was re-run on the real binary.

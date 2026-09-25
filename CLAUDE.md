@@ -94,7 +94,9 @@ vs 131 of 240), but first far less often (86–90 vs 130), at ~0.5 s against ~8.
 (883–1,241 characters, Run 6c, read in windows) a recall runs 1.2–3.2 s. A llama.cpp CHAT judge does both halves locally: Qwen3 0.6B beats no judge on both
 metrics (Run 5b) — over its own tags too, not significantly different from over Claude's though its tags collapse
 unrelated facts (Run 7) — and Gemma 3 1B loses to it (Run 3). The rules for it — the
-binding screen, the per-pair cap and the windows a long candidate is read in, the router restart limits — are in `.claude/rules/dev-conventions.md`.
+binding screen, the per-pair cap and the windows a long candidate is read in, the pace that sizes each call to the
+deadline and skips a recall this machine cannot judge in time, the device a reranker is measured fastest on and pinned to
+in its preset (launch item (6)), the router restart limits — are in `.claude/rules/dev-conventions.md`.
 
 **The runtime the app provisions is llama.cpp's `llama-server`** (2026-08-22, measured: 35 MB against
 Ollama's 1460, same 9/10 retrieval, 25 ms/query against 69 — `docs/self-managed-llm-runtime.md`).

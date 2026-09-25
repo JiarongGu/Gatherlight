@@ -1004,9 +1004,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   line on chat sections and its absence from embedder and reranker sections (a reranker keeps exactly ONE `ctx-size`,
   its own); confirmed to FAIL with the line removed and with it written on every section.
   **(6) A RERANKER runs on the device it was MEASURED fastest on — never one guessed from the device list** (2026-09-26,
-  owner decision after `docs/judge-bench.md` Run 8b). Run 8b found this laptop's integrated Arc 3–5× SLOWER than its
-  CPU for both rerankers (BGE judged 1 recall of 240 there; the device measurement read 2.7× and 6.7× per pair token),
-  and `--list-devices` prints an integrated GPU exactly like a discrete one ("Vulkan1: Intel(R) Arc(TM) Graphics"), so no
+  owner decision after `docs/judge-bench.md` Run 8b — a run recorded UNREAD, its rule not read, so its figures are
+  descriptive only and none is quoted here). On this laptop the integrated Arc is SLOWER than the CPU for both rerankers
+  WITHIN each run of the device measurement — BGE 2.9× and 2.7×, mMiniLMv2 6.0× and 6.7× per pair token (both GPUs
+  visible, then the Arc alone; Run 8b's own ratios set its iGPU arms against another run's CPU) — and `--list-devices` prints an integrated GPU exactly like a discrete one ("Vulkan1: Intel(R) Arc(TM) Graphics"), so no
   reading of the list can answer "run this where?" — while llama.cpp's own default put the child on the Arc when it was
   the only GPU visible (Run 8b) and on the RTX alone when both were. So at every router start the app performs
   (`SpawnAsync`: a start or a restart, under the one lifecycle lock — never an ADOPTED router, whose presets are not
@@ -1014,12 +1015,26 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (`device = none`) and on every listed device, ONE AT A TIME (two children share one package's power budget — Run 9's
   void), each a standalone `llama-server` with the section's own `LaunchKeys` plus `--device`, on a loopback port the OS
   picks — never one in the router's band, which this machine's dynamic range (1024–15000) covers, so a port the router
-  would take next is refused and another asked for: `/health`, a warm call, one timed call of DIFFERENT documents of the
+  would take next is refused and another asked for, up to 128 times with the refused ones held open: the OS hands out
+  bind-to-zero ports in SEQUENCE, and with 20 tries a start whose sequence had reached the 64-port band excluded two
+  devices with 「没能找到一个可用的端口」 (`e2e-p53`, final review) — `/health`, a warm call, one timed call of DIFFERENT documents of the
   same size (sent byte for byte twice, a future rerank prompt cache could answer the timed one), the tree killed. Every
   wait is capped (load 45 s, each call 30 s); a device that fails, exits, times out or does not score every document
-  (`RerankReply`) is excluded with a household reason (the exception to the log, never into a row). The preset names the
-  fastest device THAT GAVE A RESULT (`device = Vulkan0`, or `none`) and nothing else gets a device key; with no valid
-  result, no key — llama.cpp chooses, as before. The measurement is CONTAINED: anything it throws is logged and the router
+  (`RerankReply`) is excluded with a household reason (the exception to the log, never into a row). A call that TIMES
+  OUT — warm or timed; on the slowest machines the warm call is the one that does, so the timed call is never reached —
+  also leaves a LOWER BOUND on the device's rate (`LowerBoundMsPerToken`, the cap over the batch's pair tokens in the
+  pace's unit), read by the too-slow verdict alone and never as a result: with no valid device and EVERY device timed
+  out, the smallest bound is judged, and one that fails the default page's admission counts as too slow — said as
+  「至少要」, never 「约要」 (final review: a machine too slow to answer anywhere within the cap read as "nothing known" and
+  was never offered mMiniLMv2). A device excluded for any other reason leaves its speed unknown, and llama.cpp may put BGE
+  there, so then nothing is claimed. The preset names the fastest device THAT GAVE A RESULT (`device = Vulkan0`, or
+  `none`) — but only once the measurement is COMPLETE (`RerankDeviceMeasurement.Pinned`: every device valid, or its
+  attempts spent) — and nothing else gets a device key; with no valid result, or while any excluded device still has a
+  retry left, no key: llama.cpp chooses, as before. Pinning the fastest device that DID answer while a retry was pending
+  (final review) moved a reranker off the RTX a busy moment had excluded — onto the CPU — seeded the pace from the CPU,
+  skipped long recalls, and let those skips flip the badge, all before the retry that would have found the RTX; the row
+  says it while it lasts (「…但还有设备没测完,所以测完之前仍由 llama.cpp 自己选设备:一个设备一次没测出结果常常只是暂时的
+  (比如显卡当时正被别的程序占着),这时就定在 CPU 上,可能把它从本来更快的显卡上挪开。」). The measurement is CONTAINED: anything it throws is logged and the router
   starts anyway — a reranker whose retry threw keeps the device its stored result names, and one with nothing stored gets
   no key: it is an optimisation, and must never be why llama.cpp did not start, nor why a known device is forgotten.
   **An exclusion is RETRIED, a bounded number of times** (review, 2026-09-26). Most are transient — a cold shader cache or
@@ -1027,15 +1042,20 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   another llama-server holding VRAM, contention, a lost port race — and saved as final, one busy moment would have put a
   reranker on the CPU for good while the badge said 「它最快的设备是 CPU」. So at each start the app performs, a current
   measurement's excluded devices — and only those — are measured again and merged, up to `RerankDeviceMeter.MaxAttempts`
-  (3) each; valid results stand, and the start's preset uses the stored ones meanwhile. After that the exclusion stands
+  (3) each; valid results stand, and meanwhile the preset names no device (above). After that the exclusion stands
   until the key changes, and the row says which of the two applies to EACH device — so does the badge's lead, per device
   (one clause for all of them was false for any whose attempts were spent). Beside a router the app did not start, a
   retry is promised only for the app's own start, since nothing is measured for an adopted router. Each result carries the
   date it was taken, and the row gives the first and last when a retry measured some devices on a later start.
   **The key** (`RerankDeviceKey`) is the model file (id, size, time), the build tag and the device list's ids AND names —
   its free-memory figures stripped, or every boot re-measures; the names because `GGML_VK_VISIBLE_DEVICES` can hand the id
-  `Vulkan0` to a different GPU. **A GPU DRIVER update is not in it**, so it re-measures nothing — the row's "won't be
-  measured again" sentence says so (「更新显卡驱动不算」); what a driver changes is unmeasured. It lives in
+  `Vulkan0` to a different GPU — and the SHAPE the figures were taken under (final review): `MeasurementVersion`, a hash of
+  the section's `LaunchKeys`, and the batch's document count and pair tokens. A changed window, batch or token weighting
+  therefore re-measures by itself, and the version constant covers what the values cannot show (how a call is timed,
+  what counts as valid); a store written before the shape existed re-measures once. A device that comes and goes changes
+  the list, so docking and undocking an external GPU re-measures at EACH change — one entry per model, the latest.
+  **A GPU DRIVER update is not in it**, so it re-measures nothing — the row's "won't be measured again" sentence says so
+  (「除非模型文件、llama.cpp 版本、设备列表或应用的测法变了(更新显卡驱动不算)」); what a driver changes is unmeasured. It lives in
   `rerank-devices.json` beside the GGUFs, under `state/`, which the backup does not carry: a device choice belongs to one
   machine. A measurement that cannot be SAVED is still what this start's preset names, and the runtime keeps it in memory
   and reads it FIRST — it is newer than anything stored under the same key by construction (a merged retry sits beside the
@@ -1054,7 +1074,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   running child before it waits for the lifecycle lock. The window between a spawn and its assignment is not covered.
   **`n-gpu-layers = 99` stays beside `device = none`**, harmless: the child logs "offloaded 25/25 layers to GPU" yet holds
   only CPU buffers and scores at the CPU's rate, the same as with 0; `device = none` is what keeps a batch off a visible
-  GPU. **Three readers, none with a threshold of its own.** The PACE starts from the chosen device's rate — never faster
+  GPU. **Three readers, none with a threshold of its own.** The PACE starts from the PINNED device's rate — not while a
+  retry is pending, when it starts from the GPU seed as without a measurement — never faster
   than the GPU seed, because a four-document batch on a discrete GPU is mostly call overhead and, seeded at the floor, the
   pace would stop learning (`MinSignalFactor`) — read at its FIRST USE, since the verifier is built before the startup step
   that measures. The 推荐 BADGE recommends mMiniLMv2, even beside an installed BGE, when a fresh pace seeded exactly as the
@@ -1066,7 +1087,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   one RTX busy at the first start would otherwise recommend a 133 MB download the next start's retry may reverse; it flips
   once every device has a result or has spent its attempts.
   **Only BGE's measurement moves it**: a LAMAR or mMiniLMv2 measured too slow changes nothing, because the question is
-  whether this machine is too slow for BGE, the default. Precedence: recent skips → BGE measured too slow → no GPU → BGE.
+  whether this machine is too slow for BGE, the default. Precedence: recent skips → BGE measured too slow → no GPU → BGE —
+  and the first two are REPAIRS that outrank the EMBEDDER suggestion (final review): with no embedder installed the badge
+  offered the embedder while the judge skipped or BGE measured too slow, so mMiniLMv2's row (「「资源」也会改为推荐它」,
+  「应用测完就改为推荐 mMiniLMv2」) and the 判断 row promised a recommendation 资源 did not make. Only the runtime-missing
+  suggestion comes before them — a reranker needs that runtime too.
   And the reranker's ROW says where it runs and what was measured (`RerankDeviceNotes`), including that embedders and
   chat models are not measured — and, beside a router the app did not start, that it is not measured while that router is
   not ours (its "next start" promise would never be kept). **The limitation, said in the reason and the notes rather than
@@ -1076,7 +1101,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   or a bind's restart and 资源's start button, which no server or client timeout bounds, the start button's answer then
   saying what THAT start measured and how long it took (`ILlamaServerRuntime.StartAsync` returns it: a measurement another
   caller ran while this one waited for the lock is never claimed, and a start that then FAILS still says it, since the time
-  went there) — worst case 105 s per device per unmeasured reranker, and per retried
+  went there) — and a BIND's toast likewise (final review): a bind reaches the runtime inside a source's own check, so
+  `EnsureServesAsync` reports what its start or restart measured to an ambient `RerankMeasurementCapture` the bind opens,
+  and the note — or the refusal — ends with 「启动 llama.cpp 前先测了 X 在哪个设备上最快(用了 N 秒),结果写在「资源」里各自那一行。」
+  (`RerankDeviceNotes.MeasuredBeforeStart`, one writer with the start button's) — worst case 105 s per device per
+  unmeasured reranker, and per retried
   device. Inside a restart the router stays down for the measurement too; `ILlamaRestartPolicy` already refuses a restart
   while anything WRITES through the router, so what that longer window can cost is a reranker's verification, which fails
   open. Measured: 77 s for both rerankers on this laptop's three devices, and nothing on the next start
@@ -1091,20 +1120,30 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   different warm and timed documents, validity, the cap and the kill, retries and their bound, the key's four halves, the
   flip and no flip while a retry is pending, a CPU section, an unsaved measurement read first and saved again, the start's
   own measurement sentence on a failed start, the overlay's progress line, and — counted at a fake ROUTER, not read from
-  a log — the pace seed against a control with no valid measurement, and the kill-on-close job (the app TerminateProcess'd
-  under a running child). **Confirmed to FAIL** (each on a build of its own, 2026-09-26): no device key in `LaunchKeys`, the
+  a log — the pace seed against a control whose retry is pending, and the kill-on-close job (the app TerminateProcess'd
+  under a running child); and with the final review the device pinned only once the measurement is complete, the repair
+  ahead of the embedder with none installed (and `e2e-p52` case 6h for the skips), the lower bounds (every device timed
+  out → 「至少要」; one exited → nothing claimed), the shape in the key, and a refused bind's measured clause. **Confirmed to FAIL** (each on a build of its own, 2026-09-26): no device key in `LaunchKeys`, the
   preset not given the devices, validity off, the free-memory figures kept in the key, the flip off, the seed not wired,
   devices measured in parallel, no kill, the store ignored, the key without devices / the file / the build, the badge's
   limitation sentence removed, a device key on every section, the old seed sentence restored (`p51`), and with the review
   round retries off, retries unbounded, the timed call identical to the warm one, the save failure hidden, the adopted
   router ignored, no progress line and the job off; and with the re-review the store read before the unsaved measurement
   (in the lookup, and in the retry), the flip allowed while a retry is pending, the adopted clause ignored, the failed
-  start's sentence dropped, one clause for all excluded devices in the lead, and the save not retried. **Gaps**: `Dispose`
+  start's sentence dropped, one clause for all excluded devices in the lead, and the save not retried; and with the final
+  review the device pinned while a retry is pending (five assertions), the pace seeded then (the control's count), the
+  embedder ahead of the repair (`p53`'s two no-embedder badges and `p52` 6h's), no lower bound, a lower-bound verdict while
+  retries are pending, the bounds judged beside a device that exited, no shape in the key, and the bind's clause dropped
+  or its sink not threaded. **Gaps**: `Dispose`
   killing a child is asserted by nothing (the
   harness stops a server with TerminateProcess, which skips Dispose — the job covers that kill too); the router's band
   refused when the OS offers it is not drivable; so are a throw inside a retry (nothing in the measurement can be made to
-  throw there) and a start that waited behind another caller's measurement; a driver update re-measures nothing; whether an embedder or a chat model would be faster on
-  another device is unmeasured; and one laptop is the only hardware measured.
+  throw there) and a start that waited behind another caller's measurement; a bind that SUCCEEDS after measuring is not
+  driven either — the fake router can only be adopted, so no bind reaches a start of ours that then answers — and its note
+  carries the clause by the same code path as the refusal that is asserted; the port search crossing the band is not driven
+  on demand (the OS's sequence cannot be positioned; a green `p53` run crossed it, the sequence at 10,996 before and
+  13,395 after, with no exclusion); a driver update re-measures nothing; whether an embedder or a chat model would be
+  faster on another device is unmeasured; and one laptop is the only hardware measured.
   Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
   (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
   already there" is not on the table. And `LlamaServerRuntime` deliberately does **not** search PATH: a
@@ -1333,17 +1372,21 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the 判断 row reads the count — a lock and an array, nothing awaited — and says 「最近 N 次检索里有 M 次因为这台机器太慢跳过了判断」
   (`GgufCatalog.SkipNotice`), offering mMiniLMv2 unless it is what runs or is already downloaded; 资源's badge recommends it
   too, BESIDE an installed reranker — the one exception to the one-reranker rule, whose premise ("any installed reranker
-  measured better than none") the skips refute on this machine. Before, a skip reached only `state/logs` at Information:
+  measured better than none") the skips refute on this machine — and AHEAD of the embedder suggestion, which used to hide it
+  on an install with no embedder (final review; `e2e-p52` case 6h asserts it with the embedder removed). Before, a skip
+  reached only `state/logs` at Information:
   fail-open and unreported. **No GPU → mMiniLMv2** (owner decision, same day): `GgufCatalog.RecommendedRerankerFor` — the
   one writer 资源's badge and the 判断 row's suggestions read — picks `RerankerWithoutGpu` when `LlamaServerState.Gpu` is
   FALSE, i.e. `--list-devices` answered with its header and listed no device at all, OR when the pace skipped recent
   recalls, OR (since 2026-09-26, launch item (6)) when BGE was MEASURED too slow on this machine; otherwise BGE. **The
   device probe alone almost never fires**: the provisioned Vulkan build lists an integrated
   GPU as a device (this machine: `Vulkan1: Intel Arc`), so nearly every x64 laptop reads "GPU". On this laptop's Arc both
-  rerankers were then measured SLOWER than its CPU — `docs/judge-bench.md` Run 8b (recorded UNREAD: its rule was not read,
-  its device figures are descriptive) and the device measurement on the real binary (launch item (6),
-  `docs/self-managed-llm-runtime.md` 2026-09-26: mMiniLMv2 5–7×, BGE ~3×; with only the Arc visible the app chose the CPU
-  for both and, BGE being too slow for the default page there, moved the badge to mMiniLMv2). So the app MEASURES a
+  rerankers were then measured SLOWER than its CPU — by the device measurement on the real binary (launch item (6),
+  `docs/self-managed-llm-runtime.md` 2026-09-26, the Arc against the CPU WITHIN each run: mMiniLMv2 6.0× and 6.7×, BGE
+  2.9× and 2.7×; with only the Arc visible the app chose the CPU for both and, BGE being too slow for the default page
+  there, moved the badge to mMiniLMv2), and descriptively by `docs/judge-bench.md` Run 8b, a run recorded UNREAD (its
+  rule was not read), whose ratios set its iGPU arms against another run's CPU and are not quoted. The household notes
+  say 「mMiniLMv2 约 6–7 倍,BGE 约 3 倍」 — the within-run figures. So the app MEASURES a
   reranker's devices rather than reading the list, and the skip signal still catches a machine too slow on any device. The
   notes say so in one place — mMiniLMv2's row, with the configuration, labelled as one laptop's figures, BGE's row and the
   badge reasons pointing there; they said 「只有集成显卡的机器两者都还没有量过」 until 2026-09-26. Run 8b's accuracy figures
@@ -1365,7 +1408,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   their configuration, are mMiniLMv2's row's alone; BGE's row says what that run found for BGE and LAMAR's that it was not
   run there, each pointing at the row with the measurement. Unmeasured: the per-script rates beyond English and CJK; the
   skip, queue, probe, damping and 0.8 rules on a real CPU router (derived from Run 8 and reviewed against it); an
-  integrated GPU other than this laptop's Arc (Run 8b and launch item (6) measured that one). Proof, `e2e-p52`: 6e (the
+  integrated GPU other than this laptop's Arc (launch item (6) measured that one; Run 8b, unread, described it). Proof, `e2e-p52`: 6e (the
   deadline knob 12 s, a fake at 1.6 ms per pair token: all 5
   windows, all 5 again — the lone slow call not believed — then 4; still 4 after a fast pass-through big enough to teach,
   and still 4 after a 3.3 s call of 33 tokens, which the floor ignores; then a recall STOPPED by its client at ~55% of its
@@ -1465,8 +1508,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   a reranker; either way the fix is a measured row, not a guess from its file name; the character bound does NOT
   transfer to a byte-level tokenizer; and the windows (above) are measured on notes of one length band only — long
   and short notes mixed in one recall (measured since, in Run 9: no significant loss on the short targets, a loss of up to
-  ~4–6 points not ruled out — every reranker's note says so), notes past five window-lengths, and a CPU-only
-  machine are not. The row's id is the UPSTREAM file stem, with no "rerank" in it, on purpose: a catalogued
+  ~4–6 points not ruled out — every reranker's note says so) and notes past five window-lengths are not. A CPU-only
+  machine was measured in Run 8 (one laptop's CPU, 60 long notes): mMiniLMv2 judged every recall in windows, found@8
+  180/240 against no judge's 104; BGE waited out the minute on 230 of 240 and ended at 104 — which is why the pace now
+  skips; how soon the pace settles where calls are SIZED is unmeasured there (mMiniLMv2 never needed sizing). The row's id is the UPSTREAM file stem, with no "rerank" in it, on purpose: a catalogued
   id is typed by its row, and the upstream stem also catches a household who drops the file in under its own name
   — an id of ours containing "rerank" would leave that file uncatalogued and typed CHAT, the hazard that made Run 4
   rename it. Proof: `e2e-p52` case 6c (every pair at the fake router fits, query included, windows too; BGE,
