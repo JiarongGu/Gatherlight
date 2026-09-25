@@ -528,3 +528,86 @@ refused by both (HTTP 400). Uncapped, Qwen3 had answered that one in 16.5 s, int
   `Context size has been exceeded`, and failed BOTH with HTTP 500 in ~1.6 s. The same happened for three at once, on
   both models. The child served the next request normally. Uncapped, by the same arithmetic, it would take four at
   once (not measured).
+
+### 2026-09-26 — a reranker's device, measured on this machine
+
+`docs/judge-bench.md` Run 8b found this laptop's integrated GPU several times SLOWER than its CPU for both rerankers,
+while `--list-devices` prints the integrated GPU exactly like the discrete one. The owner's decision: at a router start
+the app performs, time each installed reranker on the CPU and on every listed device, run it on the fastest, and
+recommend mMiniLMv2 when even the fastest device is too slow for BGE (`RerankDeviceMeter`, `RerankDeviceVerdict`). Same
+build as above (b10549, Vulkan), this laptop: Intel Core Ultra 9 185H, an RTX 4080 Laptop GPU and the package's Intel
+Arc iGPU, on mains. The app ran on scratch data folders whose `llama-cpp/` is a junction to the bench's resources and
+whose `gguf/` holds hard links to the pinned BGE, mMiniLMv2 and EmbeddingGemma files; nothing was bound, so each
+measurement ran inside 资源's start button (`POST /api/manage/models/llama/start`). Scratch scripts, not committed.
+
+**Before building it, on the real binary:**
+
+- **The router passes `device` to the child for a GPU id, not only for `none`.** A preset section with `device =
+  Vulkan1` gave the child `--device Vulkan1` (the router's own argv dump), and the child logged `using device Vulkan1
+  (Intel(R) Arc(TM) Graphics)` with 13/13 layers offloaded (mMiniLMv2).
+- **llama.cpp's DEFAULT launch — no `device` key — with both GPUs visible puts each reranker on the RTX alone.** At
+  `log-verbosity = 4`, both children logged `using device Vulkan0 (NVIDIA GeForce RTX 4080 Laptop GPU)`, 25/25 (BGE)
+  and 13/13 (mMiniLMv2) layers, and no Vulkan1 buffer. So on a machine with a discrete GPU the measurement changes
+  nothing about where a reranker runs here — it only names it. With the RTX hidden, the default is the Arc (Run 8b),
+  and that is where it changes things.
+- **`n-gpu-layers = 99` beside `device = none` is harmless.** The child logs `offloaded 25/25 layers to GPU` (BGE), but
+  its model buffer is `CPU_Mapped` (440 MiB), its compute buffer is the CPU's, and there is no Vulkan buffer at all.
+  Standalone, four 1,000-character documents: 3.35 s per 1,000 pair tokens with 99, 3.20–3.34 with 0; sixteen
+  documents (6,162 pair tokens): 22.2–23.0 s, 3.6–3.7 s per 1,000 — a GPU does that batch in well under a second. It
+  is `device = none` that keeps a batch off a visible GPU (Run 8: `n-gpu-layers = 0` alone does not).
+- **The router ignores the measurement file** in its models directory: with `rerank-devices.json` there, `/v1/models`
+  listed the GGUFs only.
+- **The first call of a batch shape carries set-up on the RTX**: standalone BGE, a one-document warm call and then the
+  four-document batch twice: 233 ms, then 71 ms. So the measurement warms with the batch itself.
+- **`GGML_VK_VISIBLE_DEVICES=1` does NOT leave only the Arc here.** It shows `Vulkan0: Microsoft Direct3D12 (NVIDIA
+  GeForce RTX 4080 Laptop GPU)` — the RTX through Microsoft's Direct3D12 layer. The Arc's native driver is raw index 2
+  (Run 8b's table), so the iGPU-only emulation below uses `=2`.
+
+**(a) Both GPUs visible** (`--list-devices`: `Vulkan0: NVIDIA GeForce RTX 4080 Laptop GPU`, `Vulkan1: Intel(R)
+Arc(TM) Graphics`). One timed call of the fixed batch after a warm call of it, one device at a time; per 1,000 pair
+tokens as `RerankPace` counts them (its 50 ms overhead allowance taken off):
+
+| | batch | CPU (`none`) | RTX (`Vulkan0`) | Arc (`Vulkan1`) | chosen |
+|---|---|---|---|---|---|
+| BGE | 4 × 1,000 characters, 1,550 pair tokens | 5,243 ms · 3,351 | **66 ms** · 11 | 14,906 ms · 9,584 | `Vulkan0` |
+| mMiniLMv2 | 4 × 457 characters, 738 pair tokens | 226 ms · 239 | **18 ms** · floor | 1,113 ms · 1,441 | `Vulkan0` |
+
+On the RTX both calls are mostly overhead — mMiniLMv2's reads the pace's floor — which ranks the device and says little
+about its rate; that is why the pace's seed never goes below the GPU figure (`RerankDeviceVerdict.PaceSeed`). The whole
+measurement took 77 s (BGE 16 s on the CPU, 6 s on the RTX, 36 s on the Arc; mMiniLMv2 5–8 s each) and the start
+request 79 s. The preset named `device = Vulkan0` on both reranker sections and nothing on the embedder's. A real
+rerank through the app's router: both children got `--device Vulkan0 --n-gpu-layers 99` (their argv, read from the
+process table), logged `using device Vulkan0 (NVIDIA GeForce RTX 4080 Laptop GPU)` — read with `LLAMA_ARG_LOG_VERBOSITY=4`
+and `LLAMA_ARG_LOG_FILE` in the app's environment, a diagnostic only — and answered HTTP 200 in 4.4 s and 4.1 s, the
+model load included. The 推荐 badge: nothing (an embedder in, BGE fast enough here, one reranker enough).
+
+**(b) iGPU-only, emulated by `GGML_VK_VISIBLE_DEVICES=2` in the app's environment** (`--list-devices`: `Vulkan0:
+Intel(R) Arc(TM) Graphics` — the same id as the RTX in (a), a different name, so a different key):
+
+| | CPU (`none`) | Arc (`Vulkan0`) | chosen |
+|---|---|---|---|
+| BGE | 5,592 ms · 3,575 | 14,926 ms · 9,597 | **`none`** |
+| mMiniLMv2 | 208 ms · 215 | 1,115 ms · 1,444 | **`none`** |
+
+The CPU for both, as expected: per pair token the Arc is 2.7× slower for BGE and 6.7× for mMiniLMv2 here. The start
+took 67.9 s; a second start with the same key measured nothing (2.1 s). The preset: `device = none` with
+`n-gpu-layers = 99` beside it on both reranker sections. A real rerank through the router: BGE's child got `--device none --n-gpu-layers 99`,
+logged `offloaded 25/25 layers to GPU` with a `CPU_Mapped` 440 MiB model buffer and a 144 MiB CPU compute buffer and no
+`using device` line, and answered HTTP 200 in 4.3 s. BGE's row: at 3.58 s per 1,000 pair tokens the default page's
+one-window call — 96 candidates of one 1,000-character window each — is predicted at 133.1 s, past the 48 s a
+one-window call is sent under, so such a recall would be skipped. With mMiniLMv2's file removed, 资源 recommended
+mMiniLMv2 beside the installed BGE, its reason quoting the CPU, 5.59 s for the batch, 133.1 s and 48.0 s.
+
+**`GGML_VK_VISIBLE_DEVICES=1`, for the record**: BGE on the Direct3D12-layered RTX 246 ms (127 per 1,000) against the
+CPU's 5,528 ms (3,534), mMiniLMv2 27 ms against 278 ms — the layered RTX chosen for both. About 4× slower than the
+native RTX in (a), and still ~20× faster than the CPU.
+
+**Found on the way: the device-list parser.** With `LLAMA_ARG_LOG_VERBOSITY=4` in the app's environment,
+`--list-devices` also wrote `load_backend: loaded … backend` lines to stderr, which the runtime reads together with
+stdout. The parser took every line after the header as a device, so three log lines became "devices", the key changed,
+and BGE was re-measured on devices that do not exist. It now takes only the indented lines right under `Available
+devices:`.
+
+**What it does NOT say**: one laptop, one driver per GPU, one build; how an integrated GPU of another vendor or
+generation compares with its CPU; and whether an embedder or a chat model would be faster on another device — only
+rerankers are measured, and the reranker rows say so.
