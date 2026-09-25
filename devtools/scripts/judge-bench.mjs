@@ -38,7 +38,8 @@
 //     timing — on the other arms running beside it — and two arms meant to differ only in their configuration would
 //     differ in their windows too. The bench counts the pace's Information lines ("window(s) per long candidate
 //     instead of", which since 2026-09-25 also opens the line of a recall the pace SKIPPED — "0 window(s) … instead of
-//     N — the judge is skipped for this recall" — and "re-measured this machine", a probe that let the judge run) in every
+//     N — the judge is skipped for this recall", "per candidate … (none is long)" on short facts — and "re-measured this
+//     machine", a probe) in every
 //     arm's log after the run and saves the counts; any count above 0 VOIDS the run — a loud banner and exit 1, the rows
 //     still saved. A skip there would be worse than a sized call: the arm would have abstained where its twin judged.
 //     Chosen over a pinned no-pace mode, which would measure a product nobody runs and add a knob to verify; on the
@@ -487,12 +488,15 @@ const readLogs = (dataDir) => {
   if (!fs.existsSync(dir)) return '';
   return fs.readdirSync(dir).filter((f) => f.endsWith('.log')).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
 };
-// ChunkedScoreProvider's Information lines when RerankPace changes what a call sends (the header's pace guard): fewer
-// windows per long candidate than the count ceiling would give ("N window(s) per long candidate instead of M"), NONE —
-// the judge skipped because even one window per candidate is predicted past the budget ("0 window(s) … instead of M —
-// the judge is skipped for this recall", 2026-09-25) — or a probe that re-measured the machine and let the judge run
-// ("re-measured this machine"). Each line is counted once: no line carries both phrases.
-const PACE_LINE = /window\(s\) per long candidate instead of|re-measured this machine/g;
+// The pace's Information lines when RerankPace changes what a call sends (the header's pace guard): fewer windows per
+// long candidate than the count ceiling would give ("N window(s) per long candidate instead of M" — ChunkedScoreProvider,
+// in three forms: sized to the budget, after a cut, or the fewest that scores every candidate), NONE — the judge skipped,
+// decided above Lyntai by RerankAdmission since 2026-09-25, because even one window per candidate is predicted past its
+// limit or the router is presumed busy ("0 window(s) per long candidate instead of M — the judge is skipped for this
+// recall", or "0 window(s) per candidate instead of 1 (none is long) — …" on a recall of short facts) — or a probe that
+// re-measured the machine ("re-measured this machine", from either class). Each line is counted once: no line carries
+// both phrases.
+const PACE_LINE = /window\(s\) per (?:long )?candidate instead of|re-measured this machine/g;
 const paceCutsIn = (dataDir) => (readLogs(dataDir).match(PACE_LINE) ?? []).length;
 // Lyntai's TextRouter logs one `router: <provider> (model …) → <verdict>` line per attempt. `claude-cli` is the
 // CLI; `llamacpp` is LlamaCppSource's CHAT provider (its embedder and reranker register as `llamacpp-embed` and
@@ -1092,7 +1096,9 @@ const printCpu = (run) => {
     const x = {
       strip, cuts: cuts.length, firstCut: cuts[0]?.seq ?? null, lastCut: cuts.at(-1)?.seq ?? null, cutRuns: runs, longestCutRun: longest,
       recallsWithCall: withCall.length, all, quarters,
+      // 'fewest' (2026-09-25) only when there was one, so a run saved before it re-analyses byte for byte.
       paceLines: { sized: paceLines.filter((p) => p.kind === 'sized').length, afterCut: paceLines.filter((p) => p.kind === 'afterCut').length,
+        ...(paceLines.some((p) => p.kind === 'fewest') ? { fewest: paceLines.filter((p) => p.kind === 'fewest').length } : {}),
         first: paceLines.slice(0, 5), last: paceLines.slice(-5) },
       latency: { median: median(lat), p90: pct(lat, 0.9), max: lat.length ? Math.max(...lat) : null,
         verdictMedian: median(rows.filter((r) => r.answered !== null).map((r) => r.ms)),
@@ -1112,9 +1118,10 @@ const printCpu = (run) => {
         + (b.rateMedian === null ? '—' : b.rateMedian.toFixed(2)));
     console.log(`  latency, every recall: median ${ms(x.latency.median)}, p90 ${ms(x.latency.p90)}, max ${ms(x.latency.max)}; with a verdict`
       + ` ${ms(x.latency.verdictMedian)}; cut ${ms(x.latency.cutMedian)}`);
-    const pl = (p) => `seq ${p.seq}: ${p.kind === 'afterCut' ? 'after a cut' : 'sized'}, ${p.windows} window(s) instead of ${p.byCount}`
+    const pl = (p) => `seq ${p.seq}: ${p.kind === 'afterCut' ? 'after a cut' : p.kind === 'fewest' ? 'the fewest' : 'sized'}, ${p.windows} window(s) instead of ${p.byCount}`
       + `${p.msPer1k != null ? ` at ${p.msPer1k} ms/1k tokens` : ''}${p.budgetS != null ? ` (budget ~${p.budgetS} s)` : ''}`;
     console.log(`  pace lines: ${x.paceLines.sized} sized · ${x.paceLines.afterCut} after a cut`
+      + (x.paceLines.fewest ? ` · ${x.paceLines.fewest} the fewest past the budget` : '')
       + (paceLines.length ? `; first: ${x.paceLines.first.map(pl).join(' | ')}` : ''));
     if (paceLines.length > 5) console.log(`  pace lines, last: ${x.paceLines.last.map(pl).join(' | ')}`);
     const r = arm.cpuRecord;
@@ -2767,13 +2774,17 @@ const live = async () => {
     const LOG_LINE = /^\[(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d{3})\] \[(\w+)\s*\] \[([^\]]*)\] (.*)$/;
     const PACE_SIZED = /(\d+) window\(s\) per long candidate instead of (\d+), so the call fits ~([\d.]+) s at the ([\d.]+) ms per 1,000 pair tokens/;
     const PACE_AFTER_CUT = /(\d+) window\(s\) per long candidate instead of (\d+), until a call answers in time.*? slower than ([\d.]+) ms per 1,000 pair tokens/;
+    // 2026-09-25: one window each, past the budget a SIZED call has but inside the limit a one-window call is sent under —
+    // the fewest that scores every candidate, sent as it is.
+    const PACE_FEWEST = /(\d+) window\(s\) per long candidate instead of (\d+), the fewest that scores every candidate: predicted at ~([\d.]+) s at the ([\d.]+) ms per 1,000 pair tokens measured here/;
     // The pace's SKIP (2026-09-25): nothing sent, NoOpinion at once — with the probe's reading when one was sent, and the
     // presumed queue behind an abandoned call when there was one. And the probe that let the judge run.
-    const PACE_SKIP = /0 window\(s\) per long candidate instead of (\d+) — the judge is skipped for this recall: (?:a probe of (\d+) of (\d+) .*?; )?one window per candidate is predicted at ~([\d.]+) s at the ([\d.]+) ms per 1,000 pair tokens measured here(?:, behind the ~([\d.]+) s the router is presumed still busy)?/;
+    const PACE_SKIP = /0 window\(s\) per (?:long )?candidate instead of (\d+)(?: \(none is long\))? — the judge is skipped for this recall: (?:a probe of (\d+) of (\d+) .*?; )?one window per candidate is predicted at ~([\d.]+) s at the ([\d.]+) ms per 1,000 pair tokens measured here(?:, behind the ~([\d.]+) s the router is presumed still busy)?/;
     const PACE_REMEASURED = /re-measured this machine on (\d+) of (\d+) candidates' first windows: ([\d.]+) ms per 1,000 pair tokens/;
     const DEADLINE = /memory verification gave no verdict within [\d.]+ s/;
     /** The product's own log lines, placed on the recall during which each was written (by timestamp): the deadline cut
-     *  (VerificationDeadlinePolicy's Warning) and the pace's line (ChunkedScoreProvider's Information, both forms). */
+     *  (VerificationDeadlinePolicy's Warning) and the pace's lines (ChunkedScoreProvider's and RerankAdmission's
+     *  Information, every form). */
     const attachCpuEvents = (arm) => {
       const events = [];
       for (const line of readLogs(arm.dir).split(/\r?\n/)) {
@@ -2783,6 +2794,7 @@ const live = async () => {
         let p;
         if ((p = PACE_SIZED.exec(m[5]))) events.push({ at, kind: 'sized', windows: +p[1], byCount: +p[2], budgetS: +p[3], msPer1k: +p[4] });
         else if ((p = PACE_AFTER_CUT.exec(m[5]))) events.push({ at, kind: 'afterCut', windows: +p[1], byCount: +p[2], msPer1k: +p[3] });
+        else if ((p = PACE_FEWEST.exec(m[5]))) events.push({ at, kind: 'fewest', windows: +p[1], byCount: +p[2], predictedS: +p[3], msPer1k: +p[4] });
         else if ((p = PACE_SKIP.exec(m[5]))) events.push({ at, kind: 'skip', byCount: +p[1], ...(p[2] ? { probed: +p[2], of: +p[3] } : {}),
           predictedS: +p[4], msPer1k: +p[5], ...(p[6] ? { queueS: +p[6] } : {}) });
         else if ((p = PACE_REMEASURED.exec(m[5]))) events.push({ at, kind: 'remeasured', probed: +p[1], of: +p[2], msPer1k: +p[3] });
@@ -2807,7 +2819,8 @@ const live = async () => {
           continue;
         }
         if (row.pace) doubled++;
-        row.pace = { kind: e.kind, windows: e.windows, byCount: e.byCount, msPer1k: e.msPer1k, ...(e.budgetS !== undefined ? { budgetS: e.budgetS } : {}) };
+        row.pace = { kind: e.kind, windows: e.windows, byCount: e.byCount, msPer1k: e.msPer1k, ...(e.budgetS !== undefined ? { budgetS: e.budgetS } : {}),
+          ...(e.predictedS !== undefined ? { predictedS: e.predictedS } : {}) };
       }
       return { deadlineLines: events.filter((e) => e.kind === 'deadline').length, paceLines: events.filter((e) => e.kind !== 'deadline').length,
         unplaced, doubled };

@@ -1465,22 +1465,43 @@ try {
         ok('THE POINT: with no GPU, 资源 recommends mMiniLMv2 for 判断 — not BGE',
           cpuRec?.id === MMINILM && cpuShelf.runtime?.gpu === false,
           JSON.stringify({ rec: cpuRec ?? null, gpu: cpuShelf.runtime?.gpu }));
-        ok('…and its reason says why, plainly: no GPU detected, Run 8\'s CPU result with its configuration, BGE too slow there — and the tagging clause',
-          /没有检测到显卡/.test(String(cpuRec?.reason)) && /Intel Core Ultra 9 185H/.test(String(cpuRec?.reason))
+        ok('…and its reason says why, plainly: llama.cpp can use no GPU here, Run 8\'s CPU result with its configuration, BGE too slow there, the integrated-GPU gap — and the tagging clause',
+          /llama\.cpp 在这台机器上用不了任何显卡/.test(String(cpuRec?.reason)) && /Intel Core Ultra 9 185H/.test(String(cpuRec?.reason))
             && /17\.5 秒/.test(String(cpuRec?.reason)) && /180\/240/.test(String(cpuRec?.reason))
             && /104\/240/.test(String(cpuRec?.reason)) && /240 道提问/.test(String(cpuRec?.reason))
-            && /不开语义/.test(String(cpuRec?.reason)) && /约两分钟/.test(String(cpuRec?.reason))
-            && /检测到显卡时推荐的是 BGE/.test(String(cpuRec?.reason)) && String(cpuRec?.reason ?? '').includes(TAGGING_COST),
+            && /不开语义/.test(String(cpuRec?.reason)) && /一分多钟到两分钟/.test(String(cpuRec?.reason))
+            && /llama\.cpp 能用显卡时推荐的是 BGE/.test(String(cpuRec?.reason)) && /只有集成显卡的机器两者都还没有量过/.test(String(cpuRec?.reason))
+            && !/没有检测到显卡|约两分钟/.test(String(cpuRec?.reason)) && String(cpuRec?.reason ?? '').includes(TAGGING_COST),
           String(cpuRec?.reason));
         const cpuJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
         ok('THE POINT: …and the 判断 row\'s download suggestion is mMiniLMv2 too — one writer for both',
           cpuJudge?.suggest === `gguf-${MMINILM}`, JSON.stringify({ suggest: cpuJudge?.suggest }));
+        // …and an INVALIDATION does not flip it. Every start, restart and model removal drops the runtime's cached state;
+        // the badge used to read the GPU answer from there, so for as long as the background re-probe took, "no GPU" read
+        // as "not known" and the badge went back to BGE. It reads the memo of the binary's device list now, which an
+        // invalidation leaves alone (ILlamaServerRuntime.Gpu). Removing a model is the household's own way to invalidate.
+        fs.writeFileSync(path.join(ggufDir, 'zzthrowaway-Q4_K_M.gguf'), '');
+        const removed = await post('/api/manage/models/remove', { model: 'zzthrowaway-Q4_K_M', runtime: 'llama-cpp' });
+        const afterRemove = await getJson('/api/manage/models');
+        ok('THE POINT: removing a model — which drops the runtime\'s cached state — leaves the badge on mMiniLMv2 and the runtime reading "no GPU", not "unknown"',
+          removed.status === 200 && afterRemove.recommendation?.id === MMINILM && afterRemove.runtime?.gpu === false,
+          JSON.stringify({ removed: removed.status, rec: afterRemove.recommendation?.id ?? null, gpu: afterRemove.runtime?.gpu }));
         // The one-reranker rule holds on a CPU too: BGE already in means nothing more is suggested — not a second reranker.
         fs.writeFileSync(path.join(ggufDir, `${RERANKER}.gguf`), '');
         const cpuWithBge = await getJson('/api/manage/models');
         ok('…and never a second reranker: with BGE installed and no GPU, nothing is recommended',
           cpuWithBge.recommendation == null, JSON.stringify(cpuWithBge.recommendation ?? null));
         fs.rmSync(path.join(ggufDir, `${RERANKER}.gguf`), { force: true });
+
+        // A device list naming only NON-Vulkan devices comes from a build this app does not provision (CUDA, Metal, SYCL…):
+        // a device is there, so it is not "no GPU" — and not one we know to be a GPU either, so "not known", which keeps BGE
+        // and claims nothing (LlamaServerState.GpuFrom). It read "no GPU" at first, and recommended the CPU model beside one.
+        const cuda = await answerDevices('Available devices:\r\n  CUDA0: zzfake GPU (8192 MiB, 8000 MiB free)\r\n');
+        const cudaShelf = await getJson('/api/manage/models');
+        ok('THE POINT: a device list naming only a non-Vulkan device reads as NOT KNOWN, not "no GPU" — the badge stays BGE and claims nothing about the machine',
+          cuda.devicesListed === true && cuda.gpu === null && cudaShelf.runtime?.gpu === null
+            && cudaShelf.recommendation?.id === RERANKER && !/显卡/.test(String(cudaShelf.recommendation?.reason)),
+          JSON.stringify({ gpu: cuda.gpu, devices: cuda.devices, shelfGpu: cudaShelf.runtime?.gpu, rec: cudaShelf.recommendation?.id ?? null }));
 
         const withGpu = await answerDevices('Available devices:\r\n  Vulkan0: zzfake GPU (8192 MiB, 8000 MiB free)\r\n');
         ok('(non-vacuity) the same stand-in answered again, now listing a Vulkan GPU',

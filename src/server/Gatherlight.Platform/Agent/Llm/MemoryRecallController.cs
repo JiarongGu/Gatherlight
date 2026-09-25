@@ -59,6 +59,8 @@ public sealed class MemoryRecallController : ControllerBase
     // What the judge is RUNNING on, as opposed to what is saved — see MemoryJudgeWiring.
     private readonly MemoryJudgeWiring _judgeWiring;
     private readonly Storage.Knowledge.Services.IKnowledgeStore _knowledge;
+    // The reranker judge's pace, when one is running: its skip count is the one place a skipped recall becomes visible.
+    private readonly RerankPace? _pace;
 
     public MemoryRecallController(IClaudeCliRuntime claude,
         ILlamaServerRuntime llama, ServerConfigService config,
@@ -68,8 +70,10 @@ public sealed class MemoryRecallController : ControllerBase
         MemoryJudgeWiring judgeWiring, IPlatformContext platform,
         ILogger<MemoryRecallController> log,
         Lyntai.Memory.ISemanticMemory? semantic = null,
-        Lyntai.Inference.ITextClient? llm = null)
+        Lyntai.Inference.ITextClient? llm = null,
+        RerankPace? pace = null)
     {
+        _pace = pace;
         _judgeWiring = judgeWiring;
         _claude = claude;
         _llama = llama;
@@ -119,6 +123,28 @@ public sealed class MemoryRecallController : ControllerBase
             && _judgeWiring.Model is { } runningModel && runningJudge.ChecksOnly(runningModel)
                 ? MemorySources.CliTaggingNow(_claude.Cached)
                 : null;
+
+        // WHETHER THE JUDGE HAS BEEN SKIPPED, and what to try instead. A recall the reranker's pace skips — this machine
+        // too slow for one window per candidate — is NoOpinion at once, and otherwise visible only as an Information line in
+        // state/logs: fail-open and unreported. Read from the pace's own counter, which is a lock and an array: nothing
+        // awaited. Shown only when there were skips; the smaller reranker offered unless it is what runs, or is already
+        // downloaded — then there is nothing to fetch (GgufCatalog.SkipNotice, RecommendedRerankerFor).
+        object? paceView = null;
+        if (MemoryEnrichment.IsOn(_appConfig) && _pace?.RecentSkips is { Skipped: > 0 } skips)
+        {
+            // The one writer 资源's badge reads too; with skips it names the small reranker whatever the device probe says.
+            var small = GgufCatalog.RecommendedRerankerFor(_llama.Gpu, skippedHere: true);
+            var offerSmall = !string.Equals(_judgeWiring.Model, small, StringComparison.OrdinalIgnoreCase)
+                && !Hosting.Resources.Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath)
+                    .Contains(small, StringComparer.OrdinalIgnoreCase);
+            paceView = new
+            {
+                skipped = skips.Skipped, recalls = skips.Recalls,
+                text = GgufCatalog.SkipNotice(skips.Skipped, skips.Recalls, offerSmall),
+                // A RESOURCE id, as a source's own suggestion is — the 资源 row that downloads it.
+                suggest = offerSmall ? GgufCatalog.ResourceIdFor(small) : null,
+            };
+        }
 
         return Ok(new
         {
@@ -206,6 +232,8 @@ public sealed class MemoryRecallController : ControllerBase
                     retired = RetiredNote(mem.JudgeSource, MemoryLayers.Judge),
                     // Null unless the running judge only checks AND the CLI's state is known.
                     tagging = tagging is null ? null : new { works = tagging.Works, text = tagging.Text },
+                    // Null unless the reranker's pace skipped recent recalls — see paceView.
+                    pace = paceView,
                 },
                 new
                 {

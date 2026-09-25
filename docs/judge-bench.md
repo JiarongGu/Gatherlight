@@ -5294,6 +5294,16 @@ runs in parallel, so the remedy for a VOID run is a GPU with nothing else on it,
 `--arms`, `--rerankers` or `--rerank-arms` each), each paired only within itself. The pace's own Information line —
 both of its forms, the time-sized one and the one after a cut — carries the phrase the guard counts.
 
+**Since 2026-09-25 the pace has more lines, and the guard counts every one** (`PACE_LINE`). A third sizing form — one
+window each, past the budget a sized call has but inside the limit a one-window call is sent under ("…, the fewest that
+scores every candidate: predicted at ~X s …", parsed by `PACE_FEWEST`). The SKIP, decided above Lyntai by
+`RerankAdmission` rather than in the provider, so it is logged under that class's name with its text unchanged — and, on a
+recall of short facts only, as "0 window(s) per candidate instead of 1 (none is long) — the judge is skipped …", which
+`PACE_LINE` and `PACE_SKIP` both accept. And the re-measure line of a probe that was the whole one-window call ("… — that
+probe was the whole one-window call, so its answer is this recall's verdict"), which `PACE_REMEASURED` reads like the
+other. Nothing a saved run holds is re-read: the counts and the CPU arms' events were saved when they ran, and a summary
+names the new form only when one occurred, so every earlier run re-analyses byte for byte.
+
 **Why a guard, not a pinned no-pace mode.** A knob that disables the pace would make every arm deterministic again, but
 it would measure a configuration no household runs, and it would be one more measurement knob every arm must pin and
 announce. On the GPU this bench runs on, the seed allows more than the 480-window ceiling, so the pace sizes a call only

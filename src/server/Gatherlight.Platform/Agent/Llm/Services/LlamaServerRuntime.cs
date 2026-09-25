@@ -35,11 +35,24 @@ public sealed record LlamaServerState(
     bool Ours = false,
     bool DevicesListed = false)
 {
-    /// <summary>Whether llama.cpp can use a GPU here: true when it lists one, FALSE only when it answered and listed none
-    /// — measured with this build (b10549) and its Vulkan devices hidden, its whole answer is "Available devices:" and
-    /// "(none)" — and null when that is not known. Null is not "no": a recommendation that changes on "no GPU" must not
-    /// change on "nobody asked yet" (<see cref="GgufCatalog.RecommendedRerankerFor"/>).</summary>
-    public bool? Gpu => DevicesListed ? GpuLikely : null;
+    /// <summary>Whether llama.cpp can use a GPU here — <see cref="GpuFrom"/> over what <c>--list-devices</c> answered, and
+    /// null when it did not answer. Null is not "no": a recommendation that changes on "no GPU" must not change on "nobody
+    /// asked yet" (<see cref="GgufCatalog.RecommendedRerankerFor"/>).</summary>
+    public bool? Gpu => DevicesListed ? GpuFrom(Devices) : null;
+
+    /// <summary>The ONE rule for reading a device list <c>--list-devices</c> ANSWERED with: FALSE only when it listed no
+    /// device at all — measured with this build (b10549) and its Vulkan devices hidden, its whole answer is "Available
+    /// devices:" and "(none)" — TRUE when it lists a Vulkan device (the build this app provisions is the Vulkan one, and a
+    /// Vulkan device is a GPU, integrated ones included), and NULL — not known — for a list naming only devices of another
+    /// kind (CUDA0, Metal, SYCL0…). Those come from a build we did not provision, and reading them as "no GPU" would claim
+    /// a CPU-only machine where there is plainly a device (review, 2026-09-25: the first version did exactly that).
+    /// Recognising each backend's prefix as a GPU was the alternative, and was not taken: a prefix list goes stale with the
+    /// next backend llama.cpp adds, and unknown keeps the default recommendation and claims nothing, which is the honest
+    /// answer for a build nobody here has run.</summary>
+    public static bool? GpuFrom(IReadOnlyList<string> devices) =>
+        devices.Count == 0 ? false
+        : devices.Any(d => d.StartsWith("Vulkan", StringComparison.OrdinalIgnoreCase)) ? true
+        : null;
 }
 
 public interface ILlamaServerRuntime
@@ -62,6 +75,16 @@ public interface ILlamaServerRuntime
     /// 3.24 s for the whole request). The caller composes a cheap row from <see cref="LiveAsync"/> plus
     /// whatever this already holds, and kicks a background refresh when it is empty.</para></summary>
     LlamaServerState? Cached { get; }
+
+    /// <summary>Whether llama.cpp can use a GPU here (<see cref="LlamaServerState.GpuFrom"/>), from the memo of the
+    /// provisioned binary's device list — which, unlike <see cref="Cached"/>, <see cref="Invalidate"/> does not clear, by
+    /// design: the file has not changed because the server restarted. Null when there is no memo for the file on disk now
+    /// (never probed, or the binary replaced since). Never spawns anything, so a panel may read it.
+    ///
+    /// <para><b>Why not <c>Cached?.Gpu</c></b> (review, 2026-09-25): every start, restart and model removal invalidates the
+    /// cached state, so the 推荐 badge and the 判断 row's suggestion flipped from mMiniLMv2 to BGE — "no GPU" read as "not
+    /// known" — until a background probe finished.</para></summary>
+    bool? Gpu { get; }
 
     /// <summary>The state a BINDING decision needs: is it installed, is it answering, what models are on
     /// disk. Never spawns anything.
@@ -443,6 +466,18 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     private void InvalidateLocked() { _cached = null; _probeEpoch++; }
 
     public LlamaServerState? Cached { get { lock (_gate) return _cached; } }
+
+    public bool? Gpu
+    {
+        get
+        {
+            if (Locate() is not { } exe || BinaryKey(exe) is not { } key) return null;
+            lock (_gate)
+                return _binaryFacts is { } f && f.Key == key && f.Devices is { } devices
+                    ? LlamaServerState.GpuFrom(devices)
+                    : null;
+        }
+    }
 
     /// <summary>Is anything accepting connections on our port, answered within a bounded time?
     ///
@@ -1003,17 +1038,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     private async Task<(string? Version, IReadOnlyList<string>? Devices)> BinaryFactsAsync(
         string exe, CancellationToken ct)
     {
-        string key;
-        try
-        {
-            var fi = new FileInfo(exe);
-            key = $"{exe}|{fi.LastWriteTimeUtc.Ticks}|{fi.Length}";
-        }
-        catch
-        {
-            // Cannot identify the file, so cannot safely reuse an answer about it. Ask.
-            key = Guid.NewGuid().ToString();
-        }
+        // Cannot identify the file, so cannot safely reuse an answer about it. Ask.
+        var key = BinaryKey(exe) ?? Guid.NewGuid().ToString();
 
         lock (_gate)
         {
@@ -1029,6 +1055,21 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         // under load) memoized on the file's identity would stay unknown until the binary changed.
         if (devices is not null) lock (_gate) { _binaryFacts = (key, version, devices); }
         return (version, devices);
+    }
+
+    /// <summary>The identity the binary facts are memoized on — path, last write, length — or null when the file cannot
+    /// be read. One writer, for the memo and for <see cref="Gpu"/>'s read of it.</summary>
+    private static string? BinaryKey(string exe)
+    {
+        try
+        {
+            var fi = new FileInfo(exe);
+            return $"{exe}|{fi.LastWriteTimeUtc.Ticks}|{fi.Length}";
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<string?> VersionAsync(string exe, CancellationToken ct)

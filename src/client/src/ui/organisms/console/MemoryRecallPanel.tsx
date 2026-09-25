@@ -45,6 +45,9 @@ interface LayerView {
   /** 判断 only, and only when the running judge just CHECKS (a reranker): whether its tagging — handed to the
    *  Claude CLI — is happening now. Null when the CLI's state is unknown, which the server will not guess. */
   tagging?: { works: boolean; text: string } | null;
+  /** 判断 only, and only when the reranker's pace SKIPPED recent recalls (this machine too slow for one window per
+   *  candidate): how many, the sentence, and the 资源 row to fetch the smaller reranker from — or null for none. */
+  pace?: { skipped: number; recalls: number; text: string; suggest: string | null } | null;
   reindex?: {
     running: boolean; done: number; total: number;
     embedded: number | null; error: string | null;
@@ -182,6 +185,9 @@ export function MemoryRecallPanel(
             {judge.on && judge.tagging && (
               <div className={`mem-fine${judge.tagging.works ? '' : ' warn'}`}>{judge.tagging.text}</div>
             )}
+            {/* A skipped recall is NoOpinion at once and otherwise shows only in state/logs — this line is where it is
+                seen. The sentence names the download itself; the id is for the 资源 row it points at. */}
+            {judge.on && judge.pace && <div className="mem-fine warn">{judge.pace.text}</div>}
             {judge.on && (
               <BackendPicker groups={judge.groups} boundSource={judge.source} boundModel={judge.model}
                 busy={busy} bind={bind('judge')}

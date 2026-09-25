@@ -121,18 +121,40 @@ public static class GgufCatalog
     /// <c>device = none</c> and <c>n-gpu-layers = 0</c>, 60 notes of 883–1,241 characters, 240 questions, no embedder, no
     /// subject tags, a page of 8 — mMiniLMv2 judged every recall within the minute (chunked: 17.5 s median, 22 s at most)
     /// and put the answer on the page 180 of 240 times against no judge's 104; BGE scored ~3.1 s per 1,000 pair tokens,
-    /// so a recall of 40–60 long notes needed ~2 minutes even at one window each, and it judged 10 of 240 (found@8 104 —
+    /// so a recall of 40–60 long notes needed 80–120 s even at one window each, and it judged 10 of 240 (found@8 104 —
     /// no judge's). <b>Why "no GPU" and not "no layers on the GPU"</b>: the same run found that <c>n-gpu-layers = 0</c>
     /// alone is not a CPU run — with a GPU visible, llama.cpp still offloads a big batch's work to it (a 48-note BGE call:
     /// ~5 s, against 143 and 197 s with <c>device = none</c>) — so what decides is whether llama.cpp lists a GPU device at
-    /// all (<see cref="LlamaServerState.Gpu"/>), which a machine without one does not.</summary>
+    /// all (<see cref="LlamaServerState.Gpu"/>), which a machine without one does not.
+    ///
+    /// <para><b>…and that almost never fires</b> (review, 2026-09-25): the Vulkan build the app provisions lists an
+    /// INTEGRATED GPU as a device — this very machine lists <c>Vulkan1: Intel Arc</c> — so nearly every x64 laptop reads
+    /// "GPU", and how either reranker does on an integrated GPU is not measured. So the recommendation also follows what the
+    /// judge actually DID here: a recall the pace skipped because this machine was too slow (<see cref="RerankPace.RecentSkips"/>)
+    /// recommends this model whatever the device probe says (<see cref="RecommendedRerankerFor"/>).</para></summary>
     public const string RerankerWithoutGpu = "mmarco-mMiniLMv2-L12-H384-v1-Q8_0";
 
-    /// <summary>Which reranker to suggest for 判断, given what the runtime's device probe found — the ONE writer both 资源's
-    /// 推荐 badge and the 判断 row's download suggestion read. <see cref="RerankerWithoutGpu"/> only when the probe
-    /// ANSWERED and listed no GPU (<paramref name="gpu"/> false); a GPU, or no answer yet (null — the probe has not run,
-    /// or the runtime is not installed), keeps <see cref="RecommendedReranker"/> and claims nothing about the machine.</summary>
-    public static string RecommendedRerankerFor(bool? gpu) => gpu == false ? RerankerWithoutGpu : RecommendedReranker;
+    /// <summary>Which reranker to suggest for 判断, given what the runtime's device probe found and whether the judge has
+    /// been SKIPPED here for being too slow — the ONE writer both 资源's 推荐 badge and the 判断 row's suggestions read.
+    /// <see cref="RerankerWithoutGpu"/> when the probe ANSWERED and listed no GPU (<paramref name="gpu"/> false), or when
+    /// recent recalls were skipped (<paramref name="skippedHere"/>) — the second because the probe reads an integrated GPU
+    /// as a GPU, and a skip is the machine saying it is too slow for the reranker it has. Otherwise — a GPU and no skips, or
+    /// no answer yet (null: the probe has not run, or the runtime is not installed) — <see cref="RecommendedReranker"/>,
+    /// claiming nothing about the machine.</summary>
+    public static string RecommendedRerankerFor(bool? gpu, bool skippedHere = false) =>
+        gpu == false || skippedHere ? RerankerWithoutGpu : RecommendedReranker;
+
+    /// <summary>What the 判断 row says when the pace SKIPPED recent recalls (<see cref="RerankPace.RecentSkips"/>) — a skip
+    /// is otherwise an Information line in state/logs, which is where a household never looks. With
+    /// <paramref name="offerSmaller"/> it points at <see cref="RerankerWithoutGpu"/>; the caller withholds that when the
+    /// small reranker is the one bound or already downloaded, where the advice would be to fetch what they have.</summary>
+    public static string SkipNotice(int skipped, int recalls, bool offerSmaller) =>
+        $"最近 {recalls} 次检索里有 {skipped} 次因为这台机器太慢,跳过了判断、按没有判断时的顺序返回"
+        + "(应用最多每十分钟重新测一次速度,赶得上就恢复)。"
+        + (offerSmaller
+            ? "可以在「资源 · Resources」下载 mMiniLMv2 改用它:它只有 BGE 的 28%,在一台只用 CPU 的笔记本上每次检索都在一分钟内判断完"
+              + "(实测和设置见它那一行的说明);只有集成显卡的机器上,它和 BGE 都还没有量过。"
+            : "");
 
     /// <summary>What every reranker row says, because it is the one thing that differs from a chat judge:
     /// only HALF of 判断 moves. The tagging clause is <see cref="Sources.MemorySources.CliTaggingCost"/>, shared

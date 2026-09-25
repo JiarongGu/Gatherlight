@@ -123,51 +123,60 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // model with none keeps the 1,000-character cap. CHUNKED when RerankChunking is on: the reranker's own
             // provider is wrapped so a long candidate is scored in windows of that same budget (ChunkedScoreProvider),
             // and the cap then prepares candidates without cutting them — which is why RerankProviders throws when it
-            // finds nothing to wrap.
+            // finds nothing to wrap. And ADMITTED: whether a recall is sent at all is decided between the cap and the
+            // scoring policy (RerankAdmission), so a recall this machine cannot judge in time makes no call and hands
+            // Lyntai no verdict. Both read the one RerankPace Register adds — the one the 判断 row reads too.
             : new JudgeWiring(null, AnnotationModel(ctx.Model), sp =>
             {
                 var window = GgufCatalog.DeclaredWindow(ctx.Model);
                 var chunked = RerankChunking.On;
-                return new RerankInputCap(
+                var pace = sp.GetRequiredService<RerankPace>();
+                var (providers, wrapped) = RerankProviders(sp, window, chunked, pace);
+                Lyntai.Memory.Verification.IMemoryVerificationPolicy verifier =
                     new Lyntai.Memory.Verification.ScoringVerificationPolicy(
-                        RerankProviders(sp, window, chunked),
+                        providers,
                         new Lyntai.Memory.Verification.ScoringVerificationOptions
                             { ProviderId = RerankProviderId, EndorseCount = RerankEndorseCount },
                         sp.GetService<ILogger<Lyntai.Memory.Verification.ScoringVerificationPolicy>>(),
-                        sp.GetService<Lyntai.Inference.IProviderRouterFactory>()),
-                    window, chunked);
+                        sp.GetService<Lyntai.Inference.IProviderRouterFactory>());
+                if (wrapped is not null)
+                    verifier = new RerankAdmission(verifier, wrapped, pace, sp.GetService<ILogger<RerankAdmission>>());
+                return new RerankInputCap(verifier, window, chunked);
             });
 
     /// <summary>The providers the reranker's verifier chooses from — every registered one, with the reranker's own
-    /// (<see cref="RerankProviderId"/>) wrapped in a <see cref="ChunkedScoreProvider"/> when chunking is on. Wrapped HERE,
-    /// where the verifier is built, and registered nowhere: the wrapper is part of how this judge scores, not a backend
-    /// anything else may route to. Its time budget is half the verification deadline (<see cref="RerankPace"/>).
+    /// (<see cref="RerankProviderId"/>) wrapped in a <see cref="ChunkedScoreProvider"/> when chunking is on — and that
+    /// wrapper, for <see cref="RerankAdmission"/>. Wrapped HERE, where the verifier is built, and registered nowhere: the
+    /// wrapper is part of how this judge scores, not a backend anything else may route to. Its time budget is half the
+    /// verification deadline (<see cref="RerankPace"/>). The FIRST provider with that id is wrapped and returned, the one
+    /// <c>ScoringVerificationPolicy</c> selects by the same id.
     ///
     /// <para><b>Chunking on and nothing wrapped THROWS</b>, as <c>ScoringVerificationPolicy</c> throws for a
     /// <c>ProviderId</c> it cannot resolve. The two halves are coupled: with chunking on, <see cref="RerankInputCap"/> stops
     /// cutting candidates because the wrapper windows them, so a registration the wrapper does not recognise — the id
     /// renamed, or a provider that no longer implements <c>IScoreProvider</c> after a Lyntai upgrade — would send every
     /// long candidate WHOLE, and one past the model's window fails every call it is in, fail-open and silent.</para></summary>
-    private static IEnumerable<Lyntai.Inference.IModelProvider> RerankProviders(IServiceProvider sp, int? window, bool chunked)
+    private static (IReadOnlyList<Lyntai.Inference.IModelProvider> Providers, ChunkedScoreProvider? Wrapped) RerankProviders(
+        IServiceProvider sp, int? window, bool chunked, RerankPace pace)
     {
         var all = sp.GetServices<Lyntai.Inference.IModelProvider>().ToList();
-        if (!chunked) return all;
+        if (!chunked) return (all, null);
         var log = sp.GetService<ILogger<ChunkedScoreProvider>>();
-        var wrapped = 0;
+        ChunkedScoreProvider? wrapped = null;
         var providers = all.Select(p =>
         {
-            if (p is not Lyntai.Inference.IScoreProvider score
+            if (wrapped is not null || p is not Lyntai.Inference.IScoreProvider score
                 || !string.Equals(p.Id, RerankProviderId, StringComparison.OrdinalIgnoreCase)) return p;
-            wrapped++;
-            return new ChunkedScoreProvider(score, window, new RerankPace(VerificationDeadlinePolicy.Configured / 2), log);
+            wrapped = new ChunkedScoreProvider(score, window, pace, log);
+            return (Lyntai.Inference.IModelProvider)wrapped;
         }).ToList();
-        if (wrapped == 0)
+        if (wrapped is null)
             throw new InvalidOperationException(
                 $"{RerankChunking.KnobName} is on, but no registered backend is a score provider with the id '{RerankProviderId}' "
                 + $"({(all.Count == 0 ? "(none)" : string.Join(", ", all.Select(p => $"{p.Id}{(p is Lyntai.Inference.IScoreProvider ? "" : " (not a score provider)")}")))}) "
                 + "— so nothing would window a long candidate, and the input cap no longer cuts one: one past the model's "
                 + "window would fail every rerank call it is in.");
-        return providers;
+        return (providers, wrapped);
     }
 
     /// <summary>A reranker's id must never reach the CLI, which would be asked for a model it has never heard
@@ -315,6 +324,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                 o.Model = ctx.Model;
                 o.Produces = Lyntai.Inference.ProviderKinds.Score;
             });
+            // How fast this machine scores — ONE per process, shared by the verifier Wiring builds (its admission and its
+            // chunked provider) and the 判断 row, which reads its skip count (MemoryRecallController). Its budget is half
+            // the verification deadline.
+            b.Services.AddSingleton(_ => new RerankPace(VerificationDeadlinePolicy.Configured / 2));
             return;
         }
 
@@ -360,8 +373,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // judge worse than no judge; the button beside this sentence fetches the local default the owner kept.
             // (Qwen3 0.6B, a chat judge, also measured better than none in Run 5b; it is offered, not suggested.)
             // WHICH reranker is the same one writer 资源's badge reads (GgufCatalog.RecommendedRerankerFor): mMiniLMv2
-            // where the last full probe found no GPU (docs/judge-bench.md Run 8), BGE otherwise — read from the CACHED
-            // probe, because a panel must not await a process; unknown keeps BGE.
+            // where the last full probe found no GPU (docs/judge-bench.md Run 8), BGE otherwise — read from the runtime's
+            // memo of the binary's device list (ILlamaServerRuntime.Gpu), because a panel must not await a process and an
+            // invalidation must not flip it; unknown keeps BGE. No skip signal here: with no judge model there is no pace.
             return new SourceStatus(false,
                 _layer == MemoryLayers.Semantic
                     ? "运行时已就绪,但还没有嵌入模型 —— 在「资源 · Resources」面板下载一个。"
@@ -369,7 +383,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                     : "运行时已就绪,但还没有对话模型或重排模型 —— 在「资源 · Resources」面板下载一个。",
                 GgufCatalog.ResourceIdFor(_layer == MemoryLayers.Semantic
                     ? GgufCatalog.RecommendedEmbedder
-                    : GgufCatalog.RecommendedRerankerFor(ctx.Llama.Cached?.Gpu)));
+                    : GgufCatalog.RecommendedRerankerFor(ctx.Llama.Gpu)));
 
         // Present and has a model: ready to BIND. Whether the process happens to be up right now is not the
         // household's problem — starting it is ours.
