@@ -6200,3 +6200,114 @@ It printed no WARNING line. Its accuracy numbers (32 queries) inform nothing her
 
 **The first attempt at the smoke failed before any arm started**, in the bench's `mirrorGuard` (above); it is the reason
 for that fix: at `70234f3` no judge-bench command naming a local model could start (a re-launch of Run 8's included).
+
+## Run 9 — amendment: one run per reranker (design, after a VOID attempt)
+
+Written and committed BEFORE any of the runs it registers, and AFTER the attempt it replaces — read the second heading
+before any number that follows.
+
+### Why: the registered run was VOID
+
+The registered command ran once, 2026-09-25T05:28:50Z–05:54:31Z (app `3e5bffb`, the server binary built at `70234f3`),
+and exited 1 with the bench's VOID banner. **Guard 7 failed**: `rrk:bge-reranker-v2-m3-Q5_K_M` logged two pace lines,
+both "1 window(s) per long candidate instead of 5, so the call fits ~30 s", at an estimate of **1,285 and 1,406 ms per
+1,000 pair tokens** — 26–28× the GPU seed (`RerankPace.SeedMsPerToken`, 50 ms).
+
+- **Where.** Seq 82 (allergy-shellfish, `end`, a long target): its chunked body was byte-identical to the cut arm's, so
+  the one-window call changed nothing sent. Seq 97 (train-local, `beyond`, a long target): 46 documents sent, where the
+  cut arm sent 51. Neither is a short-target question — but the registered guard voids the run, not the query.
+- **Why the pace fired: contention, not the machine.** Six reranker arms shared one router on one GPU, which the sampler
+  read 96–99% busy for the whole accuracy pass. A call waits behind the other arms' batches on that router, and the pace
+  cannot know it: its queued-call rule sees only its OWN process's calls in flight, never another arm's. On the chunked
+  BGE arm, recalls whose rerank call carried only 1–5 documents took a median 2.3 s (up to 4.2 s), where a recall of 40
+  or more took 6.4 s; a small call timed like that reads as a machine dozens of times slower than the seed.
+- **Every other guard held**: the instrument and seed (1); the engine A/A, byte-identical (2); every arm's binding, knob
+  and 0 claude-cli calls (3); the router log — each model spawned once, mMiniLMv2 at `n_ctx_slot` 512 with its largest
+  task 428 tokens, BGE 848 and LAMAR 849, no error or truncation line (4); coverage, 120 of 120 in every group of every
+  reranker arm (5); every forward reached the router, 498/498, 501/501, 501/501 (6).
+- **Evidence, local only** (gitignored): `devtools/_run9/evidence/` (the results `results-2026-09-25T052850.925Z.json`,
+  its rows, `router.log`, `presets.ini` and every arm's logs), the output `devtools/_judge-bench-mixed-run9.txt`, the
+  guard check `devtools/_run9/guards.txt` (scratch `guards9.mjs`) and the load `devtools/_run9/load.log`.
+
+### This amendment follows a voided run — discount it accordingly
+
+The VOID attempt printed its tables before its banner, and they were read before this was written — including the RUN 9
+block, where no reranker's chunked found@8 on short-target questions was significantly worse than its cut. **The rule was
+not read on them**, and nothing here depends on them: the question, the fixture, the seed, the arms of each reranker, the
+metrics, the decision rule and the way it is read are the registered ones, word for word. What changes is only how many
+arms share the GPU at once. A reader should still discount the change as one made after an outcome was seen.
+
+### The new design: three runs, one per reranker
+
+Each run has `formula`, `formula2`, `rr:<m>` (the cut, knob off) and `rrk:<m>` (chunked, knob on), and is paired only
+within itself. Same fixture (`e1c9b4d5…`), same seed (`devtools/_judge-bench-seed-mixed/`, reused and re-verified by each
+run), same question order (seed 12345), the configuration as registered. The three run one after another, in this order,
+under a scratch driver (`devtools/_run9/drive-split.sh`) that stops at the first run that exits non-zero or fails a guard:
+
+```
+node devtools/scripts/judge-bench.mjs --fixture=mixed --reuse-seed --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M --rerank-arms=rr,rrk --rerank-memo --resources=devtools/_rr-res \
+  --port-base=6600 --llama-port=6640 > devtools/_judge-bench-mixed-run9-bge.txt 2>&1
+node devtools/scripts/judge-bench.mjs --fixture=mixed --reuse-seed --arms=formula,formula2 \
+  --rerankers=LAMAR-600m.Q5_K_M --rerank-arms=rr,rrk --rerank-memo --resources=devtools/_rr-res \
+  --port-base=6610 --llama-port=6641 > devtools/_judge-bench-mixed-run9-lamar.txt 2>&1
+node devtools/scripts/judge-bench.mjs --fixture=mixed --reuse-seed --arms=formula,formula2 \
+  --rerankers=mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-arms=rr,rrk --rerank-memo --resources=devtools/_rr-res \
+  --port-base=6620 --llama-port=6642 > devtools/_judge-bench-mixed-run9-minilm.txt 2>&1
+```
+
+- **Each run starts its own router with its one model** and stops it when it ends, so two reranker arms share the GPU at
+  a time instead of six. The ports differ per run (none is reused seconds after a server left it) and sit off every range
+  Windows had reserved that day, as registered.
+- **The bench's work folder is rewritten by each run**, so after each the driver copies its results, rows, router log,
+  preset and every arm's logs to `devtools/_run9/split-<m>/` and runs the guard check on them before the next starts.
+- **`formula` and `formula2` run in all three.** No model is in their loop, so their rows are expected identical across
+  the three runs (one digest); that is reported, and it is not a guard.
+- **The rule, per reranker, exactly as registered**: in the run of reranker `m`, `rrk:<m>` against `rr:<m>` on the 120
+  short-target queries; "costs short facts" iff exact McNemar p < 0.05 AND c − b < 0; three tests, one per run, each at
+  0.05, no correction, and any one triggers. Long-target questions, `all`, top-1 and everything else registered as
+  descriptive are reported as registered. The one thing the single run had that this does not: the three rerankers are
+  no longer paired against each other (they are in different runs), which the rule never read.
+- **Guards 1–7 as registered, per run**, plus **8. One build**: the three server assemblies' fingerprint (below) is the
+  same before and after every run. A failed guard in any run stops the sequence; a run already finished keeps its
+  record; nothing is re-run without another amendment. A run that exits 127 before any arm starts is re-run unchanged.
+
+### The build changed since the pre-registration
+
+The registration named the build at `70234f3`. Since then the branch took Task W2 — `26effcf` (product), `dfd4f21`
+(catalogue text) and `964b95e` (rules) — and these runs use that build: HEAD `964b95e`, not rebuilt here; the three
+assemblies were built after the last product commit, and no source under `src/server` is newer than them. **Fingerprint**
+(sha256, first 16 hex, as the bench records one): `Gatherlight.Platform.dll` `d6553bdc3fdfeb92`,
+`Gatherlight.Planner.dll` `92ab3dd3a0a8ac9f`, `Gatherlight.Server.dll` `2b8bf73223aa209c`.
+
+W2 moved the pace's skip decision above Lyntai (`RerankAdmission`, between `RerankInputCap` and
+`ScoringVerificationPolicy`), damped a lone deadline cut, set the one-window limit at 0.8 of the deadline, and added a
+skip counter. **With the pace inactive it sends exactly what `70234f3` sent** — read in the code, then checked:
+
+- `RerankAdmission.VerifyAsync` asks `RerankPace.Admit`; on `Send` (nothing presumed queued, which needs an earlier
+  deadline cut, and the one-window call predicted inside the limit) it counts the recall and passes the SAME request
+  object to the scoring policy. A `Skip` or a `Probe` logs a line the guard counts ("0 window(s) per … candidate instead
+  of", "re-measured this machine").
+- `ChunkedScoreProvider.CallAsync` then sends a pass-through request as it came, and otherwise
+  `RerankInputCap.WindowsPerDocument(documents, size, query, PairTokenBudget())` windows per document — the computation
+  `70234f3` made. Fewer windows than the count ceiling always logs one of the three sizing lines, which the guard counts.
+  So on a run the guard accepts, every request went out as it would have under `70234f3`.
+- **Checked on the wire**: a plumbing smoke on the new build (`--n=8`, `formula`, `formula2` and mMiniLMv2's `rr` and
+  `rrk`, 2026-09-25T07:29Z, `devtools/_judge-bench-mixed/results-2026-09-25T072928.629Z.json`, output
+  `devtools/_run9/smoke-split.txt`) sent `/v1/rerank` bodies byte-identical to the first smoke's (the `70234f3` build) on
+  32 of 32 queries for each arm, and returned the identical page on 32 of 32, as `formula` did. Every guard held, with 0
+  pace lines.
+- **The guard still sees W2's lines**: every Information line `ChunkedScoreProvider` and `RerankAdmission` can log — the
+  sized, after-a-cut and new fewest-windows forms; the skip, for a long or a short-facts recall, with and without a probe,
+  for each of its reasons; both re-measure lines — was rendered from its template and matched against the bench's
+  patterns as committed (scratch `devtools/_run9/pace-patterns.mjs`): 29 of 29 are counted once by `PACE_LINE` and parsed
+  by their own pattern (`PACE_SIZED`, `PACE_AFTER_CUT`, `PACE_FEWEST`, `PACE_SKIP`, `PACE_REMEASURED`).
+
+### The load
+
+The machine is shared. When this was written another session was building and testing Lyntai (MSBuild workers, `testhost`
+at ~24% of the machine), and Ollama's own runner (a `llama-server` that is not ours and is not touched) was resident, with
+~8.4 GB of the GPU's 12 GB in use. A sampler (scratch `devtools/_run9/load-sampler.ps1`, output
+`devtools/_run9/load-split.log`) records the machine's busy share, the GPU's utilisation and memory, and the five busiest
+processes about once a minute; the record states, per run, what else ran beside it. Two reranker arms per run is a third
+of the VOID attempt's GPU contention; guard 7 is what would show that it was still too much.
