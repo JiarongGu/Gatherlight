@@ -276,10 +276,12 @@ public static class GgufCatalog
     /// where llama.cpp can use no GPU, or where the judge has been skipped for being too slow (<see cref="RerankerWithoutGpu"/>).
     /// 182/240 is Run 6c's GPU figure, another run, descriptive. 「集成显卡也算显卡」 says why a laptop with only an integrated
     /// GPU is not offered it by the device probe. What an integrated GPU does is said once, here, for that same laptop's Arc:
-    /// both rerankers slower than its CPU — mMiniLMv2 5.1× (Run 8b) to 6.7× (the device measurement with only the Arc
-    /// visible), BGE 2.7–3.3× — figures from ONE machine, labelled so; with only the Arc visible the app chose the CPU for
-    /// both and, BGE being too slow for the default page there, moved the badge to mMiniLMv2 (docs/self-managed-llm-runtime.md,
-    /// 2026-09-26). Run 8b's accuracy figures are not quoted: its rule was not read. It said 「两者都还没有量过」 until then. The
+    /// both rerankers slower than its CPU — WITHIN each run of the device measurement (both GPUs visible, then only the
+    /// Arc; docs/self-managed-llm-runtime.md, 2026-09-26), mMiniLMv2 6.0× and 6.7×, BGE 2.9× and 2.7× per pair token —
+    /// figures from ONE machine, labelled so; with only the Arc visible the app chose the CPU for both and, BGE being too
+    /// slow for the default page there, moved the badge to mMiniLMv2. docs/judge-bench.md Run 8b pointed the same way, but it
+    /// is an UNREAD run (its rule was not read) and its ratios compare its iGPU arms with another run's CPU, so none of its
+    /// figures is quoted. It said 「两者都还没有量过」 until then. The
     /// third reason it is recommended — BGE MEASURED too slow on this machine (<see cref="RerankDeviceVerdict"/>) — needs BGE
     /// on disk first, which the note says, and it makes 「有显卡时推荐的仍是 BGE」 conditional on that measurement.</summary>
     private const string SmallRerankerCpuNote =
@@ -293,7 +295,7 @@ public static class GgufCatalog
         + "同一台机器上 BGE 每 1,000 个词元要约 3 秒,40–60 条长笔记每条只读开头一段也要一分多钟到两分钟,"
         + "240 次里 230 次等满一分钟(那时应用还不会跳过),带进前八和不开判断一样(104/240)。"
         + "LAMAR 没有在只用 CPU 的机器上量过。有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE。"
-        + "只有集成显卡时:在同一台笔记本的 Arc 集成显卡上,两个重排模型都比它的 CPU 慢(mMiniLMv2 约 5–7 倍,BGE 约 3 倍;"
+        + "只有集成显卡时:在同一台笔记本的 Arc 集成显卡上,两个重排模型都比它的 CPU 慢(mMiniLMv2 约 6–7 倍,BGE 约 3 倍;"
         + "只是这一台机器上的数)。所以应用在下载后第一次自己启动 llama.cpp 时,会在 CPU 和每块显卡上各测一次,"
         + "让它在最快的那个上运行 —— 那台笔记本只露出集成显卡时,两者都选了 CPU;"
         + "BGE 在那里连 CPU 上也赶不上默认检索里的长事实,应用测完就改为推荐 mMiniLMv2。";

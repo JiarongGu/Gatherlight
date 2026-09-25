@@ -424,10 +424,13 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// are long: serial medians on those notes 2.0 → 3.2 s (BGE), 2.2 → 3.2 s (LAMAR), 0.5 → 1.2 s (mMiniLMv2); unchanged
 /// on short facts. Long and short notes MIXED in one recall were measured in Run 9 (30 short facts beside 30 long notes,
 /// the same 240 questions): short-target found@8 not significantly lower in windows than cut (94 → 91, 101 → 99, 98 → 97
-/// of 120; a loss of up to 4–6 points not ruled out), long targets +30 / +50 / +69. Unmeasured: notes past five
-/// window-lengths (the stretches between windows go unread),
-/// real household notes, a CPU-only machine — where <see cref="RerankPace"/> gives a long note fewer windows by design,
-/// down to the cut, but neither what that costs nor how soon the pace settles has been measured.</para></summary>
+/// of 120; a loss of up to 4–6 points not ruled out), long targets +30 / +50 / +69. On a CPU-only machine the windows and
+/// the pace were measured in Run 8 (one laptop's CPU, 60 long notes, 240 questions): mMiniLMv2 judged every recall in
+/// windows, a median 17.5 s, found@8 180/240 against no judge's 104; BGE waited out the minute on 230 of 240 recalls and
+/// ended where no judge is (104) — which is why <see cref="RerankPace"/> now SKIPS a recall that one window per candidate
+/// cannot fit, a rule derived from that run and not run on its CPU. Unmeasured: notes past five window-lengths (the
+/// stretches between windows go unread), real household notes, and how soon the pace settles on a CPU where calls are
+/// SIZED — Run 8's mMiniLMv2 never needed sizing.</para></summary>
 public sealed class RerankInputCap : IMemoryVerificationPolicy
 {
     /// <summary>The most one candidate's text may run, in UTF-16 units. See the class comment.</summary>

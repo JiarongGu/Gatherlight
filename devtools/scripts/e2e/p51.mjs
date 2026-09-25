@@ -1332,7 +1332,7 @@ try {
         miniNote.slice(miniNote.indexOf('在一台只用 CPU'), miniNote.indexOf('在一台只用 CPU') + 240));
       ok('mMiniLMv2\'s row says it is what the app recommends where llama.cpp can use no GPU (an integrated one counts), or where the judge was skipped — that its long-note loss to BGE was on a GPU — and what one laptop\'s integrated GPU did',
         /llama\.cpp 用不了任何显卡时\(集成显卡也算显卡\),应用推荐它而不是 BGE/.test(miniNote) && /「判断」那一行也会建议改用它/.test(miniNote)
-          && /有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE。只有集成显卡时:在同一台笔记本的 Arc 集成显卡上,两个重排模型都比它的 CPU 慢\(mMiniLMv2 约 5–7 倍,BGE 约 3 倍;只是这一台机器上的数\)/.test(miniNote)
+          && /有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE。只有集成显卡时:在同一台笔记本的 Arc 集成显卡上,两个重排模型都比它的 CPU 慢\(mMiniLMv2 约 6–7 倍,BGE 约 3 倍;只是这一台机器上的数\)/.test(miniNote)
           && /那台笔记本只露出集成显卡时,两者都选了 CPU;BGE 在那里连 CPU 上也赶不上默认检索里的长事实,应用测完就改为推荐 mMiniLMv2/.test(miniNote)
           && !/还没有量过。/.test(miniNote.slice(miniNote.indexOf('只有集成显卡'))) && !/两者都还没有量过/.test(miniNote)
           && /BGE 下载后,应用会在这台机器的 CPU 和每块显卡上测它的速度,连最快的设备都赶不上时,「资源」也会改为推荐它/.test(miniNote)
