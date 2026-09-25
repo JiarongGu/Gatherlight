@@ -1276,47 +1276,66 @@ try {
       ok('…and says a fact goes partly unread only past 5 windows — 1,265–2,530 characters — and how much',
         /1,265–2,530 字以上/.test(String(mini?.note)) && /约一半读不到/.test(String(mini?.note))
           && !/1,000–2,000 字以上/.test(String(mini?.note)), String(mini?.note));
-      // EVERY catalogued reranker says what a SLOW machine does (a call sized to the verification deadline by the measured
-      // pace, down to reading only the first window — RerankPace) and that mixed long/short recalls are unmeasured. The
-      // mixed clause was in mMiniLMv2's note alone, and the slow-machine clause nowhere.
+      // EVERY catalogued reranker says what a SLOW machine does, in ONE shared clause (GgufCatalog.RerankerLatencyCaveat), each
+      // part what RerankPace does: long facts read in fewer windows, down to the first; the first recall after a launch can
+      // still wait the minute (the pace starts from the GPU figure); ONE wait is damped, so a truly slow machine waits TWICE;
+      // after a wait, one window per long fact until a recall answers in time; a recall whose one-window call is predicted
+      // past ~48 s (0.8 of the minute — computed from RerankPace.OneWindowShareOfDeadline, so it cannot drift) or half the
+      // minute right after a wait is SKIPPED at once and re-measured at most every ten minutes; for a minute or two after a
+      // wait recalls skip too; the skips show in the 判断 row. And that mixed long/short recalls are unmeasured — that clause
+      // EXACTLY as it stands, until Run 9 has a valid result. The clause was 978 characters in one parenthesis, repeated on
+      // three rows, until review (2026-09-25); Run 8's CPU figures now live in mMiniLMv2's row only, below.
       const rerankerNotes = [RERANKER, 'LAMAR-600m.Q5_K_M', MMINILM].map((id) => [id, String(rowOf(shelf, id)?.note ?? '')]);
-      ok('every catalogued reranker\'s note says what a slow machine does — fewer windows, down to the first, within the one-minute wait — and that mixed recalls are unmeasured',
-        rerankerNotes.every(([, n]) => /只有 CPU 等较慢的机器上/.test(n) && /少分几段/.test(n) && /最少只读开头一段/.test(n)
-          && /一分钟/.test(n) && /长短事实混在一起的检索还没有量过/.test(n)),
-        JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('BGE 与 LAMAR 每次检索约 3.2 秒'), n.indexOf('BGE 与 LAMAR 每次检索约 3.2 秒') + 160)])));
-      // …and what the pace does NOT promise (review, 2026-09-25): it starts from the GPU figure after every launch, so the
-      // first recall after a launch with too many long facts can still wait the full minute and come back unjudged (the
-      // engine's own order). The clause said only 尽量 before.
-      ok('…and says the pace restarts from the GPU figure at every launch — a first recall can still wait the minute and come back unjudged',
-        rerankerNotes.every(([, n]) => /每次启动后它都先按显卡上的速度估计/.test(n) && /仍可能等满一分钟/.test(n)
-          && /按没有判断时的顺序返回/.test(n)),
-        JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('尽量'), n.indexOf('尽量') + 120)])));
-      // A cut proves only a lower bound, so after one the pace reads ONE window per long fact until a recall answers in
-      // time (RerankPace.AfterCut). Where even that cannot finish, every such recall used to wait the minute — and since
-      // docs/judge-bench.md Run 8 (2026-09-25) the pace SKIPS it at once and re-measures at most every ten minutes
-      // (RerankPace.Admit), and after a cut the next ~two minutes skip too, behind the batch the router still scores.
-      // The clause said 「这类检索每次都会等满一分钟」 until then — the thing the skip removed.
-      ok('…and says what follows a cut — one window per long fact until a recall finishes in time — and that too many facts are now skipped at once and re-checked, not waited for',
-        rerankerNotes.every(([, n]) => /之后遇到长事实的检索会先每条只读开头一段/.test(n) && /等有一次在时限内做完、测出这台机器的速度/.test(n)
-          && /一次要读的事实多到每条只读开头一段也来不及时,不会每次都等满一分钟/.test(n) && /当即跳过这次判断/.test(n)
-          && /最多每十分钟/.test(n) && /多等约 5 秒/.test(n) && /之后约两分钟内的检索也会先跳过判断/.test(n)
-          && !/这类检索每次都会等满一分钟/.test(n)),
-        JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('之后遇到'), n.indexOf('之后遇到') + 240)])));
-      // …and it is MEASURED on a CPU-only machine now (docs/judge-bench.md Run 8), said with its configuration: the
-      // machine, the fixture, what each reranker did there — mMiniLMv2 judged every recall, BGE waited the minute on 230 of
-      // 240 before the skip and ended where no judge is — why mMiniLMv2 is what the app suggests without a GPU, and that
-      // LAMAR was not run there. It said 「这一点还没有在只有 CPU 的机器上实测过」 until then.
-      ok('…and states Run 8\'s CPU result with its configuration — mMiniLMv2 17.5 s and 180/240, BGE ~3 s per 1,000 tokens and 230 of 240 minute-waits before the skip, 104/240 — the no-GPU recommendation, and LAMAR unmeasured there',
-        rerankerNotes.every(([, n]) => !/这一点还没有在只有 CPU 的机器上实测过/.test(n) && /Intel Core Ultra 9 185H/.test(n)
-          && /不用显卡/.test(n) && /240 道提问/.test(n) && /不开语义/.test(n) && /17\.5 秒/.test(n) && /180\/240/.test(n)
-          && /104\/240/.test(n) && /每 1,000 个词元要约 3 秒/.test(n) && /230 次等满一分钟/.test(n) && /那一轮还没有跳过这一步/.test(n)
-          && /检测不到显卡时,应用推荐 mMiniLMv2/.test(n) && /LAMAR 没有在只有 CPU 的机器上量过/.test(n)),
-        JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('在一台只用 CPU'), n.indexOf('在一台只用 CPU') + 200)])));
-      // mMiniLMv2's OWN row says it is the no-GPU recommendation and why, and its long-note loss to BGE is a GPU result.
-      ok('mMiniLMv2\'s row says it is what the app recommends without a GPU — and that its long-note loss to BGE was on a GPU',
-        /llama\.cpp 检测不到显卡时,应用推荐它而不是 BGE/.test(String(mini?.note)) && /有显卡时推荐的仍是 BGE/.test(String(mini?.note))
-          && /\(在显卡上;测完后另算的比较\)/.test(String(mini?.note)),
-        String(mini?.note));
+      const MIXED = '长短事实混在一起的检索还没有量过(长事实取几段里最高的一段,得高分的机会比只有一段的短事实多)';
+      for (const [id, n] of rerankerNotes) {
+        ok(`${id}: its note says what a slow machine does — fewer windows, down to the first — and that mixed recalls are unmeasured, that clause exactly`,
+          /机器较慢时,应用按测到的速度让长事实少读几段,最少只读开头一段/.test(n) && /写在后面的答案就读不到/.test(n)
+            && n.includes(MIXED),
+          n.slice(n.indexOf('机器较慢时'), n.indexOf('机器较慢时') + 80));
+        ok(`${id}: …that the pace restarts from the GPU figure at every launch — a first recall can still wait the minute — and that a truly slow machine waits TWICE, because one wait is damped`,
+          /每次启动后它先按显卡上的速度估计/.test(n) && /仍可能等满一分钟、按没有判断时的顺序返回/.test(n)
+            && /单独一次等满,应用只把速度估计放慢几倍/.test(n) && /真正慢的机器一般要等满两次/.test(n),
+          n.slice(n.indexOf('每次启动后'), n.indexOf('每次启动后') + 140));
+        ok(`${id}: …what follows a wait, and when a recall is SKIPPED — past ~48 s, or half a minute right after a wait — re-measured every ten minutes, skipped for a minute or two after a wait, and counted in the 判断 row`,
+          /等满之后,遇到长事实的检索先每条只读开头一段/.test(n) && /等有一次在时限内做完、测出这台机器的速度/.test(n)
+            && /预计每条只读开头一段也要超过约 48 秒\(刚等满过一分钟时是半分钟\)时,应用当即跳过这次判断/.test(n)
+            && /最多每十分钟花几秒重新测一次速度/.test(n) && /等满一分钟之后的一两分钟里,检索也会先跳过判断/.test(n)
+            && /跳过了几次,「判断」那一行会写出来/.test(n),
+          n.slice(n.indexOf('等满之后'), n.indexOf('等满之后') + 200));
+        // The words the review replaced (M7, I3): a figure that was one attempt, a window that was two minutes, and a
+        // threshold said as 「来不及」 where the code skipped at HALF the minute.
+        ok(`${id}: …and none of the replaced wordings`,
+          !/多等约 5 秒/.test(n) && !/约两分钟内/.test(n) && !/也来不及时/.test(n) && !/这类检索每次都会等满一分钟/.test(n)
+            && !/检测不到显卡/.test(n) && !/这一点还没有在只有 CPU 的机器上实测过/.test(n),
+          n.slice(0, 120));
+      }
+      // Run 8's CPU measurement is mMiniLMv2's row's, with its configuration — the reason it is recommended where llama.cpp can
+      // use no GPU (an integrated one counts), or where the judge has been skipped — and states the integrated-GPU gap.
+      const miniNote = String(mini?.note ?? '');
+      ok('mMiniLMv2\'s row states Run 8\'s CPU result with its configuration — 17.5 s, at most ~22 s, 180/240; BGE ~3 s per 1,000 tokens, 1–2 minutes, 230 of 240 minute-waits, 104/240 — and LAMAR unmeasured there',
+        /在一台只用 CPU 的笔记本上实测过\(Intel Core Ultra 9 185H,不用显卡,llama\.cpp b10549;/.test(miniNote)
+          && /240 道提问/.test(miniNote) && /不开语义/.test(miniNote) && /17\.5 秒、最慢约 22 秒/.test(miniNote) && /180\/240/.test(miniNote)
+          && /104\/240/.test(miniNote) && /每 1,000 个词元要约 3 秒/.test(miniNote) && /一分多钟到两分钟/.test(miniNote)
+          && /230 次等满一分钟\(那时应用还不会跳过\)/.test(miniNote) && /LAMAR 没有在只用 CPU 的机器上量过/.test(miniNote),
+        miniNote.slice(miniNote.indexOf('在一台只用 CPU'), miniNote.indexOf('在一台只用 CPU') + 240));
+      ok('mMiniLMv2\'s row says it is what the app recommends where llama.cpp can use no GPU (an integrated one counts), or where the judge was skipped — that its long-note loss to BGE was on a GPU — and the integrated-GPU gap',
+        /llama\.cpp 用不了任何显卡时\(集成显卡也算显卡\),应用推荐它而不是 BGE/.test(miniNote) && /「判断」那一行也会建议改用它/.test(miniNote)
+          && /有显卡时推荐的仍是 BGE;只有集成显卡的机器两者都还没有量过/.test(miniNote)
+          && /\(在显卡上;测完后另算的比较\)/.test(miniNote),
+        miniNote);
+      // BGE's and LAMAR's rows POINT at it, with a line of their own, and do not repeat the configuration.
+      const bgeNote = String(rowOf(shelf, RERANKER)?.note ?? '');
+      const lamarNote = String(rowOf(shelf, 'LAMAR-600m.Q5_K_M')?.note ?? '');
+      ok('BGE\'s row says what Run 8 found for it on a CPU — almost never in time, 230 of 240 minute-waits before the skip, no verdict either way, 104/240 — pointing at mMiniLMv2\'s row for the configuration',
+        /只用 CPU 时它几乎总是来不及判断/.test(bgeNote) && /实测和设置见 mMiniLMv2 那一行/.test(bgeNote)
+          && /230 次等满一分钟、没能判断/.test(bgeNote) && /现在会当即跳过,同样没有判断/.test(bgeNote) && /104\/240/.test(bgeNote)
+          && /llama\.cpp 用不了任何显卡时,应用推荐 mMiniLMv2/.test(bgeNote) && /只有集成显卡的机器两者都还没有量过/.test(bgeNote)
+          && !/Intel Core Ultra 9 185H/.test(bgeNote),
+        bgeNote.slice(bgeNote.indexOf('只用 CPU 时'), bgeNote.indexOf('只用 CPU 时') + 200));
+      ok('LAMAR\'s row says it was not run on a CPU, and points at BGE\'s — the same size — without repeating the configuration',
+        /LAMAR 没有在只用 CPU 的机器上量过;和它一样大的 BGE/.test(lamarNote) && /见 BGE 那一行/.test(lamarNote)
+          && /llama\.cpp 用不了任何显卡时,应用推荐 mMiniLMv2/.test(lamarNote) && !/Intel Core Ultra 9 185H/.test(lamarNote),
+        lamarNote.slice(lamarNote.indexOf('LAMAR 没有'), lamarNote.indexOf('LAMAR 没有') + 120));
       // mMiniLMv2's parity with BGE is a SHORT-fact result: on Run 6c's long notes, both read in windows, it brought the
       // answer onto the page significantly less often (182 against 201 of 240, 33/14, p = 0.008) — post hoc, and said so.
       ok('…and mMiniLMv2\'s parity with BGE is qualified as short-fact, beside the long-note loss with its p and that it was computed afterwards',

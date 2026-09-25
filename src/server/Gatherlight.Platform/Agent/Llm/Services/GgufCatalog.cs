@@ -201,60 +201,90 @@ public static class GgufCatalog
     /// mMiniLMv2 (1,155 ms), against 2.0 / 2.2 / 0.5 s when each note was cut to its first window. The clause names those
     /// figures and their notes, because 「事实很长时更慢」 alone would not let a household weigh it.</para>
     ///
-    /// <para><b>What happens on a SLOW machine</b> (2026-09-24): the per-call window count was tuned on that GPU, so a
-    /// chunked call is now sized by the speed this process measures (<see cref="RerankPace"/>) to fit half the 60-second
-    /// verification deadline — fewer windows per long candidate, down to one, the cut, whose cost Run 6 measured (an answer
-    /// past the first window is not read). The clause says exactly that, and 尽量 rather than a promise, for the reasons
-    /// it now states (review, 2026-09-25), each what the code does:
+    /// <para><b>What happens on a SLOW machine</b> (2026-09-24, reviewed twice 2026-09-25): the per-call window count was
+    /// tuned on that GPU, so a chunked call is sized by the speed this process measures (<see cref="RerankPace"/>) to fit
+    /// half the 60-second verification deadline — fewer windows per long candidate, down to one, the cut, whose cost Run 6
+    /// measured (an answer past the first window is not read). The clause says what the household experiences, each part
+    /// what the code does:
     /// <list type="bullet">
     /// <item>The pace starts from the GPU figure after every launch and learns only from the calls it times, so the first
     /// recall after a launch that has too many long facts to read can still run to the full minute and come back unjudged
-    /// (the verification cut there is NoOpinion, the engine's own order). "Can still", not "will": slow recalls big enough
-    /// to measure may already have taught the pace.</item>
-    /// <item>A cut proves only a lower bound, so after one past the budget every recall with a long fact reads ONE window
-    /// per fact until one comes back in time, and that answer sets the pace (<see cref="RerankPace.AfterCut"/>). The clause
-    /// said nothing about this at first — worse, halving from the bound, as the pace then did, a machine 30× slower
-    /// waited the minute four times running; one window per fact makes that one wait wherever one window each can finish
-    /// in time.</item>
-    /// <item>Where even one window per fact cannot finish in time, no sizing can fix it — fewer windows than candidates
-    /// would leave one unscored. Until 2026-09-25 every such recall waited the minute and came back unjudged, and the
-    /// clause said so; since then the pace SKIPS it at once (<see cref="RerankPace.Admit"/>), re-measures with a probe of
-    /// ~5 s at most once per ten minutes (<see cref="RerankPace.ReprobeInterval"/>), and resumes when that says the call
-    /// fits — and for about twice as long as an abandoned call ran, recalls skip too, because llama-server goes on scoring
-    /// it (<see cref="RerankPace.QueueFactor"/>). The clause says what the household experiences: the minute is waited
-    /// once, then such recalls come back at once in the engine's order.</item>
-    /// <item>It said 「这一点还没有在只有 CPU 的机器上实测过」 until <c>docs/judge-bench.md</c> Run 8 (2026-09-25) measured
-    /// this machine's CPU, and now quotes that run, configuration first: mMiniLMv2 17.5 s per recall, every recall judged,
-    /// found@8 180/240 (no judge 104; Run 6c's GPU figure 182, another run, descriptive); BGE ~3 s per 1,000 tokens, ~2
-    /// minutes for 40–60 notes at one window each, 230 of 240 recalls waiting the minute BEFORE the skip existed, found@8
-    /// 104 — no judge's. It says that was before the skip, because the minute-waits are what the skip removed and the
-    /// found@8 is what it cannot change. LAMAR was not run on the CPU, and the clause says so.</item>
+    /// (the verification cut there is NoOpinion, the engine's own order).</item>
+    /// <item>ONE such wait is damped — it slows the estimate at most ×4 (<see cref="RerankPace.MaxLoneRaise"/>) — so that a
+    /// single stall does not switch the judge off; a second in a row is believed. So a machine that truly is slow waits the
+    /// minute TWICE before the app believes it, and the clause says so.</item>
+    /// <item>After a wait, every recall with a long fact reads ONE window per fact until one comes back in time, and that
+    /// answer sets the pace (<see cref="RerankPace.AfterCut"/>).</item>
+    /// <item>Where even one window per fact is predicted past <see cref="RerankPace.OneWindowLimit"/> — ~48 s, 0.8 of the
+    /// minute (<see cref="RerankPace.OneWindowShareOfDeadline"/>), or half the minute while the estimate is only a lower
+    /// bound after a wait — the recall is SKIPPED at once, re-measured with a probe of a few seconds at most once per ten
+    /// minutes (<see cref="RerankPace.ReprobeInterval"/>), resumed when that says it fits; and for a minute or two after a
+    /// wait, recalls skip too, because llama-server goes on scoring the abandoned call (<see cref="RerankPace.QueueFactor"/>).
+    /// The figure is computed from those constants, so the sentence cannot drift from the code. It said 「来不及」 until
+    /// review, which read as "not within the minute" while the code skipped at HALF of it.</item>
+    /// <item>The skips are counted and the 判断 row says so (<see cref="SkipNotice"/>).</item>
     /// </list></para>
+    ///
+    /// <para><b>The CPU measurement is ONE row's, not every row's</b> (review, 2026-09-25: the clause had grown to 978
+    /// characters inside one parenthesis, repeated on three rows). Run 8's figures are the reason mMiniLMv2 is recommended
+    /// without a GPU, so they sit in mMiniLMv2's row (<see cref="SmallRerankerCpuNote"/>); BGE's row says what that run
+    /// found for BGE (<see cref="BgeCpuNote"/>) and LAMAR's that it was not run there (<see cref="LamarCpuNote"/>).</para>
     ///
     /// <para><b>Mixed recalls are unmeasured, for every reranker</b>: Runs 6 and 6c showed each reranker recalls where every
     /// candidate was long or every one was short, and a long note's best window has up to five chances to score high where a
-    /// short fact has one. It was in mMiniLMv2's note only; it belongs to all three.</para></summary>
-    private const string RerankerLatencyCaveat =
-        "(模型已加载、在显卡上、每次不超过 60 条候选、事实都很短时测得;只有 CPU 的机器、候选更多或事实很长的检索,"
-        + "都可能慢得多 —— 默认每次取 8 条时候选最多 96 条,限定类别或一次要 34 条以上时可达 400 条;"
-        + "较长的事实会分段打分、每段都要算一次,在 60 条约 900–1,200 字的长笔记上,"
+    /// short fact has one. It was in mMiniLMv2's note only; it belongs to all three. Run 9 is measuring it; until it has a
+    /// valid result the clause stays exactly as it is.</para></summary>
+    private static readonly string RerankerLatencyCaveat =
+        "(模型已加载、在显卡上、每次不超过 60 条候选、事实都很短时测得。候选更多、事实更长或机器更慢时都会慢得多 —— "
+        + "默认每次取 8 条时候选最多 96 条,限定类别或一次要 34 条以上时可达 400 条;"
+        + "较长的事实会分段打分、每段算一次,在同一块显卡上、60 条约 900–1,200 字的长笔记上,"
         + "BGE 与 LAMAR 每次检索约 3.2 秒,mMiniLMv2 约 1.2 秒。"
-        + "在只有 CPU 等较慢的机器上,应用会按实测的速度让长事实少分几段来读(最少只读开头一段,那时写在后面的答案就读不到),"
-        + "尽量让判断在它最多等待的一分钟内做完 —— 但每次启动后它都先按显卡上的速度估计,所以启动后头一次要读的长事实太多时,"
-        + "仍可能等满一分钟、那次检索按没有判断时的顺序返回;之后遇到长事实的检索会先每条只读开头一段,"
-        + "等有一次在时限内做完、测出这台机器的速度,再按测出的速度分段。一次要读的事实多到每条只读开头一段也来不及时,"
-        + "不会每次都等满一分钟:应用按测出的速度当即跳过这次判断,检索按没有判断时的顺序返回;"
-        + "最多每十分钟在这样一次检索里用几条事实重新测一次速度(那次多等约 5 秒),测出来来得及就恢复判断。"
-        + "等满一分钟的那次打分其实还在后台算,所以之后约两分钟内的检索也会先跳过判断,免得排在它后面再等一分钟。"
-        + "在一台只用 CPU 的笔记本上(Intel Core Ultra 9 185H,不用显卡,llama.cpp b10549;"
-        + "60 条约 900–1,200 字的长笔记、240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页)实测过:"
-        + "mMiniLMv2 分段读每次检索约 17.5 秒,每次都在一分钟内做完,答案带进前八 180/240"
-        + "(不开判断 104/240;在显卡上另一轮是 182/240);"
-        + "BGE 每 1,000 个词元要约 3 秒,一次 40–60 条长笔记每条只读开头一段也要约两分钟 —— 那一轮还没有跳过这一步,"
-        + "240 次检索里 230 次等满一分钟、按没有判断时的顺序返回,带进前八和不开判断一样(104/240)。"
-        + "所以检测不到显卡时,应用推荐 mMiniLMv2。LAMAR 没有在只有 CPU 的机器上量过。"
+        + "机器较慢时,应用按测到的速度让长事实少读几段,最少只读开头一段(写在后面的答案就读不到)。"
+        + "每次启动后它先按显卡上的速度估计,所以启动后头一次要读的长事实太多时,仍可能等满一分钟、按没有判断时的顺序返回;"
+        + "单独一次等满,应用只把速度估计放慢几倍,免得一次偶然的卡顿就停掉判断,所以真正慢的机器一般要等满两次,应用才信它慢。"
+        + "等满之后,遇到长事实的检索先每条只读开头一段,等有一次在时限内做完、测出这台机器的速度,再按它分段。"
+        + $"预计每条只读开头一段也要超过约 {OneWindowLimitSeconds} 秒(刚等满过一分钟时是半分钟)时,"
+        + "应用当即跳过这次判断、按没有判断时的顺序返回,最多每十分钟花几秒重新测一次速度,赶得上就恢复;"
+        + "等满一分钟之后的一两分钟里,检索也会先跳过判断(那次打分还在后台算)。跳过了几次,「判断」那一行会写出来。"
         + "长短事实混在一起的检索还没有量过"
         + "(长事实取几段里最高的一段,得高分的机会比只有一段的短事实多))";
+
+    /// <summary>The limit a one-window call is sent under while the estimate comes from an answer, in whole seconds at the
+    /// product's deadline — read from <see cref="RerankPace.OneWindowShareOfDeadline"/> and
+    /// <see cref="VerificationDeadlinePolicy.Default"/>, so the household sentence quotes what the code does: 48.</summary>
+    private static int OneWindowLimitSeconds =>
+        (int)Math.Round(RerankPace.OneWindowShareOfDeadline * VerificationDeadlinePolicy.Default.TotalSeconds);
+
+    /// <summary>docs/judge-bench.md Run 8, configuration first — mMiniLMv2's row, because it is why that row is recommended
+    /// where llama.cpp can use no GPU, or where the judge has been skipped for being too slow (<see cref="RerankerWithoutGpu"/>).
+    /// 182/240 is Run 6c's GPU figure, another run, descriptive. 「集成显卡也算显卡」 says why a laptop with only an integrated
+    /// GPU is not offered it by the device probe, and 「两者都还没有量过」 that nobody has measured either model there.</summary>
+    private const string SmallRerankerCpuNote =
+        "llama.cpp 用不了任何显卡时(集成显卡也算显卡),应用推荐它而不是 BGE;"
+        + "用着别的重排模型、检索却因为机器太慢跳过了判断时,「判断」那一行也会建议改用它。"
+        + "在一台只用 CPU 的笔记本上实测过(Intel Core Ultra 9 185H,不用显卡,llama.cpp b10549;"
+        + "60 条约 900–1,200 字的长笔记、240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页):"
+        + "它分段读每次检索约 17.5 秒、最慢约 22 秒,每次都在一分钟内判断完,答案带进前八 180/240"
+        + "(不开判断 104/240;在显卡上另一轮是 182/240)。"
+        + "同一台机器上 BGE 每 1,000 个词元要约 3 秒,40–60 条长笔记每条只读开头一段也要一分多钟到两分钟,"
+        + "240 次里 230 次等满一分钟(那时应用还不会跳过),带进前八和不开判断一样(104/240)。"
+        + "LAMAR 没有在只用 CPU 的机器上量过。有显卡时推荐的仍是 BGE;只有集成显卡的机器两者都还没有量过。";
+
+    /// <summary>BGE's own line from Run 8 — what the household on a CPU would meet — pointing at mMiniLMv2's row for the
+    /// configuration. The minute-waits were BEFORE the skip existed; the skip removes the wait and cannot add a verdict,
+    /// so the sentence says both.</summary>
+    private const string BgeCpuNote =
+        "只用 CPU 时它几乎总是来不及判断:在一台只用 CPU 的笔记本上(实测和设置见 mMiniLMv2 那一行),"
+        + "它每 1,000 个词元要约 3 秒,40–60 条长笔记每条只读开头一段也要一分多钟到两分钟,"
+        + "240 次检索里 230 次等满一分钟、没能判断(那时应用还不会跳过;现在会当即跳过,同样没有判断),"
+        + "带进前八和不开判断一样(104/240)。所以 llama.cpp 用不了任何显卡时,应用推荐 mMiniLMv2;"
+        + "只有集成显卡的机器两者都还没有量过。";
+
+    /// <summary>LAMAR was not run on the CPU. Its size is BGE's, so BGE's outcome is the likely one — said as likely,
+    /// pointing at the row that has the measurement.</summary>
+    private const string LamarCpuNote =
+        "LAMAR 没有在只用 CPU 的机器上量过;和它一样大的 BGE 在一台只用 CPU 的笔记本上几乎每次都来不及判断"
+        + "(见 BGE 那一行),所以 llama.cpp 用不了任何显卡时,应用推荐 mMiniLMv2。";
 
     /// <summary>LAMAR against BGE, ONE sentence shared by both rows — the same comparison read from either side,
     /// so the two notes cannot tell it differently. It used to say only that the fixture could not separate
@@ -392,7 +422,7 @@ public static class GgufCatalog
             // The configuration rides with the figures (RerankerBenchSetup), as it does on the mMiniLMv2 row — these two
             // quoted bare 「本应用双语测试集」 while the row below said 不开语义 and 8 on the page.
             RerankerNote + RerankerBenchSetup + "首位命中 86/240,前八命中 208/240,每次检索约 0.47 秒"
-            + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair),
+            + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair + LamarCpuNote),
         new GgufModel(
             RecommendedReranker, "BGE Reranker v2 M3(Q5 · 判断 · 重排)", GgufCapability.Reranking,
             "gpustack/bge-reranker-v2-m3-GGUF", "3093af03b1a635e67b084b1d8c03c5f5e020fd05",
@@ -401,7 +431,7 @@ public static class GgufCatalog
             // No claim about public Chinese benchmarks: this row once said it was stronger than its peers there,
             // naming no benchmark and no source — an attribution nobody could check is not one.
             RerankerNote + RerankerBenchSetup + "首位命中 90/240,前八命中 203/240,每次检索约 0.49 秒"
-            + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair),
+            + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair + BgeCpuNote),
 
         // THE SMALL RERANKER (docs/judge-bench.md Run 4, 2026-09-24): offered, and recommended ONLY where llama.cpp lists
         // no GPU (RerankerWithoutGpu, owner decision 2026-09-25 on Run 8) — elsewhere BGE stays RecommendedReranker by the
@@ -455,9 +485,8 @@ public static class GgufCatalog
             "91d70301828ba735c22eda56adb649f48975f371337e8c8b046326b885e26eed", 132_584_000,
             RerankerNote + "体积约 133 MB,是 BGE 的 28%。"
             // Its CPU result (docs/judge-bench.md Run 8) is the reason it is the no-GPU recommendation, so the row says so up
-            // front; the figures themselves are in RerankerLatencyCaveat, shared with BGE and LAMAR, below.
-            + "llama.cpp 检测不到显卡时,应用推荐它而不是 BGE:在一台只用 CPU 的笔记本上,同样一批长笔记它每次检索都在"
-            + "一分钟内判断完(约 17.5 秒),BGE 几乎每次都来不及(实测和设置见下文)。有显卡时推荐的仍是 BGE。"
+            // front, with the figures and their configuration — this row's alone; BGE's and LAMAR's point here.
+            + SmallRerankerCpuNote
             + RerankerBenchSetup.TrimEnd(':')
             + "(不开判断是 79/240 与 125/240):前八命中 199/240,同一轮 BGE 是 204/240 —— 没有测出显著差别(事实都很短时),"
             + "但也不能算一样好,这一轮排除不了它最多少带进约 11 题;比 LAMAR(208/240)显著少,9 题只有 LAMAR 带进前八,"
