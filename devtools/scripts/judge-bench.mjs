@@ -36,12 +36,14 @@
 //   - THE PACE MUST NOT HAVE MOVED (docs/judge-bench.md, "The bench and the pace"). A chunked reranker sizes each call
 //     to the time this machine takes (RerankPace), so on a contended or slow machine what an arm SENDS depends on
 //     timing — on the other arms running beside it — and two arms meant to differ only in their configuration would
-//     differ in their windows too. The bench counts the pace's Information line ("window(s) per long candidate
-//     instead of") in every arm's log after the run and saves the counts; any count above 0 VOIDS the run — a loud
-//     banner and exit 1, the rows still saved. Chosen over a pinned no-pace mode, which would measure a product
-//     nobody runs and add a knob to verify; on the GPU this bench runs on, the seed allows more than the count
-//     ceiling, so the pace sizes a call only after calls there ran far slower than the seed — heavy contention,
-//     exactly the run this guard voids. Runs saved before the guard carry no counts and re-analyse exactly as they
+//     differ in their windows too. The bench counts the pace's Information lines ("window(s) per long candidate
+//     instead of", which since 2026-09-25 also opens the line of a recall the pace SKIPPED — "0 window(s) … instead of
+//     N — the judge is skipped for this recall" — and "re-measured this machine", a probe that let the judge run) in every
+//     arm's log after the run and saves the counts; any count above 0 VOIDS the run — a loud banner and exit 1, the rows
+//     still saved. A skip there would be worse than a sized call: the arm would have abstained where its twin judged.
+//     Chosen over a pinned no-pace mode, which would measure a product nobody runs and add a knob to verify; on the
+//     GPU this bench runs on, the seed allows more than the count ceiling, so the pace sizes a call only after calls
+//     there ran far slower than the seed — heavy contention, exactly the run this guard voids. Runs saved before the guard carry no counts and re-analyse exactly as they
 //     did.
 //   - The questions are SHUFFLED with a seeded PRNG (mulberry32, --seed) and a fact's four questions are
 //     never asked back to back; every arm gets the SAME order. (The fixture has no cluster ids — its
@@ -467,9 +469,12 @@ const readLogs = (dataDir) => {
   if (!fs.existsSync(dir)) return '';
   return fs.readdirSync(dir).filter((f) => f.endsWith('.log')).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
 };
-// ChunkedScoreProvider's Information line when RerankPace gives a long candidate fewer windows than the count ceiling
-// would — the one trace of the pace changing what a call sends (the header's pace guard).
-const PACE_LINE = /window\(s\) per long candidate instead of/g;
+// ChunkedScoreProvider's Information lines when RerankPace changes what a call sends (the header's pace guard): fewer
+// windows per long candidate than the count ceiling would give ("N window(s) per long candidate instead of M"), NONE —
+// the judge skipped because even one window per candidate is predicted past the budget ("0 window(s) … instead of M —
+// the judge is skipped for this recall", 2026-09-25) — or a probe that re-measured the machine and let the judge run
+// ("re-measured this machine"). Each line is counted once: no line carries both phrases.
+const PACE_LINE = /window\(s\) per long candidate instead of|re-measured this machine/g;
 const paceCutsIn = (dataDir) => (readLogs(dataDir).match(PACE_LINE) ?? []).length;
 // Lyntai's TextRouter logs one `router: <provider> (model …) → <verdict>` line per attempt. `claude-cli` is the
 // CLI; `llamacpp` is LlamaCppSource's CHAT provider (its embedder and reranker register as `llamacpp-embed` and
@@ -976,10 +981,12 @@ const printCpu = (run) => {
   // What RerankPace would read off an ANSWERED single call, at the proxy: (wall − CallOverheadMs) per 1,000 pair tokens.
   const rateOf = (r) => (r.rerank?.calls === 1 && r.rerank.aborted === false && r.rerank.statuses === '200' && r.rerank.pairTokens > 0
     ? ((r.rerank.callMs - PACE.overheadMs) / r.rerank.pairTokens) * 1000 : null);
-  const sym = (r) => (r.error !== null ? 'x' : r.answered !== null ? 'v' : r.deadlineCut === true ? 'C' : !(r.rerank?.calls > 0) ? 'f' : '?');
+  const sym = (r) => (r.error !== null ? 'x' : r.answered !== null ? 'v' : r.deadlineCut === true ? 'C' : r.skip ? 'S'
+    : !(r.rerank?.calls > 0) ? 'f' : '?');
   console.log('\nCPU-ONLY ARMS (Run 8) — each alone on a fresh CPU-only router, one arm at a time; its accuracy pass is the serial pass.');
   console.log('Per recall, in the order asked: v = a verdict · C = cut by the 60 s verification deadline (NoOpinion: the engine\'s own'
-    + ' page) · f = no rerank call (FTS, or nothing to judge) · x = the recall errored · ? = no verdict and no cut (a fault)');
+    + ' page) · S = skipped by the pace (nothing, or only a probe, sent: NoOpinion at once) · f = no rerank call (FTS, or nothing'
+    + ' to judge) · x = the recall errored · ? = no verdict, no cut and no skip (a fault)');
   for (const arm of cpuArms) {
     const rows = [...arm.rows].sort((a, b) => a.seq - b.seq);
     const strip = rows.map(sym).join('');
@@ -1388,12 +1395,14 @@ const analyse = (run, { baseline = null } = {}) => {
     // guard is that every abstention IS a traced deadline cut (the product's own Warning logged during that recall), and
     // that no recall carrying a verdict was also cut.
     if (arm.cpu) {
-      const unexplained = arm.rows.filter((r) => r.error === null && r.ranked === 'graph' && r.answered === null && r.deadlineCut !== true);
-      const contradicted = arm.rows.filter((r) => r.answered !== null && r.deadlineCut === true);
+      // A pace SKIP explains an abstention too (2026-09-25) — the product's own line, placed on the recall like a cut's.
+      const unexplained = arm.rows.filter((r) => r.error === null && r.ranked === 'graph' && r.answered === null && r.deadlineCut !== true
+        && !r.skip);
+      const contradicted = arm.rows.filter((r) => r.answered !== null && (r.deadlineCut === true || r.skip));
       if (unexplained.length)
-        out.warnings.push(`arm ${arm.key} — ${unexplained.length}/${s.graph} graph recalls carried no verdict that no deadline cut explains (seq ${unexplained.slice(0, 12).map((r) => r.seq).join(', ')}): a fault, not the pace`);
+        out.warnings.push(`arm ${arm.key} — ${unexplained.length}/${s.graph} graph recalls carried no verdict that no deadline cut or pace skip explains (seq ${unexplained.slice(0, 12).map((r) => r.seq).join(', ')}): a fault, not the pace`);
       if (contradicted.length)
-        out.warnings.push(`arm ${arm.key} — ${contradicted.length} recall(s) carried a verdict AND a deadline-cut line (seq ${contradicted.slice(0, 12).map((r) => r.seq).join(', ')}): the log and the rows disagree`);
+        out.warnings.push(`arm ${arm.key} — ${contradicted.length} recall(s) carried a verdict AND a deadline-cut or pace-skip line (seq ${contradicted.slice(0, 12).map((r) => r.seq).join(', ')}): the log and the rows disagree`);
     } else if (arm.reranker && s.judged < s.graph)
       out.warnings.push(`arm ${arm.key} — reranker gave no verdict on ${s.graph - s.judged}/${s.graph} graph recalls (a reranker abstains only on a fault)`);
     else if (arm.enrichment && !arm.reranker && s.judged < 0.98 * s.graph)
@@ -1439,7 +1448,7 @@ const analyse = (run, { baseline = null } = {}) => {
       console.log(`\nPACE GUARD — exempt, as designated CPU-only arms (the pace is what they measure): ${exempt.map(([k, n]) => `${k} (${n} line${n === 1 ? '' : 's'})`).join(', ')};`
         + ` judged: ${Object.keys(meta.rerankPace).filter((k) => !cpuKeys.has(k)).join(', ') || 'none'}`);
     for (const [k, n] of fired)
-      out.warnings.push(`arm ${k} — RerankPace sized ${n} rerank call(s) below the count ceiling (its log: "window(s) per long candidate instead of …"): what the arm sent depended on this machine's timing`);
+      out.warnings.push(`arm ${k} — RerankPace sized, skipped or re-measured ${n} rerank call(s) (its log: "window(s) per long candidate instead of …" or "re-measured this machine"): what the arm sent depended on this machine's timing`);
     if (fired.length) paceVoid = fired.map(([k, n]) => `${k} (${n})`).join(', ');
   }
   if (out.warnings.length > 0) {
@@ -2681,6 +2690,10 @@ const live = async () => {
     const LOG_LINE = /^\[(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d{3})\] \[(\w+)\s*\] \[([^\]]*)\] (.*)$/;
     const PACE_SIZED = /(\d+) window\(s\) per long candidate instead of (\d+), so the call fits ~([\d.]+) s at the ([\d.]+) ms per 1,000 pair tokens/;
     const PACE_AFTER_CUT = /(\d+) window\(s\) per long candidate instead of (\d+), until a call answers in time.*? slower than ([\d.]+) ms per 1,000 pair tokens/;
+    // The pace's SKIP (2026-09-25): nothing sent, NoOpinion at once — with the probe's reading when one was sent, and the
+    // presumed queue behind an abandoned call when there was one. And the probe that let the judge run.
+    const PACE_SKIP = /0 window\(s\) per long candidate instead of (\d+) — the judge is skipped for this recall: (?:a probe of (\d+) of (\d+) .*?; )?one window per candidate is predicted at ~([\d.]+) s at the ([\d.]+) ms per 1,000 pair tokens measured here(?:, behind the ~([\d.]+) s the router is presumed still busy)?/;
+    const PACE_REMEASURED = /re-measured this machine on (\d+) of (\d+) candidates' first windows: ([\d.]+) ms per 1,000 pair tokens/;
     const DEADLINE = /memory verification gave no verdict within [\d.]+ s/;
     /** The product's own log lines, placed on the recall during which each was written (by timestamp): the deadline cut
      *  (VerificationDeadlinePolicy's Warning) and the pace's line (ChunkedScoreProvider's Information, both forms). */
@@ -2693,9 +2706,12 @@ const live = async () => {
         let p;
         if ((p = PACE_SIZED.exec(m[5]))) events.push({ at, kind: 'sized', windows: +p[1], byCount: +p[2], budgetS: +p[3], msPer1k: +p[4] });
         else if ((p = PACE_AFTER_CUT.exec(m[5]))) events.push({ at, kind: 'afterCut', windows: +p[1], byCount: +p[2], msPer1k: +p[3] });
+        else if ((p = PACE_SKIP.exec(m[5]))) events.push({ at, kind: 'skip', byCount: +p[1], ...(p[2] ? { probed: +p[2], of: +p[3] } : {}),
+          predictedS: +p[4], msPer1k: +p[5], ...(p[6] ? { queueS: +p[6] } : {}) });
+        else if ((p = PACE_REMEASURED.exec(m[5]))) events.push({ at, kind: 'remeasured', probed: +p[1], of: +p[2], msPer1k: +p[3] });
         else if (DEADLINE.test(m[5])) events.push({ at, kind: 'deadline' });
       }
-      for (const row of arm.rows) { row.deadlineCut = false; row.pace = null; }
+      for (const row of arm.rows) { row.deadlineCut = false; row.pace = null; row.skip = null; row.remeasured = null; }
       let unplaced = 0, doubled = 0;
       // The recalls ran back to back, so a line belongs to the LAST recall that had begun when it was written — the next
       // one's pace line can come within 10 ms of the previous recall's end (the smoke's did), so no slack after a recall
@@ -2705,6 +2721,14 @@ const live = async () => {
         const row = byStart.filter((r) => r.t0 <= e.at).at(-1);
         if (!row || e.at > row.t0 + row.ms + 1000) { unplaced++; continue; }
         if (e.kind === 'deadline') { if (row.deadlineCut) doubled++; row.deadlineCut = true; continue; }
+        // A skipped recall and a re-measured one each carry their own line, apart from the sizing line the same recall
+        // may also log after a probe let it run.
+        if (e.kind === 'skip' || e.kind === 'remeasured') {
+          const { at: _at, kind, ...rest } = e;
+          if (row[kind]) doubled++;
+          row[kind] = rest;
+          continue;
+        }
         if (row.pace) doubled++;
         row.pace = { kind: e.kind, windows: e.windows, byCount: e.byCount, msPer1k: e.msPer1k, ...(e.budgetS !== undefined ? { budgetS: e.budgetS } : {}) };
       }

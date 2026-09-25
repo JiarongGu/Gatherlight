@@ -42,9 +42,13 @@
 //      off by one window. 6e–6g: the time a rerank call is sized to (RerankPace, half the verification deadline). 6e:
 //      a lone slow call is not believed at once, a second is, and a long note is then read in FEWER windows; a fast
 //      pass-through call does not pull the estimate back down, and a slow call too small to measure teaches nothing.
-//      6f: after a call the deadline CUT — its true time ~2.8× the deadline — the next recall reads one window per
-//      candidate and gets its verdict, rather than halving from a lower bound into a second cut. 6g: a pace learned on
-//      English sizes a Chinese note by its tokens, not its characters. 6c also cuts a long question, counted by NFKC.
+//      6f: after a call the deadline CUT — its true time ~2.8× the deadline — a recall at once after it sends nothing
+//      (the router is presumed still scoring the abandoned call, as the fake is), and once that has passed the next reads
+//      one window per candidate and gets its verdict, rather than halving from a lower bound into a second cut. 6g: a
+//      pace learned on English sizes a Chinese note by its tokens, not its characters. 6h: where even one window per
+//      candidate cannot fit, the judge is SKIPPED — cut once, then fast with nothing sent — and after the re-probe
+//      interval a probe re-measures: still slow, still skipped; fast, and the same recall runs the judge. 6c also cuts a
+//      long question, counted by NFKC.
 //   7. Whether a reranker's TAGGING is happening — it goes to the CLI, and a signed-out CLI means none — is
 //      said in the 判断 row, the bind toast and the startup warning, each paired with a signed-in control.
 //      7b: a measurement knob set at startup reaches state/logs, not only stdout.
@@ -171,6 +175,9 @@ const CUTOFF_PORT = 5425;
 const cutoffDir = plantBoundReranker('cutoff', SLOW_RERANK);
 const SCRIPT_PORT = 5426;
 const scriptDir = plantBoundReranker('script', SLOW_RERANK);
+// Case 6h: the same slow reranker, slower than one window per candidate can fit, on a server of its own.
+const SKIP_PORT = 5427;
+const skipDir = plantBoundReranker('skip', SLOW_RERANK);
 
 const plantTaggingFixture = (suffix) => {
   const dir = dataDirFor(`p52-${suffix}`);
@@ -222,8 +229,10 @@ let modelsHung = 0;
 // Case 3b: a chat judge that never answers — each held response is kept, and released when the case ends.
 let hangChat = false;
 const heldChats = [];
-// Cases 6e–6g: how long the slow reranker takes per pair TOKEN; 0 answers at once (its startup warm included).
+// Cases 6e–6h: how long the slow reranker takes per pair TOKEN; 0 answers at once (its startup warm included).
 let slowMsPerToken = 0;
+// …and when it will have finished everything it was sent, abandoned requests included (the fake's one queue).
+let slowFreeAt = 0;
 // A pair's tokens as a real XLM-R reranker's cost follows them: 0.83 per CJK character, 0.25 per other — the rates
 // measured on the real router (docs/self-managed-llm-runtime.md), per UTF-16 unit, from U+2E80 up counted as CJK.
 const fakeTokens = (s) => {
@@ -286,11 +295,15 @@ const fake = http.createServer((req, res) => {
       }
       // One result for two documents: the ANSWER alone, ranked first. Unusable — not a failed ordering.
       if (json.model === SHORT_RERANK) { send({ model: json.model, results: results.slice(0, 1) }); return; }
-      // Cases 6e–6g: a reranker on a slow machine — it answers in time proportional to the PAIR tokens it is sent (the
-      // query beside each document), which is what a cross-encoder's cost follows.
+      // Cases 6e–6h: a reranker on a slow machine — it answers in time proportional to the PAIR tokens it is sent (the
+      // query beside each document), which is what a cross-encoder's cost follows. And ONE AT A TIME, as a real
+      // llama-server child does: a request waits for the ones before it, and a request its client ABANDONED is scored to
+      // the end all the same (docs/judge-bench.md Run 8 — the next call queues behind it). Every earlier case awaits each
+      // call before the next and abandons none, so the queue only ever holds work after a deadline cut.
       if (json.model === SLOW_RERANK && slowMsPerToken > 0) {
         const pairTokens = docs.reduce((a, d) => a + fakeTokens(String(json.query ?? '')) + fakeTokens(d), 0);
-        setTimeout(() => { if (!res.destroyed) send({ model: json.model, results }); }, Math.round(pairTokens * slowMsPerToken));
+        slowFreeAt = Math.max(Date.now(), slowFreeAt) + Math.round(pairTokens * slowMsPerToken);
+        setTimeout(() => { if (!res.destroyed) send({ model: json.model, results }); }, slowFreeAt - Date.now());
         return;
       }
       send({ model: json.model, results });
@@ -323,6 +336,7 @@ let unwindowedServer = null;
 let paceServer = null;
 let cutoffServer = null;
 let scriptServer = null;
+let skipServer = null;
 try {
   // The verification deadline shortened to 2 s (case 3b) — the knob can only shorten it, and every other judge call
   // on this server is answered by the fake at once.
@@ -1083,6 +1097,11 @@ try {
   // ~17 s, 2.8× the deadline, so the first recall is cut at 6 s and is NoOpinion (`answered` absent — Lyntai sets it only
   // when a verdict was judged). The next reads ONE window, ~3.4 s, and gets its verdict. Sized by the lower bound instead,
   // it reads 2, ~6.8 s, and is cut again — confirmed to FAIL so (and with AtLeast disabled altogether, 5 again).
+  // THE QUEUE (docs/judge-bench.md Run 8): the fake, like llama-server, goes on scoring the abandoned call — ~11 s more —
+  // and the pace presumes it busy for twice as long as the call ran (~12 s). So a recall made AT ONCE after the cut is
+  // SKIPPED — nothing sent, no verdict, fast — where sending it would queue behind the abandoned batch and be cut too
+  // (confirmed to FAIL so with the presumption removed: the second recall is sent, waits, and is cut). The one-window
+  // recall is made once the presumption has run out, read from the skip line's own figure.
   cutoffServer = startServer({
     dataDir: cutoffDir, port: CUTOFF_PORT,
     env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '6' },
@@ -1103,8 +1122,18 @@ try {
   const cutQuery = 'zzcutquery 摄影社每月最后一个周日去湿地公园拍鸟';
   const cutWindows = (span) => windowsOf(span, 'zzcutquery', cutLong);
   const cutShape = (list) => shapeOf(list, 'zzcuthead', 'zzcuttail');
+  // Every /v1/rerank request of this model a recall made (the fake records a request on arrival, cut-off ones included).
+  const rerankCalls = (span) => hits.slice(span.from, span.to).filter((h) => h.path === '/v1/rerank' && h.model === SLOW_RERANK);
+  // The pace's skip line (ChunkedScoreProvider.Skipped) — and, when the router was presumed busy, for how much longer.
+  const SKIP_LINE = /0 window\(s\) per long candidate instead of \d+ — the judge is skipped for this recall/;
+  const QUEUE_CLAUSE = /behind the ~([\d.]+) s the router is presumed still busy with a call abandoned earlier/;
   slowMsPerToken = 4;
   const cut1 = await timedRecall(cCut, cutQuery);
+  const cutQueued = await timedRecall(cCut, cutQuery);
+  const queuedSkip = logOf(cutoffDir).split('\n').filter((l) => SKIP_LINE.test(l)).at(-1) ?? '';
+  const presumed = Number((QUEUE_CLAUSE.exec(queuedSkip) ?? [])[1]);
+  // Past the presumption the skip line itself states, with a margin — the fake has long finished by then (~11 s).
+  await new Promise((r) => setTimeout(r, (Number.isFinite(presumed) ? presumed : 12) * 1000 + 1500));
   const cut2 = await timedRecall(cCut, cutQuery);
   slowMsPerToken = 0;
   // A window cut from the note, or the head alone: with one window per candidate the note goes as its first 1,000.
@@ -1113,7 +1142,12 @@ try {
     && (r.result?.facts ?? []).some((f) => String(f.content ?? '').includes('zzcuthead'));
   ok('(non-vacuity) the first recall sent all 5 windows and the deadline CUT it — the engine\'s page, no verdict — its true time ~2.8× the deadline',
     cw1.length === 5 && cutPage(cut1.result), `${cutShape(cw1)} ${at(cut1)}`);
-  ok('THE POINT: after the cut, the next recall reads ONE window per candidate — and comes back within the deadline with its verdict',
+  ok('THE POINT: a recall made AT ONCE after the cut sends NOTHING — the router is presumed still scoring the abandoned call — and comes back fast, the engine\'s page, no verdict',
+    rerankCalls(cutQueued).length === 0 && cutPage(cutQueued.result) && cutQueued.ms < 3000,
+    `${rerankCalls(cutQueued).length} request(s) ${at(cutQueued)}`);
+  ok('…and the log says so: skipped, behind the ~12 s the abandoned call is presumed to hold the router (twice the 6 s it ran)',
+    SKIP_LINE.test(queuedSkip) && presumed >= 10 && presumed <= 13, queuedSkip || '(no skip line)');
+  ok('THE POINT: once that has passed, the next recall reads ONE window per candidate — and comes back within the deadline with its verdict',
     cw2.length === 1 && cw2[0].includes('zzcuthead') && judgedPage(cut2.result), `${cutShape(cw2)} ${at(cut2)}`);
   const cutLog = logOf(cutoffDir);
   ok('…and the log says why — one window until a call answers in time — and names ONE cut, not two',
@@ -1170,6 +1204,114 @@ try {
     zaw.length >= 1 && zaw.length < 5 && zbw.length >= 1 && zbw.length < 5 && judgedPage(z1.result),
     `A ${shapeOf(zaw, 'zzzhAhead', 'zzzhAtail')} · B ${shapeOf(zbw, 'zzzhBhead', 'zzzhBtail')} ${at(z1)}`);
   scriptServer.stop(); scriptServer = null;
+
+  // --- 6h. where even ONE window per candidate cannot fit, the judge is SKIPPED at once — and re-measured later -------
+  // docs/judge-bench.md Run 8: on a CPU, BGE needed ~2 minutes for a recall of 40–60 long notes at one window each, and
+  // 230 of 240 recalls waited out the minute for no verdict. No sizing can fix that — fewer windows than candidates would
+  // leave one unscored — so the pace SKIPS such a recall: nothing sent, NoOpinion at once. Here the deadline knob is 3 s
+  // (a 1.5 s budget, so the re-probe interval — ten deadlines — is 30 s) and the recall's candidates are EIGHT notes of
+  // ~950 characters, each one window already (a pass-through call of ~6,500 pair tokens: big enough to teach at the seed,
+  // ~0.33 s predicted there). The fake reranker takes ~0.93 ms per pair token, so that call takes ~6 s, 2× the deadline:
+  //   1. the first recall, sized by the GPU seed, is sent and CUT at 3 s — the lower bound it leaves predicts the same
+  //      call at ~3 s, twice the budget, and one window each is all this call ever was;
+  //   2. at once after it, a recall is SKIPPED — behind the presumed queue as well;
+  //   3. once the presumption has run out, still SKIPPED — now for the pace alone: fast, nothing sent, no verdict;
+  //   4. once 30 s have passed since the FIRST skip — the interval runs from the last call that could LOWER the estimate
+  //      (a chunked one or a probe), and the cut call was a pass-through, which only ever raises it — a skipped recall
+  //      sends a PROBE: the first window of ONE candidate, sized to a sixth of the budget at the estimate, which reads the
+  //      machine as slow as it is, so the recall is still skipped (a real call was sent, and the judge still did not wait);
+  //      Between 3 and 4, a SHORT-fact recall fits and is sent — a pass-through call — and must NOT restart the interval:
+  //      a pass-through answer can raise the estimate and never lower it, so short-fact recalls coming more often than
+  //      the interval would otherwise keep a machine that became fast in the skip for good (confirmed to FAIL, step 4
+  //      skipped with nothing sent, when every sent call restarts the interval);
+  //   5. at once after the probe, skipped again with nothing sent — a probe restarts the interval;
+  //   6. once 30 s have passed again, the fake is FAST (its GPU freed): the probe reads it so, and the SAME recall sends
+  //      the whole call and gets its verdict.
+  // With the skip removed, steps 2, 3 and 5 each send the call and wait out the deadline — confirmed to FAIL so.
+  skipServer = startServer({
+    dataDir: skipDir, port: SKIP_PORT,
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '3' },
+  });
+  const skipBase = `http://127.0.0.1:${SKIP_PORT}`;
+  await waitHealthy(skipBase);
+  const cSkip = makeClient(skipBase);
+  const skipJudge = layerOf(await cSkip.getJson('/api/manage/memory'), 'judge');
+  ok('(fixture) 判断 runs on the slow reranker, on a server of its own',
+    skipJudge.activeSource === 'llama-cpp' && skipJudge.activeModel === SLOW_RERANK,
+    JSON.stringify({ active: skipJudge.activeSource, activeModel: skipJudge.activeModel }));
+  // Eight notes of ~950 characters — under the 1,000-character window, so each is sent whole.
+  const skipNotes = [1, 2, 3, 4, 5, 6, 7, 8].map((i) =>
+    `zzskip${i}head 园艺社每月第二个周六在社区花园劳动。` + '园艺社的种子清单与劳动记录。'.repeat(64) + ` zzskip${i}tail`);
+  for (const [i, note] of skipNotes.entries()) {
+    const wrote = await cSkip.call('remember_fact', {
+      kind: 'household', topic: `zzskip${i + 1}topic 园艺社`, content: note,
+      source: 'https://example.test/zzskip', confidence: 0.8,
+    });
+    ok(`(fixture) note #${i + 1} is stored`, wrote.status === 200 && wrote.result?.ok === true, JSON.stringify(wrote.result));
+  }
+  const skipShort = 'zzskipshort The swimming lesson moved to Tuesday afternoons at the leisure pool.';
+  const wroteShort = await cSkip.call('remember_fact', {
+    kind: 'household', topic: 'zzskipshorttopic swimming lesson', content: skipShort,
+    source: 'https://example.test/zzskip', confidence: 0.8,
+  });
+  ok('(fixture) the short fact is stored', wroteShort.status === 200 && wroteShort.result?.ok === true, JSON.stringify(wroteShort.result));
+  const skipQuery = 'zzskipquery 园艺社每月第二个周六在社区花园劳动';
+  const skipLog = () => logOf(skipDir);
+  const skipLines = () => skipLog().split('\n').filter((l) => SKIP_LINE.test(l));
+  // The documents of each /v1/rerank request a recall made.
+  const requestDocs = (span) => rerankCalls(span).map((h) => { try { return (JSON.parse(h.body).documents ?? []).map(String); } catch { return []; } });
+  const skippedPage = (r) => r.status === 200 && r.result?.ranked === 'graph' && r.result?.answered === undefined
+    && (r.result?.facts ?? []).some((f) => String(f.content ?? '').includes('zzskip'));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  slowMsPerToken = 0.93;
+  const s1 = await timedRecall(cSkip, skipQuery);
+  const s2 = await timedRecall(cSkip, skipQuery);
+  const s2At = Date.now() - s2.ms;
+  const s2Line = skipLines().at(-1) ?? '';
+  await sleep((Number(((QUEUE_CLAUSE.exec(s2Line) ?? [])[1])) || 6) * 1000 + 1500);
+  const s3 = await timedRecall(cSkip, skipQuery);
+  const s3Line = skipLines().at(-1) ?? '';
+  const sShort = await timedRecall(cSkip, 'zzskipshortquery swimming lesson Tuesday leisure pool');
+  // The re-probe interval (30 s) runs from the first skip — the second recall's — so wait past it, with a margin.
+  await sleep(Math.max(0, s2At + 30_000 + 2_000 - Date.now()));
+  const s4 = await timedRecall(cSkip, skipQuery);
+  const s4Line = skipLines().at(-1) ?? '';
+  const s4At = Date.now() - s4.ms;
+  const s5 = await timedRecall(cSkip, skipQuery);
+  await sleep(Math.max(0, s4At + 30_000 + 2_000 - Date.now()));
+  slowMsPerToken = 0;
+  const s6 = await timedRecall(cSkip, skipQuery);
+  const docCounts = (span) => JSON.stringify(requestDocs(span).map((d) => d.length));
+  ok('(non-vacuity) the first recall sent all eight notes whole in ONE call, and the deadline CUT it — the engine\'s page, no verdict',
+    requestDocs(s1).length === 1 && requestDocs(s1)[0].length >= 8 && skippedPage(s1.result) && s1.ms >= 3000,
+    `requests ${docCounts(s1)} ${at(s1)}`);
+  ok('THE POINT: at once after the cut, a recall sends nothing and comes back fast — the engine\'s page, no verdict',
+    rerankCalls(s2).length === 0 && skippedPage(s2.result) && s2.ms < 1500, `${rerankCalls(s2).length} request(s) ${at(s2)}`);
+  ok('THE POINT: once the presumed queue has run out, a recall is STILL skipped — even one window per candidate is past the budget — fast, nothing sent, no verdict',
+    rerankCalls(s3).length === 0 && skippedPage(s3.result) && s3.ms < 1500, `${rerankCalls(s3).length} request(s) ${at(s3)}`);
+  ok('…and the log says so for the pace alone — skipped, predicted past the ~1.5 s budget, no queue in the sentence',
+    SKIP_LINE.test(s3Line) && !QUEUE_CLAUSE.test(s3Line) && /past the ~1\.5 s a call has/.test(s3Line) && s3Line !== s2Line,
+    s3Line || '(no skip line)');
+  ok('(non-vacuity) between them, a SHORT-fact recall fit and was sent — the short fact alone, a pass-through call — and got its verdict',
+    requestDocs(sShort).length === 1 && requestDocs(sShort)[0].length === 1 && requestDocs(sShort)[0][0] === skipShort
+      && judgedPage(sShort.result), `requests ${docCounts(sShort)} ${at(sShort)}`);
+  ok('THE POINT: after the re-probe interval, a real call IS sent again — a PROBE of fewer candidates than the recall has — and, the machine still slow, the recall is still skipped with no verdict',
+    requestDocs(s4).length === 1 && requestDocs(s4)[0].length >= 1 && requestDocs(s4)[0].length < 8 && skippedPage(s4.result)
+      && s4.ms < 3000,
+    `requests ${docCounts(s4)} ${at(s4)}`);
+  ok('…and its skip line says what the probe read',
+    SKIP_LINE.test(s4Line) && /a probe of \d+ of \d+ candidates' first windows just now read [\d.]+ ms per 1,000 pair tokens/.test(s4Line),
+    s4Line || '(no skip line)');
+  ok('…and a probe restarts the interval: at once after it, nothing is sent',
+    rerankCalls(s5).length === 0 && skippedPage(s5.result), `${rerankCalls(s5).length} request(s) ${at(s5)}`);
+  ok('THE POINT: when the machine has become FAST, the next probe says so and the SAME recall sends the whole call — and gets its verdict',
+    requestDocs(s6).length === 2 && requestDocs(s6)[0].length < 8 && requestDocs(s6)[1].length >= 8 && judgedPage(s6.result),
+    `requests ${docCounts(s6)} ${at(s6)}`);
+  ok('…and the log says it re-measured the machine and the judge runs again — and names ONE deadline cut in all',
+    /re-measured this machine on \d+ of \d+ candidates' first windows: [\d.]+ ms per 1,000 pair tokens, so one window per candidate is predicted at ~[\d.]+ s — the judge runs this recall/.test(skipLog())
+      && (skipLog().match(/gave no verdict within 3 s/g) ?? []).length === 1,
+    skipLog().split('\n').filter((l) => /verdict within|re-measured/.test(l)).slice(-3).join(' | ') || '(no such line)');
+  skipServer.stop(); skipServer = null;
 
   // --- 7. whether a reranker's TAGGING is happening, said where it is decided ---------------------------
   // A reranker hands tagging to the Claude CLI, and a CLI that is signed out means NO tagging — the annotation
@@ -1516,6 +1658,7 @@ try {
   try { paceServer?.stop(); } catch {}
   try { cutoffServer?.stop(); } catch {}
   try { scriptServer?.stop(); } catch {}
+  try { skipServer?.stop(); } catch {}
   fake.closeAllConnections();
   await new Promise((r) => fake.close(r));
 }

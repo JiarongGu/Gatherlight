@@ -74,6 +74,19 @@ public static class RerankChunking
 /// per candidate on a slow one, down to one, which is the cut — and one, after a call the deadline cut, until a call
 /// answers (<see cref="RerankPace.AfterCut"/>).</para>
 ///
+/// <para><b>And where even ONE window per candidate cannot fit, nothing is sent</b> (<see cref="RerankPace.Admit"/>,
+/// <c>docs/judge-bench.md</c> Run 8). On that run's CPU, BGE scored ~3.1 s per 1,000 pair tokens, so a recall of ~59 long
+/// notes cost ~118 s at one window each: 230 of 240 chunked recalls waited out the minute, got no verdict, and ended
+/// where no judge is — while each cut left its batch running on the router for the next call to queue behind. So when
+/// the pace predicts that the one-window call — plus whatever an abandoned call is presumed still to hold the router for
+/// — would pass its budget, the call returns at once with a blameless <see cref="ProviderVerdict.Unsupported"/>, which
+/// <c>ScoringVerificationPolicy</c> reports as NoOpinion: the engine's page, exactly as a cut leaves it, without the
+/// minute. It is logged once per recall at Information, as a pace line ("0 window(s) per long candidate instead of …").
+/// Once ten verification deadlines pass with no call able to lower the estimate (a chunked one or a probe; a pass-through
+/// call only ever raises it), a skipped recall sends a PROBE instead — the first windows of
+/// its longest candidates, sized to a sixth of the budget at the current estimate — so a machine that has become faster
+/// is re-measured; when the probe says the whole call now fits, it is sent in the same recall.</para>
+///
 /// <para><b>A WORKAROUND FOR A LYNTAI GAP, recorded on both sides</b> (dev-conventions: open workaround (6)). Lyntai has
 /// closed the gap upstream — <c>docs/task-archive.md</c> Part 287 / D177, with Part 289 closed into it; committed and NOT
 /// released, no version promised (read at Lyntai commit <c>e6fa579b</c>). D177 as it stands there: a provider given
@@ -128,15 +141,42 @@ public sealed class ChunkedScoreProvider : IScoreProvider
     public async Task<ScoreResponse> CallAsync(ScoreRequest request, CancellationToken ct = default)
     {
         var size = RerankInputCap.PerCandidate(request.Query, _window);
-        // Nothing to split — or no room to split into: the request as it came, byte for byte. Still timed: a slow
-        // pass-through call can teach the pace that this machine is slow, and timing a call changes nothing that is sent.
-        if (size <= 0 || request.Documents.All(d => d.Length <= size))
+        // Nothing to split — or no room to split into: the request goes as it came, byte for byte.
+        var passThrough = size <= 0 || request.Documents.All(d => d.Length <= size);
+        var byCount = passThrough ? 1 : RerankInputCap.WindowsPerDocument(request.Documents, size);
+
+        // FIRST, whether to send anything: the least any call can send and still score every candidate is one window each
+        // (a pass-through request IS that), and when even that is predicted past the budget the recall is skipped — or,
+        // once the re-probe interval has passed, measured with a probe (RerankPace.Admit).
+        var firsts = passThrough ? request.Documents : request.Documents.Select(d => RerankInputCap.Windows(d, size, 1)[0]).ToList();
+        var oneWindow = RerankPace.PairTokens(request.Query, firsts);
+        var plan = _pace.Admit(oneWindow);
+        if (plan.Kind == RerankPace.Admission.Probe)
+        {
+            var (probe, sent) = await MeasureAsync(request.Query, firsts, oneWindow, ct).ConfigureAwait(false);
+            // A probe that had to carry every candidate IS the one-window call: its answer is the verdict.
+            if (probe.IsOk && sent == firsts.Count && probe.Scores.Count == firsts.Count) return probe;
+            var after = _pace.Admit(oneWindow);
+            if (!probe.IsOk || after.Kind != RerankPace.Admission.Send)
+                return Skipped(byCount, after, probe.IsOk
+                    ? $"a probe of {sent} of {firsts.Count} candidates' first windows just now read {_pace.MsPerToken * 1000:0.###} ms per 1,000 pair tokens; "
+                    : $"a probe of {sent} of {firsts.Count} candidates' first windows just now got no usable answer ({probe.Verdict}); ");
+            // PARSED ELSEWHERE — judge-bench's PACE_LINE counts "re-measured this machine" as a pace line too.
+            _log?.LogInformation(
+                "{Id}: re-measured this machine on {Sent} of {Candidates} candidates' first windows: {Pace:0.###} ms per 1,000 pair tokens, so one window per candidate is predicted at ~{Predicted:0.#} s — the judge runs this recall",
+                Id, sent, firsts.Count, _pace.MsPerToken * 1000, after.PredictedMs / 1000);
+        }
+        else if (plan.Kind == RerankPace.Admission.Skip)
+            return Skipped(byCount, plan, "");
+
+        // Still timed: a slow pass-through call can teach the pace that this machine is slow, and timing a call changes
+        // nothing that is sent.
+        if (passThrough)
             return await TimedAsync(request, RerankPace.Call.PassThrough, ct).ConfigureAwait(false);
 
         // As many windows per document as the call can carry: MaxWindows, lowered — the same for every document — past
         // the per-call ceiling, or past what this machine scores within the time budget, down to one: the cut. After a
         // call the deadline cut, ONE — until an answered call has timed the machine (RerankPace.AfterCut).
-        var byCount = RerankInputCap.WindowsPerDocument(request.Documents, size);
         var afterCut = _pace.AfterCut;
         var perDocument = afterCut ? 1
             : RerankInputCap.WindowsPerDocument(request.Documents, size, request.Query, _pace.PairTokenBudget());
@@ -174,22 +214,73 @@ public sealed class ChunkedScoreProvider : IScoreProvider
 
     /// <summary>One call to the inner provider, timed into the pace: a call that answered as a measurement, a call a
     /// deadline cut off as a lower bound (it ran at least that long). A failed answer teaches nothing — a quick refusal
-    /// would read as a fast machine.</summary>
+    /// would read as a fast machine. The pace is told when the call was SENT, so a call that started while an abandoned
+    /// one was presumed still running on the router is judged as possibly queued (<see cref="RerankPace.Sending"/>).</summary>
     private async Task<ScoreResponse> TimedAsync(ScoreRequest request, RerankPace.Call kind, CancellationToken ct)
     {
         var tokens = RerankPace.PairTokens(request.Query, request.Documents);
+        var ticket = _pace.Sending(kind);
         var clock = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var response = await _inner.CallAsync(request, ct).ConfigureAwait(false);
-            if (response.IsOk) _pace.Observe(clock.Elapsed, tokens, kind);
+            if (response.IsOk) _pace.Observe(ticket, clock.Elapsed, tokens, kind);
             return response;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            _pace.AtLeast(clock.Elapsed, tokens);
+            _pace.AtLeast(ticket, clock.Elapsed, tokens);
             throw;
         }
+    }
+
+    /// <summary>The re-measuring call a skipped recall sends once the re-probe interval has passed: the FIRST windows of
+    /// the longest candidates — long pairs, like the calls the estimate sizes, since short ones cost less per token —
+    /// until they reach <see cref="RerankPace.ProbeTokens"/>, sent in their input order so that a probe needing every
+    /// candidate is the one-window call itself. Returns what came back and how many candidates it carried.</summary>
+    private async Task<(ScoreResponse Response, int Sent)> MeasureAsync(
+        string query, IReadOnlyList<string> firsts, double oneWindow, CancellationToken ct)
+    {
+        var target = _pace.ProbeTokens();
+        var queryTokens = RerankPace.Tokens(query);
+        var chosen = new HashSet<int>();
+        double tokens = 0;
+        foreach (var (i, t) in firsts.Select((d, i) => (i, queryTokens + RerankPace.Tokens(d))).OrderByDescending(x => x.Item2))
+        {
+            chosen.Add(i);
+            tokens += t;
+            if (tokens >= target) break;
+        }
+        var documents = firsts.Where((_, i) => chosen.Contains(i)).ToList();
+        _log?.LogDebug("{Id}: probing with {Sent} of {Candidates} first windows, ~{Tokens:0} of the ~{All:0} pair tokens one window each would be",
+            Id, documents.Count, firsts.Count, tokens, oneWindow);
+        var response = await TimedAsync(new ScoreRequest(query, documents), RerankPace.Call.Probe, ct).ConfigureAwait(false);
+        return (response, documents.Count);
+    }
+
+    /// <summary>A recall the pace will not send: one Information line, and a blameless failure the scoring policy turns
+    /// into NoOpinion — the engine's own page, as a cut leaves it, at once.
+    ///
+    /// <para><b>Why <see cref="ProviderVerdict.Unsupported"/></b>: Lyntai's router SURFACES it — no fallback, no dead-host
+    /// penalty, no cooldown (<c>RoutingPolicy</c>), and <c>IsBlameless</c> — which is what a decision taken here, about this
+    /// machine's speed, is: not a fault of the host. <c>Timeout</c> or <c>Failed</c> would count toward benching the
+    /// reranker. <b>On the Lyntai bump</b>: its next release logs a non-transient verdict from this policy at Warning
+    /// (3.2.0 logs it at Debug), so each skip would log twice — the line below, and a Warning. Keep the line below (the
+    /// bench and <c>e2e-p52</c> parse it) and decide then whether that Warning is noise to filter.</para></summary>
+    private ScoreResponse Skipped(int byCount, RerankPace.Plan plan, string probed)
+    {
+        var queue = plan.QueueMs > 0
+            ? $", behind the ~{plan.QueueMs / 1000:0.#} s the router is presumed still busy with a call abandoned earlier"
+            : "";
+        // PARSED ELSEWHERE — keep "0 window(s) per long candidate instead of" and "the judge is skipped": judge-bench's
+        // PACE_LINE counts the first (a bench run in which it appears outside a CPU arm is VOID), its PACE_SKIP reads this
+        // line, and e2e-p52 case 6h asserts it.
+        _log?.LogInformation(
+            "{Id}: 0 window(s) per long candidate instead of {ByCount} — the judge is skipped for this recall: {Probed}one window per candidate is predicted at ~{Predicted:0.#} s at the {Pace:0.###} ms per 1,000 pair tokens measured here{Queue}, past the ~{Budget:0.#} s a call has. The engine's own page stands; the first skipped recall after ~{Reprobe:0.#} min sends a probe to re-measure this machine",
+            Id, byCount, probed, plan.PredictedMs / 1000, _pace.MsPerToken * 1000, queue, _pace.Budget.TotalSeconds,
+            plan.NextProbeIn.TotalMinutes);
+        return ScoreResponse.Failure(ProviderVerdict.Unsupported,
+            $"{Id}: skipped — one window per candidate is predicted at ~{plan.PredictedMs / 1000:0.#} s{queue}, past the ~{_pace.Budget.TotalSeconds:0.#} s budget");
     }
 }
 
@@ -241,33 +332,75 @@ public sealed class ChunkedScoreProvider : IScoreProvider
 /// pairs cost less per token than long ones (attention grows faster than length).</item>
 /// <item><b>A call the deadline CUT</b> (the caller's token cancelled — <see cref="AtLeast"/>) teaches only if it ran
 /// longer than the estimate predicted: then it raises the estimate to that lower bound and sets the repeat flag. A
-/// cancellation earlier than that — a user's stop, an abandoned request — proves nothing and changes nothing. A lower
+/// cancellation earlier than that — a user's stop, an abandoned request — proves nothing about the rate (it still leaves
+/// the router busy; see below). A lower
 /// bound is not enough to SIZE by: halving from it, each cut call's successor is cut again whenever the first one's true
 /// time was over twice the deadline, so a machine 30× slower would wait the minute four times running. So a cut past
 /// <see cref="Budget"/> puts the pace <see cref="AfterCut"/>: every chunked call sends ONE window per candidate — the
 /// fewest that scores them all — until one ANSWERS, and that answer is believed whole, in either direction and whatever
 /// its size, since it is the measurement the lower bound was missing. On a machine where even one window per candidate
-/// is too slow for a recall that big, that recall is cut every time: no sizing can fix it, since fewer windows than
-/// candidates would leave one unscored.</item>
+/// is too slow for a recall that big, no sizing can fix it, since fewer windows than candidates would leave one
+/// unscored — so that recall is not sent at all (<see cref="Admit"/>, below).</item>
 /// <item>A failed answer teaches nothing. It lives as long as the process — each launch re-seeds it at the GPU figure —
 /// and there is one per verifier, so one per reranker. <b>Concurrency</b>: two recalls contending for one child each
 /// time the other's scoring too, so both read slower than the machine is, and the second is believed as a repeat — it
 /// errs toward fewer windows, until a later uncontended chunked call lowers it halfway.</item>
 /// </list></para>
 ///
-/// <para><b>Unmeasured</b>: it has not run on a CPU-only machine, so how many recalls it takes to settle there, and how
-/// far a long window's cost outruns a rate learned from short facts, are not known. The two token rates are two
+/// <para><b>An abandoned call is NOT free, and what queues behind it is not believed</b> (<c>docs/judge-bench.md</c> Run 8,
+/// "The deadline cuts, and the queue behind an abandoned batch" and "The pace"). llama-server keeps scoring a batch whose
+/// request was cancelled — a 1-document call sent after a BGE call abandoned at 15 s took 181.9 s — so on that run's CPU a
+/// recall right after a cut was cut 218 of 222 times, and the queue, not the machine, drove the estimate: a 1-note,
+/// 801-token call that waited out the minute behind two abandoned batches set it through <see cref="AtLeast"/> to 24× the
+/// machine's answered rate, an ANSWERED call that had queued was believed whole at 4.4×, and the run ended at 5.7×, set by
+/// a cut 3,398-token call. So, each rule a judgement stated as one:
+/// <list type="bullet">
+/// <item><b>Every abandoned call</b> (the caller's token cancelled — the deadline, a stop) leaves the router presumed
+/// BUSY for the longer of what the estimate still predicted for it and <see cref="QueueFactor"/> × the time it had run —
+/// twice as long again: at the rate BGE's answered calls ran there (~3.1 s per 1,000 pair tokens), Run 8's cut calls
+/// needed a median ~118 s and at most ~125 s in all, so at most ~65 s past the minute, inside the 120 s presumed. A
+/// first call sized at the GPU seed on a far slower machine can run longer than that — a stated limit.</item>
+/// <item><b>A call SENT while the router is presumed busy is possibly queued</b> (<see cref="Sending"/>): its time
+/// includes the wait, so if it is cut it teaches NOTHING (it proves only that the queue was long), and if it answers
+/// it is an UPPER bound — it may lower the estimate, never raise it, and does not end <see cref="AfterCut"/>. Either
+/// way an answer means the router reached it, so the busy presumption ends there.</item>
+/// <item><b>Nothing is sent where one window per candidate cannot fit</b> (<see cref="Admit"/>): when the one-window
+/// call is predicted, plus the presumed queue, past <see cref="Budget"/>, the recall is SKIPPED — NoOpinion at once,
+/// where Run 8 waited the full minute for it on 230 of 240 recalls. The prediction is only as good as the estimate, and
+/// after a cut the estimate is a lower bound, so a skip errs toward the household's time.</item>
+/// <item><b>A skipped recall re-measures</b> once <see cref="ReprobeInterval"/> — ten verification deadlines — has passed
+/// since the last call that could LOWER the estimate — a chunked call or a probe; not a pass-through call, which only
+/// ever raises it, so short-fact recalls cannot hold off the re-check; from the first skip when there has been none —
+/// and nothing is presumed queued: it sends a PROBE of <see cref="ProbeTokens"/>, a sixth of the budget at
+/// the current estimate (~5 s at the product's deadline), and the answer is believed whole, like the answer after a cut —
+/// so a machine that has become faster (its GPU freed, a smaller page) is found within the interval, and a truly slow one
+/// pays ~5 s per interval instead of a minute per recall. The worst a probe can cost is one deadline, if it is cut:
+/// bounded, at this interval, to a tenth of the time the judge is being skipped. Replaying Run 8's chunked BGE recalls
+/// against these rules (scratch, one queue on the router at the answered median rate, abandoned batches scored to the
+/// end): one minute-wait in the whole run where there were 230; 9–14 verdicts, on the recalls small enough to fit, when
+/// recalls came 5–60 s apart, against the run's 10; and 1 back to back, where every recall after the cut fell inside the
+/// presumed queue — a replay, not a measurement.</item>
+/// </list></para>
+///
+/// <para><b>Unmeasured</b>: how many recalls it takes to settle on a CPU-only machine where calls are SIZED (Run 8's
+/// mMiniLMv2 never needed sizing, and its BGE needed one window each and then more than that), and how far a long
+/// window's cost outruns a rate learned from short facts. The skip, the queue presumption and the probe were derived
+/// from Run 8 and replayed against its record, not run on its CPU. The two token rates are two
 /// measurements on the XLM-R tokenizer family: every UTF-16 unit from U+2E80 up (CJK, kana, Hangul syllables, full-width
 /// forms, both halves of a surrogate pair) is counted at the CJK rate, the worst measured — emoji measured ~0.48, rare
 /// CJK less — and every unit below it at the English one. That leaves counted like English, and unmeasured: other
 /// scripts (Cyrillic, Greek, Arabic, Thai, Devanagari…), Hangul conjoining Jamo (U+1100–11FF) and the BMP symbols and
 /// emoji of U+2600–27BF, all below U+2E80. That rerank time is proportional to tokens is itself an assumption the GPU
-/// figures fit, not a measured law. Whether a real llama-server stops scoring a batch whose request was cancelled is
-/// unmeasured too: if it does not, the next call queues behind it and reads slower than the machine is. The floor's
-/// factor, the log-space step and its cap are judgements. <c>e2e-p52</c> case 6e drives the answered path with a fake
+/// and CPU figures fit (Run 8: mMiniLMv2's answered rate steady at ~0.30 s per 1,000 across calls of 133 to 65,463
+/// tokens), not a measured law. The floor's factor, the log-space step and its cap, the queue factor, the probe's share
+/// and the re-probe interval are judgements. <c>e2e-p52</c> case 6e drives the answered path with a fake
 /// router that answers in time proportional to the pair TOKENS it is sent — a lone slow call not believed, the second
 /// believed, a fast pass-through not lowering it, a slow small call teaching nothing — case 6f the cut path (a first
-/// call ~2.8× past the deadline, then one window and a verdict), and case 6g the per-script count.</para></summary>
+/// call ~2× past the deadline; the next recall skipped while the router is presumed busy, then one window and a verdict),
+/// case 6g the per-script count, and case 6h the skip (a machine too slow for one window per candidate: cut once, then
+/// skipped fast; a short-fact recall that fits is sent and does not restart the interval; then a probe after it — still
+/// slow, skipped; then fast, and the judge runs). Confirmed to FAIL with the skip removed (6f, 6h), with the queue
+/// presumption removed (6f) and with every sent call restarting the interval (6h's probe).</para></summary>
 public sealed class RerankPace
 {
     /// <summary>Tokens per UTF-16 unit of CJK text — the worst rate measured on the real router (4,089 Chinese characters
@@ -302,6 +435,19 @@ public sealed class RerankPace
     /// infinity — the per-call ceiling then decides, as it did before this class.</summary>
     private const double MinMsPerToken = 1e-4;
 
+    /// <summary>An abandoned call is presumed to keep the router busy for this many times as long AGAIN as it had run (or
+    /// for what the estimate still predicted for it, when that is longer). See the class comment for Run 8's figures.</summary>
+    public const double QueueFactor = 2;
+
+    /// <summary>How many verification deadlines pass with no call able to lower the estimate before a skipped recall re-measures the machine
+    /// with a probe — the deadline being twice <see cref="Budget"/>. See the class comment.</summary>
+    public const double ReprobeDeadlines = 10;
+
+    /// <summary>What share of <see cref="Budget"/> a probe is sized to at the current estimate — ~5 s at the product's
+    /// deadline: long enough that the 50 ms overhead allowance is a percent of it on a slow machine, short enough that a
+    /// truly slow one pays seconds, not the minute.</summary>
+    public const double ProbeShareOfBudget = 1.0 / 6;
+
     /// <summary>What a timed call was, which decides what it may teach (the class comment's rules).</summary>
     public enum Call
     {
@@ -310,26 +456,68 @@ public sealed class RerankPace
 
         /// <summary>At least one document went as several windows (or as its first, the cut).</summary>
         Chunked,
+
+        /// <summary>A re-measuring call a skipped recall sent (<see cref="Admission.Probe"/>): believed whole, like the
+        /// answer after a cut — unless it was possibly queued.</summary>
+        Probe,
     }
 
+    /// <summary>What a recall's call is to be (<see cref="Admit"/>).</summary>
+    public enum Admission
+    {
+        /// <summary>One window per candidate fits the budget: send, sized as usual.</summary>
+        Send,
+
+        /// <summary>It does not: send nothing, and let the engine's page stand.</summary>
+        Skip,
+
+        /// <summary>It does not, but the re-probe interval has passed: send a probe (<see cref="ProbeTokens"/>) first.</summary>
+        Probe,
+    }
+
+    /// <summary><see cref="Admit"/>'s answer, with what it was decided on — for the log line.</summary>
+    /// <param name="PredictedMs">The one-window call, predicted at the current estimate, overhead included.</param>
+    /// <param name="QueueMs">How much longer the router is presumed busy with an abandoned call; 0 when it is not.</param>
+    /// <param name="NextProbeIn">How long until a skipped recall would probe, if nothing is sent meanwhile.</param>
+    public readonly record struct Plan(Admission Kind, double PredictedMs, double QueueMs, TimeSpan NextProbeIn);
+
+    /// <summary>A call as it was sent (<see cref="Sending"/>): whether the router was then presumed busy with an
+    /// abandoned one, which decides what its answer or its cut may teach.</summary>
+    public readonly record struct Ticket(bool Queued);
+
     private readonly object _gate = new();
+    private readonly Func<TimeSpan> _clock;
     private double _msPerToken;
     // The last call that taught anything was SLOW — answered slower than the estimate, or cut off having proved it slow —
     // so the next slower answer is a repeat and is believed at once. Stays set across a believed repeat.
     private bool _slowBefore;
     // A call was cut past the budget, so the estimate is only a lower bound: one window per candidate until an answer.
     private bool _afterCut;
+    // Until when the router is presumed still scoring a call that was abandoned (the clock's reading).
+    private TimeSpan _busyUntil = TimeSpan.MinValue;
+    // When a call that could LOWER the estimate — a chunked call or a probe — was last sent; the re-probe interval runs
+    // from it, or from the first skip when none has been. Not a pass-through call: it may raise the estimate and never
+    // lower it, so if it restarted the interval, a machine that became fast would stay skipped for as long as short-fact
+    // recalls kept coming.
+    private TimeSpan? _lastMeasuring;
 
     /// <param name="budget">How long one call may be predicted to take — half the verification deadline.</param>
     /// <param name="seedMsPerToken">The estimate before any call is timed.</param>
-    public RerankPace(TimeSpan budget, double seedMsPerToken = SeedMsPerToken)
+    /// <param name="clock">A monotonic clock; the process's uptime when null.</param>
+    public RerankPace(TimeSpan budget, double seedMsPerToken = SeedMsPerToken, Func<TimeSpan>? clock = null)
     {
         Budget = budget;
         _msPerToken = Math.Max(MinMsPerToken, seedMsPerToken > 0 ? seedMsPerToken : SeedMsPerToken);
+        _clock = clock ?? (() => TimeSpan.FromMilliseconds(Environment.TickCount64));
     }
 
     /// <summary>How long one call may be predicted to take.</summary>
     public TimeSpan Budget { get; }
+
+    /// <summary>How long a skipped recall waits before it probes — from the last call that could lower the estimate (a
+    /// chunked call or a probe), or from the first skip when none has been: <see cref="ReprobeDeadlines"/> verification
+    /// deadlines — 10 minutes at the product's 60 s, and proportionally less under the test knob.</summary>
+    public TimeSpan ReprobeInterval => Budget * 2 * ReprobeDeadlines;
 
     /// <summary>The current estimate, in milliseconds per pair token.</summary>
     public double MsPerToken { get { lock (_gate) return _msPerToken; } }
@@ -345,16 +533,76 @@ public sealed class RerankPace
         return ms <= 0 ? 0 : ms / MsPerToken;
     }
 
-    /// <summary>A call that answered: <paramref name="elapsed"/> for <paramref name="pairTokens"/>.</summary>
-    public void Observe(TimeSpan elapsed, double pairTokens, Call kind)
+    /// <summary>Whether a recall's call is to be sent at all, given the pair tokens it would carry at ONE window per
+    /// candidate — the least that scores them all. Send when that call, predicted at the current estimate and behind any
+    /// presumed queue, fits <see cref="Budget"/>; otherwise Skip — or Probe, once <see cref="ReprobeInterval"/> has passed
+    /// and nothing is presumed queued. A Probe is claimed here (it restarts the interval), so two recalls at once cannot
+    /// both probe; the first skip with nothing measured yet starts the interval.</summary>
+    public Plan Admit(double oneWindowPairTokens)
     {
+        lock (_gate)
+        {
+            var now = _clock();
+            var predicted = CallOverheadMs + Math.Max(0, oneWindowPairTokens) * _msPerToken;
+            var queue = _busyUntil > now ? (_busyUntil - now).TotalMilliseconds : 0;
+            var nextProbe = _lastMeasuring is { } last ? last + ReprobeInterval - now : ReprobeInterval;
+            if (nextProbe < TimeSpan.Zero) nextProbe = TimeSpan.Zero;
+            if (predicted + queue <= Budget.TotalMilliseconds) return new Plan(Admission.Send, predicted, queue, nextProbe);
+            if (queue > 0 || nextProbe > TimeSpan.Zero)
+            {
+                _lastMeasuring ??= now;
+                return new Plan(Admission.Skip, predicted, queue, nextProbe);
+            }
+            _lastMeasuring = now;
+            return new Plan(Admission.Probe, predicted, queue, ReprobeInterval);
+        }
+    }
+
+    /// <summary>How many pair tokens a probe carries: <see cref="ProbeShareOfBudget"/> of the budget at the current
+    /// estimate, the overhead allowance taken off first.</summary>
+    public double ProbeTokens()
+    {
+        var ms = Budget.TotalMilliseconds * ProbeShareOfBudget - CallOverheadMs;
+        return ms <= 0 ? 0 : ms / MsPerToken;
+    }
+
+    /// <summary>A call of <paramref name="kind"/> is being sent now: says whether the router is presumed still busy with
+    /// an abandoned call — which makes this one possibly queued (the class comment) — and, for a call whose answer could
+    /// lower the estimate (chunked, or a probe), restarts the re-probe interval.</summary>
+    public Ticket Sending(Call kind)
+    {
+        lock (_gate)
+        {
+            var now = _clock();
+            if (kind != Call.PassThrough) _lastMeasuring = now;
+            return new Ticket(_busyUntil > now);
+        }
+    }
+
+    /// <summary>A call that answered: <paramref name="elapsed"/> for <paramref name="pairTokens"/>.</summary>
+    public void Observe(Ticket ticket, TimeSpan elapsed, double pairTokens, Call kind)
+    {
+        lock (_gate)
+        {
+            // The router reached this call, so whatever it held before it is done.
+            var now = _clock();
+            if (_busyUntil > now) _busyUntil = now;
+        }
         if (!(pairTokens > 0)) return;
         var observed = Rate(elapsed, pairTokens);
         lock (_gate)
         {
-            if (_afterCut && kind == Call.Chunked)
+            if (ticket.Queued)
             {
-                // The measurement a cut was missing: believed whole, in either direction, whatever its size.
+                // Its time includes the wait, so it is an UPPER bound: it may lower the estimate, never raise it, and it
+                // is not the measurement a cut was missing (AfterCut stays).
+                if (observed < _msPerToken) _msPerToken = observed;
+                return;
+            }
+            if ((_afterCut && kind == Call.Chunked) || kind == Call.Probe)
+            {
+                // The measurement a cut was missing, or the one a probe was sent for: believed whole, in either direction,
+                // whatever its size.
                 _slowBefore = observed > _msPerToken;
                 _msPerToken = observed;
                 _afterCut = false;
@@ -373,10 +621,21 @@ public sealed class RerankPace
         }
     }
 
-    /// <summary>A call cut off after <paramref name="elapsed"/> — it would have taken at least that long.</summary>
-    public void AtLeast(TimeSpan elapsed, double pairTokens)
+    /// <summary>A call cut off after <paramref name="elapsed"/> — it would have taken at least that long, and the router
+    /// is presumed to go on scoring it (the class comment).</summary>
+    public void AtLeast(Ticket ticket, TimeSpan elapsed, double pairTokens)
     {
-        if (!(pairTokens > 0)) return;
+        lock (_gate)
+        {
+            // Whatever it proves, the router keeps it: busy for the longer of what the estimate still predicted for it and
+            // QueueFactor × the time it had run.
+            var predicted = CallOverheadMs + Math.Max(0, pairTokens) * _msPerToken;
+            var remaining = Math.Max(predicted - elapsed.TotalMilliseconds, QueueFactor * elapsed.TotalMilliseconds);
+            var until = _clock() + TimeSpan.FromMilliseconds(Math.Max(0, remaining));
+            if (until > _busyUntil) _busyUntil = until;
+        }
+        // Possibly queued: its time was the queue's, so it proves nothing about the machine.
+        if (ticket.Queued || !(pairTokens > 0)) return;
         var observed = Rate(elapsed, pairTokens);
         lock (_gate)
         {

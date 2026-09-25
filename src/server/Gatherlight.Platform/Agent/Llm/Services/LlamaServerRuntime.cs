@@ -18,6 +18,9 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// an orphan of an earlier run, or the household's own — which a service restart does not end (Dispose kills only
 /// ours), so any remedy that ends in 「重启服务」 is true only when this is. The same fact <c>HeldProblem</c> and the
 /// not-ours refusal in <see cref="LlamaServerRuntime.EnsureServesAsync"/> read.</param>
+/// <param name="DevicesListed"><c>--list-devices</c> ANSWERED — its "Available devices:" header was in the output — so
+/// <paramref name="Devices"/> is the binary's own list and an empty one means it sees no device. False when the probe was
+/// not run (a Live state), failed, or printed something else: then an empty list means nothing.</param>
 public sealed record LlamaServerState(
     string BaseUrl,
     bool Installed,
@@ -29,7 +32,15 @@ public sealed record LlamaServerState(
     bool GpuLikely,
     string? Problem,
     bool Held = false,
-    bool Ours = false);
+    bool Ours = false,
+    bool DevicesListed = false)
+{
+    /// <summary>Whether llama.cpp can use a GPU here: true when it lists one, FALSE only when it answered and listed none
+    /// — measured with this build (b10549) and its Vulkan devices hidden, its whole answer is "Available devices:" and
+    /// "(none)" — and null when that is not known. Null is not "no": a recommendation that changes on "no GPU" must not
+    /// change on "nobody asked yet" (<see cref="GgufCatalog.RecommendedRerankerFor"/>).</summary>
+    public bool? Gpu => DevicesListed ? GpuLikely : null;
+}
 
 public interface ILlamaServerRuntime
 {
@@ -246,7 +257,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     private long _probeEpoch;
     // Memoized facts about the BINARY — see BinaryFactsAsync. Deliberately not cleared by Invalidate():
     // that exists for the live state, and the file has not changed just because the server was restarted.
-    private (string Key, string? Version, IReadOnlyList<string> Devices)? _binaryFacts;
+    private (string Key, string? Version, IReadOnlyList<string>? Devices)? _binaryFacts;
 
     /// <summary>The router WE started — set only once it ANSWERED. Assigned at spawn, a second router that
     /// lost the race for the port and exited made the live one look adopted: the next bind told the household
@@ -614,9 +625,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         long epoch;
         lock (_gate) epoch = _probeEpoch;
         var exe = Locate();
-        var (version, devices) = exe is null || !withBinaryFacts
-            ? (null, (IReadOnlyList<string>)Array.Empty<string>())
+        var (version, listed) = exe is null || !withBinaryFacts
+            ? (null, (IReadOnlyList<string>?)null)
             : await BinaryFactsAsync(exe, ct);
+        var devices = listed ?? Array.Empty<string>();
 
         var probe = await IsServingAsync(ct);
         var (serving, models) = (probe.Serving, probe.Models);
@@ -639,7 +651,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             devices.Any(d => d.StartsWith("Vulkan", StringComparison.OrdinalIgnoreCase)),
             problem,
             probe.IsHeld,
-            ours);
+            ours,
+            DevicesListed: listed is not null);
 
         // Only the FULL state is cached: a Live one has empty Version/Devices by design, and letting it
         // populate this would serve 资源 a blank build number that looks like a failed install. And only if nothing
@@ -987,7 +1000,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <para>The two spawns also run concurrently now, so even a genuine miss costs one of them rather than
     /// both. A duplicate miss under load does the work twice and stores the same answer twice, which is
     /// why this takes no lock across the await — the alternative is holding one while spawning a process.</para></summary>
-    private async Task<(string? Version, IReadOnlyList<string> Devices)> BinaryFactsAsync(
+    private async Task<(string? Version, IReadOnlyList<string>? Devices)> BinaryFactsAsync(
         string exe, CancellationToken ct)
     {
         string key;
@@ -1012,7 +1025,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         var devices = await devicesTask;
         var version = await versionTask;
 
-        lock (_gate) { _binaryFacts = (key, version, devices); }
+        // A device list that did not answer is not remembered: it is "unknown", and a transient failure (a 15 s timeout
+        // under load) memoized on the file's identity would stay unknown until the binary changed.
+        if (devices is not null) lock (_gate) { _binaryFacts = (key, version, devices); }
         return (version, devices);
     }
 
@@ -1025,13 +1040,17 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         return m.Success ? $"b{m.Groups[1].Value}" : null;
     }
 
-    private async Task<IReadOnlyList<string>> DevicesAsync(string exe, CancellationToken ct)
+    /// <summary>What <c>--list-devices</c> printed, less its header — or NULL when it did not answer with that header (it
+    /// failed, timed out, or printed something else), because an empty list must mean "no device" and nothing else
+    /// (<see cref="LlamaServerState.Gpu"/>). The "(none)" line b10549 prints when it sees no device is not a device.</summary>
+    private async Task<IReadOnlyList<string>?> DevicesAsync(string exe, CancellationToken ct)
     {
         var text = await RunAsync(exe, "--list-devices", ct);
-        if (string.IsNullOrWhiteSpace(text)) return Array.Empty<string>();
-        return text.Split('\n')
-            .Select(l => l.Trim())
-            .Where(l => l.Length > 0 && !l.StartsWith("Available devices", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var lines = text.Split('\n').Select(l => l.Trim()).ToList();
+        if (!lines.Any(l => l.StartsWith("Available devices", StringComparison.OrdinalIgnoreCase))) return null;
+        return lines
+            .Where(l => l.Length > 0 && l != "(none)" && !l.StartsWith("Available devices", StringComparison.OrdinalIgnoreCase))
             .ToList();
     }
 

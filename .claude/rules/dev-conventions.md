@@ -1170,21 +1170,64 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   machine 30× slower waited the minute four times running (612 → 306 → 153 → 76 s). So a cancellation teaches only if
   the call had already run longer than predicted (a user's stop proves nothing), and one past the budget puts the pace
   AFTER CUT: every chunked call sends ONE window per candidate until one answers, and that answer is believed whole —
-  one minute-wait wherever one window each can finish in time, and a wait on every such recall where it cannot, which
-  no sizing can fix. Seeded with the GPU figure, so on that GPU nothing changes. The household note says what a slow
-  machine does, that the first recall after a launch with too many long facts can still wait the full minute, what
-  follows a cut, that too many facts wait the minute every time, and that none of it is measured on a CPU-only machine
-  — and so are the per-script rates beyond English and CJK, whether rerank time follows tokens at all off a GPU, and
-  whether llama-server stops scoring a batch whose request was cancelled. Proof, `e2e-p52`: 6e (the deadline knob 12 s,
+  one minute-wait wherever one window each can finish in time. Seeded with the GPU figure, so on that GPU nothing
+  changes.
+  **WHERE EVEN ONE WINDOW PER CANDIDATE CANNOT FIT, NOTHING IS SENT** (2026-09-25, `docs/judge-bench.md` Run 8). On that
+  run's CPU (Core Ultra 9 185H, `device = none`) BGE scored ~3.1 s per 1,000 pair tokens, so a recall of ~59 long notes
+  cost ~118 s at one window each: 230 of 240 chunked recalls waited the full minute for no verdict and ended where no
+  judge is (found@8 104, no judge's 104), and the pace sat in after-cut mode for 212 of them. No sizing can fix that, so
+  `RerankPace.Admit` now predicts the one-window call — plus any presumed queue, below — and when it is past the budget
+  the provider returns at once with a blameless `Unsupported`, which `ScoringVerificationPolicy` reports as NoOpinion:
+  the engine's page, as a cut leaves it, without the minute. One Information line per skipped recall, in the pace
+  family ("0 window(s) per long candidate instead of N — the judge is skipped for this recall"), so judge-bench's I6
+  VOIDS a GPU run in which it fires (a skipped arm abstains where its twin judged) and its CPU arms read it as an
+  explained abstention (`PACE_SKIP`, strip `S`). **Re-probe**: once ten verification deadlines (10 min; the interval
+  scales with the test knob) pass with no call able to LOWER the estimate — a chunked call or a probe; a pass-through
+  call only raises it, so short-fact recalls must not hold the re-check off — and nothing presumed queued, a skipped
+  recall sends a PROBE — the
+  first windows of its longest candidates, a sixth of the budget at the estimate (~5 s) — believed whole; when it says
+  the whole call now fits, the SAME recall sends it ("re-measured this machine", also a pace line). A truly slow machine
+  pays ~5 s per interval, never the minute per recall; the worst case, a probe cut, is one deadline per ten. Replayed
+  against Run 8's chunked BGE recalls (scratch, one queue at the answered median rate): one minute-wait in the run where
+  there were 230. **An abandoned call is not free, and what queues behind it is not believed.** llama-server scores a
+  cancelled batch to the end (a 1-document call after a 15 s abort took 181.9 s), so after a cut the next recall was cut
+  218 of 222 times, and the QUEUE drove the estimate: a 1-note, 801-token call cut behind two abandoned batches set it
+  through `AtLeast` to 24× the machine's rate, an ANSWERED call that had queued was believed whole at 4.4×, and the run
+  ended at 5.7×, set by a cut 3,398-token call. So every caller-cancelled call leaves the router presumed BUSY for the
+  longer of what the estimate still predicted and twice the time it ran (`QueueFactor`; Run 8's cut calls needed at most
+  ~125 s in all at the answered rate, ≤ 65 s past the minute), and a call SENT while presumed busy is possibly queued:
+  cut, it teaches nothing; answered, it may lower the estimate and never raise it, does not end after-cut, and ends the
+  presumption (the router reached it). A first call sized at the GPU seed on a far slower machine can outrun the
+  presumption — a stated limit. **No GPU → mMiniLMv2** (owner decision, same day): `GgufCatalog.RecommendedRerankerFor`
+  — the one writer 资源's badge and the 判断 row's suggestion read — picks `RerankerWithoutGpu` only when
+  `LlamaServerState.Gpu` is FALSE, i.e. `--list-devices` answered with its header and listed no GPU; unknown (not probed,
+  not installed, no header) keeps BGE and claims nothing. Not "n-gpu-layers = 0": Run 8 found llama.cpp offloads a big
+  batch to any GPU it sees even then (~5 s against 143–197 s with `device = none`), so the device list is what says
+  whether a machine is CPU-only. On that CPU mMiniLMv2 judged every recall (17.5 s median, found@8 180/240). The
+  household note says what a slow machine does, that the first recall after a launch with too many long facts can still
+  wait the full minute, what follows a cut, that too many facts are then skipped at once and re-checked every ten
+  minutes, Run 8's CPU figures with their configuration, that LAMAR was not run there, and why mMiniLMv2 is recommended
+  without a GPU. Unmeasured: the per-script rates beyond English and CJK, and the skip, queue and probe rules on a real
+  CPU router (derived from Run 8 and replayed against it). Proof, `e2e-p52`: 6e (the deadline knob 12 s,
   a fake at 1.6 ms per pair token: all 5 windows, all 5 again — the lone slow call not believed — then 4; still 4 after
   a fast pass-through big enough to teach, and still 4 after a 3.3 s call of 33 tokens, which the floor ignores), 6f
-  (6 s, 4 ms: the first recall ~17 s true, cut and unjudged; the next ONE window and a verdict, one "no verdict" line
-  in the log), 6g (16 s, 2.2 ms: a pace learned on four English notes sizes two Chinese ones by their tokens — fewer
-  windows and a verdict, where per-character counting sends all 10 and is cut). Each was confirmed to FAIL with its own
-  rule removed — the floor, the after-cut rule, the lone-raise damping, the pass-through no-lower, the script weights —
-  and only its own assertion. The bench cannot see the pace in its tables, so judge-bench counts the pace's Information
-  line in every arm's log and VOIDS a run in which it fired, and refuses a VOID run as a `--baseline`
-  (`docs/judge-bench.md`, "The bench and the pace").
+  (6 s, 4 ms, a fake that scores one request at a time and finishes abandoned ones: the first recall ~17 s true, cut and
+  unjudged; a recall at once after it sends NOTHING, its skip line naming the ~12 s presumed queue; once that passes,
+  ONE window and a verdict, one "no verdict" line in the log), 6g (16 s, 2.2 ms: a pace learned on four English notes
+  sizes two Chinese ones by their tokens — fewer windows and a verdict, where per-character counting sends all 10 and is
+  cut), 6h (3 s, ~0.93 ms, eight ~950-character notes, one pass-through call ~2× the deadline: cut once; skipped at once
+  behind the queue; skipped again for the pace alone, fast, nothing sent; a short-fact recall that fits is sent and
+  judged, and does NOT restart the interval; 30 s after the first skip a one-note probe, still slow, still skipped;
+  skipped again at once; after another 30 s, the fake fast, the probe re-measures and the same recall sends all eight and
+  gets its verdict). 6f's and 6h's skip assertions were confirmed to FAIL with the skip removed, 6f's with the queue
+  presumption removed, and 6h's probe with every sent call restarting the interval. Each earlier case was confirmed to FAIL with its own rule removed — the
+  floor, the after-cut rule, the lone-raise damping, the pass-through no-lower, the script weights — and only its own
+  assertion. The no-GPU recommendation: `e2e-p51`, whose stand-in `llama-server.exe` is a copy of Windows' `more.com`
+  printing a planted `--list-devices` file from its working directory — no device, then a Vulkan GPU, then unreadable —
+  asserting mMiniLMv2 with its reason on the badge and the 判断 row, BGE for a GPU and for unknown, and nothing beside an
+  installed BGE; confirmed to FAIL with `RecommendedRerankerFor` returning BGE. The bench cannot see the pace in its
+  tables, so judge-bench counts the pace's Information lines in every arm's log and VOIDS a run in which they fired, and
+  refuses a VOID run as a `--baseline` (`docs/judge-bench.md`, "The bench and the pace").
   `GATHERLIGHT_RERANK_CHUNKING=off` (`RerankChunking`) is KEPT as a measurement knob so the bench can reproduce the cut
   Runs 2–6 measured; judge-bench's `rr`/`rrf` arms pin it off and `rrk` on. **Two traps met measuring it**: llama.cpp's
   scores drift in the third decimal between identical calls, so an A/B that must be byte-identical needs identical

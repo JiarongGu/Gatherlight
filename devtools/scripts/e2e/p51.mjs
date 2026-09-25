@@ -1286,18 +1286,37 @@ try {
         JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('BGE 与 LAMAR 每次检索约 3.2 秒'), n.indexOf('BGE 与 LAMAR 每次检索约 3.2 秒') + 160)])));
       // …and what the pace does NOT promise (review, 2026-09-25): it starts from the GPU figure after every launch, so the
       // first recall after a launch with too many long facts can still wait the full minute and come back unjudged (the
-      // engine's own order) — and none of this has run on a CPU-only machine. The clause said only 尽量 before.
-      ok('…and says the pace restarts from the GPU figure at every launch — a first recall can still wait the minute and come back unjudged — and is unmeasured on a CPU-only machine',
+      // engine's own order). The clause said only 尽量 before.
+      ok('…and says the pace restarts from the GPU figure at every launch — a first recall can still wait the minute and come back unjudged',
         rerankerNotes.every(([, n]) => /每次启动后它都先按显卡上的速度估计/.test(n) && /仍可能等满一分钟/.test(n)
-          && /按没有判断时的顺序返回/.test(n) && /这一点还没有在只有 CPU 的机器上实测过/.test(n)),
+          && /按没有判断时的顺序返回/.test(n)),
         JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('尽量'), n.indexOf('尽量') + 120)])));
       // A cut proves only a lower bound, so after one the pace reads ONE window per long fact until a recall answers in
-      // time (RerankPace.AfterCut) — and where even that cannot finish, every such recall waits the minute. The clause
-      // said neither until review (2026-09-25), and the pace then halved from the bound into repeated cuts.
-      ok('…and says what follows a cut — one window per long fact until a recall finishes in time — and that too many facts wait the minute every time',
+      // time (RerankPace.AfterCut). Where even that cannot finish, every such recall used to wait the minute — and since
+      // docs/judge-bench.md Run 8 (2026-09-25) the pace SKIPS it at once and re-measures at most every ten minutes
+      // (RerankPace.Admit), and after a cut the next ~two minutes skip too, behind the batch the router still scores.
+      // The clause said 「这类检索每次都会等满一分钟」 until then — the thing the skip removed.
+      ok('…and says what follows a cut — one window per long fact until a recall finishes in time — and that too many facts are now skipped at once and re-checked, not waited for',
         rerankerNotes.every(([, n]) => /之后遇到长事实的检索会先每条只读开头一段/.test(n) && /等有一次在时限内做完、测出这台机器的速度/.test(n)
-          && /一次要读的事实多到每条只读开头一段也来不及时,这类检索每次都会等满一分钟/.test(n)),
-        JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('之后遇到'), n.indexOf('之后遇到') + 140)])));
+          && /一次要读的事实多到每条只读开头一段也来不及时,不会每次都等满一分钟/.test(n) && /当即跳过这次判断/.test(n)
+          && /最多每十分钟/.test(n) && /多等约 5 秒/.test(n) && /之后约两分钟内的检索也会先跳过判断/.test(n)
+          && !/这类检索每次都会等满一分钟/.test(n)),
+        JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('之后遇到'), n.indexOf('之后遇到') + 240)])));
+      // …and it is MEASURED on a CPU-only machine now (docs/judge-bench.md Run 8), said with its configuration: the
+      // machine, the fixture, what each reranker did there — mMiniLMv2 judged every recall, BGE waited the minute on 230 of
+      // 240 before the skip and ended where no judge is — why mMiniLMv2 is what the app suggests without a GPU, and that
+      // LAMAR was not run there. It said 「这一点还没有在只有 CPU 的机器上实测过」 until then.
+      ok('…and states Run 8\'s CPU result with its configuration — mMiniLMv2 17.5 s and 180/240, BGE ~3 s per 1,000 tokens and 230 of 240 minute-waits before the skip, 104/240 — the no-GPU recommendation, and LAMAR unmeasured there',
+        rerankerNotes.every(([, n]) => !/这一点还没有在只有 CPU 的机器上实测过/.test(n) && /Intel Core Ultra 9 185H/.test(n)
+          && /不用显卡/.test(n) && /240 道提问/.test(n) && /不开语义/.test(n) && /17\.5 秒/.test(n) && /180\/240/.test(n)
+          && /104\/240/.test(n) && /每 1,000 个词元要约 3 秒/.test(n) && /230 次等满一分钟/.test(n) && /那一轮还没有跳过这一步/.test(n)
+          && /检测不到显卡时,应用推荐 mMiniLMv2/.test(n) && /LAMAR 没有在只有 CPU 的机器上量过/.test(n)),
+        JSON.stringify(rerankerNotes.map(([id, n]) => [id, n.slice(n.indexOf('在一台只用 CPU'), n.indexOf('在一台只用 CPU') + 200)])));
+      // mMiniLMv2's OWN row says it is the no-GPU recommendation and why, and its long-note loss to BGE is a GPU result.
+      ok('mMiniLMv2\'s row says it is what the app recommends without a GPU — and that its long-note loss to BGE was on a GPU',
+        /llama\.cpp 检测不到显卡时,应用推荐它而不是 BGE/.test(String(mini?.note)) && /有显卡时推荐的仍是 BGE/.test(String(mini?.note))
+          && /\(在显卡上;测完后另算的比较\)/.test(String(mini?.note)),
+        String(mini?.note));
       // mMiniLMv2's parity with BGE is a SHORT-fact result: on Run 6c's long notes, both read in windows, it brought the
       // answer onto the page significantly less often (182 against 201 of 240, 33/14, p = 0.008) — post hoc, and said so.
       ok('…and mMiniLMv2\'s parity with BGE is qualified as short-fact, beside the long-note loss with its p and that it was computed afterwards',
@@ -1416,6 +1435,69 @@ try {
       ok('THE POINT: the 判断 row, runtime in and no judge model, suggests downloading the reranker',
         llamaJudge?.suggest === `gguf-${RERANKER}`,
         JSON.stringify({ suggest: llamaJudge?.suggest, reason: llamaJudge?.reason }));
+
+      // WHERE llama.cpp SEES NO GPU, THE SUGGESTION IS mMiniLMv2 (docs/judge-bench.md Run 8: on a CPU it judged every
+      // recall within the minute, where BGE needed ~2 minutes for 40–60 long notes and ended where no judge is). What
+      // decides is the device list the BINARY prints, so the stand-in has to be a process that answers `--list-devices`:
+      // a copy of Windows' own more.com, which prints the file its argument names from its working directory — and the
+      // runtime runs the binary with its own folder as the working directory. So a file named `--list-devices` there is
+      // the answer: first no device (b10549's own words with its Vulkan devices hidden), then a GPU. The stand-in's
+      // identity (path, time, size) keys the runtime's memo of those facts, so each new answer comes with a new time.
+      // "Unknown" — the unreadable stub above — kept BGE, and the reason claimed nothing about the machine.
+      ok('(control) with the device list unknown — the stub cannot answer it — the badge is BGE and its reason names no machine',
+        rec?.id === RERANKER && !/显卡/.test(String(rec?.reason)), JSON.stringify(rec ?? null));
+      const devicesFile = path.join(path.dirname(stubExe), '--list-devices');
+      let stamp = Date.now() / 1000;
+      const answerDevices = async (text) => {
+        fs.writeFileSync(devicesFile, text);
+        stamp += 10;
+        fs.utimesSync(stubExe, stamp, stamp);
+        return (await fetch(`${srv.base}/api/manage/models/llama?refresh=true`)).json();
+      };
+      fs.copyFileSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'more.com'), stubExe);
+      try {
+        const noGpu = await answerDevices('Available devices:\r\n  (none)\r\n');
+        ok('(non-vacuity) the stand-in binary ANSWERED --list-devices, with no device — the runtime reads "no GPU", not "unknown"',
+          noGpu.devicesListed === true && noGpu.gpu === false && (noGpu.devices ?? []).length === 0,
+          JSON.stringify({ devicesListed: noGpu.devicesListed, gpu: noGpu.gpu, devices: noGpu.devices }));
+        const cpuShelf = await getJson('/api/manage/models');
+        const cpuRec = cpuShelf.recommendation;
+        ok('THE POINT: with no GPU, 资源 recommends mMiniLMv2 for 判断 — not BGE',
+          cpuRec?.id === MMINILM && cpuShelf.runtime?.gpu === false,
+          JSON.stringify({ rec: cpuRec ?? null, gpu: cpuShelf.runtime?.gpu }));
+        ok('…and its reason says why, plainly: no GPU detected, Run 8\'s CPU result with its configuration, BGE too slow there — and the tagging clause',
+          /没有检测到显卡/.test(String(cpuRec?.reason)) && /Intel Core Ultra 9 185H/.test(String(cpuRec?.reason))
+            && /17\.5 秒/.test(String(cpuRec?.reason)) && /180\/240/.test(String(cpuRec?.reason))
+            && /104\/240/.test(String(cpuRec?.reason)) && /240 道提问/.test(String(cpuRec?.reason))
+            && /不开语义/.test(String(cpuRec?.reason)) && /约两分钟/.test(String(cpuRec?.reason))
+            && /检测到显卡时推荐的是 BGE/.test(String(cpuRec?.reason)) && String(cpuRec?.reason ?? '').includes(TAGGING_COST),
+          String(cpuRec?.reason));
+        const cpuJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
+        ok('THE POINT: …and the 判断 row\'s download suggestion is mMiniLMv2 too — one writer for both',
+          cpuJudge?.suggest === `gguf-${MMINILM}`, JSON.stringify({ suggest: cpuJudge?.suggest }));
+        // The one-reranker rule holds on a CPU too: BGE already in means nothing more is suggested — not a second reranker.
+        fs.writeFileSync(path.join(ggufDir, `${RERANKER}.gguf`), '');
+        const cpuWithBge = await getJson('/api/manage/models');
+        ok('…and never a second reranker: with BGE installed and no GPU, nothing is recommended',
+          cpuWithBge.recommendation == null, JSON.stringify(cpuWithBge.recommendation ?? null));
+        fs.rmSync(path.join(ggufDir, `${RERANKER}.gguf`), { force: true });
+
+        const withGpu = await answerDevices('Available devices:\r\n  Vulkan0: zzfake GPU (8192 MiB, 8000 MiB free)\r\n');
+        ok('(non-vacuity) the same stand-in answered again, now listing a Vulkan GPU',
+          withGpu.devicesListed === true && withGpu.gpu === true, JSON.stringify({ gpu: withGpu.gpu, devices: withGpu.devices }));
+        const gpuShelf = await getJson('/api/manage/models');
+        ok('(control) with a GPU, the badge is BGE again, with the reason that claims nothing about the machine',
+          gpuShelf.recommendation?.id === RERANKER && !/显卡/.test(String(gpuShelf.recommendation?.reason)),
+          JSON.stringify(gpuShelf.recommendation ?? null));
+        const gpuJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
+        ok('(control) …and the 判断 row suggests BGE', gpuJudge?.suggest === `gguf-${RERANKER}`,
+          JSON.stringify({ suggest: gpuJudge?.suggest }));
+      } finally {
+        // Back to the unreadable stub the rest of this block expects — and a device list nobody can read again.
+        fs.rmSync(devicesFile, { force: true });
+        fs.writeFileSync(stubExe, 'not a real binary');
+        await fetch(`${srv.base}/api/manage/models/llama?refresh=true`);
+      }
 
       // A CHAT judge on disk — even the one measured better than none — is not the suggestion, and not a reason to
       // stop suggesting the reranker: it is a different kind of judge, not a second copy of one.

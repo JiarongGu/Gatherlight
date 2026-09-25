@@ -359,6 +359,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // 判断's is the RERANKER. It was the Gemma 3 1B chat model until docs/judge-bench.md Run 3 measured that
             // judge worse than no judge; the button beside this sentence fetches the local default the owner kept.
             // (Qwen3 0.6B, a chat judge, also measured better than none in Run 5b; it is offered, not suggested.)
+            // WHICH reranker is the same one writer 资源's badge reads (GgufCatalog.RecommendedRerankerFor): mMiniLMv2
+            // where the last full probe found no GPU (docs/judge-bench.md Run 8), BGE otherwise — read from the CACHED
+            // probe, because a panel must not await a process; unknown keeps BGE.
             return new SourceStatus(false,
                 _layer == MemoryLayers.Semantic
                     ? "运行时已就绪,但还没有嵌入模型 —— 在「资源 · Resources」面板下载一个。"
@@ -366,7 +369,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                     : "运行时已就绪,但还没有对话模型或重排模型 —— 在「资源 · Resources」面板下载一个。",
                 GgufCatalog.ResourceIdFor(_layer == MemoryLayers.Semantic
                     ? GgufCatalog.RecommendedEmbedder
-                    : GgufCatalog.RecommendedReranker));
+                    : GgufCatalog.RecommendedRerankerFor(ctx.Llama.Cached?.Gpu)));
 
         // Present and has a model: ready to BIND. Whether the process happens to be up right now is not the
         // household's problem — starting it is ours.

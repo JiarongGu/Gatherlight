@@ -132,6 +132,8 @@ public sealed class ModelsController : ControllerBase
                 // not, because "no GPU" and "nobody has asked yet" are different answers and the row must
                 // not print the first while meaning the second.
                 gpuLikely = known?.GpuLikely ?? false, devices = known?.Devices ?? Array.Empty<string>(),
+                // The tri-state the recommendation reads: false only when --list-devices answered with no GPU.
+                gpu = probe.Installed ? known?.Gpu : null,
                 problem = probe.Problem,
             },
             models,
@@ -139,7 +141,9 @@ public sealed class ModelsController : ControllerBase
             // A fixed id here named the embedder, which is the first thing a household installs — so the
             // moment they took the advice the panel went on recommending a model they already had. A
             // recommendation that survives being followed is not a recommendation, it is a slogan.
-            recommendation = Recommend(models, probe.Installed),
+            // The device state from the last FULL probe, and only while the runtime is installed — null ("not known")
+            // otherwise, which keeps today's suggestion and claims nothing about the machine.
+            recommendation = Recommend(models, probe.Installed, probe.Installed ? known?.Gpu : null),
             // The sample size travels with the numbers, here as everywhere: "9/10" invites the right
             // question where a bare adjective does not.
             measuredOn = MeasuredOnLabel(),
@@ -267,8 +271,15 @@ public sealed class ModelsController : ControllerBase
     ///
     /// <para><b>ONE reranker is enough too.</b> Any installed reranker is a local judge that measured better than
     /// none (docs/judge-bench.md Runs 2 and 4); suggesting BGE beside LAMAR or mMiniLMv2 was the same second-copy
-    /// redundancy as the embedders. Proof for all of it: <c>e2e-p51</c>'s badge block.</para></summary>
-    private static object? Recommend(IReadOnlyList<ModelRowView> models, bool llamaRuntimeInstalled)
+    /// redundancy as the embedders. Proof for all of it: <c>e2e-p51</c>'s badge block.</para>
+    ///
+    /// <para><b>WHICH reranker depends on the machine</b> (<see cref="GgufCatalog.RecommendedRerankerFor"/>, owner decision
+    /// 2026-09-25 on <c>docs/judge-bench.md</c> Run 8): where llama.cpp's device probe answered and listed no GPU
+    /// (<paramref name="gpu"/> false), mMiniLMv2, with a reason quoting that run's CPU result and configuration; a GPU, or
+    /// no answer yet, BGE as before, and the reason claims nothing about the machine. The one-reranker rule above holds
+    /// either way — an installed reranker of any kind ends the suggestion. Proof: <c>e2e-p51</c>, with a stand-in binary
+    /// that answers <c>--list-devices</c> with no device, then with one.</para></summary>
+    private static object? Recommend(IReadOnlyList<ModelRowView> models, bool llamaRuntimeInstalled, bool? gpu)
     {
         var offers = models.Where(m => !m.Installed).ToList();
         var builtInIsIn = models.Any(m => m.Installed && m.Id == BuiltInSemanticSource.ModelId);
@@ -290,7 +301,7 @@ public sealed class ModelsController : ControllerBase
         var pick = (anEmbedderIsIn ? null
                 : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedEmbedder)
                   ?? offers.FirstOrDefault(o => o.Id == BuiltInSemanticSource.ModelId))
-            ?? (aRerankerIsIn ? null : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedReranker));
+            ?? (aRerankerIsIn ? null : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedRerankerFor(gpu)));
         if (pick is null) return null;
 
         if (pick.Capability == "embedding")
@@ -309,9 +320,17 @@ public sealed class ModelsController : ControllerBase
             id = pick.Id,
             // What binding it MOVES, because a reranker is half a judge: the checking comes local, the tagging goes
             // to the Claude CLI — the clause the toast, the cost line and the model note all carry.
-            reason = "「判断」那一层在本机用它核对检索结果 —— 本应用双语测试集上,它让答案进前八的次数比不开判断多得多"
-                + "(数字和测法见这一行的说明)。写入事实时的主题标注由 Claude CLI 完成("
-                + MemorySources.CliTaggingCost + ")。",
+            reason = (pick.Id == GgufCatalog.RerankerWithoutGpu
+                    // WHY this one and not BGE, said where the choice is made — docs/judge-bench.md Run 8, with the
+                    // configuration its figures belong to. Only reached when the device probe answered with no GPU.
+                    ? "「判断」那一层在本机用它核对检索结果。llama.cpp 在这台机器上没有检测到显卡,所以推荐这个更小的重排模型,而不是 BGE:"
+                      + "在一台只用 CPU 的笔记本上(Intel Core Ultra 9 185H,不用显卡,llama.cpp b10549;60 条约 900–1,200 字的长笔记、"
+                      + "240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页)实测,它分段读每次检索约 17.5 秒、每次都在一分钟内判断完,"
+                      + "答案带进前八 180/240(不开判断 104/240);BGE 每 1,000 个词元要约 3 秒,一次 40–60 条长笔记"
+                      + "每条只读开头一段也要约两分钟,几乎每次都来不及。检测到显卡时推荐的是 BGE。"
+                    : "「判断」那一层在本机用它核对检索结果 —— 本应用双语测试集上,它让答案进前八的次数比不开判断多得多"
+                      + "(数字和测法见这一行的说明)。")
+                + "写入事实时的主题标注由 Claude CLI 完成(" + MemorySources.CliTaggingCost + ")。",
             // The 检索质量 column holds the embedders' 10-query score only, so this row reads 未实测 there — which,
             // beside a line recommending it, would read as a recommendation nobody measured.
             caution = "「检索质量」一列只放嵌入模型的 10 题检索分,所以它那一格是「未实测」;"
@@ -372,8 +391,9 @@ public sealed class ModelsController : ControllerBase
             version = s.Version, executable = s.Executable,
             models = s.Models, devices = s.Devices,
             // Reported, not guessed: --list-devices answers this exactly, unlike the GpuLikely heuristic
-            // the Ollama arm has to use.
-            gpu = s.GpuLikely,
+            // the Ollama arm has to use. NULL when it did not answer (LlamaServerState.Gpu) — "no GPU" and "nobody
+            // could ask" are different answers, and the 判断 suggestion changes on the first only.
+            gpu = s.Gpu, devicesListed = s.DevicesListed,
             problem = s.Problem,
         });
     }
