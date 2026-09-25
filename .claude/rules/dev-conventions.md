@@ -1034,7 +1034,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (final review) moved a reranker off the RTX a busy moment had excluded — onto the CPU — seeded the pace from the CPU,
   skipped long recalls, and let those skips flip the badge, all before the retry that would have found the RTX; the row
   says it while it lasts (「…但还有设备没测完,所以测完之前仍由 llama.cpp 自己选设备:一个设备一次没测出结果常常只是暂时的
-  (比如显卡当时正被别的程序占着),这时就定在 CPU 上,可能把它从本来更快的显卡上挪开。」). The measurement is CONTAINED: anything it throws is logged and the router
+  (比如显卡当时正被别的程序占着),这时若就定在 CPU 上,可能把它从本来更快的显卡上挪开。」). The measurement is CONTAINED: anything it throws is logged and the router
   starts anyway — a reranker whose retry threw keeps the device its stored result names, and one with nothing stored gets
   no key: it is an optimisation, and must never be why llama.cpp did not start, nor why a known device is forgotten.
   **An exclusion is RETRIED, a bounded number of times** (review, 2026-09-26). Most are transient — a cold shader cache or

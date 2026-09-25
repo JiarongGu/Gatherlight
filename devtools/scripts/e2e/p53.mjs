@@ -247,7 +247,7 @@ try {
     /zzfake iGPU 没有测出结果\(预热:8 秒内没有打完分;第 1 次\),应用下一次自己启动 llama\.cpp 时会再测/.test(lamarNote1)
       && /zzfake dGPU 没有测出结果\(预热:只给 4 段里的 3 段打了分;第 1 次\)/.test(lamarNote1)
       && lamarNote1.includes('测出结果的设备里目前最快的是 CPU,但还有设备没测完,所以测完之前仍由 llama.cpp 自己选设备:'
-        + '一个设备一次没测出结果常常只是暂时的(比如显卡当时正被别的程序占着),这时就定在 CPU 上,可能把它从本来更快的显卡上挪开。')
+        + '一个设备一次没测出结果常常只是暂时的(比如显卡当时正被别的程序占着),这时若就定在 CPU 上,可能把它从本来更快的显卡上挪开。')
       && !/让它在 CPU 上运行/.test(lamarNote1),
     lamarNote1);
   ok('…and no other kind of row says anything about a device', rowOf(shelf1, EMBEDDER)?.deviceNote == null

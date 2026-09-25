@@ -487,7 +487,7 @@ public static class RerankDeviceNotes
         // row says why — the preset writes no device key, and the pace starts from the GPU figure.
         if (m.Pinned is null)
             return head + $"测出结果的设备里目前最快的是 {best.Name},但还有设备没测完,所以测完之前仍由 llama.cpp 自己选设备:"
-                + $"一个设备一次没测出结果常常只是暂时的(比如显卡当时正被别的程序占着),这时就定在 {best.Name} 上,"
+                + $"一个设备一次没测出结果常常只是暂时的(比如显卡当时正被别的程序占着),这时若就定在 {best.Name} 上,"
                 + "可能把它从本来更快的显卡上挪开。" + unsaved + OnlyRerankers;
 
         var slow = admission is { TooSlow: true } a ? SlowSentence(m, a.PredictedMs, a.LimitMs, lowerBound: false) : "";
