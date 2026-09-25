@@ -1382,15 +1382,19 @@ try {
     judgeBefore.pace == null && shelfBefore.recommendation == null,
     JSON.stringify({ pace: judgeBefore.pace ?? null, recommendation: shelfBefore.recommendation ?? null }));
   const paceText = String(judgeAfterSkip.pace?.text ?? '');
-  ok('THE POINT: after a skip, the 判断 row SAYS so — how many of the recent recalls were skipped — and offers mMiniLMv2 to download, whatever the device probe says, naming the integrated-GPU gap',
+  ok('THE POINT: after a skip, the 判断 row SAYS so — how many of the recent recalls were skipped — and offers mMiniLMv2 to download, whatever the device probe says, and what one laptop\'s integrated GPU did (Run 8b) — never the old "not measured"',
     judgeAfterSkip.pace?.skipped >= 1 && judgeAfterSkip.pace?.recalls >= judgeAfterSkip.pace?.skipped
       && paceText.includes(`最近 ${judgeAfterSkip.pace?.recalls} 次检索里有 ${judgeAfterSkip.pace?.skipped} 次因为这台机器太慢`)
-      && /下载 mMiniLMv2 改用它/.test(paceText) && /集成显卡/.test(paceText) && judgeAfterSkip.pace?.suggest === `gguf-${MMINILM}`,
+      && /下载 mMiniLMv2 改用它/.test(paceText) && judgeAfterSkip.pace?.suggest === `gguf-${MMINILM}`
+      && paceText.includes('在同一台笔记本的集成显卡上,它和 BGE 都比它的 CPU 慢(实测和设置见它那一行的说明)')
+      && !paceText.includes('还没有量过'),
     JSON.stringify(judgeAfterSkip.pace ?? null));
   const skipRec = shelfAfterSkip.recommendation;
   ok('THE POINT: …and 资源 recommends mMiniLMv2 BESIDE the installed reranker — the one exception to the one-reranker rule — saying why, with Run 8\'s configuration',
     skipRec?.id === MMINILM && /次因为这台机器太慢跳过了判断/.test(String(skipRec?.reason))
-      && /Intel Core Ultra 9 185H/.test(String(skipRec?.reason)) && /集成显卡/.test(String(skipRec?.reason))
+      && /Intel Core Ultra 9 185H/.test(String(skipRec?.reason))
+      && String(skipRec?.reason ?? '').includes('在同一台笔记本的集成显卡上,两者都比它的 CPU 慢(实测和设置见 mMiniLMv2 那一行的说明)')
+      && !String(skipRec?.reason ?? '').includes('还没有量过')
       && /一分多钟到两分钟/.test(String(skipRec?.reason)),
     JSON.stringify(skipRec ?? null));
   ok('THE POINT: with ~1 s of the presumed queue left, a SHORT-fact recall — tiny, so queue plus prediction fit the budget — is still skipped: nothing is sent while the router is presumed busy',

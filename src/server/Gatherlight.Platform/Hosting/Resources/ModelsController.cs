@@ -255,6 +255,12 @@ public sealed class ModelsController : ControllerBase
         long SizeBytes, bool Installed, string? InUse, string Note,
         MeasuredView? Measured, string ResourceId, string? DeviceNote);
 
+    /// <summary>What an integrated GPU did, in one pointer: on one laptop's Arc both rerankers were slower than its CPU
+    /// (docs/judge-bench.md Run 8b, descriptive; the device measurement, docs/self-managed-llm-runtime.md, 2026-09-26). The
+    /// figures and their configuration are mMiniLMv2's row's (GgufCatalog). It said 「只有集成显卡的机器两者都还没有量过」.</summary>
+    private const string IntegratedGpuPointer =
+        "在同一台笔记本的集成显卡上,两者都比它的 CPU 慢(实测和设置见 mMiniLMv2 那一行的说明)。";
+
     /// <summary>BGE's current device measurement on this machine and its reference-page admission, when that admission is
     /// NOT a send — i.e. BGE measured too slow here (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>). Null when BGE is
     /// not installed, not measured under the current key, or fast enough — and while its measurement still has an excluded
@@ -372,7 +378,8 @@ public sealed class ModelsController : ControllerBase
             };
 
         // Run 8's CPU measurement, with its configuration — the evidence for mMiniLMv2 where the reason is the machine
-        // rather than a measurement of BGE on it.
+        // rather than a measurement of BGE on it. What an integrated GPU does is mMiniLMv2's row's, with ITS configuration
+        // (Run 8b and the device measurement, one laptop); the reason points there (IntegratedGpuPointer).
         const string run8 =
             "在一台只用 CPU 的笔记本上(Intel Core Ultra 9 185H,不用显卡,llama.cpp b10549;60 条约 900–1,200 字的长笔记、"
             + "240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页)实测,它分段读每次检索约 17.5 秒、每次都在一分钟内判断完,"
@@ -389,13 +396,13 @@ public sealed class ModelsController : ControllerBase
                     ? "「判断」那一层在本机用它核对检索结果。"
                       + (skipped
                           ? $"最近 {skips.Recalls} 次检索里有 {skips.Skipped} 次因为这台机器太慢跳过了判断,所以推荐这个更小的重排模型:"
-                            + run8 + "只有集成显卡的机器两者都还没有量过。"
+                            + run8 + IntegratedGpuPointer
                           : bgeTooSlow is { } slow
                           ? RerankDeviceNotes.TooSlowLead(slow.M, slow.PredictedMs, slow.LimitMs, adopted) + "它在只用 CPU 的笔记本上的实测见它那一行的说明;"
                             + "它在这台机器上多快,下载后应用下一次自己启动 llama.cpp 时同样会测。"
                           : "llama.cpp 在这台机器上用不了任何显卡,所以推荐这个更小的重排模型,而不是 BGE:" + run8
                             + "llama.cpp 能用显卡、BGE 下载后在这台机器上也没有测出太慢时,推荐的是 BGE;"
-                            + "只有集成显卡的机器两者都还没有量过。")
+                            + IntegratedGpuPointer)
                     : "「判断」那一层在本机用它核对检索结果 —— 本应用双语测试集上,它让答案进前八的次数比不开判断多得多"
                       + "(数字和测法见这一行的说明)。"
                       // THE LIMITATION, said where the badge is: nothing about the machine is known until it is downloaded.

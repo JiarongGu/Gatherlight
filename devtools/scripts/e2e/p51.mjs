@@ -1282,16 +1282,21 @@ try {
       // after a wait, one window per long fact until a recall answers in time; a recall whose one-window call is predicted
       // past ~48 s (0.8 of the minute — computed from RerankPace.OneWindowShareOfDeadline, so it cannot drift) or half the
       // minute right after a wait is SKIPPED at once and re-measured at most every ten minutes; for a minute or two after a
-      // wait recalls skip too; the skips show in the 判断 row. And that mixed long/short recalls are unmeasured — that clause
-      // EXACTLY as it stands, until Run 9 has a valid result. The clause was 978 characters in one parenthesis, repeated on
-      // three rows, until review (2026-09-25); Run 8's CPU figures now live in mMiniLMv2's row only, below.
+      // wait recalls skip too; the skips show in the 判断 row. And what docs/judge-bench.md Run 9 (VALID; 1a22630) measured
+      // for long and short facts in ONE recall, with its configuration, in the words its intervals allow: short-target
+      // found@8 not significantly lower when long notes are read in windows (94→91, 101→99, 98→97 of 120), a loss of up to
+      // ~4–6 points not ruled out, and long targets +30 to +69 of 120. It said 「长短事实混在一起的检索还没有量过」 until
+      // then. The clause was 978 characters in one parenthesis, repeated on three rows, until review (2026-09-25); Run 8's
+      // CPU figures now live in mMiniLMv2's row only, below.
       const rerankerNotes = [RERANKER, 'LAMAR-600m.Q5_K_M', MMINILM].map((id) => [id, String(rowOf(shelf, id)?.note ?? '')]);
-      const MIXED = '长短事实混在一起的检索还没有量过(长事实取几段里最高的一段,得高分的机会比只有一段的短事实多)';
+      const MIXED = '长短事实混在一起时(在显卡上,30 条短事实加 30 条约 900–1,200 字的长笔记、240 道提问、不开语义、没有主题标注、'
+        + '每次由它挑 8 条上页),分段读没有让答案在短事实里的提问显著少进前八(120 道里 BGE 94→91、LAMAR 101→99、mMiniLMv2 98→97,'
+        + '但排除不了最多约 4–6 个百分点的损失),答案在长笔记里的则多进了 30–69 道';
       for (const [id, n] of rerankerNotes) {
-        ok(`${id}: its note says what a slow machine does — fewer windows, down to the first — and that mixed recalls are unmeasured, that clause exactly`,
+        ok(`${id}: its note says what a slow machine does — fewer windows, down to the first — and Run 9's mixed-recall result, that clause exactly`,
           /机器较慢时,应用按测到的速度让长事实少读几段,最少只读开头一段/.test(n) && /写在后面的答案就读不到/.test(n)
-            && n.includes(MIXED),
-          n.slice(n.indexOf('机器较慢时'), n.indexOf('机器较慢时') + 80));
+            && n.includes(MIXED) && !/混在一起的检索还没有量过/.test(n),
+          n.slice(n.indexOf('长短事实'), n.indexOf('长短事实') + 200));
         // The pace starts from this machine's MEASUREMENT of the reranker where there is one (RerankDeviceVerdict.PaceSeed,
         // e2e-p53), never faster than the GPU figure — it said 「先按显卡上的速度估计」, false once a device is measured.
         ok(`${id}: …that the pace restarts at every launch from the rate measured on this machine (the GPU reference figure without one, or when faster) — a first recall can still wait the minute — and that a truly slow machine waits TWICE, because one wait is damped`,
@@ -1314,7 +1319,10 @@ try {
           n.slice(0, 120));
       }
       // Run 8's CPU measurement is mMiniLMv2's row's, with its configuration — the reason it is recommended where llama.cpp can
-      // use no GPU (an integrated one counts), or where the judge has been skipped — and states the integrated-GPU gap.
+      // use no GPU (an integrated one counts), or where the judge has been skipped — and what is known of an integrated GPU
+      // now: on that same laptop's Arc both rerankers were slower than its CPU (Run 8b, descriptive; the device measurement on
+      // the real binary), so the app measures the devices and, on that laptop with only the Arc visible, chose the CPU for
+      // both and moved the badge to mMiniLMv2. It said 「只有集成显卡的机器两者都还没有量过」 until then.
       const miniNote = String(mini?.note ?? '');
       ok('mMiniLMv2\'s row states Run 8\'s CPU result with its configuration — 17.5 s, at most ~22 s, 180/240; BGE ~3 s per 1,000 tokens, 1–2 minutes, 230 of 240 minute-waits, 104/240 — and LAMAR unmeasured there',
         /在一台只用 CPU 的笔记本上实测过\(Intel Core Ultra 9 185H,不用显卡,llama\.cpp b10549;/.test(miniNote)
@@ -1322,9 +1330,11 @@ try {
           && /104\/240/.test(miniNote) && /每 1,000 个词元要约 3 秒/.test(miniNote) && /一分多钟到两分钟/.test(miniNote)
           && /230 次等满一分钟\(那时应用还不会跳过\)/.test(miniNote) && /LAMAR 没有在只用 CPU 的机器上量过/.test(miniNote),
         miniNote.slice(miniNote.indexOf('在一台只用 CPU'), miniNote.indexOf('在一台只用 CPU') + 240));
-      ok('mMiniLMv2\'s row says it is what the app recommends where llama.cpp can use no GPU (an integrated one counts), or where the judge was skipped — that its long-note loss to BGE was on a GPU — and the integrated-GPU gap',
+      ok('mMiniLMv2\'s row says it is what the app recommends where llama.cpp can use no GPU (an integrated one counts), or where the judge was skipped — that its long-note loss to BGE was on a GPU — and what one laptop\'s integrated GPU did',
         /llama\.cpp 用不了任何显卡时\(集成显卡也算显卡\),应用推荐它而不是 BGE/.test(miniNote) && /「判断」那一行也会建议改用它/.test(miniNote)
-          && /有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE;只有集成显卡的机器两者都还没有量过/.test(miniNote)
+          && /有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE。只有集成显卡时:在同一台笔记本的 Arc 集成显卡上,两个重排模型都比它的 CPU 慢\(mMiniLMv2 约 5–7 倍,BGE 约 3 倍;只是这一台机器上的数\)/.test(miniNote)
+          && /那台笔记本只露出集成显卡时,两者都选了 CPU;BGE 在那里连 CPU 上也赶不上默认检索里的长事实,应用测完就改为推荐 mMiniLMv2/.test(miniNote)
+          && !/还没有量过。/.test(miniNote.slice(miniNote.indexOf('只有集成显卡'))) && !/两者都还没有量过/.test(miniNote)
           && /BGE 下载后,应用会在这台机器的 CPU 和每块显卡上测它的速度,连最快的设备都赶不上时,「资源」也会改为推荐它/.test(miniNote)
           && /\(在显卡上;测完后另算的比较\)/.test(miniNote),
         miniNote);
@@ -1334,7 +1344,9 @@ try {
       ok('BGE\'s row says what Run 8 found for it on a CPU — almost never in time, 230 of 240 minute-waits before the skip, no verdict either way, 104/240 — pointing at mMiniLMv2\'s row for the configuration',
         /只用 CPU 时它几乎总是来不及判断/.test(bgeNote) && /实测和设置见 mMiniLMv2 那一行/.test(bgeNote)
           && /230 次等满一分钟、没能判断/.test(bgeNote) && /现在会当即跳过,同样没有判断/.test(bgeNote) && /104\/240/.test(bgeNote)
-          && /llama\.cpp 用不了任何显卡时,应用推荐 mMiniLMv2/.test(bgeNote) && /只有集成显卡的机器两者都还没有量过/.test(bgeNote)
+          && /llama\.cpp 用不了任何显卡时,应用推荐 mMiniLMv2/.test(bgeNote)
+          && /在同一台笔记本的集成显卡上,它比它的 CPU 还慢约 3 倍\(实测和设置见 mMiniLMv2 那一行\)/.test(bgeNote)
+          && !/两者都还没有量过/.test(bgeNote)
           && /它在这台机器上多快,应用要等下载之后才测得出\(在 CPU 和每块显卡上各测一次,之后让它在最快的那个上运行\)/.test(bgeNote)
           && /连最快的设备都赶不上时,也改为推荐 mMiniLMv2/.test(bgeNote)
           && !/Intel Core Ultra 9 185H/.test(bgeNote),
@@ -1498,13 +1510,14 @@ try {
         ok('THE POINT: with no GPU, 资源 recommends mMiniLMv2 for 判断 — not BGE',
           cpuRec?.id === MMINILM && cpuShelf.runtime?.gpu === false,
           JSON.stringify({ rec: cpuRec ?? null, gpu: cpuShelf.runtime?.gpu }));
-        ok('…and its reason says why, plainly: llama.cpp can use no GPU here, Run 8\'s CPU result with its configuration, BGE too slow there, the integrated-GPU gap — and the tagging clause',
+        ok('…and its reason says why, plainly: llama.cpp can use no GPU here, Run 8\'s CPU result with its configuration, BGE too slow there, what one laptop\'s integrated GPU did — and the tagging clause',
           /llama\.cpp 在这台机器上用不了任何显卡/.test(String(cpuRec?.reason)) && /Intel Core Ultra 9 185H/.test(String(cpuRec?.reason))
             && /17\.5 秒/.test(String(cpuRec?.reason)) && /180\/240/.test(String(cpuRec?.reason))
             && /104\/240/.test(String(cpuRec?.reason)) && /240 道提问/.test(String(cpuRec?.reason))
             && /不开语义/.test(String(cpuRec?.reason)) && /一分多钟到两分钟/.test(String(cpuRec?.reason))
             && /llama\.cpp 能用显卡、BGE 下载后在这台机器上也没有测出太慢时,推荐的是 BGE/.test(String(cpuRec?.reason))
-            && /只有集成显卡的机器两者都还没有量过/.test(String(cpuRec?.reason))
+            && /在同一台笔记本的集成显卡上,两者都比它的 CPU 慢\(实测和设置见 mMiniLMv2 那一行的说明\)/.test(String(cpuRec?.reason))
+            && !/两者都还没有量过/.test(String(cpuRec?.reason))
             && !/没有检测到显卡|约两分钟/.test(String(cpuRec?.reason)) && String(cpuRec?.reason ?? '').includes(TAGGING_COST),
           String(cpuRec?.reason));
         const cpuJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');

@@ -422,8 +422,10 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// (start: 49 → 47, 55 → 54, 52 → 50), and on the ≤ 101-character fixture every row of every reranker was
 /// byte-identical, because a candidate that fits one window is sent exactly as before. The cost is time, where notes
 /// are long: serial medians on those notes 2.0 → 3.2 s (BGE), 2.2 → 3.2 s (LAMAR), 0.5 → 1.2 s (mMiniLMv2); unchanged
-/// on short facts. Unmeasured: long and short notes mixed in one recall (a note's best window has more chances to
-/// score high than a short fact's only one), notes past five window-lengths (the stretches between windows go unread),
+/// on short facts. Long and short notes MIXED in one recall were measured in Run 9 (30 short facts beside 30 long notes,
+/// the same 240 questions): short-target found@8 not significantly lower in windows than cut (94 → 91, 101 → 99, 98 → 97
+/// of 120; a loss of up to 4–6 points not ruled out), long targets +30 / +50 / +69. Unmeasured: notes past five
+/// window-lengths (the stretches between windows go unread),
 /// real household notes, a CPU-only machine — where <see cref="RerankPace"/> gives a long note fewer windows by design,
 /// down to the cut, but neither what that costs nor how soon the pace settles has been measured.</para></summary>
 public sealed class RerankInputCap : IMemoryVerificationPolicy

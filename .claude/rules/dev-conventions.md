@@ -1339,9 +1339,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   FALSE, i.e. `--list-devices` answered with its header and listed no device at all, OR when the pace skipped recent
   recalls, OR (since 2026-09-26, launch item (6)) when BGE was MEASURED too slow on this machine; otherwise BGE. **The
   device probe alone almost never fires**: the provisioned Vulkan build lists an integrated
-  GPU as a device (this machine: `Vulkan1: Intel Arc`), so nearly every x64 laptop reads "GPU", and how either reranker
-  does on an integrated GPU is unmeasured — the notes say 「只有集成显卡的机器两者都还没有量过」, and the skip signal is what
-  catches such a machine. A list naming only NON-Vulkan devices (CUDA0, Metal, SYCL0…) is a build we did not provision and
+  GPU as a device (this machine: `Vulkan1: Intel Arc`), so nearly every x64 laptop reads "GPU". On this laptop's Arc both
+  rerankers were then measured SLOWER than its CPU — `docs/judge-bench.md` Run 8b (recorded UNREAD: its rule was not read,
+  its device figures are descriptive) and the device measurement on the real binary (launch item (6),
+  `docs/self-managed-llm-runtime.md` 2026-09-26: mMiniLMv2 5–7×, BGE ~3×; with only the Arc visible the app chose the CPU
+  for both and, BGE being too slow for the default page there, moved the badge to mMiniLMv2). So the app MEASURES a
+  reranker's devices rather than reading the list, and the skip signal still catches a machine too slow on any device. The
+  notes say so in one place — mMiniLMv2's row, with the configuration, labelled as one laptop's figures, BGE's row and the
+  badge reasons pointing there; they said 「只有集成显卡的机器两者都还没有量过」 until 2026-09-26. Run 8b's accuracy figures
+  are not quoted in household text. A list naming only NON-Vulkan devices (CUDA0, Metal, SYCL0…) is a build we did not provision and
   reads NOT KNOWN (`LlamaServerState.GpuFrom`), never "no GPU" — it read "no GPU" at first. The badge and the row read the
   runtime's MEMO of the binary's device list (`ILlamaServerRuntime.Gpu`), which `Invalidate` leaves alone by design: read
   from the cached state, every start, restart and model removal flipped the badge to BGE until a background probe
@@ -1352,11 +1358,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the first recall after a launch can still wait the minute; one wait is damped, so a truly slow machine waits twice; one
   window each after a wait; skipped past ~48 s (half a minute right after a wait — the figure computed from the constants,
   so it cannot drift from the code); re-measured every ten minutes; skipped for a minute or two after a wait; the skips shown
-  in the 判断 row — and keeps the mixed-recall clause EXACTLY until Run 9 has a valid result; Run 8's CPU figures, with
+  in the 判断 row — and carries `docs/judge-bench.md` Run 9's mixed-recall result (VALID, 1a22630: 30 short facts beside 30
+  long notes, on the GPU; reading the long notes in windows did not significantly lower short-target found@8 — 94→91,
+  101→99, 98→97 of 120 — with a loss of up to ~4–6 points not ruled out, so "no cost" is not claimed; long targets +30 to
+  +69), in one sentence no stronger than those intervals, where it said 「长短事实混在一起的检索还没有量过」; Run 8's CPU figures, with
   their configuration, are mMiniLMv2's row's alone; BGE's row says what that run found for BGE and LAMAR's that it was not
   run there, each pointing at the row with the measurement. Unmeasured: the per-script rates beyond English and CJK; the
-  skip, queue, probe, damping and 0.8 rules on a real CPU router (derived from Run 8 and reviewed against it); either
-  reranker on an integrated GPU. Proof, `e2e-p52`: 6e (the deadline knob 12 s, a fake at 1.6 ms per pair token: all 5
+  skip, queue, probe, damping and 0.8 rules on a real CPU router (derived from Run 8 and reviewed against it); an
+  integrated GPU other than this laptop's Arc (Run 8b and launch item (6) measured that one). Proof, `e2e-p52`: 6e (the
+  deadline knob 12 s, a fake at 1.6 ms per pair token: all 5
   windows, all 5 again — the lone slow call not believed — then 4; still 4 after a fast pass-through big enough to teach,
   and still 4 after a 3.3 s call of 33 tokens, which the floor ignores; then a recall STOPPED by its client at ~55% of its
   call's cost, and the next recall at ~80% of it is sent and judged), 6f (6 s, 4 ms, a fake that scores one request at a
@@ -1454,7 +1464,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   before; named without it — this model's other quants included — `GgufKind` types it CHAT, so it is never used as
   a reranker; either way the fix is a measured row, not a guess from its file name; the character bound does NOT
   transfer to a byte-level tokenizer; and the windows (above) are measured on notes of one length band only — long
-  and short notes mixed in one recall (every reranker's note says so), notes past five window-lengths, and a CPU-only
+  and short notes mixed in one recall (measured since, in Run 9: no significant loss on the short targets, a loss of up to
+  ~4–6 points not ruled out — every reranker's note says so), notes past five window-lengths, and a CPU-only
   machine are not. The row's id is the UPSTREAM file stem, with no "rerank" in it, on purpose: a catalogued
   id is typed by its row, and the upstream stem also catches a household who drops the file in under its own name
   — an id of ours containing "rerank" would leave that file uncatalogued and typed CHAT, the hazard that made Run 4

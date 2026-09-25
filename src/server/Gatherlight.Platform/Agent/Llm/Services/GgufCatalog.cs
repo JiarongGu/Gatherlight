@@ -129,9 +129,13 @@ public static class GgufCatalog
     ///
     /// <para><b>…and that almost never fires</b> (review, 2026-09-25): the Vulkan build the app provisions lists an
     /// INTEGRATED GPU as a device — this very machine lists <c>Vulkan1: Intel Arc</c> — so nearly every x64 laptop reads
-    /// "GPU", and how either reranker does on an integrated GPU is not measured. So the recommendation also follows what the
-    /// judge actually DID here: a recall the pace skipped because this machine was too slow (<see cref="RerankPace.RecentSkips"/>)
-    /// recommends this model whatever the device probe says (<see cref="RecommendedRerankerFor"/>).</para></summary>
+    /// "GPU". On that very laptop's Arc both rerankers were then measured SLOWER than its CPU (docs/judge-bench.md Run 8b,
+    /// descriptive — its rule was not read — and the device measurement on the real binary, docs/self-managed-llm-runtime.md,
+    /// 2026-09-26), which is why the app now measures a reranker's devices instead of reading the list
+    /// (<see cref="RerankDeviceMeter"/>). So the recommendation follows what was measured or done HERE: a recall the pace
+    /// skipped because this machine was too slow (<see cref="RerankPace.RecentSkips"/>), or BGE measured too slow on every
+    /// device that gave a result, recommends this model whatever the device probe says
+    /// (<see cref="RecommendedRerankerFor"/>).</para></summary>
     public const string RerankerWithoutGpu = "mmarco-mMiniLMv2-L12-H384-v1-Q8_0";
 
     /// <summary>Which reranker to suggest for 判断, given what the runtime's device probe found, whether the judge has
@@ -158,7 +162,7 @@ public static class GgufCatalog
         + "(应用最多每十分钟重新测一次速度,赶得上就恢复)。"
         + (offerSmaller
             ? "可以在「资源 · Resources」下载 mMiniLMv2 改用它:它只有 BGE 的 28%,在一台只用 CPU 的笔记本上每次检索都在一分钟内判断完"
-              + "(实测和设置见它那一行的说明);只有集成显卡的机器上,它和 BGE 都还没有量过。"
+              + ";在同一台笔记本的集成显卡上,它和 BGE 都比它的 CPU 慢(实测和设置见它那一行的说明)。"
             : "");
 
     /// <summary>What every reranker row says, because it is the one thing that differs from a chat judge:
@@ -238,10 +242,13 @@ public static class GgufCatalog
     /// without a GPU, so they sit in mMiniLMv2's row (<see cref="SmallRerankerCpuNote"/>); BGE's row says what that run
     /// found for BGE (<see cref="BgeCpuNote"/>) and LAMAR's that it was not run there (<see cref="LamarCpuNote"/>).</para>
     ///
-    /// <para><b>Mixed recalls are unmeasured, for every reranker</b>: Runs 6 and 6c showed each reranker recalls where every
-    /// candidate was long or every one was short, and a long note's best window has up to five chances to score high where a
-    /// short fact has one. It was in mMiniLMv2's note only; it belongs to all three. Run 9 is measuring it; until it has a
-    /// valid result the clause stays exactly as it is.</para></summary>
+    /// <para><b>Mixed recalls, for every reranker — docs/judge-bench.md Run 9</b> (VALID; 1a22630): 30 short facts beside 30
+    /// long notes of ~900–1,200 characters, the same 240 questions, on the GPU, no 语义, no subject tags, a page of 8.
+    /// Reading the long notes in windows did not significantly lower found@8 on the 120 questions whose answer is a SHORT
+    /// fact (BGE 94 → 91, LAMAR 101 → 99, mMiniLMv2 98 → 97; 3/0, 2/0, 2/1, p ≥ 0.25), and a loss of up to 5.6 / 4.4 / 4.0
+    /// points is not ruled out — so "no cost" is not claimed; on the 120 whose answer is in a LONG note, windows brought in
+    /// +30 / +50 / +69 (73 → 103, 54 → 104, 18 → 87). It said 「长短事实混在一起的检索还没有量过」 until that run; the
+    /// sentence is no stronger than the intervals.</para></summary>
     private static readonly string RerankerLatencyCaveat =
         "(模型已加载、在显卡上、每次不超过 60 条候选、事实都很短时测得。候选更多、事实更长或机器更慢时都会慢得多 —— "
         + "默认每次取 8 条时候选最多 96 条,限定类别或一次要 34 条以上时可达 400 条;"
@@ -255,8 +262,9 @@ public static class GgufCatalog
         + $"预计每条只读开头一段也要超过约 {OneWindowLimitSeconds} 秒(刚等满过一分钟时是半分钟)时,"
         + "应用当即跳过这次判断、按没有判断时的顺序返回,最多每十分钟花几秒重新测一次速度,赶得上就恢复;"
         + "等满一分钟之后的一两分钟里,检索也会先跳过判断(那次打分还在后台算)。跳过了几次,「判断」那一行会写出来。"
-        + "长短事实混在一起的检索还没有量过"
-        + "(长事实取几段里最高的一段,得高分的机会比只有一段的短事实多))";
+        + "长短事实混在一起时(在显卡上,30 条短事实加 30 条约 900–1,200 字的长笔记、240 道提问、不开语义、没有主题标注、"
+        + "每次由它挑 8 条上页),分段读没有让答案在短事实里的提问显著少进前八(120 道里 BGE 94→91、LAMAR 101→99、mMiniLMv2 98→97,"
+        + "但排除不了最多约 4–6 个百分点的损失),答案在长笔记里的则多进了 30–69 道)";
 
     /// <summary>The limit a one-window call is sent under while the estimate comes from an answer, in whole seconds at the
     /// product's deadline — read from <see cref="RerankPace.OneWindowShareOfDeadline"/> and
@@ -267,7 +275,11 @@ public static class GgufCatalog
     /// <summary>docs/judge-bench.md Run 8, configuration first — mMiniLMv2's row, because it is why that row is recommended
     /// where llama.cpp can use no GPU, or where the judge has been skipped for being too slow (<see cref="RerankerWithoutGpu"/>).
     /// 182/240 is Run 6c's GPU figure, another run, descriptive. 「集成显卡也算显卡」 says why a laptop with only an integrated
-    /// GPU is not offered it by the device probe, and 「两者都还没有量过」 that nobody has measured either model there. The
+    /// GPU is not offered it by the device probe. What an integrated GPU does is said once, here, for that same laptop's Arc:
+    /// both rerankers slower than its CPU — mMiniLMv2 5.1× (Run 8b) to 6.7× (the device measurement with only the Arc
+    /// visible), BGE 2.7–3.3× — figures from ONE machine, labelled so; with only the Arc visible the app chose the CPU for
+    /// both and, BGE being too slow for the default page there, moved the badge to mMiniLMv2 (docs/self-managed-llm-runtime.md,
+    /// 2026-09-26). Run 8b's accuracy figures are not quoted: its rule was not read. It said 「两者都还没有量过」 until then. The
     /// third reason it is recommended — BGE MEASURED too slow on this machine (<see cref="RerankDeviceVerdict"/>) — needs BGE
     /// on disk first, which the note says, and it makes 「有显卡时推荐的仍是 BGE」 conditional on that measurement.</summary>
     private const string SmallRerankerCpuNote =
@@ -280,8 +292,11 @@ public static class GgufCatalog
         + "(不开判断 104/240;在显卡上另一轮是 182/240)。"
         + "同一台机器上 BGE 每 1,000 个词元要约 3 秒,40–60 条长笔记每条只读开头一段也要一分多钟到两分钟,"
         + "240 次里 230 次等满一分钟(那时应用还不会跳过),带进前八和不开判断一样(104/240)。"
-        + "LAMAR 没有在只用 CPU 的机器上量过。有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE;"
-        + "只有集成显卡的机器两者都还没有量过。";
+        + "LAMAR 没有在只用 CPU 的机器上量过。有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE。"
+        + "只有集成显卡时:在同一台笔记本的 Arc 集成显卡上,两个重排模型都比它的 CPU 慢(mMiniLMv2 约 5–7 倍,BGE 约 3 倍;"
+        + "只是这一台机器上的数)。所以应用在下载后第一次自己启动 llama.cpp 时,会在 CPU 和每块显卡上各测一次,"
+        + "让它在最快的那个上运行 —— 那台笔记本只露出集成显卡时,两者都选了 CPU;"
+        + "BGE 在那里连 CPU 上也赶不上默认检索里的长事实,应用测完就改为推荐 mMiniLMv2。";
 
     /// <summary>BGE's own line from Run 8 — what the household on a CPU would meet — pointing at mMiniLMv2's row for the
     /// configuration. The minute-waits were BEFORE the skip existed; the skip removes the wait and cannot add a verdict,
@@ -293,7 +308,8 @@ public static class GgufCatalog
         + "240 次检索里 230 次等满一分钟、没能判断(那时应用还不会跳过;现在会当即跳过,同样没有判断),"
         + "带进前八和不开判断一样(104/240)。所以 llama.cpp 用不了任何显卡时,应用推荐 mMiniLMv2;"
         + "它在这台机器上多快,应用要等下载之后才测得出(在 CPU 和每块显卡上各测一次,之后让它在最快的那个上运行),"
-        + "连最快的设备都赶不上时,也改为推荐 mMiniLMv2。只有集成显卡的机器两者都还没有量过。";
+        + "连最快的设备都赶不上时,也改为推荐 mMiniLMv2。"
+        + "在同一台笔记本的集成显卡上,它比它的 CPU 还慢约 3 倍(实测和设置见 mMiniLMv2 那一行)。";
 
     /// <summary>LAMAR was not run on the CPU. Its size is BGE's, so BGE's outcome is the likely one — said as likely,
     /// pointing at the row that has the measurement.</summary>
