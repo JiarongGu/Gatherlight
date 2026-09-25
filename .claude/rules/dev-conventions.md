@@ -1003,6 +1003,54 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   sliding-window layers kept its cache small anyway, went 183 → 119 MiB of KV and answered as before. `p51` pins the
   line on chat sections and its absence from embedder and reranker sections (a reranker keeps exactly ONE `ctx-size`,
   its own); confirmed to FAIL with the line removed and with it written on every section.
+  **(6) A RERANKER runs on the device it was MEASURED fastest on — never one guessed from the device list** (2026-09-26,
+  owner decision after `docs/judge-bench.md` Run 8b). Run 8b found this laptop's integrated Arc 3–5× SLOWER than its
+  CPU for both rerankers (BGE judged 1 recall of 240 there; the device measurement read 2.7× and 6.7× per pair token),
+  and `--list-devices` prints an integrated GPU exactly like a discrete one ("Vulkan1: Intel(R) Arc(TM) Graphics"), so no
+  reading of the list can answer "run this where?" — while llama.cpp's own default put the child on the Arc when it was
+  the only GPU visible (Run 8b) and on the RTX alone when both were. So at every router start the app performs
+  (`SpawnAsync`: a start or a restart, under the one lifecycle lock — never an ADOPTED router, whose presets are not
+  ours), each installed reranker without a current measurement is timed first by `RerankDeviceMeter`: on the CPU
+  (`device = none`) and on every listed device, ONE AT A TIME (two children share one package's power budget — Run 9's
+  void), each a standalone `llama-server` with the section's own `LaunchKeys` plus `--device`, on a loopback port the OS
+  picks: `/health`, a warm call of the fixed batch, one timed call, the tree killed. Every wait is capped (load 45 s, each
+  call 30 s); a device that fails, exits, times out or does not score every document (`RerankReply`) is excluded with its
+  reason. The preset names the fastest (`device = Vulkan0`, or `none`) and nothing else gets a device key; with no valid
+  result, no key — llama.cpp chooses, as before. **The key** (`RerankDeviceKey`) is the model file (id, size, time), the
+  build tag and the device list's ids AND names — its free-memory figures stripped, or every boot re-measures; the names
+  because `GGML_VK_VISIBLE_DEVICES` can hand the id `Vulkan0` to a different GPU. It lives in `rerank-devices.json` beside
+  the GGUFs, under `state/`, which the backup does not carry: a device choice belongs to one machine. The batch is four
+  documents of invented bilingual prose, each a full window of the model's own budget (`RerankInputCap.Fit`), counted by
+  `RerankPace.PairTokens` and read through `RerankPace.RateOf` — the pace's unit, one counting. **`n-gpu-layers = 99` stays
+  beside `device = none`**, harmless: the child logs "offloaded 25/25 layers to GPU" yet holds only CPU buffers and scores
+  at the CPU's rate, the same as with 0; `device = none` is what keeps a batch off a visible GPU. **Three readers, none
+  with a threshold of its own.** The PACE starts from the chosen device's rate — never faster than the GPU seed, because
+  a four-document batch on a discrete GPU is mostly call overhead and, seeded at the floor, the pace would stop learning
+  (`MinSignalFactor`) — read at its FIRST USE, since the verifier is built before the startup step that measures. The
+  推荐 BADGE recommends mMiniLMv2, even beside an installed BGE, when a fresh pace seeded with BGE's fastest rate would not
+  SEND the default page's one-window call — 96 candidates (`recall_facts`' 8 → `FactIndex.RankLimit`'s 24 → Lyntai's 4×
+  verification depth; the bench's "≤ 60" is its fixture's size), each one full window of the batch's prose — the
+  runtime's own admission (`RerankDeviceVerdict.ReferenceAdmission`). Precedence: recent skips → BGE measured too slow →
+  no GPU → BGE. And the reranker's ROW says where it runs and what was measured (`RerankDeviceNotes`), including that
+  embedders and chat models are not measured. **The limitation, said in the reason and the notes rather than hidden**: a
+  measurement exists only for a model on disk, taken at the next router start the app performs, so on an iGPU-only
+  machine the badge offers BGE first and moves to mMiniLMv2 once BGE is measured. **Who waits**: the migration overlay,
+  or a bind's restart and 资源's start button, which no server or client timeout bounds — worst case 105 s per device per
+  unmeasured reranker. Inside a restart the router stays down for the measurement too; `ILlamaRestartPolicy` already
+  refuses a restart while anything WRITES through the router, so what that longer window can cost is a reranker's
+  verification, which fails open. Measured: 77 s for both rerankers on this laptop's three devices, and nothing on the
+  next start (`docs/self-managed-llm-runtime.md`, 2026-09-26, with the per-device figures: on the RTX the choice changes
+  nothing, the default already put both there; with only the Arc visible, both go to the CPU). **Measuring it found a parser bug**:
+  `--list-devices` is read as stdout and stderr together, and with `LLAMA_ARG_LOG_VERBOSITY=4` in the environment three
+  `load_backend` log lines became "devices" and a re-measure on devices that do not exist — only the indented lines
+  under the header are devices now. Proof: `e2e-p53`, through the measurement-only seam `GATHERLIGHT_LLAMA_MEASURE_CMD`
+  (a fake `llama-server`, `devtools/scripts/fake-llama-measure.mjs`, answering in time proportional to the pair tokens
+  it is sent, per model and device; the precedent is `GATHERLIGHT_CLAUDE_CMD`) and the cap knob
+  `GATHERLIGHT_RERANK_MEASURE_CAP_SECONDS`, which only shortens: the choice, one device at a time, the launch keys,
+  validity, the cap and the kill, the key's four halves, the flip, a CPU section, and the pace seed against a control
+  with no valid measurement. **Gaps**: `Dispose` killing a measurement child is asserted by nothing (the harness stops a
+  server with TerminateProcess, which skips Dispose); whether an embedder or a chat model would be faster on another
+  device is unmeasured; and one laptop is the only hardware measured.
   Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
   (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
   already there" is not on the table. And `LlamaServerRuntime` deliberately does **not** search PATH: a
@@ -1174,7 +1222,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the call had already run longer than predicted (a user's stop proves nothing), and one past the budget puts the pace
   AFTER CUT: every chunked call sends ONE window per candidate until one answers, and that answer is believed whole —
   one minute-wait wherever one window each can finish in time. Seeded with the GPU figure, so on that GPU nothing
-  changes.
+  changes — or, since 2026-09-26, with this machine's measurement of the bound reranker where there is one, never faster
+  than that figure (launch item (6)).
   **WHERE EVEN ONE WINDOW PER CANDIDATE CANNOT FIT, NOTHING IS SENT** (2026-09-25, `docs/judge-bench.md` Run 8). On that
   run's CPU (Core Ultra 9 185H, `device = none`) BGE scored ~3.1 s per 1,000 pair tokens, so a recall of ~59 long notes
   cost ~118 s at one window each: 230 of 240 chunked recalls waited the full minute for no verdict and ended where no
@@ -1234,7 +1283,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   fail-open and unreported. **No GPU → mMiniLMv2** (owner decision, same day): `GgufCatalog.RecommendedRerankerFor` — the
   one writer 资源's badge and the 判断 row's suggestions read — picks `RerankerWithoutGpu` when `LlamaServerState.Gpu` is
   FALSE, i.e. `--list-devices` answered with its header and listed no device at all, OR when the pace skipped recent
-  recalls; otherwise BGE. **The device probe alone almost never fires**: the provisioned Vulkan build lists an integrated
+  recalls, OR (since 2026-09-26, launch item (6)) when BGE was MEASURED too slow on this machine; otherwise BGE. **The
+  device probe alone almost never fires**: the provisioned Vulkan build lists an integrated
   GPU as a device (this machine: `Vulkan1: Intel Arc`), so nearly every x64 laptop reads "GPU", and how either reranker
   does on an integrated GPU is unmeasured — the notes say 「只有集成显卡的机器两者都还没有量过」, and the skip signal is what
   catches such a machine. A list naming only NON-Vulkan devices (CUDA0, Metal, SYCL0…) is a build we did not provision and
