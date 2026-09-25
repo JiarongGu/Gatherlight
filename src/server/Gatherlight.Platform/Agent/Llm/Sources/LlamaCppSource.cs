@@ -326,8 +326,12 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             });
             // How fast this machine scores — ONE per process, shared by the verifier Wiring builds (its admission and its
             // chunked provider) and the 判断 row, which reads its skip count (MemoryRecallController). Its budget is half
-            // the verification deadline.
-            b.Services.AddSingleton(_ => new RerankPace(VerificationDeadlinePolicy.Configured / 2));
+            // the verification deadline. It STARTS from this machine's measurement of the bound reranker when there is a
+            // current one (RerankDeviceVerdict.PaceSeed) — read at the pace's first use, through the runtime's spawn-free
+            // lookup, because the device measurement runs in the startup step after this singleton is built.
+            var model = ctx.Model;
+            b.Services.AddSingleton(sp => new RerankPace(VerificationDeadlinePolicy.Configured / 2,
+                measuredSeed: () => MeasuredPaceSeed(sp, model)));
             return;
         }
 
@@ -348,6 +352,29 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         // only then drop `reasoning = off` from the preset and p51's assertion of it.
         b.AddLlamaProvider(ctx.Endpoint, ctx.Model, ProviderId)
          .AddTextClient(ClientId, c => c.UseProviders(ProviderId));
+    }
+
+    /// <summary>Where the reranker's pace starts: this machine's measurement of <paramref name="model"/> on the device it
+    /// runs on (<see cref="RerankDeviceVerdict.PaceSeed"/>), or null — the GPU figure — when there is no current one. Said
+    /// in the log either way, because the pace's other lines quote its estimate and a reader has to know where it began.
+    /// NOT in judge-bench's pace-line family (no "window(s) per … instead of", no "re-measured this machine").</summary>
+    private static double? MeasuredPaceSeed(IServiceProvider sp, string model)
+    {
+        var lookup = sp.GetService<ILlamaServerRuntime>()?.RerankDevice(model);
+        var seed = RerankDeviceVerdict.PaceSeed(lookup?.Measurement);
+        var log = sp.GetService<ILogger<RerankPace>>();
+        if (seed is { } s && lookup?.Measurement?.Fastest is { } best)
+            log?.LogInformation(
+                "{Model}: the rerank pace starts from {Seed:0.###} ms per 1,000 pair tokens — this machine's measurement on {Device} ({Name}), {Rate:0.###}, never below the GPU figure {Gpu:0.###}",
+                model, s * 1000, best.Device, best.Name, best.MsPerToken * 1000, RerankPace.SeedMsPerToken * 1000);
+        else
+            log?.LogInformation(
+                "{Model}: the rerank pace starts from the GPU figure, {Gpu:0.###} ms per 1,000 pair tokens — {Why}",
+                model, RerankPace.SeedMsPerToken * 1000,
+                lookup is null ? "no device-measurement key yet (the binary's build and device list are not known in this process)"
+                : lookup.Measurement is null ? "this reranker has no current device measurement on this machine"
+                : "its measurement found no device that scored the batch");
+        return seed;
     }
 
     /// <summary>Three states with three different fixes, so they are three different sentences: the runtime
@@ -476,7 +503,8 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         }
 
         if (!succeeded) return $"{model} 没能在 llama.cpp 上完成重排(HTTP {status}):{Detail(body)}";
-        if (ScreenScores(body) is not { } scores) return $"{model} 返回的重排结果无法使用:{Detail(body)}";
+        // The one reader of a rerank reply (RerankReply): every document scored exactly once, or unusable.
+        if (RerankReply.Scores(body, ScreenDocuments.Length) is not { } scores) return $"{model} 返回的重排结果无法使用:{Detail(body)}";
 
         // ORDERING, never a margin: a household-dropped reranker may score on another scale, so the answer
         // strictly first is every model's assertion while a threshold would be one model's.
@@ -487,40 +515,6 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
 
     /// <summary>Generous: the screen also pays the model load (measured in docs/self-managed-llm-runtime.md).</summary>
     private static readonly TimeSpan ScreenTimeout = TimeSpan.FromMinutes(3);
-
-    /// <summary>The screen's scores in INPUT order, or null for anything unusable — invalid JSON, a missing or
-    /// mistyped field, an index outside the batch or seen twice, a non-finite score, or FEWER results than
-    /// documents. Reads <c>relevance_score</c> or <c>score</c>, as Lyntai's rerank transport does, so the
-    /// screen accepts exactly the replies the verifier will be able to read.</summary>
-    private static double[]? ScreenScores(string body)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object
-                || !doc.RootElement.TryGetProperty("results", out var results)
-                || results.ValueKind != JsonValueKind.Array) return null;
-
-            var scores = new double[ScreenDocuments.Length];
-            var seen = new bool[ScreenDocuments.Length];
-            foreach (var r in results.EnumerateArray())
-            {
-                if (r.ValueKind != JsonValueKind.Object
-                    || !r.TryGetProperty("index", out var i) || i.ValueKind != JsonValueKind.Number
-                    || !i.TryGetInt32(out var index) || index < 0 || index >= scores.Length || seen[index])
-                    return null;
-                if ((!r.TryGetProperty("relevance_score", out var s) || s.ValueKind != JsonValueKind.Number)
-                    && (!r.TryGetProperty("score", out s) || s.ValueKind != JsonValueKind.Number))
-                    return null;
-                var value = s.GetDouble();
-                if (!double.IsFinite(value)) return null;
-                scores[index] = value;
-                seen[index] = true;
-            }
-            return Array.TrueForAll(seen, x => x) ? scores : null;
-        }
-        catch (JsonException) { return null; }
-    }
 
     /// <summary>What the server SAID, for a sentence the household can act on: llama-server's
     /// <c>error.message</c> when it sent one, otherwise the head of the body.</summary>

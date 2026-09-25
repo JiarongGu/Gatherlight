@@ -48,6 +48,9 @@ interface Model {
   /** Which layer is holding it, when one is — the reason its delete button is a label instead. */
   inUse: string | null;
   note: string; measured: Measured | null;
+  /** For an installed RERANKER: the device the app runs it on and the measurement on this machine that chose it — or
+   *  what happens until there is one. Written by the server (RerankDeviceNotes), null for every other row. */
+  device: string | null;
   /** The resource to provision. Sent by the server rather than built from the id here — deriving it
    *  client-side is what put models in the runtimes column twice already. */
   resourceId: string;
@@ -246,6 +249,7 @@ export function LocalModelsPanel(
                     </div>
                     {/* The id, because it is what 记忆检索 shows and what you would match against. */}
                     <div className="mem-m-sub">{m.id}</div>
+                    {m.device && <div className="mem-m-device">{m.device}</div>}
                     {m.note && <div className="mem-m-note">{m.note}</div>}
                     {/* Progress goes in the NAME cell, where there is room for a bar and a status line —
                         the action cell is a narrow, right-aligned, nowrap column. */}

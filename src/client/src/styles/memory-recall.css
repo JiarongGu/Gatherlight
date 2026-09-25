@@ -206,6 +206,9 @@
    prose stops being readable at, which is much wider than the narrowest column this table ever has. */
 .mem-m-note { font-size: 11.5px; color: var(--muted); line-height: 1.55; max-width: 68ch; }
 .mem-m-sub { font-family: var(--font-mono); font-size: 10px; color: var(--muted); margin-top: 3px; }
+/* WHERE a reranker runs on this machine, and the measurement that chose it — a fact about THIS install, so it
+   reads in the text colour above the catalogue note, which is the same for every install. */
+.mem-m-device { font-size: 11.5px; color: var(--text); line-height: 1.55; max-width: 68ch; margin: 3px 0 4px; }
 .mem-act-pair { display: inline-flex; gap: 6px; }
 
 /* 本机模型 inside 资源 · Resources. Reuses the mem-* vocabulary wholesale rather than growing a second

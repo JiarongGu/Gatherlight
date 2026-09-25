@@ -299,6 +299,25 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         catch (IOException) { return Array.Empty<string>(); }
     }
 
+    /// <summary>The file llama-server loads for <paramref name="modelId"/> — the first <c>.gguf</c> (by name) in its own
+    /// directory, the layout the app provisions, else the flat <c>&lt;id&gt;.gguf</c> a household dropped in — or null when
+    /// neither is there. The same two layouts <see cref="InstalledGgufIds"/> enumerates; read by the reranker device
+    /// measurement, which launches a standalone child on this file and keys its result on the file's size and time.</summary>
+    public static string? GgufFile(string resourcesPath, string modelId)
+    {
+        var dir = ProvisionedGgufDir(resourcesPath);
+        try
+        {
+            var nested = Path.Combine(dir, modelId);
+            if (Directory.Exists(nested)
+                && Directory.EnumerateFiles(nested, "*.gguf").OrderBy(f => f, StringComparer.OrdinalIgnoreCase).FirstOrDefault() is { } inner)
+                return inner;
+            var flat = Path.Combine(dir, modelId + ".gguf");
+            return File.Exists(flat) ? flat : null;
+        }
+        catch (IOException) { return null; }
+    }
+
     /// <summary>What a GGUF IS — the ONE writer of that answer. llama-server's <c>embeddings</c> and
     /// <c>reranking</c> presets each RESTRICT a child to one API, so a wrong answer makes a judge refuse to talk,
     /// an embedder serve chat it cannot, or a reranker never be asked.

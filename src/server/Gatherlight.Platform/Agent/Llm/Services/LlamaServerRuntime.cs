@@ -86,6 +86,12 @@ public interface ILlamaServerRuntime
     /// known" — until a background probe finished.</para></summary>
     bool? Gpu { get; }
 
+    /// <summary>Where a RERANKER's device measurement stands on this machine (<see cref="RerankDeviceMeter"/>): its key
+    /// now, and the measurement when one is current. Null when there is no key to ask with — the model file is not on
+    /// disk, or this process holds no memo of the binary's build tag and device list (nothing probed yet, or the binary
+    /// did not answer). Never spawns anything, so a panel and a registration factory may read it.</summary>
+    RerankDeviceLookup? RerankDevice(string modelId);
+
     /// <summary>The state a BINDING decision needs: is it installed, is it answering, what models are on
     /// disk. Never spawns anything.
     ///
@@ -311,6 +317,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
     private readonly ILlamaRestartPolicy? _restartPolicy;
 
+    /// <summary>Times each installed reranker on the CPU and every GPU before a router of ours starts — see
+    /// <see cref="MeasureRerankersAsync"/>. Held here so <see cref="Dispose"/> can kill a measurement child.</summary>
+    private readonly RerankDeviceMeter _meter;
+
     public LlamaServerRuntime(IPlatformContext platform, IHttpClientFactory http,
         ILogger<LlamaServerRuntime> log, ILlamaRestartPolicy? restartPolicy = null)
     {
@@ -318,6 +328,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         _http = http;
         _log = log;
         _restartPolicy = restartPolicy;
+        _meter = new RerankDeviceMeter(http, log);
     }
 
     /// <summary>Env override → loopback default, with the loopback guard applied. Non-loopback is refused
@@ -383,8 +394,12 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 
     /// <summary>Write the router's preset file. Regenerated on every start rather than kept, because it is
     /// derived state: the models on disk are the truth, and a stale section naming a deleted GGUF is a
-    /// child that fails to spawn.</summary>
-    private string WritePresets(IReadOnlyList<string> models)
+    /// child that fails to spawn. Each section is <see cref="LaunchKeys"/> — the ONE writer of the launch contract,
+    /// which the reranker device measurement launches its standalone children with too.
+    /// <para><paramref name="devices"/>: the device each MEASURED reranker runs on (<see cref="RerankDeviceMeter"/>) — the
+    /// fastest of its current measurement, <c>none</c> for the CPU. A reranker without one, and every other kind, gets no
+    /// device key: llama.cpp chooses, as it always did.</para></summary>
+    private string WritePresets(IReadOnlyList<string> models, IReadOnlyDictionary<string, string> devices)
     {
         var path = Path.Combine(ModelsDir(), "presets.ini");
         var sb = new StringBuilder();
@@ -395,67 +410,133 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         {
             sb.AppendLine();
             sb.AppendLine($"[{m}]");
-            sb.AppendLine($"n-gpu-layers = {GpuLayers}");
-            switch (ResourceProvisioner.GgufKind(m))
-            {
-                // `embeddings` RESTRICTS a child to embedding-only. Right for an embedder, fatal for a judge.
-                case GgufCapability.Embedding:
-                    sb.AppendLine("embeddings = true");
-                    break;
-                // A CHAT child — the only kind that generates — launches with thinking OFF, a generation cap and a
-                // context cap.
-                //
-                // `reasoning = off` IS A WORKAROUND FOR A LYNTAI GAP, recorded on both sides (dev-conventions: open
-                // workaround (5)). Both memory seams ask for no reasoning (TextReasoning.Suppress), and Lyntai 3.2.0's
-                // OpenAI-shaped payload drops the field — Lyntai docs/task-archive.md Part 288, "the OpenAI-shaped wire
-                // drops TextReasoning.Suppress", CLOSED upstream as D179 but NOT released (no version promised).
-                // llama-server's default `--reasoning auto` then opens a thinking block for any
-                // template that supports one: Qwen3-0.6B thought on every call (1.3–7.5 s), Qwen3.5-0.8B for 17.5 s and
-                // then past a 300 s client timeout (docs/judge-bench.md, Run 5's screen). The router passes this key to
-                // the child as `--reasoning off`; the template then renders its pre-closed think block, and replies ran
-                // 6–21 tokens. For a template with nothing to turn off (Gemma 3) the rendered prompt is byte-identical.
-                // NOT `reasoning-budget = 0`: the template stays in thinking mode, the model writes its reasoning into
-                // the content, and 4 of 6 replies did not parse. KEEP THIS LINE UNTIL D179 SHIPS — and even then it goes
-                // LAST. D179 is CONFIGURED fields: HttpModelOptions.SuppressReasoningFields, a JSON object Lyntai merges
-                // into a chat request only when the call asks Suppress; like DocumentPrefix, the library knows no vendor's
-                // spelling and ships no default. So the bump wires nothing by itself. In order:
-                // (1) set SuppressReasoningFields = {"chat_template_kwargs":{"enable_thinking":false}} on the `llamacpp`
-                // registration — the AddLlamaProvider line in LlamaCppSource.Register, through the preset's options-action
-                // overload D179 added — a spelling that is TEMPLATE-specific (a template reading another key ignores it)
-                // and was tried only as a dedicated server's `--chat-template-kwargs` flag, never as a request field or a
-                // preset key; (2) verify EACH catalogued chat model on the real binary with this line removed: no
-                // `<think>`, no reasoning_content, replies as short as they ran under this line (6–21 tokens); (3) only
-                // then delete this line and p51's assertion of it. The other order puts every Qwen judge back to thinking
-                // on every call, silently.
-                //
-                // `n-predict` is our own launch contract, not a workaround — see ChatMaxTokens.
-                //
-                // `ctx-size` is launch contract too — see ChatContextTokens. Unset, the child reserves its model's whole
-                // TRAINING context (Qwen3-0.6B: 40,960 tokens, 4,480 MiB of KV for a 604 MiB model; +5,175 MiB of GPU
-                // memory with the router, measured); 16,384 holds the measured worst prompt with a third to spare, and
-                // took the same child to +2,472 MiB on the real binary (docs/self-managed-llm-runtime.md, 2026-09-24).
-                // Chat sections ONLY: a reranker's window is its whole-pair contract (below) and an embedder takes its
-                // own — neither was measured under any other. p51 pins all three halves.
-                case GgufCapability.Completion:
-                    sb.AppendLine("reasoning = off");
-                    sb.AppendLine($"n-predict = {ChatMaxTokens}");
-                    sb.AppendLine($"ctx-size = {ChatContextTokens}");
-                    break;
-                // `reranking` restricts it to /v1/rerank, and the pair must fit one batch — see RerankBatch. A row
-                // that DECLARES a smaller window gets that instead (GgufCatalog.DeclaredWindow — the read
-                // RerankInputCap and ChunkedScoreProvider fit the input to, so they cannot disagree). llama.cpp serves mMiniLMv2 512-token
-                // slots whatever the preset asks; a preset claiming 4096 for it states a limit nothing honours.
-                case GgufCapability.Reranking:
-                    var window = GgufCatalog.DeclaredWindow(m) ?? RerankBatch;
-                    sb.AppendLine("reranking = true");
-                    sb.AppendLine($"ctx-size = {window}");
-                    sb.AppendLine($"batch-size = {window}");
-                    sb.AppendLine($"ubatch-size = {window}");
-                    break;
-            }
+            foreach (var (key, value) in LaunchKeys(m, devices.TryGetValue(m, out var d) ? d : null))
+                sb.AppendLine($"{key} = {value}");
         }
         File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
         return path;
+    }
+
+    /// <summary>The keys a model's child is launched with — a preset section's lines, and (for a reranker's device
+    /// measurement) a standalone child's flags: <c>--key value</c>, or <c>--key</c> alone for <c>true</c>, which is how the
+    /// router itself passes a preset to its child (read back from the child's argv on b10549). ONE writer, so a reranker is
+    /// measured under exactly the launch it then runs with.
+    /// <para><paramref name="device"/> is written on a RERANKER section only, and only when given.</para></summary>
+    public static IReadOnlyList<(string Key, string Value)> LaunchKeys(string model, string? device)
+    {
+        // n-gpu-layers on EVERY section — the launch contract (class comment). On a reranker section measured fastest on the
+        // CPU it stands beside `device = none`, and is harmless there: verified on b10549 (2026-09-26, BGE, both GPUs
+        // visible) — the child's log still says "offloaded 25/25 layers to GPU", but its model buffer is CPU_Mapped
+        // (440 MiB) and its compute buffer CPU, with no Vulkan buffer at all, and it scored at the CPU's rate: 3.35 s per
+        // 1,000 pair tokens with 99 against 3.20–3.34 with 0, and 3.6–3.7 on a 16-document batch, where a GPU would have
+        // taken well under a second. (Run 8 found `n-gpu-layers = 0` ALONE still offloads a big batch to a visible GPU —
+        // it is `device = none` that keeps the child on the CPU.)
+        var keys = new List<(string, string)> { ("n-gpu-layers", GpuLayers.ToString()) };
+        switch (ResourceProvisioner.GgufKind(model))
+        {
+            // `embeddings` RESTRICTS a child to embedding-only. Right for an embedder, fatal for a judge.
+            case GgufCapability.Embedding:
+                keys.Add(("embeddings", "true"));
+                break;
+            // A CHAT child — the only kind that generates — launches with thinking OFF, a generation cap and a
+            // context cap.
+            //
+            // `reasoning = off` IS A WORKAROUND FOR A LYNTAI GAP, recorded on both sides (dev-conventions: open
+            // workaround (5)). Both memory seams ask for no reasoning (TextReasoning.Suppress), and Lyntai 3.2.0's
+            // OpenAI-shaped payload drops the field — Lyntai docs/task-archive.md Part 288, "the OpenAI-shaped wire
+            // drops TextReasoning.Suppress", CLOSED upstream as D179 but NOT released (no version promised).
+            // llama-server's default `--reasoning auto` then opens a thinking block for any
+            // template that supports one: Qwen3-0.6B thought on every call (1.3–7.5 s), Qwen3.5-0.8B for 17.5 s and
+            // then past a 300 s client timeout (docs/judge-bench.md, Run 5's screen). The router passes this key to
+            // the child as `--reasoning off`; the template then renders its pre-closed think block, and replies ran
+            // 6–21 tokens. For a template with nothing to turn off (Gemma 3) the rendered prompt is byte-identical.
+            // NOT `reasoning-budget = 0`: the template stays in thinking mode, the model writes its reasoning into
+            // the content, and 4 of 6 replies did not parse. KEEP THIS LINE UNTIL D179 SHIPS — and even then it goes
+            // LAST. D179 is CONFIGURED fields: HttpModelOptions.SuppressReasoningFields, a JSON object Lyntai merges
+            // into a chat request only when the call asks Suppress; like DocumentPrefix, the library knows no vendor's
+            // spelling and ships no default. So the bump wires nothing by itself. In order:
+            // (1) set SuppressReasoningFields = {"chat_template_kwargs":{"enable_thinking":false}} on the `llamacpp`
+            // registration — the AddLlamaProvider line in LlamaCppSource.Register, through the preset's options-action
+            // overload D179 added — a spelling that is TEMPLATE-specific (a template reading another key ignores it)
+            // and was tried only as a dedicated server's `--chat-template-kwargs` flag, never as a request field or a
+            // preset key; (2) verify EACH catalogued chat model on the real binary with this line removed: no
+            // `<think>`, no reasoning_content, replies as short as they ran under this line (6–21 tokens); (3) only
+            // then delete this line and p51's assertion of it. The other order puts every Qwen judge back to thinking
+            // on every call, silently.
+            //
+            // `n-predict` is our own launch contract, not a workaround — see ChatMaxTokens.
+            //
+            // `ctx-size` is launch contract too — see ChatContextTokens. Unset, the child reserves its model's whole
+            // TRAINING context (Qwen3-0.6B: 40,960 tokens, 4,480 MiB of KV for a 604 MiB model; +5,175 MiB of GPU
+            // memory with the router, measured); 16,384 holds the measured worst prompt with a third to spare, and
+            // took the same child to +2,472 MiB on the real binary (docs/self-managed-llm-runtime.md, 2026-09-24).
+            // Chat sections ONLY: a reranker's window is its whole-pair contract (below) and an embedder takes its
+            // own — neither was measured under any other. p51 pins all three halves.
+            case GgufCapability.Completion:
+                keys.Add(("reasoning", "off"));
+                keys.Add(("n-predict", ChatMaxTokens.ToString()));
+                keys.Add(("ctx-size", ChatContextTokens.ToString()));
+                break;
+            // `reranking` restricts it to /v1/rerank, and the pair must fit one batch — see RerankBatch. A row
+            // that DECLARES a smaller window gets that instead (GgufCatalog.DeclaredWindow — the read
+            // RerankInputCap and ChunkedScoreProvider fit the input to, so they cannot disagree). llama.cpp serves mMiniLMv2 512-token
+            // slots whatever the preset asks; a preset claiming 4096 for it states a limit nothing honours.
+            //
+            // `device` — the device the reranker was MEASURED fastest on (RerankDeviceMeter), when it has a current
+            // measurement; absent otherwise, and llama.cpp chooses. The router passes it to the child as `--device <id>`
+            // (read back from the child's argv, b10549, 2026-09-26: `device = Vulkan1` → `--device Vulkan1`, and the child
+            // logged `using device Vulkan1 (Intel(R) Arc(TM) Graphics)`). Rerankers ONLY: embedders and chat models were
+            // never measured anywhere but on llama.cpp's own choice, so they keep it. p51 and p53 pin both halves.
+            case GgufCapability.Reranking:
+                var window = GgufCatalog.DeclaredWindow(model) ?? RerankBatch;
+                keys.Add(("reranking", "true"));
+                keys.Add(("ctx-size", window.ToString()));
+                keys.Add(("batch-size", window.ToString()));
+                keys.Add(("ubatch-size", window.ToString()));
+                if (device is { Length: > 0 }) keys.Add(("device", device));
+                break;
+        }
+        return keys;
+    }
+
+    /// <summary>The device each installed RERANKER runs on, by id — measured now for any without a current measurement
+    /// (<see cref="RerankDeviceMeter"/>, one reranker and one device at a time), read from the store for the rest. Needs
+    /// the binary's build tag and a device list it ANSWERED (<see cref="LlamaServerState.DevicesListed"/>): without either
+    /// there is no key to measure under, nothing is measured, and no reranker gets a device key — today's launch. A reranker
+    /// whose measurement found no valid device gets none either. Persisted as each finishes; one ended by Dispose is not.</summary>
+    private async Task<IReadOnlyDictionary<string, string>> MeasureRerankersAsync(LlamaServerState state,
+        IReadOnlyList<string> models, CancellationToken ct)
+    {
+        var chosen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var rerankers = models.Where(m => ResourceProvisioner.GgufKind(m) == GgufCapability.Reranking).ToList();
+        if (rerankers.Count == 0) return chosen;
+        if (state.Executable is not { } exe || state.Version is not { } build || !state.DevicesListed)
+        {
+            _log.LogInformation(
+                "rerank device measurement skipped: the llama-server binary did not answer {What}; rerankers launch where llama.cpp puts them",
+                state.Version is null ? "--version" : "--list-devices");
+            return chosen;
+        }
+        foreach (var id in rerankers)
+        {
+            if (_disposed) break;
+            var file = ResourceProvisioner.GgufFile(_platform.ResourcesPath, id);
+            if (RerankDeviceKey.For(id, file, build, state.Devices) is not { } key) continue;
+            var m = RerankDeviceStore.Current(_platform.ResourcesPath, key);
+            if (m is null)
+            {
+                m = await _meter.MeasureAsync(exe, id, file!, key, ct);
+                if (m is null) break;   // Dispose ended it: nothing is saved, and nothing is started after it
+                try { RerankDeviceStore.Save(_platform.ResourcesPath, m); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Used for THIS start all the same; the next start measures again.
+                    _log.LogWarning("rerank device measurement for {Model} could not be saved: {Msg}", id, ex.Message);
+                }
+            }
+            if (m.Fastest is { } best) chosen[id] = best.Device;
+        }
+        return chosen;
     }
 
     /// <summary>Drop the cached probe, and void any probe still in flight — see <see cref="_probeEpoch"/>.</summary>
@@ -477,6 +558,20 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                     ? LlamaServerState.GpuFrom(devices)
                     : null;
         }
+    }
+
+    public RerankDeviceLookup? RerankDevice(string modelId)
+    {
+        if (Locate() is not { } exe || BinaryKey(exe) is not { } binary) return null;
+        string? build;
+        IReadOnlyList<string>? devices;
+        lock (_gate)
+        {
+            if (_binaryFacts is not { } f || f.Key != binary) return null;
+            (build, devices) = (f.Version, f.Devices);
+        }
+        var key = RerankDeviceKey.For(modelId, ResourceProvisioner.GgufFile(_platform.ResourcesPath, modelId), build, devices);
+        return key is null ? null : new RerankDeviceLookup(key, RerankDeviceStore.Current(_platform.ResourcesPath, key));
     }
 
     /// <summary>Is anything accepting connections on our port, answered within a bounded time?
@@ -729,7 +824,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         return (await SpawnAsync(state, ct), null);
     }
 
-    /// <summary>Start a router on a port the probe found SILENT, and wait for it to answer.</summary>
+    /// <summary>Start a router on a port the probe found SILENT, and wait for it to answer. Every installed reranker
+    /// without a current device measurement is measured FIRST (<see cref="MeasureRerankersAsync"/>), so the preset
+    /// written next names the device each one is fastest on. Only here: this is the one path that starts a router of OURS
+    /// — a start or a restart, both under <see cref="_lifecycle"/> — and never one we adopted, whose presets are not ours.</summary>
     private async Task<bool> SpawnAsync(LlamaServerState state, CancellationToken ct)
     {
         if (state.Executable is null) return false;
@@ -741,7 +839,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             return false;
         }
 
-        var presets = WritePresets(models);
+        var devices = await MeasureRerankersAsync(state, models, ct);
+        // A shutdown that arrived during the measurement (Dispose aborted it) starts nothing after it.
+        if (_disposed) return false;
+        var presets = WritePresets(models, devices);
         var port = new Uri(BaseUrl).Port;
         var args = new List<string>
         {
@@ -1088,10 +1189,18 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     {
         var text = await RunAsync(exe, "--list-devices", ct);
         if (string.IsNullOrWhiteSpace(text)) return null;
-        var lines = text.Split('\n').Select(l => l.Trim()).ToList();
-        if (!lines.Any(l => l.StartsWith("Available devices", StringComparison.OrdinalIgnoreCase))) return null;
-        return lines
-            .Where(l => l.Length > 0 && l != "(none)" && !l.StartsWith("Available devices", StringComparison.OrdinalIgnoreCase))
+        var raw = text.Replace("\r", "").Split('\n');
+        var header = Array.FindIndex(raw, l => l.TrimStart().StartsWith("Available devices", StringComparison.OrdinalIgnoreCase));
+        if (header < 0) return null;
+        // Only the INDENTED lines right under the header are devices. The output is stdout and stderr together, and
+        // anything else llama.cpp logs lands there too: with LLAMA_ARG_LOG_VERBOSITY=4 in the environment (found
+        // 2026-09-26) its stderr carries "load_backend: loaded … backend" lines, which a take-every-line reading turned
+        // into three "devices" — and, since the device list keys the reranker device measurement, into a re-measure on
+        // devices that do not exist.
+        return raw.Skip(header + 1)
+            .TakeWhile(l => l.Length > 0 && char.IsWhiteSpace(l[0]))
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0 && l != "(none)")
             .ToList();
     }
 
@@ -1160,6 +1269,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     public void Dispose()
     {
         _disposed = true;
+        // A reranker device measurement runs UNDER the lifecycle lock and can hold it for minutes; its child is killed here,
+        // before the wait, so a shutdown during one leaves no llama-server behind (RerankDeviceMeter).
+        _meter.Abort();
         var held = _lifecycle.Wait(TimeSpan.FromSeconds(30));
         try { StopOursCore(); }
         finally { if (held) _lifecycle.Release(); }

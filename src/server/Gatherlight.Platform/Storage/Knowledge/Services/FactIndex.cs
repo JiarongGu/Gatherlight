@@ -315,6 +315,11 @@ public sealed class FactIndex : IFactIndex
         }
     }
 
+    /// <summary>How many candidates <see cref="RankAsync"/> asks the engine for — the over-ask its comment explains:
+    /// min(3 × limit, 100) with no kind, 100 with one. Public because the reranker device verdict follows the recall path
+    /// through it to the candidate count a verifier sees (<c>RerankDeviceVerdict.ReferenceCandidates</c>) — one writer.</summary>
+    public static int RankLimit(string? kind, int limit) => kind is null ? Math.Min(limit * 3, 100) : 100;
+
     public async Task<FactRanking> RankAsync(string query, string? kind, int limit,
         CancellationToken ct = default)
     {
@@ -327,7 +332,7 @@ public sealed class FactIndex : IFactIndex
             // RebuildAsync, not by recall). And a KIND narrows the ranked list afterwards rather than
             // before it — see AllFacts — so a kind holding a tenth of the corpus needs a far wider
             // ranking to return a full page of its own.
-            var want = kind is null ? Math.Min(limit * 3, 100) : 100;
+            var want = RankLimit(kind, limit);
             var recall = await _engine.RecallAsync(
                 new MemoryQuery(TaskKey, Scope: AllFacts, Query: query, Limit: want), ct);
             var hits = new List<FactHit>(recall.Items.Count);

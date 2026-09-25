@@ -149,7 +149,7 @@ public sealed class ModelsController : ControllerBase
             // The device state from the last FULL probe, and only while the runtime is installed — null ("not known")
             // otherwise, which keeps today's suggestion and claims nothing about the machine.
             recommendation = Recommend(models, probe.Installed, probe.Installed ? _llama.Gpu : null,
-                _pace?.RecentSkips ?? (0, 0)),
+                _pace?.RecentSkips ?? (0, 0), BgeMeasuredTooSlow()),
             // The sample size travels with the numbers, here as everywhere: "9/10" invites the right
             // question where a bare adjective does not.
             measuredOn = MeasuredOnLabel(),
@@ -187,7 +187,7 @@ public sealed class ModelsController : ControllerBase
             c.SizeBytes ?? 0, installed, inUse, c.Note ?? "",
             c.Measured is null ? null : new MeasuredView(
                 c.Measured.RecallTop1, c.Measured.RecallTop3, c.Measured.Queries, c.Measured.MsPerQuery),
-            BuiltInSemanticSource.ResourceId);
+            BuiltInSemanticSource.ResourceId, Device: null);
     }
 
     /// <summary>Every GGUF — on disk and fetchable — from one pass.
@@ -219,7 +219,14 @@ public sealed class ModelsController : ControllerBase
                 known?.Measured is { } k
                     ? new MeasuredView(k.RecallTop1, k.RecallTop3, k.Queries, k.MsPerQuery)
                     : null,
-                GgufCatalog.ResourceIdFor(id));
+                GgufCatalog.ResourceIdFor(id),
+                // WHERE it runs, for an installed reranker — the only kind whose device the app chooses (RerankDeviceMeter).
+                // Nothing when there is no key to ask with yet: this process holds no memo of the binary's build and device
+                // list (the panel re-asks while the build tag is unknown), or the binary does not answer — "not measured"
+                // there would promise a measurement that cannot happen.
+                Device: installed && kind == GgufCapability.Reranking && _llama.RerankDevice(id) is { } lookup
+                    ? RerankDeviceNotes.Row(lookup.Measurement)
+                    : null);
         }
     }
 
@@ -238,10 +245,22 @@ public sealed class ModelsController : ControllerBase
     /// (the only date a pinned GGUF carries) put two meanings in one field, so a freshly measured model
     /// would eventually render as an obsolete one. WHEN it was measured belongs with the sample size, in
     /// the footnote, which is where every other qualifier on these numbers already lives.</para>
+    /// <param name="Device">For an installed RERANKER: which device the app runs it on and that the choice was measured on
+    /// this machine, with the figures — or what happens until it is (<see cref="RerankDeviceNotes.Row"/>). Null for every
+    /// other row.</param>
     private sealed record ModelRowView(
         string Id, string Name, string Runtime, string Capability,
         long SizeBytes, bool Installed, string? InUse, string Note,
-        MeasuredView? Measured, string ResourceId);
+        MeasuredView? Measured, string ResourceId, string? Device);
+
+    /// <summary>BGE's current device measurement on this machine and its reference-page admission, when that admission is
+    /// NOT a send — i.e. BGE measured too slow here (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>). Null when BGE is
+    /// not installed, not measured under the current key, or fast enough.</summary>
+    private (RerankDeviceMeasurement M, double PredictedMs, double LimitMs)? BgeMeasuredTooSlow() =>
+        _llama.RerankDevice(GgufCatalog.RecommendedReranker)?.Measurement is { } m
+        && RerankDeviceVerdict.ReferenceAdmission(m) is { TooSlow: true } a
+            ? (m, a.PredictedMs, a.LimitMs)
+            : null;
 
     /// <summary>Which model to put the 推荐 badge on, or null when there is nothing left to advise.
     ///
@@ -286,16 +305,22 @@ public sealed class ModelsController : ControllerBase
     /// either way — an installed reranker of any kind ends the suggestion. Proof: <c>e2e-p51</c>, with a stand-in binary
     /// that answers <c>--list-devices</c> with no device, then with one.</para>
     ///
-    /// <para><b>…with ONE exception: a reranker that this machine is too slow for</b> (review, 2026-09-25). The device
-    /// probe reads an integrated GPU as a GPU, so on nearly every laptop it keeps BGE — and a household who already
-    /// installed BGE was told nothing at all while the judge skipped recall after recall, fail-open and unreported. So when
-    /// the running judge's pace SKIPPED recent recalls (<paramref name="skips"/>), mMiniLMv2 is recommended whatever the
-    /// probe says and even beside an installed reranker: the one-reranker rule rests on "any installed reranker is a
-    /// local judge that measured better than none", which the skips refute on this machine. Never when mMiniLMv2 is itself
-    /// installed — it is then no download (and, bound, the skips are its own). The 判断 row says the same, from the same
-    /// writer (<see cref="GgufCatalog.RecommendedRerankerFor"/>). Proof: <c>e2e-p52</c> case 6h.</para></summary>
+    /// <para><b>…with TWO exceptions, each a reranker this machine is too slow for.</b> An installed reranker ends the
+    /// suggestion because "any installed reranker is a local judge that measured better than none" — which two things can
+    /// refute on THIS machine, and then mMiniLMv2 is recommended even beside an installed reranker, whatever the device
+    /// probe says (never when mMiniLMv2 is itself installed — it is then no download). Precedence, which is also which
+    /// reason is given: (1) the running judge's pace SKIPPED recent recalls (<paramref name="skips"/>; review,
+    /// 2026-09-25 — the device probe reads an integrated GPU as a GPU, so on nearly every laptop it keeps BGE while the
+    /// judge skipped recall after recall, fail-open and unreported); (2) BGE was MEASURED too slow here
+    /// (<paramref name="bgeTooSlow"/>, owner decision 2026-09-26 after Run 8b: its fastest device on this machine would
+    /// not be sent the default page's one-window call — <see cref="RerankDeviceVerdict.ReferenceAdmission"/>, the runtime's
+    /// own admission); (3) the device probe answered with no GPU; else BGE. The 判断 row reads the same writer
+    /// (<see cref="GgufCatalog.RecommendedRerankerFor"/>). <b>A limitation, said in the reasons</b>: a measurement exists
+    /// only for a model on disk, taken at the next router start the app performs — so on an iGPU-only machine the badge
+    /// still offers BGE first, and moves to mMiniLMv2 once BGE has been downloaded and measured. Proof: <c>e2e-p52</c>
+    /// case 6h (skips), <c>e2e-p53</c> (the measurement).</para></summary>
     private static object? Recommend(IReadOnlyList<ModelRowView> models, bool llamaRuntimeInstalled, bool? gpu,
-        (int Skipped, int Recalls) skips)
+        (int Skipped, int Recalls) skips, (RerankDeviceMeasurement M, double PredictedMs, double LimitMs)? bgeTooSlow)
     {
         var offers = models.Where(m => !m.Installed).ToList();
         var builtInIsIn = models.Any(m => m.Installed && m.Id == BuiltInSemanticSource.ModelId);
@@ -315,12 +340,13 @@ public sealed class ModelsController : ControllerBase
         var anEmbedderIsIn = builtInIsIn || (ggufEmbedderIsIn && llamaRuntimeInstalled);
         var aRerankerIsIn = models.Any(m => m.Installed && m.Capability == "reranking");
         var skipped = skips.Skipped > 0;
+        var slowBge = bgeTooSlow is not null;
         var pick = (anEmbedderIsIn ? null
                 : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedEmbedder)
                   ?? offers.FirstOrDefault(o => o.Id == BuiltInSemanticSource.ModelId))
-            // Only among OFFERS, i.e. not installed — so a skip never recommends mMiniLMv2 beside itself.
-            ?? (aRerankerIsIn && !skipped ? null
-                : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedRerankerFor(gpu, skipped)));
+            // Only among OFFERS, i.e. not installed — so neither exception ever recommends mMiniLMv2 beside itself.
+            ?? (aRerankerIsIn && !skipped && !slowBge ? null
+                : offers.FirstOrDefault(o => o.Id == GgufCatalog.RecommendedRerankerFor(gpu, skipped, slowBge)));
         if (pick is null) return null;
 
         if (pick.Capability == "embedding")
@@ -334,33 +360,56 @@ public sealed class ModelsController : ControllerBase
                 caution = (string?)null,
             };
 
+        // Run 8's CPU measurement, with its configuration — the evidence for mMiniLMv2 where the reason is the machine
+        // rather than a measurement of BGE on it.
+        const string run8 =
+            "在一台只用 CPU 的笔记本上(Intel Core Ultra 9 185H,不用显卡,llama.cpp b10549;60 条约 900–1,200 字的长笔记、"
+            + "240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页)实测,它分段读每次检索约 17.5 秒、每次都在一分钟内判断完,"
+            + "答案带进前八 180/240(不开判断 104/240);BGE 每 1,000 个词元要约 3 秒,一次 40–60 条长笔记"
+            + "每条只读开头一段也要一分多钟到两分钟,几乎每次都等满一分钟、没能判断。";
         return new
         {
             id = pick.Id,
             // What binding it MOVES, because a reranker is half a judge: the checking comes local, the tagging goes
             // to the Claude CLI — the clause the toast, the cost line and the model note all carry.
             reason = (pick.Id == GgufCatalog.RerankerWithoutGpu
-                    // WHY this one and not BGE, said where the choice is made — docs/judge-bench.md Run 8, with the
-                    // configuration its figures belong to. Reached when the device probe answered with no GPU, or when the
-                    // running judge skipped recent recalls for being too slow — the reason says which.
+                    // WHY this one and not BGE, said where the choice is made, in the precedence the pick used: the skips,
+                    // then BGE's measurement on this machine, then the device probe.
                     ? "「判断」那一层在本机用它核对检索结果。"
                       + (skipped
                           ? $"最近 {skips.Recalls} 次检索里有 {skips.Skipped} 次因为这台机器太慢跳过了判断,所以推荐这个更小的重排模型:"
-                          : "llama.cpp 在这台机器上用不了任何显卡,所以推荐这个更小的重排模型,而不是 BGE:")
-                      + "在一台只用 CPU 的笔记本上(Intel Core Ultra 9 185H,不用显卡,llama.cpp b10549;60 条约 900–1,200 字的长笔记、"
-                      + "240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页)实测,它分段读每次检索约 17.5 秒、每次都在一分钟内判断完,"
-                      + "答案带进前八 180/240(不开判断 104/240);BGE 每 1,000 个词元要约 3 秒,一次 40–60 条长笔记"
-                      + "每条只读开头一段也要一分多钟到两分钟,几乎每次都等满一分钟、没能判断。"
-                      + (skipped ? "" : "llama.cpp 能用显卡时推荐的是 BGE;")
-                      + "只有集成显卡的机器两者都还没有量过。"
+                            + run8 + "只有集成显卡的机器两者都还没有量过。"
+                          : bgeTooSlow is { } slow
+                          ? BgeMeasuredLead(slow) + "它在只用 CPU 的笔记本上的实测见它那一行的说明;"
+                            + "它在这台机器上多快,下载后应用下一次自己启动 llama.cpp 时同样会测。"
+                          : "llama.cpp 在这台机器上用不了任何显卡,所以推荐这个更小的重排模型,而不是 BGE:" + run8
+                            + "llama.cpp 能用显卡、BGE 下载后在这台机器上也没有测出太慢时,推荐的是 BGE;"
+                            + "只有集成显卡的机器两者都还没有量过。")
                     : "「判断」那一层在本机用它核对检索结果 —— 本应用双语测试集上,它让答案进前八的次数比不开判断多得多"
-                      + "(数字和测法见这一行的说明)。")
+                      + "(数字和测法见这一行的说明)。"
+                      // THE LIMITATION, said where the badge is: nothing about the machine is known until it is downloaded.
+                      + "它在这台机器上多快,要等下载后、应用下一次自己启动 llama.cpp 时才测得出;"
+                      + "测出来连最快的设备都太慢的话,这里会改为推荐更小的 mMiniLMv2。")
                 + "写入事实时的主题标注由 Claude CLI 完成(" + MemorySources.CliTaggingCost + ")。",
             // The 检索质量 column holds the embedders' 10-query score only, so this row reads 未实测 there — which,
             // beside a line recommending it, would read as a recommendation nobody measured.
             caution = "「检索质量」一列只放嵌入模型的 10 题检索分,所以它那一格是「未实测」;"
                 + "它作为判断的实测在另一套测试上,数字在这一行的说明里。",
         };
+    }
+
+    /// <summary>BGE measured too slow on this machine, as the badge says it: the fastest device and its time for the batch,
+    /// and what that rate predicts for the default page's one-window call against the limit the runtime sends one under —
+    /// the figures <see cref="RerankDeviceVerdict.ReferenceAdmission"/> decided on.</summary>
+    private static string BgeMeasuredLead((RerankDeviceMeasurement M, double PredictedMs, double LimitMs) slow)
+    {
+        var best = slow.M.Fastest!;
+        return $"BGE 在这台机器上实测过:它最快的设备是 {best.Name},同一批 {slow.M.Documents} 段、共 "
+            + $"{slow.M.Characters.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} 字的打分用了 "
+            + $"{RerankDeviceNotes.Seconds(best.ElapsedMs!.Value)} 秒;按这个速度推算,默认一次检索最多给判断看的 "
+            + $"{RerankDeviceVerdict.ReferenceCandidates} 条候选、每条只读一段时约要 {RerankDeviceNotes.Seconds((long)slow.PredictedMs)} 秒,"
+            + $"超过应用送出这样一次判断的 {RerankDeviceNotes.Seconds((long)slow.LimitMs)} 秒上限,这样的检索会跳过判断 —— "
+            + "所以推荐这个更小的重排模型。";
     }
 
     /// <summary>Which layer is holding a GGUF, if any — and it checks the BACKEND, not just the name.

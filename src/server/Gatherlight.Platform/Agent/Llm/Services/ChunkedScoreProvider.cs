@@ -460,7 +460,14 @@ public sealed class RerankAdmission : IMemoryVerificationPolicy
 /// <list type="bullet">
 /// <item>Seeded with the GPU measurement (<see cref="SeedMsPerToken"/>), at which the time budget allows more than the
 /// ceiling for a question of up to ~500 characters beside dense Chinese windows — so until a call has been timed,
-/// nothing changes from the fixed cap on that GPU.</item>
+/// nothing changes from the fixed cap on that GPU. <b>Unless this machine measured the bound reranker</b>
+/// (<see cref="RerankDeviceMeter"/>, at a router start the app performs): then the estimate starts from the rate that
+/// measurement read on the device the reranker runs on, never faster than the GPU figure
+/// (<see cref="RerankDeviceVerdict.PaceSeed"/>) — so the first recall of long notes on a slow machine is sized, or
+/// skipped, from what the machine did rather than cut at the deadline as Run 8's was. Read at the pace's FIRST USE, not
+/// at its construction: the verifier is built when the fact index is, before the startup step that measures, and the
+/// first recall comes only after the migration gate lifts. Read once; a process that had no memo of the binary's facts
+/// by then keeps the GPU figure.</item>
 /// <item><b>A call too SMALL to measure teaches nothing</b> — neither the estimate nor the repeat flag below: one whose
 /// scoring, at the current estimate, would take under <see cref="MinSignalFactor"/> × <see cref="CallOverheadMs"/>. Its
 /// time is then mostly round trip, queueing, or a stall, and dividing it by a few dozen tokens reads any of those as a
@@ -502,8 +509,9 @@ public sealed class RerankAdmission : IMemoryVerificationPolicy
 /// deadline cannot have run that long under the deadline that cancels it, so the gap is the clock's — a machine that
 /// slept mid-recall, if <c>Stopwatch</c> (QueryPerformanceCounter) counts the sleep, which is believed and NOT verified
 /// on Windows. It teaches no rate; the busy presumption below still starts, capped.</item>
-/// <item>A failed answer teaches nothing. It lives as long as the process — each launch re-seeds it at the GPU figure —
-/// and there is one per process: the verifier's, registered once, which is also what the 判断 row reads.
+/// <item>A failed answer teaches nothing. It lives as long as the process — each launch re-seeds it, at this machine's
+/// measurement when there is one and the GPU figure otherwise — and there is one per process: the verifier's, registered
+/// once, which is also what the 判断 row reads.
 /// <b>Concurrency</b>: two recalls contending for one child each time the other's scoring too, so both read slower than
 /// the machine is. A call sent while another is IN FLIGHT is therefore possibly queued (below), like one sent behind an
 /// abandoned call.</item>
@@ -718,6 +726,8 @@ public sealed class RerankPace
     // lower it, so if it restarted the interval, a machine that became fast would stay skipped for as long as short-fact
     // recalls kept coming.
     private TimeSpan? _lastMeasuring;
+    // The measured seed, read once at first use and then dropped (SeedLocked); null once read, or when none was given.
+    private Func<double?>? _measuredSeed;
     // The last RecentRecalls recalls, true where the judge was skipped: a ring, _recentNext the next slot to write.
     private readonly bool[] _recent = new bool[RecentRecalls];
     private int _recentCount;
@@ -726,11 +736,26 @@ public sealed class RerankPace
     /// <param name="budget">How long one sized call may be predicted to take — half the verification deadline.</param>
     /// <param name="seedMsPerToken">The estimate before any call is timed.</param>
     /// <param name="clock">A monotonic clock; the process's uptime when null.</param>
-    public RerankPace(TimeSpan budget, double seedMsPerToken = SeedMsPerToken, Func<TimeSpan>? clock = null)
+    /// <param name="measuredSeed">Read ONCE, at the pace's first use: a positive value replaces
+    /// <paramref name="seedMsPerToken"/> — this machine's measurement of the bound reranker (the class comment).</param>
+    public RerankPace(TimeSpan budget, double seedMsPerToken = SeedMsPerToken, Func<TimeSpan>? clock = null,
+        Func<double?>? measuredSeed = null)
     {
         Budget = budget;
         _msPerToken = Math.Max(MinMsPerToken, seedMsPerToken > 0 ? seedMsPerToken : SeedMsPerToken);
         _clock = clock ?? (() => TimeSpan.FromMilliseconds(Environment.TickCount64));
+        _measuredSeed = measuredSeed;
+    }
+
+    // Under the lock, before anything reads or moves the estimate: the measured seed, once. A reader that throws or answers
+    // nothing leaves the constructor's seed.
+    private void SeedLocked()
+    {
+        if (_measuredSeed is not { } read) return;
+        _measuredSeed = null;
+        double? seed = null;
+        try { seed = read(); } catch { /* no measurement to start from */ }
+        if (seed is { } s && s > 0 && double.IsFinite(s)) _msPerToken = Math.Max(MinMsPerToken, s);
     }
 
     /// <summary>How long one sized call may be predicted to take.</summary>
@@ -745,7 +770,7 @@ public sealed class RerankPace
     public TimeSpan ReprobeInterval => Deadline * ReprobeDeadlines;
 
     /// <summary>The current estimate, in milliseconds per pair token.</summary>
-    public double MsPerToken { get { lock (_gate) return _msPerToken; } }
+    public double MsPerToken { get { lock (_gate) { SeedLocked(); return _msPerToken; } } }
 
     /// <summary>True from a call cut past <see cref="Budget"/> until a chunked call answers: the estimate is then only a
     /// lower bound, and <see cref="ChunkedScoreProvider"/> sends one window per candidate.</summary>
@@ -763,7 +788,11 @@ public sealed class RerankPace
     /// included.</summary>
     public double PredictMs(double pairTokens)
     {
-        lock (_gate) return CallOverheadMs + Math.Max(0, pairTokens) * _msPerToken;
+        lock (_gate)
+        {
+            SeedLocked();
+            return CallOverheadMs + Math.Max(0, pairTokens) * _msPerToken;
+        }
     }
 
     /// <summary>How many pair tokens one call may carry within <see cref="Budget"/> at the current estimate.</summary>
@@ -783,6 +812,7 @@ public sealed class RerankPace
     {
         lock (_gate)
         {
+            SeedLocked();
             var now = _clock();
             var predicted = CallOverheadMs + Math.Max(0, oneWindowPairTokens) * _msPerToken;
             var queue = _busyUntil > now ? (_busyUntil - now).TotalMilliseconds : 0;
@@ -861,11 +891,12 @@ public sealed class RerankPace
     {
         lock (_gate)
         {
+            SeedLocked();
             // The router reached this call, so whatever it held from a call abandoned BEFORE this one was sent is done.
             var now = _clock();
             if (_busyUntil > now && ticket.SentAt > _busyFrom) _busyUntil = now;
             if (!(pairTokens > 0) || ClockJumped(elapsed)) return;
-            var observed = Rate(elapsed, pairTokens);
+            var observed = RateOf(elapsed, pairTokens);
             if (ticket.Queued)
             {
                 // Its time includes the wait, so it is an UPPER bound: it never raises the estimate, lowers it only as an
@@ -903,6 +934,7 @@ public sealed class RerankPace
     {
         lock (_gate)
         {
+            SeedLocked();
             // Whatever it proves, the router keeps it: busy for QueueFactor × the time it ran when it ran past what the
             // estimate predicted, for the rest of that prediction when it was stopped sooner — and never longer than
             // QueueFactor verification deadlines.
@@ -920,7 +952,7 @@ public sealed class RerankPace
             // Possibly queued: its time was the queue's, so it proves nothing about the machine. Nor does a clock that
             // jumped.
             if (ticket.Queued || !(pairTokens > 0) || ClockJumped(elapsed)) return;
-            var observed = Rate(elapsed, pairTokens);
+            var observed = RateOf(elapsed, pairTokens);
             // Cancelled before it was due to finish, or too small to say anything: proves nothing.
             if (TooSmall(pairTokens) || observed <= _msPerToken) return;
             // A lower bound, damped like a slower answer when alone: one stall must not switch the judge off.
@@ -938,7 +970,10 @@ public sealed class RerankPace
 
     private bool ClockJumped(TimeSpan elapsed) => elapsed > Deadline * ClockJumpDeadlines;
 
-    private static double Rate(TimeSpan elapsed, double pairTokens) =>
+    /// <summary>A call's rate in this class's unit — ms per pair token, <see cref="CallOverheadMs"/> taken off, floored at
+    /// 1e-4. Public because the reranker device measurement reads its timed call through it (<see cref="RerankDeviceMeter"/>):
+    /// one unit, one formula.</summary>
+    public static double RateOf(TimeSpan elapsed, double pairTokens) =>
         Math.Max(MinMsPerToken, (elapsed.TotalMilliseconds - CallOverheadMs) / pairTokens);
 
     /// <summary>What one character is counted as: <see cref="CjkTokensPerChar"/> from <see cref="CjkFrom"/> up,

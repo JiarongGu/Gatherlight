@@ -134,15 +134,19 @@ public static class GgufCatalog
     /// recommends this model whatever the device probe says (<see cref="RecommendedRerankerFor"/>).</para></summary>
     public const string RerankerWithoutGpu = "mmarco-mMiniLMv2-L12-H384-v1-Q8_0";
 
-    /// <summary>Which reranker to suggest for 判断, given what the runtime's device probe found and whether the judge has
-    /// been SKIPPED here for being too slow — the ONE writer both 资源's 推荐 badge and the 判断 row's suggestions read.
-    /// <see cref="RerankerWithoutGpu"/> when the probe ANSWERED and listed no GPU (<paramref name="gpu"/> false), or when
-    /// recent recalls were skipped (<paramref name="skippedHere"/>) — the second because the probe reads an integrated GPU
-    /// as a GPU, and a skip is the machine saying it is too slow for the reranker it has. Otherwise — a GPU and no skips, or
-    /// no answer yet (null: the probe has not run, or the runtime is not installed) — <see cref="RecommendedReranker"/>,
-    /// claiming nothing about the machine.</summary>
-    public static string RecommendedRerankerFor(bool? gpu, bool skippedHere = false) =>
-        gpu == false || skippedHere ? RerankerWithoutGpu : RecommendedReranker;
+    /// <summary>Which reranker to suggest for 判断, given what the runtime's device probe found, whether the judge has
+    /// been SKIPPED here for being too slow, and whether BGE was MEASURED too slow here — the ONE writer both 资源's 推荐
+    /// badge and the 判断 row's suggestions read. <see cref="RerankerWithoutGpu"/> when recent recalls were skipped
+    /// (<paramref name="skippedHere"/>), when BGE's fastest device on this machine would not be sent the default page's
+    /// one-window call (<paramref name="bgeMeasuredTooSlow"/>, <see cref="RerankDeviceVerdict.ReferenceAdmission"/> — owner
+    /// decision 2026-09-26: the device list cannot tell an integrated GPU from a discrete one, so the app measures), or when
+    /// the probe ANSWERED and listed no GPU (<paramref name="gpu"/> false) — that precedence is the order the badge's
+    /// reason names them in. Otherwise — a GPU, no skips and no measurement saying otherwise, or no answer yet (null: the
+    /// probe has not run, or the runtime is not installed) — <see cref="RecommendedReranker"/>, claiming nothing about the
+    /// machine. A measurement exists only once BGE is on disk, so on a machine whose only GPU is integrated this still says
+    /// BGE until BGE has been downloaded and measured.</summary>
+    public static string RecommendedRerankerFor(bool? gpu, bool skippedHere = false, bool bgeMeasuredTooSlow = false) =>
+        skippedHere || bgeMeasuredTooSlow || gpu == false ? RerankerWithoutGpu : RecommendedReranker;
 
     /// <summary>What the 判断 row says when the pace SKIPPED recent recalls (<see cref="RerankPace.RecentSkips"/>) — a skip
     /// is otherwise an Information line in state/logs, which is where a household never looks. With
@@ -207,9 +211,12 @@ public static class GgufCatalog
     /// measured (an answer past the first window is not read). The clause says what the household experiences, each part
     /// what the code does:
     /// <list type="bullet">
-    /// <item>The pace starts from the GPU figure after every launch and learns only from the calls it times, so the first
-    /// recall after a launch that has too many long facts to read can still run to the full minute and come back unjudged
-    /// (the verification cut there is NoOpinion, the engine's own order).</item>
+    /// <item>After every launch the pace starts from the rate the app MEASURED for this reranker on the device it runs on
+    /// (<see cref="RerankDeviceMeter"/>, <see cref="RerankDeviceVerdict.PaceSeed"/>) — never faster than the GPU figure, which
+    /// is also where it starts with no measurement — and learns only from the calls it times, so an estimate that is too
+    /// fast still lets the first recall after a launch with too many long facts to read run to the full minute and come
+    /// back unjudged (the verification cut there is NoOpinion, the engine's own order). The GPU figure is a measurement on
+    /// one discrete GPU (<see cref="RerankPace.SeedMsPerToken"/>), hence 「一块独立显卡上的参考速度」.</item>
     /// <item>ONE such wait is damped — it slows the estimate at most ×4 (<see cref="RerankPace.MaxLoneRaise"/>) — so that a
     /// single stall does not switch the judge off; a second in a row is believed. So a machine that truly is slow waits the
     /// minute TWICE before the app believes it, and the clause says so.</item>
@@ -240,7 +247,8 @@ public static class GgufCatalog
         + "较长的事实会分段打分、每段算一次,在同一块显卡上、60 条约 900–1,200 字的长笔记上,"
         + "BGE 与 LAMAR 每次检索约 3.2 秒,mMiniLMv2 约 1.2 秒。"
         + "机器较慢时,应用按测到的速度让长事实少读几段,最少只读开头一段(写在后面的答案就读不到)。"
-        + "每次启动后它先按显卡上的速度估计,所以启动后头一次要读的长事实太多时,仍可能等满一分钟、按没有判断时的顺序返回;"
+        + "每次启动后它先按应用在这台机器上为它实测的速度估计(没有实测、或实测比一块独立显卡上的参考速度还快时,按那个参考速度);"
+        + "估计偏快时,启动后头一次要读的长事实太多,仍可能等满一分钟、按没有判断时的顺序返回;"
         + "单独一次等满,应用只把速度估计放慢几倍,免得一次偶然的卡顿就停掉判断,所以真正慢的机器一般要等满两次,应用才信它慢。"
         + "等满之后,遇到长事实的检索先每条只读开头一段,等有一次在时限内做完、测出这台机器的速度,再按它分段。"
         + $"预计每条只读开头一段也要超过约 {OneWindowLimitSeconds} 秒(刚等满过一分钟时是半分钟)时,"
@@ -258,27 +266,33 @@ public static class GgufCatalog
     /// <summary>docs/judge-bench.md Run 8, configuration first — mMiniLMv2's row, because it is why that row is recommended
     /// where llama.cpp can use no GPU, or where the judge has been skipped for being too slow (<see cref="RerankerWithoutGpu"/>).
     /// 182/240 is Run 6c's GPU figure, another run, descriptive. 「集成显卡也算显卡」 says why a laptop with only an integrated
-    /// GPU is not offered it by the device probe, and 「两者都还没有量过」 that nobody has measured either model there.</summary>
+    /// GPU is not offered it by the device probe, and 「两者都还没有量过」 that nobody has measured either model there. The
+    /// third reason it is recommended — BGE MEASURED too slow on this machine (<see cref="RerankDeviceVerdict"/>) — needs BGE
+    /// on disk first, which the note says, and it makes 「有显卡时推荐的仍是 BGE」 conditional on that measurement.</summary>
     private const string SmallRerankerCpuNote =
         "llama.cpp 用不了任何显卡时(集成显卡也算显卡),应用推荐它而不是 BGE;"
-        + "用着别的重排模型、检索却因为机器太慢跳过了判断时,「判断」那一行也会建议改用它。"
+        + "用着别的重排模型、检索却因为机器太慢跳过了判断时,「判断」那一行也会建议改用它;"
+        + "BGE 下载后,应用会在这台机器的 CPU 和每块显卡上测它的速度,连最快的设备都赶不上时,「资源」也会改为推荐它。"
         + "在一台只用 CPU 的笔记本上实测过(Intel Core Ultra 9 185H,不用显卡,llama.cpp b10549;"
         + "60 条约 900–1,200 字的长笔记、240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页):"
         + "它分段读每次检索约 17.5 秒、最慢约 22 秒,每次都在一分钟内判断完,答案带进前八 180/240"
         + "(不开判断 104/240;在显卡上另一轮是 182/240)。"
         + "同一台机器上 BGE 每 1,000 个词元要约 3 秒,40–60 条长笔记每条只读开头一段也要一分多钟到两分钟,"
         + "240 次里 230 次等满一分钟(那时应用还不会跳过),带进前八和不开判断一样(104/240)。"
-        + "LAMAR 没有在只用 CPU 的机器上量过。有显卡时推荐的仍是 BGE;只有集成显卡的机器两者都还没有量过。";
+        + "LAMAR 没有在只用 CPU 的机器上量过。有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE;"
+        + "只有集成显卡的机器两者都还没有量过。";
 
     /// <summary>BGE's own line from Run 8 — what the household on a CPU would meet — pointing at mMiniLMv2's row for the
     /// configuration. The minute-waits were BEFORE the skip existed; the skip removes the wait and cannot add a verdict,
-    /// so the sentence says both.</summary>
+    /// so the sentence says both. And what the app does about it on the household's own machine — measured only once BGE
+    /// is on disk (<see cref="RerankDeviceMeter"/>) — so the recommendation can move to mMiniLMv2 only after a download.</summary>
     private const string BgeCpuNote =
         "只用 CPU 时它几乎总是来不及判断:在一台只用 CPU 的笔记本上(实测和设置见 mMiniLMv2 那一行),"
         + "它每 1,000 个词元要约 3 秒,40–60 条长笔记每条只读开头一段也要一分多钟到两分钟,"
         + "240 次检索里 230 次等满一分钟、没能判断(那时应用还不会跳过;现在会当即跳过,同样没有判断),"
         + "带进前八和不开判断一样(104/240)。所以 llama.cpp 用不了任何显卡时,应用推荐 mMiniLMv2;"
-        + "只有集成显卡的机器两者都还没有量过。";
+        + "它在这台机器上多快,应用要等下载之后才测得出(在 CPU 和每块显卡上各测一次,之后让它在最快的那个上运行),"
+        + "连最快的设备都赶不上时,也改为推荐 mMiniLMv2。只有集成显卡的机器两者都还没有量过。";
 
     /// <summary>LAMAR was not run on the CPU. Its size is BGE's, so BGE's outcome is the likely one — said as likely,
     /// pointing at the row that has the measurement.</summary>

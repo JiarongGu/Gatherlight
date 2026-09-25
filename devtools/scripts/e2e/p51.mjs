@@ -1292,8 +1292,12 @@ try {
           /机器较慢时,应用按测到的速度让长事实少读几段,最少只读开头一段/.test(n) && /写在后面的答案就读不到/.test(n)
             && n.includes(MIXED),
           n.slice(n.indexOf('机器较慢时'), n.indexOf('机器较慢时') + 80));
-        ok(`${id}: …that the pace restarts from the GPU figure at every launch — a first recall can still wait the minute — and that a truly slow machine waits TWICE, because one wait is damped`,
-          /每次启动后它先按显卡上的速度估计/.test(n) && /仍可能等满一分钟、按没有判断时的顺序返回/.test(n)
+        // The pace starts from this machine's MEASUREMENT of the reranker where there is one (RerankDeviceVerdict.PaceSeed,
+        // e2e-p53), never faster than the GPU figure — it said 「先按显卡上的速度估计」, false once a device is measured.
+        ok(`${id}: …that the pace restarts at every launch from the rate measured on this machine (the GPU reference figure without one, or when faster) — a first recall can still wait the minute — and that a truly slow machine waits TWICE, because one wait is damped`,
+          /每次启动后它先按应用在这台机器上为它实测的速度估计\(没有实测、或实测比一块独立显卡上的参考速度还快时,按那个参考速度\)/.test(n)
+            && /估计偏快时,启动后头一次要读的长事实太多,仍可能等满一分钟、按没有判断时的顺序返回/.test(n)
+            && !/先按显卡上的速度估计/.test(n)
             && /单独一次等满,应用只把速度估计放慢几倍/.test(n) && /真正慢的机器一般要等满两次/.test(n),
           n.slice(n.indexOf('每次启动后'), n.indexOf('每次启动后') + 140));
         ok(`${id}: …what follows a wait, and when a recall is SKIPPED — past ~48 s, or half a minute right after a wait — re-measured every ten minutes, skipped for a minute or two after a wait, and counted in the 判断 row`,
@@ -1320,7 +1324,8 @@ try {
         miniNote.slice(miniNote.indexOf('在一台只用 CPU'), miniNote.indexOf('在一台只用 CPU') + 240));
       ok('mMiniLMv2\'s row says it is what the app recommends where llama.cpp can use no GPU (an integrated one counts), or where the judge was skipped — that its long-note loss to BGE was on a GPU — and the integrated-GPU gap',
         /llama\.cpp 用不了任何显卡时\(集成显卡也算显卡\),应用推荐它而不是 BGE/.test(miniNote) && /「判断」那一行也会建议改用它/.test(miniNote)
-          && /有显卡时推荐的仍是 BGE;只有集成显卡的机器两者都还没有量过/.test(miniNote)
+          && /有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE;只有集成显卡的机器两者都还没有量过/.test(miniNote)
+          && /BGE 下载后,应用会在这台机器的 CPU 和每块显卡上测它的速度,连最快的设备都赶不上时,「资源」也会改为推荐它/.test(miniNote)
           && /\(在显卡上;测完后另算的比较\)/.test(miniNote),
         miniNote);
       // BGE's and LAMAR's rows POINT at it, with a line of their own, and do not repeat the configuration.
@@ -1330,6 +1335,8 @@ try {
         /只用 CPU 时它几乎总是来不及判断/.test(bgeNote) && /实测和设置见 mMiniLMv2 那一行/.test(bgeNote)
           && /230 次等满一分钟、没能判断/.test(bgeNote) && /现在会当即跳过,同样没有判断/.test(bgeNote) && /104\/240/.test(bgeNote)
           && /llama\.cpp 用不了任何显卡时,应用推荐 mMiniLMv2/.test(bgeNote) && /只有集成显卡的机器两者都还没有量过/.test(bgeNote)
+          && /它在这台机器上多快,应用要等下载之后才测得出\(在 CPU 和每块显卡上各测一次,之后让它在最快的那个上运行\)/.test(bgeNote)
+          && /连最快的设备都赶不上时,也改为推荐 mMiniLMv2/.test(bgeNote)
           && !/Intel Core Ultra 9 185H/.test(bgeNote),
         bgeNote.slice(bgeNote.indexOf('只用 CPU 时'), bgeNote.indexOf('只用 CPU 时') + 200));
       ok('LAMAR\'s row says it was not run on a CPU, and points at BGE\'s — the same size — without repeating the configuration',
@@ -1447,6 +1454,13 @@ try {
         rec?.id === RERANKER, JSON.stringify(rec ?? null));
       ok('…and its reason says what binding it moves: the checking is local, the tagging goes to the Claude CLI on the account',
         /Claude CLI/.test(String(rec?.reason)) && String(rec?.reason ?? '').includes(TAGGING_COST), String(rec?.reason));
+      // THE LIMITATION, said where the badge is (owner decision 2026-09-26, after Run 8b): the app MEASURES a reranker's
+      // devices on this machine (RerankDeviceMeter; e2e-p53) — but only once it is on disk, so the badge offers BGE first
+      // everywhere and moves to mMiniLMv2 only after BGE has been downloaded and measured too slow here.
+      ok('…and it says the machine is unknown until BGE is downloaded and measured — and what happens if it is too slow here',
+        /要等下载后、应用下一次自己启动 llama\.cpp 时才测得出/.test(String(rec?.reason))
+          && /连最快的设备都太慢的话,这里会改为推荐更小的 mMiniLMv2/.test(String(rec?.reason)),
+        String(rec?.reason));
 
       // THE 判断 ROW'S SUGGESTION: runtime present, no model 判断 can use (the embedder is the wrong kind), so its
       // sentence names a download — and that download is the reranker's.
@@ -1489,7 +1503,8 @@ try {
             && /17\.5 秒/.test(String(cpuRec?.reason)) && /180\/240/.test(String(cpuRec?.reason))
             && /104\/240/.test(String(cpuRec?.reason)) && /240 道提问/.test(String(cpuRec?.reason))
             && /不开语义/.test(String(cpuRec?.reason)) && /一分多钟到两分钟/.test(String(cpuRec?.reason))
-            && /llama\.cpp 能用显卡时推荐的是 BGE/.test(String(cpuRec?.reason)) && /只有集成显卡的机器两者都还没有量过/.test(String(cpuRec?.reason))
+            && /llama\.cpp 能用显卡、BGE 下载后在这台机器上也没有测出太慢时,推荐的是 BGE/.test(String(cpuRec?.reason))
+            && /只有集成显卡的机器两者都还没有量过/.test(String(cpuRec?.reason))
             && !/没有检测到显卡|约两分钟/.test(String(cpuRec?.reason)) && String(cpuRec?.reason ?? '').includes(TAGGING_COST),
           String(cpuRec?.reason));
         const cpuJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
@@ -1622,8 +1637,18 @@ try {
     };
     // EVERY section, of every kind — the rerankers' too, which carry the most other keys and are where a refactor of
     // the per-kind switch would most easily drop it.
+    //
+    // …A CPU SECTION INCLUDED. A reranker measured fastest on the CPU (RerankDeviceMeter) gets `device = none` — and KEEPS
+    // `n-gpu-layers = 99` beside it, which is harmless there: on the real binary (b10549, 2026-09-26) that child logs
+    // "offloaded 25/25 layers to GPU" yet holds only CPU buffers and scores at the CPU's rate, the same as with 0 — it is
+    // `device = none` that keeps a batch off a visible GPU (Run 8: `n-gpu-layers = 0` alone does not). No section here is
+    // measured (the stub binary answers neither --version nor --list-devices, so there is no key to measure under, and
+    // no section gets a device key); e2e-p53 drives the measurement and asserts both lines on a CPU section.
     const allSections = ['zztest-embed-model', 'zztest-chat-model', 'zztest-rerank-model', WINDOWED];
-    ok('THE POINT: every model gets n-gpu-layers — without it recall is ~30x slower, silently',
+    ok('(D) with no measurement possible, no section names a device — llama.cpp chooses, as before',
+      allSections.every((id) => !/^device\s*=/m.test(sectionOf(id))),
+      JSON.stringify(Object.fromEntries(allSections.map((id) => [id, sectionOf(id)]))));
+    ok('THE POINT: every model gets n-gpu-layers — without it recall is ~30x slower, silently (a CPU section keeps it too; e2e-p53)',
       allSections.every((id) => /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf(id))),
       JSON.stringify(Object.fromEntries(allSections.map((id) => [id, sectionOf(id)]))));
     // …and a CHAT section's context is capped (LlamaServerRuntime.ChatContextTokens, 2026-09-24). Unset, a chat child
