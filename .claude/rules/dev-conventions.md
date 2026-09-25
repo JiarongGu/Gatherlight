@@ -1013,44 +1013,81 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   ours), each installed reranker without a current measurement is timed first by `RerankDeviceMeter`: on the CPU
   (`device = none`) and on every listed device, ONE AT A TIME (two children share one package's power budget — Run 9's
   void), each a standalone `llama-server` with the section's own `LaunchKeys` plus `--device`, on a loopback port the OS
-  picks: `/health`, a warm call of the fixed batch, one timed call, the tree killed. Every wait is capped (load 45 s, each
-  call 30 s); a device that fails, exits, times out or does not score every document (`RerankReply`) is excluded with its
-  reason. The preset names the fastest (`device = Vulkan0`, or `none`) and nothing else gets a device key; with no valid
-  result, no key — llama.cpp chooses, as before. **The key** (`RerankDeviceKey`) is the model file (id, size, time), the
-  build tag and the device list's ids AND names — its free-memory figures stripped, or every boot re-measures; the names
-  because `GGML_VK_VISIBLE_DEVICES` can hand the id `Vulkan0` to a different GPU. It lives in `rerank-devices.json` beside
-  the GGUFs, under `state/`, which the backup does not carry: a device choice belongs to one machine. The batch is four
-  documents of invented bilingual prose, each a full window of the model's own budget (`RerankInputCap.Fit`), counted by
-  `RerankPace.PairTokens` and read through `RerankPace.RateOf` — the pace's unit, one counting. **`n-gpu-layers = 99` stays
-  beside `device = none`**, harmless: the child logs "offloaded 25/25 layers to GPU" yet holds only CPU buffers and scores
-  at the CPU's rate, the same as with 0; `device = none` is what keeps a batch off a visible GPU. **Three readers, none
-  with a threshold of its own.** The PACE starts from the chosen device's rate — never faster than the GPU seed, because
-  a four-document batch on a discrete GPU is mostly call overhead and, seeded at the floor, the pace would stop learning
-  (`MinSignalFactor`) — read at its FIRST USE, since the verifier is built before the startup step that measures. The
-  推荐 BADGE recommends mMiniLMv2, even beside an installed BGE, when a fresh pace seeded with BGE's fastest rate would not
-  SEND the default page's one-window call — 96 candidates (`recall_facts`' 8 → `FactIndex.RankLimit`'s 24 → Lyntai's 4×
-  verification depth; the bench's "≤ 60" is its fixture's size), each one full window of the batch's prose — the
-  runtime's own admission (`RerankDeviceVerdict.ReferenceAdmission`). Precedence: recent skips → BGE measured too slow →
-  no GPU → BGE. And the reranker's ROW says where it runs and what was measured (`RerankDeviceNotes`), including that
-  embedders and chat models are not measured. **The limitation, said in the reason and the notes rather than hidden**: a
-  measurement exists only for a model on disk, taken at the next router start the app performs, so on an iGPU-only
-  machine the badge offers BGE first and moves to mMiniLMv2 once BGE is measured. **Who waits**: the migration overlay,
-  or a bind's restart and 资源's start button, which no server or client timeout bounds — worst case 105 s per device per
-  unmeasured reranker. Inside a restart the router stays down for the measurement too; `ILlamaRestartPolicy` already
-  refuses a restart while anything WRITES through the router, so what that longer window can cost is a reranker's
-  verification, which fails open. Measured: 77 s for both rerankers on this laptop's three devices, and nothing on the
-  next start (`docs/self-managed-llm-runtime.md`, 2026-09-26, with the per-device figures: on the RTX the choice changes
-  nothing, the default already put both there; with only the Arc visible, both go to the CPU). **Measuring it found a parser bug**:
+  picks — never one in the router's band, which this machine's dynamic range (1024–15000) covers, so a port the router
+  would take next is refused and another asked for: `/health`, a warm call, one timed call of DIFFERENT documents of the
+  same size (sent byte for byte twice, a future rerank prompt cache could answer the timed one), the tree killed. Every
+  wait is capped (load 45 s, each call 30 s); a device that fails, exits, times out or does not score every document
+  (`RerankReply`) is excluded with a household reason (the exception to the log, never into a row). The preset names the
+  fastest device THAT GAVE A RESULT (`device = Vulkan0`, or `none`) and nothing else gets a device key; with no valid
+  result, no key — llama.cpp chooses, as before. The measurement is CONTAINED: anything it throws is logged and the router
+  starts with no device keys — it is an optimisation, and must never be why llama.cpp did not start.
+  **An exclusion is RETRIED, a bounded number of times** (review, 2026-09-26). Most are transient — a cold shader cache or
+  a virus scan of a fresh `llama-server` at the first start of a new build (exactly when the key changes), a game or
+  another llama-server holding VRAM, contention, a lost port race — and saved as final, one busy moment would have put a
+  reranker on the CPU for good while the badge said 「它最快的设备是 CPU」. So at each start the app performs, a current
+  measurement's excluded devices — and only those — are measured again and merged, up to `RerankDeviceMeter.MaxAttempts`
+  (3) each; valid results stand, and the start's preset uses the stored ones meanwhile. After that the exclusion stands
+  until the key changes, and the row says which of the two applies to each device.
+  **The key** (`RerankDeviceKey`) is the model file (id, size, time), the build tag and the device list's ids AND names —
+  its free-memory figures stripped, or every boot re-measures; the names because `GGML_VK_VISIBLE_DEVICES` can hand the id
+  `Vulkan0` to a different GPU. **A GPU DRIVER update is not in it**, so it re-measures nothing — the row's "won't be
+  measured again" sentence says so (「更新显卡驱动不算」); what a driver changes is unmeasured. It lives in
+  `rerank-devices.json` beside the GGUFs, under `state/`, which the backup does not carry: a device choice belongs to one
+  machine. A measurement that cannot be SAVED is still what this start's preset names; the runtime keeps it in memory so
+  the row says what is running (「这次的结果没能保存…会重新测」), and the next start measures from scratch. The batch is
+  four documents of invented bilingual prose, each a full window of the model's own budget (`RerankInputCap.Fit`), counted
+  by `RerankPace.PairTokens` and read through `RerankPace.RateOf` — the pace's unit, one counting.
+  **Nothing outlives it** — a measurement child on a random port is adopted by nothing, and holds RAM or VRAM until a
+  reboot. Each child goes into a Windows JOB OBJECT with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` whose only handle the process
+  holds and never closes (`MeasurementJob`), so the OS kills the child when the app ends however it ends — the likely case
+  being a household force-quitting a first-boot overlay a minute into a measurement. Verified on the real binary: the app
+  TerminateProcess'd mid-measurement, the child gone in 111 ms; the same with the job disabled, the child still running
+  10 s later. The ROUTER is not in the job — its orphan is adopted by the next start, by design. `Dispose` also kills a
+  running child before it waits for the lifecycle lock. The window between a spawn and its assignment is not covered.
+  **`n-gpu-layers = 99` stays beside `device = none`**, harmless: the child logs "offloaded 25/25 layers to GPU" yet holds
+  only CPU buffers and scores at the CPU's rate, the same as with 0; `device = none` is what keeps a batch off a visible
+  GPU. **Three readers, none with a threshold of its own.** The PACE starts from the chosen device's rate — never faster
+  than the GPU seed, because a four-document batch on a discrete GPU is mostly call overhead and, seeded at the floor, the
+  pace would stop learning (`MinSignalFactor`) — read at its FIRST USE, since the verifier is built before the startup step
+  that measures. The 推荐 BADGE recommends mMiniLMv2, even beside an installed BGE, when a fresh pace seeded exactly as the
+  runtime seeds one (`RerankDeviceVerdict.PaceSeed`) from BGE's measurement would not SEND the default page's one-window
+  call — 96 candidates (`recall_facts`' 8 → `FactIndex.RankLimit`'s 24 → Lyntai's 4× verification depth; the bench's
+  "≤ 60" is its fixture's size), each a long fact read in one full window of the batch's prose — the runtime's own
+  admission (`RerankDeviceVerdict.ReferenceAdmission`); the lead says it is long facts, and that short ones take far less.
+  **Only BGE's measurement moves it**: a LAMAR or mMiniLMv2 measured too slow changes nothing, because the question is
+  whether this machine is too slow for BGE, the default. Precedence: recent skips → BGE measured too slow → no GPU → BGE.
+  And the reranker's ROW says where it runs and what was measured (`RerankDeviceNotes`), including that embedders and
+  chat models are not measured — and, beside a router the app did not start, that it is not measured while that router is
+  not ours (its "next start" promise would never be kept). **The limitation, said in the reason and the notes rather than
+  hidden**: a measurement exists only for a model on disk, taken at the next router start the app performs, so on an
+  iGPU-only machine the badge offers BGE first and moves to mMiniLMv2 once BGE is measured. **Who waits**: the migration
+  overlay — whose step line shows 「正在测重排模型 … 第 i/n 个」 while it runs (`ILlamaServerRuntime.MeasuringNow`, polled) —
+  or a bind's restart and 资源's start button, which no server or client timeout bounds, the start button's answer then
+  saying a measurement ran and how long it took — worst case 105 s per device per unmeasured reranker, and per retried
+  device. Inside a restart the router stays down for the measurement too; `ILlamaRestartPolicy` already refuses a restart
+  while anything WRITES through the router, so what that longer window can cost is a reranker's verification, which fails
+  open. Measured: 77 s for both rerankers on this laptop's three devices, and nothing on the next start
+  (`docs/self-managed-llm-runtime.md`, 2026-09-26, with the per-device figures: on the RTX the choice changes nothing, the
+  default already put both there; with only the Arc visible, both go to the CPU). **Measuring it found a parser bug**:
   `--list-devices` is read as stdout and stderr together, and with `LLAMA_ARG_LOG_VERBOSITY=4` in the environment three
   `load_backend` log lines became "devices" and a re-measure on devices that do not exist — only the indented lines
   under the header are devices now. Proof: `e2e-p53`, through the measurement-only seam `GATHERLIGHT_LLAMA_MEASURE_CMD`
   (a fake `llama-server`, `devtools/scripts/fake-llama-measure.mjs`, answering in time proportional to the pair tokens
   it is sent, per model and device; the precedent is `GATHERLIGHT_CLAUDE_CMD`) and the cap knob
   `GATHERLIGHT_RERANK_MEASURE_CAP_SECONDS`, which only shortens: the choice, one device at a time, the launch keys,
-  validity, the cap and the kill, the key's four halves, the flip, a CPU section, and the pace seed against a control
-  with no valid measurement. **Gaps**: `Dispose` killing a measurement child is asserted by nothing (the harness stops a
-  server with TerminateProcess, which skips Dispose); whether an embedder or a chat model would be faster on another
-  device is unmeasured; and one laptop is the only hardware measured.
+  different warm and timed documents, validity, the cap and the kill, retries and their bound, the key's four halves, the
+  flip, a CPU section, an unsaved measurement, the overlay's progress line, and — counted at a fake ROUTER, not read from
+  a log — the pace seed against a control with no valid measurement, and the kill-on-close job (the app TerminateProcess'd
+  under a running child). **Confirmed to FAIL** (each on a build of its own, 2026-09-26): no device key in `LaunchKeys`, the
+  preset not given the devices, validity off, the free-memory figures kept in the key, the flip off, the seed not wired,
+  devices measured in parallel, no kill, the store ignored, the key without devices / the file / the build, the badge's
+  limitation sentence removed, a device key on every section, the old seed sentence restored (`p51`), and with the review
+  round retries off, retries unbounded, the timed call identical to the warm one, the save failure hidden, the adopted
+  router ignored, no progress line and the job off. **Gaps**: `Dispose` killing a child is asserted by nothing (the
+  harness stops a server with TerminateProcess, which skips Dispose — the job covers that kill too); the router's band
+  refused when the OS offers it is not drivable; the start button's sentence was seen on the real binary only (the suite's
+  router never comes up); a driver update re-measures nothing; whether an embedder or a chat model would be faster on
+  another device is unmeasured; and one laptop is the only hardware measured.
   Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
   (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
   already there" is not on the table. And `LlamaServerRuntime` deliberately does **not** search PATH: a

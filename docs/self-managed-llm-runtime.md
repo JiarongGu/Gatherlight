@@ -611,3 +611,17 @@ devices:`.
 **What it does NOT say**: one laptop, one driver per GPU, one build; how an integrated GPU of another vendor or
 generation compares with its CPU; and whether an embedder or a chat model would be faster on another device — only
 rerankers are measured, and the reranker rows say so.
+
+**After review, same day: a child that outlives a forced end, and what the start button says.** A measurement child
+listens on a port the OS picked, so if the app dies mid-measurement nothing ever adopts it: it holds RAM or VRAM until a
+reboot. Each child now goes into a Windows job object created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, whose only
+handle the app holds and never closes (`MeasurementJob`). Checked on the real binary with a fresh data folder holding
+BGE: 资源's start button pressed, and while the Arc's child was measuring, the app process ended with `taskkill /F`
+(TerminateProcess — no Dispose, no `finally`). With the job, the child was gone 111 ms later. With the assignment
+disabled on a build of its own, the child was still running 10 s later, and was killed by hand. The router is not in the
+job: its orphan is adopted by the next start, by design. A later fresh start answered: 「启动前先测了
+bge-reranker-v2-m3-Q5_K_M、mmarco-mMiniLMv2-L12-H384-v1-Q8_0 在哪个设备上最快(用了 99.1 秒),结果写在下面各自那一行。」 —
+and the machine was busier then than in (a): BGE took 523 ms on the RTX, 6.4 s on the CPU and 15.5 s on the Arc, and
+mMiniLMv2 755 ms on the CPU. The ranking, and so the choice, did not change, but a single timed call is not a stable
+figure on a shared machine. That is one reason an EXCLUDED device is measured again at the next starts (up to three
+attempts) instead of being written off.
