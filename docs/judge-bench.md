@@ -5924,3 +5924,269 @@ machine's CPU".
 
 The long work folder's previous `arm-*`, `router.log` and `presets.ini` (from `results-2026-09-24T121532.284Z.json`)
 were copied to `devtools/_judge-bench-long/kept-2026-09-24T121532/` before the smoke overwrote them.
+
+## Run 9 — long and short facts in one recall (design)
+
+Written and committed BEFORE the run; the results section that follows names this commit. The fixture, its measured
+lengths, the seed and a plumbing smoke came first, because this design quotes them.
+
+**The question** (the plan's). Every reranker note says mixed recalls are unmeasured: 「长短事实混在一起的检索还没有量过
+(长事实取几段里最高的一段,得高分的机会比只有一段的短事实多)」. A chunked reranker (`ChunkedScoreProvider`, the default since
+Run 6c) scores a long candidate in up to five windows and keeps its BEST window's score, while a short fact is one window. In
+Runs 6–8 every candidate of a recall was long (the long fixture) or every one was short (the bilingual fixture), so no run
+showed the two competing. **When long and short facts compete in one recall, does chunking cost the SHORT facts?**
+
+### The instrument — a mixed fixture
+
+`devtools/fixtures/recall-bilingual-mixed.json`, sha256 `e1c9b4d5bcc66822432708842ed69a3ed47e046c7f792bc7f4c9c9e61ae95032`.
+It is written by `devtools/scripts/judge-bench-mixed-fixture.mjs` (committed in `ea42985`), deterministically and with
+no model, and the bench (`--fixture=mixed`) refuses a committed copy that is not byte-for-byte what the generator writes.
+
+- **Same facts, same questions.** The 60 facts keep their id, kind and topic, and the 240 questions are byte-identical
+  (the generator asserts both).
+- **30 facts keep their original text** (`short`, 20–93 characters).
+- **30 become long notes, by Run 6's construction**: the generator calls the long fixture's own note builder (`longNote`,
+  split out of `judge-bench-long-fixture.mjs` in the same commit, which still writes Run 6's fixture byte for byte). So a
+  long note here is exactly the note Run 6's generator builds for that fact at that position: the same filler, shuffled by
+  the same seed, and the same mentions of other facts by topic at the same strides. 11 of the 30 are identical to Run 6's
+  own notes (the facts whose Run 6 position was the same). The answer, the fact's original text, sits at:
+  - **`end`** (15): the note's last text, ending at 880–960 characters — past mMiniLMv2's cut for every question, inside
+    BGE's and LAMAR's 1,000;
+  - **`beyond`** (15): the note's last text, starting at 1,070–1,118 characters — past every model's cut.
+
+**The assignment, and how the near-duplicates are split.** Short and long ALTERNATE through each language's facts in fixture
+order. A near-duplicate group sits next to itself in the fixture, so alternation splits it: a short fact competes in every
+recall with its own group's long note. zh and en must start on opposite lengths: the allergy pair (zh 花生过敏, en Shellfish
+allergy) is one fact in each, both at an even index, so otherwise it falls on one length. zh starts short, as plain
+alternation would, en long, and ja short (either splits its group); four of the eight phase choices split all twelve
+groups, and this is one. The build fails unless every group has a short and a long member. Each language's long facts then
+cycle end → beyond.
+
+| | zh | en | ja | all |
+|---|---|---|---|---|
+| short | 20 | 8 | 2 | 30 (120 questions) |
+| long, `end` | 10 | 4 | 1 | 15 (60 questions) |
+| long, `beyond` | 10 | 4 | 1 | 15 (60 questions) |
+
+| position | facts |
+|---|---|
+| **short** | mkt-east, museum-adult, museum-child, lib-weekday, pool-south, pharm-local, visa, school-pickup, school-lunch, allergy-peanut, car-inspection, rest-noodle2, rest-sushi, train-express, hotel-mountain, dentist, swim-class, vet, plant, water-bill, internet, parking, hospital, post, grandma-bday, ramen, summer-camp, flu-shot, laundry, babysitter |
+| **end** | mkt-west, mkt-harbor, pool-north, passport, school-dropoff, allergy-shellfish, rest-noodle, trash-day, gym, cat-food, gas-bill, bank, anniversary, onsen, ski |
+| **beyond** | museum-adult-old, lib-weekend, pharm-24h, id-card, car-insurance, train-local, hotel-lake, piano, power-bill, bike, airport, hotpot, konbini, zoo, movie |
+
+The twelve near-duplicate groups, as the bench groups them (`groupOf`: a shared id prefix, and the three `-bill` facts):
+
+| group | short | long |
+|---|---|---|
+| mkt | mkt-east (zh) | mkt-west (zh, end), mkt-harbor (en, end) |
+| museum | museum-adult, museum-child (zh) | museum-adult-old (zh, beyond) |
+| lib | lib-weekday (en) | lib-weekend (en, beyond) |
+| pool | pool-south (zh) | pool-north (zh, end) |
+| pharm | pharm-local (zh) | pharm-24h (zh, beyond) |
+| school | school-pickup (zh), school-lunch (en) | school-dropoff (zh, end) |
+| allergy | allergy-peanut (zh) | allergy-shellfish (en, end) |
+| car | car-inspection (zh) | car-insurance (zh, beyond) |
+| rest | rest-noodle2 (zh), rest-sushi (ja) | rest-noodle (zh, end) |
+| train | train-express (en) | train-local (en, beyond) |
+| hotel | hotel-mountain (zh) | hotel-lake (zh, beyond) |
+| bill | water-bill (zh) | power-bill (zh, beyond), gas-bill (zh, end) |
+
+So 15 short facts (60 short-target questions) have a long near-duplicate in every recall's corpus: 8 of them one at
+`beyond` (water-bill has one at each position) and 7 only at `end`.
+
+**The padding, and one asymmetry it brings.** The long notes carry Run 6's padding unchanged: neutral household filler
+checked against `SUBJECT_TERMS`, and up to three other facts named BY TOPIC, never their content, with the four
+answer-bearing topics never named. A short fact is its original text and names nothing. With the strides' parities, a
+short fact's topic is therefore named by **two** long notes (29 of 30; allergy-peanut by none, as it is never named) and a
+long fact's by **one** (27 of 30; the three never-named by none). This is not balanced away: it is what puts a short
+target's subject into long notes that do not answer it, which is one of the ways a long note's best window could beat a
+short fact.
+
+**What the build enforces** (`validateMixed`; the build fails otherwise):
+
+- every fact's original content occurs **exactly once in the whole corpus**, in its own text, at its declared offset — so
+  no text answers another fact's questions;
+- NFKC preserves every text's length, so one offset serves both the raw 1,000-character cap and mMiniLMv2's normalised
+  fit;
+- **per question**:
+  - a short fact fits mMiniLMv2's budget for every question (and 1,000), so it is ONE window for every model and chunking
+    sends it exactly as the cut does;
+  - an `end` answer starts at or after mMiniLMv2's budget and ends within 1,000 characters;
+  - a `beyond` answer starts after 1,000;
+- the filler pools and mention templates name no fixture subject (the long fixture's own check, shared);
+- the balance in the table, per language; every near-duplicate group split into short and long; no two texts identical.
+
+**Measured lengths.** Measured with `judge-bench-mixed-fixture.mjs --measure` (the long generator's `measure`, shared):
+dedicated CPU `llama-server`s (b10549), each loading the catalogue's pinned file (mMiniLMv2 `91d70301…`, BGE `1a212007…`),
+and `/tokenize` on each text. mMiniLMv2 and BGE tokenize every text **identically**, as in Run 6. Characters are UTF-16
+units, equal to NFKC units here.
+
+| position | lang | n | answer starts, chars | answer ends, chars | answer starts, tokens | answer ends, tokens | text, tokens |
+|---|---|---|---|---|---|---|---|
+| short | zh | 20 | 0 | 20–35 | 0 | 16–29 | 16–29 |
+| short | en | 8 | 0 | 65–93 | 0 | 17–20 | 17–20 |
+| short | ja | 2 | 0 | 29–31 | 0 | 16–24 | 16–24 |
+| end | zh | 10 | 857–875 | 880–898 | 683–704 | 704–730 | 704–730 |
+| end | en | 4 | 826–872 | 902–960 | 198–215 | 216–240 | 216–240 |
+| end | ja | 1 | 860 | 890 | 554 | 572 | 572 |
+| beyond | zh | 10 | 1,070–1,081 | 1,091–1,116 | 851–866 | 869–886 | 869–886 |
+| beyond | en | 4 | 1,092–1,118 | 1,175–1,217 | 261–280 | 284–304 | 284–304 |
+| beyond | ja | 1 | 1,075 | 1,108 | 716 | 731 | 731 |
+
+- **What the cut sends mMiniLMv2**: every (question, candidate) pair, the question fitted and each text cut to the budget
+  it leaves (342–490 characters), plus the 4 special tokens: **14,400 pairs, 0 over 512 tokens, the largest 425.** No call
+  can be refused for length. (Chunked windows are cut to the same character budget; the router log's largest task is
+  checked after the run, guard 4.)
+
+**What chunking shows a reranker that the cut hid** — measuring rule 1, "can the instrument express the effect?", computed
+from the committed fixture with `RerankInputCap.WindowSpans`'s geometry (printed by the generator):
+
+| | mMiniLMv2 (342–490 characters a window) | BGE and LAMAR (1,000) |
+|---|---|---|
+| windows per long note | `end` 3–4, `beyond` 3–4 | `end` **1**, `beyond` 2 |
+| short targets whose long near-duplicate's ANSWER the cut hides and a window shows | 60 of 120 | 32 of 120 (its near-duplicate at `beyond`) |
+| short targets named by a long note OUTSIDE the cut but inside a window | 116 of 120 | 0 of 120 (every mention sits in the first 1,000 characters) |
+| long targets: own answer inside the cut → inside some window | `end` 0 → 60 of 60, `beyond` 0 → 60 | `end` 60 → 60, `beyond` 0 → 60 |
+
+- **For BGE and LAMAR, chunking can change a recall only through a `beyond` note.** A short fact is one window and an
+  `end` note fits one 1,000-character window, so both are sent exactly as the cut sends them. Only a `beyond` note gains a
+  second window, its tail — which holds its own answer. So for these two models the question is narrow: does a `beyond`
+  note's tail window displace short targets (32 of which have a `beyond` near-duplicate)?
+- **For mMiniLMv2 every long note gains windows**, and with them its near-duplicate answers (60 short targets) and the
+  mentions of short targets' topics past its cut (116). This is where the instrument can express a cost most.
+- A short target is ONE window in both arms, so any change in its own score between the arms is llama.cpp's drift, which
+  the memo proxy removes when the two arms send identical bytes (below).
+
+### The seed
+
+`devtools/_judge-bench-seed-mixed/`, built by `judge-bench --fixture=mixed --seed-only --arms=formula` at
+2026-09-25T05:18:41Z, app `70234f3` (v1.3.0; the branch's build, not rebuilt).
+
+- **判断 OFF.** The seed server switched it off and read it back before its first write: `memory.enrichment.enabled` = 0,
+  and `lyntai_memory_subject` holds 0 rows.
+- **Against the e2e claude stub**: the seed server's log holds **0 `router: claude-cli` lines**.
+- **Each text exactly once**: 60 `knowledge` rows each hold exactly their text (short or long), on 60 distinct graph
+  nodes; 0 stored vectors (语义 unbound).
+
+The bench re-verifies all of it at `--reuse-seed`, and refuses a seed written with 判断 on or from another fixture hash.
+
+### A different base from every earlier run — within-run comparisons only
+
+A new fixture, so a new fixture hash and a new `formula` digest; the bench refuses `--baseline` across fixtures, and no
+number here may be set beside another run's.
+
+### Arms, command and configuration
+
+```
+node devtools/scripts/judge-bench.mjs --fixture=mixed --reuse-seed --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M,LAMAR-600m.Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-arms=rr,rrk \
+  --rerank-memo --resources=devtools/_rr-res --port-base=6600 --llama-port=6640 > devtools/_judge-bench-mixed-run9.txt 2>&1
+```
+
+Eight arms in ONE run, all in parallel on the GPU, every comparison paired per query within it:
+
+- `formula`, and its engine A/A twin `formula2` (the sanity guard of Runs 6–8);
+- per reranker (BGE, LAMAR, mMiniLMv2): `rr:` (partition over the CUT, `GATHERLIGHT_RERANK_CHUNKING=off`) and `rrk:`
+  (partition, chunked, `=on` — what ships). Each must announce its knob or the bench refuses the arm. No `rrf:` arm: the
+  bench adds one only when `--rerank-arms` names it.
+
+**Configuration**, as Run 6c: mMiniLMv2 binds its catalogued id (window 512, NFKC fit), BGE and LAMAR declare none (4096,
+1,000 characters raw); no embedder; `EndorseCount` 8 = the page; ≤ 60 candidates; the product's 60 s verification deadline
+(knob pinned blank); every server on the claude stub. **The build is the branch's, from `70234f3`** (the last product
+commit; not rebuilt), so it carries the pace's skip and re-probe; on this GPU they are not expected to act, and guard 7
+checks it. **The machine is shared**: another session was running .NET test suites during the smoke, and may during the
+run; the pace is what such contention would move, and guard 7 is what would show it. **The memo proxy** (`--rerank-memo`) gives
+two arms that send identical `/v1/rerank` bytes the identical reply, so the cut and chunked arms of BGE and LAMAR differ only
+where a `beyond` note's second window changed the body. **Ports**: 6600–6608 and 6640 sit off every tcp range Windows had
+reserved that day (5357, 5458–5557, 5768–5967, 7341–7360 in single ports, 8270–8469, 8691–8890, 9855–9954 and several
+ranges from 10023 up) and off the port in use (8090 is another program's). The command runs the bench directly with `node`,
+as the smokes did (`dev.mjs`'s occasional exit 127 before any arm starts, Runs 6/6c); if it exits before any arm starts it
+is re-run unchanged.
+
+**One bench fix is in `ea42985` too.** The bench's `mirrorGuard` reads each `GgufCatalog` row's id as a literal;
+since `70234f3` mMiniLMv2's row names it by the constant `RerankerWithoutGpu`, so at HEAD the guard failed ("a GgufCatalog
+row declares ContextTokens under a non-literal id") and no local-model arm could start — the first smoke died there. The
+guard now resolves a `const string` of the same file; anything else is still drift.
+
+### Measured
+
+- **found@8 and top-1**, every arm, on `all` and BY POSITION, which on this fixture reads four groups: **short** (120
+  queries), **long** (120, `end` and `beyond` pooled), `end` (60), `beyond` (60); coverage (judged-of-graph) per group.
+- **Paired, McNemar exact with the Agresti–Min 95% interval**: each reranker chunked against itself cut, per group and on
+  `all` (the bench's new RUN 9 block prints short · long · all, both metrics, and reads the rule); each arm against
+  `formula`; every reranker arm against every other.
+- **What the reranker was shown** (the memo proxy's record): per group, how often the target's answer text was among the
+  documents; documents per call; the chunked-vs-cut identity check per reranker.
+- **Serial latency** (12 queries, verdict-carrying recalls) and the parallel means.
+- **Descriptive, from the saved rows** (scratch, not the bench): by fact language; on short-target questions, how many long
+  notes each arm put on the page; and for the short targets the cut found and chunking did not (and the reverse), which
+  facts took their place — a long near-duplicate, a long note naming the target, or another.
+
+### Decision rule
+
+Verbatim from the plan: **chunking "costs short facts" if, on questions whose target is SHORT, chunked found@8 is
+significantly worse than cut (paired, p < 0.05) for any reranker — then the notes must say so with the number, and a
+length-aware fix (e.g. a window-count penalty) becomes a measured follow-up; otherwise the notes' "mixed recalls
+unmeasured" becomes the result. Report long-target questions too.**
+
+It is read as follows, fixed before the run.
+
+- **The pairs**: `rrk:<m>` against `rr:<m>`, for BGE, LAMAR and mMiniLMv2, over the **120 queries whose target is short**.
+  b = cut hit & chunked miss, c = the reverse.
+- **"Significantly worse"**: exact McNemar p < 0.05 AND c − b < 0. Three tests, each at 0.05, no correction, and any one
+  triggers — so the rule errs toward reporting a cost. The bench's per-set veto does not apply.
+- **If it triggers**: the notes must carry, for each reranker it triggered on, short-target found@8 cut → chunked (of 120),
+  the net pp and its 95% interval, and the configuration (no tags, no embedder, `EndorseCount` 8, 30 short facts beside 30
+  notes of 880–1,217 characters); and a length-aware fix (a window-count penalty, say) becomes a measured follow-up. The
+  sentence is proposed in the report and routed by the round's controller; no product code or catalogue text changes here.
+- **If it does not**: 「长短事实混在一起的检索还没有量过」 is replaced by the measured result, in words no stronger than the
+  intervals allow — "no significant difference" quotes the loss each interval cannot rule out, and "no cost" or
+  "equivalent" is not claimed unless an interval lies inside ±3 pp.
+- **Long-target questions are reported beside it**, both metrics, per reranker: chunking is expected to help where the cut
+  hides the answer (mMiniLMv2 at `end` and `beyond`; BGE and LAMAR at `beyond`), and that is descriptive here, not the rule.
+
+**Reported beside the rule, outside it (descriptive):** top-1 on short targets; `all`; `end` and `beyond` separately; each
+arm against `formula` by group; the mechanism tables; by language; latency; what reached the reranker.
+
+### Guards, checked before the rule is read
+
+A failed guard leaves the rule unread. It is reported, not worked around.
+
+1. **The instrument.** The bench accepted the fixture (generator check) and re-verified the seed: 判断 off, 0 claude-cli
+   calls, 60 exact texts, 60 graph nodes.
+2. **The engine A/A.** `formula` against `formula2` is quiet on `all` (p ≥ 0.05).
+3. **Startup.** Every reranker arm reads back `llama-cpp · <its id>`, raises no startup warning, announces its knob (`rr`
+   off, `rrk` on), and makes 0 claude-cli calls at startup and over the run (the bench enforces it).
+4. **The router log.** Each model spawns once; mMiniLMv2's child logs `n_ctx_slot = 512` and every task it processes is
+   ≤ 512 tokens; no error or truncation line.
+5. **Coverage.** `judged` = `graph` in every group of every reranker arm. A reranker abstains only on a fault: an
+   abstention is traced, and one on any of the six reranker arms leaves the rule unread.
+6. **Every request reached the model.** Per model, the proxies' forwarded `/v1/rerank` requests equal the router's
+   `proxying request to model` lines; no forward failed.
+7. **The pace did not act (I6).** No arm logged a pace line — sized, after a cut, skipped or re-measured. One voids the run
+   (the bench's VOID banner and exit 1), and the rule is not read.
+8. **Expressible, by construction**: the table above.
+
+### Plumbing smoke, before this design
+
+`--n=8` (32 questions: 3 short facts, 5 long notes; every recall still searches all 60), the same eight arms and ports,
+run directly with `node`, 2026-09-25T05:22Z–05:25Z (`devtools/_judge-bench-mixed/results-2026-09-25T052226.793Z.json`,
+output `devtools/_judge-bench-mixed/smoke.txt`), with the bench as committed in `ea42985`. It checked, with the scratch
+guard script `devtools/_run9/guards9.mjs`, that:
+
+- the fixture and the seed were accepted and re-verified;
+- the router spawned each model once — mMiniLMv2 with `n_ctx_slot = 512`, its largest task 423 tokens (BGE 847, LAMAR
+  845) — with no error or truncation line;
+- every reranker arm read back its binding and announced its knob, and 0 claude-cli calls were made;
+- every forward reached the router (89 of 89 per model), with no retry and no failure;
+- no arm logged a pace line;
+- `judged` = `graph` in every group of every reranker arm;
+- BY POSITION printed short · long · end · beyond, and the RUN 9 block printed its three rows per reranker and read the rule;
+- the chunked arms sent windows (at most 51 documents a call on BGE, 55 on LAMAR, 100 on mMiniLMv2, none longer than its
+  budget: 1,000 and 486 characters), and the cut and chunked bodies differed on 31 of 32 queries for each reranker — a
+  `beyond` note (BGE, LAMAR) or a long note past mMiniLMv2's cut was a candidate in nearly every recall.
+
+It printed no WARNING line. Its accuracy numbers (32 queries) inform nothing here.
+
+**The first attempt at the smoke failed before any arm started**, in the bench's `mirrorGuard` (above); it is the reason
+for that fix: at `70234f3` no judge-bench command naming a local model could start (a re-launch of Run 8's included).
