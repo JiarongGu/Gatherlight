@@ -5505,3 +5505,422 @@ before its rerank call takes milliseconds. Lines now go to the last recall that 
 the smoke's lines (`devtools/_run8/reattach-check.mjs`) put every sized or after-cut line on a recall that sent one window
 per note, as such a line says. (2) The CPU block printed an empty preset. The server fingerprint was added after the
 smoke. Its accuracy numbers inform nothing here: 16 questions, early in a run, where candidates are few.
+
+## Run 8 — the pace on a CPU (2026-09-25, llama.cpp b10549; claude never called — every server on the stub)
+
+### A deviation first: guard 5 failed, and was amended AFTER the data was seen
+
+**Read this before any number below.** Registered guard 5 ("CPU-only, as launched") required, among other things, no
+error line in a CPU router's log except `Connection handling canceled`. Both BGE CPU routers logged a second kind:
+
+```
+E srv    operator(): http client error: Failed to read connection
+```
+
+- **42 lines** on `cpu-rr:bge-reranker-v2-m3-Q5_K_M`'s router (`router-cpu-5.log`), and **26** on
+  `cpu-rrk:bge-reranker-v2-m3-Q5_K_M`'s (`router-cpu-6.log`).
+- **None** on either mMiniLMv2 router, and no other error line on any router.
+
+As registered, the rule was therefore NOT to be read. The run was reported as stopped. **The owner then decided
+(2026-09-25) to accept guard 5 as amended below, as a deviation, and to read the rule.** The amendment was written
+after the results were seen, and a reader should discount it accordingly.
+
+**What the lines are — the evidence** (scratch `devtools/_run8/router-errors.mjs` and `cancel-timing.mjs`, over the two
+router logs). They look like the router's second way of handling a request the 60 s verification deadline abandoned, not
+a scoring fault:
+
+- **Each follows an abandoned request.** The request proxied just before the latest one was a deadline cut in 42 of 42
+  cases (26 of 26). Each line came **102.4–103.1 s** after that abandoned request was proxied, which is about 42.5 s after
+  the deadline abandoned it (42.1–42.7 s after the next request was proxied).
+- **Each is paired with the model child cancelling tasks.** The child logged `stop: cancel task` in **42 bursts, 2,458
+  tasks** (26 bursts, 1,547 tasks): one burst per `Failed to read connection` line. That is 58.5 (59.5) tasks per
+  burst, about one call's windows at that point in the run. The nearest cancel line is within −5.7 to +14.2 s of its
+  error line (median −3.5 s; −3.3 s).
+- **It replaces the first way; it does not come on top of it.** Up to the abandoned request of seq 196 (212), the router
+  logged `Connection handling canceled` instead:
+  - 122 (145) of those, each 60.4–120.6 s after the abandoned request was proxied;
+  - never followed by cancel-task lines within 5 s, and no cancel-task line at all until 2 s before the first
+    `Failed to read connection`;
+  - from seq 197 (213) on, every abandoned request got a `Failed to read connection` line instead.
+- **When the switch came.** The router had been up 191.2 min (212.2 min) at the first such line, and its last request
+  came at 231.7 (236.6). So it covers the last ~41 (~24) minutes of each arm, when every recall was being cut anyway
+  (below).
+- What switches the router from one way to the other is not known from these logs.
+- **Nothing was lost in scoring.**
+  - Guard 6 held: every abstention is a deadline cut matched to the product's own Warning during that recall, and every
+    cut call is one the client abandoned. No call came back early with an error.
+  - Guard 7 held: every forwarded request reached its router, and no forward failed.
+  - Every answered call carried a score for every window sent, and no task was truncated.
+
+**Guard 5 as amended:** "no error line but `Connection handling canceled` — or `Failed to read connection`, where each
+follows a request the deadline abandoned and pairs with a `stop: cancel task` burst from the child". Everything else in
+guard 5 held as registered.
+
+### Command, build, timing
+
+```
+node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M --rerank-arms=rrk \
+  --cpu-rerankers=mmarco-mMiniLMv2-L12-H384-v1-Q8_0,bge-reranker-v2-m3-Q5_K_M --cpu-rerank-arms=rr,rrk \
+  --rerank-memo --resources=devtools/_rr-res --port-base=6500 --llama-port=6540 --cpu-llama-port=6541 \
+  > devtools/_judge-bench-long-run8.txt 2>&1
+```
+
+- **Exactly as registered** in `0e20589`, which is the run's app HEAD (v1.3.0). The bench is `42526b8`'s, unmodified.
+- **The server binary** is the branch's build after `adf6ab8`, the last product commit. It is fingerprinted by the bench
+  (`Gatherlight.Platform.dll` `7693293f…`, `Gatherlight.Planner.dll` `03891067…`, `Gatherlight.Server.dll` `93f6be19…`)
+  and was unchanged at every CPU arm's start.
+- **Timing.** 2026-09-24T18:27:48Z – 2026-09-25T03:50:59Z (9 h 23 min), exit 0 on the first attempt. Order seed 12345
+  (240 queries, 0 same-fact adjacencies).
+- **The parallel part** (`formula`, `formula2`, the GPU reference; accuracy and latency passes) ran first. Then each CPU
+  arm ran alone, in its own accuracy pass:
+
+  | CPU arm | from – to (UTC) | wall |
+  |---|---|---|
+  | mMiniLMv2, cut | 18:38:45 – 18:57:49 | 19.1 min |
+  | mMiniLMv2, chunked | 18:58:02 – 20:00:22 | 62.3 min |
+  | BGE, cut | 20:00:36 – 23:53:06 | 232.5 min |
+  | BGE, chunked | 23:53:21 – 03:50:50 | 237.5 min |
+
+- **The seed** was `devtools/_judge-bench-seed-long/`, reused and re-verified at startup.
+
+**Every guard held, guard 5 as amended above** (checked by scratch `devtools/_run8/guards8.mjs`; output kept as
+`devtools/_run8/guards.txt`):
+
+| guard | result |
+|---|---|
+| 1. instrument | fixture `1f48f1be…` accepted; seed re-verified (判断 off, 0 claude-cli calls, 60 exact notes, 60 graph nodes); `formula` digest **`976af4663b6e`** = Runs 6–6c |
+| 2. engine A/A | `formula`/`formula2` byte-identical: 0/0, p = 1.000 |
+| 3. startup | every reranker arm read back `llama-cpp · <its id>`, no startup warning, its knob as its kind says (`rr` off, `rrk` on), 0 claude-cli calls at startup and over the whole run, every arm |
+| 4. one build | the fingerprint above, unchanged at each CPU arm's start |
+| 5. CPU-only, as launched | each CPU router spawned its child once, its argv carrying `--device none --n-gpu-layers 0`; `n_threads = 16`; no Vulkan line in any CPU router's log; 0 truncated tasks; largest task mMiniLMv2 425 and 429 tokens (≤ 512), BGE 857 and 857; **error lines: none on the mMiniLMv2 routers; on the BGE routers 122 / 145 `Connection handling canceled` and 42 / 26 `Failed to read connection` — the latter held only under the amendment above** |
+| 6. coverage | the GPU reference: `judged` = `graph` = 240; each CPU arm: 0 errors, 0 abstentions not explained by a traced deadline cut, 0 recalls carrying both a verdict and a cut, every log line placed on a recall (0 unplaced) |
+| 7. every request reached the model | forwarded = proxied: shared router 253/253, each CPU router 241/241; 0 retries, 0 failed forwards |
+| 8. the pace guard where it applies | 0 pace lines on `formula`, `formula2` and the GPU reference; the CPU arms' counts printed as exempt (0, 0, 0 and 235) |
+
+The bench printed **no WARNING line**.
+
+### The hardware, and how the CPU routers were launched
+
+- **CPU**: Intel Core Ultra 9 185H.
+  - 16 cores: 6 performance, 8 efficient and 2 low-power efficient.
+  - 22 logical processors.
+  - 64 GB of memory.
+- **OS and power**: Windows 11 Pro 10.0.26200, on mains, the Balanced plan.
+- **llama.cpp**: b10549. Its CPU backend is chosen by the build's own loader. Every CPU child ran with `n_threads = 16`,
+  llama.cpp's own choice; the product sets none.
+- **Each CPU router** was a fresh `llama-server` router of its own, started before its arm and killed by PID after it.
+  - Its preset section: `n-gpu-layers = 0`, `device = none`, `reranking = true`, ctx/batch/ubatch 512 (mMiniLMv2) or
+    4096 (BGE), otherwise the product's.
+  - **Why `device = none`.** `n-gpu-layers = 0` alone is not a CPU run on this build. llama.cpp's op-offload defaults on,
+    and runs a big batch's matrix work on any GPU it can see. Measured before the run: a 48-note BGE call took ~5 s with
+    `n-gpu-layers = 0` alone, and 143 s and 197 s with `device = none` added.
+  - A machine with no GPU has only the CPU backend; `device = none` gives this one the same.
+- **The GPU reference** ran on the shared router with the product's launch (`n-gpu-layers = 99`), on the RTX 4080
+  Laptop, as in Runs 6–6c.
+
+### The headline
+
+All 240 queries. Pairs are within this run. The CPU arms' latency is their accuracy pass, run alone, over every recall.
+
+| arm | router | top-1 | found@8 | recalls with a verdict | deadline cuts | latency, median / p90 / max |
+|---|---|---|---|---|---|---|
+| `formula` (and `formula2`, identical) | — | 68 | 104 | — | — | 0.20 s serial |
+| `rrk:` BGE — the GPU reference | GPU | 87 | 201 | 240 | 0 | 2.9 s serial (12 queries) |
+| `cpu-rr:` mMiniLMv2 (cut) | CPU | 29 | 68 | 240 | 0 | 5.3 / 6.2 / 7.2 s |
+| `cpu-rrk:` mMiniLMv2 (chunked, with the pace) | CPU | **78** | **180** | 240 | 0 | 17.5 / 18.9 / 22.2 s |
+| `cpu-rr:` BGE (cut) | CPU | 69 | 106 | 17 | 223 | 60.3 / 60.3 / 60.4 s |
+| `cpu-rrk:` BGE (chunked, with the pace) | CPU | 68 | 104 | 10 | 230 | 60.3 / 60.3 / 60.7 s |
+
+- **mMiniLMv2 is usable on this CPU and chunking keeps its whole value.** Every recall carried a verdict, and a chunked
+  recall of up to 60 long notes took at most 22 s.
+- **BGE is not.** It judged 17 and 10 of 240 recalls, all in the first quarter. It waited out the minute on the rest,
+  and both of its arms end up where no judge is.
+
+### The decision rule, applied
+
+The pairs: `cpu-rrk:<m>` against `cpu-rr:<m>`, `all`, found@8. b = cut hit & chunked miss.
+
+| reranker | found@8 cut → chunked | b/c | p | net, 95% | significantly worse? |
+|---|---|---|---|---|---|
+| mMiniLMv2 | 68 → 180 | 5/117 | < 0.001 | **+46.7pp**, [+39.4, +53.1] | no — significantly BETTER |
+| BGE | 106 → 104 | 2/0 | 0.500 | −0.8pp, [−2.2, +0.6] | no — **equivalent** (interval inside ±3pp) |
+
+**Neither is significantly worse, so, per the rule, the default does not change.** The household sentences that say the
+behaviour is unmeasured on a CPU-only machine are to be replaced by what was measured here (see "What the household
+sentences can now say").
+
+**Separately, the owner has ordered two product changes** in the light of this run. Another task is implementing them,
+and neither is part of this record:
+
+1. **Skip the judge at once** when even one segment per fact cannot fit in time, instead of waiting out the minute.
+2. **Recommend mMiniLMv2** when no GPU is detected.
+
+### By position — accuracy and coverage (cells: top-1 / found@8 / judged-of-graph)
+
+```
+arm                                                                                 start (n=60)          middle (n=60)         end (n=60)            beyond (n=60)
+公式 · no verification (seed has no tags)                                           16 / 21 / 0-60        13 / 24 / 0-60        19 / 29 / 0-60        20 / 30 / 0-60
+reranker bge-reranker-v2-m3-Q5_K_M · partition · chunked                            18 / 47 / 60-60       20 / 53 / 60-60       21 / 50 / 60-60       28 / 51 / 60-60
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · partition · cut · CPU-only router      23 / 51 / 60-60       2 / 7 / 60-60         1 / 3 / 60-60         3 / 7 / 60-60
+reranker mmarco-mMiniLMv2-L12-H384-v1-Q8_0 · partition · chunked · CPU-only router  17 / 50 / 60-60       19 / 49 / 60-60       24 / 44 / 60-60       18 / 37 / 60-60
+reranker bge-reranker-v2-m3-Q5_K_M · partition · cut · CPU-only router              16 / 21 / 3-60        13 / 26 / 3-60        20 / 29 / 9-60        20 / 30 / 2-60
+reranker bge-reranker-v2-m3-Q5_K_M · partition · chunked · CPU-only router          16 / 21 / 2-60        13 / 24 / 1-60        19 / 29 / 5-60        20 / 30 / 2-60
+```
+
+The rule's pairs by position (b/c, p; descriptive):
+
+| reranker | start | middle | end | beyond |
+|---|---|---|---|---|
+| mMiniLMv2 found@8 | 1/0, 1.000 | 0/42, < 0.001 | 0/41, < 0.001 | 4/34, < 0.001 |
+| mMiniLMv2 top-1 | 7/1, 0.070 | 0/17, < 0.001 | 0/23, < 0.001 | 3/18, 0.001 |
+| BGE found@8 | 0/0 | 2/0, 0.500 | 0/0 | 0/0 |
+| BGE top-1 | 0/0 | 0/0 | 1/0, 1.000 | 0/0 |
+
+- **mMiniLMv2** loses nothing on found@8 where the cut already read the answer (`start`: 51 → 50). It gains 42, 41 and
+  34 queries where it did not.
+  - Its top-1 at `start` leans the cut's way: 23 → 17, 7/1, p = 0.070. This is the same lean Run 6c saw on the GPU
+    (6/1).
+- **BGE's two CPU arms** read the answer text at `beyond` in 0 of 60 recalls each (the bench's answer-sent record). Its
+  chunked arm was sending one window per note, which is the cut.
+
+**Against the other arms, on `all`** (b = the right-hand arm hit & the left-hand arm miss):
+
+- CPU chunked mMiniLMv2 against `formula`:
+  - found@8 18/94, p < 0.001, +31.7pp;
+  - top-1 12/22, p = 0.121.
+- CPU chunked mMiniLMv2 against the GPU reference (chunked BGE on the GPU):
+  - found@8 35/14, p = 0.004, **−8.8pp** [−14.3, −3.1];
+  - top-1 24/15, p = 0.200.
+  - This is the gap Run 6c's post-hoc GPU pairing of the same two showed (−7.9pp).
+- **Both CPU BGE arms against `formula`: equivalent on both metrics** (intervals inside ±3pp):
+  - cut: found@8 0/2, top-1 0/1;
+  - chunked: 0/0 on both.
+- Both CPU BGE arms against the GPU reference: found@8 96/1 and 97/0, −39.6pp and −40.4pp.
+
+**Across runs, descriptive only (measuring rule 2).** The GPU reference reproduces Run 6c's chunked BGE exactly: 87 /
+201, the same cells at every position, on the same `formula` digest. The CPU mMiniLMv2 arms read 29 / 68 and 78 / 180,
+against Run 6c's GPU 31 / 71 and 79 / 182.
+
+### The deadline cuts, and the queue behind an abandoned batch
+
+Per recall, in the order asked (`v` = a verdict, `C` = cut by the 60 s verification deadline, which returns the engine's
+own page):
+
+```
+cpu-rr:bge     seq 0    vCCvvvvvCCCvvCCvvvvvCCvvvvCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC   then C to seq 239
+cpu-rrk:bge    seq 0    vCCCCCCvCCCvvCCvvvCvCCCvCvCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC   then C to seq 239
+```
+
+Both mMiniLMv2 arms: 240 of 240 `v`, no cut.
+
+| BGE arm | cuts by quarter (of 60) | verdicts by quarter | notes per call by quarter | first cut | longest run of cuts |
+|---|---|---|---|---|---|
+| cut | 43 / 60 / 60 / 60 | 17 / 0 / 0 / 0 | 31.6 / 49.2 / 56.8 / 59.5 | seq 1 (43 notes) | 214 (seq 26–239) |
+| chunked | 50 / 60 / 60 / 60 | 10 / 0 / 0 / 0 | 30.4 / 48.2 / 56.4 / 59.4 | seq 1 (43 notes) | 214 |
+
+**Two causes, and the run separates them.**
+
+1. **A recall of many long notes cannot finish on this CPU, queue or no queue.**
+   - BGE's answered calls ran at a median **3.09 s per 1,000 pair tokens** (the cut arm's 17: p10 2.42, p90 8.03, the
+     top of that range being calls that had queued).
+   - At that rate a call's own cost is under 60 s for 29 / 19 / 3 / 0 of each quarter's 60 recalls.
+   - In the last quarter the cheapest recall would take **116 s** with nothing ahead of it.
+   - The cut calls' own cost has a median of 118.3 s.
+2. **After a cut, the next call waits for the abandoned batch.**
+   - The child keeps scoring a batch whose request the deadline abandoned (the answer to `RerankPace`'s "unmeasured"
+     line, below), so the next call starts behind it.
+   - A recall right after a cut was cut **218 of 222** times (the chunked arm: 223 of 229). A recall right after an
+     answered one was cut 5 of 17 times (7 of 10).
+   - The answered calls that followed a cut ran a median **6.4 s** beyond their own cost at the arm's rate (n = 4; the
+     chunked arm 9.8 s, n = 6). Those that followed an answered call ran −0.6 s (n = 12; −4.1 s, n = 3).
+   - **34 of the cut arm's 223 cut calls would have fit in 60 s** on an idle child at the median rate; 2 of them in 30 s.
+   - The chunked arm's third cut was a 1-note, 801-token call (seq 3) that waited out the whole minute behind two
+     abandoned batches.
+
+So in the first half of the run the queue turned calls that could have finished into cuts. From the third quarter the
+recalls themselves were too big. Either way, a BGE recall of more than about 30 long notes of this fixture's mix (646
+pair tokens per note; about 20 when they are mostly Chinese, as in the probe) waits out the minute on this CPU. This is
+what the owner's first product change addresses.
+
+### The pace
+
+**mMiniLMv2: the pace never fired** (0 lines) — and never had to.
+
+- Its answered calls ran at a median **0.30 s per 1,000 pair tokens**, steady over the run:
+  - cut arm: 297 / 292 / 300 / 300 by quarter, p10–p90 0.257–0.327 overall;
+  - chunked arm: 301 / 303 / 293 / 296.
+- That is about 6× the GPU seed (0.050).
+- At that rate the 30 s budget holds ~100,600 pair tokens. The largest chunked call sent 65,463 (245 windows), about 1.5×
+  inside the budget.
+- So every note was read in all its windows: 3.19 per note on average, up to 4.15, rising to ~191 windows per call as the
+  recalls grew (99.7 / 165.1 / 190.1 / 191.1 by quarter).
+- The budget holds about 100 long notes at their chunked cost here (1,015 pair tokens per note), just above the 96
+  candidates a default recall can show. A recall naming a kind (up to 400 candidates) is where the pace would start to
+  size calls on this CPU. That was not reached here.
+
+**BGE: the pace sat in "after a cut" mode for 212 of 240 recalls.** From the third recall on it sent one window per
+note — the cut — on every call but two.
+
+- **235 pace lines: 23 time-sized, 212 after a cut.**
+- **Windows per note**: 1.01 on average. Only 4 of 240 calls sent a second window for any note (seq 0, 1, 10, 23).
+- **The after-cut stretches**: 4 of them, the last lasting **206 recalls** (seq 34–239). No call answered after seq 25,
+  so the pace never left it.
+
+**What drove its estimate was the queue, not the machine.** Every change of the logged rate is traced to the call before
+it (in ms per 1,000 pair tokens; the machine's median answered rate is 3,094):
+
+| from the call at | that call | what `RerankPace` did | estimate after | × the median answered rate |
+|---|---|---|---|---|
+| seq 1 | 43 notes, 41,330 tokens, **cut** | a lower bound (`AtLeast`), after-cut mode on | 1,452 | 0.5 |
+| seq 3 | **1 note, 801 tokens, cut** — queued behind two abandoned batches | a lower bound, raised to it | **74,880** | **24.2** |
+| seq 7 | answered, 10,828 tokens in 45.1 s | believed whole (after a cut) | 4,161 | 1.3 |
+| seq 10 | 6,596 tokens, cut | a lower bound | 9,095 | 2.9 |
+| seq 11 | **answered, 4,205 tokens in 57.2 s** — queued | **believed whole** (after a cut) | **13,595** | **4.4** |
+| seq 12–19 | answered calls | a faster call moves it halfway down; a lone slower one (seq 15) to the geometric mean | 8,258 → 8,830 → 6,312 → 5,243 → 4,364 | 2.7 → 1.4 |
+| seq 23 | answered, 5,014 tokens in 51.0 s, after three cuts | a lone slower call: the geometric mean | 6,659 | 2.2 |
+| seq 25 | answered, 3,337 tokens in 23.7 s | a slower repeat, believed | 7,100 | 2.3 |
+| seq 33 | 3,398 tokens, **cut** | a lower bound, after-cut mode on, **never left** | **17,648** | **5.7** |
+
+- **The pace's own rules did what they say.** A cut is a lower bound; after one, an answer is believed whole.
+- **But on this machine both kinds of evidence were mostly queue time.**
+  - A small call that waited behind abandoned batches "proved" the machine 24× slower than it is (seq 3).
+  - An answered call that had queued was believed whole at 4.4× (seq 11).
+  - The run ended on an estimate 5.7× the machine's rate, set by a cut 3,398-token call.
+- Because every sized line already said one window per note, the inflated estimate changed nothing that was sent. It
+  would matter on a machine where a recall's one-window cost is close to the budget.
+- **(Correction, 2026-09-25.)** This round's first report said the 24× came from answered calls believed whole. It came
+  from a CUT call's lower bound (seq 3). An answered call believed whole took the estimate to 4.4× (seq 11).
+
+### Latency
+
+| arm | median | p90 | max | calls: windows per call (mean, max) | ms per 1,000 pair tokens (answered, median) |
+|---|---|---|---|---|---|
+| GPU reference (12 queries, serial) | 2.9 s | — | — | 74.2, 91 | — |
+| CPU mMiniLMv2, cut | 5.3 s | 6.2 s | 7.2 s | 46.6, 59 | 299 |
+| CPU mMiniLMv2, chunked | 17.5 s | 18.9 s | 22.2 s | 161.5, 245 | 298 |
+| CPU BGE, cut | 60.3 s (verdicts: 27.9 s) | 60.3 s | 60.4 s | 49.3, 60 | 3,094 |
+| CPU BGE, chunked | 60.3 s (verdicts: 45.8 s) | 60.3 s | 60.7 s | 48.8, 67 | 4,159 (n = 10, queued calls included) |
+
+- **On this CPU, chunking costs mMiniLMv2 about 3.3× its cut recall** (17.5 against 5.3 s), all of it within the deadline.
+- **Against the GPU**, a chunked mMiniLMv2 recall here takes ~6× the chunked BGE recall there (17.5 against 2.9 s), and
+  ~15× Run 6c's GPU mMiniLMv2 (1.2 s; across runs, descriptive).
+
+### `RerankPace`'s "unmeasured" lines, answered for this build and this CPU
+
+- **"Whether a real llama-server stops scoring a batch whose request was cancelled"**: for most of a run, **it does not**.
+  - The probe before the design: a 1-document call sent straight after a 72-window BGE call abandoned at 15 s took
+    **181.9 s**. It waited for the whole abandoned batch.
+  - In the run, the child logged no `stop: cancel task` line for the first 191 (212) minutes of each BGE arm.
+  - The consequence the comment predicted, "the next call queues behind it and reads slower than the machine is",
+    happened: the cut rates and the excess times above, and the estimate the queue drove.
+  - Late in each arm the child did cancel abandoned batches (the deviation above) — about 42 s after the deadline, so
+    the next call still started behind most of the batch.
+  - Of the windows sent to the BGE children, 7,250 (7,525) were scored to the end and 2,458 (1,547) cancelled. **2,118
+    (2,636) left neither line in the log**, so whether part of other abandoned batches was dropped is not settled by these
+    logs.
+- **"How many recalls it takes to settle there"**:
+  - mMiniLMv2 never needed to size a call, so there was nothing to settle. Its answered rate was stable from the first
+    quarter.
+  - BGE never settled: its estimate followed the queue (table above) and stayed in after-cut mode for the last 206
+    recalls.
+- **"How far a long window's cost outruns a rate learned from short facts"**: not measured. Every candidate in this
+  fixture is long.
+
+### The machine's load while the CPU arms ran
+
+A sampler (scratch `devtools/_run8/load-sampler.ps1`, output `devtools/_run8/load.log`) recorded the machine's busy share
+and its busiest processes about once a minute. Percentages are of the whole machine (22 logical processors).
+
+| CPU arm | samples | machine busy, median [range] | llama-server, median | the busiest other processes (peak) |
+|---|---|---|---|---|
+| mMiniLMv2, cut | 17 | 79.7% [72.5–84.0] | 64.3% | ssh-agent 4.5, svchost 4.0, msedge 2.2 |
+| mMiniLMv2, chunked | 58 | 78.3% [71.3–85.5] | 61.2% | msedge 5.5, qqpctray 5.4, ssh-agent 4.5, alibabaprotect 4.3 |
+| BGE, cut | 213 | 83.6% [71.7–91.0] | 66.7% | msedgewebview2 13.7, vbcscompiler 9.3, msedge 8.9, qqpcrtp 7.4 |
+| BGE, chunked | 217 | 84.7% [72.8–91.1] | 70.8% | **testhost 30.9, vbcscompiler 24.4**, msedgewebview2 11.0 |
+
+- During the BGE arms another session built and ran .NET tests on this machine (the compiler, and `testhost` at up to
+  31% at its peak).
+- That cannot explain BGE's outcome. The last quarter's cheapest recall cost 116 s at the median rate, so the minute is
+  out of reach even at twice the measured speed.
+- It may have slowed individual calls, and some of the p90 of BGE's answered rate may be that load.
+
+### What it says
+
+- **On this machine's CPU, mMiniLMv2 is a working judge for long notes, and chunking keeps all of what it buys.**
+  - Every recall carried a verdict.
+  - Chunked found@8 was 180 against the cut's 68 (+46.7pp), close to its GPU figure in Run 6c.
+  - A recall took 17.5 s (median; at most 22 s).
+  - The pace never needed to act.
+- **On the same CPU, BGE is not a working judge for recalls of many long notes.**
+  - It gave a verdict on 17 and 10 of 240 recalls, all early in the run, when recalls carried few notes.
+  - Every other recall waited the full minute and came back in the engine's own order. Both its arms are equivalent
+    to having no judge.
+  - Scoring costs ~3.1 s per 1,000 pair tokens. So a recall of more than about 20–30 long notes cannot finish in
+    time even at one window per note.
+- **The pace does no harm on either reranker here, but it cannot help BGE.**
+  - Sized to one window per note, the chunked BGE arm is the cut arm (equivalent on found@8, −0.8pp).
+  - The cut arm is no judge.
+- **An abandoned rerank call is not free.** The child keeps scoring it, so the next call queues behind it:
+  - a cut is followed by another cut almost every time;
+  - the pace reads the queue as the machine's speed.
+
+### What it does NOT say
+
+- **One CPU, one run.** One laptop processor (Core Ultra 9 185H), one llama.cpp build (b10549), one power plan, 16
+  threads chosen by llama.cpp. No A/A twin ran on the CPU arms.
+  - llama.cpp's CPU scores are not the GPU's bit for bit, and no memo was shared between the CPU arms. That noise is
+    symmetric and inside every pair.
+  - A faster or slower CPU moves the ~20–30-note limit.
+- **LAMAR was not measured on a CPU.** Its size is BGE's, so BGE's outcome is the likely one for it, but that is not
+  measured.
+- **The deviation**: guard 5 was amended after the data was seen.
+- **Recalls back to back.** Each recall started when the last returned, as in an agent turn that recalls several times.
+  A household whose recalls are minutes apart would not queue behind an abandoned batch. It still cannot fit a recall
+  whose own one-window cost is over the minute; that was the case for every recall of the last quarter here.
+- **Long notes only.** Every candidate was 883–1,241 characters, and there were ≤ 60 candidates per recall.
+  - Short facts on this CPU were not measured, nor were mixed recalls (Run 9's question).
+  - A recall of more than ~100 long candidates (one naming a kind can show up to 400) is where mMiniLMv2's pace would
+    start to size calls on this CPU. That is unmeasured.
+- **What switches the router** from scoring abandoned batches to the end to cancelling them is not known.
+- **No embedder**, partition, a page of 8, no subject tags (Run 6's base). The concurrent load is described above.
+
+### What the household sentences can now say (routed; not changed here)
+
+The wording belongs to the task that owns the catalogue notes and `next.md`, and the owner's two product changes will
+change what the app does on a slow machine. So this record states only what the sentences may quote, each as "this
+machine's CPU".
+
+- The machine: Intel Core Ultra 9 185H, no GPU used.
+- **mMiniLMv2**, on 60 long notes of about 900–1,200 characters:
+  - every recall judged within the minute;
+  - a chunked recall about 17.5 s, a cut one about 5.3 s;
+  - found@8 180/240 chunked against 68/240 cut;
+  - the reading was not reduced.
+- **BGE**: about 3 s per 1,000 tokens.
+  - A recall of 40–60 long notes needs about two minutes even at one segment per note.
+  - After the first few recalls, every recall waited the full minute and came back in the no-judge order (230 of 240 on
+    the chunked arm).
+  - found@8 104/240, the same as no judge.
+- **An interrupted scoring run is not stopped at once.** The next recall waits behind it, and the speed measured then is
+  far slower than the machine.
+- **LAMAR** was not measured on a CPU-only machine.
+
+**Evidence, local only** (gitignored):
+
+- the run: `devtools/_judge-bench-long/results-2026-09-24T182748.926Z.json` and `rows-2026-09-24T182748.926Z.jsonl`,
+  the output `devtools/_judge-bench-long-run8.txt`;
+- copies of all of it, with every arm folder (`arm-0` … `arm-6`, each arm's own `state/logs`), the shared router's log
+  and preset, and the four CPU routers' logs and presets (`router-cpu-3.log` … `router-cpu-6.log`,
+  `presets-cpu-3.ini` … `presets-cpu-6.ini`), in `devtools/_run8/evidence/` — the bench's work folder is rewritten by
+  the next run;
+- the load record: `devtools/_run8/load.log`;
+- the guard check: `devtools/_run8/guards.txt` (scratch `guards8.mjs`);
+- the descriptive extras: `devtools/_run8/analyse8.txt` (scratch `analyse8.mjs`);
+- the deviation's evidence: scratch `router-errors.mjs` and `cancel-timing.mjs`, run over the two BGE router logs;
+- the probes: `devtools/_run8/probe-cpu/`, `probe-ngl0/` and `probe-cancel/` (`probe-cpu.mjs`, `probe-cancel.mjs`);
+- the smoke: `devtools/_judge-bench-long/results-2026-09-24T180007.620Z.json`, `devtools/_run8/smoke.txt` and
+  `load-smoke.log`.
+
+The long work folder's previous `arm-*`, `router.log` and `presets.ini` (from `results-2026-09-24T121532.284Z.json`)
+were copied to `devtools/_judge-bench-long/kept-2026-09-24T121532/` before the smoke overwrote them.
