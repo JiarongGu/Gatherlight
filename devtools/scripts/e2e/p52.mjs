@@ -17,6 +17,13 @@
 //      3b: a judge that HANGS costs its verdict, never the page: the verification's own deadline ends it inside
 //      the tool call's, and the engine's page stands — where the tool's deadline used to cancel the recall itself
 //      and drop it to FTS.
+//      And case 1's write, whose annotation the fake answers with no JSON, is named in the log as kept WITHOUT its
+//      subject handles (Lyntai 3.5's MemoryAnnotation.Unanswered, Part 303); case 4's write, tagged by the stub CLI,
+//      is the control. The first confirmed to FAIL on a Lyntai 3.4.0 build, where the flag was set for an unanswered
+//      annotation.
+//      3c: a chat backend REFUSING the reasoning-suppression field (a 400 naming it) is warned of ONCE in state/logs
+//      across several refused calls, quoting the server (Lyntai 3.5, Part 309) — where the refusal used to be silent.
+//      Confirmed to FAIL on a Lyntai 3.4.0 build (0 lines for 3 refused calls).
 //   4. When 判断 FALLS BACK to the CLI (its runtime gone), the CLI is asked for the CLI's model — not for
 //      the GGUF named by the saved judgeModel or by the live route the binding wrote. Read from the stub's own
 //      argv log, because a CLI asked for an unknown model is otherwise indistinguishable from one that answered
@@ -276,6 +283,10 @@ let modelsHung = 0;
 // Case 3b: a chat judge that never answers — each held response is kept, and released when the case ends.
 let hangChat = false;
 const heldChats = [];
+// Case 3c: a chat backend that REFUSES the reasoning-suppression field — a 400 naming it, the shape an OpenAI-compatible
+// server gives an argument it does not recognise. Counted, so the case can prove several calls were refused.
+let refuseChatFields = false;
+let chatFieldsRefused = 0;
 // Cases 6e–6h: how long the slow reranker takes per pair TOKEN; 0 answers at once (its startup warm included).
 let slowMsPerToken = 0;
 // …and when it will have finished everything it was sent, abandoned requests included (the fake's one queue).
@@ -368,6 +379,16 @@ const fake = http.createServer((req, res) => {
       return;
     }
     if (hangChat) { heldChats.push(res); return; }   // case 3b: accepted, never answered
+    // Case 3c: the field refused. No "refused", "policy" or "token" in the words — the classifier must leave it Failed,
+    // which is the only verdict Lyntai's Warning keys on.
+    if (refuseChatFields && body.includes('chat_template_kwargs')) {
+      chatFieldsRefused++;
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: {
+        code: 400, message: 'zzfieldsaid Unrecognized request argument supplied: chat_template_kwargs',
+        type: 'invalid_request_error' } }));
+      return;
+    }
     // Chat: an answer no policy can parse. Both are fail-open, so this proves the call was MADE without
     // depending on what the judge concluded.
     send({
@@ -498,6 +519,48 @@ try {
   ok('…and nothing fell back to FTS', !/recall failed; falling back to FTS/.test(logText()),
     logText().split('\n').filter((l) => /falling back to FTS/.test(l)).slice(-2).join(' | '));
 
+  // --- 1 (again). a write whose annotation went UNANSWERED says so ---------------------------------------
+  // Case 1's write was annotated by the chat fake, whose reply ('noted') holds no JSON. Lyntai 3.5 (its Part 303) makes
+  // the shipped annotator answer MemoryAnnotation.Unanswered for that — logged by Lyntai at Debug only — and leaves
+  // MemorySources.Annotation off the write; through 3.4 it returned None, "about nothing", and the flag was set. The
+  // write kept its reference (its vector was indexed), so nothing re-tags it: FactIndex says so, by name. Case 4's write,
+  // tagged by the stub CLI, is the control.
+  const unansweredLine = (topic) => logText().split('\n')
+    .filter((l) => l.includes(`household/${topic} was stored without its subject handles`));
+  ok('THE POINT: a write whose annotation got no answer is named in the log — kept without its subject handles',
+    unansweredLine('zzroute morning routine').length > 0 && unansweredLine('zzroute morning routine').every((l) => /WARN/.test(l)),
+    unansweredLine('zzroute morning routine').join(' | ')
+      || logText().split('\n').filter((l) => l.includes('subject handles')).slice(-2).join(' | ') || '(no such line)');
+
+  // --- 3c. a server REFUSING the reasoning field is WARNED of — once --------------------------------------
+  // Lyntai 3.5 (its Part 309): the first call carrying the configured SuppressReasoningFields that is answered with a
+  // 4xx the classifier leaves Failed logs ONE Warning per registration, naming the option and quoting the server. Until
+  // then a refusal was silent — the router logged Failed at Information, the judge read it as transient, and it looked
+  // like no judge at all. Several refused calls, through both memory seams (two writes' annotations, a recall's
+  // verification), so "once" is per registration, not per call.
+  refuseChatFields = true;
+  const refusedBefore = chatFieldsRefused;
+  for (const [n, what] of [['one', 'kettle'], ['two', 'teapot']]) {
+    const w = await c.call('remember_fact', {
+      kind: 'household', topic: `zzrefuse ${n}`, content: `The zzrefusefact ${what} lives on the second shelf.`,
+      source: 'https://example.test/zzrefuse', confidence: 0.8,
+    });
+    ok(`(fixture) remember_fact stores fact ${n} while the field is refused`, w.status === 200 && w.result?.ok === true,
+      JSON.stringify(w.result));
+  }
+  const refusedRecall = await c.call('recall_facts', { query: 'zzrefusefact kettle shelf', limit: 5 });
+  ok('(fixture) recall_facts answers while the field is refused', refusedRecall.status === 200,
+    JSON.stringify(refusedRecall.result).slice(0, 200));
+  refuseChatFields = false;
+  const refusedCalls = chatFieldsRefused - refusedBefore;
+  ok('(non-vacuity) several chat calls carrying the field were refused with a 400', refusedCalls >= 2, `${refusedCalls}`);
+  const refusalWarnings = () => logText().split('\n')
+    .filter((l) => /a call carrying the configured SuppressReasoningFields failed with a client error/.test(l));
+  await until(() => refusalWarnings().length > 0, 10000).catch(() => {});
+  ok('THE POINT: the refusal is WARNED of, once — naming the option and quoting the server',
+    refusalWarnings().length === 1 && /WARN/.test(refusalWarnings()[0]) && /zzfieldsaid/.test(refusalWarnings()[0]),
+    `${refusalWarnings().length} line(s) for ${refusedCalls} refused call(s): ${refusalWarnings().join(' | ').slice(0, 400)}`);
+
   // --- 4. a FALLBACK to the CLI asks the CLI for the CLI's model -----------------------------------
   // The household story: a chat GGUF is bound, then the runtime goes (deleted, a failed update). 判断
   // resolves to the CLI — and two things written for the GGUF were still being read: settings' judgeModel
@@ -566,6 +629,11 @@ try {
   ok('THE POINT: the CLI is asked for the CLI\'s model — never the GGUF it fell back from',
     annotated.length > 0 && annotated.every((x) => modelOf(x) === 'haiku'),
     JSON.stringify(annotated.map(modelOf)));
+  // Case 1's control: the stub answers an annotation with {"subjects":[]} — answered, about nothing — so this write
+  // carries MemorySources.Annotation and FactIndex says nothing of it. A line fired on every write would fail here.
+  ok('(control) a write the CLI tagged is NOT named as stored without its subject handles',
+    annotated.length > 0 && unansweredLine('zzfallbackfact evening routine').length === 0,
+    unansweredLine('zzfallbackfact evening routine').join(' | ') || `${annotated.length} annotation(s), no line`);
 
   const recalled2 = await c2.call('recall_facts', { query: 'zzfallbackfact evening walk', limit: 5 });
   ok('recall_facts answers after the fallback', recalled2.status === 200, JSON.stringify(recalled2.result).slice(0, 200));
