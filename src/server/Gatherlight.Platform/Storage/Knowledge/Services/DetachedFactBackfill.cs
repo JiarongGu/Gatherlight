@@ -17,7 +17,9 @@ namespace Gatherlight.Server.Platform.Storage.Knowledge.Services;
 /// empty and touches nothing else, so every decay position and link the index has accumulated survives. The backup
 /// import is the one caller that rebuilds (its facts were REPLACED, so every restored ref names a node this install
 /// never had), and it does so inline — which is why it must not also call this: a back-fill racing a rebuild that has
-/// just cleared every ref would remember facts twice.</para>
+/// just cleared every ref would remember facts twice. A memory import DURING a backup import's rebuild would start one
+/// all the same, so <see cref="IFactIndex.SyncAsync"/> waits for the rebuild to end (FactIndex's bulk lock) and then
+/// finds only what is still unindexed (<c>e2e-p48</c> case 10).</para>
 ///
 /// <para><b>Detached, and not bound to the request</b>, like the semantic reindex: each fact is a model call when 判断
 /// is on, so a large bundle takes minutes, and a browser that stops waiting must not cancel the work. Runs are

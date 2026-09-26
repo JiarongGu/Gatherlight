@@ -156,7 +156,9 @@ public interface IFactIndex
 
     /// <summary>Index facts that have no entry yet, leaving indexed ones untouched. Cheap, idempotent,
     /// and safe to run at every startup — which is the point: it back-fills what the household already
-    /// knew when this index first shipped, and picks up anything written while it was unavailable.</summary>
+    /// knew when this index first shipped, and picks up anything written while it was unavailable. WAITS for a running
+    /// <see cref="RebuildAsync"/> or <see cref="ReembedInPlaceAsync"/> first: beside a rebuild, which clears every ref,
+    /// it would read every fact as pending and annotate each a second time (<c>e2e-p48</c> case 10).</summary>
     Task<int> SyncAsync(CancellationToken ct = default);
 
     /// <summary>Discard the index and rebuild it from the record of truth. Returns facts indexed — fewer than the
@@ -169,9 +171,15 @@ public interface IFactIndex
     /// address recall no longer reads (a pre-marker layout, at startup). Where only the vectors need redoing — a
     /// model turned on or changed, a vector address moved — use <see cref="ReembedInPlaceAsync"/>; at an ordinary
     /// startup use <see cref="SyncAsync"/>, or every restart would erase the accumulated ranking this exists to
-    /// build. Serialised with <see cref="ReembedInPlaceAsync"/>: this forgets through the graph STORE, which the
-    /// engine's own removal lock does not cover, so a re-embed racing it could write vectors back for forgotten
-    /// entries.</para></summary>
+    /// build. Forgets THROUGH THE ENGINE (<c>IForgettableMemory</c>), whose removal lock every write's vector index and
+    /// every re-embed batch wait on, so no vector outlives it (Lyntai 3.5.1); serialised with
+    /// <see cref="ReembedInPlaceAsync"/> and <see cref="SyncAsync"/> besides.</para>
+    /// <para><b>NOT serialised with a single write</b> (<c>remember_fact</c>; the memory import's rows), and two app-level
+    /// races remain, both on <c>graph_ref</c>, which no Lyntai lock sees: a write that stored its node before the forget
+    /// and writes its ref after this pass re-indexed that row leaves the row naming a forgotten node; and an EDIT landing
+    /// after this pass's snapshot is overwritten by a ref to the node of the content it replaced. Either ref is non-empty,
+    /// so no back-fill returns to it; the fact stays findable by its words until the next rebuild. Neither is closed:
+    /// the choices are an owner decision (see the dev-conventions bullet on the fact index).</para></summary>
     Task<int> RebuildAsync(CancellationToken ct = default);
 
     /// <summary>Re-embed every graph entry IN PLACE with the embedder that is wired now — Lyntai's
@@ -286,12 +294,15 @@ public sealed class FactIndex : IFactIndex
     /// the runtime doc, 2026-09-27).</summary>
     public const int ReindexBatchSize = 1;
 
-    /// <summary>Serialises the two bulk passes that touch every graph entry: <see cref="RebuildAsync"/>, which forgets
-    /// through the graph STORE, and <see cref="ReembedInPlaceAsync"/>. Lyntai's pass holds the ENGINE's removal lock for
-    /// each write and re-reads which entries still exist, so it never writes a vector back for an entry the engine's own
-    /// forget removed (D194) — but a store-level forget takes no part in that lock, so a re-embed racing a backup import's
-    /// rebuild could put vectors back for entries the rebuild had just forgotten. Neither pass takes
-    /// <c>DataWriteLock</c>, so holding this inside it (the import's rebuild runs outside it anyway) cannot deadlock.</summary>
+    /// <summary>Serialises the passes that walk every fact or graph entry: <see cref="RebuildAsync"/>,
+    /// <see cref="ReembedInPlaceAsync"/> and the back-fill (<see cref="SyncAsync"/>). The engine's removal lock already
+    /// keeps a VECTOR from outliving a forget — both the re-embed (D194) and, since Lyntai 3.5.1, every write's index step
+    /// take it and re-read their entry — now that the rebuild forgets through the engine. What that lock cannot see is the
+    /// app's own half: the rebuild clears every <c>graph_ref</c> and re-indexes from a snapshot, so a back-fill beside it
+    /// would read every fact as pending and index each a second time. <b>Single writes do not take this</b> —
+    /// <c>remember_fact</c> runs beside a rebuild, and what that leaves is stated at <see cref="RebuildAsync"/>. None of
+    /// the three takes <c>DataWriteLock</c>, so holding this inside it (the import's rebuild runs outside it anyway)
+    /// cannot deadlock, and none calls another while holding it.</summary>
     private readonly SemaphoreSlim _bulk = new(1, 1);
 
     public FactIndex(IMemoryEngineFactory? engines, IKnowledgeStore store,
@@ -555,6 +566,13 @@ public sealed class FactIndex : IFactIndex
     private async Task<int> SyncAsync(CancellationToken ct, IProgress<SemanticReindexProgress>? progress)
     {
         if (_engine is null) return 0;
+        // Serialised with the two bulk passes — see _bulk. Beside a REBUILD, which clears every ref before it
+        // re-indexes, a back-fill reads EVERY fact as pending and re-remembers all of them alongside it: each fact
+        // annotated twice (a CLI call each with 判断 on), and its ref writes racing the rebuild's own. A detached
+        // back-fill after a memory import could do exactly that while a backup import ran. Waiting, it starts after
+        // the rebuild and finds only what is still unindexed. Beside a re-embed in place, Lyntai asks for writes to
+        // pause (IReindexableMemory: a write mid-pass links against the old vectors). Never called with _bulk held.
+        await _bulk.WaitAsync(ct);
         try
         {
             var pending = (await _store.AllAsync()).Where(f => string.IsNullOrEmpty(f.GraphRef)).ToList();
@@ -572,6 +590,10 @@ public sealed class FactIndex : IFactIndex
             _log?.LogWarning(ex, "fact index: back-fill failed; those facts stay findable by FTS");
             return 0;
         }
+        finally
+        {
+            _bulk.Release();
+        }
     }
 
     public async Task<int> RebuildAsync(CancellationToken ct = default)
@@ -586,13 +608,30 @@ public sealed class FactIndex : IFactIndex
             // is worse than none: it ranks confidently for facts that are gone. This is also why this
             // is NOT wired to IRecordIndex, whose step runs at every startup: the discard would erase
             // the decay positions, reinforcement and links that are the whole point.
-            if (_graph is not null) await _graph.ForgetAsync(GraphMember, TaskKey, scope: null, ct);
-            // The vectors go with them. Forgetting a NODE does not reach its embedding — that lives in the
-            // vector store keyed by node id, and a rebuilt node takes a fresh id — so this would otherwise leave
-            // the old ones behind, holding the old content as their payload. Both callers want them gone: an
-            // import replaced the facts, and a pre-marker layout left them at an address recall no longer reads
-            // (the prefix sweep also reaches collections a pre-3.2 build named). A MODEL change no longer comes
-            // here — it re-embeds in place (ReembedInPlaceAsync), overwriting each entry's vector at its address.
+            //
+            // THROUGH THE ENGINE, not its store (Lyntai 3.5.1). A write stores its entry and only then indexes the
+            // vector, with the entry's full content as its payload; since 3.5.1 that index step waits on the engine's
+            // removal lock and re-reads that its entry survived, so a forget cannot land between the two — but only a
+            // forget that takes the same lock, on the same engine instance. The store's own ForgetAsync takes none, so
+            // a remember_fact running beside a backup import could re-read its entry just before this deleted it and
+            // then index its vector for a node that no longer exists. The engine's verb holds the lock, clears the
+            // similarity index first, then the nodes. `_engine` is the one instance every write goes through (the
+            // factory builds each engine once), and the composite fans the verb out to its one graph member.
+            if (_engine is IForgettableMemory forgettable)
+                await forgettable.ForgetAsync(TaskKey, scope: null, ct);
+            else if (_graph is not null)
+            {
+                _log?.LogWarning("fact index: the memory engine {Engine} cannot forget (no IForgettableMemory); " +
+                    "forgetting through the graph store, which a concurrent write's vector index does not wait on",
+                    _engine.GetType().Name);
+                await _graph.ForgetAsync(GraphMember, TaskKey, scope: null, ct);
+            }
+            // The vectors go with them. The engine's forget clears the collections at the CURRENT address; this
+            // prefix sweep also reaches the ones a pre-3.2 build named, which no forget of today's address touches
+            // (and it is the whole cleanup when the forget went through the store above). Both callers want them
+            // gone: an import replaced the facts, and a pre-marker layout left them at an address recall no longer
+            // reads. A MODEL change no longer comes here — it re-embeds in place (ReembedInPlaceAsync), overwriting
+            // each entry's vector at its address.
             await DropGraphVectorsAsync(ct);
             // Detach every row NOW, not one-by-one as each re-index lands: annotation makes this
             // loop minutes long on a real corpus, and an abort mid-way (client gone, an update

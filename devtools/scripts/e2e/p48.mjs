@@ -16,6 +16,9 @@
 //      install with no embedder: nothing there reads a vector, and a rebuild would erase decay and links
 //   9. an EDITED fact whose re-index fails — and one edited by the memory import, which never indexes — keeps
 //      no ref to its previous content's node, so the next start's back-fill indexes the NEW content
+//  10. a back-fill never runs BESIDE a rebuild: a memory import landing while a backup import rebuilds starts a
+//      detached back-fill, which waits for the rebuild and then indexes only what is still unindexed — rather than
+//      reading every fact the rebuild had just detached as pending and annotating each a second time
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -34,16 +37,22 @@ const RESTORE_PORT = 5499;
 const UPGRADE_PORT = 5497;
 const VECTOR_MOVE_PORT = 5495;
 const BACKFILL_PORT = 5512;
+const RACE_PORT = 5513;
 
 /** A fact whose content carries this marker is never annotated by the stub while the server runs with
  *  GATHERLIGHT_STUB_HANG_ANNOTATION set to it — case 9's failing re-index. */
 const HANG = 'zzhangindex';
+
+/** A fact whose content carries this marker takes 6 s to annotate while the server runs with
+ *  GATHERLIGHT_STUB_SLOW_ANNOTATION set to it — case 10's rebuild, kept in progress. */
+const SLOW = 'zzslowindex';
 
 let server = null;
 let restoreServer = null;
 let upgraded = null;
 let vectorMove = null;
 let backfill = null;
+let race = null;
 
 const remember = (c, kind, topic, content, confidence = 0.8) =>
   c.call('remember_fact', { kind, topic, content, source: `https://example.test/${encodeURIComponent(topic)}`, confidence });
@@ -642,6 +651,94 @@ try {
     bySailing.result?.ranked === 'graph'
       && (bySailing.result?.facts ?? []).some((f) => f.topic === 'ferry timetable' && f.ref === ferryAfter?.ref),
     JSON.stringify({ ranked: bySailing.result?.ranked, facts: (bySailing.result?.facts ?? []).map((f) => [f.topic, f.ref]) }));
+  backfill.stop();
+  backfill = null;
+
+  // --- 10. a back-fill never runs BESIDE a rebuild -------------------------------------------------
+  // A backup import REBUILDS the index: it forgets the graph, clears every graph_ref up front, and re-indexes from a
+  // snapshot, an annotation per fact. A memory import landing meanwhile starts a detached back-fill
+  // (DetachedFactBackfill), which indexes the rows whose ref is EMPTY — which, mid-rebuild, is every row the rebuild
+  // has not reached yet. So it re-remembered all of them beside the rebuild: every such fact annotated twice (a CLI
+  // call each against the household's quota), and two writers racing on each row's ref. The back-fill now waits for
+  // the rebuild (FactIndex's bulk lock) and then finds only what is still unindexed: the imported fact.
+  //
+  // Staged on one server with its own folder: seed six facts (two whose annotation the stub makes take 6 s), let their
+  // back-fill finish, export, and import that backup onto the same server — its rebuild then stays in progress for
+  // ~6 s, and the memory import is sent inside that window, once the rebuild has taken its snapshot.
+  const raceDir = dataDirFor('p48-race');
+  fs.rmSync(raceDir, { recursive: true, force: true });
+  makeTestData(raceDir);
+  const argsLog = path.join(raceDir, '..', '_p48-race-args.log');
+  fs.rmSync(argsLog, { force: true });
+  race = startServer({ dataDir: raceDir, port: RACE_PORT, env: {
+    GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_SLOW_ANNOTATION: SLOW, GATHERLIGHT_STUB_ARGS_LOG: argsLog } });
+  const rbase = `http://127.0.0.1:${RACE_PORT}`;
+  await waitHealthy(rbase);
+  const raceLogDir = path.join(raceDir, 'state', 'logs');
+  const raceLog = () => (fs.existsSync(raceLogDir)
+    ? fs.readdirSync(raceLogDir).map((n) => fs.readFileSync(path.join(raceLogDir, n), 'utf8')).join('\n') : '');
+  const backfillCounts = (text) => [...text.matchAll(/back-fill after a memory import indexed (\d+) fact/g)].map((m) => +m[1]);
+  const raceFact = (topic, content) => ({ kind: 'schedule', topic, content,
+    source: `https://example.test/${encodeURIComponent(topic)}`, confidence: 0.8 });
+  const seedFacts = [
+    raceFact('race lighthouse', `The lighthouse tour ${SLOW} runs every Saturday at dawn.`),
+    raceFact('race ferry', `The island ferry ${SLOW} leaves from pier nine at noon.`),
+    raceFact('race bakery', 'The corner bakery sells rye bread until two in the afternoon.'),
+    raceFact('race library', 'The branch library lends board games on Wednesdays.'),
+    raceFact('race pool', 'The public pool keeps one lane for lessons each evening.'),
+    raceFact('race market', 'The flower market moves indoors when it rains.'),
+  ];
+  const importMemory = (knowledge) => fetch(`${rbase}/api/memory/import`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ gatherlightMemory: 1, knowledge }) });
+
+  const seeded = await importMemory(seedFacts);
+  for (let i = 0; i < 120 && backfillCounts(raceLog()).length < 1; i++) await new Promise((r) => setTimeout(r, 250));
+  ok('(fixture) the six seed facts were imported and back-filled before the race',
+    seeded.status === 200 && backfillCounts(raceLog())[0] === 6, `${seeded.status} ${JSON.stringify(backfillCounts(raceLog()))}`);
+
+  const raceZip = Buffer.from(await (await fetch(`${rbase}/api/backup/export`)).arrayBuffer());
+  let restoreDone = false;
+  const restoring = fetch(`${rbase}/api/backup/import`, {
+    method: 'POST', headers: { 'content-type': 'application/zip' }, body: raceZip,
+  }).then((r) => { restoreDone = true; return r; });
+  // The rebuild logs its count right after it has cleared the refs and read its snapshot.
+  for (let i = 0; i < 240 && !/fact index: rebuilding \d+ facts/.test(raceLog()); i++) await new Promise((r) => setTimeout(r, 100));
+  const newFact = raceFact('race observatory', 'The observatory opens its roof on clear Friday nights.');
+  const late = await importMemory([newFact]);
+  ok('(fixture) the memory import landed WHILE the rebuild ran',
+    late.status === 200 && /fact index: rebuilding 6 facts/.test(raceLog()) && !restoreDone,
+    JSON.stringify({ status: late.status, rebuilding: /rebuilding 6 facts/.test(raceLog()), restoreDone }));
+  const restored = await restoring;
+  ok('(fixture) the backup import onto itself succeeded', restored.status === 200, `status ${restored.status}`);
+  for (let i = 0; i < 120 && backfillCounts(raceLog()).length < 2; i++) await new Promise((r) => setTimeout(r, 250));
+
+  ok('THE POINT: the back-fill beside a rebuild waited for it, then indexed only the fact the import added',
+    backfillCounts(raceLog())[1] === 1,
+    `back-fills after a memory import indexed ${JSON.stringify(backfillCounts(raceLog()))} (want [6, 1]) · ` +
+    (raceLog().split('\n').filter((l) => /back-filled|rebuil/.test(l)).slice(-4).join(' | ') || '(no lines)'));
+  // What that saves the household: an annotation is a CLI call against their quota. Each slow fact is annotated by the
+  // seed back-fill and by the rebuild — never a third time by a back-fill running beside the rebuild.
+  const annotationsOf = (marker) => (fs.existsSync(argsLog) ? fs.readFileSync(argsLog, 'utf8') : '').split('\n')
+    .filter(Boolean).map((l) => JSON.parse(l))
+    .filter((e) => e.kind === 'annotation' && String(e.tail).split('Fact:\n').pop().includes(marker)).length;
+  const perSlowFact = [annotationsOf('lighthouse tour'), annotationsOf('island ferry')];
+  ok('…so no fact was annotated twice for one restore (seed + rebuild = 2 each)',
+    perSlowFact.every((n) => n === 2), JSON.stringify(perSlowFact));
+  // The positive control: waiting did not lose the late fact, and every row names a node that exists.
+  const raceDb = new DatabaseSync(path.join(raceDir, 'state', 'gatherlight.db'));
+  let rows;
+  try {
+    rows = raceDb.prepare(`SELECT k.topic, COALESCE(k.graph_ref, '') AS ref, n.content AS node
+      FROM knowledge k LEFT JOIN lyntai_memory_node n
+        ON n.engine = 'facts/graph' AND n.id = CAST(substr(k.graph_ref, instr(k.graph_ref, '#') + 1) AS INTEGER)
+      WHERE k.topic LIKE 'race %'`).all();
+  } finally { raceDb.close(); }
+  const late2 = rows.find((r) => r.topic === 'race observatory');
+  ok('…and the imported fact is indexed, its ref naming a node that holds its content',
+    !!late2?.ref && late2.node === newFact.content, JSON.stringify(late2));
+  ok('…and every fact\'s ref names a node that exists',
+    rows.length === 7 && rows.every((r) => r.ref && r.node), JSON.stringify(rows.map((r) => [r.topic, r.ref, !!r.node])));
 
 } catch (err) {
   fail('e2e-p48 fatal: ' + (err?.stack || err?.message || String(err)));
@@ -651,6 +748,7 @@ try {
   try { upgraded?.stop(); } catch {}
   try { vectorMove?.stop(); } catch {}
   try { backfill?.stop(); } catch {}
+  try { race?.stop(); } catch {}
 }
 
 done();

@@ -407,9 +407,31 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   vectors and nothing else, so node ids, links, decay positions, reinforcement and subject handles all stay and no fact
   is annotated. The destructive rebuild is left for the two cases where the ENTRIES are wrong: a backup import and a
   pre-marker layout. Before D194 re-remembering was the only way to give an entry a new vector, so every one of those
-  vector passes paid a rebuild — and an annotation per fact. The two passes are serialised (`FactIndex._bulk`), because
-  the rebuild forgets through the graph STORE, which the engine's removal lock (the one D194's pass takes for each
-  write, re-reading which entries still exist) does not cover. One embed per entry (`FactIndex.ReindexBatchSize` = 1):
+  vector passes paid a rebuild — and an annotation per fact. **The rebuild forgets THROUGH THE ENGINE**
+  (`IForgettableMemory`, since the 3.5.1 bump), not its store: the engine's removal lock is what D194's pass takes for
+  each write-back, and since Lyntai 3.5.1 what every write's vector index takes too, each re-reading that its entry
+  survived — so no vector outlives the forget. The store's own `ForgetAsync` took no part in that lock, and a
+  `remember_fact` beside a backup import could re-read its node just before the forget deleted it and index a vector
+  for a node that no longer existed. Not driven by a suite: the window lies inside Lyntai, between a re-read and an
+  upsert. **The bulk passes are serialised besides** (`FactIndex._bulk`): the rebuild, the re-embed and the BACK-FILL.
+  The rebuild clears every `graph_ref` before it re-indexes, so a back-fill beside it — a detached one after a memory
+  import during a backup import — read every fact as pending and annotated each a second time; it now waits and finds
+  only what is still unindexed. `e2e-p48` case 10 stages it (the stub keeps two facts' annotation 6 s long) and was
+  confirmed to FAIL with the wait removed: the back-fill indexed 7/7 instead of 1/1, and each slow fact was annotated 3
+  times instead of 2. **Stated residuals — single writes, NOT closed, an owner decision:** `remember_fact` (and the
+  memory import's rows) take no lock, so two races on `graph_ref` remain, which no Lyntai lock sees. (1) A write that
+  stored its node BEFORE the forget and writes its ref AFTER the rebuild re-indexed that row leaves a ref to a forgotten
+  node — and so does `RememberFactTool`'s fall-back to the ref it read before indexing, when a removal took the write's
+  entry (no `Similarity`, the classifier's re-embed succeeds, null) and that ref predates the rebuild. Realistic mainly
+  with 语义 on the CLI arm, whose rephrasing call sits between the graph write and the ref write. (2) An EDIT landing
+  after the rebuild's snapshot is overwritten by a ref to the node of the content it replaced — the widest window, the
+  whole rebuild. Both refs are non-empty, so no back-fill returns to them; the fact stays findable by its words until
+  the next rebuild. (The vector left by (1) in 3.5.0 was harmless in kind: ids are never reissued — 3.5.1 pins it on
+  every store — so an orphan vector never answers for another entry.) The options: conditional ref writes (the
+  rebuild's and the back-fill's only while the row still holds the content indexed; `remember_fact`'s only while the ref
+  is still the one it read) — closes both, no lock; `remember_fact` waits on `_bulk` — simplest, but a rebuild holds it
+  for minutes and the tool's 120 s deadline fails the call after the row is written; or a rebuild epoch the write
+  checks. One embed per entry (`FactIndex.ReindexBatchSize` = 1):
   D194 counts a whole BATCH failed when its one embed call fails, and llama.cpp refuses a request whole when one input
   is past the window, so at Lyntai's default of 32 one long fact cost every other entry its new vector (confirmed:
   「0 条向量已原地重新计算;5 条没能计算」). An entry the embedder refuses keeps the vector it had, or none, and is never
@@ -422,8 +444,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   them scored them, or absent when none did — D194 recomputes no edge, and recall reads the new vectors through the
   semantic seed channel, which is what the paraphrase check measured; an entry the NEW model refuses keeps the old
   model's vector, which scores 0 at another width but is in the wrong space at the same one; a pre-3.2 address
-  collection is swept only by a rebuild; and the serialisation with a rebuild is not driven by any suite (a race on
-  demand). An EMPTY `graph_ref` is the index's retry queue: a write that failed — or kept no
+  collection is swept only by a rebuild; and the re-embed's serialisation with a rebuild is not driven by any suite (a
+  race on demand; the back-fill's is, above). An EMPTY `graph_ref` is the index's retry queue: a write that failed — or kept no
   vector while its embedder was DOWN — is left that way on purpose, and the back-fill returns to it. The graph
   dedups on **content hash**, so editing a fact orphans its
   previous node; recall over-asks and filters to resolvable refs so an orphan never shrinks the page.

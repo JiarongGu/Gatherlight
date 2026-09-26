@@ -251,6 +251,12 @@ if (prompt.includes('{"subjects"')) {
     await new Promise((r) => setTimeout(r, 30000));
     process.exit(1);
   }
+  // SLOW, on request: GATHERLIGHT_STUB_SLOW_ANNOTATION=<marker> makes the annotation of a fact containing the marker
+  // take 6 s and then answer as usual — so a rebuild that re-annotates it stays IN PROGRESS long enough for a suite to
+  // start something beside it (e2e-p48 case 10). Only the fact being annotated counts, like the hang above: the
+  // earlier facts Lyntai shows the annotator would otherwise slow every write after the first marked one.
+  const slowOn = process.env.GATHERLIGHT_STUB_SLOW_ANNOTATION;
+  if (slowOn && fact.includes(slowOn)) await new Promise((r) => setTimeout(r, 6000));
   const handles = [];
   if (fact.includes('伴侣')) handles.push('pairbond');
   if (fact.includes('旅行证件')) handles.push('paperwork');
