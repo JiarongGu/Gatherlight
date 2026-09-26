@@ -361,10 +361,12 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// (<see cref="GgufModel.ContextTokens"/>, read through <see cref="GgufCatalog.DeclaredWindow"/>, the same read the
 /// preset makes). mMiniLMv2 serves 512-token slots, and <c>docs/judge-bench.md</c> Run 4 measured what the
 /// 1,000-character cap does to it: dense Chinese at the cap is 781 tokens and the whole call comes back
-/// <c>400 input (781 tokens) is larger than the max context size (512 tokens)</c>. Lyntai 3.2.0 reads that refusal as a
-/// HOST fault (<c>Failed</c>, counted toward benching the reranker for every caller) and logs it at Debug; its next release
-/// reads it as <c>ContextWindowExceeded</c>, which advances without blame, and logs a failure that will repeat at Warning
-/// (Lyntai <c>docs/FIXES.md</c>, 2026-09-24, committed and unreleased) — the call is refused either way, so the bound
+/// <c>400 input (781 tokens) is larger than the max context size (512 tokens)</c>. Lyntai 3.2.0 read that refusal as a
+/// HOST fault (<c>Failed</c>, counted toward benching the reranker for every caller) and logged it at Debug; 3.3.0 reads it
+/// as <c>ContextWindowExceeded</c>, which advances without blame, and logs a failure that will repeat at Warning (Lyntai
+/// <c>docs/FIXES.md</c>, 2026-09-24). The 512-preset's other shape, the 500 <c>too large to process … physical batch
+/// size</c>, still classifies <c>Failed</c> (transient, Debug) in 3.4.0 — Lyntai <c>docs/task-archive.md</c> Part 310's
+/// item, closed there as Part 307, committed after 3.4.0 and NOT released. The call is refused either way, so the bound
 /// stays. A pair is formatted as query +
 /// document + 4 special tokens (read back from the server's own figure in that refusal), and on this tokenizer
 /// family — XLM-RoBERTa SentencePiece, no byte fallback — an NFKC-normalised text costs at most its UTF-16 length + 1

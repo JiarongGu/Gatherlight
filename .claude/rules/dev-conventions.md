@@ -241,7 +241,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   constructor is the exact trap that left a freshly downloaded git invisible to a retry. The seam into
   Lyntai is the **`CLAUDE_CMD` env var**, deliberately not `AddClaudeCliAgentSession(command)` — that
   argument is captured once at DI registration, while `ClaudeAgentSession` calls
-  `ClaudeCommand.Resolve` *inside the run*, so only the env var can carry a CLI installed after startup.
+  `CliCommand.Resolve` *inside the run* (`ClaudeCommand.Resolve` through 3.2, with the same precedence), so
+  only the env var can carry a CLI installed after startup.
   `Apply()` therefore runs on every probe, not just at boot, and never overrules an existing override.
 - **Installed is not usable: probe, don't pattern-match.** A downloaded CLI is not a signed-in one, so
   `claude auth status --json` is the probe (`{loggedIn,email,subscriptionType}`, exit 1 when signed
@@ -623,7 +624,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
     travels. An install from before the routes skips `llm.route.scorer`, so its scorer stays on the default.
   - The backup reconcile deletes `llm.route.memory`, and any leftover `llm.model.memory`.
   - `LiveRouteMigrationStep`, right after `db-migrate`, moves what an install stored and LOGS each key, because our
-    namespace gets no warn-once from Lyntai (its check covers only `lyntai.model.`): `llm.model.scorer = X` becomes
+    namespace gets no warn-once from Lyntai (its check covers only `lyntai.model.`; the option that widens it,
+    `LyntaiOptions.ModelOnlyKeyPrefixes` — Part 310's item, closed as Part 308, NOT released — warns on ANY key left
+    under a listed namespace, and `llm.model.` keeps the current `chat`/`extract`/`validate` keys, so it does not fit
+    us and stays at its default when it ships): `llm.model.scorer = X` becomes
     `claude-cli:X`; `llm.model.memory` takes the SAVED binding's `AnnotationProvider` — the provider the key was
     written for, which reproduces exactly what the deleted store did with it — becomes `claude-cli:X` when nothing
     is bound, and is DROPPED, at Warning, where there is no provider to derive (a retired backend, a source saved
@@ -764,11 +768,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   The `n-predict` and `ctx-size` caps beside it are NOT part of this workaround and stay: they are our own launch
   contract (`LlamaServerRuntime.ChatMaxTokens` — the memory seams send no `max_tokens`, and the router does not stop
   a child's generation when the app abandons a request; `LlamaServerRuntime.ChatContextTokens` — launch item (5)).
-  **(6) `ChunkedScoreProvider` (with `RerankPace`) ↔ Lyntai `docs/task-archive.md` Part 287 / D177, with Part 289
-  closed into it — CLOSED upstream, NOT released (no version promised; read at Lyntai commit `e6fa579b`).** Lyntai
+  **(6) OPEN until Run 10 and the owner decide — `ChunkedScoreProvider` (with `RerankPace`) ↔ Lyntai
+  `docs/task-archive.md` Part 287 / D177, with Part 289 closed into it, RELEASED in 3.3.0 (first read at Lyntai commit
+  `e6fa579b`; nothing after it changed the segmentation described here) and not adopted by the 3.4 bump.** Lyntai
   3.2.0 has no way to score a document longer than a reranker's window except to send it whole (one over-window pair
   fails the WHOLE call) or cut it, and Run 6 measured the cut pushing a long note off the page; so the app scores each
-  long candidate in windows and keeps its best (the reranker bullet below). D177 as it stands at that commit: a
+  long candidate in windows and keeps its best (the reranker bullet below). D177 as released: a
   provider given `HttpModelOptions.MaxInputChars` SEGMENTS an over-long input (`InputSegmentation`) and scores a
   document as its best piece (MaxP), every piece in one request; on a Score registration that bound is the PAIR
   window, the query keeping at most (1 − `MinDocumentShare`, default 0.5) of it, cut ONCE per call at a word boundary;
@@ -782,18 +787,25 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   AT LEAST a quarter (settable in D177 as an `Overlap` of 0.25, where it is an upper bound — the next piece restarts at
   the earliest sentence end or space inside it, else where the last one ended); under a declared window we SEND the
   NFKC text, where D177 counts NFKC and sends the original (the tokenizer normalises either way — identical token ids
-  but for 95 scalars newer than the model's table); and the call sized by TIME (`RerankPace`). **D177 cannot carry
-  `RerankPace`**: its piece cap is fixed at registration, so no decorator can vary a call's pieces per request, and
+  but for 95 scalars newer than the model's table); and the call sized by TIME (`RerankPace`). **D177 in 3.4.0 cannot
+  carry `RerankPace`**: its piece cap is fixed at registration, so no decorator can vary a call's pieces per request, and
   deleting `ChunkedScoreProvider` deletes the pace — and the skip with it, since `RerankAdmission` reads the provider's
   one-window shape and sends its probe. (The skip itself needs nothing on any Lyntai bump: it is decided above the scoring
-  policy and hands Lyntai no verdict — see the pace paragraph under the reranker bullet.) **On the bump**: measure D177
-  against ours on Run 6's long fixture
+  policy and hands Lyntai no verdict — see the pace paragraph under the reranker bullet.) Two items of Lyntai
+  `docs/task-archive.md` Part 310 — our upgrade's findings — bear on this, closed on Lyntai's HEAD after 3.4.0 and NOT
+  released: Part 305's `ScoreRequest.MaxPiecesPerInput` narrows the registration's cap for one call, so a decorator
+  could size a D177 call by the pace without segmenting it itself; Part 306's `InputSegmentation.MaxDocumentPiece`
+  bounds a document's pieces apart from the query, which can express our rule for a model declaring no window (read
+  only where a window is set, so it needs `MaxInputChars` set generously beside it). Neither changes Run 10; the
+  release carrying them changes what it can compare against. **Run 10**: measure D177 against ours on Run 6's long
+  fixture
   WITHIN ONE RUN — the rule, unchanged: not significantly worse at `end` or `beyond`, and identical on short facts.
   What follows is then an OWNER decision, informed by that comparison: keep `ChunkedScoreProvider` for the pace, or
   configure `MaxInputChars`/`Segmentation` on the `llamacpp-rerank` registration (`LlamaCppSource.Register`) with a
   fixed piece cap and lose time-sizing. If D177 fails the rule, keep ours and tell Lyntai why, with the run. **Both
   halves are recorded**: Part 289's outcome names "an app-side segmenting score-provider decorator" as the adopter's
-  copy to remove when D177 releases — by its role, not its class name, as a library that names no adopter must — and
+  copy to remove when D177 releases — by its role, not its class name, as a library that names no adopter must; it has
+  released, so that instruction is now Run 10's to settle — and
   Lyntai's `docs/memory-measurements.md` records our Run 6c as `rerank-segmented-adopter-long-notes`.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
@@ -1503,8 +1515,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   leaves it, without the minute. **The skip is decided ABOVE Lyntai** (`RerankAdmission`, between `RerankInputCap` and
   `ScoringVerificationPolicy`, reading `ChunkedScoreProvider.Shape` — the documents the scoring policy will send): a
   skipped recall makes no provider call and hands Lyntai no verdict. It was first a blameless `Unsupported` returned by
-  the provider, and Lyntai's next release (its `6c45d051`, unreleased) logs a verdict that is not transient at Warning in
-  that policy — one Warning per skipped recall — while the in-code plan to "filter it" would also have hidden
+  the provider, and Lyntai 3.3.0 (its `6c45d051`, unreleased when this was decided) logs a verdict that is not transient
+  at Warning in that policy — one Warning per skipped recall — while the in-code plan to "filter it" would also have hidden
   `ContextWindowExceeded`, `AuthFailed` and `Refused`, and `Unsupported` means a capability gap in Lyntai's vocabulary, not
   "this machine is slow". So there is NO Lyntai-bump step for the skip; the probe and the sizing stay in the provider,
   the one place a call to the router can be timed. One Information line per skipped recall, in the pace family ("0
@@ -1652,10 +1664,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   **The limit is PER MODEL, and it comes from the model's catalogue row** (2026-09-24). mMiniLMv2
   (`docs/judge-bench.md` Run 4) serves 512-token slots, and at the 1,000-character cap dense Chinese is 781 tokens:
   the whole call is refused — 400 under the 4096 preset, 500 「too large to process … batch size 512」 under its
-  own — fail-open, so every recall surfacing a long fact would go unverified in silence. (Lyntai 3.2.0 reads that 400's
+  own — fail-open, so every recall surfacing a long fact would go unverified in silence. (Lyntai 3.2.0 read that 400's
   「larger than the max context size」 as a HOST fault, `Failed`, counted toward benching the reranker for every caller,
-  logged at Debug; its next release reads it as `ContextWindowExceeded`, which advances without blame, and logs a
-  failure that will repeat at Warning — Lyntai `docs/FIXES.md` 2026-09-24, unreleased. The call is refused either way.)
+  logged at Debug; 3.3.0 reads it as `ContextWindowExceeded`, which advances without blame, and logs a failure that
+  will repeat at Warning — Lyntai `docs/FIXES.md` 2026-09-24. The 500's 「physical batch size」 still reads `Failed` in
+  3.4.0 — Lyntai `docs/task-archive.md` Part 310's item, closed there as Part 307 after 3.4.0, NOT released. The call
+  is refused either way.)
   `GgufModel.ContextTokens`
   declares the window, and `GgufCatalog.DeclaredWindow` is the ONE read behind both halves of the contract: the
   preset launches the model with that `ctx-size`/`batch-size`/`ubatch-size`, and `RerankInputCap` fits every pair

@@ -25,7 +25,12 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// which an app-side routing store did by hand, per call, until the Lyntai 3.4 bump deleted it.</para>
 ///
 /// <para>Our namespace gets NO warn-once from Lyntai (its check covers only <c>lyntai.model.</c>), so a key
-/// left under the old name is silent: <c>LiveRouteMigrationStep</c> moves them.</para>
+/// left under the old name is silent: <c>LiveRouteMigrationStep</c> moves them. Lyntai <c>docs/task-archive.md</c>
+/// Part 310's item "Warn about leftover keys under a model-key prefix of the app's own" — closed there as Part 308,
+/// <c>LyntaiOptions.ModelOnlyKeyPrefixes</c>, committed after 3.4.0 and NOT released — does not fit us when it ships:
+/// its check warns when ANY key remains under a listed namespace, and <see cref="ModelKeyPrefix"/> keeps the current
+/// <c>chat</c>/<c>extract</c>/<c>validate</c> keys for good, so listing it would warn at every start about keys meant
+/// to be there. Leave the option at its default; the migration step's own log stays the record.</para>
 /// </summary>
 public static class LiveRoutes
 {

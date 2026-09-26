@@ -80,9 +80,11 @@ public static class RerankChunking
 /// be a provider call: the sizing above, the timing every call feeds <see cref="RerankPace"/>, and the probe the admission
 /// asks for (<see cref="ProbeAsync"/>) — the provider is the one place that can time a call to the router.</para>
 ///
-/// <para><b>A WORKAROUND FOR A LYNTAI GAP, recorded on both sides</b> (dev-conventions: open workaround (6)). Lyntai has
-/// closed the gap upstream — <c>docs/task-archive.md</c> Part 287 / D177, with Part 289 closed into it; committed and NOT
-/// released, no version promised (read at Lyntai commit <c>e6fa579b</c>). D177 as it stands there: a provider given
+/// <para><b>A WORKAROUND FOR A LYNTAI GAP, recorded on both sides</b> (dev-conventions: open workaround (6)). Lyntai
+/// closed the gap upstream — <c>docs/task-archive.md</c> Part 287 / D177, with Part 289 closed into it — and RELEASED it
+/// in 3.3.0 (read first at Lyntai commit <c>e6fa579b</c>; nothing after it changed the segmentation described here). The 3.4
+/// bump KEPT this class: which of the two scores long notes is decided by Run 10 and then the owner (below), and until
+/// then nothing on the <c>llamacpp-rerank</c> registration segments. D177 as released: a provider given
 /// <c>HttpModelOptions.MaxInputChars</c> SEGMENTS an over-long input (<c>InputSegmentation</c>) and scores a document as
 /// its best piece, as here; on a Score registration that bound is the PAIR window, the query keeping at most
 /// (1 − <c>MinDocumentShare</c>, default 0.5) of it, cut once per call at a word boundary; it counts characters after NFKC,
@@ -96,16 +98,24 @@ public static class RerankChunking
 /// NFKC and sends the original (the tokenizer normalises either way; the measurement in <see cref="RerankInputCap"/>
 /// found identical token ids for all but 95 scalars newer than the model's table); (3) the call sized by TIME
 /// (<see cref="RerankPace"/>), which D177 explicitly rejects as library policy — fitting a call to a latency budget is
-/// the deployment's — and cannot carry: <c>MaxPiecesPerInput</c> is fixed at registration, so no decorator can vary a
-/// call's pieces per request, and deleting this class deletes the pace. <b>On the bump</b>: measure D177 against this
-/// class on Run 6's long fixture within ONE run — the rule, unchanged: not significantly worse at <c>end</c> or
-/// <c>beyond</c>, and identical on short facts. D177 cannot carry <see cref="RerankPace"/>, so what follows is an OWNER
+/// the deployment's — and cannot carry in 3.4.0: <c>MaxPiecesPerInput</c> is fixed at registration, so no decorator can
+/// vary a call's pieces per request, and deleting this class deletes the pace. Two items of Lyntai
+/// <c>docs/task-archive.md</c> Part 310 — our upgrade's findings — bear on that, closed on Lyntai's HEAD after 3.4.0 and
+/// NOT released: Part 305's <c>ScoreRequest.MaxPiecesPerInput</c> narrows the registration's cap for one call, so a
+/// decorator could size a D177 call by <see cref="RerankPace"/> without segmenting it itself; and Part 306's
+/// <c>InputSegmentation.MaxDocumentPiece</c> bounds a document's pieces apart from the query, which can express this
+/// class's rule for a model declaring no window (1,000 characters whatever the query) — read only where a window is set,
+/// so such a model needs <c>MaxInputChars</c> set generously beside it. Neither is in 3.4.0, so neither changes the
+/// comparison below; the release carrying them changes what it can compare against. <b>Run 10</b>: measure D177 against
+/// this class on Run 6's long fixture within ONE run — the rule, unchanged: not significantly worse at <c>end</c> or
+/// <c>beyond</c>, and identical on short facts. D177 in 3.4.0 cannot carry <see cref="RerankPace"/>, so what follows is an OWNER
 /// decision, informed by that comparison: keep this class for the pace, or configure <c>MaxInputChars</c>/
 /// <c>Segmentation</c> on the <c>llamacpp-rerank</c> registration (<c>LlamaCppSource.Register</c>) with a fixed
 /// <c>MaxPiecesPerInput</c> and lose time-sizing. Either way <see cref="RerankInputCap"/>'s query fit stays until D177's is
 /// measured beside it. If D177 fails the rule, keep this class and tell Lyntai why, with the run. The Lyntai half is
 /// complete: Part 289's outcome names an app-side segmenting score-provider decorator as the adopter's copy to remove when
-/// D177 releases, and Lyntai's <c>docs/memory-measurements.md</c> records our Run 6c as
+/// D177 releases — it has, so that instruction is now Run 10's to settle — and Lyntai's
+/// <c>docs/memory-measurements.md</c> records our Run 6c as
 /// <c>rerank-segmented-adopter-long-notes</c>.</para></summary>
 public sealed class ChunkedScoreProvider : IScoreProvider
 {
@@ -322,10 +332,10 @@ public sealed class ChunkedScoreProvider : IScoreProvider
 ///
 /// <para><b>Why here, and not in the provider where it was first put</b> (review, 2026-09-25). The first version returned a
 /// blameless <see cref="ProviderVerdict.Unsupported"/> from <see cref="ChunkedScoreProvider"/>, which
-/// <c>ScoringVerificationPolicy</c> reports as NoOpinion. Lyntai's next release (its commit <c>6c45d051</c>, unreleased) logs
-/// a verdict that is not transient at WARNING in that policy, so every skipped recall would have logged a Warning — and the
-/// in-code plan to filter it would also have hidden <c>ContextWindowExceeded</c>, <c>AuthFailed</c> and <c>Refused</c>,
-/// the very failures that release raised to Warning; it also used <c>Unsupported</c> for something Lyntai's own meaning of
+/// <c>ScoringVerificationPolicy</c> reports as NoOpinion. Lyntai 3.3.0 (its commit <c>6c45d051</c>, unreleased when this was
+/// decided) logs a verdict that is not transient at WARNING in that policy, so every skipped recall would have logged a
+/// Warning — and the in-code plan to filter it would also have hidden <c>ContextWindowExceeded</c>, <c>AuthFailed</c> and
+/// <c>Refused</c>, the very failures that release raised to Warning; it also used <c>Unsupported</c> for something Lyntai's own meaning of
 /// it (a capability or transport gap) does not cover. Decided here, a skip makes no provider call and hands Lyntai no
 /// verdict at all, so there is nothing to log twice and nothing to filter.</para>
 ///
