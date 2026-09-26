@@ -310,7 +310,8 @@ public static class GatherlightApp
                 // Registering the decorators BEFORE AddMemory* is the whole mechanism: those use
                 // TryAddSingleton precisely so a consumer's own policy wins, which their remarks call the
                 // BYO seam. Off returns the library's own no-opinion values, a state the engine already
-                // treats as "no policy registered" — so the switch is safe to flip at runtime.
+                // treats as "no policy registered" — so the switch is safe to flip at runtime. (Stored alike; since
+                // Lyntai 3.5 an "off" write REPORTS Annotation, None being an answer — see MemoryEnrichment.)
                 // ClientName is the seam Lyntai documents for exactly this — a name selects BACKENDS, never
                 // permissions — and which name annotation uses is judgeWiring.AnnotationClient, i.e. the bound
                 // source's own answer (null for the CLI arm, which then uses the default client); the verifier
@@ -509,7 +510,8 @@ public static class GatherlightApp
                     sp.GetService<Platform.Kernel.Services.ServerConfigService>(),
                     // The embedding backends, for one probe embed before a startup back-fill or rebuild — our
                     // quota gate: an embedder that is wired and down makes every write lose its vector, and
-                    // each retried write would first pay its annotation (IFactIndex.EmbedderReadyAsync).
+                    // each retried write would still pay its annotation — after its failed embed since Lyntai 3.5,
+                    // SkipAnnotationWithoutVector being left off (IFactIndex.EmbedderReadyAsync).
                     sp.GetServices<Lyntai.Inference.IModelProvider>(),
                     sp.GetService<Lyntai.Inference.IProviderRouterFactory>()))
             // The import endpoint's and the seed step's back-fill, detached and serialised — see DetachedFactBackfill.

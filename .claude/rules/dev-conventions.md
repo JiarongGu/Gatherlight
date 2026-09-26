@@ -46,7 +46,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   inline at CreateTable (SQLite has no ALTER ADD CONSTRAINT). The 0.x ledger was squashed into a
   single `202607280001_Baseline` (one-time, at the Lyntai-1.0 fresh-start reset — durable data
   travels via the whole-install backup); the ledger is append-only again from there. Lyntai owns its
-  own `lyntai_*` tables + `lyntai_version_info` (migrated eagerly by `UseSqliteStorage`).
+  own `lyntai_*` tables + `lyntai_version_info` (migrated eagerly by `UseSqliteStorage`) — so a Lyntai
+  bump can change this database's schema at its first start: 3.5.0 added the nullable
+  `lyntai_job.stage_detail`, which nothing of ours reads (we run no Lyntai job store, write no `lyntai_*`
+  SQL, and the backup carries no database). What a build downgraded past such a migration does with the
+  version it does not know is unverified.
 - **Full-text search = FTS5 `trigram`**: search indexes are external-content FTS5 virtual tables
   with the **`trigram`** tokenizer (indexed CJK *substring* recall — `unicode61` treats a whole
   Chinese phrase as one token), kept in sync by AFTER INSERT/DELETE/UPDATE triggers and backfilled
@@ -526,7 +530,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   3.3.0 and the 3.4 bump adopted them, (5) after a real-binary check of every catalogued chat model. (3) is CLOSED as a workaround: the bump adopted its per-write detection, and
   the probe it named stays as a cost policy of OUR OWN, which the entry says how to end. (1) and (6) stay OPEN by
   decision although their fixes shipped in 3.3.0 too — (1) because the shipped cut guts a long CJK note, (6) until
-  Run 10 and the owner decide.**
+  Run 10 and the owner decide. Lyntai 3.5.0 (2026-09-26) released the fixes this round filed against 3.4.0 (its
+  Parts 302–309): the cut (1) waited for is fixed and the owner decided to adopt it, a change that lands after the
+  bump itself; (6) gained a per-request piece cap and still waits for Run 10.**
   **(1) OPEN, by owner decision — `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170, shipped
   in 3.3.0 and NOT adopted by the 3.4 bump (2026-09-26).** Lyntai's LLM judge rendered each candidate as its headline
   alone, and our headline is the fact's TOPIC, so the judge decided "did this answer?" from topics; the decorator shows
@@ -543,11 +549,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   and most household facts — and diverge exactly on long notes (Run 6c's 883–1,241 characters), where no LLM judge
   has been measured. `JudgeWiring.Llm` therefore leaves `ContentChars` at 0, and says why. **What ends it:** Lyntai
   `docs/task-archive.md` Part 310's item "Cut a derived headline or a judge note where the text allows, not at its
-  last space however early" — closed there as Part 302 (2026-09-26), committed after 3.4.0 and NOT released: a space
-  counts only in the cap's latter half, else the cut falls at the last text-element boundary, never inside a
-  surrogate pair. On the release that carries it, what still differs is a note cut at a space in the latter half — at
-  a word, at worst half the cap — where ours reads to 400, and Lyntai's wider flattening (`MemoryLine.Flatten` also
-  folds U+000B and U+001C–U+001E, a strict improvement); accepting that residual is the owner's call then. **On
+  last space however early" — closed there as Part 302 (2026-09-26), RELEASED in 3.5.0: a space counts only in the
+  cap's latter half, else the cut falls at the last text-element boundary, never inside a surrogate pair. What still
+  differs is a note cut at a space in the latter half — at a word, at worst half the cap — where ours reads to 400,
+  and Lyntai's wider flattening (`MemoryLine.Flatten` also folds U+000B and U+001C–U+001E, a strict improvement). The
+  owner accepted that residual on 2026-09-26 and decided to adopt `ContentChars`; the steps below are that change,
+  which lands on its own after the 3.5 bump. **On
   adopting it** — none of this ran in the 3.4 bump — five things, because the bench and a suite pin this knob to
   `both`: (a) set `ContentChars = JudgeSeesContentPolicy.MaxChars` where `JudgeWiring.Llm` builds the verifier, and
   delete the class and its `GATHERLIGHT_JUDGE_INPUT` knob, both announcements included — not both mechanisms: with
@@ -625,9 +632,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   - The backup reconcile deletes `llm.route.memory`, and any leftover `llm.model.memory`.
   - `LiveRouteMigrationStep`, right after `db-migrate`, moves what an install stored and LOGS each key, because our
     namespace gets no warn-once from Lyntai (its check covers only `lyntai.model.`; the option that widens it,
-    `LyntaiOptions.ModelOnlyKeyPrefixes` — Part 310's item, closed as Part 308, NOT released — warns on ANY key left
-    under a listed namespace, and `llm.model.` keeps the current `chat`/`extract`/`validate` keys, so it does not fit
-    us and stays at its default when it ships): `llm.model.scorer = X` becomes
+    `LyntaiOptions.ModelOnlyKeyPrefixes` — Part 310's item, closed as Part 308, released in 3.5.0 — warns on ANY key
+    left under a listed namespace, and `llm.model.` keeps the current `chat`/`extract`/`validate` keys, so it does not
+    fit us and stays at its default): `llm.model.scorer = X` becomes
     `claude-cli:X`; `llm.model.memory` takes the SAVED binding's `AnnotationProvider` — the provider the key was
     written for, which reproduces exactly what the deleted store did with it — becomes `claude-cli:X` when nothing
     is bound, and is DROPPED, at Warning, where there is no provider to derive (a retired backend, a source saved
@@ -686,9 +693,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   下次启动会再试。」 — the next start rebuilds again where it finds refs, back-fills where it finds none, and does either
   only if the embedder answers its gate.
   **The probe stays, as a gate, by owner decision** — our quota, not a library gap. Without it nothing would be lost,
-  but every bulk pass during an embedder outage would re-remember each pending fact, and in 3.4 a graph write ANNOTATES
-  BEFORE IT EMBEDS: with 判断 on the Claude CLI, each is an annotation call against the household's quota, for a fact
-  that loses its vector again and is walked again by the next pass. It gates EVERY bulk path that re-remembers facts but
+  but every bulk pass during an embedder outage would re-remember each pending fact, and each write still pays its
+  annotation: Lyntai 3.5.0 made a graph write EMBED BEFORE IT ANNOTATES (3.4 annotated first), yet a write whose embed
+  failed goes on to annotate unless `SkipAnnotationWithoutVector` is set, which stays off (below) — so with 判断 on the
+  Claude CLI, each is an annotation call against the household's quota, for a fact that loses its vector again and is
+  walked again by the next pass. It gates EVERY bulk path that re-remembers facts but
   one: `FactIndexStep`'s back-fill and layout rebuild at startup, which keeps its household warning (「「语义」的嵌入模型
   这次启动没有响应…」); `DetachedFactBackfill`'s after a memory import or the startup seed, which skips with a log line;
   and the console's semantic REINDEX (`MemoryRecallController`), which answers 409 before touching anything —
@@ -704,18 +713,28 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   one pass's annotations, wrongly failing defers the indexing with the warning — and, in the classifier, reads an input
   refusal as an outage, so that fact is retried. **What ends the gate:** Lyntai `docs/task-archive.md` Part 310's item
   "Let a graph write skip its annotation when its vector fails" — closed there as Part 304,
-  `GraphMemoryOptions.SkipAnnotationWithoutVector` (with the write embedding before it annotates), committed after 3.4.0
-  and NOT released. On the release that carries it, that option makes a retried write during an outage cost no
-  annotation, so the quota reason goes. **But it cannot simply be switched on:** it skips the annotation of EVERY write
-  owed a vector that got none — including one the classifier then KEEPS as a refused input and never retries, which
-  would stay without subjects for good. So on that release either leave the option off and keep the gate, or enable it
-  together with a pass that re-annotates the kept vector-less facts (not built). The classifier keeps its probe either
-  way — it answers a different question. The startup warning would then need another source — a start with nothing
-  pending makes no write, so there is nothing to observe; `LlamaWarmStep` warns for a llama.cpp model that fails to
-  warm, and nothing warns for the built-in embedder. **Not adopted: 3.4's `Lyntai.Memory.MemorySources.Annotation`
-  flag.** The shipped LLM annotator catches its own failures and returns `MemoryAnnotation.None`, which the engine counts
-  as an answer, so the flag is set for a signed-out CLI too — Lyntai `docs/task-archive.md` Part 310's item "Let the
-  shipped LLM annotator say it did not answer…", closed there as Part 303 (`MemoryAnnotation.Unanswered`), not released.
+  `GraphMemoryOptions.SkipAnnotationWithoutVector` (with the write embedding before it annotates), RELEASED in 3.5.0
+  and left OFF by the 3.5 bump (2026-09-26). Set, it would make a retried write during an outage cost no annotation, so
+  the quota reason would go. **But it cannot simply be switched on:** it skips the annotation of EVERY write owed a
+  vector that got none — including one the classifier then KEEPS as a refused input and never retries, which would stay
+  without subjects for good (it is an engine option, with no per-write override). So the option stays off and the gate
+  stays, until the option can come with either a pass that re-annotates the kept vector-less facts (not built) or an
+  embedder that cannot refuse a fact for its length (Lyntai's input segmentation on `llamacpp-embed`, unmeasured). The
+  classifier keeps its probe either way — it answers a different question. The startup warning would then need another
+  source — a start with nothing pending makes no write, so there is nothing to observe; `LlamaWarmStep` warns for a
+  llama.cpp model that fails to warm, and nothing warns for the built-in embedder. **A write kept WITHOUT ITS SUBJECTS
+  is logged, since the 3.5 bump.** Through 3.4 the shipped LLM annotator caught its own failures and returned
+  `MemoryAnnotation.None`, which the engine counts as an answer, so `Lyntai.Memory.MemorySources.Annotation` was set for
+  a signed-out CLI too and the app did not read it. 3.5.0 returns `MemoryAnnotation.Unanswered` for a refused or non-Ok
+  call, an empty or unparseable reply and its own timeout (Lyntai `docs/task-archive.md` Part 303), logging the likeliest
+  at Debug, below our file log. So `FactIndex.IndexAsync` now warns — 「fact index: kind/topic was stored without its
+  subject handles…」 — when a write that KEEPS its reference lacks the flag: a real call that went unanswered, or a
+  subject store that failed (Lyntai warns of that too). Warning, because the same outcome from a THROWING annotator is a
+  Warning in Lyntai's own engine and because nothing retries it (a write left unindexed is re-annotated by the back-fill
+  and is not logged). With 判断 OFF, `SwitchableAnnotationPolicy` returns `None` without asking — answered, about
+  nothing — so an "off" write sets the flag and logs nothing, which is right: nothing was asked. Proof, `e2e-p52`: the
+  chat fake's unparseable annotation (case 1's write) is named in the log, and a write the stub CLI tags (case 4's, after
+  the fallback) is not; the first confirmed to FAIL on a 3.4.0 build, where the flag was set for it.
   **Where a fact past the embedder's window stands:** indexed without a vector — graph-ranked, linked and reachable by
   its subjects, found by meaning only through its words. Lyntai 3.3's input segmentation on the embedding registration
   (D177: `MaxInputChars` on `llamacpp-embed`, the pieces embedded and pooled into one length-weighted mean vector) would
@@ -770,10 +789,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   — the app's own warm (`max_tokens: 1`) now opens a think block on Qwen3, one discarded token; and a template that
   decides thinking by some other variable than `enable_thinking` (a dropped-in model) is not reached by the field —
   the 512-token cap then makes it silent rather than slow (launch item (4)). **A server that REFUSES the field fails the
-  call quietly**: the router logs `Failed` at Information and the judge reads it as transient, so a refusal looks like no
-  judge at all. llama-server b10549 accepts it. Lyntai's `docs/task-archive.md` Part 309 — done at its HEAD, NOT released
-  — logs a Warning naming the option and quoting the server when a call carrying these fields is refused; that release is
-  what would make a future refusal visible, and adopting it needs nothing from us. The `n-predict` and `ctx-size` caps
+  call**: the router logs `Failed` at Information and the judge reads it as transient, so a refusal looks like no
+  judge at all. llama-server b10549 accepts it. Since Lyntai 3.5.0 (its `docs/task-archive.md` Part 309) it is no longer
+  QUIET: the first call carrying these fields that is answered with a 4xx the classifier leaves `Failed` logs ONE
+  Warning per registration, naming the option and quoting the server. It needed nothing from us and stays at its
+  default. It keys on the status, not the field, so ANY such 4xx fires it — an unrestarted or adopted router's
+  `400 model not found` too — and the Warning then only suggests the field was refused; the quoted words say which.
+  Proof, `e2e-p52` case 3c: the fake answers every chat call carrying the field with a 400 naming it, several calls are
+  refused, and `state/logs` holds that Warning exactly once, quoting the fake — confirmed to FAIL on a 3.4.0 build (no
+  Warning for 3 refused calls). The `n-predict` and `ctx-size` caps
   were never part of this workaround and stay: they are our own launch contract (`LlamaServerRuntime.ChatMaxTokens` —
   the memory seams send no `max_tokens`, and the router does not stop a child's generation when the app abandons a
   request; `LlamaServerRuntime.ChatContextTokens` — launch item (5)).
@@ -796,17 +820,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   AT LEAST a quarter (settable in D177 as an `Overlap` of 0.25, where it is an upper bound — the next piece restarts at
   the earliest sentence end or space inside it, else where the last one ended); under a declared window we SEND the
   NFKC text, where D177 counts NFKC and sends the original (the tokenizer normalises either way — identical token ids
-  but for 95 scalars newer than the model's table); and the call sized by TIME (`RerankPace`). **D177 in 3.4.0 cannot
-  carry `RerankPace`**: its piece cap is fixed at registration, so no decorator can vary a call's pieces per request, and
-  deleting `ChunkedScoreProvider` deletes the pace — and the skip with it, since `RerankAdmission` reads the provider's
-  one-window shape and sends its probe. (The skip itself needs nothing on any Lyntai bump: it is decided above the scoring
+  but for 95 scalars newer than the model's table); and the call sized by TIME (`RerankPace`). **D177 through 3.4.0
+  could not carry `RerankPace`**: its piece cap was fixed at registration, so no decorator could vary a call's pieces per
+  request, and deleting `ChunkedScoreProvider` deleted the pace — and the skip with it, since `RerankAdmission` reads
+  the provider's one-window shape and sends its probe. (The skip itself needs nothing on any Lyntai bump: it is decided above the scoring
   policy and hands Lyntai no verdict — see the pace paragraph under the reranker bullet.) Two items of Lyntai
-  `docs/task-archive.md` Part 310 — our upgrade's findings — bear on this, closed on Lyntai's HEAD after 3.4.0 and NOT
-  released: Part 305's `ScoreRequest.MaxPiecesPerInput` narrows the registration's cap for one call, so a decorator
-  could size a D177 call by the pace without segmenting it itself; Part 306's `InputSegmentation.MaxDocumentPiece`
-  bounds a document's pieces apart from the query, which can express our rule for a model declaring no window (read
-  only where a window is set, so it needs `MaxInputChars` set generously beside it). Neither changes Run 10; the
-  release carrying them changes what it can compare against. **Run 10**: measure D177 against ours on Run 6's long
+  `docs/task-archive.md` Part 310 — our upgrade's findings — bear on this, both RELEASED in 3.5.0: Part 305's
+  `ScoreRequest.MaxPiecesPerInput` narrows the registration's cap for one call, so a decorator can now size a D177 call
+  by the pace without segmenting it itself; Part 306's `InputSegmentation.MaxDocumentPiece` bounds a document's pieces
+  apart from the query, which can express our rule for a model declaring no window (read only where a window is set,
+  so it needs `MaxInputChars` set generously beside it). What such a decorator still cannot see is what was SENT — D177
+  counts no pieces for its caller and the HTTP reranker returns no usage — so its pace would learn from a bound, not a
+  count. Run 10 compares against D177 as 3.5.0 ships it. **Run 10**: measure D177 against ours on Run 6's long
   fixture
   WITHIN ONE RUN — the rule, unchanged: not significantly worse at `end` or `beyond`, and identical on short facts.
   What follows is then an OWNER decision, informed by that comparison: keep `ChunkedScoreProvider` for the pace, or
@@ -857,7 +882,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `AddMemoryAnnotation`/`AddMemoryVerification`, whose `TryAddSingleton` then stands down — the BYO seam
   those registrations document — and "off" returns the library's own `MemoryAnnotation.None` /
   `MemoryVerification.NoOpinion`, a state the engine already treats as "no policy registered", which is
-  what makes runtime flipping safe. **NoOpinion, never `NothingRelevant`**: the latter asserts every recall
+  what makes runtime flipping safe (in what it STORES; since Lyntai 3.5 an "off" write reports `Annotation` in its
+  `Ran` — `None` is an answer, about nothing — where no policy would not, which is right: nothing was asked, and it
+  keeps `FactIndex`'s unanswered-annotation warning for a real call). **NoOpinion, never `NothingRelevant`**: the latter asserts every recall
   found nothing useful and teaches the engine exactly the wrong thing. The LOCAL MODEL is the honest
   exception and stays in `settings.json`: the embedder, vector store and engine member are consumed at DI
   REGISTRATION time, before the container — and therefore the DB — exists, the same reason `security.*`
@@ -967,12 +994,19 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   2026-09-23**: "内置 on 判断 needs an in-process chat model, which does not exist". A reranker verifies without
   chatting, and Lyntai 3.2.0 ships an in-process ONNX cross-encoder (`AddOnnxProvider` producing scores, its
   D157), so 内置 on 判断 is now exactly an option nobody built — with tagging on the CLI, like the llama.cpp
-  reranker. It was not built for a measured reason: that path reads WordPiece tokenizers only, so the one model
+  reranker. It was not built for a measured reason: that path read WordPiece tokenizers only, so the one model
   proven through it, ms-marco-MiniLM-L6-v2, is English-only (+3.0 of 9.5 on Lyntai's English LoCoMo, 2026-09-15,
   base 83.0%, and −5.4 on multi-hop), while the multilingual rerankers need SentencePiece and run on llama.cpp
-  (`docs/superpowers/specs/2026-09-23-reranker-judge-and-verdict-bench-design.md` §Constraints). So it stays
-  unbindable, and its reason (`MemorySources.BuiltInCannotJudge`) now says "not built, and why" rather than
-  "cannot" — the honest sentence for a gap that is ours.
+  (`docs/superpowers/specs/2026-09-23-reranker-judge-and-verdict-bench-design.md` §Constraints). **That reason went
+  false too, three days later**: Lyntai 3.5.0's ONNX provider reads SentencePiece from a model's `tokenizer.json`, and
+  Lyntai's own model notes record the multilingual `mmarco-mMiniLMv2` reranker — the one we catalogue for llama.cpp —
+  running end to end through it (its D191, 2026-09-26). So the gap is now wholly ours: the option is not BUILT (it needs
+  `Lyntai.Providers.Onnx`, an ONNX export, a catalogue row) and not MEASURED against llama.cpp's mMiniLMv2, and the
+  owner decided on 2026-09-26 to build it in a later round. It stays unbindable, and its reason
+  (`MemorySources.BuiltInCannotJudge`) says "not built yet, not yet measured against llama.cpp's mMiniLMv2, use llama.cpp
+  meanwhile" rather than "cannot" — the honest sentence for a gap that is ours. Twice now a stated reason for an
+  unbuilt option was overtaken by the library while the option stayed unbuilt; a reason names what it rests on so
+  the next release can be checked against it.
   A model row saying "you do not need this" is the same error in miniature: state the trade-off, and say
   when it is unmeasured. And a removed capability needs a test asserting the household can still do it —
   both removals above passed every check, because nothing asserted the ability existed (`p51` now does).
@@ -1676,9 +1710,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   own — fail-open, so every recall surfacing a long fact would go unverified in silence. (Lyntai 3.2.0 read that 400's
   「larger than the max context size」 as a HOST fault, `Failed`, counted toward benching the reranker for every caller,
   logged at Debug; 3.3.0 reads it as `ContextWindowExceeded`, which advances without blame, and logs a failure that
-  will repeat at Warning — Lyntai `docs/FIXES.md` 2026-09-24. The 500's 「physical batch size」 still reads `Failed` in
-  3.4.0 — Lyntai `docs/task-archive.md` Part 310's item, closed there as Part 307 after 3.4.0, NOT released. The call
-  is refused either way.)
+  will repeat at Warning — Lyntai `docs/FIXES.md` 2026-09-24. The 500's 「physical batch size」 read `Failed` through
+  3.4.0 and reads `ContextWindowExceeded` since 3.5.0 — Lyntai `docs/task-archive.md` Part 310's item, closed there as
+  Part 307 — so it no longer benches `llamacpp-rerank` or `llamacpp-embed`, and the scoring verifier logs it at
+  Warning. The call is refused either way.)
   `GgufModel.ContextTokens`
   declares the window, and `GgufCatalog.DeclaredWindow` is the ONE read behind both halves of the contract: the
   preset launches the model with that `ctx-size`/`batch-size`/`ubatch-size`, and `RerankInputCap` fits every pair

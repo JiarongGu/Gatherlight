@@ -757,7 +757,9 @@ preset and no `--reasoning` at all on the final build.
   the 512-token cap then makes such a model silent rather than slow (`LlamaServerRuntime.ChatMaxTokens`).
 - **A future refusal would still be silent here.** b10549 accepts the field. Lyntai's `docs/task-archive.md` Part 309,
   done at its HEAD and not released, logs a Warning naming the option and quoting the server when a call carrying these
-  fields is refused; that release would make one visible.
+  fields is refused; that release would make one visible. *(Update, same day: Lyntai 3.5.0 released it — one Warning per
+  registration, for any 4xx the classifier leaves `Failed` on a call carrying the fields, so an unrestarted router's
+  `400 model not found` fires it too. `e2e-p52` case 3c asserts it once against a fake that refuses the field.)*
 
 Scratch scripts, not committed; each router and its children were ended by PID as a process tree, and each data folder
 was a fresh fixture under `devtools/`.

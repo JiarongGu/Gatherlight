@@ -98,20 +98,21 @@ public static class RerankChunking
 /// NFKC and sends the original (the tokenizer normalises either way; the measurement in <see cref="RerankInputCap"/>
 /// found identical token ids for all but 95 scalars newer than the model's table); (3) the call sized by TIME
 /// (<see cref="RerankPace"/>), which D177 explicitly rejects as library policy — fitting a call to a latency budget is
-/// the deployment's — and cannot carry in 3.4.0: <c>MaxPiecesPerInput</c> is fixed at registration, so no decorator can
-/// vary a call's pieces per request, and deleting this class deletes the pace. Two items of Lyntai
-/// <c>docs/task-archive.md</c> Part 310 — our upgrade's findings — bear on that, closed on Lyntai's HEAD after 3.4.0 and
-/// NOT released: Part 305's <c>ScoreRequest.MaxPiecesPerInput</c> narrows the registration's cap for one call, so a
-/// decorator could size a D177 call by <see cref="RerankPace"/> without segmenting it itself; and Part 306's
-/// <c>InputSegmentation.MaxDocumentPiece</c> bounds a document's pieces apart from the query, which can express this
-/// class's rule for a model declaring no window (1,000 characters whatever the query) — read only where a window is set,
-/// so such a model needs <c>MaxInputChars</c> set generously beside it. Neither is in 3.4.0, so neither changes the
-/// comparison below; the release carrying them changes what it can compare against. <b>Run 10</b>: measure D177 against
-/// this class on Run 6's long fixture within ONE run — the rule, unchanged: not significantly worse at <c>end</c> or
-/// <c>beyond</c>, and identical on short facts. D177 in 3.4.0 cannot carry <see cref="RerankPace"/>, so what follows is an OWNER
-/// decision, informed by that comparison: keep this class for the pace, or configure <c>MaxInputChars</c>/
+/// the deployment's — and could not carry through 3.4.0: <c>MaxPiecesPerInput</c> was fixed at registration, so no
+/// decorator could vary a call's pieces per request, and deleting this class deleted the pace. Two items of Lyntai
+/// <c>docs/task-archive.md</c> Part 310 — our upgrade's findings — bear on that, both RELEASED in 3.5.0: Part 305's
+/// <c>ScoreRequest.MaxPiecesPerInput</c> narrows the registration's cap for one call, so a decorator can now size a D177
+/// call by <see cref="RerankPace"/> without segmenting it itself; and Part 306's <c>InputSegmentation.MaxDocumentPiece</c>
+/// bounds a document's pieces apart from the query, which can express this class's rule for a model declaring no window
+/// (1,000 characters whatever the query) — read only where a window is set, so such a model needs <c>MaxInputChars</c>
+/// set generously beside it. What 3.5.0 still does not give such a decorator is what was SENT: D177 counts no pieces for
+/// its caller, and the HTTP reranker returns no usage, so the pace would learn from a bound rather than a count.
+/// <b>Run 10</b>: measure D177 against this class on Run 6's long fixture within ONE run — the rule, unchanged: not
+/// significantly worse at <c>end</c> or <c>beyond</c>, and identical on short facts. What follows is an OWNER
+/// decision, informed by that comparison: keep this class for the pace; configure <c>MaxInputChars</c>/
 /// <c>Segmentation</c> on the <c>llamacpp-rerank</c> registration (<c>LlamaCppSource.Register</c>) with a fixed
-/// <c>MaxPiecesPerInput</c> and lose time-sizing. Either way <see cref="RerankInputCap"/>'s query fit stays until D177's is
+/// <c>MaxPiecesPerInput</c> and lose time-sizing; or, since 3.5.0, keep only the pace, over D177's segmentation, as a
+/// thin decorator learning from that bound. Either way <see cref="RerankInputCap"/>'s query fit stays until D177's is
 /// measured beside it. If D177 fails the rule, keep this class and tell Lyntai why, with the run. The Lyntai half is
 /// complete: Part 289's outcome names an app-side segmenting score-provider decorator as the adopter's copy to remove when
 /// D177 releases — it has, so that instruction is now Run 10's to settle — and Lyntai's

@@ -363,11 +363,13 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         // chat model with the launch key gone (docs/self-managed-llm-runtime.md, 2026-09-26), and only then was the key
         // deleted (LlamaServerRuntime.LaunchKeys). p52 asserts the field on both seams' requests.
         //
-        // A SERVER THAT REFUSES THE FIELD FAILS THE CALL, and fails it quietly: the router logs `Failed` at Information
-        // and the judge reads it as transient, so a refusal looks like no judge at all. llama-server b10549 accepts it.
-        // Lyntai's docs/task-archive.md Part 309 — done at its HEAD, not released — logs a Warning naming the option and
-        // quoting the server when a call carrying these fields is refused; that release is what would make a future
-        // refusal visible.
+        // A SERVER THAT REFUSES THE FIELD FAILS THE CALL: the router logs `Failed` at Information and the judge reads it
+        // as transient, so a refusal looks like no judge at all. llama-server b10549 accepts it. Since Lyntai 3.5.0 (its
+        // docs/task-archive.md Part 309) the refusal is no longer quiet: the first call carrying these fields that is
+        // answered with a 4xx the classifier leaves `Failed` logs ONE Warning per registration, naming the option and
+        // quoting the server — p52 case 3c asserts it. Left at that default. It keys on the status, not on the field, so
+        // ANY such 4xx fires it — an unrestarted or adopted router's `400 model not found` too — and the Warning then only
+        // SUGGESTS the field was refused; the server's own words it quotes say which.
         b.AddLlamaProvider(ProviderId, o =>
          {
              o.BaseUrl = ctx.Endpoint;
