@@ -245,11 +245,16 @@ export function CortexPanel({ toast, onRestart }: { toast: (t: string, k?: 'ok' 
     if ((m.override ?? '') === value) return;
     setModels((prev) => prev.map((x) => (x.consumer === m.consumer ? { ...x, override: value || null, overridden: !!value, effective: value || m.default } : x)));
     try {
-      await fetch(`/api/manage/cortex/model/${m.consumer}`, {
+      const res = await fetch(`/api/manage/cortex/model/${m.consumer}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ value }),
       });
+      // A refused value is SAID, not just reverted by the reload below — a row snapping back reads as a glitch.
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        toast(`保存失败:${j.error ?? res.status}`, 'err');
+      }
     } finally {
       load();
     }

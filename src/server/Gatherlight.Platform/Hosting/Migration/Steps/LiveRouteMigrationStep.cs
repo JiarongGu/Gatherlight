@@ -82,6 +82,11 @@ public sealed class LiveRouteMigrationStep : IMigrationStep
         {
             _log.LogInformation("live routes: dropped {Old}, which was blank", oldKey);
         }
+        else if (LiveRoutes.WhyNotAModel(model) is not null)
+        {
+            _log.LogWarning("live routes: dropped {Old} = {Model} — a comma would make its route a fallback list naming a backend nobody chose",
+                oldKey, model);
+        }
         else
         {
             var (p, why) = provider();

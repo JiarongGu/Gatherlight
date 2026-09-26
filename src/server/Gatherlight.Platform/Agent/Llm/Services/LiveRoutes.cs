@@ -54,11 +54,25 @@ public static class LiveRoutes
     /// <summary><paramref name="provider"/> serving <paramref name="model"/>, in the spec Lyntai parses.</summary>
     public static string Format(string provider, string model) => $"{provider}:{model}";
 
+    /// <summary>Why <paramref name="model"/> cannot be a route's model, or null when it can.
+    ///
+    /// <para><b>A comma is refused</b>: a route is a comma-separated FALLBACK LIST, so <c>haiku, llamacpp:x</c> would
+    /// be stored as two entries — the second a backend nobody chose. <b>A colon is not</b>: Lyntai splits every
+    /// entry at its FIRST colon, so the provider is already fixed by the time a model's own colon is read, and real
+    /// model ids carry one (a Bedrock id's <c>…-v1:0</c>, an Ollama-style <c>name:tag</c>).</para></summary>
+    public static string? WhyNotAModel(string? model) =>
+        model is not null && model.Contains(',')
+            ? $"模型名不能含逗号:「{model.Trim()}」—— 这一项存成一条路由,逗号会把它拆成好几个后端"
+            : null;
+
     /// <summary>Write <paramref name="consumer"/>'s route — or DELETE it when <paramref name="model"/> is blank,
-    /// because a bare provider would mean that backend's default, not the consumer's.</summary>
+    /// because a bare provider would mean that backend's default, not the consumer's. Throws on a model
+    /// <see cref="WhyNotAModel"/> refuses: every caller asks it first, so reaching here with one is a defect, and
+    /// storing it would route to a backend nobody chose.</summary>
     public static void Set(IAppConfigService config, string consumer, string provider, string? model)
     {
         var m = model?.Trim();
+        if (WhyNotAModel(m) is { } why) throw new ArgumentException(why, nameof(model));
         if (string.IsNullOrEmpty(m)) config.Delete(Key(consumer));
         else config.Set(Key(consumer), Format(provider, m));
     }

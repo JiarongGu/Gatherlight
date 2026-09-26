@@ -39,7 +39,12 @@ public sealed class CortexController : ControllerBase
 
     [HttpPut("api/manage/cortex/model/{consumer}")]
     public IActionResult SetModel(string consumer, [FromBody] ModelBody body)
-        => _cortex.SetModel(consumer, body?.Value) ? Ok(new { ok = true }) : NotFound(new { error = "unknown consumer" });
+    {
+        var r = _cortex.SetModel(consumer, body?.Value);
+        if (!r.Found) return NotFound(new { error = "unknown consumer" });
+        if (r.Refused is { } why) return BadRequest(new { error = why });
+        return Ok(new { ok = true });
+    }
 
     [HttpDelete("api/manage/cortex/model/{consumer}")]
     public IActionResult ResetModel(string consumer)

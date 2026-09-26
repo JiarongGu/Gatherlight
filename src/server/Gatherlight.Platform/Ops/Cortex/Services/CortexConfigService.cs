@@ -19,6 +19,12 @@ public sealed record ModelView(
 /// <summary>Result of a prompt override write — surfaces the placeholder contract to the caller.</summary>
 public sealed record PromptSetResult(bool Found, IReadOnlyList<string> MissingPlaceholders);
 
+/// <summary>Result of a model write: an unknown consumer, a value the row refuses (with why), or written.</summary>
+public sealed record ModelSetResult(bool Found, string? Refused = null)
+{
+    public bool Written => Found && Refused is null;
+}
+
 /// <summary>
 /// The cortex tuning surface — reads/writes the runtime knobs that shape every LLM call: the
 /// prompt template overrides (<c>cortex.prompt.{name}</c>) and per-consumer models
@@ -33,7 +39,7 @@ public interface ICortexConfigService
     IReadOnlyList<ModelView> Models();
     PromptSetResult SetPrompt(string name, string value);
     bool ResetPrompt(string name);
-    bool SetModel(string consumer, string? value);
+    ModelSetResult SetModel(string consumer, string? value);
     bool ResetModel(string consumer);
 
     /// <summary>The <c>app_config</c> key each settable consumer's model is STORED under — what a memory bundle
@@ -144,15 +150,22 @@ public sealed class CortexConfigService : ICortexConfigService
     }
 
     /// <summary>A blank value CLEARS the row — for a routed one that DELETES the route, never writes a bare
-    /// provider, which would run the consumer on the CLI's own default rather than this row's (LiveRoutes).</summary>
-    public bool SetModel(string consumer, string? value)
+    /// provider, which would run the consumer on the CLI's own default rather than this row's (LiveRoutes). A
+    /// routed row REFUSES a model with a comma, which its route would store as a fallback list naming a backend
+    /// nobody chose (<see cref="LiveRoutes.WhyNotAModel"/>) — here, and so on every path that sets one, a memory
+    /// bundle's import included.</summary>
+    public ModelSetResult SetModel(string consumer, string? value)
     {
-        if (Row(consumer) is not { } row) return false;
+        if (Row(consumer) is not { } row) return new ModelSetResult(false);
         var v = value?.Trim();
-        if (row.Routed) LiveRoutes.Set(_config, consumer, RoutedProvider, v);
+        if (row.Routed)
+        {
+            if (LiveRoutes.WhyNotAModel(v) is { } why) return new ModelSetResult(true, why);
+            LiveRoutes.Set(_config, consumer, RoutedProvider, v);
+        }
         else if (string.IsNullOrEmpty(v)) _config.Delete(LiveRoutes.ModelKey(consumer));
         else _config.Set(LiveRoutes.ModelKey(consumer), v);
-        return true;
+        return new ModelSetResult(true);
     }
 
     public bool ResetModel(string consumer)
@@ -168,16 +181,17 @@ public sealed class CortexConfigService : ICortexConfigService
     /// <c>llm.model.&lt;consumer&gt;</c> = a bare model, for EVERY row — what every bundle carried before the routes,
     /// <c>scorer</c> included, which therefore lands as its route — and, for a routed row, its route as stored
     /// (<c>llm.route.scorer</c> = <c>claude-cli:&lt;model&gt;</c>). A route this panel could not have written (another
-    /// provider, a fallback list, no model) is refused. Keys are matched ORDINALLY, as the catalog is.</summary>
+    /// provider, a fallback list, no model) is refused, and so is an old key whose model the row refuses (a comma,
+    /// which would become that fallback list). Keys are matched ORDINALLY, as the catalog is.</summary>
     public bool SetModelFromKey(string key, string value)
     {
         if (key.StartsWith(LiveRoutes.ModelKeyPrefix, StringComparison.Ordinal))
-            return SetModel(key[LiveRoutes.ModelKeyPrefix.Length..], value);
+            return SetModel(key[LiveRoutes.ModelKeyPrefix.Length..], value).Written;
         if (!key.StartsWith(LiveRoutes.KeyPrefix, StringComparison.Ordinal)) return false;
         var consumer = key[LiveRoutes.KeyPrefix.Length..];
         return Row(consumer) is { Routed: true }
             && LiveRoutes.Single(value) is { } one && one.Provider == RoutedProvider
-            && SetModel(consumer, one.Model);
+            && SetModel(consumer, one.Model).Written;
     }
 
     private static (string Consumer, bool Routed)? Row(string consumer)
