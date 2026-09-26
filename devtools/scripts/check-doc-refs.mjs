@@ -95,7 +95,11 @@ const csFiles = [];
       // `_`-prefixed directories are scratch/fixtures; they hold copies that would mask a real rename.
       if (SKIP_DIR.has(e.name) || e.name.startsWith('_')) continue;
       walk(path.join(dir, e.name));
-    } else if (CODE_EXT.has(path.extname(e.name))) {
+    } else if (CODE_EXT.has(path.extname(e.name))
+      // …and so are `_`-prefixed FILES directly under devtools/ (gitignored `devtools/_*`): a scratch script there kept a
+      // deleted class "resolved" on the machine that had it and nowhere else (2026-09-27). Only there — a tracked
+      // `_e2e-common.mjs` deeper down is real code.
+      && !(e.name.startsWith('_') && path.relative(repo, dir) === 'devtools')) {
       corpus.push(e.name);
       try {
         const text = fs.readFileSync(path.join(dir, e.name), 'utf8');
