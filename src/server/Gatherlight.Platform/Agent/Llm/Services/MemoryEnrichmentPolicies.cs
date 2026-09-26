@@ -22,6 +22,13 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// state the library already handles, and one a model outage produces anyway. That is what makes the
 /// switch safe to flip at runtime rather than at startup.</para>
 ///
+/// <para><b>One difference since Lyntai 3.5.0, in what a write REPORTS.</b> The engine now tells <c>None</c> — an
+/// answer, "about nothing" — apart from <see cref="MemoryAnnotation.Unanswered"/> (its Part 303): a write annotated
+/// <c>None</c> carries <c>MemorySources.Annotation</c> in its <c>Ran</c>, one with no annotator registered or an
+/// unanswered one does not. So "off" is still exactly the stored outcome of no policy, and it reads as ANSWERED — which
+/// is right, since nothing was asked, and is what keeps <c>FactIndex.IndexAsync</c>'s "stored without its subject
+/// handles" line for a real call that went unanswered, never for a household that switched 判断 off.</para>
+///
 /// <para>Default ON when unset: the enrichment shipped on with the Lyntai 3.0 adoption, and defaulting it
 /// off would silently degrade recall for every existing household on upgrade.</para>
 /// </summary>
@@ -56,7 +63,9 @@ public sealed record MemoryJudgeWiring(string Transport, string? Model);
 
 /// <summary>Runs the real annotator only while the switch is on. Registered BEFORE
 /// <c>AddMemoryAnnotation()</c>, whose <c>TryAddSingleton</c> then stands down — the BYO seam that
-/// registration documents.</summary>
+/// registration documents. Off returns <see cref="MemoryAnnotation.None"/>, deliberately NOT
+/// <see cref="MemoryAnnotation.Unanswered"/>: nothing was asked, so there is nothing that failed to answer, and the inner
+/// annotator's own Unanswered passes through untouched (see <see cref="MemoryEnrichment"/>).</summary>
 public sealed class SwitchableAnnotationPolicy : IMemoryAnnotationPolicy
 {
     private readonly IMemoryAnnotationPolicy _inner;
@@ -229,12 +238,12 @@ public sealed class VerificationDeadlinePolicy : IMemoryVerificationPolicy
 /// diverge exactly on long notes (Run 6c's 883–1,241 characters), where no LLM judge has been measured at all.</para>
 ///
 /// <para><b>What ends it:</b> Lyntai <c>docs/task-archive.md</c> Part 310's item "Cut a derived headline or a judge
-/// note where the text allows, not at its last space however early" — closed there as Part 302 (2026-09-26), committed
-/// after 3.4.0 and NOT released. <c>Derive</c> then takes a space only in the cap's latter half, else cuts at the last
-/// text-element boundary, never inside a surrogate pair. On the release that carries it, what still differs from ours:
-/// a note with a space in the latter half is cut there, at a word — at worst half the cap — where ours reads to 400;
-/// and Lyntai's flattening (<c>MemoryLine.Flatten</c>) also folds U+000B and U+001C–U+001E, a strict improvement.
-/// Whether that residual is acceptable is the owner's call on that release.</para>
+/// note where the text allows, not at its last space however early" — closed there as Part 302 (2026-09-26), RELEASED
+/// in 3.5.0. <c>Derive</c> now takes a space only in the cap's latter half, else cuts at the last text-element boundary,
+/// never inside a surrogate pair. What still differs from ours: a note with a space in the latter half is cut there, at
+/// a word — at worst half the cap — where ours reads to 400; and Lyntai's flattening (<c>MemoryLine.Flatten</c>) also
+/// folds U+000B and U+001C–U+001E, a strict improvement. The owner decided on 2026-09-26 to accept that residual and
+/// adopt <c>ContentChars</c>; that change — the list below — lands on its own, after the 3.5 bump itself.</para>
 ///
 /// <para><b>ON ADOPTING IT</b> — none of this ran in the 3.4 bump. Lyntai's side of this note is Part 276's own outcome,
 /// which names this decorator as the thing to remove (dev-conventions: a workaround is recorded on both sides). It is
@@ -365,8 +374,9 @@ public sealed class JudgeSeesContentPolicy : IMemoryVerificationPolicy
 /// HOST fault (<c>Failed</c>, counted toward benching the reranker for every caller) and logged it at Debug; 3.3.0 reads it
 /// as <c>ContextWindowExceeded</c>, which advances without blame, and logs a failure that will repeat at Warning (Lyntai
 /// <c>docs/FIXES.md</c>, 2026-09-24). The 512-preset's other shape, the 500 <c>too large to process … physical batch
-/// size</c>, still classifies <c>Failed</c> (transient, Debug) in 3.4.0 — Lyntai <c>docs/task-archive.md</c> Part 310's
-/// item, closed there as Part 307, committed after 3.4.0 and NOT released. The call is refused either way, so the bound
+/// size</c>, classified <c>Failed</c> (transient, Debug) through 3.4.0; since 3.5.0 it is <c>ContextWindowExceeded</c>
+/// too — Lyntai <c>docs/task-archive.md</c> Part 310's item, closed there as Part 307 — so it no longer counts toward
+/// benching the reranker, and the scoring verifier logs it at Warning. The call is refused either way, so the bound
 /// stays. A pair is formatted as query +
 /// document + 4 special tokens (read back from the server's own figure in that refusal), and on this tokenizer
 /// family — XLM-RoBERTa SentencePiece, no byte fallback — an NFKC-normalised text costs at most its UTF-16 length + 1

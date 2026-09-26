@@ -57,10 +57,12 @@ public interface IFactIndex
     /// which refuses with a sentence rather than discard the index for nothing — and with an embedder wired and not
     /// answering, they re-remember NOTHING. What keeps a lost vector RETRYABLE is no longer this probe but <see
     /// cref="IndexAsync"/>, which reads each write's <c>Ran</c> (Lyntai D175, shipped in 3.3.0). So without this gate
-    /// nothing would be lost — every pending fact would simply be re-remembered on every pass of an outage, and in Lyntai
-    /// 3.4 a graph write ANNOTATES BEFORE IT EMBEDS: with 判断 on the Claude CLI, each of those writes is an annotation
-    /// call against the household's quota, for a fact that then loses its vector and is walked again by the next
-    /// back-fill. The probe is one embed; skipping costs nothing a later back-fill does not recover. ONE bulk path does
+    /// nothing would be lost — every pending fact would simply be re-remembered on every pass of an outage, and each of
+    /// those writes still pays its annotation: since Lyntai 3.5.0 a graph write EMBEDS BEFORE IT ANNOTATES (3.4 annotated
+    /// first), but a write whose embed failed goes on to annotate unless <c>SkipAnnotationWithoutVector</c> is set, which
+    /// we leave off (below). With 判断 on the Claude CLI, each is an annotation call against the household's quota, for a
+    /// fact that has lost its vector and is walked again by the next back-fill. The probe is one embed; skipping costs
+    /// nothing a later back-fill does not recover. ONE bulk path does
     /// NOT ask: a backup import's rebuild — its facts were replaced, so the old refs must go whatever the embedder says,
     /// and the rows it leaves unindexed are the startup back-fill's.</para>
     /// <para><b>AND A CLASSIFIER.</b> <see cref="IndexAsync"/> re-embeds a vector-less write's own content and, when that
@@ -74,15 +76,16 @@ public interface IFactIndex
     /// an input refusal, keeping that write's reference without a vector; one that fails wrongly defers the indexing with
     /// <c>FactIndexStep</c>'s warning — and reads an input refusal as an outage, so that fact is retried. <b>What would
     /// end the GATE</b>: Lyntai <c>docs/task-archive.md</c> Part 310's item "Let a graph write skip its annotation when
-    /// its vector fails" — closed there as Part 304, <c>GraphMemoryOptions.SkipAnnotationWithoutVector</c>, committed
-    /// after 3.4.0 and NOT released. On the release that carries it, setting that option on the facts engine makes a
-    /// retried write during an outage cost no annotation, so the quota reason is gone and the back-fills could stop
-    /// asking. <b>But the option cannot simply be switched on</b>: it skips the annotation of EVERY write owed a vector
-    /// that got none — including one this classifier then KEEPS as an input refusal and never retries, which would stay
-    /// without subjects for good. So on that release either leave the option off and keep this gate, or enable it
-    /// together with a pass that re-annotates the kept vector-less facts (not built). The CLASSIFIER keeps the probe
-    /// either way — it answers a different question. The household warning <c>FactIndexStep</c> attaches to a failed
-    /// probe would then need another source — a start with nothing pending makes no write, so there is nothing to
+    /// its vector fails" — closed there as Part 304, <c>GraphMemoryOptions.SkipAnnotationWithoutVector</c>, RELEASED in
+    /// 3.5.0 and left OFF by the 3.5 bump (2026-09-26). Set on the facts engine, it would make a retried write during an
+    /// outage cost no annotation, so the quota reason would go and the back-fills could stop asking. <b>But the option
+    /// cannot simply be switched on</b>: it skips the annotation of EVERY write owed a vector that got none — including
+    /// one this classifier then KEEPS as an input refusal and never retries, which would stay without subjects for good
+    /// (and there is no per-write override). So it stays off and this gate stays, until it can be enabled together with
+    /// either a pass that re-annotates the kept vector-less facts (not built) or an embedder that cannot refuse a fact
+    /// for its length (Lyntai's input segmentation on the embedding registration — unmeasured). The CLASSIFIER keeps
+    /// the probe either way — it answers a different question. The household warning <c>FactIndexStep</c> attaches to a
+    /// failed probe would then need another source — a start with nothing pending makes no write, so there is nothing to
     /// observe; <c>LlamaWarmStep</c> warns for a llama.cpp model that fails to warm, and nothing warns for the built-in
     /// embedder.</para></summary>
     Task<bool> EmbedderReadyAsync(CancellationToken ct = default);
@@ -92,7 +95,8 @@ public interface IFactIndex
     /// embedding fine on a second try): a null leaves the row's <c>graph_ref</c> empty, the retry queue the gated
     /// back-fill (<see cref="SyncAsync"/>) works through. A vector-less write whose own content is refused again while the
     /// embedder answers a probe was refused for its input, and keeps its address — see the
-    /// implementation. <paramref name="factId"/> is the <c>knowledge</c> row, named in that case's log line.</summary>
+    /// implementation. <paramref name="factId"/> is the <c>knowledge</c> row, named in that case's log line. A write
+    /// that keeps its address WITHOUT its subject handles — 判断 on, and its annotation unanswered — is logged too.</summary>
     Task<string?> IndexAsync(string kind, string topic, string content, long? factId = null,
         CancellationToken ct = default);
 
@@ -305,18 +309,15 @@ public sealed class FactIndex : IFactIndex
             //   2. The content is refused again: send the tiny probe. It fails too — the embedder is DOWN: unindexed, as
             //      in 1. It answers — the embedder refused THIS input, twice, while it takes others: past its window, above
             //      all (llama.cpp refuses an input longer than its physical batch, or its context, whole:
-            //      docs/self-managed-llm-runtime.md). Retrying would fail the same way at every start and pay the fact's
-            //      annotation each time, while the fact stayed keyword-only; so it keeps its reference — graph-indexed
-            //      without a vector, as every vector-less write was before the bump — and is never retried.
+            //      docs/self-managed-llm-runtime.md; since Lyntai 3.5.0 the physical-batch 500 classifies
+            //      ContextWindowExceeded, its Part 307, so such a refusal no longer counts toward benching the embedder).
+            //      Retrying would fail the same way at every start and pay the fact's annotation each time, while the
+            //      fact stayed keyword-only; so it keeps its reference — graph-indexed without a vector, as every
+            //      vector-less write was before the bump — and is never retried.
             // THE RESIDUAL: an input refused only INTERMITTENTLY — refused at the write and again at the re-check, while
             // the probe is answered — is read as refused for good and kept without a vector until a semantic reindex. And
             // a vector store that refuses after a good embed EVERY time reads as passing, so its fact is retried by every
             // back-fill, an annotation each; Lyntai itself calls that case "not foreseen" (docs/task-archive.md Part 304).
-            //
-            // 3.4's MemorySources.Annotation is deliberately NOT read here: the shipped LLM annotator catches its own
-            // failures and returns MemoryAnnotation.None, which the engine counts as an answer, so the flag is set
-            // for a signed-out CLI too (Lyntai docs/task-archive.md Part 310's item "Let the shipped LLM annotator say it
-            // did not answer…" — closed there as Part 303, MemoryAnnotation.Unanswered, not released).
             if (Embeds && !written.Ran.HasFlag(Lyntai.Memory.MemorySources.Similarity))
             {
                 if (await EmbedsNowAsync(content, "a re-embed of the fact's content", ct))
@@ -337,6 +338,26 @@ public sealed class FactIndex : IFactIndex
                     "it answers a probe — most likely past its window; indexed without a vector and never retried",
                     factId?.ToString() ?? "(no row id)", kind, topic);
             }
+
+            // A WRITE KEPT WITHOUT ITS SUBJECTS IS SAID (Lyntai 3.5.0, Part 303). `Ran` carries
+            // Lyntai.Memory.MemorySources.Annotation only when the annotator ANSWERED and its subjects were recorded. Until
+            // 3.5 the shipped LLM annotator caught its own failures and returned MemoryAnnotation.None — an answer, "about
+            // nothing" — so the flag was set for a signed-out CLI too; it now returns MemoryAnnotation.Unanswered for a
+            // refused or non-Ok call, an empty or unparseable reply and its own timeout, and logs the likeliest of them —
+            // a non-Ok verdict, a reply with no JSON — at Debug only, below this file log's level. So without this line a
+            // fact that lost its subjects left no trace, while the same outcome from an annotator that THROWS is a Warning
+            // in Lyntai's own engine — hence Warning here too, and because the loss is not retried: this write keeps its
+            // reference, and the back-fill revisits only empty ones.
+            // Absent exactly when a real call went unanswered (or the subject store failed, which Lyntai also warns of):
+            // an annotator is always registered (GatherlightApp's SwitchableAnnotationPolicy), and with 判断 switched OFF
+            // it returns None without asking anything — answered, about nothing — so an "off" write sets the flag and says
+            // nothing here. Asked only on the path that KEEPS the reference: a write returned unindexed above is
+            // re-remembered by the next back-fill, which annotates it again.
+            if (!written.Ran.HasFlag(Lyntai.Memory.MemorySources.Annotation))
+                _log?.LogWarning("fact index: {Kind}/{Topic} was stored without its subject handles — its annotation got " +
+                    "no answer (a signed-out or failing CLI, a reply that is not the JSON asked for) or its subjects could " +
+                    "not be recorded; nothing re-tags it until it is written again or the index is rebuilt (it stays " +
+                    "findable by its words)", kind, topic);
             return Encode(written.Reference);
         }
         catch (Exception ex)
