@@ -23,7 +23,10 @@
 //      badly. Since Lyntai 3.3 the route is PROVIDER and model (llm.route.memory = llamacpp:<gguf>), and the
 //      router ignores one naming a provider it does not hold — which is all that keeps the GGUF's id from the
 //      CLI now: the app-side store that withheld the old model-only key is deleted. So the case fails if the
-//      binding writes the wrong provider (claude-cli:<gguf> is read straight through; confirmed).
+//      binding writes the wrong provider (claude-cli:<gguf> is read straight through; confirmed). And the restart
+//      DROPS that route (LiveRouteMigrationStep): no router in the fallen-back process holds llamacpp, so Lyntai
+//      would warn of it on every annotation and recall for as long as the fallback lasts — the log must carry no
+//      such warning (confirmed to fail with the drop removed).
 //      4b: the positive control — a route written for the RUNNING client (the CLI rebound to sonnet) is read,
 //      live, before any restart; confirmed to fail when the bind writes no route.
 //   5. A RERANKER binding says what it moves — the checking; tagging goes to the CLI and spends the account —
@@ -547,6 +550,18 @@ try {
   ok('nothing was sent to llama.cpp after the fallback',
     !hits.slice(beforeFallback).some((h) => h.path === '/v1/chat/completions'),
     JSON.stringify(hits.slice(beforeFallback).map((h) => `${h.path} ${h.model}`)));
+  // THE FALLBACK'S ROUTE IS DROPPED AT THE START, not warned about on every call. It names llamacpp, which no router
+  // in this process holds, so Lyntai would log "the live route for consumer memory … names no registered text
+  // provider" on the annotation above and on the recall's verification — and on every one after, for as long as the
+  // fallback lasts. Nothing is lost by dropping it: when the GGUF runs again, its model is the judge's default.
+  const liveRouteLines = logText().split('\n').filter((l) => l.includes('live route') || l.includes('live routes:'));
+  ok('THE POINT: the restart dropped the fallback\'s route, saying why — nothing left under llm.route.memory',
+    storedKey(dataDir, 'llm.route.memory') === null
+      && /live routes: dropped llm\.route\.memory = llamacpp:zzroute-chat — 判断 is running on claude-cli/.test(logText()),
+    `llm.route.memory=${JSON.stringify(storedKey(dataDir, 'llm.route.memory'))} ${liveRouteLines.slice(-3).join(' | ')}`);
+  ok('THE POINT: …so the fallback\'s annotation and recall log NO per-call router warning about the route',
+    !/live route for consumer memory .*names no registered text provider/.test(logText()),
+    liveRouteLines.filter((l) => l.includes('names no registered')).slice(0, 2).join(' | '));
 
   // --- 4b. …and the route IS READ when it names the provider that is running --------------------------
   // Every check above has the router ignore the GGUF's route, and every annotation lands on the default

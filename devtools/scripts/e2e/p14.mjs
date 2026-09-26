@@ -8,6 +8,8 @@
 // it verbatim would leave the scorer on haiku without a word. Both halves confirmed to fail: the export with the
 // scorer's stored key taken as llm.model.scorer (the route is not carried), and the import with the old key written
 // raw (no route, and the pre-route key sitting in app_config). The judge's route never travels, like its old key.
+// And an old key whose model carries a COMMA is skipped, not turned into a route — which would be a fallback list
+// naming a backend nobody chose (confirmed to fail with both refusals removed: the route is stored with the comma).
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -189,6 +191,14 @@ try {
   ok('…and a scorer route cortex could not write (a bare provider, another backend) is refused, not stored',
     oddRoutes.imported?.cortex === 0 && oddRoutes2.imported?.cortex === 0 && keyOn(dataB, 'llm.route.scorer') === 'claude-cli:opus',
     `${JSON.stringify(oddRoutes.imported)} ${JSON.stringify(oddRoutes2.imported)} llm.route.scorer=${JSON.stringify(keyOn(dataB, 'llm.route.scorer'))}`);
+  // The OLD-KEY branch goes through the same refusal: a comma in llm.model.scorer would land as a two-entry route.
+  const comma = await (await fetch(`${baseB}/api/memory/import`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ gatherlightMemory: 1, cortex: { 'llm.model.scorer': 'haiku, llamacpp:zzcomma' } }),
+  })).json();
+  ok('THE POINT: an old bundle\'s llm.model.scorer carrying a COMMA is skipped — never a fallback route',
+    comma.ok === true && comma.imported?.cortex === 0 && keyOn(dataB, 'llm.route.scorer') === 'claude-cli:opus',
+    `${JSON.stringify(comma.imported)} llm.route.scorer=${JSON.stringify(keyOn(dataB, 'llm.route.scorer'))}`);
 
   // An older (1.3.0-era) bundle exported before this fix DID carry llm.model.memory — hand-edit one back in
   // and confirm import refuses to write it: a model key travels only if cortex can set it, and cortex cannot

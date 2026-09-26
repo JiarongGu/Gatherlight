@@ -8,16 +8,23 @@
 // ROUTE (llm.route.scorer = claude-cli:<model>), not a bare llm.model.scorer — which nothing reads any more, so a
 // row still writing it would be a control that changes nothing, silently (S1 confirmed to fail that way). Clearing
 // it must DELETE the route: a bare `claude-cli` would run the scorers on the CLI's own default model instead of
-// the consumer default, haiku (S2 confirmed to fail that way — the spawn then carries no --model at all).
+// the consumer default, haiku (S2 confirmed to fail that way — the spawn then carries no --model at all). S4: a model
+// with a COMMA is refused (400) and nothing is stored — a route is a comma-separated fallback list, so `haiku,
+// llamacpp:x` would have routed to a backend nobody chose (confirmed to fail with both refusals removed).
 //
 // M cases — the STARTUP MIGRATION of what an install stored before the routes (LiveRouteMigrationStep). Nothing
 // reads llm.model.scorer / llm.model.memory any more and Lyntai warns only of ITS old namespace, so a key the step
 // missed is a model silently back on its default. Each case plants the old keys into a stopped install's database
 // and boots it: M1 (nothing bound) — both become claude-cli routes, and the next scorer and annotation spawns carry
-// the migrated models end to end; M2 (a chat GGUF saved, its runtime absent) — the judge's key takes the SAVED
-// binding's provider, llamacpp, so the CLI it fell back to is never asked for the GGUF; M3 (a retired backend saved)
-// — dropped, and a route already present beside an old key wins. Confirmed to fail: M1 with the step unregistered,
-// M2 with the provider taken from the RUNNING (fallen-back) judge instead of the saved binding.
+// the migrated models end to end; M2 (a chat GGUF saved, its runtime absent) — the judge's key is derived with the
+// SAVED binding's provider, llamacpp, and then DROPPED as a fallback's leftover, which no router here would read, so
+// the CLI it fell back to is asked for its own model and the log carries no per-call router warning; M3 (a retired
+// backend saved) — dropped, and a route already present beside an old key is kept; M4 (the CLI saved with a model)
+// — the stored model, not the saved one, becomes the route and reaches the annotation; M5 (a RERANKER saved, its
+// runtime absent) — its tagging is the CLI's, so the route is claude-cli:… and KEPT; M6 — a second boot changes and
+// logs nothing. Confirmed to fail: M1 with the step unregistered; M2 with the provider taken as the CLI's instead of
+// the saved binding's (the CLI is then asked for the GGUF), and its no-warning assertion with the stale-route drop
+// removed; M5 with a reranker's provider taken as llama.cpp's (its route is then dropped as stale).
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -34,12 +41,15 @@ const srv = startServer({
   dataDir, port: 5398,
   env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ARGS_LOG: argsLog },
 });
-// The M cases' servers: M1 reboots this suite's own folder, M2/M3 a second one (booted once to create its database).
-// Each boot on a port of its own — reusing one inside a suite is its own trap.
+// The M cases' servers: M1 reboots this suite's own folder, M2–M6 a second one (booted once to create its database).
+// Each boot on a port of its own — reusing one inside a suite is its own trap. The gaps no other suite's literal port
+// fills in the suites' own block, outside p17's runtime wildcard probe and every Windows-excluded range seen on
+// 2026-09-26. (A block just past the excluded range was tried first; a VS Code process on this machine listens in it.
+// No port is spelled out here: the runner reads every 5xxx literal in a file, comments included, as its footprint.)
 const migDir = dataDirFor('p16-migrate');
 makeTestData(migDir);
 const migArgsLog = path.join(migDir, 'state', 'stub-args.jsonl');
-const M1_PORT = 5407, MIG_PRE_PORT = 5408, M2_PORT = 5409, M3_PORT = 5410;
+const M1_PORT = 5400, MIG_PRE_PORT = 5444, M2_PORT = 5445, M3_PORT = 5449, M4_PORT = 5453, M5_PORT = 5454, M6_PORT = 5457;
 const extra = [];
 const { j, post, put, del, waitPhase } = makeClient(srv.base);
 
@@ -249,6 +259,13 @@ try {
   ok('S2 THE POINT: the scorer spawns get the consumer default, --model haiku — not sonnet, and not no --model',
     s2.spawns.length >= 1 && s2.spawns.every((x) => modelOf(x) === 'haiku'), summary(s2.spawns));
 
+  // S4 — a model with a COMMA is refused, by the endpoint (400, saying why) and so by everything that sets a row: a
+  // route is a comma-separated fallback list, and this one would name a backend nobody chose.
+  const sComma = await put('/api/manage/cortex/model/scorer', { value: 'haiku, llamacpp:zzcomma' });
+  ok('S4 THE POINT: a scorer model with a comma is refused — 400, saying why — and nothing is stored',
+    sComma.status === 400 && /逗号/.test(String(sComma.body?.error)) && storedKey('llm.route.scorer') === undefined,
+    `${sComma.status} ${JSON.stringify(sComma.body)} llm.route.scorer=${JSON.stringify(storedKey('llm.route.scorer'))}`);
+
   // S3 — reset (DELETE) of a set row removes the route too.
   await put('/api/manage/cortex/model/scorer', { value: 'opus' });
   ok('S3 (fixture) the row set again is its route — or the reset below would pass on nothing',
@@ -331,14 +348,21 @@ try {
     fs.writeFileSync(path.join(dir, 'state', 'settings.json'), JSON.stringify({ memory }, null, 2), 'utf8');
 
   // M2 — a chat GGUF is the SAVED binding, but its runtime is not on disk, so 判断 falls back to the CLI. The key
-  // was written for the GGUF: it must become ITS route (llamacpp:…), which the CLI's router does not hold — never
-  // claude-cli:<gguf>, which the fallen-back CLI would read and be asked for a model it has never heard of.
+  // was written for the GGUF: it becomes ITS route (llamacpp:…) — never claude-cli:<gguf>, which the fallen-back CLI
+  // would read and be asked for a model it has never heard of — and that route is then DROPPED, because no router
+  // this process builds holds llamacpp: Lyntai would warn of it on every annotation and every recall, for as long as
+  // the fallback lasts. Nothing is lost: when the GGUF runs again, its model is the judge's default.
   settingsOf(migDir, { judgeSource: 'llama-cpp', judgeModel: 'zzmig-chat' });
   plant(migDir, { 'llm.model.memory': 'zzmig-chat' });
   const m2 = await boot(migDir, M2_PORT, migArgsLog);
-  ok('M2 THE POINT: the judge\'s key takes the SAVED binding\'s provider — llm.route.memory = llamacpp:zzmig-chat',
-    keyIn(migDir, 'llm.route.memory') === 'llamacpp:zzmig-chat' && keyIn(migDir, 'llm.model.memory') === undefined,
-    `route=${JSON.stringify(keyIn(migDir, 'llm.route.memory'))} old=${JSON.stringify(keyIn(migDir, 'llm.model.memory'))}`);
+  ok('M2 THE POINT: the judge\'s key is derived with the SAVED binding\'s provider — llamacpp:zzmig-chat — as the log says',
+    /live routes: llm\.model\.memory = zzmig-chat → llm\.route\.memory = llamacpp:zzmig-chat/.test(logOf(migDir)),
+    logOf(migDir).split('\n').filter((l) => l.includes('live routes')).join(' | '));
+  ok('M2 THE POINT: …and dropped at once as a fallback\'s leftover — no route and no old key remain, and the log says why',
+    keyIn(migDir, 'llm.route.memory') === undefined && keyIn(migDir, 'llm.model.memory') === undefined
+      && /live routes: dropped llm\.route\.memory = llamacpp:zzmig-chat — 判断 is running on claude-cli/.test(logOf(migDir)),
+    `route=${JSON.stringify(keyIn(migDir, 'llm.route.memory'))} old=${JSON.stringify(keyIn(migDir, 'llm.model.memory'))} `
+      + logOf(migDir).split('\n').filter((l) => l.includes('live routes')).join(' | '));
   const m2c = makeClient(m2.base);
   const m2Layer = ((await m2c.getJson('/api/manage/memory')).layers ?? []).find((l) => l.id === 'judge') ?? {};
   ok('M2 (fixture) with its runtime absent, 判断 runs on the CLI', m2Layer.activeSource === 'claude-cli',
@@ -350,6 +374,13 @@ try {
   const m2Ann = await annotated(migArgsLog, 'zzmig2fact');
   ok('M2 …so the CLI is asked for ITS model (haiku), never the GGUF the migrated route names',
     m2Wrote.status === 200 && m2Ann.length >= 1 && m2Ann.every((x) => modelOf(x) === 'haiku'), summary(m2Ann));
+  const m2Recall = await m2c.call('recall_facts', { query: 'zzmig2fact garden hose', limit: 5 });
+  try { await until(() => callsIn(migArgsLog).some((x) => x.kind === 'verification' && x.tail.includes('zzmig2fact')), 60000); } catch { /* reported below */ }
+  const staleWarnings = () => logOf(migDir).split('\n').filter((l) => /live route for consumer memory .*names no registered text provider/.test(l));
+  ok('M2 THE POINT: the annotation and the recall\'s verification log NO per-call router warning about the route',
+    m2Recall.status === 200 && callsIn(migArgsLog).some((x) => x.kind === 'verification' && x.tail.includes('zzmig2fact'))
+      && staleWarnings().length === 0,
+    `${m2Recall.status} warnings=${staleWarnings().length} ${staleWarnings().slice(0, 2).join(' | ')}`);
   await stopAll();
 
   // M3 — a RETIRED backend is saved (ollama): the key was never read, so there is no provider to derive; dropped.
@@ -357,15 +388,64 @@ try {
   settingsOf(migDir, { judgeSource: 'ollama', judgeModel: 'gemma3:4b' });
   plant(migDir, { 'llm.model.memory': 'gemma3:4b', 'llm.route.memory': null,
     'llm.model.scorer': 'opus', 'llm.route.scorer': 'claude-cli:sonnet' });
-  const m3 = await boot(migDir, M3_PORT, migArgsLog);
+  await boot(migDir, M3_PORT, migArgsLog);
   ok('M3 THE POINT: a key written for a retired backend is DROPPED, not turned into a route',
     keyIn(migDir, 'llm.route.memory') === undefined && keyIn(migDir, 'llm.model.memory') === undefined,
     `route=${JSON.stringify(keyIn(migDir, 'llm.route.memory'))} old=${JSON.stringify(keyIn(migDir, 'llm.model.memory'))}`);
   ok('M3 …and says why', /live routes: dropped llm\.model\.memory = gemma3:4b — the saved 判断 backend 'ollama'/.test(logOf(migDir)),
     logOf(migDir).split('\n').filter((l) => l.includes('live routes')).join(' | '));
-  ok('M3 …and a route already set wins over the old key beside it (kept; the old key deleted)',
+  ok('M3 …and a route already set is kept over the old key beside it (the route is what this build reads; the old key deleted)',
     keyIn(migDir, 'llm.route.scorer') === 'claude-cli:sonnet' && keyIn(migDir, 'llm.model.scorer') === undefined,
     `route=${JSON.stringify(keyIn(migDir, 'llm.route.scorer'))} old=${JSON.stringify(keyIn(migDir, 'llm.model.scorer'))}`);
+  await stopAll();
+
+  // M4 — the CLI is the saved binding, with a model (sonnet), and the stored key names ANOTHER (opus — the old cortex
+  // row could leave that). The retired store read the key straight through for a binding on the running client, so
+  // the route carries the STORED model on the CLI, and the next annotation asks for it.
+  settingsOf(migDir, { judgeSource: 'claude-cli', judgeModel: 'sonnet' });
+  plant(migDir, { 'llm.model.memory': 'opus', 'llm.route.memory': null });
+  const m4 = await boot(migDir, M4_PORT, migArgsLog);
+  ok('M4 THE POINT: a saved CLI binding\'s stored key becomes llm.route.memory = claude-cli:opus, and is kept',
+    keyIn(migDir, 'llm.route.memory') === 'claude-cli:opus' && keyIn(migDir, 'llm.model.memory') === undefined,
+    `route=${JSON.stringify(keyIn(migDir, 'llm.route.memory'))} old=${JSON.stringify(keyIn(migDir, 'llm.model.memory'))}`);
+  const m4Wrote = await makeClient(m4.base).call('remember_fact', {
+    kind: 'household', topic: 'zzmig4fact porch routine',
+    content: 'The zzmig4fact porch light is on a timer.', source: 'https://example.test/zzmig4', confidence: 0.8,
+  });
+  const m4Ann = await annotated(migArgsLog, 'zzmig4fact');
+  ok('M4 …and the next annotation asks for opus', m4Wrote.status === 200 && m4Ann.length >= 1 && m4Ann.every((x) => modelOf(x) === 'opus'),
+    summary(m4Ann));
+  await stopAll();
+
+  // M5 — a RERANKER is the saved binding, its runtime absent (so 判断 runs on the CLI). A reranker never tags: its
+  // tagging is the CLI's, so its key becomes a claude-cli route — which the running CLI does read, so it is KEPT,
+  // where a chat GGUF's (M2) is dropped. The stored model here is sonnet, so the annotation shows the route in force.
+  settingsOf(migDir, { judgeSource: 'llama-cpp', judgeModel: 'zzmig-rerank' });
+  plant(migDir, { 'llm.model.memory': 'sonnet', 'llm.route.memory': null });
+  const m5 = await boot(migDir, M5_PORT, migArgsLog);
+  ok('M5 THE POINT: a saved reranker\'s key becomes llm.route.memory = claude-cli:sonnet — its tagging is the CLI\'s — and is kept',
+    keyIn(migDir, 'llm.route.memory') === 'claude-cli:sonnet' && keyIn(migDir, 'llm.model.memory') === undefined,
+    `route=${JSON.stringify(keyIn(migDir, 'llm.route.memory'))} old=${JSON.stringify(keyIn(migDir, 'llm.model.memory'))}`);
+  const m5Wrote = await makeClient(m5.base).call('remember_fact', {
+    kind: 'household', topic: 'zzmig5fact attic routine',
+    content: 'The zzmig5fact attic fan runs in summer.', source: 'https://example.test/zzmig5', confidence: 0.8,
+  });
+  const m5Ann = await annotated(migArgsLog, 'zzmig5fact');
+  ok('M5 …and the next annotation asks for sonnet', m5Wrote.status === 200 && m5Ann.length >= 1 && m5Ann.every((x) => modelOf(x) === 'sonnet'),
+    summary(m5Ann));
+  await stopAll();
+
+  // M6 — a SECOND boot of the same install: nothing left to move, nothing stale, so nothing changes and nothing is
+  // logged. The step runs every start; it must not re-derive, re-drop or re-announce.
+  const migLines = () => logOf(migDir).split('\n').filter((l) => l.includes('live routes:')).length;
+  const before = { lines: migLines(), memory: keyIn(migDir, 'llm.route.memory'), scorer: keyIn(migDir, 'llm.route.scorer') };
+  await boot(migDir, M6_PORT, migArgsLog);
+  const after = { lines: migLines(), memory: keyIn(migDir, 'llm.route.memory'), scorer: keyIn(migDir, 'llm.route.scorer') };
+  ok('M6 THE POINT: a second boot is idempotent — the same routes, no old keys, and no new migration line in the log',
+    after.lines === before.lines && after.memory === before.memory && after.scorer === before.scorer
+      && after.memory === 'claude-cli:sonnet' && keyIn(migDir, 'llm.model.memory') === undefined
+      && keyIn(migDir, 'llm.model.scorer') === undefined,
+    JSON.stringify({ before, after }));
   await stopAll();
 } catch (err) {
   fail('e2e-p16 fatal: ' + err.message);
