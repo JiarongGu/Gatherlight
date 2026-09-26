@@ -430,6 +430,13 @@ try {
     judged.length > 0, JSON.stringify(hits.slice(before).map((h) => `${h.path} ${h.model}`)));
   ok('…asking for the judge\'s model, not a default a candidate list carried',
     judged.every((h) => h.model === JUDGE_MODEL), JSON.stringify(judged.map((h) => h.model)));
+  // THINKING IS OFF BY THE REQUEST (Lyntai D179, 2026-09-26). The launch key `reasoning = off` is gone from the chat
+  // preset (p51 asserts its absence), so this field is now the ONLY thing between a Qwen3 template and a thinking block
+  // on every judgement — measured on the real binary with neither: 119–512 tokens of reasoning per call
+  // (docs/self-managed-llm-runtime.md, 2026-09-26). llama-server reads `chat_template_kwargs.enable_thinking` itself.
+  const thinkingOff = (h) => { try { return JSON.parse(h.body).chat_template_kwargs?.enable_thinking === false; } catch { return false; } };
+  ok('THE POINT: the annotation request asks the template for no thinking — chat_template_kwargs.enable_thinking = false (Lyntai SuppressReasoningFields)',
+    judged.length > 0 && judged.every(thinkingOff), JSON.stringify(judged.map((h) => { try { return JSON.parse(h.body).chat_template_kwargs ?? null; } catch { return 'unparsed'; } })));
 
   // --- 2. the fact is EMBEDDED ---------------------------------------------------------------------
   const embedded = hits.slice(before).filter((h) => h.path === '/v1/embeddings' && h.body.includes('zzroutefact'));
@@ -468,6 +475,14 @@ try {
     .filter((h) => h.path === '/v1/chat/completions' && h.model === JUDGE_MODEL && h.body.includes('zzroutefact'));
   ok('(non-vacuity) the recall\'s verification reached the chat judge — and was never answered',
     heldVerification.length > 0, JSON.stringify(hits.slice(beforeHang).map((h) => `${h.path} ${h.model}`)));
+  ok('…asking the template for no thinking, as the annotation does (the verifier is the other memory seam)',
+    heldVerification.length > 0 && heldVerification.every(thinkingOff),
+    JSON.stringify(heldVerification.map((h) => { try { return JSON.parse(h.body).chat_template_kwargs ?? null; } catch { return 'unparsed'; } })));
+  // …and ONLY the chat registration carries it: an embedder's request never does (its registration sets no fields, and
+  // Lyntai adds them only on a Text registration's Suppress call).
+  ok('…and no embedding request carries it',
+    hits.filter((h) => h.path === '/v1/embeddings').every((h) => !h.body.includes('chat_template_kwargs')),
+    JSON.stringify(hits.filter((h) => h.path === '/v1/embeddings' && h.body.includes('chat_template_kwargs')).length));
   ok('THE POINT: a judge that never answers leaves the ENGINE\'s page — ranked by the graph, the fact on it, no verdict',
     hung.status === 200 && hung.result?.ranked === 'graph' && hung.result?.answered === undefined
       && (hung.result?.facts ?? []).some((f) => JSON.stringify(f).includes('zzroutefact')),

@@ -1631,8 +1631,9 @@ try {
     const WINDOWED = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
     fs.writeFileSync(path.join(ggufDir, `${WINDOWED}.gguf`), 'x');
     // …and the catalogued CHAT judge (Qwen3 0.6B, docs/judge-bench.md Run 5b), whose template THINKS by default: the
-    // kind that most needs `reasoning = off`. Its row types it chat; so would its name, so this pins the launch the
-    // row gets rather than proving the row exists (the shelf block does that).
+    // kind whose launch once carried `reasoning = off` (the request turns thinking off since Lyntai D179 — p52). Its row
+    // types it chat; so would its name, so this pins the launch the row gets rather than proving the row exists (the
+    // shelf block does that).
     const QWEN3 = 'Qwen3-0.6B-Q8_0';
     fs.writeFileSync(path.join(ggufDir, `${QWEN3}.gguf`), 'x');
     // …and the catalogued EMBEDDER, whose row declares its 2,048-token window (EmbeddingGemma's GGUF context_length).
@@ -1687,28 +1688,33 @@ try {
         && ['zztest-embed-model', 'zztest-rerank-model', WINDOWED].every((id) => !/16384/.test(sectionOf(id))),
       JSON.stringify({ embed: sectionOf('zztest-embed-model'), rerank: sectionOf('zztest-rerank-model'), windowed: sectionOf(WINDOWED) }));
 
-    // A CHAT child launches with thinking OFF and a generation cap. Without the first, a thinking-capable template
-    // thinks on every judgement (Lyntai 3.2.0's OpenAI-shaped wire drops TextReasoning.Suppress — its
-    // docs/task-archive.md Part 288, closed as D179 and not yet released; this assertion goes only on that bump, after
-    // each catalogued chat model is verified on the real binary — dev-conventions open workaround (5);
-    // measured 1.3–17.5 s per verdict and past a 300 s timeout, docs/judge-bench.md Run 5's screen); without the
-    // second a small model's runaway fills its whole context. Both SILENT: no error, only seconds. Verified in the
-    // child's own argv on the real binary (--reasoning off --n-predict 512).
-    ok('THE POINT: a chat section launches with thinking OFF and a 512-token generation cap — and still offloaded',
-      /^reasoning\s*=\s*off\s*$/m.test(sectionOf('zztest-chat-model'))
-        && /^n-predict\s*=\s*512\s*$/m.test(sectionOf('zztest-chat-model'))
-        && /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf('zztest-chat-model')),
+    // A CHAT child launches with a generation cap: without it a small model's runaway fills its whole context — SILENT,
+    // no error, only seconds. Verified in the child's own argv on the real binary (--n-predict 512).
+    //
+    // …and with NO `reasoning` key (2026-09-26, the Lyntai 3.4 bump). It was `reasoning = off` until then, the workaround
+    // for Lyntai's OpenAI-shaped wire dropping TextReasoning.Suppress (its docs/task-archive.md Part 288); since Lyntai
+    // 3.3.0 (its D179) every memory-seam call carries `chat_template_kwargs: {"enable_thinking": false}` instead — p52
+    // asserts the request half. Removed only after each catalogued chat model was verified on the real binary with the
+    // key gone and the field sent (docs/self-managed-llm-runtime.md, 2026-09-26: no reasoning, 6–23-token replies, every
+    // verdict and subject list arriving; the same prompt rendered). Absent, rather than merely unasserted, because a
+    // launch key and a request field both saying it is one mechanism too many to reason about when one of them breaks.
+    ok('THE POINT: a chat section launches with a 512-token generation cap, still offloaded, and NO reasoning key — thinking is the request\'s now (Lyntai D179; p52)',
+      /^n-predict\s*=\s*512\s*$/m.test(sectionOf('zztest-chat-model'))
+        && /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf('zztest-chat-model'))
+        && !/^reasoning/m.test(sectionOf('zztest-chat-model')),
       JSON.stringify({ chat: sectionOf('zztest-chat-model') }));
-    ok('…and so does the catalogued Qwen3 0.6B — thinking off, both caps, offloaded, and none of another kind\'s keys',
-      /^reasoning\s*=\s*off\s*$/m.test(sectionOf(QWEN3)) && /^n-predict\s*=\s*512\s*$/m.test(sectionOf(QWEN3))
+    ok('…and so does the catalogued Qwen3 0.6B — both caps, offloaded, no reasoning key, and none of another kind\'s keys',
+      /^n-predict\s*=\s*512\s*$/m.test(sectionOf(QWEN3))
         && /^n-gpu-layers\s*=\s*\d+\s*$/m.test(sectionOf(QWEN3))
         && /^ctx-size\s*=\s*16384\s*$/m.test(sectionOf(QWEN3))
+        && !/^reasoning/m.test(sectionOf(QWEN3))
         && !/batch-size|embeddings|reranking/.test(sectionOf(QWEN3)),
       JSON.stringify({ qwen3: sectionOf(QWEN3) }));
-    // …and ONLY there: an embedder or a reranker never generates, and a key its child does not need is a key whose
-    // meaning for that kind nobody measured.
-    ok('…and ONLY a chat section: no embedder or reranker carries either key',
-      ['zztest-embed-model', 'zztest-rerank-model', WINDOWED].every((id) => !/reasoning|n-predict/.test(sectionOf(id))),
+    // …and the cap ONLY there: an embedder or a reranker never generates, and a key its child does not need is a key whose
+    // meaning for that kind nobody measured. No section of any kind carries a reasoning key.
+    ok('…and ONLY a chat section carries n-predict, and no section at all a reasoning key',
+      ['zztest-embed-model', 'zztest-rerank-model', WINDOWED].every((id) => !/n-predict/.test(sectionOf(id)))
+        && !/^reasoning/m.test(preset),
       JSON.stringify(Object.fromEntries(['zztest-embed-model', 'zztest-rerank-model', WINDOWED].map((id) => [id, sectionOf(id)]))));
 
     ok('embeddings = true goes on the EMBEDDER and nowhere else',

@@ -37,6 +37,14 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     internal const string EmbedProviderId = "llamacpp-embed";
     private const string ClientId = "memory-llamacpp";
 
+    /// <summary>What the CHAT registration adds to a request that asks <c>TextReasoning.Suppress</c> — every call
+    /// both memory seams make (Lyntai D179, <c>HttpModelOptions.SuppressReasoningFields</c>). The ONLY thing turning a
+    /// chat judge's thinking off since the preset's <c>reasoning = off</c> went (2026-09-26). Measured on llama-server
+    /// b10549 (docs/self-managed-llm-runtime.md): it renders, byte for byte, the prompt the launch key rendered — Qwen3's
+    /// pre-closed think block, and Gemma 3's prompt unchanged — for every catalogued chat model. A template that decides
+    /// thinking by some other variable (a dropped-in model) is not reached by it. See <see cref="Register"/>.</summary>
+    private const string SuppressReasoningFields = """{"chat_template_kwargs":{"enable_thinking":false}}""";
+
     /// <summary>The reranker's own provider id — a third registration against the same router (Lyntai D133:
     /// one host serving several routes is several registrations), named so a trace says which one answered.</summary>
     private const string RerankProviderId = "llamacpp-rerank";
@@ -346,17 +354,26 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         // A named client narrows BOTH the provider pool and the candidate list since Lyntai 3.1 (its D87),
         // so the global candidate list no longer has to be widened to include this provider.
         //
-        // THE SITE OF OPEN WORKAROUND (5) (dev-conventions). Lyntai 3.2.0's OpenAI-shaped wire drops the memory seams'
-        // TextReasoning.Suppress, so a thinking-capable chat template thinks on every call, and the preset's
-        // `reasoning = off` (LlamaServerRuntime.WritePresets) is what stops it. Lyntai closed the gap as
-        // docs/task-archive.md Part 288 / D179 — committed, NOT released: HttpModelOptions.SuppressReasoningFields, JSON
-        // merged into a request only when the call asks Suppress, no library default. On the bump, in this order: switch
-        // this line to the preset's options-action overload and set
-        // o.SuppressReasoningFields = """{"chat_template_kwargs":{"enable_thinking":false}}""" here (Qwen3's template
-        // variable — template-specific, so a template reading another key ignores it); verify EACH catalogued chat model
-        // on the real binary with the preset line removed (no <think>, no reasoning_content, replies of 6–21 tokens);
-        // only then drop `reasoning = off` from the preset and p51's assertion of it.
-        b.AddLlamaProvider(ctx.Endpoint, ctx.Model, ProviderId)
+        // THINKING IS OFF BY THE REQUEST — what closed dev-conventions' workaround (5) (2026-09-26). Both memory seams ask
+        // TextReasoning.Suppress on every call; Lyntai 3.2.0's OpenAI-shaped wire dropped it (its docs/task-archive.md
+        // Part 288), so the chat preset's `reasoning = off` launch key did the job. Lyntai 3.3.0 shipped D179:
+        // HttpModelOptions.SuppressReasoningFields, JSON merged into a request only when the call asks Suppress, with no
+        // library default — reachable here through the preset's options-action overload, which seeds
+        // http://localhost:8080 (overridden below) and leaves Produces at Text. Verified on b10549 for every catalogued
+        // chat model with the launch key gone (docs/self-managed-llm-runtime.md, 2026-09-26), and only then was the key
+        // deleted (LlamaServerRuntime.LaunchKeys). p52 asserts the field on both seams' requests.
+        //
+        // A SERVER THAT REFUSES THE FIELD FAILS THE CALL, and fails it quietly: the router logs `Failed` at Information
+        // and the judge reads it as transient, so a refusal looks like no judge at all. llama-server b10549 accepts it.
+        // Lyntai's docs/task-archive.md Part 309 — done at its HEAD, not released — logs a Warning naming the option and
+        // quoting the server when a call carrying these fields is refused; that release is what would make a future
+        // refusal visible.
+        b.AddLlamaProvider(ProviderId, o =>
+         {
+             o.BaseUrl = ctx.Endpoint;
+             o.Model = ctx.Model;
+             o.SuppressReasoningFields = SuppressReasoningFields;
+         })
          .AddTextClient(ClientId, c => c.UseProviders(ProviderId));
     }
 

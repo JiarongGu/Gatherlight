@@ -159,11 +159,12 @@ public interface ILlamaServerRuntime
 /// <see cref="ResourceProvisioner.GgufKind"/> — exact for what we provision, a stated name
 /// heuristic for a GGUF the household dropped in themselves, and ONE writer either way.</para>
 ///
-/// <para><b>Chat models launch with thinking OFF, a generation cap and a context cap</b> (<c>reasoning = off</c>,
-/// <c>n-predict</c>, <c>ctx-size</c> — chat sections only). All three fail SILENTLY without it: a thinking-capable
-/// template thinks on every judgement, a small model's runaway fills its whole context, and an uncapped child reserves
-/// its model's whole TRAINING context in GPU memory up front; none is an error. See <see cref="WritePresets"/>,
-/// <see cref="ChatMaxTokens"/> and <see cref="ChatContextTokens"/>.</para>
+/// <para><b>Chat models launch with a generation cap and a context cap</b> (<c>n-predict</c>, <c>ctx-size</c> — chat
+/// sections only). Both fail SILENTLY without it: a small model's runaway fills its whole context, and an uncapped child
+/// reserves its model's whole TRAINING context in GPU memory up front; neither is an error. Thinking is turned off per
+/// REQUEST, not here — the memory seams' calls carry <c>chat_template_kwargs.enable_thinking = false</c> (Lyntai D179,
+/// <c>LlamaCppSource</c>). See <see cref="LaunchKeys"/>, <see cref="ChatMaxTokens"/> and
+/// <see cref="ChatContextTokens"/>.</para>
 /// </summary>
 public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
 {
@@ -223,16 +224,18 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// the better outcome there anyway. Run 5's screen measured the replies actually given, with thinking off: 6–21
     /// tokens.</para>
     ///
-    /// <para><b>The cap turns an ALWAYS-THINKING model silent rather than slow.</b> <c>reasoning = off</c> works by the
-    /// chat template rendering a pre-closed think block; a dropped-in model whose template thinks regardless (ignores
-    /// <c>--reasoning off</c>) spends its 512 tokens inside the thinking and is cut before it writes a verdict or a
+    /// <para><b>The cap turns an ALWAYS-THINKING model silent rather than slow.</b> Thinking is turned off by the chat
+    /// template rendering a pre-closed think block when the request carries <c>enable_thinking = false</c> (Lyntai D179 —
+    /// the <c>--reasoning off</c> launch key until 2026-09-26); a dropped-in model whose template thinks regardless (ignores
+    /// <c>enable_thinking</c>) spends its 512 tokens inside the thinking and is cut before it writes a verdict or a
     /// subject list. That reply does not parse, and both seams fail open — so such a model verifies nothing and tags
     /// nothing, on every call, in about the time the cap takes to decode, with no error anywhere. Uncapped it would have
     /// been slow instead (seconds to minutes per call, Run 5's screen), which at least shows. No catalogued model does
     /// this; the fix for one that does is a row measured on the bench, not a larger cap.</para>
     ///
     /// <para><b>What it bounds a runaway to: cap ÷ decode rate.</b> Measured on the real binary under the preset this
-    /// file generates (2026-09-24, llama.cpp b10549, Qwen3-0.6B-Q8_0 on one laptop GPU): a prompt asking for every
+    /// file generated then, thinking off by its <c>reasoning = off</c> (2026-09-24, llama.cpp b10549, Qwen3-0.6B-Q8_0 on
+    /// one laptop GPU): a prompt asking for every
     /// number to 100,000 stopped at exactly 512 completion tokens, <c>finish_reason: length</c>, in 2.4 s (229 tokens/s
     /// decode). A CPU-only machine decodes several times slower, and pays that many times more — still bounded. The
     /// same router answered a verification-shaped request (Lyntai's verifier prompt, 60 fixture notes, 1,632 prompt
@@ -480,31 +483,28 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 keys.Add(("batch-size", embedWindow));
                 keys.Add(("ubatch-size", embedWindow));
                 break;
-            // A CHAT child — the only kind that generates — launches with thinking OFF, a generation cap and a
-            // context cap.
+            // A CHAT child — the only kind that generates — launches with a generation cap and a context cap.
             //
-            // `reasoning = off` IS A WORKAROUND FOR A LYNTAI GAP, recorded on both sides (dev-conventions: open
-            // workaround (5)). Both memory seams ask for no reasoning (TextReasoning.Suppress), and Lyntai 3.2.0's
-            // OpenAI-shaped payload drops the field — Lyntai docs/task-archive.md Part 288, "the OpenAI-shaped wire
-            // drops TextReasoning.Suppress", CLOSED upstream as D179 but NOT released (no version promised).
-            // llama-server's default `--reasoning auto` then opens a thinking block for any
-            // template that supports one: Qwen3-0.6B thought on every call (1.3–7.5 s), Qwen3.5-0.8B for 17.5 s and
-            // then past a 300 s client timeout (docs/judge-bench.md, Run 5's screen). The router passes this key to
-            // the child as `--reasoning off`; the template then renders its pre-closed think block, and replies ran
-            // 6–21 tokens. For a template with nothing to turn off (Gemma 3) the rendered prompt is byte-identical.
-            // NOT `reasoning-budget = 0`: the template stays in thinking mode, the model writes its reasoning into
-            // the content, and 4 of 6 replies did not parse. KEEP THIS LINE UNTIL D179 SHIPS — and even then it goes
-            // LAST. D179 is CONFIGURED fields: HttpModelOptions.SuppressReasoningFields, a JSON object Lyntai merges
-            // into a chat request only when the call asks Suppress; like DocumentPrefix, the library knows no vendor's
-            // spelling and ships no default. So the bump wires nothing by itself. In order:
-            // (1) set SuppressReasoningFields = {"chat_template_kwargs":{"enable_thinking":false}} on the `llamacpp`
-            // registration — the AddLlamaProvider line in LlamaCppSource.Register, through the preset's options-action
-            // overload D179 added — a spelling that is TEMPLATE-specific (a template reading another key ignores it)
-            // and was tried only as a dedicated server's `--chat-template-kwargs` flag, never as a request field or a
-            // preset key; (2) verify EACH catalogued chat model on the real binary with this line removed: no
-            // `<think>`, no reasoning_content, replies as short as they ran under this line (6–21 tokens); (3) only
-            // then delete this line and p51's assertion of it. The other order puts every Qwen judge back to thinking
-            // on every call, silently.
+            // NO `reasoning` KEY: thinking is turned off by the REQUEST, not the launch (2026-09-26, the Lyntai 3.4 bump).
+            // Both memory seams ask TextReasoning.Suppress on every call, and since Lyntai 3.3.0 (its D179) the `llamacpp`
+            // chat registration expresses that as `chat_template_kwargs: {"enable_thinking": false}` in the request body
+            // (LlamaCppSource.SuppressReasoningFields). Until then Lyntai's OpenAI-shaped wire dropped the ask (its
+            // docs/task-archive.md Part 288), llama-server's default `--reasoning auto` opened a thinking block for any
+            // template with one — Qwen3-0.6B thought on every call (1.3–7.5 s), Qwen3.5-0.8B past a 300 s timeout
+            // (docs/judge-bench.md, Run 5's screen) — and `reasoning = off` here was the workaround (dev-conventions'
+            // workaround (5), now closed). Verified on b10549 for every catalogued chat model through the app's own write
+            // and recall paths, with this key gone and the field sent (docs/self-managed-llm-runtime.md, 2026-09-26):
+            // every call answered, no reasoning_content, no <think>, replies of 6–23 tokens (6–30 with the key, same runs),
+            // every write tagged and every verdict parsed but two of Gemma 3 1B's 28 (a stray quote the model wrote, with
+            // and without the field alike); Qwen3's prompt renders its pre-closed think block exactly as it did under the
+            // key, and Gemma 3's is byte-identical either way. The same run's controls: the key gone and the field stripped, Qwen3 reasoned on every call
+            // (119–512 tokens). NOT `reasoning-budget = 0`: the template stays in thinking mode and the model writes its
+            // reasoning into the content (Run 5's screen: 4 of 6 replies did not parse).
+            //
+            // What the key covered and the field does not: a request that does not come through the memory seams — the
+            // app's own warm (WarmCoreAsync, max_tokens 1) now opens a think block on a Qwen template, one discarded
+            // token. And a template that decides thinking by something other than `enable_thinking` — a dropped-in
+            // model — is not reached by the field; see ChatMaxTokens for what the cap then does.
             //
             // `n-predict` is our own launch contract, not a workaround — see ChatMaxTokens.
             //
@@ -513,9 +513,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
             // memory with the router, measured); 16,384 holds the measured worst prompt with a third to spare, and
             // took the same child to +2,472 MiB on the real binary (docs/self-managed-llm-runtime.md, 2026-09-24).
             // Chat sections ONLY: a reranker's window is its whole-pair contract (below) and an embedder takes its
-            // own — neither was measured under any other. p51 pins all three halves.
+            // own — neither was measured under any other. p51 pins both caps and the key's absence; p52 the field.
             case GgufCapability.Completion:
-                keys.Add(("reasoning", "off"));
                 keys.Add(("n-predict", ChatMaxTokens.ToString()));
                 keys.Add(("ctx-size", ChatContextTokens.ToString()));
                 break;

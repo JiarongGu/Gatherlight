@@ -685,3 +685,79 @@ and its `llama_context` lines.
   is unmeasured here and not built.
 
 Scratch scripts, not committed; each router and its child were ended by the router's PID, as a process tree.
+
+### 2026-09-26 — thinking off by the REQUEST: the chat preset's `reasoning = off` removed (Lyntai D179)
+
+The Lyntai 3.4 bump brought D179 (shipped in 3.3.0): `HttpModelOptions.SuppressReasoningFields`, a JSON object Lyntai
+adds to a `chat/completions` body on every call asking `TextReasoning.Suppress` — which both memory seams ask on every
+call. `LlamaCppSource` now sets `{"chat_template_kwargs":{"enable_thinking":false}}` on the `llamacpp` chat
+registration, and this entry is the check that had to hold, for EVERY catalogued chat model, before the preset's
+`reasoning = off` could go (`dev-conventions.md`, the Lyntai list's workaround (5)). It held, and the key is gone.
+
+**Setup.** b10549 (Vulkan, llama.cpp choosing the device, as the product launches it), the three chat
+rows of `GgufCatalog` — `Qwen3-0.6B-Q8_0`, `gemma-3-1b-it-Q4_K_M`, `gemma-3-4b-it-Q4_K_M`, each file matching its pinned
+sha256 — and the app itself, 判断 bound to the model in `settings.json`, 语义 off, the claude CLI a STUB (no account
+quota; with a chat GGUF bound both halves of 判断 run on llama.cpp). Each configuration got a fresh fixture data folder
+and the same workload through the app's own tools: six invented household facts written with `remember_fact` (each
+ANNOTATED by the judge), then four `recall_facts` questions each answered by one of them (each VERIFIED). Two ways of
+running the router:
+- **spawn** — the app starts its own router from its own `presets.ini`: the product path verbatim. Read: the child's
+  command line, the app log's router outcomes, subject rows in the database, and each recall's `answered`.
+- **proxy** — a router started by the script with the app's `presets.ini` (verbatim, or with the one line removed) and
+  the app's own router argv, behind a recording proxy the app reaches through `GATHERLIGHT_LLAMACPP_URL` (it adopts it).
+  Every request body and reply recorded: the field, `reasoning_content`, `<think>` in the content, `finish_reason`,
+  `usage.completion_tokens`. A proxy option strips the field before forwarding, which is exactly the wire before D179
+  (the HEAD build's bodies carried `messages, model, stream` and nothing else; the new build's add only
+  `chat_template_kwargs`).
+
+**Arrivals were asserted, not inferred from silence**: a server refusing the field fails the call as `Failed`, logged at
+Information by the router and read by the judge as transient — no verdict, no subjects, no error. So every
+configuration counts subject lists written and recalls judged.
+
+| model | launch key | field sent | calls → 200 | reasoning / `<think>` | completion tokens | median | tagged / judged |
+|---|---|---|---|---|---|---|---|
+| Qwen3 0.6B | yes | no (today) | 10 → 10 | 0 / 0 | 6–17 | 100 ms | 6/6 · 4/4 |
+| | yes | yes | 10 → 10 | 0 / 0 | 6–22 | 104 ms | 6/6 · 4/4 |
+| | **no** | **yes** | 10 → 10 | 0 / 0 | 6–17 | 106 ms | 6/6 · 4/4 |
+| | **no** (final build) | **yes** | 10 → 10 | 0 / 0 | 6–15 | 101 ms | 6/6 · 4/4 |
+| | no | no (control) | 12 → 12 | **12** / 0 | **144–512**, 2 cut | 997 ms | 6/6 · 4/4 |
+| | no | stripped (control) | 11 → 11 | **11** / 0 | **119–512**, 1 cut | 1,509 ms | 5/6 · 4/4 |
+| Gemma 3 1B | yes | stripped (today) | 10 → 10 | 0 / 0 | 11–30 | 194 ms | 6/6 · 4/4 |
+| | yes | yes | 10 → 10 | 0 / 0 | 9–26 | 176 ms | 6/6 · 4/4 |
+| | **no** | **yes** | 10 → 10 | 0 / 0 | 10–21 | 157 ms | 6/6 · 4/4 |
+| | **no** (final build) | **yes** | 10 → 10 | 0 / 0 | 11–23 | 201 ms | 6/6 · 3/4 |
+| | no | stripped | 10 → 10 | 0 / 0 | 10–21 | 189 ms | 6/6 · 3/4 |
+| Gemma 3 4B | yes | stripped (today) | 10 → 10 | 0 / 0 | 7–18 | 308 ms | 6/6 · 4/4 |
+| | yes | yes | 10 → 10 | 0 / 0 | 6–18 | 281 ms | 6/6 · 4/4 |
+| | **no** | **yes** | 10 → 10 | 0 / 0 | 8–18 | 288 ms | 6/6 · 4/4 |
+| | **no** (final build) | **yes** | 10 → 10 | 0 / 0 | 7–18 | 287 ms | 6/6 · 4/4 |
+| | no | stripped | 10 → 10 | 0 / 0 | 7–18 | 285 ms | 6/6 · 4/4 |
+
+"Calls" are the annotation and verification requests (the startup warm apart); "median" the proxy's per-call time,
+model loaded. Qwen3's first control row is the HEAD build (no field at all), its second the new build with the proxy
+stripping the field; the extra calls there are Lyntai's one retry of a reply cut at the cap with nothing in `content`
+("malformed or empty response body; retrying once"). The spawn runs, on each build and each model, all tagged 6/6 and
+judged 4/4 with every router outcome `Ok`; the child's command line carried `--reasoning off` while the key was in the
+preset and no `--reasoning` at all on the final build.
+
+- **The candidate holds for all three**: with the key gone and the field sent, no call returned reasoning, every reply
+  was 6–23 tokens (6–30 with the key, in the same runs), every call answered 200, and every write got subjects. Two of
+  Gemma 3 1B's 28 verdicts across its runs did not parse — `{"relevant":[1,4"]}` and `{"relevant":[1,3"]}`, a stray quote
+  the model wrote — one with the field and one without, over a byte-identical prompt: the model's sampling, not the
+  field.
+- **The instrument could see the failure**: with neither key nor field, Qwen3 reasoned on every call.
+- **The same prompt, byte for byte.** Through the router's `/apply-template`, on the annotation and verification
+  requests the app had sent: the app's preset WITH the key and no field renders exactly the prompt the preset WITHOUT
+  the key renders with the field — full prompts compared (Qwen3 1,214 and 1,279 characters, ending in the pre-closed
+  `<think>\n\n</think>\n\n`; Gemma 3 1B 1,172 / 1,166; 4B 1,172 / 1,237). With neither, Qwen3's prompt ends at a bare
+  `<|im_start|>assistant\n`; Gemma's is unchanged in every combination — its template reads neither.
+- **What the key covered that the field does not.** The app's own warm (`max_tokens: 1`, not a Lyntai call, so no
+  field) answered `Hello` with the key and `<think>` without it on Qwen3 — one discarded token. And the field reaches only
+  a template that decides thinking by `enable_thinking`; a dropped-in one that uses something else is not covered, and
+  the 512-token cap then makes such a model silent rather than slow (`LlamaServerRuntime.ChatMaxTokens`).
+- **A future refusal would still be silent here.** b10549 accepts the field. Lyntai's `docs/task-archive.md` Part 309,
+  done at its HEAD and not released, logs a Warning naming the option and quoting the server when a call carrying these
+  fields is refused; that release would make one visible.
+
+Scratch scripts, not committed; each router and its children were ended by PID as a process tree, and each data folder
+was a fresh fixture under `devtools/`.
