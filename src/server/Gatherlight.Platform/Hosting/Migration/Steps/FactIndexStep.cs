@@ -45,6 +45,20 @@ public sealed class FactIndexStep : IMigrationStep
     /// next start with an embedder wired rebuilds, re-embedding every indexed fact.</summary>
     private const string VectorsOnlyMoved = "2";
 
+    /// <summary>Set once the facts a llama.cpp embedder refused at its OLD 512-token physical batch have been handed back
+    /// to the back-fill (<see cref="RevisitLongFactsOnceAsync"/>). A one-off, like the layout marker, and for the same
+    /// reason: running it again would re-remember — and re-annotate — facts that already got their vectors.</summary>
+    private const string EmbedWindowKey = "facts.index.embed-window";
+    private const string EmbedWindowRevisited = "1";
+
+    /// <summary>How long a fact must be, in <see cref="Agent.Llm.Services.RerankPace.Tokens"/>, to count as possibly
+    /// refused at the old 512-token batch. That estimate's rates (0.83 per CJK character, 0.25 per other) were measured
+    /// on the rerankers' tokenizer, and they OVERESTIMATE EmbeddingGemma's (0.68 and 0.19, measured on b10549 —
+    /// docs/self-managed-llm-runtime.md): a fact that really was refused estimates at ~625 tokens or more. 400 leaves
+    /// room beside that for scripts neither rate was measured on, at the price of revisiting some facts that did get a
+    /// vector — one re-remember each, once.</summary>
+    private const double LongAtOldBatchTokens = 400;
+
     private readonly IFactIndex _index;
     private readonly IKnowledgeStore _store;
     private readonly IAppConfigService _config;
@@ -88,6 +102,8 @@ public sealed class FactIndexStep : IMigrationStep
                 + "下次启动会自动重试。");
             return;
         }
+
+        await RevisitLongFactsOnceAsync();
 
         var stored = _config.Get(LayoutKey);
         if (stored == Layout)
@@ -138,19 +154,26 @@ public sealed class FactIndexStep : IMigrationStep
             // second. Proof: e2e-p52 case 9b, where the fake embedder goes down for one fact mid-pass: the marker is
             // written and the next start back-fills that fact and keeps every other node; confirmed to FAIL against
             // the total rule.
+            //
+            // Its sentence says only that the rebuild did not complete and will be tried again — never a count, never
+            // "补上": a zero also covers a rebuild that THREW after indexing some facts (RebuildAsync's catch returns
+            // 0), where "none were built" would be false, and the next start then REBUILDS again (it finds refs) — and
+            // only if the embedder answers its gate. Proof: e2e-p52 case 9, whose zero pass keeps the marker and whose
+            // next start back-fills onto the zero pass's own nodes.
             var indexed = await _index.RebuildAsync(ct);
+            if (indexed == 0)
+            {
+                _log?.LogWarning("fact index: the layout rebuild indexed nothing; leaving the marker unset so the " +
+                    "next start retries rather than recording a migration that may not have happened");
+                _state?.AddWarning("事实索引的重建没有完成 —— 已有的事实仍能按关键词找到,下次启动会再试。");
+                return;
+            }
             if (indexed < facts.Count)
             {
                 _log?.LogWarning("fact index: the layout rebuild indexed {Indexed} of {Total} facts; the rest stay " +
                     "unindexed (found by keyword) until the next start's back-fill", indexed, facts.Count);
                 _state?.AddWarning($"事实索引的重建没有全部完成(建立了 {indexed}/{facts.Count} 条) —— "
                     + "其余的事实仍能按关键词找到,下次启动会补上。");
-            }
-            if (indexed == 0)
-            {
-                _log?.LogWarning("fact index: the layout rebuild indexed nothing; leaving the marker unset so the " +
-                    "next start retries rather than recording a migration that may not have happened");
-                return;
             }
         }
 
@@ -171,6 +194,46 @@ public sealed class FactIndexStep : IMigrationStep
         // Last, deliberately: a crash mid-rebuild leaves the marker unset too, so the next start retries
         // rather than settling into the silent FTS fallback this exists to prevent.
         _config.Set(LayoutKey, layout);
+    }
+
+    /// <summary>ONCE, with a llama.cpp embedder wired: hand the back-fill every indexed fact long enough to have been
+    /// refused at the OLD 512-token physical batch.
+    /// <para><b>Why.</b> Until the Lyntai 3.4 bump the embedder section set no batch, so llama.cpp refused every fact past
+    /// ~510 tokens whole, and the engine stored such a fact WITHOUT its vector while handing back its reference. Those
+    /// rows kept their refs, and the back-fill revisits only EMPTY ones — so the window the preset launches with now
+    /// (<see cref="Agent.Llm.Services.LlamaServerRuntime.EmbedBatch"/>, the row's declared one) would never reach them
+    /// short of a destructive reindex.</para>
+    /// <para><b>Non-destructive.</b> Clearing a ref drops nothing: re-remembering IDENTICAL content refreshes the same
+    /// node — Lyntai 3.4's graph store upserts on (engine, task, scope, content hash) and returns the existing id — and the
+    /// write's vector is then indexed under that id (<c>GraphMemoryEngine.RememberAsync</c> → its enrichment). So the
+    /// gated back-fill that follows, in this very start, gives each fact its vector on the node it already had: decay,
+    /// links and subjects kept. What it costs is one re-remember per fact revisited — an annotation each when 判断 is on
+    /// the CLI — once.</para>
+    /// <para><b>Which facts.</b> No API says whether a node HAS a vector (the vector store reads by similarity, never by
+    /// id), so length stands in for it, estimated generously (<see cref="LongAtOldBatchTokens"/>): a fact revisited
+    /// needlessly costs one re-remember, a fact missed keeps no vector. Only a llama.cpp embedder, the one that refused
+    /// at 512; only an INDEXED fact — an unindexed one is the back-fill's anyway. A fact that is still past the NEW window
+    /// is refused again and kept without a vector (<c>FactIndex.IndexAsync</c>). Run after the gate, so a start whose
+    /// embedder is down leaves this for the next; the key is set BEFORE the back-fill, and a back-fill cut short leaves
+    /// empty refs the next one finishes. Proof: e2e-p52 case 9e, confirmed to FAIL with this step removed.</para></summary>
+    private async Task RevisitLongFactsOnceAsync()
+    {
+        if (!_index.Embeds || _config.Get(EmbedWindowKey) == EmbedWindowRevisited
+            || !string.Equals(_settings.Current.Memory.SemanticSource, Agent.Llm.Sources.MemoryBackends.LlamaCpp,
+                StringComparison.OrdinalIgnoreCase))
+            return;
+        var revisited = 0;
+        foreach (var (row, graphRef) in await _store.AllAsync())
+        {
+            if (string.IsNullOrEmpty(graphRef)
+                || Agent.Llm.Services.RerankPace.Tokens(row.Content) <= LongAtOldBatchTokens) continue;
+            await _store.SetGraphRefAsync(row.Id, null);
+            revisited++;
+        }
+        _config.Set(EmbedWindowKey, EmbedWindowRevisited);
+        if (revisited > 0)
+            _log?.LogInformation("fact index: handing {Count} long fact(s) back to the back-fill, once — the embedder's " +
+                "old 512-token batch may have refused them their vectors, and its window is wider now", revisited);
     }
 
     /// <summary>Is 语义 bound to an EMBEDDER arm that is not wired this start?
