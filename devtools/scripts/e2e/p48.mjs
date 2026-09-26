@@ -382,13 +382,21 @@ try {
   ok('(fixture) the judge saw several candidates and endorsed the last of them',
     shown.length >= 2 && verdictPage.length >= 2, JSON.stringify({ shown, page: verdictPage.map((f) => f.topic) }));
 
-  // THE JUDGE SEES THE FACT, NOT ITS LABEL. Lyntai's LLM verifier renders `{n}. {Headline}`, and the fact
-  // index writes each fact's TOPIC as its headline — so the judge used to decide "did this answer?" from
-  // topics alone. JudgeSeesContentPolicy hands it the fact's content (content alone by default; `topic —
-  // content` under the bench knob). `listing-id 4417` exists only in the content of one fact, so its
+  // THE JUDGE SEES THE FACT, NOT ITS LABEL. Lyntai's LLM verifier renders `{n}. {Headline}` by default, and the
+  // fact index writes each fact's TOPIC as its headline — so the judge used to decide "did this answer?" from
+  // topics alone. JudgeWiring.Llm sets Lyntai's ContentChars, which shows each candidate's content instead (an
+  // app-side decorator did it until 2026-09-27). `listing-id 4417` exists only in the content of one fact, so its
   // presence in the notes is proof the content arrived.
   ok('the judge is shown the facts’ CONTENT, not only their topics',
     shown.some((n) => n.includes('listing-id 4417')), JSON.stringify(shown));
+  // …AND THE CONTENT ALONE, NOT "topic — content". The booking fact's topic says `policy`, a word no fact's content
+  // holds, so a note carrying it can only have come from a topic. Content alone was measured equivalent to "topic —
+  // content" for the Claude judge (docs/judge-bench.md Run 1) with ~24% less text, and it is what ContentChars renders:
+  // with ContentChars left at 0 the notes are the topics (`policy` present, `fifteen minutes` absent), and under the
+  // old decorator's `both` mode they carried both.
+  ok('THE POINT: the judge is shown each fact’s content ALONE — the booking fact’s content arrives, its topic does not',
+    shown.some((n) => n.includes('fifteen minutes past the reserved time')) && !shown.some((n) => /\bpolicy\b/.test(n)),
+    JSON.stringify(shown));
 
   ok('THE POINT: the endorsed candidate was NOT top of the pre-verdict ranking',
     shown[shown.length - 1] !== shown[0], JSON.stringify(shown));
@@ -398,6 +406,25 @@ try {
   ok('...and it comes back at the top of the page',
     !!verdictPage[0]?.content && String(shown[shown.length - 1] ?? '').includes(verdictPage[0].content),
     JSON.stringify({ endorsed: shown[shown.length - 1], page: verdictPage.map((f) => f.topic) }));
+
+  // A LONG CHINESE NOTE WITH AN EARLY SPACE IS READ PAST IT. ContentChars cuts content longer than 400 characters, and
+  // through Lyntai 3.4.0 it cut at the LAST space at or before the cap however early — so a Chinese note whose only
+  // spaces follow a leading English name reached the judge as that name and "…". 3.5.0 (its Part 302) takes a space
+  // only in the cap's latter half, else cuts at the last text-element boundary, which is what this note needs: its
+  // three spaces all sit in its first 30 characters, and the rest is 480 characters of Chinese with none.
+  const longNote = `harbour teahouse zzlongnote ${'茶馆的包间要提前一天预订,周末人多时最好提前三天,靠窗的位置要单独说明。'.repeat(20)}`.slice(0, 508);
+  await remember(uc, 'venue-note', 'harbour teahouse private room notes', longNote);
+  try { fs.unlinkSync(path.join(process.cwd(), 'devtools', '_stub-verdict.txt')); } catch {}
+  await uc.call('recall_facts', { query: 'harbour teahouse zzjudge', limit: 6 });
+  const shownLong = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), 'devtools', '_stub-verdict.txt'), 'utf8') || '[]');
+  const longLine = shownLong.find((n) => n.startsWith('harbour teahouse zzlongnote')) ?? null;
+  ok('(fixture) the long note is over the 400-character cap, with its only spaces in its first 30 characters',
+    longNote.length > 400 && longNote.lastIndexOf(' ') < 30, `length ${longNote.length}, last space at ${longNote.lastIndexOf(' ')}`);
+  ok('THE POINT: a long Chinese note with an early space reaches the judge with at least half the cap of its content, cut and marked',
+    !!longLine && longLine.endsWith('…') && longLine.length - 1 >= 200 && longLine.length - 1 <= 400
+      && longNote.startsWith(longLine.slice(0, -1)),
+    JSON.stringify({ length: longLine?.length ?? null, line: longLine }));
 
   // ---- SUBJECT HANDLES ARE SEARCHABLE ----------------------------------------------------------
   //

@@ -50,6 +50,9 @@ const ALLOWED = new Map([
   ['.claude/rules/dev-conventions.md::GgufCatalog.RecommendedJudge',
     'RETIRED on 2026-09-24 when Run 3 measured its model worse than no judge; the rule names it to say what '
     + 'it claimed and why it went — the same sentence names its replacement, RecommendedReranker'],
+  ['.claude/rules/dev-conventions.md::JudgeSeesContentPolicy',
+    'DELETED on 2026-09-27 when the app adopted Lyntai\'s ContentChars; the closed workaround (1) names it to say what '
+    + 'ContentChars replaced and why it outlived that option\'s release'],
   ['.claude/rules/dev-conventions.md::JudgeScopedModelRoutingStore',
     'DELETED by the Lyntai 3.4 bump when D176 routes made it redundant; the closed workaround (2) names it to '
     + 'say what the routes replaced and why it could go'],

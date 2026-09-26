@@ -463,8 +463,10 @@ their whole-pair window and embedders their own. Same build as above (b10549, Vu
 MiB) shared with other resident processes, the pinned GGUFs. Scratch scripts, not committed; the method is here.
 
 **How big the prompts get.** Built exactly as Lyntai 3.2.0's verifier and annotator build them: its system prompts
-verbatim, candidates as the app's content-only judge input renders them (one line, at most
-`JudgeSeesContentPolicy.MaxChars` = 400 characters plus "…"), numbered. Counted by the server as `usage.prompt_tokens`
+verbatim, candidates as the app's content-only judge input renders them (one line, at most 400 characters plus "…"),
+numbered. That input was the app's own decorator then; since 2026-09-27 it is Lyntai's `ContentChars` at
+`JudgeWiring.ContentChars` (400), which renders the same shape and never a longer line, so these counts still bound
+it — identical for every fact here, all under 400 characters. Counted by the server as `usage.prompt_tokens`
 (template included) with `max_tokens: 1`, or read from its refusal past the window. "Fixture facts" are the bench's 60
 invented household facts (median 29 characters, at most 101), cycled; the question is the bench's longest (164
 characters).

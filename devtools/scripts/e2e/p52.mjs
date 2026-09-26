@@ -1688,15 +1688,14 @@ try {
     dataDir: signedOutDir, port: SIGNED_OUT_PORT,
     env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_CLAUDE_CMD: `node ${signedOutStub}` },
   });
-  // The judge-input knob rides along on this server (case 7b): it only affects an LLM verifier, and this one
-  // runs a reranker, so it changes nothing here except whether the logs say it is set. Pinned to `both` —
-  // NOT the default since 2026-09-24 — so the case is still exercising a knob that was actually SET, rather
-  // than a value that would now be there anyway. Lyntai shipped ContentChars in 3.3.0, but the 3.4 bump kept this knob
-  // with JudgeSeesContentPolicy; when the class goes, 7b moves to GATHERLIGHT_VERDICT_COMBINATION=fuse (its class
-  // comment, "ON ADOPTING IT").
+  // The verdict-combination knob rides along on this server (case 7b). It changes how the engine combines a verdict
+  // with its own ranking, so it could only matter to a RECALL, and case 7 makes none on this server; it changes nothing
+  // here except whether the logs say it is set. `fuse` is NOT the default (partition is), so the logged value can only
+  // have come from the knob. Case 7b used the judge-input knob until 2026-09-27, when the app adopted Lyntai's
+  // ContentChars and that knob went with the decorator it steered.
   signedInServer = startServer({
     dataDir: signedInDir, port: SIGNED_IN_PORT,
-    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_INPUT: 'both' },
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_VERDICT_COMBINATION: 'fuse' },
   });
   const outBase = `http://127.0.0.1:${SIGNED_OUT_PORT}`;
   const inBase = `http://127.0.0.1:${SIGNED_IN_PORT}`;
@@ -1743,7 +1742,7 @@ try {
   const knobLog = fs.existsSync(logsDir)
     ? fs.readdirSync(logsDir).map((f) => fs.readFileSync(path.join(logsDir, f), 'utf8')).join('\n') : '';
   ok('a measurement knob set at startup is logged as a Warning in state/logs',
-    /WARN.*Measurement knob set: judge input = both/.test(knobLog),
+    /WARN.*Measurement knob set: verdict combination = Fuse \(GATHERLIGHT_VERDICT_COMBINATION=fuse\)/.test(knobLog),
     knobLog.split('\n').filter((l) => /knob|measurement/i.test(l)).join(' | ') || '(nothing about the knob in state/logs)');
 
   // --- 8. a model downloaded AFTER the router started ---------------------------------------------------

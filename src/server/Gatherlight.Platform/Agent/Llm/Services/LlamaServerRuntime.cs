@@ -252,11 +252,19 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// and annotator build them, counted by llama-server b10549 on each model's own tokenizer and chat template
     /// (Qwen3-0.6B / Gemma 3 1B; 2026-09-24). The deepest verification shows the judge 400 candidates (4 × what
     /// <c>FactIndex.RankAsync</c> asks for: a recall naming a kind, or asking for 34 or more), each line capped at
-    /// <see cref="JudgeSeesContentPolicy.MaxChars"/>. 400 of the bench fixture's facts (household-shaped, median 29
+    /// <see cref="Sources.JudgeWiring.ContentChars"/>. 400 of the bench fixture's facts (household-shaped, median 29
     /// characters) with its longest question: 9,993 / 10,395 tokens; with the <see cref="ChatMaxTokens"/> reply, at most
     /// 10,907 — a third of the window to spare. 400 candidates of 100 ENGLISH characters: 12,565 / 12,830. The deepest
     /// annotation (Lyntai's 24 known subjects and 8 earlier facts, then the write): 604 / 606 tokens with fixture facts,
     /// 2,909 / 3,132 with every fact at 400 Chinese characters.</para>
+    ///
+    /// <para><b>Still the worst case since the judge's input moved to Lyntai's <c>ContentChars</c></b> (2026-09-27). Those
+    /// prompts were built with the app's own decorator, which put each candidate's content, flattened to one line and
+    /// hard-cut at 400 characters plus "…", where Lyntai's verifier prints <c>{n}. {headline}</c>. <c>ContentChars</c>
+    /// prints the same shape — the same instruction and the same <c>Question: … Notes: …</c> layout through 3.5.0, one
+    /// numbered line per candidate, its content alone flattened by <c>MemoryLine.Flatten</c> — and cuts past 400 at a
+    /// space in the latter half or at a text-element boundary at or before it, so no line is longer than the decorator's:
+    /// identical at or below 400 characters, which covers every fixture fact above, and at most as long past it.</para>
     ///
     /// <para><b>What does not fit, and what happens then.</b> 400 candidates of 100 CHINESE characters is 30,819 /
     /// 32,941 tokens, and 400 at the 400-character cap 114,476 / 124,166 — past both models' own training windows too,

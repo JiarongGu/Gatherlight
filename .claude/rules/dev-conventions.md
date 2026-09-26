@@ -414,7 +414,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   | | does | evidence |
   |---|---|---|
   | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost. On the 240-question bilingual fixture (`docs/judge-bench.md`): top-1 79/240, found@8 125/240, ~0.23 s per recall |
-  | **判断 · Claude CLI** | subject handles on every write; judges which candidates answered, and promotes those to the front | **top-1 79 → 130/240 (+21.3pp, p < 0.001, 95% [+15.9, +26.3]pp), each of the four sets significant on its own; found@8 125 → 131, not a finding (p = 0.210)** — `docs/judge-bench.md` Run 1, 2026-09-23, its `contentonly` arm: the judge reading each fact's CONTENT alone, the input that ships since 2026-09-24. Its `content` arm — topic — content, the 1.3.0 input — read top-1 132 (+22.1pp, [+16.6, +27.2]pp) and found@8 133 (p = 0.096), and the two were measured equivalent. Costs **~8.7 s per recall** there (serial median; ~9.5 s for topic — content; 8.7–11.7 s across Run 1's judge arms; **9–17 s** measured earlier on the household's own facts) — a CLI spawn per call. Before the content fix, on the household's own facts: +2 facts in each multilingual probe, 0 same-language |
+  | **判断 · Claude CLI** | subject handles on every write; judges which candidates answered, and promotes those to the front | **top-1 79 → 130/240 (+21.3pp, p < 0.001, 95% [+15.9, +26.3]pp), each of the four sets significant on its own; found@8 125 → 131, not a finding (p = 0.210)** — `docs/judge-bench.md` Run 1, 2026-09-23, its `contentonly` arm: the judge reading each fact's CONTENT alone, the input that ships since 2026-09-24 (through Lyntai's `ContentChars` since 2026-09-27, workaround (1) — the arm names here are Run 1's: the bench's `content` arm has shown content alone since then, and `contentonly` is gone). Its `content` arm — topic — content, the 1.3.0 input — read top-1 132 (+22.1pp, [+16.6, +27.2]pp) and found@8 133 (p = 0.096), and the two were measured equivalent. Costs **~8.7 s per recall** there (serial median; ~9.5 s for topic — content; 8.7–11.7 s across Run 1's judge arms; **9–17 s** measured earlier on the household's own facts) — a CLI spawn per call. Before the content fix, on the household's own facts: +2 facts in each multilingual probe, 0 same-language |
   | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 125 → 208 (LAMAR) / 203 (BGE) of 240 (+34.6 / +32.5pp, both p < 0.001) — cross-language 6 → 49 / 48 of 60; top-1 79 → 86 / 90 (+2.9pp p = 0.039 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 2, 2026-09-23. ~0.47–0.49 s per recall, warm, on one GPU, ≤60 candidates, on facts of at most 101 characters — on 60 long notes of 883–1,241 characters (Run 6c, each read in windows) a recall took 3.2 s on BGE and LAMAR and 1.2 s on mMiniLMv2. **mMiniLMv2** (133 MB, `docs/judge-bench.md` Run 4, 2026-09-24, same fixture, 语义 off, page of 8): found@8 125 → 199 (+30.8pp) and top-1 79 → 99 (+8.3pp), both p < 0.001; against the SAME run's BGE (204) no significant difference and not equivalent (7/2, p = 0.180, [−4.6, +0.5]pp), against LAMAR (208) a measured loss (9/0, p = 0.004); ~0.31 s per recall against the run's formula 0.24 s (facts of at most 101 characters), measured under a 4096 launch (the product launches it at its declared 512; the rerank call was re-measured under both, no difference). LAMAR vs BGE: no finding either way — found@8 leans LAMAR 5–0 (p = 0.063, interval excluding zero); BGE is `RecommendedReranker` by the smaller-file tie-break registered before the run, and by nothing else. Lyntai, on ITS English LoCoMo corpus (`docs/memory-measurements.md` there, evidence-hit, n = 200), in ONE run — 2026-09-10, `embeddinggemma-300M` embedder, base 85.5%, a perfect judge +7.0: BGE Q8 +5.5, LAMAR Q8 +5.5, LAMAR Q5 (our file) +6.0. Its 2026-09-15 run read LAMAR Q5 at +9.0 of 9.5 over `nomic-embed-text` (base 83.0%); Lyntai's own rule is that a reranker's delta belongs to the configuration, so quote the base and embedder with it or not at all — the household notes quote neither |
   | **判断 · llama.cpp chat model** | BOTH halves locally — subject handles on every write, and judges which candidates answered (partition, like the Claude judge); no account quota | Same 240-question fixture, 语义 off, content-only judge input, one chat model per run beside 公式 (and BGE in Run 5b). **Gemma 3 1B is WORSE than no judge**: top-1 79 → 33 (−19.2pp, p < 0.001), found@8 125 → 111 (−5.8pp, p = 0.003) — `docs/judge-bench.md` Run 3, 2026-09-24; verdict coverage 202/234. **Qwen3 0.6B is BETTER on both**: top-1 79 → 110 (+12.9pp, p < 0.001), found@8 125 → 148 (+9.6pp, p < 0.001) — Run 5b, 2026-09-24, thinking off and the 512-token cap as the product launches it (context uncapped in that run; the 16,384 cap is far above any fixture prompt); coverage 226/234. Adds ~0.18 s (Gemma: 403 ms against the run's formula 219) and ~0.16 s (Qwen3: 381 against 220) per recall, serial medians, warm, one GPU. Those figures are over tags the Claude CLI wrote. **Qwen3's OWN tags were measured in Run 7** (2026-09-24, the same fixture and settings, a seed tagged by Qwen3 paired within the run against Claude's tags replayed through the same path): no significant difference — top-1 104 vs 114 (−4.2pp, p = 0.143, 95% [−9.2, +0.9]), found@8 155 vs 152 (+1.3pp, p = 0.736, [−3.6, +6.1]) — and NOT equivalent (neither interval inside ±3pp); still significantly better than no judge over the same tags (+10.8 / +14.6pp, p < 0.001). Its tags COLLAPSE unrelated facts (`parent` on 12; 29 of 78 handle assignments reused only across groups, against Claude's 7 of 65), which a fixture of one-fact questions barely exercises — the model note says so. Gemma's own tags are unmeasured. Qwen3's child and the router took +2,472 MiB of GPU memory at the chat context cap, +5,175 MiB uncapped (launch item (5)) |
   | **语义 · Claude CLI** | stores other wordings of a fact, **≥1 in another language** | capability proven directly: an English question retrieves a Chinese-only fact. Aggregate effect NOT measured — see the rule below on why this tool cannot |
@@ -528,61 +528,51 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   takes, so only one of the two copies is gone.
   **Six were open at Lyntai 3.2.0, and each says what ends it. (2), (4) and (5) are CLOSED — their fixes shipped in
   3.3.0 and the 3.4 bump adopted them, (5) after a real-binary check of every catalogued chat model. (3) is CLOSED as a workaround: the bump adopted its per-write detection, and
-  the probe it named stays as a cost policy of OUR OWN, which the entry says how to end. (1) and (6) stay OPEN by
-  decision although their fixes shipped in 3.3.0 too — (1) because the shipped cut guts a long CJK note, (6) until
-  Run 10 and the owner decide. Lyntai 3.5.0 (2026-09-26) released the fixes this round filed against 3.4.0 (its
-  Parts 302–309): the cut (1) waited for is fixed and the owner decided to adopt it, a change that lands after the
-  bump itself; (6) gained a per-request piece cap and still waits for Run 10.**
-  **(1) OPEN, by owner decision — `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170, shipped
-  in 3.3.0 and NOT adopted by the 3.4 bump (2026-09-26).** Lyntai's LLM judge rendered each candidate as its headline
-  alone, and our headline is the fact's TOPIC, so the judge decided "did this answer?" from topics; the decorator shows
-  it the content. Upstream closed the gap with `LlmVerificationOptions.ContentChars` — content ALONE, not "topic —
-  content" — and Part 276's own outcome names our decorator as the thing to remove. Whether the topic was worth
-  keeping was MEASURED rather than argued: `docs/judge-bench.md` Run 1 found content alone EQUIVALENT to topic —
-  content on top-1 and found@8 (2/0 pairs, p = 0.500, 95% [−2.2, +0.6]pp, inside ±3pp) with ~24% less
-  candidate text. **Content alone is the default since 2026-09-24** (owner-approved on the measured equivalence
-  above). **Why the bump kept the class: the CUT.** `ContentChars` renders through Lyntai's `MemoryHeadline.Derive`,
-  which in 3.3.0 and 3.4.0 cuts content past the cap at the LAST space at or before it, however early, and hard-cuts
-  at the cap — splitting a surrogate pair if one sits there — only when there is none. So a long Chinese note whose one
-  space follows a leading date or a "Wi-Fi" reaches the judge as those few characters and "…"; ours cuts at 400
-  without splitting a pair. The two are identical at or below 400 characters — every judge-bench fixture fact (≤ 101)
-  and most household facts — and diverge exactly on long notes (Run 6c's 883–1,241 characters), where no LLM judge
-  has been measured. `JudgeWiring.Llm` therefore leaves `ContentChars` at 0, and says why. **What ends it:** Lyntai
-  `docs/task-archive.md` Part 310's item "Cut a derived headline or a judge note where the text allows, not at its
-  last space however early" — closed there as Part 302 (2026-09-26), RELEASED in 3.5.0: a space counts only in the
-  cap's latter half, else the cut falls at the last text-element boundary, never inside a surrogate pair. What still
-  differs is a note cut at a space in the latter half — at a word, at worst half the cap — where ours reads to 400,
-  and Lyntai's wider flattening (`MemoryLine.Flatten` also folds U+000B and U+001C–U+001E, a strict improvement). The
-  owner accepted that residual on 2026-09-26 and decided to adopt `ContentChars`; the steps below are that change,
-  which lands on its own after the 3.5 bump. **On
-  adopting it** — none of this ran in the 3.4 bump — five things, because the bench and a suite pin this knob to
-  `both`: (a) set `ContentChars = JudgeSeesContentPolicy.MaxChars` where `JudgeWiring.Llm` builds the verifier, and
-  delete the class and its `GATHERLIGHT_JUDGE_INPUT` knob, both announcements included — not both mechanisms: with
-  `ContentChars` above 0 upstream reads the content itself and ignores the decorator's rewritten headline, so
-  keeping it would be dead code running on every recall. Re-home the 400 first: two XML crefs name `MaxChars`
-  (`LlamaServerRuntime`'s chat context cap and `RerankInputCap`), and no build flags a dangling cref; the live docs
-  naming the class — this file, `docs/judge-bench.md`, `docs/self-managed-llm-runtime.md` — fail `check-doc-refs`;
-  (b) in `judge-bench.mjs`, `topic` and `contentonly` go, `content` and `content2` COLLAPSE into the content-only
-  default (no env, no knob, relabelled — they stay, because `content` is the paired reference arm and `content2` the
-  judge's A/A twin), and `fuse` drops its judge-input pin and second knob regex, keeping the verdict-combination one;
-  (c) the `lcb:<model>` chat arms — which pin `both` with the same knob and are in the default `--chat-arms lc,lcb` —
-  go or become a documented cannot-reproduce arm; left pinned, every arm in (b) and (c) would throw "its knob did not
-  announce itself", the `lcb:` ones on any chat-judge run (this item was missing from the list until the 3.4 bump's
-  review); (d) `e2e-p52` case 7b, which asserts `judge input = both` in state/logs, moves to the other knob —
-  `GATHERLIGHT_VERDICT_COMBINATION=fuse` on the same signed-in server (non-default, so the logged value can only come
-  from the knob; case 7 makes no recall there, so Fuse changes nothing it asserts); (e) accept that `both` can no
-  longer be reproduced: Run 1's `content` rows and Run 3's `lcb` rows become its only record, which is fine because
-  Run 1 measured it equivalent — but a `--baseline=…:content` against a pre-bump results file then pairs content-only
-  with `both` under one arm name. `e2e-p48`'s judge-view assertion stays green (its facts are short, so both cuts
-  agree). The full list is in the class comment.
+  the probe it named stays as a cost policy of OUR OWN, which the entry says how to end. (1) is CLOSED since
+  2026-09-27: its fix shipped in 3.3.0 with a cut that gutted a long CJK note, Lyntai 3.5.0 (2026-09-26, its Part 302)
+  fixed the cut, and the app adopted it after the 3.5 bump. (6) stays OPEN by decision until Run 10 and the owner
+  decide; 3.5.0 gave it a per-request piece cap.**
+  **(1) CLOSED — the app-side judge-content decorator ↔ Lyntai `docs/task-archive.md` Part 276 / D170, shipped in 3.3.0,
+  adopted on 2026-09-27 once Lyntai 3.5.0 had fixed its cut (Part 302).** Lyntai's LLM judge rendered each candidate as
+  its headline alone, and our headline is the fact's TOPIC, so the judge decided "did this answer?" from topics;
+  `JudgeSeesContentPolicy` showed it the content. Upstream closed the gap with `LlmVerificationOptions.ContentChars` —
+  content ALONE, not "topic — content" — and Part 276's own outcome named our decorator as the thing to remove. Whether
+  the topic was worth keeping was MEASURED rather than argued: `docs/judge-bench.md` Run 1 found content alone
+  EQUIVALENT to topic — content on top-1 and found@8 (2/0 pairs, p = 0.500, 95% [−2.2, +0.6]pp, inside ±3pp) with ~24%
+  less candidate text, so content alone became the default on 2026-09-24, and it is what `ContentChars` renders. The
+  3.4 bump still kept the decorator, for its CUT: through 3.4.0 Lyntai cut content past the cap at the LAST space
+  however early, so a long Chinese note whose one space follows a leading date reached the judge as the date. 3.5.0
+  takes a space only in the cap's latter half, else cuts at the last text-element boundary, never inside a surrogate
+  pair, and flattens with `MemoryLine.Flatten` first (which also folds U+000B and U+001C–U+001E, a strict improvement).
+  **What was done:** `JudgeWiring.Llm` sets `ContentChars` to `JudgeWiring.ContentChars` — 400, the decorator's cap,
+  re-homed beside the verifier it sizes; `LlamaServerRuntime.ChatContextTokens` and `RerankInputCap` name it — for BOTH
+  LLM judges, the Claude CLI and a llama.cpp chat GGUF. The class, its `GATHERLIGHT_JUDGE_INPUT` knob and both of the
+  knob's announcements are deleted. In `judge-bench.mjs`, `topic`, `contentonly` and the `lcb:<model>` chat arms are
+  REFUSED by name with the reason, `content`/`content2`/`fuse` show content alone and set no judge-input knob (`fuse`
+  keeps the verdict-combination one), the default `--chat-arms` is `lc`, and a saved run keeps what its arm names meant
+  on its own date — so a `--baseline=…:content` against a run from before the change is LABELLED with the input it
+  measured ("topic — content") in the header and a note, rather than paired as if both sides ran one configuration.
+  `e2e-p52` case 7b asserts the verdict-combination knob in state/logs instead. **The residual, accepted by the owner
+  on 2026-09-26:** a note with a space in its characters 200–400 is cut there, at a word — at worst half the cap —
+  where the decorator hard-cut at 400. On the committed fixtures every fact of at most 400 characters renders
+  identically, and 20 of the 90 long notes (the long and mixed fixtures) are cut 1–12 characters shorter. No LLM judge
+  has been measured on notes over 400 characters at all — the long fixtures run the claude stub. The chat context
+  cap's worst prompt still bounds the judge's, because no line is longer than the decorator's was
+  (`LlamaServerRuntime.ChatContextTokens` says why). **What can no longer be reproduced:** "topic — content" and
+  topics alone. Run 1's `content`, `content2`, `fuse` and `topic` rows and the `lcb` rows of Runs 3, 5 and 5b are
+  their only record (`docs/judge-bench.md`, "The judge's input since 2026-09-27"). **Proof:** `e2e-p48` asserts that
+  the judge is shown a fact's content and not its topic — a topic word no fact's content holds is absent, a content
+  phrase present — confirmed to FAIL with `ContentChars` left at 0; and that a 508-character Chinese note whose three
+  spaces sit in its first 30 characters reaches the judge with at least 200 characters of its content — confirmed to
+  FAIL on a real build against Lyntai 3.4.0, where the note arrived as its first 27 characters and "…".
   **The flip also moved the llama.cpp CHAT judge, and `docs/judge-bench.md` Run 3 measured that.** `JudgeWiring.Llm`
   builds the verifier for both LLM judges (`ClaudeCliJudgeSource`, and `LlamaCppSource` bound to a chat GGUF). Run 3
   benched `gemma-3-1b-it-Q4_K_M` on both inputs, under a rule written before the run: stop and ask the owner only
   if content alone is significantly worse. It is not significantly worse, but it is not equivalent either. Content
   alone trails `topic — content` by 4.6pp top-1 (23/12, p = 0.090, 95% [−9.4, +0.3]pp) and by 4.2pp found@8 (18/8,
   p = 0.076, [−8.3, +0.04]pp). Part of that gap is `both` failing to give a verdict more often (75% coverage
-  against 86%), since a recall with no verdict keeps the engine's page. So the flip stays unscoped: adopting
-  `ContentChars` would give every LLM verifier the same content-only rendering anyway. Quote the lean with the
+  against 86%), since a recall with no verdict keeps the engine's page. So the flip stayed unscoped, and adopting
+  `ContentChars` gave every LLM verifier the same content-only rendering. Quote the lean with the
   figures, never as "equivalent". The same run found the bigger thing: in EITHER mode this 1B judge is
   significantly WORSE than no judge (top-1 79 → 33 / 44 of 240, −19.2 / −14.6pp, p < 0.001), because partition
   promotes whatever it endorses.

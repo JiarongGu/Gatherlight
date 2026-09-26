@@ -116,15 +116,12 @@ public static class GatherlightApp
         // MEASUREMENT KNOBS — read by `dev.mjs judge-bench` (docs/judge-bench.md), never settings. Each one
         // that is active says so on the console, because the bench refuses to report an arm whose knob did
         // not take: two arms that silently ran the same configuration would read as "no difference".
-        // Announced whenever SET, with the raw value beside what it resolved to: a typo ("contents") silently
+        // Announced whenever SET, with the raw value beside what it resolved to: a typo ("fsue") silently
         // resolving to the default is exactly the "two arms ran the same configuration" failure.
         var combinationRaw = Environment.GetEnvironmentVariable("GATHERLIGHT_VERDICT_COMBINATION");
         var fuseVerdicts = string.Equals(combinationRaw?.Trim(), "fuse", StringComparison.OrdinalIgnoreCase);
         if (!string.IsNullOrWhiteSpace(combinationRaw))
             Console.WriteLine($"[measurement] verdict combination = {(fuseVerdicts ? "Fuse" : "Partition")} (GATHERLIGHT_VERDICT_COMBINATION={combinationRaw})");
-        var judgeInputRaw = Environment.GetEnvironmentVariable("GATHERLIGHT_JUDGE_INPUT");
-        if (!string.IsNullOrWhiteSpace(judgeInputRaw))
-            Console.WriteLine($"[measurement] judge input = {Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode} (GATHERLIGHT_JUDGE_INPUT={judgeInputRaw})");
         var chunkingRaw = Platform.Agent.Llm.Services.RerankChunking.Raw;
         if (!string.IsNullOrWhiteSpace(chunkingRaw))
             Console.WriteLine($"[measurement] rerank chunking = {(Platform.Agent.Llm.Services.RerankChunking.On ? "on" : "off")} "
@@ -725,16 +722,12 @@ public static class GatherlightApp
 
         // THE MEASUREMENT KNOBS again, through the LOGGER. The Console lines above are what judge-bench reads,
         // but the desktop Host drops stdout and state/logs never saw them — so an install left running with a
-        // bench knob set (Fuse verdicts, a judge shown topics only) behaved differently from every other one
+        // bench knob set (Fuse verdicts, a reranker cutting long notes) behaved differently from every other one
         // with no trace anywhere a household or a developer would look. Warning, because it is not a setting.
         if (!string.IsNullOrWhiteSpace(combinationRaw))
             app.Logger.LogWarning(
                 "Measurement knob set: verdict combination = {Mode} (GATHERLIGHT_VERDICT_COMBINATION={Raw}) — a benchmark setting, not a household one",
                 fuseVerdicts ? "Fuse" : "Partition", combinationRaw);
-        if (!string.IsNullOrWhiteSpace(judgeInputRaw))
-            app.Logger.LogWarning(
-                "Measurement knob set: judge input = {Mode} (GATHERLIGHT_JUDGE_INPUT={Raw}) — a benchmark setting, not a household one",
-                Platform.Agent.Llm.Services.JudgeSeesContentPolicy.Mode, judgeInputRaw);
         if (!string.IsNullOrWhiteSpace(chunkingRaw))
             app.Logger.LogWarning(
                 "Measurement knob set: rerank chunking = {Mode} ({Knob}={Raw}) — a benchmark setting, not a household one",
