@@ -82,9 +82,10 @@ public static class RerankReply
 /// Absent in a file written before retries existed: the measurement's own date then stands for it.</param>
 /// <param name="LowerBoundMsPerToken">For a device whose call ran out of time (<see cref="RerankDeviceMeter.CallTimeout"/>):
 /// the rate it would have needed to answer at the cap — the cap over the batch's pair tokens, in the pace's unit — so its
-/// true rate is AT LEAST this. Read by the too-slow VERDICT only, when no device gave a valid result
-/// (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>): the slowest machines time out everywhere, and "no result"
-/// must not read as "not too slow". Never a valid result, never a preset's device.</param>
+/// true rate is AT LEAST this. Never a valid result, never a preset's device. Read in two places: whether a device still
+/// to be measured can hold back the pin (<see cref="RerankDeviceMeasurement.Pinned"/> — one this slow cannot win), and,
+/// when every device timed out, the verdict and the pace's seed (<see cref="RerankDeviceMeasurement.LowerBoundOnly"/>):
+/// the slowest machines time out everywhere, and "no result" must not read as "not too slow".</param>
 public sealed record RerankDeviceResult(string Device, string Name, long? ElapsedMs, double? MsPerToken, string? Error,
     int Attempts = 1, DateTimeOffset? MeasuredAt = null, double? LowerBoundMsPerToken = null)
 {
@@ -210,13 +211,40 @@ public sealed record RerankDeviceMeasurement(
     [JsonIgnore]
     public bool Complete => Retryable.Count == 0;
 
-    /// <summary>The device the preset NAMES — the fastest valid one, but only once the measurement is
-    /// <see cref="Complete"/>; null while any excluded device still has retries left (final review). One exclusion is often
-    /// transient — the RTX busy for a moment — and pinning the fastest device that DID answer (the CPU) would move a reranker
-    /// off the GPU llama.cpp's own choice would have used, seed its pace from the CPU, skip long recalls, and let those skips
-    /// flip the badge. So while a retry is pending, llama.cpp chooses, as it did before any measurement.</summary>
+    /// <summary>The device the preset NAMES — the fastest valid one — unless an excluded device that could still turn out
+    /// FASTER has a retry left (final review, and its re-review).
+    /// <para>One exclusion is often transient — the RTX busy for a moment — and pinning the fastest device that DID answer
+    /// (the CPU) would move a reranker off the GPU llama.cpp's own choice would have used, seed its pace from the CPU, skip
+    /// long recalls, and let those skips flip the badge. So an excluded device whose speed is UNKNOWN — it exited, failed to
+    /// load, answered an error, scored part of the batch — blocks the pin while it has a retry left, and llama.cpp chooses
+    /// meanwhile.</para>
+    /// <para>One that TIMED OUT does not block it: its lower bound (<see cref="RerankDeviceResult.LowerBoundMsPerToken"/>)
+    /// already proves it no faster than the fastest valid device, and leaving the choice to llama.cpp for three starts put
+    /// BGE on exactly that device on an iGPU-only laptop, where llama.cpp's default is the iGPU (Run 8b). It is still measured
+    /// again at each start the app performs, and takes over if the retry finds it faster. Under one cap that comparison
+    /// always holds — a valid call finished inside the cap on a batch of the same size, so its rate is below any bound the
+    /// cap leaves — but it is compared rather than assumed, because the cap is a knob.</para></summary>
     [JsonIgnore]
-    public RerankDeviceResult? Pinned => Complete ? Fastest : null;
+    public RerankDeviceResult? Pinned =>
+        Fastest is { MsPerToken: { } rate } best
+        && Retryable.All(r => r.LowerBoundMsPerToken is { } bound && bound >= rate)
+            ? best
+            : null;
+
+    /// <summary>The excluded devices that will be measured again but do not block <see cref="Pinned"/> — each timed out,
+    /// its lower bound at least the pinned device's rate. Empty unless a device is pinned.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<RerankDeviceResult> PendingSlower =>
+        Pinned is null ? Array.Empty<RerankDeviceResult>() : Retryable;
+
+    /// <summary>When no device gave a valid result, the measurement is <see cref="Complete"/>, and EVERY device timed out:
+    /// the smallest lower bound they left — the most any device could be. Null otherwise: a device excluded for any other
+    /// reason has an unknown speed, and llama.cpp, which chooses when nothing is pinned, may put the model there.</summary>
+    [JsonIgnore]
+    public double? LowerBoundOnly =>
+        Fastest is null && Complete && Results.Count > 0 && Results.All(r => r.LowerBoundMsPerToken is not null)
+            ? Results.Min(r => r.LowerBoundMsPerToken!.Value)
+            : null;
 }
 
 /// <summary>The persisted measurements — <c>rerank-devices.json</c> in the provisioned models directory
@@ -396,26 +424,20 @@ public static class RerankDeviceVerdict
     /// <see cref="RerankPace.Admit"/> it. So "too slow" is the admission the runtime itself would make on its first recall,
     /// never a threshold of this class: too slow exactly when that answer is not Send (its
     /// <see cref="RerankPace.OneWindowLimit"/>, 48 s at the product's deadline).
-    /// <para>Only a COMPLETE measurement is judged — nothing is claimed while a retry is pending. When no device gave a valid
-    /// result and EVERY device ran out of time, the smallest LOWER BOUND they left
-    /// (<see cref="RerankDeviceResult.LowerBoundMsPerToken"/>) is judged instead, and the answer says so (<c>LowerBound</c>):
-    /// a machine too slow to answer anywhere within the cap counts as too slow for BGE, never as "nothing known". A device
-    /// excluded for any other reason has an unknown rate, so then nothing is claimed — nor when nothing was measured.</para></summary>
+    /// <para>Judged exactly when the runtime seeds its pace from the measurement (<see cref="Seed"/>): a PINNED device, or —
+    /// when no device gave a valid result, the measurement is complete and EVERY device ran out of time — the smallest
+    /// LOWER BOUND they left, and the answer says so (<c>LowerBound</c>): a machine too slow to answer anywhere within the
+    /// cap counts as too slow for BGE, never as "nothing known". Null otherwise — nothing is claimed while a device whose
+    /// speed is unknown has a retry left, when one excluded for another reason leaves the speed unknown, or when nothing was
+    /// measured. One condition for both, so the verdict is the admission the runtime makes on its first recall (re-review:
+    /// the verdict read the lower bound while the pace did not, so the row said 「会跳过判断」 while the first long recalls
+    /// were sent and cut at the deadline twice).</para></summary>
     public static (bool TooSlow, double PredictedMs, double LimitMs, bool LowerBound)? ReferenceAdmission(RerankDeviceMeasurement m)
     {
-        if (!m.Complete) return null;
-        var lowerBound = false;
-        if (PaceSeed(m) is not { } seed)
-        {
-            // EVERY device must have left one: a device excluded for another reason (it crashed, it answered 500) says
-            // nothing about its speed, and llama.cpp — which chooses when nothing is pinned — may put the model there.
-            if (m.Results.Count == 0 || m.Results.Any(r => r.LowerBoundMsPerToken is null)) return null;
-            seed = Math.Max(RerankPace.SeedMsPerToken, m.Results.Min(r => r.LowerBoundMsPerToken!.Value));
-            lowerBound = true;
-        }
-        var pace = new RerankPace(VerificationDeadlinePolicy.Configured / 2, seed);
+        if (Seed(m) is not { } seed) return null;
+        var pace = new RerankPace(VerificationDeadlinePolicy.Configured / 2, seed.Rate);
         var plan = pace.Admit(ReferencePairTokens(GgufCatalog.DeclaredWindow(m.Model)));
-        return (plan.Kind != RerankPace.Admission.Send, plan.PredictedMs, plan.LimitMs, lowerBound);
+        return (plan.Kind != RerankPace.Admission.Send, plan.PredictedMs, plan.LimitMs, seed.LowerBound);
     }
 
     /// <summary>Where the pace starts for a reranker measured here: the chosen device's rate — but never FASTER than
@@ -430,16 +452,25 @@ public static class RerankDeviceVerdict
     /// pace MORE careful than the GPU figure — which is what it is for: on this laptop's CPU, BGE's 3.35 ms per pair token
     /// is 67× the seed, and the first recall of long notes seeded at the GPU figure was cut at the deadline (Run 8).</para>
     ///
-    /// <para><b>And only once the measurement is COMPLETE</b> (<see cref="RerankDeviceMeasurement.Pinned"/>): while a retry is
-    /// pending, llama.cpp chooses the device, so the GPU seed — the figure without a measurement — is the honest start.</para></summary>
-    public static double? PaceSeed(RerankDeviceMeasurement? m) =>
-        m?.Pinned is { MsPerToken: { } rate } ? Math.Max(RerankPace.SeedMsPerToken, rate) : null;
+    /// <para><b>Only from a PINNED device</b> (<see cref="RerankDeviceMeasurement.Pinned"/>): while a device whose speed is
+    /// unknown has a retry left, llama.cpp chooses the device, so the GPU seed — the figure without a measurement — is the
+    /// honest start. <b>Or from the LOWER BOUND</b> when no device answered within the cap and every one timed out
+    /// (<see cref="RerankDeviceMeasurement.LowerBoundOnly"/>, re-review): the machine is at least that slow wherever
+    /// llama.cpp puts the model, and seeded at the GPU figure the first long recalls were sent and cut at the deadline.</para></summary>
+    public static double? PaceSeed(RerankDeviceMeasurement? m) => Seed(m)?.Rate;
+
+    /// <summary><see cref="PaceSeed"/>, and whether it is a lower bound — the one condition the pace and the verdict share.</summary>
+    public static (double Rate, bool LowerBound)? Seed(RerankDeviceMeasurement? m) =>
+        m?.Pinned is { MsPerToken: { } rate } ? (Math.Max(RerankPace.SeedMsPerToken, rate), false)
+        : m?.LowerBoundOnly is { } bound ? (Math.Max(RerankPace.SeedMsPerToken, bound), true)
+        : null;
 }
 
 /// <summary>What 资源 says about a reranker's device — its row, and the lead of the 推荐 line when BGE measured too slow.
 /// ONE writer, so the sentences and the code that decides cannot drift apart. Every clause is a fact the code holds: the
 /// measurement's own figures, the device the preset names (<see cref="LlamaServerRuntime"/> writes <c>device = </c> from
-/// the same result, <see cref="RerankDeviceMeasurement.Pinned"/> — the fastest VALID one, once no retry is pending), each
+/// the same result, <see cref="RerankDeviceMeasurement.Pinned"/> — the fastest VALID one, unless a device of unknown speed
+/// is still to be measured), each
 /// excluded device's attempts against <see cref="RerankDeviceMeter.MaxAttempts"/>, and the reference-page admission
 /// (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>, a lower bound when every device timed out).</summary>
 public static class RerankDeviceNotes
@@ -483,16 +514,21 @@ public static class RerankDeviceNotes
             return head + "没有一个设备测出可用的结果,所以仍由 llama.cpp 自己选设备。"
                 + (admission is { TooSlow: true, LowerBound: true } lb ? SlowSentence(m, lb.PredictedMs, lb.LimitMs, lowerBound: true) : "")
                 + unsaved + OnlyRerankers;
-        // A retry pending: llama.cpp chooses until the measurement is complete (RerankDeviceMeasurement.Pinned), and the
-        // row says why — the preset writes no device key, and the pace starts from the GPU figure.
+        // A device of unknown speed still to be measured: llama.cpp chooses until it is (RerankDeviceMeasurement.Pinned), and
+        // the row says why — the preset writes no device key, and the pace starts from the GPU figure. Generic on purpose:
+        // the device still to be measured may be the CPU or a GPU, and all that is known is that it could turn out faster.
         if (m.Pinned is null)
             return head + $"测出结果的设备里目前最快的是 {best.Name},但还有设备没测完,所以测完之前仍由 llama.cpp 自己选设备:"
-                + $"一个设备一次没测出结果常常只是暂时的(比如显卡当时正被别的程序占着),这时若就定在 {best.Name} 上,"
-                + "可能把它从本来更快的显卡上挪开。" + unsaved + OnlyRerankers;
+                + $"没测完的设备重测时可能比 {best.Name} 更快(一次没测出结果常常只是暂时的,比如当时正被别的程序占着),"
+                + "所以应用等它测完再定用哪个。" + unsaved + OnlyRerankers;
 
         var slow = admission is { TooSlow: true } a ? SlowSentence(m, a.PredictedMs, a.LimitMs, lowerBound: false) : "";
         var fastest = m.Excluded.Count > 0 ? $"测出结果的设备里最快的是 {best.Name},所以" : "所以";
-        return head + fastest + $"应用启动 llama.cpp 时让它在 {best.Name} 上运行。" + slow + unsaved + OnlyRerankers;
+        // Pinned beside a device still to be measured: it TIMED OUT, so it is already known to be slower (re-review).
+        var pending = m.PendingSlower.Count == 0 ? ""
+            : $"{string.Join("、", m.PendingSlower.Select(r => r.Name))} 在限定时间内没有打完,已经比 {best.Name} 慢,"
+              + "所以不等重测就先定下来;重测时要是更快,就改用它。";
+        return head + fastest + $"应用启动 llama.cpp 时让它在 {best.Name} 上运行。" + pending + slow + unsaved + OnlyRerankers;
     }
 
     /// <summary>What the reference-page admission predicts, against its limit. <paramref name="lowerBound"/>: no device

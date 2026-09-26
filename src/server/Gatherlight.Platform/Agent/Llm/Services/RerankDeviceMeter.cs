@@ -192,7 +192,7 @@ public sealed class RerankDeviceMeter
             DateTimeOffset.UtcNow, timed.Documents.Count, timed.Characters, timed.PairTokens, results, key.Shape);
         _log.LogInformation("rerank device measurement: {Model} → {Chosen}", modelId,
             m.Pinned is { } f ? $"{f.Device} ({f.Name}), the fastest that gave a result"
-            : m.Fastest is { } p ? $"none yet — {p.Device} ({p.Name}) is the fastest so far, but {m.Retryable.Count} excluded device(s) will be measured again; llama.cpp chooses until then"
+            : m.Fastest is { } p ? $"none yet — {p.Device} ({p.Name}) is the fastest so far, but an excluded device of unknown speed will be measured again; llama.cpp chooses until then"
             : "no device gave a valid result; the preset names none");
         return m;
     }

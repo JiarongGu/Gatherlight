@@ -361,22 +361,26 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     private static double? MeasuredPaceSeed(IServiceProvider sp, string model)
     {
         var lookup = sp.GetService<ILlamaServerRuntime>()?.RerankDevice(model);
-        var seed = RerankDeviceVerdict.PaceSeed(lookup?.Measurement);
+        var seed = RerankDeviceVerdict.Seed(lookup?.Measurement);
         var log = sp.GetService<ILogger<RerankPace>>();
-        if (seed is { } s && lookup?.Measurement?.Pinned is { } best)
+        if (seed is { LowerBound: false } s && lookup?.Measurement?.Pinned is { } best)
             log?.LogInformation(
                 "{Model}: the rerank pace starts from {Seed:0.###} ms per 1,000 pair tokens — this machine's measurement on {Device} ({Name}), {Rate:0.###}, never below the GPU figure {Gpu:0.###}",
-                model, s * 1000, best.Device, best.Name, best.MsPerToken * 1000, RerankPace.SeedMsPerToken * 1000);
+                model, s.Rate * 1000, best.Device, best.Name, best.MsPerToken * 1000, RerankPace.SeedMsPerToken * 1000);
+        else if (seed is { LowerBound: true } b)
+            log?.LogInformation(
+                "{Model}: the rerank pace starts from {Seed:0.###} ms per 1,000 pair tokens — a LOWER BOUND: every device timed out in this machine's measurement, never below the GPU figure {Gpu:0.###}",
+                model, b.Rate * 1000, RerankPace.SeedMsPerToken * 1000);
         else
             log?.LogInformation(
                 "{Model}: the rerank pace starts from the GPU figure, {Gpu:0.###} ms per 1,000 pair tokens — {Why}",
                 model, RerankPace.SeedMsPerToken * 1000,
                 lookup is null ? "no device-measurement key yet (the binary's build and device list are not known in this process)"
                 : lookup.Measurement is null ? "this reranker has no current device measurement on this machine"
-                : !lookup.Measurement.Complete
-                    ? $"its device measurement is not complete ({lookup.Measurement.Retryable.Count} excluded device(s) will be measured again), so llama.cpp chooses the device"
+                : lookup.Measurement.Fastest is not null
+                    ? "no device is pinned yet — an excluded device of unknown speed will be measured again, so llama.cpp chooses the device"
                 : "its measurement found no device that scored the batch");
-        return seed;
+        return seed?.Rate;
     }
 
     /// <summary>Three states with three different fixes, so they are three different sentences: the runtime

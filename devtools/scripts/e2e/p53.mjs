@@ -34,11 +34,14 @@
 //      version) is measured again
 //   E  the pace seed, counted at the ROUTER: a second life of a folder where BGE was measured slow adopts a fake router, and
 //      a recall of long notes sends it NOTHING (skipped at the measured rate); the control — the same slow CPU, but a retry
-//      of the iGPU PENDING — sends it the call (the GPU seed) and names no device. A never-measured reranker's row, beside a
+//      of the iGPU PENDING, its speed unknown — sends it the call (the GPU seed) and names no device; and where every device
+//      TIMED OUT (three starts), the pace starts from their lower bound and sends nothing. A never-measured reranker's row, beside a
 //      router the app did not start, says it is not
 //      measured while that router is not ours, and an excluded device's retry is promised only for the app's own start.
 //      The overlay's step line showed the measurement's progress
 //   F  the kill-on-close job: the app TerminateProcess'd while a measurement child is running — the child dies with it
+//   H  a device still to be measured that TIMED OUT does not hold back the pin (its lower bound proves it slower): the
+//      CPU is named at once, the row says why, and the device measured again takes over when it is faster
 //   G  no device answers within the cap (a 3 s cap, both devices hang): each timed-out call leaves a LOWER BOUND; no verdict
 //      while retries are pending; once they are spent the best lower bound fails the default page's admission, so BGE is
 //      too slow here — the badge (no embedder installed: the repair outranks it) and the row say 「至少要」, and the preset
@@ -62,7 +65,9 @@
 // embedder ahead of the repair (C's no-embedder badge and G's; p52 6h's for the skips), no lower bound (G's verdict, reason
 // and row), a lower-bound verdict while retries are pending (G's pending row), the lower bounds judged beside a device that
 // exited (G's unknown-speed case), no shape in the key (D's shape), and the bind's measured clause dropped or the sink not
-// threaded into EnsureServesAsync (G's bind, each).
+// threaded into EnsureServesAsync (G's bind, each); and with the re-review — the pace NOT starting from the lower bound
+// when every device timed out (E's bound case: the recall sent), a timed-out device holding back the pin (H's), and no
+// excluded device holding it back at all (ten assertions across A2, B, C, D and E's control).
 //
 // NOT DRIVEN: Dispose killing a measurement child (the harness stops a server with TerminateProcess, which skips Dispose
 // — F drives the job, which covers that kill too); the router's port band refused when the OS offers it (the OS's port
@@ -84,6 +89,8 @@ const PACE2_PORT = 5440;
 const CONTROL2_PORT = 5441;
 const JOB_PORT = 5446;
 const SLOWEST_PORT = 5447;
+const BOUND_PORT = 5448;
+const BOUND2_PORT = 5450;
 
 const BGE = 'bge-reranker-v2-m3-Q5_K_M';
 const LAMAR = 'LAMAR-600m.Q5_K_M';
@@ -243,11 +250,11 @@ try {
       && /嵌入模型和对话模型仍由 llama\.cpp 自己选/.test(bgeNote) && /没有量过/.test(bgeNote),
     bgeNote);
   const lamarNote1 = String(rowOf(shelf1, LAMAR)?.deviceNote ?? '');
-  ok('…LAMAR\'s names each excluded device, its reason and that it will be measured AGAIN — and says that until then llama.cpp chooses, and WHY: an exclusion is often transient',
+  ok('…LAMAR\'s names each excluded device, its reason and that it will be measured AGAIN — and says that until then llama.cpp chooses, and WHY: the device not yet measured could turn out faster',
     /zzfake iGPU 没有测出结果\(预热:8 秒内没有打完分;第 1 次\),应用下一次自己启动 llama\.cpp 时会再测/.test(lamarNote1)
       && /zzfake dGPU 没有测出结果\(预热:只给 4 段里的 3 段打了分;第 1 次\)/.test(lamarNote1)
       && lamarNote1.includes('测出结果的设备里目前最快的是 CPU,但还有设备没测完,所以测完之前仍由 llama.cpp 自己选设备:'
-        + '一个设备一次没测出结果常常只是暂时的(比如显卡当时正被别的程序占着),这时若就定在 CPU 上,可能把它从本来更快的显卡上挪开。')
+        + '没测完的设备重测时可能比 CPU 更快(一次没测出结果常常只是暂时的,比如当时正被别的程序占着),所以应用等它测完再定用哪个。')
       && !/让它在 CPU 上运行/.test(lamarNote1),
     lamarNote1);
   ok('…and no other kind of row says anything about a device', rowOf(shelf1, EMBEDDER)?.deviceNote == null
@@ -453,6 +460,44 @@ try {
     JSON.stringify(starts7.map((e) => `${e.model}@${e.device}`)) === JSON.stringify([`${MMINILM}@none`, `${MMINILM}@Vulkan0`])
       && /^v1\|/.test(entryOf(f, MMINILM)?.shape ?? ''),
     JSON.stringify({ starts: starts7.map((e) => `${e.model}@${e.device}`), shape: entryOf(f, MMINILM)?.shape }));
+
+  // ---- H · a device that TIMED OUT does not hold back the pin (re-review) --------------------------------------------
+  // A new build re-measures everything. BGE's iGPU never answers within the 8 s cap — its lower bound (~5 ms per pair
+  // token) already proves it slower than the CPU's 0.4 — so the CPU is pinned NOW, not after three starts of llama.cpp's
+  // own choice (on an iGPU-only laptop, the iGPU). The iGPU is still measured again, and takes over when it is faster.
+  answer(f, { devices: IGPU_ONLY, build: '10551' });
+  await getJson('/api/manage/models/llama?refresh=true');
+  configure(f, {
+    [BGE]: { none: 0.4, Vulkan0: 'hang' },
+    [LAMAR]: { none: 0.05, Vulkan0: 0.3 },
+    [MMINILM]: { none: 0.05, Vulkan0: 0.3 },
+  });
+  await post('/api/manage/models/llama/start');
+  const h1 = resultsOf(f, BGE);
+  ok('(fixture) the new build re-measured BGE: the CPU valid, the iGPU timed out with a lower bound and a retry left',
+    h1.none?.msPerToken > 0 && h1.Vulkan0?.elapsedMs == null && h1.Vulkan0?.lowerBoundMsPerToken > h1.none?.msPerToken
+      && h1.Vulkan0?.attempts === 1,
+    JSON.stringify(entryOf(f, BGE)?.results ?? null));
+  const hRow = String(rowOf(await getJson('/api/manage/models'), BGE)?.deviceNote ?? '');
+  ok('THE POINT (re-review): a device still to be measured that TIMED OUT does not hold back the pin — the CPU is named NOW, and the row says why it did not wait',
+    /^device\s*=\s*none\s*$/m.test(sectionOf(readPreset(f), BGE))
+      && hRow.includes('测出结果的设备里最快的是 CPU,所以应用启动 llama.cpp 时让它在 CPU 上运行。'
+        + 'zzfake iGPU 在限定时间内没有打完,已经比 CPU 慢,所以不等重测就先定下来;重测时要是更快,就改用它。')
+      && /zzfake iGPU 没有测出结果\(预热:8 秒内没有打完分;第 1 次\),应用下一次自己启动 llama\.cpp 时会再测/.test(hRow)
+      && !/还有设备没测完/.test(hRow),
+    JSON.stringify({ section: sectionOf(readPreset(f), BGE), row: hRow }));
+  configure(f, {
+    [BGE]: { none: 0.4, Vulkan0: 0.05 },
+    [LAMAR]: { none: 0.05, Vulkan0: 0.3 },
+    [MMINILM]: { none: 0.05, Vulkan0: 0.3 },
+  });
+  const h2 = startsOf(f).length;
+  await post('/api/manage/models/llama/start');
+  const startsH = startsOf(f).slice(h2);
+  ok('THE POINT: …it is still measured again — it alone — and, faster this time, it TAKES OVER',
+    JSON.stringify(startsH.map((e) => `${e.model}@${e.device}`)) === JSON.stringify([`${BGE}@Vulkan0`])
+      && /^device\s*=\s*Vulkan0\s*$/m.test(sectionOf(readPreset(f), BGE)) && resultsOf(f, BGE).Vulkan0?.attempts === 2,
+    JSON.stringify({ starts: startsH.map((e) => `${e.model}@${e.device}`), section: sectionOf(readPreset(f), BGE) }));
   srv.stop();
 
   // ---- E · the pace starts from the measurement — counted at the router ----------------------------------------------
@@ -487,11 +532,11 @@ try {
   await new Promise((r) => fakeRouter.listen(0, '127.0.0.1', r));
   const fakeUrl = `http://127.0.0.1:${fakeRouter.address().port}`;
 
-  const runPace = async (suffix, port1, port2, rates) => {
+  const runPace = async (suffix, port1, port2, rates, { extraStarts = 0, extraKnobs = {} } = {}) => {
     const g = plant(suffix, [BGE], bound);
     answer(g, { devices: IGPU_ONLY });
     configure(g, { [BGE]: rates });
-    const knobs = { GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '3' };
+    const knobs = { GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '3', ...extraKnobs };
     // Life 1: measure at boot; watch the overlay's step line while it does.
     const s1 = startServer({ dataDir: g.dir, port: port1, env: env(g, knobs) });
     servers.push(s1);
@@ -505,6 +550,8 @@ try {
       try { const h = await (await fetch(`${s1.base}/api/health`)).json(); return h.migrating === false; } catch { return false; }
     }, 180000, 100);
     const c1 = makeClient(s1.base);
+    // More starts of the app's own, for a measurement whose excluded devices need their retries.
+    for (let i = 0; i < extraStarts; i++) await c1.post('/api/manage/models/llama/start');
     for (const [i, note] of notes.entries()) {
       const wrote = await c1.call('remember_fact', { kind: 'household', topic: `zzpace${i + 1}topic 社区花园`, content: note,
         source: 'https://example.test/zzpace', confidence: 0.8 });
@@ -556,7 +603,7 @@ try {
   ok('THE POINT (final review): while a retry is PENDING the pace starts from the GPU figure — the same recall IS sent to the router',
     ctl.r.status === 200 && ctl.sent >= 1, JSON.stringify({ status: ctl.r.status, sent: ctl.sent }));
   const ctlSeed = ctl.log().split(/\r?\n/).find((l) => /the rerank pace starts from/.test(l)) ?? '';
-  ok('…and the log says why (secondary: the count above is the evidence)', /its device measurement is not complete/.test(ctlSeed), ctlSeed);
+  ok('…and the log says why (secondary: the count above is the evidence)', /no device is pinned yet/.test(ctlSeed), ctlSeed);
   ok('THE POINT: …and its preset names no device — llama.cpp chooses until the measurement is complete', !/device/.test(sectionOf(readPreset(ctl.g), BGE)),
     JSON.stringify(sectionOf(readPreset(ctl.g), BGE)));
   const ctlRow = String(rowOf(ctl.shelf, BGE)?.deviceNote ?? '');
@@ -565,6 +612,22 @@ try {
       && !/应用下一次自己启动 llama\.cpp 时会再测/.test(ctlRow) && /测出结果的设备里目前最快的是 CPU,但还有设备没测完/.test(ctlRow),
     ctlRow);
   ctl.s2.stop();
+
+  // Every device TIMES OUT (a 3 s cap), over three starts of the app's own — the measurement complete, nothing valid, every
+  // device a lower bound (~1.9 ms per pair token). The verdict says 「会跳过判断」; the pace must start from the same bound, or
+  // the first long recalls are sent and cut at the deadline (re-review).
+  const lb = await runPace('-bound', BOUND_PORT, BOUND2_PORT, { none: 'hang', Vulkan0: 'hang' },
+    { extraStarts: 2, extraKnobs: { GATHERLIGHT_RERANK_MEASURE_CAP_SECONDS: '3' } });
+  const lbRes = resultsOf(lb.g, BGE);
+  ok('(fixture) three attempts each, every device timed out — a lower bound on each, no valid result, no device named',
+    ['none', 'Vulkan0'].every((d) => lbRes[d]?.attempts === 3 && lbRes[d]?.elapsedMs == null && lbRes[d]?.lowerBoundMsPerToken > 1)
+      && !/device/.test(sectionOf(readPreset(lb.g), BGE)),
+    JSON.stringify(entryOf(lb.g, BGE)?.results ?? null));
+  ok('THE POINT (re-review): the recall of long notes SENT NOTHING to the router — the pace starts from the LOWER BOUND the verdict reads, not the GPU figure',
+    lb.r.status === 200 && lb.sent === 0, JSON.stringify({ status: lb.r.status, sent: lb.sent }));
+  const lbSeed = lb.log().split(/\r?\n/).find((l) => /the rerank pace starts from/.test(l)) ?? '';
+  ok('…and the log says so (secondary: the count above is the evidence)', /a LOWER BOUND: every device timed out/.test(lbSeed), lbSeed);
+  lb.s2.stop();
 
   // ---- F · a measurement child dies with the app, however the app dies ----------------------------------------------
   // The app is ended with TerminateProcess while a child is measuring (a device that never answers keeps it busy for the

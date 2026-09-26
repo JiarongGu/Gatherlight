@@ -417,8 +417,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// child that fails to spawn. Each section is <see cref="LaunchKeys"/> — the ONE writer of the launch contract,
     /// which the reranker device measurement launches its standalone children with too.
     /// <para><paramref name="devices"/>: the device each MEASURED reranker runs on (<see cref="RerankDeviceMeter"/>) — the
-    /// fastest of its current, COMPLETE measurement (<see cref="RerankDeviceMeasurement.Pinned"/>), <c>none</c> for the CPU.
-    /// A reranker without one — never measured, or a retry still pending — and every other kind, gets no device key:
+    /// fastest of its current measurement once it is PINNED (<see cref="RerankDeviceMeasurement.Pinned"/>), <c>none</c> for
+    /// the CPU. A reranker without one — never measured, or a device of unknown speed still to be measured — and every
+    /// other kind, gets no device key:
     /// llama.cpp chooses, as it always did.</para></summary>
     private string WritePresets(IReadOnlyList<string> models, IReadOnlyDictionary<string, string> devices)
     {
@@ -526,9 +527,10 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// (<see cref="RerankDeviceMeasurement.Retryable"/>); the rest read from the store. Needs the binary's build tag and a
     /// device list it ANSWERED (<see cref="LlamaServerState.DevicesListed"/>): without either there is no key to measure
     /// under, nothing is measured, and no reranker gets a device key — today's launch. A reranker whose measurement found no
-    /// valid device gets none either, and neither does one whose measurement still has excluded devices with attempts left
+    /// valid device gets none either, and neither does one with an excluded device of UNKNOWN speed still to be measured
     /// (<see cref="RerankDeviceMeasurement.Pinned"/>): one exclusion is often transient, and pinning the fastest device that
-    /// DID answer would move the reranker off a GPU llama.cpp's own choice would have used (final review). Persisted as each finishes; one ended by Dispose is not; one that could not be saved
+    /// DID answer would move the reranker off a GPU llama.cpp's own choice would have used (final review). One that timed
+    /// out does not hold the pin back — its lower bound already proves it slower (re-review). Persisted as each finishes; one ended by Dispose is not; one that could not be saved
     /// is used for this start and kept in <see cref="_unsaved"/> for the readers. A throw measuring one model is logged and
     /// the next model measured; the caller contains anything else.</summary>
     private async Task<IReadOnlyDictionary<string, string>> MeasureRerankersAsync(LlamaServerState state,
@@ -558,8 +560,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 // This process's unsaved measurement first — newer by construction — then the stored one.
                 var m = Unsaved(id, key) ?? RerankDeviceStore.Current(_platform.ResourcesPath, key);
                 // What is known already names the device FIRST, so a throw in the retry below cannot cost this start the
-                // device key a valid stored result gives it (review, 2026-09-26) — only a COMPLETE one, though; while a
-                // retry is pending llama.cpp chooses.
+                // device key a valid stored result gives it (review, 2026-09-26) — only a PINNED one, though; while a
+                // device of unknown speed is still to be measured llama.cpp chooses.
                 if (m?.Pinned is { } known) chosen[id] = known.Device;
                 var save = m is not null && _unsaved.ContainsKey(id);   // an earlier save failed: try it again
                 if (m is null || m.Retryable.Count > 0)

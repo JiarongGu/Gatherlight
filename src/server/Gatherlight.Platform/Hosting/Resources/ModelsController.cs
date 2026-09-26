@@ -266,11 +266,11 @@ public sealed class ModelsController : ControllerBase
     /// NOT a send — i.e. BGE measured too slow here (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>). Null when BGE is
     /// not installed, not measured under the current key, or fast enough — and while its measurement still has an excluded
     /// device with attempts LEFT (<see cref="RerankDeviceMeasurement.Retryable"/>): one RTX busy at the first start would
-    /// otherwise recommend a 133 MB download that the next start's retry may reverse (review, 2026-09-26). It flips once
-    /// no retry is pending — every device measured, or its attempts spent.</summary>
+    /// otherwise recommend a 133 MB download that the next start's retry may reverse (review, 2026-09-26). It flips exactly
+    /// when the runtime seeds its pace from the measurement (<see cref="RerankDeviceVerdict.Seed"/>): a device pinned — a
+    /// device still to be measured that TIMED OUT does not hold that back — or every device timed out, its attempts spent.</summary>
     private (RerankDeviceMeasurement M, double PredictedMs, double LimitMs, bool LowerBound)? BgeMeasuredTooSlow() =>
         _llama.RerankDevice(GgufCatalog.RecommendedReranker)?.Measurement is { } m
-        && m.Complete
         && RerankDeviceVerdict.ReferenceAdmission(m) is { TooSlow: true } a
             ? (m, a.PredictedMs, a.LimitMs, a.LowerBound)
             : null;
@@ -522,8 +522,13 @@ public sealed class ModelsController : ControllerBase
         // What THIS start measured (RerankDeviceMeter) — returned by the start itself, so a measurement another caller ran
         // while this one waited for the lock is never claimed, and a start that then FAILS still says the time went on
         // measuring (review, 2026-09-26).
+        // …and what a warm below measures, should it restart the router (WarmAsync → EnsureServesAsync reports to the capture
+        // open around it; re-review) — added to this start's own report, so the answer names both.
+        using var capture = RerankMeasurementCapture.Begin();
         var start = await _llama.StartAsync();
-        var measured = start.Measured is { } ran ? RerankDeviceNotes.MeasuredBeforeStart(ran, bind: false) : null;
+        if (start.Measured is { } ran) capture.Add(ran);
+        string? Measured() => capture.Report is { } r ? RerankDeviceNotes.MeasuredBeforeStart(r, bind: false) : null;
+        var measured = Measured();
         if (!start.Ok) return NotRunning(await _llama.ProbeAsync(refresh: true), measured);
 
         var state = await _llama.ProbeAsync(refresh: true);
@@ -554,6 +559,7 @@ public sealed class ModelsController : ControllerBase
                     : (layer, model, $"「{name}」绑定的 {model} 不在这个 llama.cpp 列出的模型里,所以没有预热",
                         LlamaServerRuntime.NotOursRemedy));
         }
+        measured = Measured();   // a warm that restarted the router may have measured too
         return Ok(new
         {
             ok = true, warmed,
