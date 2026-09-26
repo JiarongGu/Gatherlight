@@ -240,7 +240,7 @@ public sealed class BackupService : IBackupService
                     // that is running — consistent either way. The pre-route key goes too, should one have
                     // survived its startup migration: nothing reads it, and it must not ride into a later one.
                     _config.Delete(LiveRoutes.Key(LiveRoutes.Memory));
-                    _config.Delete(LiveRoutes.LegacyKey(LiveRoutes.Memory));
+                    _config.Delete(LiveRoutes.ModelKey(LiveRoutes.Memory));
                 }
             }
 

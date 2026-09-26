@@ -32,9 +32,12 @@ public static class LiveRoutes
     /// <summary>What <c>LyntaiOptions.RouteKeyPrefix</c> is set to.</summary>
     public const string KeyPrefix = "llm.route.";
 
-    /// <summary>The namespace <see cref="Scorer"/> and <see cref="Memory"/> were stored under before routes —
-    /// a bare model. Read by the startup migration and the memory bundle's import only.</summary>
-    public const string LegacyModelPrefix = "llm.model.";
+    /// <summary>The namespace of a BARE model the app reads ITSELF — <c>chat</c>, <c>extract</c>, <c>validate</c>,
+    /// each handed to the agent CLI's <c>--model</c> (cortex's unrouted rows) — and, before the routes, of
+    /// <see cref="Scorer"/> and <see cref="Memory"/> too. So it is CURRENT, not legacy: the startup migration and a
+    /// memory bundle's import read the two routed consumers' old keys under it, and cortex reads and writes the
+    /// other three there every day. Removing it would break three rows, silently.</summary>
+    public const string ModelKeyPrefix = "llm.model.";
 
     /// <summary>The LLM-judge scorers' consumer tag (<c>BuiltInScorers</c>). Our own tag, not Lyntai's
     /// <c>scoring</c>: a tag is a KEY, so a second spelling would open a second, unrouted bucket.</summary>
@@ -45,7 +48,8 @@ public static class LiveRoutes
 
     public static string Key(string consumer) => KeyPrefix + consumer;
 
-    public static string LegacyKey(string consumer) => LegacyModelPrefix + consumer;
+    /// <summary>The bare-model key of <paramref name="consumer"/> (see <see cref="ModelKeyPrefix"/>).</summary>
+    public static string ModelKey(string consumer) => ModelKeyPrefix + consumer;
 
     /// <summary><paramref name="provider"/> serving <paramref name="model"/>, in the spec Lyntai parses.</summary>
     public static string Format(string provider, string model) => $"{provider}:{model}";

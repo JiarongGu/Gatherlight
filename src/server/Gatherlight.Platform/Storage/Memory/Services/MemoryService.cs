@@ -54,7 +54,7 @@ public sealed class MemoryService : IMemoryService
     // Only these app_config prefixes are memory (the tuned cortex) — never export/import arbitrary
     // config (ports, machine-local paths, feature flags don't travel between installs). A model is stored under
     // llm.model. or, for the one consumer Lyntai's router resolves (the scorer), as a live route under llm.route.
-    private static readonly string[] CortexPrefixes = { "cortex.prompt.", LiveRoutes.LegacyModelPrefix, LiveRoutes.KeyPrefix };
+    private static readonly string[] CortexPrefixes = { "cortex.prompt.", LiveRoutes.ModelKeyPrefix, LiveRoutes.KeyPrefix };
 
     private readonly IDbConnectionFactory _db;
     private readonly ILibraryRepository _library;

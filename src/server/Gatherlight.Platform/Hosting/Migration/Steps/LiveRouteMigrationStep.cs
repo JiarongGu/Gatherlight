@@ -68,7 +68,7 @@ public sealed class LiveRouteMigrationStep : IMigrationStep
     /// <paramref name="provider"/> derives — or drop it when that returns a null provider, with the reason.</summary>
     private void Move(string consumer, Func<(string? Provider, string Why)> provider)
     {
-        var oldKey = LiveRoutes.LegacyKey(consumer);
+        var oldKey = LiveRoutes.ModelKey(consumer);
         var model = _config.Get(oldKey)?.Trim();
         if (model is null) return;
 

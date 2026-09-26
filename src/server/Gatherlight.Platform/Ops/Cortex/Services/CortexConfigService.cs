@@ -114,7 +114,7 @@ public sealed class CortexConfigService : ICortexConfigService
     /// they do not.</summary>
     private string? Override(string consumer, bool routed)
     {
-        if (!routed) return _config.Get(LiveRoutes.LegacyKey(consumer));
+        if (!routed) return _config.Get(LiveRoutes.ModelKey(consumer));
         var route = _config.Get(LiveRoutes.Key(consumer));
         return LiveRoutes.Single(route) is { } one && one.Provider == RoutedProvider ? one.Model : route;
     }
@@ -150,8 +150,8 @@ public sealed class CortexConfigService : ICortexConfigService
         if (Row(consumer) is not { } row) return false;
         var v = value?.Trim();
         if (row.Routed) LiveRoutes.Set(_config, consumer, RoutedProvider, v);
-        else if (string.IsNullOrEmpty(v)) _config.Delete(LiveRoutes.LegacyKey(consumer));
-        else _config.Set(LiveRoutes.LegacyKey(consumer), v);
+        else if (string.IsNullOrEmpty(v)) _config.Delete(LiveRoutes.ModelKey(consumer));
+        else _config.Set(LiveRoutes.ModelKey(consumer), v);
         return true;
     }
 
@@ -171,8 +171,8 @@ public sealed class CortexConfigService : ICortexConfigService
     /// provider, a fallback list, no model) is refused. Keys are matched ORDINALLY, as the catalog is.</summary>
     public bool SetModelFromKey(string key, string value)
     {
-        if (key.StartsWith(LiveRoutes.LegacyModelPrefix, StringComparison.Ordinal))
-            return SetModel(key[LiveRoutes.LegacyModelPrefix.Length..], value);
+        if (key.StartsWith(LiveRoutes.ModelKeyPrefix, StringComparison.Ordinal))
+            return SetModel(key[LiveRoutes.ModelKeyPrefix.Length..], value);
         if (!key.StartsWith(LiveRoutes.KeyPrefix, StringComparison.Ordinal)) return false;
         var consumer = key[LiveRoutes.KeyPrefix.Length..];
         return Row(consumer) is { Routed: true }
@@ -188,5 +188,5 @@ public sealed class CortexConfigService : ICortexConfigService
     }
 
     private static string StoredKey(string consumer, bool routed) =>
-        routed ? LiveRoutes.Key(consumer) : LiveRoutes.LegacyKey(consumer);
+        routed ? LiveRoutes.Key(consumer) : LiveRoutes.ModelKey(consumer);
 }
