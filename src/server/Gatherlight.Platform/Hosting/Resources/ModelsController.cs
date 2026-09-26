@@ -265,7 +265,7 @@ public sealed class ModelsController : ControllerBase
     /// <summary>BGE's current device measurement on this machine and its reference-page admission, when that admission is
     /// NOT a send — i.e. BGE measured too slow here (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>). Null when BGE is
     /// not installed, not measured under the current key, or fast enough — and while its measurement still has an excluded
-    /// device with attempts LEFT (<see cref="RerankDeviceMeasurement.Retryable"/>): one RTX busy at the first start would
+    /// device of UNKNOWN speed with attempts left (<see cref="RerankDeviceMeasurement.Retryable"/>): one RTX busy at the first start would
     /// otherwise recommend a 133 MB download that the next start's retry may reverse (review, 2026-09-26). It flips exactly
     /// when the runtime seeds its pace from the measurement (<see cref="RerankDeviceVerdict.Seed"/>): a device pinned — a
     /// device still to be measured that TIMED OUT does not hold that back — or every device timed out, its attempts spent.</summary>
