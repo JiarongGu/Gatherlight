@@ -34,6 +34,9 @@ public sealed class ClaudeCliJudgeSource : IMemoryJudgeSource
 
     public string AnnotationModel(string model) => model;
 
+    /// <summary>The default client's only candidate — the CLI this arm is.</summary>
+    public string AnnotationProvider(string model) => Lyntai.Providers.ClaudeCli.ClaudeCliProvider.ProviderId;
+
     /// <summary>Each wait beside the no-judge floor of its OWN measurement: Run 1's 公式 arm (211 ms serial median) for
     /// the fixture, 68–90 ms for the household's facts — a floor from one next to a wait from the other would be the
     /// cross-run comparison docs/judge-bench.md refuses.</summary>

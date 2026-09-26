@@ -1,0 +1,74 @@
+using Gatherlight.Server.Platform.Kernel.Services;
+
+namespace Gatherlight.Server.Platform.Agent.Llm.Services;
+
+/// <summary>
+/// The live ROUTES Lyntai's text router reads per call (its D176, 3.3.0): <c>llm.route.&lt;consumer&gt;</c> in
+/// <c>app_config</c>, holding <c>provider:model</c>. ONE place that writes and reads them, because the value
+/// is a small grammar with a trap in it.
+///
+/// <para><b>Only two consumers are routed: <see cref="Scorer"/> and <see cref="Memory"/></b> — the only ones
+/// Lyntai's router resolves. <c>chat</c>/<c>extract</c>/<c>validate</c> stay <c>llm.model.&lt;consumer&gt;</c>:
+/// the app reads each ITSELF and hands it to the agent CLI's <c>--model</c>, so a route there would either be
+/// read by nothing or pass <c>provider:model</c> straight to <c>--model</c>.</para>
+///
+/// <para><b>Every write names a MODEL; a blank one DELETES the key.</b> A bare <c>provider</c> entry means
+/// "that backend's default model" — never <c>DefaultModelByConsumer</c>, which belongs to the candidates the
+/// route REPLACES (Lyntai <c>IModelRoutingStore</c>'s own contract). So writing <c>claude-cli</c> to "clear" the
+/// scorer would run it on the CLI's default instead of <c>haiku</c>, silently. And the namespace is our own,
+/// never <c>llm.model.</c>: a bare model there (<c>haiku</c>) would be read as a PROVIDER id and live routing
+/// would stop for that consumer.</para>
+///
+/// <para><b>What a route buys over the model-only key it replaced.</b> A route names the provider as well as
+/// the model, and the router ignores (with a warning) one naming a provider IT does not hold. So a key written
+/// for one 判断 binding is not read by another — after a fallback, or between a rebind and its restart —
+/// which an app-side routing store did by hand, per call, until the Lyntai 3.4 bump deleted it.</para>
+///
+/// <para>Our namespace gets NO warn-once from Lyntai (its check covers only <c>lyntai.model.</c>), so a key
+/// left under the old name is silent: <c>LiveRouteMigrationStep</c> moves them.</para>
+/// </summary>
+public static class LiveRoutes
+{
+    /// <summary>What <c>LyntaiOptions.RouteKeyPrefix</c> is set to.</summary>
+    public const string KeyPrefix = "llm.route.";
+
+    /// <summary>The namespace <see cref="Scorer"/> and <see cref="Memory"/> were stored under before routes —
+    /// a bare model. Read by the startup migration and the memory bundle's import only.</summary>
+    public const string LegacyModelPrefix = "llm.model.";
+
+    /// <summary>The LLM-judge scorers' consumer tag (<c>BuiltInScorers</c>). Our own tag, not Lyntai's
+    /// <c>scoring</c>: a tag is a KEY, so a second spelling would open a second, unrouted bucket.</summary>
+    public const string Scorer = "scorer";
+
+    /// <summary>The memory judges' consumer — Lyntai's own tag.</summary>
+    public const string Memory = Lyntai.Inference.ProviderConsumers.Memory;
+
+    public static string Key(string consumer) => KeyPrefix + consumer;
+
+    public static string LegacyKey(string consumer) => LegacyModelPrefix + consumer;
+
+    /// <summary><paramref name="provider"/> serving <paramref name="model"/>, in the spec Lyntai parses.</summary>
+    public static string Format(string provider, string model) => $"{provider}:{model}";
+
+    /// <summary>Write <paramref name="consumer"/>'s route — or DELETE it when <paramref name="model"/> is blank,
+    /// because a bare provider would mean that backend's default, not the consumer's.</summary>
+    public static void Set(IAppConfigService config, string consumer, string provider, string? model)
+    {
+        var m = model?.Trim();
+        if (string.IsNullOrEmpty(m)) config.Delete(Key(consumer));
+        else config.Set(Key(consumer), Format(provider, m));
+    }
+
+    /// <summary>The route's PROVIDER and MODEL when it is exactly one <c>provider:model</c> entry — what every
+    /// writer here produces — else null (none stored, a fallback list, or an entry naming no model).
+    /// Split at the FIRST colon, as Lyntai splits every candidate spec, so a model id may contain one.</summary>
+    public static (string Provider, string Model)? Single(string? route)
+    {
+        if (string.IsNullOrWhiteSpace(route) || route.Contains(',')) return null;
+        var at = route.IndexOf(':');
+        if (at <= 0) return null;
+        var provider = route[..at].Trim();
+        var model = route[(at + 1)..].Trim();
+        return provider.Length == 0 || model.Length == 0 ? null : (provider, model);
+    }
+}

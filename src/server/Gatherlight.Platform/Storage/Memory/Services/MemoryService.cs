@@ -1,4 +1,5 @@
 using Dapper;
+using Gatherlight.Server.Platform.Agent.Llm.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Ops.Cortex.Services;
 using Gatherlight.Server.Platform.Storage.Knowledge.Services;
@@ -51,8 +52,9 @@ public interface IMemoryService
 public sealed class MemoryService : IMemoryService
 {
     // Only these app_config prefixes are memory (the tuned cortex) — never export/import arbitrary
-    // config (ports, machine-local paths, feature flags don't travel between installs).
-    private static readonly string[] CortexPrefixes = { "cortex.prompt.", "llm.model." };
+    // config (ports, machine-local paths, feature flags don't travel between installs). A model is stored under
+    // llm.model. or, for the one consumer Lyntai's router resolves (the scorer), as a live route under llm.route.
+    private static readonly string[] CortexPrefixes = { "cortex.prompt.", LiveRoutes.LegacyModelPrefix, LiveRoutes.KeyPrefix };
 
     private readonly IDbConnectionFactory _db;
     private readonly ILibraryRepository _library;
@@ -79,7 +81,8 @@ public sealed class MemoryService : IMemoryService
         var entities = (await conn.QueryAsync<EntityExport>(
             "SELECT kind, key, value_json FROM entity ORDER BY kind, key")).ToList();
         var cortexRows = await conn.QueryAsync(
-            "SELECT key, value FROM app_config WHERE key LIKE 'cortex.prompt.%' OR key LIKE 'llm.model.%' ORDER BY key");
+            "SELECT key, value FROM app_config WHERE key LIKE 'cortex.prompt.%' OR key LIKE 'llm.model.%' "
+            + "OR key LIKE 'llm.route.%' ORDER BY key");
         var cortex = new Dictionary<string, string>();
         // A model key travels only if cortex can SET it — the household's tuning, one rule. `memory` is not one:
         // 记忆检索 binds the judge's model together with its BACKEND in settings.json, which this bundle does
@@ -91,7 +94,12 @@ public sealed class MemoryService : IMemoryService
         // SELECT's SQLite `LIKE` is ASCII case-INSENSITIVE, so a stray-cased row (`LLM.Model.memory`) comes
         // back in `cortexRows` — a case-sensitive deny-filter on `llm.model.` would then miss it entirely
         // and let it straight through. Here it simply matches neither branch and is dropped.
-        var tunable = _cortex.Models().Select(m => $"llm.model.{m.Consumer}").ToHashSet(StringComparer.Ordinal);
+        //
+        // Each key as cortex STORES it: the scorer travels as its route (llm.route.scorer = claude-cli:<model>),
+        // which an install before the routes does not read — its import skips the key, and the scorer stays on
+        // its default there. The reverse is covered: an older bundle's llm.model.scorer imports as the route.
+        // llm.route.memory is no cortex row, so the judge's route stays home for the same reason as above.
+        var tunable = _cortex.ModelKeys().ToHashSet(StringComparer.Ordinal);
         foreach (var r in cortexRows)
         {
             var key = (string)r.key;
@@ -143,7 +151,8 @@ public sealed class MemoryService : IMemoryService
             // Prompt overrides must satisfy the placeholder contract, or the planner breaks quietly on the
             // target install — route them through the validating cortex writer; model knobs route through
             // the SAME writer the cortex panel uses, which refuses a consumer it cannot set — so an older
-            // bundle carrying llm.model.memory cannot write it (see ExportAsync).
+            // bundle carrying llm.model.memory cannot write it (see ExportAsync) — and accepts both shapes a
+            // scorer model has travelled in: the old bare llm.model.scorer (written as its route) and the route.
             if (key.StartsWith(promptPrefix))
             {
                 var r = _cortex.SetPrompt(key[promptPrefix.Length..], value);
@@ -151,7 +160,7 @@ public sealed class MemoryService : IMemoryService
             }
             else
             {
-                if (!_cortex.SetModel(key["llm.model.".Length..], value)) continue;   // consumer cortex can't set — skip
+                if (!_cortex.SetModelFromKey(key, value)) continue;   // a key cortex can't set — skip
             }
             cx++;
         }

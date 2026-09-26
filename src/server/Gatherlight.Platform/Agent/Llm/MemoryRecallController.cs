@@ -611,8 +611,11 @@ public sealed class MemoryRecallController : ControllerBase
             // ONE key names the model. Cortex used to offer a second, and its value OVERRODE this one —
             // which is how "haiku" got handed to an Ollama that had never heard of it, silently, because
             // both memory policies are fail-open.
-            // The ANNOTATION model — for a reranker that is the CLI's, never the reranker's id (JudgeWiring).
-            _appConfig.Set("llm.model.memory", source.AnnotationModel(model!));
+            // The ANNOTATION route — for a reranker that is the CLI's model on the CLI, never the reranker's id
+            // (JudgeWiring). Provider AND model, so a router reads it only when it holds that provider: one that
+            // does not — the running judge's, before the restart that wires a different backend, or the CLI's
+            // after a fallback — ignores it with a warning and keeps its own wiring's model.
+            LiveRoutes.Set(_appConfig, LiveRoutes.Memory, source.AnnotationProvider(model!), source.AnnotationModel(model!));
             _log.LogInformation("memory judge bound to {Source}/{Model}", source.Id, model);
 
             // …and whether that tagging will HAPPEN: a signed-out or missing CLI means none, which the toast's

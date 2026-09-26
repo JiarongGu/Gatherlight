@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
+using Gatherlight.Server.Platform.Agent.Llm.Services;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Models;
 using Gatherlight.Server.Platform.Capabilities.McpClient.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
@@ -228,18 +229,18 @@ public sealed class BackupService : IBackupService
                     restored++;
 
                     // settings.json is COPIED wholesale, but app_config is only MERGED — the memory bundle
-                    // below is an upsert, and `llm.model.memory` isn't even in it any more (MemoryService
-                    // carries a model key only if cortex can set it, and `memory` deliberately is not one).
-                    // So the target's own live key survives a restore untouched, while the file that just
-                    // landed beside it names a different binding (or none at all). A saved binding whose
-                    // client happens to match the one running reads that stale key straight through
-                    // (JudgeScopedModelRoutingStore only withholds it across a client MISMATCH) — so a
-                    // target bound to a llama.cpp chat GGUF, restored from a backup bound to claude-cli,
-                    // keeps asking the Claude CLI for the GGUF's id after the restart. Fail-open both
-                    // sides: zero enrichment, no error. Deleting it here means that after the restart the
-                    // restored settings.json is the only answer; before it, the RUNNING wiring's own
-                    // default answers, which belongs to the client that is running — consistent either way.
-                    _config.Delete("llm.model.memory");
+                    // below is an upsert, and the judge's route isn't even in it (MemoryService carries a
+                    // model only if cortex can set it, and `memory` deliberately is not one). So the target's
+                    // own live route survives a restore untouched, while the file that just landed beside it
+                    // names a different binding (or none at all). A route is read wherever its PROVIDER is
+                    // held, so a target bound to the CLI on opus, restored from a backup bound to the CLI on
+                    // sonnet, keeps judging on opus — the wrong model, no error, either side of a restart.
+                    // Deleting it here means that after the restart the restored settings.json is the only
+                    // answer; before it, the RUNNING wiring's own default answers, which belongs to the client
+                    // that is running — consistent either way. The pre-route key goes too, should one have
+                    // survived its startup migration: nothing reads it, and it must not ride into a later one.
+                    _config.Delete(LiveRoutes.Key(LiveRoutes.Memory));
+                    _config.Delete(LiveRoutes.LegacyKey(LiveRoutes.Memory));
                 }
             }
 

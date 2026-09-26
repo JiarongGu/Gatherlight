@@ -4,7 +4,8 @@ namespace Gatherlight.Server.Platform.Kernel.Services;
 
 /// <summary>
 /// Dynamic key→value configuration in the <c>app_config</c> table — prompt template overrides
-/// (<c>cortex.prompt.{name}</c>), per-consumer model routing (<c>llm.model.{consumer}</c>),
+/// (<c>cortex.prompt.{name}</c>), per-consumer models (<c>llm.model.{consumer}</c>) and live routes
+/// (<c>llm.route.{consumer}</c>, <c>LiveRoutes</c>),
 /// timeouts, feature flags. No migration needed for a new key; absent key = caller's default.
 /// </summary>
 public interface IAppConfigService

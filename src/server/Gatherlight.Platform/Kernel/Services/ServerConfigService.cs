@@ -157,7 +157,7 @@ public sealed class TlsConfig
 public sealed class MemoryConfig
 {
     // NOTE: the claude-CLI enrichment switch is deliberately NOT here. It is a tunable value, so it lives
-    // in app_config beside its own model routing (llm.model.memory) and takes effect without a restart —
+    // in app_config beside its own model routing (llm.route.memory) and takes effect without a restart —
     // see MemoryEnrichment. This class is for what must exist before the DB opens, which the settings
     // below genuinely are: they are consumed at DI REGISTRATION time, before the container exists.
 
@@ -191,8 +191,8 @@ public sealed class MemoryConfig
 
     /// <summary>The model 判断 runs on — <c>haiku</c> on the CLI arm, an Ollama model id such as
     /// <c>gemma3:4b</c> on the local one.
-    /// <para>It becomes the "memory" consumer's DEFAULT model rather than a fixed one. 记忆检索 writes
-    /// <c>llm.model.memory</c> to match whenever it binds this layer, because those were once two
+    /// <para>It becomes the "memory" consumer's DEFAULT model rather than a fixed one. 记忆检索 writes the
+    /// route <c>llm.route.memory</c> to match whenever it binds this layer, because those were once two
     /// independent writers of one value and the cortex one silently won — handing "haiku" to the Ollama
     /// provider for a household that had set it once and switched backends later.</para></summary>
     public string? JudgeModel { get; set; }

@@ -120,10 +120,22 @@ public interface IMemoryJudgeSource : IMemorySource
     /// <see cref="IMemorySource.Register"/> — see <see cref="JudgeWiring"/> for why the source decides.</summary>
     JudgeWiring Wiring(MemoryWiringContext ctx);
 
-    /// <summary>The model ANNOTATION runs on when this source is bound to <paramref name="model"/> — what the
-    /// binding endpoint writes to <c>llm.model.memory</c>. Must agree with <see cref="Wiring"/>, which is why
-    /// every implementation builds its wiring FROM this rather than restating the rule.</summary>
+    /// <summary>The model ANNOTATION runs on when this source is bound to <paramref name="model"/> — the model
+    /// half of the route the binding endpoint writes to <c>llm.route.memory</c>. Must agree with
+    /// <see cref="Wiring"/>, which is why every implementation builds its wiring FROM this rather than restating
+    /// the rule.</summary>
     string AnnotationModel(string model);
+
+    /// <summary>The Lyntai PROVIDER id annotation runs on when this source is bound to <paramref name="model"/> —
+    /// the provider half of that route (<see cref="Services.LiveRoutes"/>). Stated BESIDE
+    /// <see cref="AnnotationModel"/>, because the two are one answer: a route is provider and model together, and
+    /// the router ignores one naming a provider the annotating client's router does not hold.
+    ///
+    /// <para><b>It must be a provider the <see cref="Wiring"/>'s annotation client can reach</b>, or the route
+    /// is ignored with a warning on every call and the binding's live model never takes effect: the Claude CLI's
+    /// id for the default client (<c>AnnotationClient</c> null), the named client's own provider otherwise. No
+    /// default, so a new source cannot compile without saying where its tagging goes.</para></summary>
+    string AnnotationProvider(string model);
 
     /// <summary>Does <paramref name="model"/>, bound here, do only the CHECKING at recall, while annotation runs
     /// on another model entirely (<see cref="AnnotationModel"/>) — a reranker, which scores and never

@@ -21,8 +21,9 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Sources;
 /// along with the provider pool. Before that it narrowed only the pool, so each source also had to append its
 /// provider to the GLOBAL candidate list — which let the default client reach a backend it was never meant
 /// to. That workaround (Lyntai Part 93) is gone.</para></param>
-/// <param name="AnnotationModel">The model annotation runs on — the ONE value <c>llm.model.memory</c> and
-/// <c>DefaultModelByConsumer["memory"]</c> hold. Never a reranker's id: the CLI would be asked for it.</param>
+/// <param name="AnnotationModel">The model annotation runs on — the ONE value <c>DefaultModelByConsumer["memory"]</c>
+/// holds and the model half of the <c>llm.route.memory</c> route a bind writes (its provider is the source's
+/// <c>AnnotationProvider</c>). Never a reranker's id: the CLI would be asked for it.</param>
 /// <param name="Verifier">Builds the recall verifier from the container.</param>
 public sealed record JudgeWiring(
     string? AnnotationClient,

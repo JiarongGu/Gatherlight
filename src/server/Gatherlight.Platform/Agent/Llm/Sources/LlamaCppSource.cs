@@ -184,6 +184,12 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public string AnnotationModel(string model) =>
         IsReranker(model) ? MemorySources.DefaultJudgeModel : model;
 
+    /// <summary>Beside <see cref="AnnotationModel"/> because the two are one route: a reranker's tagging is the
+    /// Claude CLI's (the default client, <see cref="Wiring"/>'s null), a chat model's is <see cref="ProviderId"/> —
+    /// the one provider <see cref="ClientId"/> is narrowed to.</summary>
+    public string AnnotationProvider(string model) =>
+        IsReranker(model) ? Lyntai.Providers.ClaudeCli.ClaudeCliProvider.ProviderId : ProviderId;
+
     /// <summary>Side by side with <see cref="AnnotationModel"/> on purpose: both answer "does this model only
     /// check?", and if they disagreed the toast would describe one wiring while <see cref="Wiring"/> built the
     /// other. Both ask <see cref="IsReranker"/>.</summary>

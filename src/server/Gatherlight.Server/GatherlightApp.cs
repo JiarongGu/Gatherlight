@@ -167,17 +167,6 @@ public static class GatherlightApp
             // AddLyntai returns IServiceCollection, so it chains; SQLite storage backs scoring persistence.
             .AddLyntai(b =>
             {
-                // The live model routing, except the memory judge's key while it names a model for a client
-                // that is not the one annotating — after a fallback, or between a rebind and its restart.
-                // BEFORE AddLiveModelRouting below, whose TryAddSingleton then stands down.
-                b.Services.AddSingleton<Lyntai.Inference.IModelRoutingStore>(sp => new JudgeScopedModelRoutingStore(
-                    new Lyntai.Inference.KeyValueModelRoutingStore(
-                        sp.GetService<Lyntai.Storage.IKeyValueStore>(),
-                        sp.GetService<ILogger<Lyntai.Inference.KeyValueModelRoutingStore>>(),
-                        sp.GetRequiredService<LyntaiOptions>().ModelKeyPrefix),
-                    sp.GetRequiredService<ServerConfigService>(),
-                    sp.GetRequiredService<IPlatformContext>(),
-                    judgeWiring.AnnotationClient));
                 b
                 .AddClaudeCliProvider()
                 // The interactive two-gate + jobs + playground drive the CLI's own agent loop through
@@ -189,27 +178,33 @@ public static class GatherlightApp
                 {
                     o.MaxProviderTimeout = TimeSpan.FromHours(2);
                     // Cortex lives in the app's OWN keys — point Lyntai's IPromptRegistry / IModelRoutingStore
-                    // straight at cortex.prompt.* / llm.model.* (no shim, no lyntai_kv duplicate).
+                    // straight at cortex.prompt.* / llm.route.* (no shim, no lyntai_kv duplicate). A ROUTE since
+                    // Lyntai 3.3 (D176): provider:model, never a bare model — so its own namespace, NEVER
+                    // llm.model., where chat/extract/validate keep bare models the app reads itself and a route
+                    // reader would take `haiku` for a provider id (LiveRoutes).
                     o.PromptKeyPrefix = "cortex.prompt.";
-                    o.ModelKeyPrefix = "llm.model.";
-                    o.DefaultModelByConsumer["scorer"] = "haiku"; // cheap-judge default; llm.model.scorer overrides live
+                    o.RouteKeyPrefix = Platform.Agent.Llm.Services.LiveRoutes.KeyPrefix;
+                    // Cheap-judge default; llm.route.scorer (claude-cli:<model>) overrides it live.
+                    o.DefaultModelByConsumer[Platform.Agent.Llm.Services.LiveRoutes.Scorer] = "haiku";
                     // The memory judges (annotation per write, verification per recall) bill to
                     // Lyntai's own "memory" consumer tag.
                     //
                     // ONE SOURCE OF TRUTH for which model judges. It used to be two — this default AND
-                    // cortex's live llm.model.memory, which overrides it — so a household that had ever set
+                    // cortex's live llm.model.memory, which overrode it — so a household that had ever set
                     // 记忆判断 to haiku and later moved the judge to a local model got the router asking the
                     // OLLAMA provider for a model called "haiku". Both memory policies are fail-open, so
                     // the symptom was no model calls and no error at all. 记忆检索's picker now writes that
                     // key itself whenever it binds this layer, and cortex no longer offers a second place
                     // to disagree from. The value is still a DEFAULT rather than a pin on the policy's own
                     // Model, because pinning would capture it at registration and kill the live override.
-                    // That override is itself withheld whenever it was written for a client other than the
-                    // running one (JudgeScopedModelRoutingStore) — otherwise a fallback to the CLI kept
-                    // reading a key naming the GGUF it fell back FROM.
-                    o.DefaultModelByConsumer["memory"] = judgeWiring.AnnotationModel;
+                    // That override is a ROUTE (llm.route.memory = provider:model, Lyntai D176), and a router
+                    // ignores one naming a provider it does not hold — so after a fallback to the CLI, a route
+                    // written for the GGUF it fell back FROM (llamacpp:<gguf>) is not read, and this default
+                    // answers. The app-side store that withheld the old model-only key by hand is gone.
+                    o.DefaultModelByConsumer[Platform.Agent.Llm.Services.LiveRoutes.Memory] = judgeWiring.AnnotationModel;
                 })
-                // Live per-consumer model routing (the scorers' judge model) read from app_config each call.
+                // Live per-consumer ROUTES (the scorers' judge model, the memory judge's annotation model) read
+                // from app_config each call, under RouteKeyPrefix. Lyntai's own KeyValueModelRoutingStore, as is.
                 .AddLiveModelRouting()
                 // claude-cli ALONE. A local judge source reaches its provider through its own named client,
                 // which since Lyntai 3.1 narrows the candidate list as well as the provider pool (its D87).
@@ -309,7 +304,7 @@ public static class GatherlightApp
                 // The switch is LIVE (app_config, the cortex store) rather than a registration, because
                 // this codebase already says where a tunable value belongs: settings.json is "what must
                 // exist before the DB opens", everything tunable is app_config. The enrichment's MODEL was
-                // already there (llm.model.memory) — keeping its on/off in settings.json split one
+                // already there (now the route llm.route.memory) — keeping its on/off in settings.json split one
                 // feature's controls across two stores AND made it need a restart.
                 //
                 // Registering the decorators BEFORE AddMemory* is the whole mechanism: those use
@@ -343,7 +338,7 @@ public static class GatherlightApp
                 b
                 // The 6 scorers now implement Lyntai.Cortex.IScorer — registered into Lyntai's scoring
                 // collection so its IScoringService iterates + persists them (LLM judges route through
-                // llm.model.scorer, skip via Applies()).
+                // the live route llm.route.scorer, skip via Applies()).
                 .AddScorer<Platform.Ops.Scoring.Services.ScopeAdherenceScorer>()
                 .AddScorer<Platform.Ops.Scoring.Services.PlanStructureScorer>()
                 .AddScorer<Platform.Ops.Scoring.Services.OutcomeScorer>()
@@ -398,7 +393,7 @@ public static class GatherlightApp
                         embeddingModel!, semanticSource.Endpoint(memorySettings) ?? "", memorySettings));
             })
             // Lyntai's cortex (IPromptRegistry / IModelRoutingStore) reads/writes the app's OWN app_config
-            // table — single source of truth for cortex.prompt.* / llm.model.*, no lyntai_kv duplicate. Plain
+            // table — single source of truth for cortex.prompt.* / llm.route.*, no lyntai_kv duplicate. Plain
             // AddSingleton after AddLyntai wins over its TryAdd SqliteKeyValueStore.
             .AddSingleton<Lyntai.Storage.IKeyValueStore, Platform.Ops.Cortex.Services.AppConfigKeyValueStore>()
             // App-side adapter over Lyntai's IAgentSession — the two-gate / jobs / playground run through this.
@@ -632,6 +627,10 @@ public static class GatherlightApp
             .AddSingleton<Platform.Hosting.Migration.Services.MigrationState>()
             .AddSingleton<Platform.Hosting.Migration.Services.StartupMigrationRunner>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.DbMigrateStep>()
+            // Right after the database exists and before anything can make a model call (the fact index's back-fill
+            // annotates): the scorer's and the judge's stored models move to Lyntai 3.3's live routes. Nothing reads
+            // the old keys and nothing warns of them in our namespace, so a key it missed would be a silent default.
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.LiveRouteMigrationStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.SelfHealLocksStep>()
             // Early, so every later step that might reach for the agent already spawns the right binary.
             // Unlike GitRuntimeStep this is NOT essential and downloads nothing: git is boot-essential so

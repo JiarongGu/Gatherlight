@@ -13,8 +13,8 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// dynamic, tunable value, and this codebase already says where those belong: <c>ServerConfig</c>'s own
 /// doc reserves <c>settings.json</c> for "what must exist before the DB opens", with everything tunable in
 /// <c>app_config</c> — which is what the cortex panel edits. The enrichment's MODEL already lives there
-/// (<c>llm.model.memory</c>); having its on/off somewhere else, behind a restart, split one feature's
-/// controls across two stores.</para>
+/// (the live route <c>llm.route.memory</c>); having its on/off somewhere else, behind a restart, split one
+/// feature's controls across two stores.</para>
 ///
 /// <para><b>Why decorating works at all.</b> Both seams already define a "no opinion" result that the
 /// engine treats as identical to having no policy registered — <see cref="MemoryAnnotation.None"/> and

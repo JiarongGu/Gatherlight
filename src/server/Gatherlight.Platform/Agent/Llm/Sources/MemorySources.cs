@@ -239,8 +239,8 @@ public static class MemorySources
 
     /// <summary>Do the settings NAME the source whose id is <paramref name="sourceId"/>? False after a
     /// FALLBACK — and false in the window between binding another source and the restart that wires it.
-    /// Either way, what was written for the saved source (its model, and the live <c>llm.model.memory</c> the
-    /// binding wrote beside it) describes a backend that is not the one answering. Also false when nothing is
+    /// Either way, what was written for the saved source (its model, and the live route <c>llm.route.memory</c>
+    /// the binding wrote beside it) describes a backend that is not the one answering. Also false when nothing is
     /// saved; a caller for whom that case means "the default" says so itself.</summary>
     public static bool SavedIs(MemoryConfig c, string sourceId) =>
         SavedJudgeSource(c) is { } saved
