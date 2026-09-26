@@ -7001,3 +7001,179 @@ run cannot separate it out.
   `guards8b.txt`;
 - the probes: `devtools/_run8/probe-igpu/` and `probe-igpu-device/`;
 - the smoke: `devtools/_judge-bench-long/results-2026-09-25T094517.872Z.json` and `devtools/_run8/smoke8b.txt`.
+
+## Run 10 — Lyntai's segmentation (D177) against ours (design)
+
+Written and committed BEFORE the runs; the results section that follows names this commit. The knob mode, the bench arm
+and four plumbing smokes came first, because this design quotes them.
+
+**The question.** Since Run 6c the app reads a long candidate in WINDOWS of its own (`ChunkedScoreProvider`, with
+`RerankPace` sizing each call and `RerankAdmission` deciding whether a recall is sent). Lyntai has since shipped the same
+job in its HTTP reranker:
+
+- D177 in 3.3.0: `HttpModelOptions.MaxInputChars` with `Segmentation`, each over-long document segmented and scored as
+  its best piece;
+- Parts 305 and 306 in 3.5.0: a per-request piece cap and `InputSegmentation.MaxDocumentPiece`.
+
+The app now runs Lyntai 3.5.1. **Is D177's segmentation, configured as close to ours as it allows, significantly better
+than ours?**
+
+The owner's decision (2026-09-26): run it, then decide, and keep ours unless D177 is significantly better. Switching
+would also cost the pace its precision. Lyntai reports neither a piece count nor a `Usage`, so a pace on top of D177
+would learn from bounds up to ~2× apart (`devtools/_lyntai-3.5-delta.md` §3.4).
+
+### What is compared
+
+Two arms per reranker, both partition, both reading the whole of every candidate. `RerankInputCap` stays in front of
+both, fitting the query and preparing the candidates (NFKC under a declared window) and cutting none.
+
+| | `rrk` — ours, as shipped | `rrd` — Lyntai's D177 pieces |
+|---|---|---|
+| knob | `GATHERLIGHT_RERANK_CHUNKING=on` | `GATHERLIGHT_RERANK_CHUNKING=d177` (`085398c`), a measurement mode, never a default |
+| segmenter | `ChunkedScoreProvider` windows, one call, MaxP | Lyntai's `HttpRerankTransport` pieces, one call, MaxP |
+| pace and admission | `RerankPace` sizes the call; `RerankAdmission` may skip | none: no wrapper, so no pace, no admission, no skip |
+| per-call total | at most 480 windows (`RerankInputCap.MaxWindowsPerCall`) | none |
+
+**D177's configuration** (`RerankChunking.LyntaiSegmentation`, set on the `llamacpp-rerank` registration in that mode
+only), stated per model:
+
+| model | `MaxInputChars` | `MinDocumentShare` | `MaxDocumentPiece` | `Overlap` | `MaxPiecesPerInput` |
+|---|---|---|---|---|---|
+| `bge-reranker-v2-m3-Q5_K_M`, `LAMAR-600m.Q5_K_M` (no declared window; launched at 4,096) | 4,090 | 0.5 → query ≤ 2,045 | 1,000 | 0.25 | 5 |
+| `mmarco-mMiniLMv2-L12-H384-v1-Q8_0` (declared 512) | 506 | 0.5 → query ≤ 253 | none (the 506 − query budget is below 1,000) | 0.25 | 5 |
+
+- **The budgets are ours.** The query keeps at most 2,045 or 253 characters. A document piece is at most 1,000 characters
+  (BGE, LAMAR) or what the query leaves of 506 (mMiniLMv2). At most 5 pieces per document.
+- **What no setting can match:**
+  - **Placement.** Ours cuts every window to the full budget, spaced evenly, with the last anchored at the tail. D177
+    cuts each piece at the last blank line, line break, sentence end or space in its latter half, restarts inside the
+    last quarter, and lets the last piece run short.
+  - **Overlap.** At least a quarter in ours; AT MOST a quarter in D177.
+  - **What is counted and what is sent.** D177 counts the NFKC text and sends the original. Here that is the same under
+    a declared window, because `RerankInputCap` sends D177 the NFKC text already. Without a declared window, D177's NFKC
+    count is the stricter one.
+  - **Past the cap.** When more than 5 pieces are needed, D177 keeps the first, the last and evenly spaced INDICES;
+    ours places 5 full windows evenly by POSITION.
+  - **The per-call total.** No per-call total in D177.
+- **On a GPU the pace does not bind at this fixture's ≤ 60 candidates** (Runs 6c and 9: 0 pace lines), so `rrk` here
+  measures the windows, not the pace.
+
+### The instrument
+
+Three fixtures, the same seeds and questions as their runs:
+
+| fixture | file (sha256) | seed |
+|---|---|---|
+| **long** (Run 6) | `recall-bilingual-long.json` (`1f48f1be…4f17`) | `devtools/_judge-bench-seed-long/`, 判断 off, no tags |
+| **mixed** (Run 9) | `recall-bilingual-mixed.json` (`e1c9b4d5…5032`) | `devtools/_judge-bench-seed-mixed/`, 判断 off, no tags |
+| **short** (Runs 1–5b) | `recall-bilingual.json` (`9680443e…f555`) | `devtools/_judge-bench-seed/`, Claude's tags; `--claude-stub` |
+
+- 240 questions each, order seed 12345.
+- 判断 verification by the reranker only (tagging is on the CLI and nothing is written), 语义 off, partition, a page
+  of 8, the product's 60 s deadline.
+- Every server is on the claude stub, so no quota can be spent.
+
+**Nine runs, one reranker and one fixture each** — never more than two reranker arms on the GPU at once (Run 9's VOID).
+Each has `formula`, `formula2`, `rrk:<m>` and `rrd:<m>`, and is paired only within itself:
+
+```
+node devtools/scripts/judge-bench.mjs <--fixture=long --reuse-seed | --fixture=mixed --reuse-seed | --reuse-seed --claude-stub> \
+  --arms=formula,formula2 --rerankers=<m> --rerank-arms=rrk,rrd --rerank-memo --resources=devtools/_rr-res \
+  --port-base=<6900 + 10k> --llama-port=<6990 + k>
+```
+
+- **Order**: long BGE, long LAMAR, long mMiniLMv2; then mixed in the same order; then short. Run k (0–8) gets port base
+  6900 + 10k and router port 6990 + k. None of those ports is in a range Windows had reserved that day (checked just
+  before), none is reused (the smokes used 6700–6743, the p51 copy 6810–6811), and the proxies take ephemeral ports.
+- **The driver** is scratch `devtools/_run10/drive.sh`. It copies each run's results, rows, router log, preset and every
+  arm's logs to `devtools/_run10/<fixture>-<model>/` before the next run rewrites the work folder. It stops at the first
+  run that exits non-zero. A run that exits 127 before any arm starts is re-run once, unchanged.
+- **`--rerank-memo`**, as in Runs 6c and 9:
+  - where the two arms send the SAME bytes, they get the same reply, so llama.cpp's third-decimal drift cannot tell them
+    apart;
+  - where they differ, both are computed fresh;
+  - the serial latency pass is never memoised.
+- **The build.** App `2fa711d` (Lyntai 3.5.1, v1.3.0), the server built from `085398c`. Fingerprint (Platform / Planner
+  / Server): `715b91b3b197afd6` / `0c7d745c25c6070d` / `318ca094393afd75`.
+- **The device measurement is not in play.** Every arm ADOPTS the bench's router, and the app measures nothing for a
+  router it did not start. No arm's data folder holds a measurement, so the pace starts from its GPU seed, as in Runs 6c
+  and 9.
+- **Estimated time**: about 1.5 hours.
+
+### Measured
+
+Per run, as the bench prints it:
+
+- the four sets and `all` for every arm (top-1, found@8, MRR, `judged`/`graph`);
+- by position or target group, each arm's cells;
+- paired, McNemar exact with the Agresti–Min 95% interval: each arm against `formula`, and `rrd` against `rrk` (the RUN
+  10 block);
+- the identity check of `rrd` against `rrk`: position, verdict flag, graph or FTS, rows returned, errors, the whole page,
+  and every rerank body's hash;
+- what each arm sent: calls, documents per call (pieces or windows), the longest;
+- serial latency (12 queries, verdict-carrying recalls only) and the parallel mean.
+
+### Decision rule
+
+As written by the owner, **verbatim**: **"switch only if, for the recommended reranker BGE, D177 is significantly BETTER
+on long-fixture `all` found@8 (paired exact test, p < 0.05), AND no reranker is significantly worse under D177 on any
+position (start/middle/end/beyond) or on the mixed fixture's short-target questions, AND the short-fact fixture is
+unaffected (both arms should pass short facts through untouched; verify byte-identical, or state why not). Otherwise,
+keep ours."**
+
+It is read as follows, fixed before the runs. b = `rrk` hit & `rrd` miss, c = the reverse; paired within one run.
+
+- **(A) Better for BGE.** In the long run of BGE, on `all` (240 pairs), found@8: exact McNemar p < 0.05 AND c − b > 0.
+- **(B) Worse nowhere.** It blocks if, for ANY of BGE, LAMAR and mMiniLMv2, either of these holds (p < 0.05 AND c − b < 0):
+  - on found@8 in one of the long fixture's four positions (60 pairs each);
+  - on found@8 over the mixed fixture's 120 short-target questions.
+  - That is fifteen tests, each at 0.05 with no correction; any one blocks. That errs toward keeping ours.
+  - The mixed fixture's `long`, `end` and `beyond` groups, `all` and top-1 everywhere are reported beside the rule, and
+    do not decide.
+- **(C) Short facts unaffected.** For each reranker, the short run's identity check of `rrd` against `rrk` reads YES:
+  - all 240 rows identical in position, verdict flag, graph or FTS, rows returned and errors;
+  - the whole page compared on 240/240;
+  - every rerank body's hash compared on 240/240.
+  - If any differs, (C) fails. The record then says what differed and why, and the switch is not taken on this run.
+- **Switch iff (A) and (B) and (C).** Otherwise keep ours. Either way nothing in the product changes here: the result
+  goes to the owner, with the CPU consequence stated — D177 carries no pace and no skip, and Run 8 measured what BGE does
+  on a CPU without one.
+
+### Guards, checked per run before the rule is read
+
+A failed guard leaves the rule unread. It is reported, not worked around.
+
+1. **The instrument.** The fixture is accepted and the seed re-verified. `formula`'s digest is expected to be the
+   fixture's earlier one: long `976af4663b6e`, mixed `7b64a4488202`, short `f661eb6a056e`. On Lyntai 3.5.1 it may
+   differ; the within-run comparisons stand either way, and the record says which.
+2. **The engine A/A.** `formula` against `formula2` is quiet on `all` (p ≥ 0.05).
+3. **Startup.** Both reranker arms read back `llama-cpp · <m>`, raise no startup warning, announce their knob (`rrk`
+   `on`, `rrd` `d177`), and make 0 claude-cli calls over the run.
+4. **The router log.** The model spawned once, with its window (`n_ctx_slot` 512 for mMiniLMv2, 4,096 otherwise). The
+   largest task fits it. There is no error line and no truncated task.
+5. **Coverage.** `judged` = `graph` in every set, and in every position or group, of both reranker arms. A reranker
+   abstains only on a fault; an abstention on either arm leaves the rule unread.
+6. **Every request reached the model.** The proxies' forwarded `/v1/rerank` requests equal the router's `proxying request
+   to model` lines; no forward failed.
+7. **The pace did not act.** 0 pace lines in every arm. The bench voids the run otherwise; `rrd` has no pace, so a line
+   there would itself be a fault.
+8. **One build.** The fingerprint above, the same before and after every run.
+
+### Plumbing smokes, before this design
+
+- **Long, BGE** (`--n=4`, `formula`, `formula2`, `rrk`, `rrd`):
+  - `rrd` announced `rerank chunking = d177`;
+  - it sent pieces of at most 1,000 characters (27.0 documents per call on average, at most 82; `rrk` 29.3, at most 81);
+  - forwarded = proxied 58/58, no pace line, no warning.
+- **Long, mMiniLMv2** (`--n=2`): the largest task on the router 421 tokens (≤ 512), no truncation, no error line.
+- **Short, mMiniLMv2** (`--claude-stub`, `--n=6`): the identity check read **YES**, bodies included. The memo shared an
+  identical body between the arms 11 and 13 times.
+- **Mixed, BGE** (`--n=4`): the mixed seed was re-verified under this build, and the RUN 10 block printed the `short` /
+  `long` / `end` groups.
+- The long smoke's `formula` digest over its 8 queries equals Run 8b's smoke's over the same 8 (`6c0b362bcd3d`).
+
+The smokes' numbers inform nothing (16 questions at most, early in a run).
+
+**The e2e suites on this build**: `p52` passed. `p51` passed when run from a scratch copy on port 6810 — its own 5510
+sits inside a range Windows had reserved that day (5458–5557), and the fixture's log shows the bind refused (WSAEACCES),
+the case `dev-conventions.md` describes.
