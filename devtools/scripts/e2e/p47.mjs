@@ -195,15 +195,27 @@ try {
   // The target already has its OWN judge bound to a DIFFERENT model than the backup carries (opus here,
   // sonnet on the source) — the setup for the reconcile assertion after the import below.
   const memDbPath = path.join(restoreDir, 'state', 'gatherlight.db');
-  const readMemKey = () => {
+  const readKey = (key) => {
     const d = new DatabaseSync(memDbPath, { readOnly: true });
-    try { return d.prepare("SELECT value FROM app_config WHERE key = 'llm.model.memory'").get()?.value; }
+    try { return d.prepare('SELECT value FROM app_config WHERE key = ?').get(key)?.value; }
     finally { d.close(); }
   };
+  const readMemKey = () => readKey('llm.route.memory');
   const targetBind = await rc.post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'opus' });
   ok('(fixture) the restore target is bound to a judge model the backup does not carry',
-    targetBind.status === 200 && readMemKey() === 'opus',
-    `${targetBind.status} llm.model.memory=${JSON.stringify(readMemKey())}`);
+    targetBind.status === 200 && readMemKey() === 'claude-cli:opus',
+    `${targetBind.status} llm.route.memory=${JSON.stringify(readMemKey())}`);
+  // A PRE-ROUTE key left beside it — what a startup migration that failed would leave. Planted straight into the
+  // database, since nothing in this build writes one; the reconcile must take it too, or a later import (or a
+  // downgrade) could meet it again. The server reads app_config per call, so a row written here is simply there.
+  {
+    const d = new DatabaseSync(memDbPath);
+    try { d.prepare("INSERT INTO app_config(key, value) VALUES ('llm.model.memory', 'zzleftover') "
+      + "ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(); }
+    finally { d.close(); }
+  }
+  ok('(fixture) a leftover pre-route llm.model.memory sits beside the route', readKey('llm.model.memory') === 'zzleftover',
+    `llm.model.memory=${JSON.stringify(readKey('llm.model.memory'))}`);
 
   const imported = await fetch(`${rBase}/api/backup/import`, {
     method: 'POST', headers: { 'content-type': 'application/zip' }, body: zipBytes,
@@ -214,16 +226,16 @@ try {
     JSON.stringify(impBody?.restored));
 
   // THE POINT (backup reconcile): settings.json is copied WHOLESALE on import, but app_config is only
-  // MERGED (the memory bundle inside the zip is the same upsert as /api/memory, and per Task 2 no longer
-  // even carries this key) — so without a reconcile the target's stale llm.model.memory (opus, bound just
-  // above) would survive untouched beside the freshly restored settings.json (claude-cli / sonnet), and
-  // the scoped routing store only withholds a saved key across a CLIENT mismatch — both are the default
-  // client here, so a same-client mismatch reads the stale key straight through. Here both names are valid
-  // CLI models, so the judge silently runs on opus when the restored settings say sonnet — the WRONG model,
-  // with no error, either side of a restart. (Zero enrichment is the GGUF case: a stale key naming a model the
-  // running client cannot serve, which fails open.)
-  ok('THE POINT: a restore drops the target\'s stale llm.model.memory rather than leaving it beside a restored settings.json it can contradict',
-    readMemKey() === undefined, `llm.model.memory=${JSON.stringify(readMemKey())}`);
+  // MERGED (the memory bundle inside the zip is the same upsert as /api/memory, and never carries this key)
+  // — so without a reconcile the target's stale route (claude-cli:opus, bound just above) would survive
+  // untouched beside the freshly restored settings.json (claude-cli / sonnet). A route is read wherever its
+  // PROVIDER is held, and both bindings annotate on the CLI, so the judge silently runs on opus when the
+  // restored settings say sonnet — the WRONG model, with no error, either side of a restart. Confirmed to fail
+  // with the route's delete removed; the leftover's assertion, with the pre-route key's delete removed.
+  ok('THE POINT: a restore drops the target\'s stale llm.route.memory rather than leaving it beside a restored settings.json it can contradict',
+    readMemKey() === undefined, `llm.route.memory=${JSON.stringify(readMemKey())}`);
+  ok('…and a leftover pre-route llm.model.memory with it', readKey('llm.model.memory') === undefined,
+    `llm.model.memory=${JSON.stringify(readKey('llm.model.memory'))}`);
 
   // Named for the page the AGENT wrote, never the template's welcome.json — the seeder re-creates
   // that one, so asserting on it would pass with `ui/` left out of the backup entirely.

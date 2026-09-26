@@ -1,10 +1,27 @@
 #!/usr/bin/env node
 // e2e P16 — cortex tuning surface. Read the prompt-template + model-routing registry, override
 // with placeholder validation, prove a runtime override reaches the spawned CLI, and reset. Ends with a
-// real 智库 validation pass, asserting the validate row's model reaches THAT spawn's argv.
+// real 智库 validation pass, asserting the validate row's model reaches THAT spawn's argv, and a real
+// SCORING pass asserting the same of the scorer row.
+//
+// The scorer row is the one cortex row Lyntai's router resolves, so since Lyntai 3.3 it is stored as a live
+// ROUTE (llm.route.scorer = claude-cli:<model>), not a bare llm.model.scorer — which nothing reads any more, so a
+// row still writing it would be a control that changes nothing, silently (S1 confirmed to fail that way). Clearing
+// it must DELETE the route: a bare `claude-cli` would run the scorers on the CLI's own default model instead of
+// the consumer default, haiku (S2 confirmed to fail that way — the spawn then carries no --model at all).
+//
+// M cases — the STARTUP MIGRATION of what an install stored before the routes (LiveRouteMigrationStep). Nothing
+// reads llm.model.scorer / llm.model.memory any more and Lyntai warns only of ITS old namespace, so a key the step
+// missed is a model silently back on its default. Each case plants the old keys into a stopped install's database
+// and boots it: M1 (nothing bound) — both become claude-cli routes, and the next scorer and annotation spawns carry
+// the migrated models end to end; M2 (a chat GGUF saved, its runtime absent) — the judge's key takes the SAVED
+// binding's provider, llamacpp, so the CLI it fell back to is never asked for the GGUF; M3 (a retired backend saved)
+// — dropped, and a route already present beside an old key wins. Confirmed to fail: M1 with the step unregistered,
+// M2 with the provider taken from the RUNNING (fallen-back) judge instead of the saved binding.
 import fs from 'node:fs';
 import path from 'node:path';
-import { dataDirFor, claudeStubCmd, makeReporter, makeTestData, startServer, waitHealthy, makeClient } from './_e2e-common.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { dataDirFor, claudeStubCmd, makeReporter, makeTestData, startServer, waitHealthy, makeClient, until } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p16');
 const { ok, fail, done } = makeReporter('p16');
@@ -17,6 +34,13 @@ const srv = startServer({
   dataDir, port: 5398,
   env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ARGS_LOG: argsLog },
 });
+// The M cases' servers: M1 reboots this suite's own folder, M2/M3 a second one (booted once to create its database).
+// Each boot on a port of its own — reusing one inside a suite is its own trap.
+const migDir = dataDirFor('p16-migrate');
+makeTestData(migDir);
+const migArgsLog = path.join(migDir, 'state', 'stub-args.jsonl');
+const M1_PORT = 5407, MIG_PRE_PORT = 5408, M2_PORT = 5409, M3_PORT = 5410;
+const extra = [];
 const { j, post, put, del, waitPhase } = makeClient(srv.base);
 
 const getCortex = async () => (await j('/api/manage/cortex')).body;
@@ -130,7 +154,7 @@ try {
     const spawns = calls().slice(from).filter((x) => ['plan', 'execute', 'validate'].includes(x.kind));
     await post(`/api/chat/${id}/diff/${decision}`);
     await waitPhase(id, decision === 'approve' ? 'committed' : 'rejected');
-    return { review, spawns };
+    return { id, review, spawns };
   };
 
   const setChat = await put('/api/manage/cortex/model/chat', { value: 'opus' });
@@ -171,10 +195,184 @@ try {
     v2.spawns.filter((x) => x.kind !== 'validate').length >= 2
       && v2.spawns.filter((x) => x.kind !== 'validate').every((x) => modelOf(x) === 'opus'), summary(v2.spawns));
   await put('/api/manage/cortex/model/chat', { value: '' });
+
+  // --- a real SCORING pass: the scorer row reaches the judge spawn's --model, through its ROUTE ------------
+  // The scorer is read by Lyntai's router, per call, from llm.route.scorer — so this proves the row writes the
+  // key the router reads AND that the router reads it, where the V cases prove a key the app reads itself. A manual
+  // re-score of V2's turn (POST /api/manage/scores/run/<id>) runs the two LLM judges synchronously. The route is
+  // read at each call, so V1's auto-scorers could only ever land on the new model once it is set — but a spawn
+  // STARTED before the write logs its line a moment later, so the log is left to go quiet first.
+  const storedKey = (key) => {
+    const d = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'), { readOnly: true });
+    try { return d.prepare('SELECT value FROM app_config WHERE key = ?').get(key)?.value; }
+    finally { d.close(); }
+  };
+  const quiet = async () => {
+    let n = -1;
+    for (let i = 0; i < 40 && calls().length !== n; i++) { n = calls().length; await new Promise((r) => setTimeout(r, 750)); }
+  };
+  const scorePass = async () => {
+    await quiet();
+    const from = calls().length;
+    const run = await post(`/api/manage/scores/run/${v2.id}`);
+    return { run, spawns: calls().slice(from).filter((x) => x.kind === 'scorer') };
+  };
+
+  // S1 — scorer=sonnet: stored as the route, shown as its model, and every judge spawn gets --model sonnet.
+  const sSet = await put('/api/manage/cortex/model/scorer', { value: 'sonnet' });
+  ok('S1 (fixture) set model scorer=sonnet → 200', sSet.status === 200, JSON.stringify(sSet.body));
+  ok('S1 the row is stored as the ROUTE llm.route.scorer = claude-cli:sonnet, and not as the pre-route key',
+    storedKey('llm.route.scorer') === 'claude-cli:sonnet' && storedKey('llm.model.scorer') === undefined,
+    `llm.route.scorer=${JSON.stringify(storedKey('llm.route.scorer'))} llm.model.scorer=${JSON.stringify(storedKey('llm.model.scorer'))}`);
+  c = await getCortex();
+  ok('S1 …and cortex reads it back as the MODEL half: override sonnet, effective sonnet',
+    model(c, 'scorer')?.override === 'sonnet' && model(c, 'scorer')?.effective === 'sonnet' && model(c, 'scorer')?.overridden === true,
+    JSON.stringify(model(c, 'scorer')));
+  const s1 = await scorePass();
+  ok('S1 (fixture) the manual re-score ran and the LLM judges spawned',
+    s1.run.status === 200 && s1.spawns.length >= 1, `${s1.run.status} ${summary(s1.spawns)}`);
+  ok('S1 THE POINT: every scorer spawn receives --model sonnet (the route, read by Lyntai\'s router)',
+    s1.spawns.length >= 1 && s1.spawns.every((x) => modelOf(x) === 'sonnet'), summary(s1.spawns));
+
+  // S2 — the row cleared: the route is DELETED, and the judges fall back to the consumer default — haiku —
+  // never to no --model, which is what a bare `claude-cli` route would give (the backend's own default).
+  const sClear = await put('/api/manage/cortex/model/scorer', { value: '' });
+  ok('S2 (fixture) scorer row cleared → 200', sClear.status === 200, JSON.stringify(sClear.body));
+  ok('S2 THE POINT: clearing DELETES the route — no llm.route.scorer at all, not a bare provider',
+    storedKey('llm.route.scorer') === undefined, `llm.route.scorer=${JSON.stringify(storedKey('llm.route.scorer'))}`);
+  c = await getCortex();
+  ok('S2 …and cortex shows the default: not overridden, effective haiku',
+    model(c, 'scorer')?.overridden === false && model(c, 'scorer')?.override === null && model(c, 'scorer')?.effective === 'haiku',
+    JSON.stringify(model(c, 'scorer')));
+  const s2 = await scorePass();
+  ok('S2 (fixture) a second re-score spawned the judges', s2.spawns.length >= 1, summary(s2.spawns));
+  ok('S2 THE POINT: the scorer spawns get the consumer default, --model haiku — not sonnet, and not no --model',
+    s2.spawns.length >= 1 && s2.spawns.every((x) => modelOf(x) === 'haiku'), summary(s2.spawns));
+
+  // S3 — reset (DELETE) of a set row removes the route too.
+  await put('/api/manage/cortex/model/scorer', { value: 'opus' });
+  ok('S3 (fixture) the row set again is its route — or the reset below would pass on nothing',
+    storedKey('llm.route.scorer') === 'claude-cli:opus', `llm.route.scorer=${JSON.stringify(storedKey('llm.route.scorer'))}`);
+  const sReset = await del('/api/manage/cortex/model/scorer');
+  ok('S3 reset of the scorer row → 200 and the route is gone',
+    sReset.status === 200 && storedKey('llm.route.scorer') === undefined,
+    `${sReset.status} llm.route.scorer=${JSON.stringify(storedKey('llm.route.scorer'))}`);
+
+  // --- M: the startup migration of pre-route keys ------------------------------------------------------
+  await quiet();
+  srv.stop();
+  await new Promise((r) => setTimeout(r, 1500));
+  const plant = (dir, rows) => {
+    const d = new DatabaseSync(path.join(dir, 'state', 'gatherlight.db'));
+    try {
+      for (const [k, v] of Object.entries(rows)) {
+        if (v === null) d.prepare('DELETE FROM app_config WHERE key = ?').run(k);
+        else d.prepare('INSERT INTO app_config(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, v);
+      }
+    } finally { d.close(); }
+  };
+  const keyIn = (dir, key) => {
+    const d = new DatabaseSync(path.join(dir, 'state', 'gatherlight.db'), { readOnly: true });
+    try { return d.prepare('SELECT value FROM app_config WHERE key = ?').get(key)?.value; }
+    finally { d.close(); }
+  };
+  const boot = async (dir, port, log) => {
+    const s = startServer({ dataDir: dir, port, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ARGS_LOG: log } });
+    extra.push(s);
+    await waitHealthy(s.base);
+    return s;
+  };
+  const stopAll = async () => { for (const s of extra.splice(0)) s.stop(); await new Promise((r) => setTimeout(r, 1500)); };
+  // The fixture's own log files (UTF-8, as the file logger writes them), not stdout, whose encoding is the console's.
+  const logOf = (dir) => {
+    const d = path.join(dir, 'state', 'logs');
+    return fs.existsSync(d) ? fs.readdirSync(d).map((n) => fs.readFileSync(path.join(d, n), 'utf8')).join('\n') : '';
+  };
+  const callsIn = (log) => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+
+  // M1 — nothing bound (the default CLI judge): an old scorer model and an old judge model, as an install before
+  // the routes stored them.
+  plant(dataDir, { 'llm.model.scorer': 'opus', 'llm.model.memory': 'sonnet', 'llm.route.scorer': null, 'llm.route.memory': null });
+  const m1 = await boot(dataDir, M1_PORT, argsLog);
+  ok('M1 THE POINT: llm.model.scorer = opus became the route llm.route.scorer = claude-cli:opus, and the old key is gone',
+    keyIn(dataDir, 'llm.route.scorer') === 'claude-cli:opus' && keyIn(dataDir, 'llm.model.scorer') === undefined,
+    `route=${JSON.stringify(keyIn(dataDir, 'llm.route.scorer'))} old=${JSON.stringify(keyIn(dataDir, 'llm.model.scorer'))}`);
+  ok('M1 THE POINT: with nothing bound, llm.model.memory = sonnet became llm.route.memory = claude-cli:sonnet',
+    keyIn(dataDir, 'llm.route.memory') === 'claude-cli:sonnet' && keyIn(dataDir, 'llm.model.memory') === undefined,
+    `route=${JSON.stringify(keyIn(dataDir, 'llm.route.memory'))} old=${JSON.stringify(keyIn(dataDir, 'llm.model.memory'))}`);
+  ok('M1 …and the migration SAID so (our namespace gets no warning from Lyntai)',
+    /live routes: llm\.model\.scorer = opus → llm\.route\.scorer = claude-cli:opus/.test(logOf(dataDir))
+      && /live routes: llm\.model\.memory = sonnet → llm\.route\.memory = claude-cli:sonnet/.test(logOf(dataDir)),
+    logOf(dataDir).split('\n').filter((l) => l.includes('live routes')).join(' | '));
+  const m1c = makeClient(m1.base);
+  const m1From = calls().length;
+  const m1Run = await m1c.post(`/api/manage/scores/run/${v2.id}`);
+  const m1Scorers = calls().slice(m1From).filter((x) => x.kind === 'scorer');
+  ok('M1 …and end to end: the next scorer spawns carry --model opus',
+    m1Run.status === 200 && m1Scorers.length >= 1 && m1Scorers.every((x) => modelOf(x) === 'opus'), summary(m1Scorers));
+  const m1Wrote = await m1c.call('remember_fact', {
+    kind: 'household', topic: 'zzmigfact kitchen routine',
+    content: 'The zzmigfact kitchen is cleaned every Friday evening.', source: 'https://example.test/zzmig', confidence: 0.8,
+  });
+  const annotated = async (log, marker) => {
+    try { await until(() => callsIn(log).some((x) => x.kind === 'annotation' && x.tail.includes(marker)), 60000); } catch { /* reported below */ }
+    return callsIn(log).filter((x) => x.kind === 'annotation' && x.tail.includes(marker));
+  };
+  const m1Ann = await annotated(argsLog, 'zzmigfact');
+  ok('M1 …and the judge\'s annotation of the next fact carries --model sonnet',
+    m1Wrote.status === 200 && m1Ann.length >= 1 && m1Ann.every((x) => modelOf(x) === 'sonnet'), summary(m1Ann));
+  await stopAll();
+
+  // M2/M3 run on a second install, booted once so its database exists.
+  await boot(migDir, MIG_PRE_PORT, migArgsLog);
+  await stopAll();
+  const settingsOf = (dir, memory) =>
+    fs.writeFileSync(path.join(dir, 'state', 'settings.json'), JSON.stringify({ memory }, null, 2), 'utf8');
+
+  // M2 — a chat GGUF is the SAVED binding, but its runtime is not on disk, so 判断 falls back to the CLI. The key
+  // was written for the GGUF: it must become ITS route (llamacpp:…), which the CLI's router does not hold — never
+  // claude-cli:<gguf>, which the fallen-back CLI would read and be asked for a model it has never heard of.
+  settingsOf(migDir, { judgeSource: 'llama-cpp', judgeModel: 'zzmig-chat' });
+  plant(migDir, { 'llm.model.memory': 'zzmig-chat' });
+  const m2 = await boot(migDir, M2_PORT, migArgsLog);
+  ok('M2 THE POINT: the judge\'s key takes the SAVED binding\'s provider — llm.route.memory = llamacpp:zzmig-chat',
+    keyIn(migDir, 'llm.route.memory') === 'llamacpp:zzmig-chat' && keyIn(migDir, 'llm.model.memory') === undefined,
+    `route=${JSON.stringify(keyIn(migDir, 'llm.route.memory'))} old=${JSON.stringify(keyIn(migDir, 'llm.model.memory'))}`);
+  const m2c = makeClient(m2.base);
+  const m2Layer = ((await m2c.getJson('/api/manage/memory')).layers ?? []).find((l) => l.id === 'judge') ?? {};
+  ok('M2 (fixture) with its runtime absent, 判断 runs on the CLI', m2Layer.activeSource === 'claude-cli',
+    JSON.stringify({ source: m2Layer.source, active: m2Layer.activeSource }));
+  const m2Wrote = await m2c.call('remember_fact', {
+    kind: 'household', topic: 'zzmig2fact garden routine',
+    content: 'The zzmig2fact garden hose is stored in the shed.', source: 'https://example.test/zzmig2', confidence: 0.8,
+  });
+  const m2Ann = await annotated(migArgsLog, 'zzmig2fact');
+  ok('M2 …so the CLI is asked for ITS model (haiku), never the GGUF the migrated route names',
+    m2Wrote.status === 200 && m2Ann.length >= 1 && m2Ann.every((x) => modelOf(x) === 'haiku'), summary(m2Ann));
+  await stopAll();
+
+  // M3 — a RETIRED backend is saved (ollama): the key was never read, so there is no provider to derive; dropped.
+  // And a route already present beside an old key WINS — it was written by this build, the key before it.
+  settingsOf(migDir, { judgeSource: 'ollama', judgeModel: 'gemma3:4b' });
+  plant(migDir, { 'llm.model.memory': 'gemma3:4b', 'llm.route.memory': null,
+    'llm.model.scorer': 'opus', 'llm.route.scorer': 'claude-cli:sonnet' });
+  const m3 = await boot(migDir, M3_PORT, migArgsLog);
+  ok('M3 THE POINT: a key written for a retired backend is DROPPED, not turned into a route',
+    keyIn(migDir, 'llm.route.memory') === undefined && keyIn(migDir, 'llm.model.memory') === undefined,
+    `route=${JSON.stringify(keyIn(migDir, 'llm.route.memory'))} old=${JSON.stringify(keyIn(migDir, 'llm.model.memory'))}`);
+  ok('M3 …and says why', /live routes: dropped llm\.model\.memory = gemma3:4b — the saved 判断 backend 'ollama'/.test(logOf(migDir)),
+    logOf(migDir).split('\n').filter((l) => l.includes('live routes')).join(' | '));
+  ok('M3 …and a route already set wins over the old key beside it (kept; the old key deleted)',
+    keyIn(migDir, 'llm.route.scorer') === 'claude-cli:sonnet' && keyIn(migDir, 'llm.model.scorer') === undefined,
+    `route=${JSON.stringify(keyIn(migDir, 'llm.route.scorer'))} old=${JSON.stringify(keyIn(migDir, 'llm.model.scorer'))}`);
+  await stopAll();
 } catch (err) {
   fail('e2e-p16 fatal: ' + err.message);
   console.error(srv.log().slice(-3000));
+  for (const s of extra) console.error(s.log().slice(-3000));
 } finally {
   srv.stop();
+  for (const s of extra) s.stop();
 }
 done();

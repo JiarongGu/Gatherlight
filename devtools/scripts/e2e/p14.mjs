@@ -2,6 +2,12 @@
 // e2e P14 — portable memory transfer. Export the DB knowledge (library + learned facts) from one
 // install, then (a) re-import it (idempotent) and (b) SEED A FRESH install from the same bundle at
 // startup via GATHERLIGHT_SEED_MEMORY. Two server instances, no claude/browser.
+//
+// The scorer's model travels as its LIVE ROUTE since Lyntai 3.3 (llm.route.scorer = claude-cli:<model>), and an
+// older bundle's bare llm.model.scorer imports AS that route — the key a route reader never looks at, so importing
+// it verbatim would leave the scorer on haiku without a word. Both halves confirmed to fail: the export with the
+// scorer's stored key taken as llm.model.scorer (the route is not carried), and the import with the old key written
+// raw (no route, and the pre-route key sitting in app_config). The judge's route never travels, like its old key.
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -34,8 +40,10 @@ try {
   // backend the bundle doesn't carry, so a plain llm.model.<consumer> key should travel exactly like
   // `extract`'s.
   await fetch(`${baseA}/api/manage/cortex/model/validate`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: 'haiku' }) });
+  // The scorer is the one cortex row stored as a live ROUTE — it must travel as one.
+  await fetch(`${baseA}/api/manage/cortex/model/scorer`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: 'sonnet' }) });
   // The judge's model is BOUND with its backend (settings.json), which a memory bundle does not carry — so
-  // the key must not travel alone. Binding the CLI judge writes llm.model.memory = sonnet on A.
+  // the route must not travel alone. Binding the CLI judge writes llm.route.memory = claude-cli:sonnet on A.
   const judgeBind = await fetch(`${baseA}/api/manage/memory/layer/judge`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ source: 'claude-cli', model: 'sonnet' }),
@@ -43,13 +51,15 @@ try {
   ok('(fixture) the judge bind on A succeeds', judgeBind.status === 200, `${judgeBind.status} ${await judgeBind.text()}`);
   // Positive control for the assertion below: read A's OWN app_config, not the export, so a bind that
   // silently no-opped (400/409 swallowed) can't make "the bundle does not carry it" pass vacuously.
-  const memKeyOnA = (() => {
-    const d = new DatabaseSync(path.join(dataA, 'state', 'gatherlight.db'), { readOnly: true });
-    try { return d.prepare("SELECT value FROM app_config WHERE key = 'llm.model.memory'").get()?.value; }
+  const keyOn = (dir, key) => {
+    const d = new DatabaseSync(path.join(dir, 'state', 'gatherlight.db'), { readOnly: true });
+    try { return d.prepare('SELECT value FROM app_config WHERE key = ?').get(key)?.value; }
     finally { d.close(); }
-  })();
-  ok('(fixture) A\'s live llm.model.memory is sonnet before export', memKeyOnA === 'sonnet',
-    `llm.model.memory=${JSON.stringify(memKeyOnA)}`);
+  };
+  ok('(fixture) A\'s live llm.route.memory is claude-cli:sonnet before export',
+    keyOn(dataA, 'llm.route.memory') === 'claude-cli:sonnet', `llm.route.memory=${JSON.stringify(keyOn(dataA, 'llm.route.memory'))}`);
+  ok('(fixture) A\'s scorer row is stored as its route', keyOn(dataA, 'llm.route.scorer') === 'claude-cli:sonnet',
+    `llm.route.scorer=${JSON.stringify(keyOn(dataA, 'llm.route.scorer'))}`);
 
   const exportRes = await fetch(`${baseA}/api/memory/export`);
   ok('GET /api/memory/export 200 + attachment', exportRes.status === 200 && (exportRes.headers.get('content-disposition') ?? '').includes('.json'),
@@ -63,7 +73,11 @@ try {
   ok('bundle carries cortex tuning', bundle.cortex && bundle.cortex['llm.model.extract'] === 'opus', JSON.stringify(bundle.cortex));
   ok('bundle carries the validate model too (tunable since round 2)', bundle.cortex && bundle.cortex['llm.model.validate'] === 'haiku', JSON.stringify(bundle.cortex));
   ok('THE POINT: the bundle does NOT carry the judge\'s model — it belongs to a binding the bundle lacks',
-    !Object.prototype.hasOwnProperty.call(bundle.cortex ?? {}, 'llm.model.memory'), JSON.stringify(bundle.cortex));
+    !Object.prototype.hasOwnProperty.call(bundle.cortex ?? {}, 'llm.model.memory')
+      && !Object.prototype.hasOwnProperty.call(bundle.cortex ?? {}, 'llm.route.memory'), JSON.stringify(bundle.cortex));
+  ok('THE POINT: the scorer travels as its ROUTE, the key a route reader reads — not the bare pre-route key',
+    bundle.cortex?.['llm.route.scorer'] === 'claude-cli:sonnet'
+      && !Object.prototype.hasOwnProperty.call(bundle.cortex ?? {}, 'llm.model.scorer'), JSON.stringify(bundle.cortex));
 
   // idempotent re-import into A
   const reimport = await (await fetch(`${baseA}/api/memory/import`, {
@@ -147,25 +161,54 @@ try {
     JSON.stringify(bCortex.models?.find((m) => m.consumer === 'extract')));
   ok('seeded validate model override survived transfer too', bCortex.models.find((m) => m.consumer === 'validate')?.effective === 'haiku',
     JSON.stringify(bCortex.models?.find((m) => m.consumer === 'validate')));
+  ok('…and so did the scorer\'s route, which cortex reads back as its model', bCortex.models.find((m) => m.consumer === 'scorer')?.effective === 'sonnet'
+      && keyOn(dataB, 'llm.route.scorer') === 'claude-cli:sonnet',
+    `${JSON.stringify(bCortex.models?.find((m) => m.consumer === 'scorer'))} llm.route.scorer=${JSON.stringify(keyOn(dataB, 'llm.route.scorer'))}`);
+
+  // AN OLDER BUNDLE's scorer: every bundle before the routes carried llm.model.scorer, a bare model. Nothing reads
+  // that key any more, so importing it as written would leave the scorer on haiku; it has to land as the route.
+  const older = await (await fetch(`${baseB}/api/memory/import`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ gatherlightMemory: 1, cortex: { 'llm.model.scorer': 'opus' } }),
+  })).json();
+  ok('(fixture) an older bundle carrying llm.model.scorer imports it', older.ok === true && older.imported?.cortex === 1,
+    JSON.stringify(older.imported));
+  ok('THE POINT: an older bundle\'s llm.model.scorer lands as the route llm.route.scorer = claude-cli:opus',
+    keyOn(dataB, 'llm.route.scorer') === 'claude-cli:opus' && keyOn(dataB, 'llm.model.scorer') === undefined,
+    `llm.route.scorer=${JSON.stringify(keyOn(dataB, 'llm.route.scorer'))} llm.model.scorer=${JSON.stringify(keyOn(dataB, 'llm.model.scorer'))}`);
+  // …and a route cortex could not have written — another provider, or no model at all (which would run the scorer
+  // on the backend's default rather than haiku) — is refused, not stored verbatim.
+  const oddRoutes = await (await fetch(`${baseB}/api/memory/import`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ gatherlightMemory: 1, cortex: { 'llm.route.scorer': 'claude-cli' } }),
+  })).json();
+  const oddRoutes2 = await (await fetch(`${baseB}/api/memory/import`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ gatherlightMemory: 1, cortex: { 'llm.route.scorer': 'llamacpp:zzforeign-chat' } }),
+  })).json();
+  ok('…and a scorer route cortex could not write (a bare provider, another backend) is refused, not stored',
+    oddRoutes.imported?.cortex === 0 && oddRoutes2.imported?.cortex === 0 && keyOn(dataB, 'llm.route.scorer') === 'claude-cli:opus',
+    `${JSON.stringify(oddRoutes.imported)} ${JSON.stringify(oddRoutes2.imported)} llm.route.scorer=${JSON.stringify(keyOn(dataB, 'llm.route.scorer'))}`);
 
   // An older (1.3.0-era) bundle exported before this fix DID carry llm.model.memory — hand-edit one back in
   // and confirm import refuses to write it: a model key travels only if cortex can set it, and cortex cannot
-  // set `memory` (it binds together with a backend the bundle does not carry).
-  const foreign = { ...bundle, cortex: { ...bundle.cortex, 'llm.model.memory': 'zzforeign-chat.gguf' } };
+  // set `memory` (it binds together with a backend the bundle does not carry). Its route likewise.
+  const foreign = { ...bundle, cortex: { ...bundle.cortex, 'llm.model.memory': 'zzforeign-chat.gguf',
+    'llm.route.memory': 'llamacpp:zzforeign-chat.gguf' } };
   const imp = await (await fetch(`${baseB}/api/memory/import`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(foreign),
   })).json();
   // Proves the loop actually RAN over the foreign bundle's cortex keys and skipped exactly one — the
   // count alone (imported.cortex >= 1, as the earlier re-import assertion checks) can't distinguish
   // "skipped the foreign key" from "silently dropped everything".
-  const expectedCortexCount = Object.keys(foreign.cortex).length - 1; // every key but the foreign one
-  ok('…and the import count shows the loop skipped exactly the foreign key, nothing else',
+  const expectedCortexCount = Object.keys(foreign.cortex).length - 2; // every key but the two foreign ones
+  ok('…and the import count shows the loop skipped exactly the foreign keys, nothing else',
     imp.imported?.cortex === expectedCortexCount, `cortex=${imp.imported?.cortex} expected=${expectedCortexCount}`);
-  const db = new DatabaseSync(path.join(dataB, 'state', 'gatherlight.db'), { readOnly: true });
-  const memKey = db.prepare("SELECT value FROM app_config WHERE key = 'llm.model.memory'").get()?.value;
-  db.close();
+  const memKey = keyOn(dataB, 'llm.model.memory');
+  const memRoute = keyOn(dataB, 'llm.route.memory');
   ok('…and an older bundle that DOES carry it cannot write it (import skips a key cortex cannot set)',
-    imp.ok === true && memKey === undefined, `llm.model.memory=${JSON.stringify(memKey)}`);
+    imp.ok === true && memKey === undefined && memRoute === undefined,
+    `llm.model.memory=${JSON.stringify(memKey)} llm.route.memory=${JSON.stringify(memRoute)}`);
 } catch (err) {
   fail('e2e-p14 fatal: ' + err.message);
   console.error(((srv?.log() ?? '') + (srv2?.log() ?? '')).slice(-3000));

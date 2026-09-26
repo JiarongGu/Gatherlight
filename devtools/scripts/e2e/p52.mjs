@@ -18,14 +18,19 @@
 //      the tool call's, and the engine's page stands — where the tool's deadline used to cancel the recall itself
 //      and drop it to FTS.
 //   4. When 判断 FALLS BACK to the CLI (its runtime gone), the CLI is asked for the CLI's model — not for
-//      the GGUF named by the saved judgeModel or by the live llm.model.memory the binding wrote. Read from
-//      the stub's own argv log, because a CLI asked for an unknown model is otherwise indistinguishable
-//      from one that answered badly.
-//      4b: the positive control — a key written for the RUNNING client (the CLI rebound to sonnet) is read.
+//      the GGUF named by the saved judgeModel or by the live route the binding wrote. Read from the stub's own
+//      argv log, because a CLI asked for an unknown model is otherwise indistinguishable from one that answered
+//      badly. Since Lyntai 3.3 the route is PROVIDER and model (llm.route.memory = llamacpp:<gguf>), and the
+//      router ignores one naming a provider it does not hold — which is all that keeps the GGUF's id from the
+//      CLI now: the app-side store that withheld the old model-only key is deleted. So the case fails if the
+//      binding writes the wrong provider (claude-cli:<gguf> is read straight through; confirmed).
+//      4b: the positive control — a route written for the RUNNING client (the CLI rebound to sonnet) is read,
+//      live, before any restart; confirmed to fail when the bind writes no route.
 //   5. A RERANKER binding says what it moves — the checking; tagging goes to the CLI and spends the account —
 //      in its toast, in the cost line beside it and in the catalogued rerankers' notes, where the toast used
 //      to claim both halves for every binding and none of the three said the tagging uses quota; and it writes
-//      the CLI's model to llm.model.memory, never the reranker's id. The bind-time screen really runs against
+//      the route claude-cli:haiku, never the reranker's id nor llama.cpp's provider (confirmed to fail with the
+//      provider taken from the chat branch). The bind-time screen really runs against
 //      the runtime and refuses a reranker that ranks by word OVERLAP or simply BACKWARDS; one it refuses for
 //      a reason other than its ordering is told apart, quoting the server.
 //   6. A reranker AT WORK, on a server that booted bound to one: a fact write makes no chat call to
@@ -444,14 +449,26 @@ try {
   // --- 4. a FALLBACK to the CLI asks the CLI for the CLI's model -----------------------------------
   // The household story: a chat GGUF is bound, then the runtime goes (deleted, a failed update). 判断
   // resolves to the CLI — and two things written for the GGUF were still being read: settings' judgeModel
-  // (the badge said "claude-cli · <gguf>", and it became DefaultModelByConsumer), and the live
-  // llm.model.memory the binding wrote, which outranks that default. Either one hands the GGUF's id to
-  // Claude; both policies are fail-open, so the symptom is zero enrichment and no error.
+  // (the badge said "claude-cli · <gguf>", and it became DefaultModelByConsumer), and the live key the
+  // binding wrote, which outranks that default. Either one hands the GGUF's id to Claude; both policies are
+  // fail-open, so the symptom is zero enrichment and no error.
   //
-  // BINDING through the endpoint, rather than planting settings, is what writes the live key.
+  // BINDING through the endpoint, rather than planting settings, is what writes the live route.
   const bound = await c.post('/api/manage/memory/layer/judge', { source: 'llama-cpp', model: JUDGE_MODEL });
-  ok('(fixture) binding the chat GGUF succeeds, which writes llm.model.memory = that GGUF',
+  ok('(fixture) binding the chat GGUF succeeds',
     bound.status === 200, `${bound.status} ${JSON.stringify(bound.body)}`);
+  // The route names the provider the GGUF annotates through — llama.cpp's, the one its named client holds. Read
+  // from the database: no API response carries it. Its PROVIDER half is what the fallback below rests on.
+  const storedKey = (dir, key) => {
+    const db = new DatabaseSync(path.join(dir, 'state', 'gatherlight.db'), { readOnly: true });
+    try { return db.prepare('SELECT value FROM app_config WHERE key = ?').get(key)?.value ?? null; }
+    finally { db.close(); }
+  };
+  ok('…which writes the route llm.route.memory = llamacpp:<the GGUF>, provider and model together',
+    storedKey(dataDir, 'llm.route.memory') === `llamacpp:${JUDGE_MODEL}`,
+    `llm.route.memory=${JSON.stringify(storedKey(dataDir, 'llm.route.memory'))}`);
+  ok('…and nothing under the pre-route key', storedKey(dataDir, 'llm.model.memory') === null,
+    `llm.model.memory=${JSON.stringify(storedKey(dataDir, 'llm.model.memory'))}`);
 
   server.stop();
   server = null;
@@ -509,13 +526,16 @@ try {
     !hits.slice(beforeFallback).some((h) => h.path === '/v1/chat/completions'),
     JSON.stringify(hits.slice(beforeFallback).map((h) => `${h.path} ${h.model}`)));
 
-  // --- 4b. …and the key PASSES THROUGH when it was written for the client that is running ---------------
-  // Every check above has the store withhold llm.model.memory, and every annotation lands on the default
-  // haiku — which a store that ALWAYS withheld the key would pass too. So: on this server, whose judge runs on
-  // the CLI, bind the CLI judge to sonnet. Same client, so the key must be read, and the very next annotation
-  // — before any restart — asks for sonnet.
+  // --- 4b. …and the route IS READ when it names the provider that is running --------------------------
+  // Every check above has the router ignore the GGUF's route, and every annotation lands on the default
+  // haiku — which a route that was NEVER read would pass too. So: on this server, whose judge runs on the CLI,
+  // bind the CLI judge to sonnet. The CLI's router holds claude-cli, so the route must be read, and the very
+  // next annotation — before any restart — asks for sonnet.
   const toSonnet = await c2.post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'sonnet' });
   ok('(fixture) the CLI judge binds to sonnet', toSonnet.status === 200, `${toSonnet.status} ${JSON.stringify(toSonnet.body)}`);
+  ok('(fixture) …which writes the route llm.route.memory = claude-cli:sonnet',
+    storedKey(dataDir, 'llm.route.memory') === 'claude-cli:sonnet',
+    `llm.route.memory=${JSON.stringify(storedKey(dataDir, 'llm.route.memory'))}`);
   const wrotePass = await c2.call('remember_fact', {
     kind: 'household', topic: 'zzpassfact garden routine',
     content: 'The zzpassfact garden is watered every Sunday morning before the market.',
@@ -542,16 +562,14 @@ try {
   ok('…because the screen really ran against the runtime',
     hits.slice(beforeBind).some((h) => h.path === '/v1/rerank' && h.model === RERANK_MODEL),
     JSON.stringify(hits.slice(beforeBind).map((h) => `${h.path} ${h.model}`)));
-  // THE TRAP: the binding writes the ANNOTATION model to llm.model.memory, and for a reranker that is the
-  // CLI's. Writing the reranker's id there would send it to Claude on every fact write — fail-open, so no
-  // error, just no tagging. Read from the database itself: no API response carries this key.
-  const liveKey = (() => {
-    const db = new DatabaseSync(path.join(dataDir, 'state', 'gatherlight.db'));
-    try { return db.prepare('SELECT value FROM app_config WHERE key = ?').get('llm.model.memory')?.value ?? null; }
-    finally { db.close(); }
-  })();
-  ok('THE TRAP: llm.model.memory holds the CLI\'s model, never the reranker\'s id',
-    liveKey === 'haiku', `llm.model.memory=${JSON.stringify(liveKey)}`);
+  // THE TRAP: the binding writes the ANNOTATION route to llm.route.memory, and for a reranker that is the
+  // CLI's model ON THE CLI. Writing the reranker's id there would send it to Claude on every fact write —
+  // fail-open, so no error, just no tagging — and llama.cpp's provider would be a route no router serving
+  // this judge holds, so the tagging would silently stay on whatever the running wiring had. Read from the
+  // database itself: no API response carries this key.
+  const liveKey = storedKey(dataDir, 'llm.route.memory');
+  ok('THE TRAP: llm.route.memory is the CLI\'s model on the CLI — claude-cli:haiku, never the reranker\'s id',
+    liveKey === 'claude-cli:haiku', `llm.route.memory=${JSON.stringify(liveKey)}`);
   const rrNote = String(rr.body?.note ?? '');
   ok('THE POINT: its toast says the tagging goes to the Claude CLI, on the CLI\'s model',
     /核对/.test(rrNote) && /Claude CLI/.test(rrNote) && /haiku/.test(rrNote) && !/标注与核对/.test(rrNote), rrNote);

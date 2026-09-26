@@ -46,7 +46,8 @@ const prompt = Buffer.concat(chunks).toString('utf8');
 // read their own model key (chat → plan/execute, validate → the .claude/ validation pass), so a suite
 // asserting a model has to be able to name WHICH spawn it is looking at — "some call carried --model x"
 // is satisfied by the wrong one. The validation header is tested first because that prompt embeds a diff,
-// and a diff can contain anything.
+// and a diff can contain anything. The LLM-judge scorers read a live ROUTE (llm.route.scorer), so they are
+// told apart too, by the marker their system prompt keeps for exactly this stub (e2e-p16's scorer case).
 if (process.env.GATHERLIGHT_STUB_ARGS_LOG) {
   try {
     fs.appendFileSync(process.env.GATHERLIGHT_STUB_ARGS_LOG,
@@ -54,6 +55,7 @@ if (process.env.GATHERLIGHT_STUB_ARGS_LOG) {
         args,
         // Lyntai's own prompt shapes — the same tests the branches below answer on.
         kind: prompt.includes('CURRENT PHASE: VALIDATION') ? 'validate'
+          : prompt.includes('SCORING TASK') ? 'scorer'
           : prompt.includes('{"subjects"') ? 'annotation'
           : prompt.includes('Notes:' + String.fromCharCode(10)) ? 'verification'
           : prompt.includes('CURRENT PHASE: PLANNING') ? 'plan'
