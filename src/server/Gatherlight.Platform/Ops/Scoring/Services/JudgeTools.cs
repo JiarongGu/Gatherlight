@@ -8,7 +8,10 @@ namespace Gatherlight.Server.Platform.Ops.Scoring.Services;
 /// <summary>
 /// The read jail shared by the judge tools. These tools are reachable ONLY from Lyntai's ephemeral MCP
 /// tool host, which <c>ClaudeCliProvider</c> stands up for the duration of a one-shot <c>ITextClient</c>
-/// call — in this app, the two LLM-judge scorers and nothing else. They are strictly read-only.
+/// call — since Lyntai 3.4 (its D190) only for a call tagged <c>scorer</c>, i.e. the two LLM-judge scorers
+/// (<c>McpToolHostOptions.ToolsByConsumer</c>, GatherlightApp). Through 3.2 it was EVERY such call: the CLI
+/// 判断's annotation and verification and 语义's rephrasing got these tools too, and never used them. They are
+/// strictly read-only.
 ///
 /// <para>The jail deliberately mirrors the planner scope-guard's artifact subtrees
 /// (<c>plans/ household/ .claude/</c>) and, just as deliberately, does NOT include <c>state/</c>: that
@@ -123,7 +126,12 @@ internal static class JudgeJail
 /// </summary>
 public sealed class JudgeReadFileTool(ISiteContext data) : ITool
 {
-    public string Name => "judge_read_file";
+    /// <summary>The tool's MCP name — a constant because the tool host's per-consumer list names it too
+    /// (<c>McpToolHostOptions.ToolsByConsumer</c>, GatherlightApp), and a second spelling there would be refused
+    /// when the host is built.</summary>
+    public const string ToolName = "judge_read_file";
+
+    public string Name => ToolName;
 
     public string? Description =>
         "Read a plan or household/knowledge file from the family data folder, so a scoring judgement is " +
@@ -162,7 +170,10 @@ public sealed class JudgeReadFileTool(ISiteContext data) : ITool
 /// </summary>
 public sealed class JudgeListFilesTool(ISiteContext data) : ITool
 {
-    public string Name => "judge_list_files";
+    /// <summary>The tool's MCP name; see <see cref="JudgeReadFileTool.ToolName"/>.</summary>
+    public const string ToolName = "judge_list_files";
+
+    public string Name => ToolName;
 
     public string? Description =>
         "List readable artifact files (plans/, household/, .claude/) in the family data folder, to find " +

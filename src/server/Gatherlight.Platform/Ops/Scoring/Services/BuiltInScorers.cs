@@ -159,7 +159,10 @@ public sealed partial class CitationScorer : IScorer
 /// Base for the judges that can open the REAL artifact instead of grading only the excerpt packed into
 /// the score context. The read-only tools (<see cref="JudgeReadFileTool"/>/<see cref="JudgeListFilesTool"/>)
 /// reach these calls because <c>AddMcpToolHost</c> hosts them for the one-shot ITextClient path — see
-/// GatherlightApp. Two things have to change for that to be usable: the base rubric's "reply with JSON
+/// GatherlightApp — and, since Lyntai 3.4, only for a call tagged <c>scorer</c>
+/// (<c>McpToolHostOptions.ToolsByConsumer</c>). So each judge's <c>Consumer</c> override below is what hands it
+/// the tools: without it the call carries Lyntai's <c>scoring</c> tag, which falls through to the empty
+/// <c>default</c> entry and gets none. Two things have to change for that to be usable: the base rubric's "reply with JSON
 /// and nothing else", which read literally forbids calling a tool first, and a prompt hint naming the
 /// tools and this session's artifacts (a judge won't go looking for a path nobody gave it).
 /// </summary>

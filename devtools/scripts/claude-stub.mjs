@@ -48,6 +48,8 @@ const prompt = Buffer.concat(chunks).toString('utf8');
 // is satisfied by the wrong one. The validation header is tested first because that prompt embeds a diff,
 // and a diff can contain anything. The LLM-judge scorers read a live ROUTE (llm.route.scorer), so they are
 // told apart too, by the marker their system prompt keeps for exactly this stub (e2e-p16's scorer case).
+// 语义's rephrasing is named as well, by the phrase its prompt asks for (同义扩展): with the judge spawns, it is
+// one of the one-shot calls that must get NO judge-tools host (e2e-p36), so it cannot stay lumped into `other`.
 if (process.env.GATHERLIGHT_STUB_ARGS_LOG) {
   try {
     fs.appendFileSync(process.env.GATHERLIGHT_STUB_ARGS_LOG,
@@ -58,6 +60,7 @@ if (process.env.GATHERLIGHT_STUB_ARGS_LOG) {
           : prompt.includes('SCORING TASK') ? 'scorer'
           : prompt.includes('{"subjects"') ? 'annotation'
           : prompt.includes('Notes:' + String.fromCharCode(10)) ? 'verification'
+          : prompt.includes('同义扩展') ? 'rephrase'
           : prompt.includes('CURRENT PHASE: PLANNING') ? 'plan'
           : prompt.includes('CURRENT PHASE: EXECUTING') ? 'execute' : 'other',
         tail: prompt.slice(-600),
@@ -105,7 +108,8 @@ if (prompt.includes('FORCE_ERROR') && !prompt.includes('未完成(出错)')) {
 }
 
 // ---- judge tool host (Lyntai AddMcpToolHost) -------------------------------------------------
-// On a one-shot ILlmClient call — i.e. an LLM-judge scorer — Lyntai stands up an ephemeral loopback
+// On a one-shot ITextClient call tagged `scorer` — i.e. an LLM-judge scorer; since Lyntai 3.4 (D190) no other
+// consumer gets it — Lyntai stands up an ephemeral loopback
 // MCP server exposing the app's ITools (Platform/Ops/Scoring/JudgeTools) and passes us --mcp-config
 // pointing at it, bearer token inside. The real claude would drive it with its built-in MCP client;
 // the stub speaks the streamable-HTTP JSON-RPC directly, which is what lets e2e-p36 assert the host

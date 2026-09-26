@@ -74,8 +74,10 @@
          landed in the same gatherlight.db (lyntai_-prefixed, coexists with the app's own tables). -->
     <PackageReference Include="Lyntai.Storage.Sqlite" Version="3.4.0" />
     <!-- The ephemeral loopback MCP host Lyntai stands up per one-shot ITextClient call. It reaches ONLY
-         the ClaudeCliProvider path — i.e. the two LLM-judge scorers — giving them the read-only judge
-         tools (Platform/Ops/Scoring/JudgeTools). The interactive agent path is untouched: that one gets MCP
+         the ClaudeCliProvider path, and since 3.4 (D190, McpToolHostOptions.ToolsByConsumer in
+         GatherlightApp) only the calls tagged `scorer` — the two LLM-judge scorers — giving them the
+         read-only judge tools (Platform/Ops/Scoring/JudgeTools). Through 3.2 it ran on EVERY such call,
+         the memory judge's and 语义's rephrasing included. The interactive agent path is untouched: that one gets MCP
          from this server's loopback-only /mcp channel (AgentMcpWiring). The host runs on HttpListener, not
          Kestrel — no ASP.NET framework reference. Lyntai.Tools.Mcp.Hosting folded into this package in 3.2;
          the namespace is unchanged. -->

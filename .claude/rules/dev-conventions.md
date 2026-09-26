@@ -63,17 +63,28 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (`Platform/Ops/Playground`, `dev.mjs eval`) reuses them against dry plans (no persistence).
 - **Judge tools** (`Platform/Ops/Scoring/Services/JudgeTools.cs`): the LLM judges can open the
   REAL artifact instead of grading the truncated excerpt in the `ScoreContext`. They reach it
-  through Lyntai's `AddMcpToolHost(new ClaudeCliMcpDialect())`, which registers an
-  `ICliToolProvisioner` — read ONLY by `ClaudeCliProvider`, i.e. the one-shot `ITextClient` path,
-  so this affects the judges and nothing else (the agent path, `ClaudeAgentSession`, takes no
-  provisioner — it reaches the app's tools through the loopback channel in the next bullet, a
-  different endpoint with a different lifetime). Per call Lyntai starts a bearer-gated loopback
-  Kestrel and tears it down after. **It executes app code, so the jail is the load-bearing part**:
+  through Lyntai's `AddMcpToolHost(new ClaudeCliMcpConnector(), …)`, which registers an
+  `ICliToolProvisioner` — read ONLY by `ClaudeCliProvider`, i.e. the one-shot `ITextClient` path
+  (the agent path, `ClaudeAgentSession`, takes no provisioner — it reaches the app's tools through
+  the loopback channel in the next bullet, a different endpoint with a different lifetime). **Which
+  one-shot calls get it is per CONSUMER** (Lyntai 3.4, D190, `McpToolHostOptions.ToolsByConsumer`):
+  `scorer` gets exactly the two judge tools, named by their `ToolName` constants, and `default` is
+  EMPTY, so every other tag — the CLI 判断's annotation and verification (`memory`), 语义's rephrasing
+  (untagged, `default`) — starts no host and is handed no `--mcp-config`. So the scorers' `Consumer`
+  override is what hands them the tools: Lyntai's own `scoring` tag would fall through to `default`.
+  **Through 3.2 this bullet said "the judges and nothing else" and it was false**: the provisioner ran
+  on EVERY `ClaudeCliProvider` call, so each memory write and recall on the CLI judge stood up the host
+  and was handed file-read tools it never used. Per hosted call Lyntai starts a bearer-gated loopback
+  `HttpListener` and tears it down after. **It executes app code, so the jail is the load-bearing part**:
   read-only, text extensions only, size-capped, and a POSITIVE allow-list of `plans/ household/
   .claude/` — never `state/` (access token, TLS pfx, DB), with symlink targets re-checked and every
   listing hit re-resolved. That's the same set the planner agent may already read, so the judges gain
-  no reach the scope guard doesn't already grant. Registering zero `ITool`s makes the host a no-op.
-  Proof lives in `e2e-p36` (the claude stub drives the MCP server for real and asserts the denials).
+  no reach the scope guard doesn't already grant. Registering zero `ITool`s makes the host a no-op, and
+  a `ToolsByConsumer` name no registered tool has is refused when the provisioner is built. Proof lives
+  in `e2e-p36`: the claude stub drives the MCP server for real and asserts the denials, and the stub's
+  args log shows every scorer spawn handed an `--mcp-config` while no annotation, verification or
+  rephrase spawn is — confirmed to FAIL with the option removed (all three) and with only `scorer`'s
+  entry removed (the scorer rows).
 - **The agent's own tools come from a loopback-only channel**, not the public listener: a second
   Kestrel endpoint on `127.0.0.1:0`, plain HTTP, serving `/mcp` only, behind a per-start bearer token
   held in memory. `AgentSessionOptions.McpServers` (Lyntai) points each run at it. This exists because

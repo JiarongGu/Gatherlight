@@ -61,6 +61,9 @@ const ALLOWED = new Map([
     + 'history'],
   ['docs/ROADMAP.md::IDataContext',
     'same — S1 records it splitting into ISiteContext / IPlatformContext'],
+  ['docs/ROADMAP.md::ILlmClient',
+    'the dated 2026-07-29 row names the Lyntai 1.x interface as it shipped then (now ITextClient); it resolved '
+    + 'only through stale comments in e2e-p36 and the claude stub, fixed in the 3.4 bump'],
   ['docs/STORAGE_NOTES.md::AssistantMemoryService',
     'belongs to VIDORA, a sibling project this note compares against — not a symbol in this tree'],
 ]);

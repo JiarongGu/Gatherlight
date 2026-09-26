@@ -346,14 +346,30 @@ public static class GatherlightApp
                 .AddScorer<Platform.Ops.Scoring.Services.AnswerRelevancyScorer>()
                 .AddScorer<Platform.Ops.Scoring.Services.FaithfulnessScorer>()
                 // Tool-calling for the LLM judges. AddMcpToolHost registers an ICliToolProvisioner, which
-                // ONLY ClaudeCliProvider reads — i.e. the one-shot ITextClient path, whose only consumers
-                // here are the two judges above. (The agent path, ClaudeAgentSession, takes no provisioner;
-                // its MCP stays --mcp-config → this server's own /mcp.) Per call it starts a loopback
-                // Kestrel on an OS-assigned port, bearer-gated, and tears it down after — so the judges get
-                // mediated, read-only access to the artifacts they're grading without the data folder's
-                // CLAUDE.md/knowledge base being loaded, which is exactly why they run neutral-cwd.
-                // Registering ZERO ITools would make the host a no-op (the provisioner short-circuits).
-                .AddMcpToolHost(new Lyntai.Providers.ClaudeCli.ClaudeCliMcpConnector())
+                // ONLY ClaudeCliProvider reads — i.e. the one-shot ITextClient path. (The agent path,
+                // ClaudeAgentSession, takes no provisioner; its MCP is this server's loopback-only /mcp,
+                // AgentMcpWiring.) Per hosted call it starts a loopback HttpListener on an OS-assigned port,
+                // bearer-gated, and tears it down after — so the judges get mediated, read-only access to the
+                // artifacts they're grading without the data folder's CLAUDE.md/knowledge base being loaded,
+                // which is exactly why they run neutral-cwd.
+                //
+                // WHICH calls get it is per CONSUMER (Lyntai 3.4, D190): the scorers' tag and nothing else,
+                // and "default" is empty, so a call tagged anything unlisted starts no host and is handed no
+                // --mcp-config. Through 3.2 the provisioner ran on EVERY ClaudeCliProvider call, which this
+                // comment then denied: the CLI 判断's annotation and verification ("memory" — a spawn per write
+                // and per recall) and 语义's rephrasing ("default") each stood up the host and were handed file
+                // -read tools they never use. The names are the tools' own constants; one no registered ITool
+                // has is refused when the provisioner is built, so a rename cannot quietly host fewer.
+                // e2e-p36 asserts both halves from the stub's argv.
+                .AddMcpToolHost(new Lyntai.Providers.ClaudeCli.ClaudeCliMcpConnector(), o =>
+                {
+                    o.ToolsByConsumer[Lyntai.Inference.ProviderConsumers.Default] = [];
+                    o.ToolsByConsumer[Platform.Agent.Llm.Services.LiveRoutes.Scorer] =
+                    [
+                        Platform.Ops.Scoring.Services.JudgeReadFileTool.ToolName,
+                        Platform.Ops.Scoring.Services.JudgeListFilesTool.ToolName,
+                    ];
+                })
                 .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeReadFileTool(
                     sp.GetRequiredService<Platform.Kernel.Services.ISiteContext>()))
                 .AddTool(sp => new Platform.Ops.Scoring.Services.JudgeListFilesTool(
