@@ -3,7 +3,9 @@
 // AI tool surface, using the claude stub: create (cron next-run), the four job kinds run on demand
 // (tool / notify / report-less agent-commit / agent stage→approve), failure auto-disable, the global
 // kill-switch setting, and the notification feed. Scheduler cadence itself isn't waited on — every
-// run here is triggered via /run (run-now), which shares the same execution path as the loop.
+// run here is triggered via /run (run-now), which shares the same execution path as the loop — except case 10, where
+// the LOOP is the point: it must not tick while the startup migration runs.
+import path from 'node:path';
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, gitLog, tracked } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p26');
@@ -99,6 +101,60 @@ try {
   await post(`/api/notifications/${feed2.items[0].id}/read`);
   const feed3 = await getJson('/api/notifications');
   ok('mark-read lowers unread count', feed3.unreadCount === unreadBefore - 1, `${unreadBefore} → ${feed3.unreadCount}`);
+
+  // 10) the scheduler waits for the STARTUP MIGRATION. It used to wait a fixed 5 s, so a startup that took longer — a
+  //     layout rebuild or a re-embed of a large corpus — had a due job running beside it (a remember_fact tool job
+  //     writing facts while the rebuild cleared and re-indexed every ref). Staged with the runner's delay seam: a job due
+  //     at boot, a migration held open 20 s — no run while it is open, one run once it has finished.
+  const jobDir = dataDirFor('p26-migrating');
+  makeTestData(jobDir);
+  const JOB_PORTS = [5614, 5615];
+  let boot = startServer({ dataDir: jobDir, port: JOB_PORTS[0], env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+  try {
+    await waitHealthy(boot.base);
+    const created = await makeClient(boot.base).post('/api/jobs', {
+      name: '迁移中不运行', kind: 'tool', schedule: 'once', runAt: future, config: { tool: 'index_reindex', args: {} },
+    });
+    ok('(fixture 10) a tool job is created', created.status === 200 && !!created.body?.job?.id, JSON.stringify(created.body));
+    boot.stop();
+    await new Promise((r) => setTimeout(r, 1500));
+    // Due a minute ago — inside the catch-up grace, so the first tick fires it.
+    const { DatabaseSync } = await import('node:sqlite');
+    const jobDb = path.join(jobDir, 'state', 'gatherlight.db');
+    const due = new Date(Date.now() - 60000).toISOString();
+    const runsOf = () => {
+      const db = new DatabaseSync(jobDb, { readOnly: true });
+      try { return db.prepare('SELECT COUNT(*) n FROM job_run WHERE job_id = ?').get(created.body.job.id).n; }
+      finally { db.close(); }
+    };
+    {
+      const db = new DatabaseSync(jobDb);
+      try { db.prepare('UPDATE job SET run_at = ?, next_run_at = ? WHERE id = ?').run(due, due, created.body.job.id); }
+      finally { db.close(); }
+    }
+    boot = startServer({ dataDir: jobDir, port: JOB_PORTS[1], env: {
+      GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_MIGRATION_TEST_DELAY: '20000' } });
+    let firstAnswer = 0;
+    for (let i = 0; i < 240 && !firstAnswer; i++) {
+      try { if ((await fetch(`${boot.base}/api/health`)).ok) firstAnswer = Date.now(); } catch { /* not up yet */ }
+      if (!firstAnswer) await new Promise((r) => setTimeout(r, 250));
+    }
+    // Well past the scheduler's old fixed 5 s, well inside the 20 s the migration is held open.
+    await new Promise((r) => setTimeout(r, 11000));
+    const stillMigrating = (await (await fetch(`${boot.base}/api/health`)).json().catch(() => ({}))).migrating === true;
+    const runsDuring = runsOf();
+    ok('THE POINT: while the startup migration runs, a due job does NOT run',
+      !!firstAnswer && stillMigrating && runsDuring === 0, JSON.stringify({ stillMigrating, runsDuring }));
+    await waitHealthy(boot.base);
+    let runsAfter = 0;
+    for (let i = 0; i < 80 && runsAfter === 0; i++) {
+      runsAfter = runsOf();
+      if (!runsAfter) await new Promise((r) => setTimeout(r, 250));
+    }
+    ok('…and once it has finished, the job runs — at the first tick, not a poll later', runsAfter === 1, `runs=${runsAfter}`);
+  } finally {
+    boot.stop();
+  }
 } catch (err) {
   fail('e2e-p26 fatal: ' + err.message);
   console.error(srv.log().slice(-4000));
