@@ -80,8 +80,8 @@ chose — and switched 语义 off, both invisibly.
 **"Worse" and "costlier" are reasons to DESCRIBE an option, not to remove it** — and *cannot* has to mean
 cannot. Broken twice here (语义's missing Claude arm; Ollama's deleted pull/delete), both times by reasoning
 that sounded like engineering judgement; `.claude/rules/dev-conventions.md` carries the rule and both
-failures. A declined entry is only for a real impossibility. `builtin` on 判断 is NOT one: it is an option
-nobody built. Its first reason — the in-process cross-encoder path read WordPiece only, so its one model was
+failures. A declined entry saying *cannot* is only for a real impossibility. `builtin` on 判断 is NOT one: it is an
+option nobody built, and its entry says "not built yet". Its first reason — the in-process cross-encoder path read WordPiece only, so its one model was
 English-only (the design spec's §Constraints) — went false with Lyntai 3.5.0, whose ONNX provider reads SentencePiece
 and runs the multilingual `mmarco-mMiniLMv2` end to end (its D191). What remains is ours: it is not built and not
 measured against llama.cpp's mMiniLMv2, and the owner decided (2026-09-26) to build it in a later round; until then
@@ -114,8 +114,10 @@ as one table with one row shape, because "downloaded" is a state of a model rath
 object — it was three components and three left edges before. 记忆检索 keeps only the recall decision: which
 model each layer uses. A semantic reindex runs detached with progress, and the panel reports index
 COVERAGE rather than a history of runs. For an embedder it re-embeds the graph IN PLACE (Lyntai D194): one embed per
-entry, no annotation, nothing the graph has learned lost. The destructive rebuild is left for when the facts
-themselves were replaced (a backup import) or sit at a pre-marker address. Lyntai's measurement that 0% of recall misses are retrieval failures
+entry, nothing the graph has learned lost, no annotation — except for the facts that had no index entry at all, which
+it back-fills afterwards, each annotated as every back-fill write is. Binding a new embedder records the vectors as
+owed, so the restart re-embeds on its own; a reindex before that restart is refused. The destructive rebuild is left
+for when the facts themselves were replaced (a backup import) or sit at a pre-marker address. Lyntai's measurement that 0% of recall misses are retrieval failures
 is **attributed as Lyntai's, on Lyntai's corpus** — it is a statement about a stack that HAS an embedder, so
 it cannot also be the reason an install without one is offered nothing.
 

@@ -418,34 +418,60 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   import during a backup import — read every fact as pending and annotated each a second time; it now waits and finds
   only what is still unindexed. `e2e-p48` case 10 stages it (the stub keeps two facts' annotation 6 s long) and was
   confirmed to FAIL with the wait removed: the back-fill indexed 7/7 instead of 1/1, and each slow fact was annotated 3
-  times instead of 2. **Stated residuals — single writes, NOT closed, an owner decision:** `remember_fact` (and the
-  memory import's rows) take no lock, so two races on `graph_ref` remain, which no Lyntai lock sees. (1) A write that
-  stored its node BEFORE the forget and writes its ref AFTER the rebuild re-indexed that row leaves a ref to a forgotten
-  node — and so does `RememberFactTool`'s fall-back to the ref it read before indexing, when a removal took the write's
-  entry (no `Similarity`, the classifier's re-embed succeeds, null) and that ref predates the rebuild. Realistic mainly
-  with 语义 on the CLI arm, whose rephrasing call sits between the graph write and the ref write. (2) An EDIT landing
-  after the rebuild's snapshot is overwritten by a ref to the node of the content it replaced — the widest window, the
-  whole rebuild. Both refs are non-empty, so no back-fill returns to them; the fact stays findable by its words until
-  the next rebuild. (The vector left by (1) in 3.5.0 was harmless in kind: ids are never reissued — 3.5.1 pins it on
-  every store — so an orphan vector never answers for another entry.) The options: conditional ref writes (the
-  rebuild's and the back-fill's only while the row still holds the content indexed; `remember_fact`'s only while the ref
-  is still the one it read) — closes both, no lock; `remember_fact` waits on `_bulk` — simplest, but a rebuild holds it
-  for minutes and the tool's 120 s deadline fails the call after the row is written; or a rebuild epoch the write
-  checks. One embed per entry (`FactIndex.ReindexBatchSize` = 1):
+  times instead of 2. **Single writes racing a rebuild: CONDITIONAL REF WRITES** (owner decision 2026-09-27, no lock).
+  `remember_fact` (and the memory import's rows) take no lock, and two races on `graph_ref` left a NON-empty ref no
+  back-fill returns to. (1) A write that read the row's ref before indexing, and wrote or restored it after the rebuild
+  had cleared and re-indexed that row, left a ref to a node the rebuild forgot — `RememberFactTool`'s fall-back to the
+  ref it read, above all, when its index failed. (2) An EDIT landing after the rebuild's snapshot was overwritten when
+  the rebuild, re-remembering the OLD content, wrote that node's ref — the widest window, the whole rebuild. Now the
+  tool writes only while the row's ref is still the one it read (`IKnowledgeStore.SetGraphRefIfAsync`, `NULLIF(graph_ref,
+  '') IS @read`), and the rebuild and the back-fill write only while the row still holds the content they indexed
+  (`SetGraphRefIfContentAsync`); a lost race leaves the ref current, or empty for the back-fill. `e2e-p48` case 11 drives
+  both: a remember_fact held open in its annotation (the stub's `GATHERLIGHT_STUB_HANG_ONCE_FILE` hangs ONE annotation
+  and lets the rebuild's own of the same fact answer) is abandoned after a backup import re-indexed its row, and an edit
+  lands inside the rebuild's 6-s re-remember of the old content — each confirmed to FAIL with its condition removed (the
+  row naming a forgotten node; the edited row naming its OLD content's node). (The vector left by (1) in 3.5.0 was
+  harmless in kind: ids are never reissued — 3.5.1 pins it on every store — so an orphan vector never answers for
+  another entry.) **Nor does a scheduled job run beside the startup's own bulk passes**: `JobSchedulerService` waited a
+  fixed 5 s, so a startup rebuild or re-embed longer than that had a due `remember_fact` tool job writing beside it; it
+  now waits for the migration gate (`MigrationState.IsMigrating`, the one the access middleware uses) and asks again at
+  every tick, so a Retry holds jobs back too. `e2e-p26` case 10 (a due job, a migration held open 20 s by the runner's
+  test seam: no run while it is open, one at the first tick after), confirmed to FAIL with the wait removed.
+  One embed per entry (`FactIndex.ReindexBatchSize` = 1):
   D194 counts a whole BATCH failed when its one embed call fails, and llama.cpp refuses a request whole when one input
   is past the window, so at Lyntai's default of 32 one long fact cost every other entry its new vector (confirmed:
-  「0 条向量已原地重新计算;5 条没能计算」). An entry the embedder refuses keeps the vector it had, or none, and is never
-  retried within the pass — nothing loops; a pass whose failures come with the embedder DOWN (the probe after them
-  unanswered) does not complete, and leaves the layout marker owed for the next start. Measured on the real binary
-  (`docs/self-managed-llm-runtime.md`, 2026-09-27): 100 facts, 100 embeds and one probe, no stub spawn, every graph
-  table byte-identical, 2.6 s on one GPU and 5.6 s on the CPU. Proof: `e2e-p52` case 11, confirmed to FAIL with the
-  old rebuild restored (links 32 → 0, an annotation per fact), with the owed marker removed, at batch size 32, and
-  with the failures never classified. **Stated residuals:** the write-time `similar` links stay as the model that wrote
-  them scored them, or absent when none did — D194 recomputes no edge, and recall reads the new vectors through the
-  semantic seed channel, which is what the paraphrase check measured; an entry the NEW model refuses keeps the old
-  model's vector, which scores 0 at another width but is in the wrong space at the same one; a pre-3.2 address
-  collection is swept only by a rebuild; and the re-embed's serialisation with a rebuild is not driven by any suite (a
-  race on demand; the back-fill's is, above). An EMPTY `graph_ref` is the index's retry queue: a write that failed — or kept no
+  「0 条向量已原地重新计算;5 条没能计算」). What that costs is a request per entry — POST to summary, 100 short facts:
+  2.6–2.7 s on one discrete GPU and 5.4–5.8 s on the CPU (llama.cpp b10549, EmbeddingGemma-300M Q8_0), 4.5–4.8 s for the
+  built-in ONNX embedder (CPU, in process) — about 26, 56 and 46 ms per entry, so ~26 s, ~56 s and ~46 s for a thousand
+  short facts, if it scales linearly (only 100 were measured; long facts cost more). **A pass with failures runs ONCE
+  MORE** (Lyntai's own recipe, its `docs/memory.md`) and only what fails twice is classified: a blip is healed by the
+  rerun, where it used to read as a refused input. An entry refused on both passes keeps the vector it had, or none, and
+  is not retried — nothing loops; a pass whose failures come with the embedder DOWN (the probe after them unanswered)
+  does not complete, and leaves the layout marker owed for the next start. A pass that completed also sweeps the vector
+  collections a pre-3.2 build left at the OLD address (`{member}|{task}|{scope}`, listed by that prefix — a format that is
+  history, and one the pass never writes to): no recall read them, and each held a stale copy of every fact's content
+  as its payload. Measured on the real binary (`docs/self-managed-llm-runtime.md`, 2026-09-27): 100 facts, 100 embeds
+  and one probe, no stub spawn, every graph table byte-identical. Proof: `e2e-p52` case 11, confirmed to FAIL with the
+  old rebuild restored (links 32 → 0, an annotation per fact), with the owed marker removed, at batch size 32, with the
+  failures never classified, without the rerun (11a2: the once-refused entry keeps its old width) and without the sweep
+  (11b). **A MODEL CHANGE owes the vectors, and the restart pays them** (11d): binding an embedder newly, or to another
+  model, records the layout marker as owed, so the start that wires it re-embeds in place on its own — the bind's note
+  says so, and asks for no reindex. A reindex BEFORE that restart is refused (409), because it would re-embed with the
+  model still running and record the vectors as current: after the restart they were the wrong width, semantic recall
+  silently empty. The panel's running model is the WIRED one (`MemorySemanticWiring`), so a model change shows the
+  restart owed where it used to read as applied. A console pass writes a token of its own (`FactIndexLayout.PassPrefix`)
+  and hands the marker back by COMPARE-AND-SET (`IAppConfigService.CompareAndSet`), so a bind landing mid-pass — which
+  writes a plain "2" — survives the pass's end. Each confirmed to FAIL with its own half removed: the refusal (the
+  reindex 202s), the bind's owed marker, and the compare-and-set (both leave the marker "3" and the restart re-embeds
+  nothing). **Stated residuals:** the write-time `similar` links stay as the model that wrote them scored them, or
+  absent when none did — D194 recomputes no edge, and recall reads the new vectors through the semantic seed channel,
+  which is what the paraphrase check measured; an entry the NEW model refuses twice keeps the old model's vector, which
+  scores 0 at another width but is in the wrong space at the SAME one — which takes a household-dropped GGUF embedder of
+  the same width as the one it replaces AND a fact past the new one's window (the catalogued embedders are one model,
+  EmbeddingGemma, at one width, and its window is 2,048 tokens); refs are not cleared for it, since the fact's words and
+  graph still find it; an input refused on both passes while the probe is answered is read as refused for good, and an
+  outage that lifts between the rerun and the probe reads that way too; and the re-embed's serialisation with a rebuild
+  is not driven by any suite (a race on demand; the back-fill's is, above). An EMPTY `graph_ref` is the index's retry queue: a write that failed — or kept no
   vector while its embedder was DOWN — is left that way on purpose, and the back-fill returns to it. The graph
   dedups on **content hash**, so editing a fact orphans its
   previous node; recall over-asks and filters to resolvable refs so an orphan never shrinks the page.
@@ -766,7 +792,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   call, an empty or unparseable reply and its own timeout (Lyntai `docs/task-archive.md` Part 303), logging the likeliest
   at Debug, below our file log. So `FactIndex.IndexAsync` now warns — 「fact index: kind/topic was stored without its
   subject handles…」 — when a write that KEEPS its reference lacks the flag: a real call that went unanswered, or a
-  subject store that failed (Lyntai warns of that too). Warning, because the same outcome from a THROWING annotator is a
+  subject store that failed (Lyntai warns of that too). **Its volume:** one line per SINGLE write (`remember_fact`); a
+  BULK pass (a back-fill, a rebuild) counts them and writes ONE line at its end with the count and three examples,
+  because while the annotator fails every write of the pass loses its subjects the same way — a back-fill of N facts
+  on a signed-out CLI used to be N Warnings of one cause. The text names the annotator neutrally ("the Claude CLI or a
+  local chat model"), since a llama.cpp chat GGUF annotates too. Warning, because the same outcome from a THROWING annotator is a
   Warning in Lyntai's own engine and because nothing retries it (a write left unindexed is re-annotated by the back-fill
   and is not logged). With 判断 OFF, `SwitchableAnnotationPolicy` returns `None` without asking — answered, about
   nothing — so an "off" write sets the flag and logs nothing, which is right: nothing was asked. Proof, `e2e-p52`: the
@@ -2002,7 +2032,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the graph has learned, and neither annotates: the back-fill that follows an embedder's pass, for facts with no index
   entry at all, is the one part that does. That is not a tidiness point: the
   over-broad version made "bind it, then rebuild" advice with a hidden price, and made measuring the arm's
-  own benefit an operation nobody should agree to. Proof lives in `e2e-p48`, which writes facts BEFORE binding the arm
+  own benefit an operation nobody should agree to. **The rephrasing pass counts what it STORED**: it counted the facts
+  it VISITED, with `ExpandAkaAsync` swallowing every failure, so a signed-out CLI — which rephrases nothing — was
+  reported as 「N 条事实补写了检索用的说法」. It now reports stored and failed apart, and a pass that stored nothing is
+  an error naming the likely cause (`e2e-p48` case 12, a FORCE_ERROR fact and a signed-out stub, confirmed to FAIL on the
+  old count). Proof lives in `e2e-p48`, which writes facts BEFORE binding the arm
   and was confirmed to FAIL against the old guard — the phrasings stay empty. Note this also makes the
   advice "bind it, then rebuild" true; it was not, and the panel gave no sign.
 - **A rebuild runs detached, and the console reports COVERAGE rather than a run history.** `ReindexSemanticAsync`
@@ -2017,8 +2051,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   itself: `RebuildAsync` clears every `graph_ref` up front, which is exactly what the startup back-fill repairs
   (measured 2026-08-21: 2/6 → 6/6 across a restart). An interrupted RE-EMBED clears nothing, so no back-fill would ever
   return to it — the entries after the cut would stay on the old model with their refs intact — so the pass records the
-  vectors as owed in the layout marker (`FactIndexLayout.VectorsOwed`, "2") before it starts and the current layout only
-  once it COMPLETED, and the next start re-embeds in place (`FactIndexStep`). `e2e-p52` case 11b kills a pass mid-way
+  vectors as owed in the layout marker before it starts (a token of its own, `FactIndexLayout.PassPrefix`, read as owed
+  by `FactIndexLayout.IsVectorsOwed`) and swaps it for the current layout only once it COMPLETED, by compare-and-set,
+  and the next start re-embeds in place (`FactIndexStep`). `e2e-p52` case 11b kills a pass mid-way
   and sees the next start finish it — confirmed to FAIL with the owed marker removed. So the panel answers "is what I
   know searchable NOW" with `coverage {indexed,total}`, shown only when short — state is self-correcting where an event
   log is not. The PROGRESS is the server's words (`ReindexSnapshot.Phase` and `ReindexSnapshot.Summary`): a re-embed is ONE engine

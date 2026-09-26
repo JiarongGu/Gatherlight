@@ -798,26 +798,45 @@ spawn in between.
 | GPU 2 | 2.6 s | 2.4 s | 101, all 200 | 24 ms | 0 / 0 | byte-identical | 0 → 100 × 768 |
 | CPU 1 | 5.4 s | 5.2 s | 101, all 200 | 41 ms | 0 / 0 | byte-identical | 0 → 100 × 768 |
 | CPU 2 | 5.8 s | 5.6 s | 101, all 200 | 46 ms | 0 / 0 | byte-identical | 0 → 100 × 768 |
+| built-in 1 | 4.5 s | 4.4 s (the app log's own figure) | in process, not counted | — | 0 / — | byte-identical | 0 → 100 × 768 |
+| built-in 2 | 4.8 s | 4.6 s | in process, not counted | — | 0 / — | byte-identical | 0 → 100 × 768 |
+
+The two BUILT-IN rows are the same workload on the in-process embedder, a second run of the script the same day (the
+review asked for them): 语义 bound to `builtin` (EmbeddingGemma-300M, ONNX q4, the 资源 panel's sha256-pinned download),
+ONNX Runtime's CPU provider — the only one the app references — on the same laptop, no router at all, so there is no
+proxy to count its embeds; the pass's time is the app log's `re-embedded … IN PLACE in … ms` line.
 
 - **Kept, exactly.** Node ids, content, `last_recalled_position`, `recall_count`, `stability`, the engine's position,
   the 140 links, the reviews and the subject handles were all unchanged. The layout marker was "3" before and after:
-  the console pass records "2" while it runs, so a pass cut short is finished by the next start.
+  the console pass records the vectors as owed while it runs (a "2:" token since the review), so a pass cut short is
+  finished by the next start.
 - **No annotation.** The stub CLI was not spawned during the pass and no chat request reached the router. One embed
   per entry (`FactIndex.ReindexBatchSize` = 1) and one probe. The destructive path this replaces would have
   re-remembered all 100 facts, each an annotation call, and discarded the links. Not re-run on the real binary;
   `e2e-p52` case 11, with the old path restored, loses its links (32 → 0) and spawns 5 annotations for 5 facts.
-- **Meaning-based recall works after it.** Four paraphrases share no content word with their target fact beyond
-  function words: "how much is a swimming ticket for grown-ups", 「成年人去游泳一次多少钱」, "when can I leave the car
-  near the pictures for nothing" and "what time do they start selling vegetables at the Saturday stalls". Their
-  target's rank on a page of 8, before the pass → after:
+- **A capability check, not a measure of recall.** Four paraphrases share no content word with
+  their target fact beyond function words: "how much is a swimming ticket for grown-ups", 「成年人去游泳一次多少钱」,
+  "when can I leave the car near the pictures for nothing" and "what time do they start selling vegetables at the
+  Saturday stalls". Their target's rank on a page of 8, before the pass → after:
   - GPU: not on the page → 8, not on the page → 4, 6 → 6, 3 → 1.
   - CPU: not on the page → not on the page, not on the page → 4, 6 → 6, 3 → 1.
+  - built-in (both runs): not on the page → not on the page, not on the page → 4, 6 → not on the page, 3 → 1.
 
-  That is one run each over a canned stub verdict, a capability check and not a measurement of recall quality. The
-  first paraphrase sits at the page's edge, and the CPU's vectors differ from the GPU's in the last digits.
-- **What the household note says**, from these runs: 「实测一百条短事实:有显卡约 3 秒,只用 CPU 约 5 秒;长的事实会慢一些」.
-  The facts were 21–64 characters. A long fact embeds more slowly: 453 ms for 3,000 Chinese characters on this GPU (the
-  2026-09-26 entry above).
+  One run each, and two caveats on reading it. **What a verdict would do to the rank**: under Lyntai's partition an
+  endorsed candidate is promoted ahead of the rest, so with a judge that answers, a rank is the engine's page reshuffled
+  by the verdict, and a rank from a canned one would say nothing. Here no verdict applied at all — 判断 was on the stub,
+  which answers a verification only for a query carrying its `zzjudge` marker and replies unparseably to every other
+  (so `answered` stays absent), which leaves each page in the engine's own order; the rank is the formula's and the
+  vectors', before and after alike. And **the CPU run never found paraphrase 1**: at the GPU run's rank 8 it sits at the
+  page's edge, and the CPU's vectors differ from the GPU's in the last digits; the built-in runs lost paraphrase 3 from
+  the page. So this shows the pass gave every entry a vector the semantic seed channel reaches — the Chinese paraphrase
+  went from off the page to fourth on every backend, the first English one onto the page on the GPU only — and nothing
+  about how well any backend recalls.
+- **What the household note says**, from these runs, per backend since the review (the timing had been quoted for the
+  built-in arm too, which nobody had measured, and rounded down): llama.cpp 「llama.cpp 上的 EmbeddingGemma,实测一百条短
+  事实:一块独立显卡约 3 秒,只用 CPU 约 6 秒;长的事实会慢一些」, built-in 「应用内置的 EmbeddingGemma 在 CPU 上运行,实测
+  一百条短事实约 5 秒;长的事实会慢一些」. The facts were 21–64 characters. A long fact embeds more slowly: 453 ms for
+  3,000 Chinese characters on this GPU (the 2026-09-26 entry above).
 - **Not driven here:** a model CHANGE between two real embedders. The one catalogued GGUF embedder and the built-in ONNX
   embedder are the same model at the same width. The e2e suite stands in for it with a fake whose vectors change width
   (`e2e-p52` case 11), where every entry the new "model" could embed was rewritten to the new width.
