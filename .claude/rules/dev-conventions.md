@@ -522,8 +522,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Lyntai's source on 2026-09-24 and switched to `FilePathOf` there — `ToolDetail`'s OWN copy of the same
   fallback chain stays, because it takes a parsed `JsonElement` for a UI label, not the `ToolCall` `FilePathOf`
   takes, so only one of the two copies is gone.
-  **Six were open at Lyntai 3.2.0, and each says what ends it. (2) and (4) are CLOSED — their fixes shipped in
-  3.3.0 and the 3.4 bump adopted them. (3) is CLOSED as a workaround: the bump adopted its per-write detection, and
+  **Six were open at Lyntai 3.2.0, and each says what ends it. (2), (4) and (5) are CLOSED — their fixes shipped in
+  3.3.0 and the 3.4 bump adopted them, (5) after a real-binary check of every catalogued chat model. (3) is CLOSED as a workaround: the bump adopted its per-write detection, and
   the probe it named stays as a cost policy of OUR OWN, which the entry says how to end. (1) and (6) stay OPEN by
   decision although their fixes shipped in 3.3.0 too — (1) because the shipped cut guts a long CJK note, (6) until
   Run 10 and the owner decide.**
@@ -741,33 +741,42 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   second `SessionStarted` — a claude run has one id. Proof: `e2e-p43` stays green against a stub that still emits
   those progress events (the stub bullet under *LLM / process spawning*), so it now fails if the upstream fix
   regresses rather than if our guard does.
-  **(5) `reasoning = off` on every CHAT preset section ↔ Lyntai `docs/task-archive.md` Part 288 / D179 — CLOSED
-  upstream, NOT released (no version promised).** Both memory seams ask for no reasoning, and Lyntai 3.2.0's OpenAI-shaped payload
-  (`OpenAiPayload.Build`) never reads the field while its Ollama payload maps it to `think: false` — so against
-  llama-server's default `--reasoning auto`, a thinking-capable template thinks on every verification and
-  annotation: Qwen3-0.6B at 1.3–7.5 s per verdict, Qwen3.5-0.8B at 17.5 s and then past a 300 s timeout
-  (`docs/judge-bench.md`, Run 5's screen). `LlamaServerRuntime.WritePresets` writes `reasoning = off` on every chat
-  section, which the router passes to the child as `--reasoning off` (read back from the child's argv on the real
-  binary, 2026-09-24); it is byte-neutral for Gemma 3, whose template has nothing to turn off. NOT
-  `reasoning-budget = 0`, which leaves the template thinking and puts the reasoning in the content (4 of 6 replies
-  unparseable). Part 288's outcome names this preset: "When this ships, the adopter can drop its server-side
-  `reasoning = off` preset." **D179 is CONFIGURED fields**: `HttpModelOptions.SuppressReasoningFields`, a JSON object
-  Lyntai merges into a `chat/completions` body only when the call asks `Suppress` — like `DocumentPrefix`, the library
-  knows no vendor's spelling and ships NO default, because hosted OpenAI-shaped APIs may reject an unknown field; a
-  member the wire sets itself is refused, and a merge never overwrites. Every OpenAI-shaped preset gained an
-  options-action overload (`AddLlamaProvider(id, o => …)`) to reach it. So the bump turns nothing on by itself.
-  **On that bump, in this order**: (1) set `SuppressReasoningFields = {"chat_template_kwargs":{"enable_thinking":false}}`
-  on the `llamacpp` chat registration — the `AddLlamaProvider` line in `LlamaCppSource.Register`, whose comment names
-  this item, moved to the options-action overload — a spelling that is TEMPLATE-specific (a template reading another
-  key ignores it) and was tried only as a dedicated server's `--chat-template-kwargs` flag, never as a request field or
-  a preset key (docs/judge-bench.md, Run 5's screen); (2) verify EACH catalogued chat model on the real binary with the
-  preset line removed — no `<think>`, no `reasoning_content`, replies as short as under the preset (6–21 tokens);
-  (3) only then delete the `reasoning = off` line and p51's assertion of it. The other order puts every Qwen judge back
-  to thinking on every call, silently. Lyntai's own recipe warns that a value the server rejects fails the call, which
-  a judge with no fallback turns into no verdict — so step (2) is also where a rejection would show.
-  The `n-predict` and `ctx-size` caps beside it are NOT part of this workaround and stay: they are our own launch
-  contract (`LlamaServerRuntime.ChatMaxTokens` — the memory seams send no `max_tokens`, and the router does not stop
-  a child's generation when the app abandons a request; `LlamaServerRuntime.ChatContextTokens` — launch item (5)).
+  **(5) CLOSED — `reasoning = off` on every CHAT preset section ↔ Lyntai `docs/task-archive.md` Part 288 / D179,
+  shipped in 3.3.0, adopted with the 3.4 bump (2026-09-26), verified on the real binary before the key went.** Both memory
+  seams ask for no reasoning (`TextReasoning.Suppress`), and Lyntai 3.2.0's OpenAI-shaped payload never read the field —
+  so against llama-server's default `--reasoning auto` a thinking-capable template thought on every verification and
+  annotation (Qwen3-0.6B 1.3–7.5 s per verdict, Qwen3.5-0.8B past a 300 s timeout; `docs/judge-bench.md`, Run 5's screen),
+  and the chat preset's `reasoning = off` (the router passes it to the child as `--reasoning off`) was what stopped it.
+  NOT `reasoning-budget = 0`, which leaves the template thinking and puts the reasoning in the content. **D179 is
+  CONFIGURED fields**: `HttpModelOptions.SuppressReasoningFields`, a JSON object Lyntai merges into a `chat/completions`
+  body only when the call asks `Suppress` — the library ships NO default, so the bump turned nothing on by itself.
+  **What the bump did, in the order this entry required**: (1) `LlamaCppSource.Register`'s chat registration moved to
+  the options-action overload `AddLlamaProvider(id, o => …)` (it seeds `http://localhost:8080`, overridden, and leaves
+  `Produces` at Text) and sets `SuppressReasoningFields = {"chat_template_kwargs":{"enable_thinking":false}}`
+  (`LlamaCppSource.SuppressReasoningFields`); (2) each catalogued chat model — Qwen3-0.6B, Gemma 3 1B, Gemma 3 4B — was
+  driven through the app's own write and recall on b10549 with the key REMOVED, behind a recording proxy
+  (`docs/self-managed-llm-runtime.md`, 2026-09-26): every call carried the field and answered 200, with no
+  `reasoning_content` and no `<think>`, 6–23 completion tokens (6–30 with the key kept), every write tagged and every
+  verdict parsed but two of Gemma 3 1B's 28 (a stray quote the model wrote, with and without the field alike) — ARRIVALS
+  asserted, because a refused field is a silent NoOpinion (below); and the rendered prompt is byte for byte the one the
+  key rendered, for all three (Qwen3's pre-closed think block; Gemma's template ignores both). The same run's controls:
+  with the key gone and the field stripped by the proxy, Qwen3 reasoned on every call (119–512 tokens, one reply cut at
+  the cap), so the instrument could see thinking; with the key kept, today's behaviour, no reasoning either.
+  (3) Only then was the key deleted from `LlamaServerRuntime.LaunchKeys` — p51 now asserts it ABSENT from every section,
+  p52 that both seams' requests carry the field (and no embedding request does), and judge-bench's own preset copy lost
+  it too, its `mirrorGuard` holding both halves to the product and its tag-seed build guarding the field on every
+  annotation request instead of `--reasoning off` in the child's argv. Each confirmed to FAIL with its half reverted.
+  **What the key covered and the field does not, both accepted**: a request that does not come through the memory seams
+  — the app's own warm (`max_tokens: 1`) now opens a think block on Qwen3, one discarded token; and a template that
+  decides thinking by some other variable than `enable_thinking` (a dropped-in model) is not reached by the field —
+  the 512-token cap then makes it silent rather than slow (launch item (4)). **A server that REFUSES the field fails the
+  call quietly**: the router logs `Failed` at Information and the judge reads it as transient, so a refusal looks like no
+  judge at all. llama-server b10549 accepts it. Lyntai's `docs/task-archive.md` Part 309 — done at its HEAD, NOT released
+  — logs a Warning naming the option and quoting the server when a call carrying these fields is refused; that release is
+  what would make a future refusal visible, and adopting it needs nothing from us. The `n-predict` and `ctx-size` caps
+  were never part of this workaround and stay: they are our own launch contract (`LlamaServerRuntime.ChatMaxTokens` —
+  the memory seams send no `max_tokens`, and the router does not stop a child's generation when the app abandons a
+  request; `LlamaServerRuntime.ChatContextTokens` — launch item (5)).
   **(6) OPEN until Run 10 and the owner decide — `ChunkedScoreProvider` (with `RerankPace`) ↔ Lyntai
   `docs/task-archive.md` Part 287 / D177, with Part 289 closed into it, RELEASED in 3.3.0 (first read at Lyntai commit
   `e6fa579b`; nothing after it changed the segmentation described here) and not adopted by the 3.4 bump.** Lyntai
@@ -1095,18 +1104,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   replaced a yes/no embedder test the day a third kind arrived: a boolean has no answer for "reranker", so every
   caller would have grown its own. It briefly had two copies of a substring test in two files, which is the
   drift this file keeps paying for.
-  **(4) A CHAT section launches with `reasoning = off` and `n-predict = 512`** (2026-09-24), and nothing else does.
-  Both fail silently: a thinking-capable template thinks on every judgement (the first key is open workaround (5)
-  in the Lyntai list above), and a small model's runaway fills its whole context — Run 5's screen saw gemma-3-270m
-  reach 31,073 tokens in 154 s. 512 holds every legitimate reply measured on the small models' own tokenizers (a
+  **(4) A CHAT section launches with `n-predict = 512`** (2026-09-24), and nothing else does — and with NO `reasoning`
+  key since 2026-09-26: `reasoning = off` sat beside it as workaround (5) in the Lyntai list above, and thinking is now
+  turned off by the REQUEST (`chat_template_kwargs.enable_thinking = false`, Lyntai D179). Without the cap a small
+  model's runaway fills its whole context, silently — Run 5's screen saw gemma-3-270m reach 31,073 tokens in 154 s. 512 holds every legitimate reply measured on the small models' own tokenizers (a
   whole page's verdict 19 tokens, four subject handles ≤ 26, a verdict naming all 96 candidates a recall at the
   DEFAULT limit of 8 shows the judge 282) and cuts only a verdict endorsing ~170+ candidates, which Lyntai calls the
   judge's failure signal and which then parses as NoOpinion. How many the judge is shown depends on the LIMIT as well
   as the kind: 4× what `FactIndex.RankAsync` asks for, min(3 × limit, 100) with no kind and 100 with one — so 400 on
   a recall naming a kind or asking for 34 or more, and past ~170 from a kind-less limit of 15. On the real binary the
-  capped runaway stopped at 512 tokens in 2.4 s. `p51` pins both keys on chat sections and their absence on embedder
-  and reranker sections; both confirmed to FAIL when broken. **The cap makes an ALWAYS-THINKING model silent, not
-  slow**: a dropped-in model whose template thinks regardless of `--reasoning off` spends the 512 tokens inside its
+  capped runaway stopped at 512 tokens in 2.4 s. `p51` pins the cap on chat sections and its absence on embedder and
+  reranker sections, and a `reasoning` key on none; confirmed to FAIL when broken. **The cap makes an ALWAYS-THINKING
+  model silent, not slow**: a dropped-in model whose template thinks regardless of `enable_thinking` spends the 512 tokens inside its
   thinking and is cut before any verdict or subject list, so it verifies nothing and tags nothing on every call —
   fail-open, no error — where uncapped it would at least have been visibly slow. None in the catalogue does; the cure
   for one is a row measured on the bench, not a bigger cap.
