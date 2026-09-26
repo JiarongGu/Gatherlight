@@ -674,9 +674,13 @@ and its `llama_context` lines.
   embedder whose row declares no window — the model's own context becomes the limit — and a row that declares one (this
   model's, 2,048) is launched with exactly that. What 8,192 costs a model whose OWN context is that large is unmeasured.
 - **Past the window**, a fact still gets no vector — refused whole, whichever message. Since the same bump the fact
-  index probes the embedder once when a write kept no vector, and an embedder that answers means the input was refused:
-  the fact is kept graph-indexed without a vector and never retried, where it used to be retried at every start
-  (`dev-conventions.md`, the Lyntai list's workaround (3)). Lyntai 3.3's input segmentation on the embedding
+  index re-embeds the content of a write that kept no vector and, refused again, probes the embedder: one that answers
+  means the input was refused, and the fact is kept graph-indexed without a vector and never retried, where it used to
+  be retried at every start (`dev-conventions.md`, the Lyntai list's workaround (3)).
+- **What the old batch left behind** — facts past ~510 tokens that kept a graph ref WITHOUT a vector on 1.3.x — is handed
+  back to the back-fill once, by a one-off step in `FactIndexStep`: Lyntai 3.4.0 re-remembers identical content onto the
+  SAME node and indexes the write's vector under its id, so nothing is lost but one re-remember per fact (launch item (7)
+  in `dev-conventions.md`). Lyntai 3.3's input segmentation on the embedding
   registration (D177: `MaxInputChars`, pieces embedded and pooled into one vector) would give such a fact a vector; it
   is unmeasured here and not built.
 
