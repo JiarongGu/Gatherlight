@@ -558,16 +558,28 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   holds only `llamacpp`, so a `claude-cli:…` route written by a rebind is ignored there and the running GGUF keeps
   annotating. Two caveats stand: the argument needs the chat provider id distinct from the embedder's and the
   reranker's (`LlamaCppSource.Register` gives each its own, Lyntai D133, and D176 skips a provider serving no text
-  anyway); and the ignored path LOGS a warning on every call, where the store was silent. **What the bump did, as ONE
-  unit** — renaming the prefix without writing routes would have silently dropped every live model change:
+  anyway); and an ignored route LOGS a Warning on every call it is ignored for, where the store was silent. **That
+  warning is not accepted as the trade for a FALLBACK.** There it would fire on every annotation and every recall's
+  verification for as long as the fallback lasts — forever for a household that removed llama.cpp on purpose — plus
+  one per fact on the startup back-fill: a log that cries wolf about a state the startup warning already announced.
+  So `LiveRouteMigrationStep`, which runs at every start, DELETES a `memory` route naming no provider the RUNNING judge
+  annotates through (`MemoryJudgeWiring`, the resolved judge, asked for its `AnnotationProvider`). At a start the
+  restart has already applied any rebind, so such a route can only be a fallback's leftover, and deleting it loses
+  nothing: once the saved binding resolves again, `DefaultModelByConsumer["memory"]` carries the model the bind wrote
+  into it. What remains is the warning between a rebind and its restart — transient, and true: that choice waits for
+  the restart. **What the bump did, as ONE unit** — renaming the prefix without writing routes would have silently
+  dropped every live model change:
   - `RouteKeyPrefix` is `llm.route.`, its own namespace — NEVER `llm.model.`, where a bare `haiku` is read as a
     provider id and live routing stops for that consumer. `LiveRoutes` reads and writes every route: each write is
     `provider:model`, and a blank model DELETES the key, because a bare provider means the backend's own default,
     never `DefaultModelByConsumer`.
   - Only `scorer` and `memory` are routes — the two consumers Lyntai's router resolves. `chat`/`extract`/`validate`
-    stay `llm.model.<consumer>`: the app reads each itself and hands it to the agent CLI's `--model`
-    (`ChatSessionService`, `UnattendedRunService`, `PlaygroundService`, `ZhikuMigrator`, `ExtractTool`,
-    `ClaudeValidateService`), where a route would arrive as `claude-cli:opus`.
+    stay `llm.model.<consumer>` (`LiveRoutes.ModelKey` — CURRENT keys, not legacy ones): the app reads each itself
+    and hands it to the agent CLI's `--model` (`ChatSessionService`, `UnattendedRunService`, `PlaygroundService`,
+    `ZhikuMigrator`, `ExtractTool`, `ClaudeValidateService`), where a route would arrive as `claude-cli:opus`.
+  - A routed model may not contain a COMMA (`LiveRoutes.WhyNotAModel`): a route is a comma-separated fallback list,
+    so `haiku, llamacpp:x` would store a second backend nobody chose. Cortex answers 400 and a bundle's import skips
+    the key; a colon is allowed, because Lyntai splits every entry at its FIRST colon and real ids carry one.
   - The provider is STATED beside the model, on the source: `IMemoryJudgeSource.AnnotationProvider` — the CLI's id
     for the CLI arm and for a reranker's tagging, `llamacpp` for a chat GGUF. The binding endpoint writes
     `AnnotationProvider:AnnotationModel`.
@@ -582,14 +594,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
     namespace gets no warn-once from Lyntai (its check covers only `lyntai.model.`): `llm.model.scorer = X` becomes
     `claude-cli:X`; `llm.model.memory` takes the SAVED binding's `AnnotationProvider` — the provider the key was
     written for, which reproduces exactly what the deleted store did with it — becomes `claude-cli:X` when nothing
-    is bound, and is DROPPED where there is no provider to derive (a retired backend, a source saved with no model:
-    both keys the store never read). A route already present wins over the old key beside it.
+    is bound, and is DROPPED, at Warning, where there is no provider to derive (a retired backend, a source saved
+    with no model: both keys the store never read). A route already present is kept over the old key beside it —
+    the route is what this build reads, which is not the same as newer (a downgrade and an upgrade can leave either
+    one older). It then drops a fallback's stale `memory` route (above).
   Proof: `e2e-p52` case 4 passes on routes alone, and fails when a chat GGUF's route names the CLI (read straight
   through after the fallback); 4b is its positive control, a route for the running provider read live; case 5 reads
-  `claude-cli:haiku` from the database. `e2e-p16` S1–S3 drive a real scoring pass (the route reaches the judge
-  spawn's `--model`; a clear gives the consumer default, haiku, never no `--model`) and M1–M3 the migration;
-  `e2e-p14` the bundle; `e2e-p47` the reconcile. Each is confirmed to fail with its own half removed (the suites'
-  headers name which).
+  `claude-cli:haiku` from the database; and after the fallback the restart has dropped the GGUF's route and the log
+  holds no per-call router warning. `e2e-p16` S1–S4 drive a real scoring pass (the route reaches the judge spawn's
+  `--model`; a clear gives the consumer default, haiku, never no `--model`; a comma is a 400) and M1–M6 the migration
+  (nothing bound, a fallen-back chat GGUF, a retired backend, the CLI saved with a model, a reranker, and a second
+  boot changing nothing); `e2e-p14` the bundle; `e2e-p47` the reconcile. Each is confirmed to fail with its own half
+  removed (the suites' headers name which).
   **(3) CLOSED as a workaround — `IFactIndex.EmbedderReadyAsync` ↔ `docs/task-archive.md` Part 285 / D175, shipped
   in 3.3.0, adopted with the 3.4 bump (2026-09-26); the probe STAYS, as our cost policy and as a classifier.** A failed
   write-time embed is not an error to Lyntai's graph engine: it stores the fact WITHOUT its vector and hands back a
@@ -757,8 +773,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   no way to decline it; the default stays ON (turning it off by default would silently degrade recall on
   upgrade) but declining is now a setting. **It is an `app_config` value read per call, not a
   registration** — `ServerConfig` reserves `settings.json` for "what must exist before the DB opens", its
-  model already lived in cortex as `llm.model.memory`, and splitting one feature's controls across two
-  stores also made it need a restart. The decorators that make it live are registered BEFORE
+  model already lived in `app_config` (then cortex's `llm.model.memory`; since the 3.4 bump the live route
+  `llm.route.memory`, written by 记忆检索's bind — cortex no longer has the row), and splitting one feature's
+  controls across two stores also made it need a restart. The decorators that make it live are registered BEFORE
   `AddMemoryAnnotation`/`AddMemoryVerification`, whose `TryAddSingleton` then stands down — the BYO seam
   those registrations document — and "off" returns the library's own `MemoryAnnotation.None` /
   `MemoryVerification.NoOpinion`, a state the engine already treats as "no policy registered", which is
