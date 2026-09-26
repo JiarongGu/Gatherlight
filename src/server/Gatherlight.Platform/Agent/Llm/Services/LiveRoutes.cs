@@ -77,6 +77,15 @@ public static class LiveRoutes
         else config.Set(Key(consumer), Format(provider, m));
     }
 
+    /// <summary>The provider each entry of <paramref name="route"/> names (its part before the first colon),
+    /// blank entries skipped — as Lyntai reads them.</summary>
+    public static IReadOnlyList<string> Providers(string? route) =>
+        string.IsNullOrWhiteSpace(route) ? []
+        : route.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(e => (e.IndexOf(':') is var at && at >= 0 ? e[..at] : e).Trim())
+            .Where(p => p.Length > 0)
+            .ToArray();
+
     /// <summary>The route's PROVIDER and MODEL when it is exactly one <c>provider:model</c> entry — what every
     /// writer here produces — else null (none stored, a fallback list, or an entry naming no model).
     /// Split at the FIRST colon, as Lyntai splits every candidate spec, so a model id may contain one.</summary>

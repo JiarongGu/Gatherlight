@@ -613,8 +613,9 @@ public sealed class MemoryRecallController : ControllerBase
             // both memory policies are fail-open.
             // The ANNOTATION route — for a reranker that is the CLI's model on the CLI, never the reranker's id
             // (JudgeWiring). Provider AND model, so a router reads it only when it holds that provider: one that
-            // does not — the running judge's, before the restart that wires a different backend, or the CLI's
-            // after a fallback — ignores it with a warning and keeps its own wiring's model.
+            // does not — the running judge's, before the restart that wires a different backend — ignores it with a
+            // warning and keeps its own wiring's model. A route a FALLBACK strands is dropped at the next start
+            // (LiveRouteMigrationStep), so that warning never becomes one per call for as long as the fallback lasts.
             LiveRoutes.Set(_appConfig, LiveRoutes.Memory, source.AnnotationProvider(model!), source.AnnotationModel(model!));
             _log.LogInformation("memory judge bound to {Source}/{Model}", source.Id, model);
 
