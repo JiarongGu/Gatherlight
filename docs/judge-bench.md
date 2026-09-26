@@ -9,6 +9,40 @@ recall therefore had no semantic channel to bridge languages; only the lexical f
 reasoning over candidate text carried it, which is why every arm's cross/third-language numbers stay far below
 its same-language numbers (see "What it does NOT say").
 
+## The judge's input since 2026-09-27
+
+*Dated note, 2026-09-27 — read it before re-running or pairing against any run below that has an LLM judge.*
+
+Every LLM judge (the Claude CLI and a llama.cpp chat model) is now shown each candidate's CONTENT alone through Lyntai's
+`LlmVerificationOptions.ContentChars`, at 400 characters (`JudgeWiring.ContentChars`). The app's own decorator,
+`JudgeSeesContentPolicy`, is deleted, and so is its `GATHERLIGHT_JUDGE_INPUT` knob. Content alone had been the default
+since 2026-09-24, on Run 1's equivalence. What changed is the mechanism, and past 400 characters the cut. Lyntai 3.5.0
+cuts at a space in the cap's latter half, else at a text-element boundary, so a long note may be shown as little as half
+the cap; the decorator hard-cut at 400. That is identical for every fact of the bilingual fixture (≤ 101 characters). On
+the long and mixed fixtures, 20 of the 90 long notes are cut 1–12 characters shorter. No LLM judge has run on those
+fixtures: they run the claude stub.
+
+What that means for the runs in this file:
+
+- **"topic — content" and topics alone can no longer be reproduced.** The bench refuses `topic`, `contentonly` and
+  `lcb:<model>` by name, saying why. Their only record is here:
+  - Run 1's `topic` rows, for topics alone.
+  - Run 1's `content`, `content2` and `fuse` rows, for the Claude judge shown "topic — content".
+  - The `lcb` rows of Runs 3, 5 and 5b, for the local chat judges shown "topic — content".
+
+  Re-analysing those saved files (`--report-only`) is unaffected: each keeps the labels and inputs it saved.
+- **Three arm names changed meaning.** `content`, `content2` and `fuse` showed the judge "topic — content" before
+  2026-09-27 and show content alone since, with no judge-input knob (`fuse` keeps its verdict-combination one). Run 1's
+  `contentonly` measured what `content` measures now. The bench reads a saved run's arm names as of that run's date.
+  So a `--baseline=<a Run 1 file>:content` is LABELLED with the input it measured: `[Claude judge · topic — content ·
+  partition]` in the header, plus a NOTE. It is not read as the same configuration as this run's `content`. Run 1
+  measured the two inputs equivalent, so such a pairing is still worth reading. Quote it as content alone against
+  "topic — content", never as an A/A.
+- **The registered commands of Runs 1, 3, 5 and 5b no longer measure what they did.** Run 1's names refused arms,
+  so the bench stops before it starts anything. Runs 3, 5 and 5b named no `--chat-arms` and took the old default
+  `lc,lcb`, so re-launched now they run their `lc` arms only; the bench prints a NOTE saying so before it starts. The
+  default `--arms` is now `formula,formula2,content,content2,fuse`, and the default `--chat-arms` is `lc`.
+
 ## Run 1 — the Claude judge (2026-09-23, claude 2.1.280)
 
 **Command**
@@ -316,7 +350,8 @@ No `judge failed open` warning fired for any arm (see the CLI-failures bullet be
   topic-prefix decorator should be deleted in favor of it. *(2026-09-26: it shipped in Lyntai 3.3.0, and the 3.4 bump
   kept the decorator by owner decision — `ContentChars` cuts a note over 400 characters at its last space however
   early, which guts a long Chinese note. This run's finding stands; dev-conventions workaround (1) says what ends the
-  decorator.)*
+  decorator.)* *(2026-09-27: adopted, once Lyntai 3.5.0 had fixed that cut, and the decorator is deleted — see "The
+  judge's input since 2026-09-27" at the top of this file.)*
 - **topic — content (partition) vs fuse — does fuse change the default?** No. Against `content`, `fuse` is
   significantly **worse** on top-1 (69/0, p < 0.001, net -69 = -28.8pp, 95% CI [-34.3, -22.8]pp, not equivalent),
   and the direction holds in every set (same -48.3pp p<.001, cross -16.7pp p=.002, third -25.0pp p<.001, mixed

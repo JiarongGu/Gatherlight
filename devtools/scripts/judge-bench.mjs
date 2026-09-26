@@ -31,7 +31,7 @@
 //     annotates on the CLI only when a fact is WRITTEN, and the formula arm runs no judge — and a reused seed
 //     writes nothing. So any claude-cli call from one of those arms is a WARNING (it is also spent quota), and a
 //     chat-judge arm whose llama.cpp chat calls (`router: llamacpp`) never succeeded is one too.
-//   - Every arm PINS both measurement knobs (blank = unset), a knob-less arm must print no `[measurement]`
+//   - Every arm PINS every measurement knob (blank = unset), a knob-less arm must print no `[measurement]`
 //     line, and the 判断 switch is read BACK after it is set — so no arm silently duplicates another.
 //   - THE PACE MUST NOT HAVE MOVED (docs/judge-bench.md, "The bench and the pace"). A chunked reranker sizes each call
 //     to the time this machine takes (RerankPace), so on a contended or slow machine what an arm SENDS depends on
@@ -57,8 +57,9 @@
 //
 // HOW TO READ IT. Every arm answers the same queries, so arms are compared PAIRED, per query, on top-1 hits and
 // on found@8 hits: against `content` and against `formula` when they ran, every reranker against every other, each
-// local chat judge against its own other input, against each reranker under partition and against every other chat
-// model shown the same input, and against `--baseline=<results.json>:<arm>` from another run. Each comparison reports McNemar's exact p, the
+// local chat judge against its own other input (in a run saved with `lcb` arms — see THE JUDGE'S INPUT below), against
+// each reranker under partition and against every other chat model shown the same input, and against
+// `--baseline=<results.json>:<arm>` from another run. Each comparison reports McNemar's exact p, the
 // net difference c − b, and a 95% interval for the net rate (c − b)/pairs — the Agresti–Min adjusted Wald interval
 // for a paired difference in proportions, which accounts for both how often the arms disagree and how that splits.
 //   - A FINDING needs p < 0.05 on `all` AND no question set that is itself significant (p < 0.05) in the
@@ -85,11 +86,23 @@
 // measured); the report goes to results-<iso>.json. Neither is ever deleted or truncated by a later run.
 // Unknown flags and duplicate arms are REJECTED, so a typo cannot launch a full-cost run with the defaults.
 //
+// THE JUDGE'S INPUT (2026-09-27). Every LLM judge is shown each candidate's CONTENT alone, through Lyntai's
+// LlmVerificationOptions.ContentChars (JudgeWiring.Llm), and the app-side decorator that used to do it — with its
+// GATHERLIGHT_JUDGE_INPUT knob — is gone. So "topic — content" and "topic only" cannot be launched at all: `topic`,
+// `contentonly` and `lcb:<m>` are refused with the reason, and `content`, `content2` and `fuse` — which pinned the knob
+// to `both` — now show content alone and set no judge-input knob. Those three NAMES therefore mean something different
+// in a run saved before that date: HISTORY (below) says what each meant, the loader applies it to a saved file or a row
+// stream that did not record its arm's input, and a `--baseline` whose arm meant something else under the same name is
+// LABELLED with what it measured, in the header and in a note — never silently paired as if both sides ran one
+// configuration. Run 1's `content`/`content2`/`fuse` rows (the Claude judge) and the `lcb` rows of Runs 3, 5 and 5b
+// (local chat judges) are the only record of "topic — content", and Run 1's `topic` rows the only record of topics
+// alone (docs/judge-bench.md, "The judge's input since 2026-09-27").
+//
 // LOCAL-MODEL ARMS. `--rerankers=<m,…>` adds `rr:<m>` (partition) and `rrf:<m>` (fuse) per reranker, both over the cut
 // (`--rerank-arms=` adds `rrk:<m>`, the shipped chunked input — see CHUNKED RERANKING below);
-// `--chat-judges=<m,…>` adds `lc:<m>` (content alone — the shipped default, no knob) and `lcb:<m>`
-// (`GATHERLIGHT_JUDGE_INPUT=both`, "topic — content") per llama.cpp CHAT model, paired against each other — the
-// question docs/judge-bench.md Run 3 asks — as well as against `formula`. All of them share ONE real router,
+// `--chat-judges=<m,…>` adds `lc:<m>` (content alone — what ships, no knob) per llama.cpp CHAT model, paired against
+// `formula`; its "topic — content" twin `lcb:<m>`, the other half of docs/judge-bench.md Run 3's question, cannot run
+// any more (THE JUDGE'S INPUT, below) and is re-analysed from saved runs only. All of them share ONE real router,
 // launched with the preset section the product writes for each model's kind — for a chat model, the `n-predict`
 // generation cap and the `ctx-size` context cap (thinking is off by the product's own REQUEST field since 2026-09-26,
 // not by a `reasoning` key — see presetSection); for a reranker, its declared window or 4096 (see presetSection,
@@ -156,7 +169,8 @@
 // --baseline compares each seed's digest with its own. The TAG STATISTICS — handles per fact, vocabulary, reuse within
 // the fixture's near-duplicate groups, overlap with Claude's handles for the same fact — are descriptive, printed at the
 // seed step and saved with the seeds and the run. `--chat-arms=` picks which arms each `--chat-judges=` model gets
-// (`lc`, `lcb`; default both), as `--rerank-arms=` does for rerankers.
+// (`lc`, the default and the only one that still runs — `lcb` is refused, see THE JUDGE'S INPUT), as `--rerank-arms=`
+// does for rerankers.
 //
 // CPU-ONLY ARMS (`--cpu-rerankers=<m,…>`, docs/judge-bench.md Run 8). What the shipped chunked scoring and its pace
 // (RerankPace) do on this machine's CPU. `--cpu-rerank-arms=` picks each model's kinds as `--rerank-arms=` does (default
@@ -183,7 +197,7 @@
 // an iGPU-only arm gets too ("solo" arms below), and its router record adds the device the child named.
 //
 // Usage:
-//   node devtools/dev.mjs judge-bench                     # formula, formula2, topic, content, content2, contentonly, fuse
+//   node devtools/dev.mjs judge-bench                     # formula, formula2, content, content2, fuse
 //   node devtools/dev.mjs judge-bench --arms=formula,content --n=20 --reuse-seed
 //   node devtools/dev.mjs judge-bench --arms=formula --rerankers=LAMAR-600m.Q5_K_M,bge-reranker-v2-m3-Q5_K_M
 //   node devtools/dev.mjs judge-bench --reuse-seed --arms=formula --chat-judges=gemma-3-1b-it-Q4_K_M --resources=devtools/_rr-res
@@ -196,7 +210,7 @@
 //   node devtools/dev.mjs judge-bench --claude-stub --reuse-seed --tag-seed=Qwen3-0.6B-Q8_0 --arms=formula --chat-judges=Qwen3-0.6B-Q8_0 --chat-arms=lc --tag-seed-arms=formula,lc:Qwen3-0.6B-Q8_0 --resources=devtools/_rr-res
 //   node devtools/dev.mjs judge-bench --fixture=long --reuse-seed --arms=formula,formula2 --rerankers=bge-reranker-v2-m3-Q5_K_M --rerank-arms=rrk --cpu-rerankers=bge-reranker-v2-m3-Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-memo --resources=devtools/_rr-res
 //   node devtools/dev.mjs judge-bench --fixture=mixed --reuse-seed --arms=formula,formula2 --rerankers=… --rerank-arms=rr,rrk --rerank-memo --resources=devtools/_rr-res
-// Flags: --arms= --rerankers= --rerank-arms=rr,rrf,rrk --chat-judges= --chat-arms=lc,lcb --n= --port-base= --llama-port= --resources=
+// Flags: --arms= --rerankers= --rerank-arms=rr,rrf,rrk --chat-judges= --chat-arms=lc --n= --port-base= --llama-port= --resources=
 //        --seed= --latency-sample=   --fixture=bilingual|long|mixed   --reuse-seed | --reseed   --seed-only   --claude-stub   --rerank-memo
 //        --tag-seed=<chat model>   --build-tag-seed   --tag-seed-arms=<arm keys>
 //        --cpu-rerankers=<m,…>   --cpu-rerank-arms=rr,rrf,rrk   --cpu-llama-port=
@@ -332,20 +346,17 @@ const baseKeyOf = (key) => key.replace(/@(tags|replay)$/, '');
 /** The formula arm whose digest vouches for a seed's starting state. */
 const formulaKeyFor = (seed) => (seed === 'default' ? 'formula' : `formula@${seed}`);
 
-// Every arm pins BOTH knobs; the server treats a blank value as unset. Without the pin, a knob exported in
+// Every arm pins EVERY knob; the server treats a blank value as unset. Without the pin, a knob exported in
 // the shell that launched the bench would leak into every arm that did not set it.
-// GATHERLIGHT_JUDGE_INPUT lives as long as JudgeSeesContentPolicy does. Lyntai shipped ContentChars in 3.3.0, but the 3.4
-// bump kept the class (its cut guts a long CJK note — the class comment says what ends that). When it goes, these arms
-// change with it — `topic`/`contentonly` go, `content`/`content2` become knob-less content-only arms, `fuse` keeps one
-// knob, and the `lcb:` chat arms (default `--chat-arms lc,lcb`) go or become a documented cannot-reproduce arm. The
-// full list is the class comment, "ON ADOPTING IT"; after it, `both` cannot be reproduced.
+// GATHERLIGHT_JUDGE_INPUT is no longer pinned: the server stopped reading it on 2026-09-27, when the app adopted Lyntai's
+// ContentChars and deleted the decorator it steered (THE JUDGE'S INPUT, header) — a value left in the shell changes
+// nothing, so there is nothing for a pin to hold still.
 // GATHERLIGHT_JUDGE_DEADLINE_SECONDS (VerificationDeadlinePolicy's test knob) is pinned blank for the same reason, so
 // every arm runs the product's default verification deadline; startup below refuses an arm that announces it.
 // GATHERLIGHT_RERANK_CHUNKING (RerankChunking, Runs 6b/6c) is pinned blank the same way, and every reranker arm then
 // sets it and must announce it: chunking became the product default on 2026-09-24 (Run 6c), so `rr`/`rrf` pin it OFF —
 // the cut Runs 2–6 measured, so they re-launch as they ran — and `rrk` pins it ON, which is what ships.
-const PINNED = { GATHERLIGHT_JUDGE_INPUT: '', GATHERLIGHT_VERDICT_COMBINATION: '', GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '',
-  GATHERLIGHT_RERANK_CHUNKING: '' };
+const PINNED = { GATHERLIGHT_VERDICT_COMBINATION: '', GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '', GATHERLIGHT_RERANK_CHUNKING: '' };
 /** Which arms each `--rerankers=` model gets, and what each pins: `rr` partition over the CUT, `rrf` fuse over the cut,
  *  `rrk` partition over windows (the shipped default). ONE writer: the live run builds reranker arms from this and
  *  armConfigFor labels them from it. Runs 6b and 6c ran `rr` with the knob blank, which was the cut then too. */
@@ -432,27 +443,46 @@ function paceMirror() {
 const ARMS = {
   formula: { label: '公式 · no verification (seed tags present)', enrichment: false, env: {} },
   formula2: { label: '公式 · no verification · A/A twin', enrichment: false, env: {} },
-  topic: { label: 'Claude judge · topic only', enrichment: true, judgeInput: 'headline',
-    env: { GATHERLIGHT_JUDGE_INPUT: 'headline' }, knob: /judge input = headline \(/ },
-  // `content` and `content2` relied on the default being `both`; content-alone became the default 2026-09-24
-  // (docs/judge-bench.md Run 1), so both now pin `both` explicitly, with the knob to prove it took.
-  content: { label: 'Claude judge · topic — content · partition', enrichment: true, judgeInput: 'both',
-    env: { GATHERLIGHT_JUDGE_INPUT: 'both' }, knob: /judge input = both \(/ },
-  content2: { label: 'Claude judge · topic — content · partition · A/A twin', enrichment: true, judgeInput: 'both',
-    env: { GATHERLIGHT_JUDGE_INPUT: 'both' }, knob: /judge input = both \(/ },
-  // How Lyntai's LlmVerificationOptions.ContentChars (3.3.0; Part 276 / D170) renders a candidate of at most 400
-  // characters: content ALONE. Past 400 the two cut differently, which is why the app has not adopted it.
-  // Kept explicitly pinned (rather than left to the now-default) so the non-vacuity check below still confirms
-  // the knob took, instead of this arm becoming indistinguishable from one that sets nothing.
-  contentonly: { label: 'Claude judge · content only · partition', enrichment: true, judgeInput: 'content',
-    env: { GATHERLIGHT_JUDGE_INPUT: 'content' }, knob: /judge input = content \(/ },
-  // Two knobs: the verdict-combination knob AND the judge-input knob (pinned to `both`, since fuse is measured
-  // against the pre-flip default). `knob` here is an array — see the non-vacuity check, which requires every
-  // entry to announce itself.
-  fuse: { label: 'Claude judge · topic — content · fuse', enrichment: true, judgeInput: 'both',
-    env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse', GATHERLIGHT_JUDGE_INPUT: 'both' },
-    knob: [/verdict combination = Fuse/, /judge input = both \(/] },
+  // The Claude judge as it ships: content alone, through Lyntai's ContentChars (THE JUDGE'S INPUT, header). `content` is
+  // the paired reference arm and `content2` the judge's A/A twin; neither sets a knob, so the knob-less check below
+  // proves nothing leaked into them. Before 2026-09-27 both pinned `both` ("topic — content") — HISTORY, below.
+  content: { label: 'Claude judge · content · partition', enrichment: true, judgeInput: 'content', env: {} },
+  content2: { label: 'Claude judge · content · partition · A/A twin', enrichment: true, judgeInput: 'content', env: {} },
+  // One knob, the verdict combination; it must announce itself. It pinned the judge input to `both` as well until the
+  // knob went, so a saved `fuse` from before then measured "topic — content" under Fuse.
+  fuse: { label: 'Claude judge · content · fuse', enrichment: true, judgeInput: 'content',
+    env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse' }, knob: /verdict combination = Fuse/ },
 };
+// HISTORY — what an arm NAME meant in a run saved before 2026-09-27 (THE JUDGE'S INPUT, header), the day the app adopted
+// Lyntai's ContentChars and deleted the judge-input knob. ONE writer: armConfigFor reads it for a run older than that,
+// which is how a saved file or a row stream that recorded no arm configuration keeps its meaning, and the cross-run
+// pairing reads the saved arm to say when a baseline's name meant something else. `topic`, `contentonly` and `lcb:` are
+// here only; `content`, `content2` and `fuse` exist in both tables and mean different inputs in each.
+// An INSTANT, not a date: a run records its time in UTC, and 2026-09-27 at UTC+10 — where this project's dates are
+// written — began at 14:00 UTC on the 26th. The first build without the knob was made at 18:25 UTC; the last bench run
+// before it was on 2026-09-25.
+const CONTENT_CHARS_SINCE = '2026-09-26T18:00:00.000Z';
+const BEFORE_CONTENT_CHARS = {
+  topic: { label: 'Claude judge · topic only', enrichment: true, judgeInput: 'headline' },
+  content: { label: 'Claude judge · topic — content · partition', enrichment: true, judgeInput: 'both' },
+  content2: { label: 'Claude judge · topic — content · partition · A/A twin', enrichment: true, judgeInput: 'both' },
+  contentonly: { label: 'Claude judge · content only · partition', enrichment: true, judgeInput: 'content' },
+  fuse: { label: 'Claude judge · topic — content · fuse', enrichment: true, judgeInput: 'both' },
+};
+/** A saved arm's `judgeInput`, in words. */
+const JUDGE_INPUT_NAMES = { headline: 'topics only', both: '"topic — content"', content: 'content alone' };
+/** True when a run's timestamp is before the judge-input knob went — or unrecorded, which only an old file is. */
+const beforeContentChars = (at) => !at || !(Date.parse(at) >= Date.parse(CONTENT_CHARS_SINCE));
+/** Why an arm that can no longer run is refused — named, so the refusal says what to read instead. */
+const CANNOT_REPRODUCE = {
+  topic: { what: 'the Claude judge shown topics only', instead: 'Run 1\'s saved rows are its only record' },
+  contentonly: { what: 'the Claude judge shown content alone', instead: 'That is what `content` measures now — run it' },
+  lcb: { what: 'a local chat judge shown "topic — content"', instead: 'The saved rows of Runs 3, 5 and 5b are its only record' },
+};
+const cannotReproduce = (arm) => `'${arm}' cannot run any more: it measured ${CANNOT_REPRODUCE[arm].what} through the `
+  + 'GATHERLIGHT_JUDGE_INPUT knob, which went on 2026-09-27 when the app adopted Lyntai\'s ContentChars, and every LLM '
+  + `judge is now shown content alone. ${CANNOT_REPRODUCE[arm].instead}; a saved run re-analyses with --report-only `
+  + '(docs/judge-bench.md, "The judge\'s input since 2026-09-27")';
 
 const appHead = (() => {
   try { return git(repo, 'rev-parse', '--short', 'HEAD').trim(); } catch (e) { return `unknown (${String(e.message).split('\n')[0]})`; }
@@ -706,10 +736,11 @@ const loadRun = (json, source) => {
   if (!json || typeof json.rows !== 'object' || json.rows === null)
     throw new Error(`${source}: no saved rows — this file predates them, and nothing can be recomputed from it`);
   const cfg = Array.isArray(json.arms) ? json.arms : Object.keys(json.rows).map((key) => ({ key }));
-  if (!Array.isArray(json.arms)) notes.push('no arm configuration saved — labels and enrichment taken from the current arm table');
+  if (!Array.isArray(json.arms)) notes.push('no arm configuration saved — labels and enrichment taken from the arm table as of the run\'s date');
   const arms = cfg.map((a) => {
-    // The arm table, or what a local-model key's own shape says (`rr:`/`rrf:`/`lc:`/`lcb:`).
-    const known = ARMS[a.key] ?? armConfigFor(a.key);
+    // The arm table, or what a local-model key's own shape says (`rr:`/`rrf:`/`lc:`/`lcb:`) — as of the run's own date,
+    // so a Claude-judge name from before 2026-09-27 keeps the input it measured (HISTORY) when the file did not save it.
+    const known = armConfigFor(a.key, json.at ?? null);
     return {
       key: a.key,
       label: a.label ?? known.label ?? a.key,
@@ -1311,7 +1342,8 @@ const analyse = (run, { baseline = null } = {}) => {
     }
   }
   // THE LOCAL CHAT JUDGE'S QUESTION (docs/judge-bench.md Run 3): content alone (`lc:`, the shipped default) against
-  // "topic — content" (`lcb:`), per model. Paired by KEY, so a saved or recovered run pairs the same way.
+  // "topic — content" (`lcb:`), per model. Paired by KEY, so a saved or recovered run pairs the same way. Only a run
+  // saved before 2026-09-27 has `lcb:` arms (THE JUDGE'S INPUT, header); a live run pairs nothing here.
   const chatKey = (a) => /^(lcb?):(.+)$/.exec(a.key);
   const cjComps = [];
   for (const lc of arms.filter((a) => chatKey(a)?.[1] === 'lc')) {
@@ -1367,7 +1399,25 @@ const analyse = (run, { baseline = null } = {}) => {
       for (const p of problems) console.log(`  - ${p}`);
       out.warnings.push(`cross-run pairing vs ${baseline.arm} refused: ${problems.join('; ')}`);
     } else {
-      const label = `${baseline.arm}@${path.basename(baseline.file, '.json')}`;
+      // A NAME THAT CHANGED MEANING (THE JUDGE'S INPUT, header). `content`, `content2` and `fuse` showed the judge
+      // "topic — content" before 2026-09-27 and content alone since, so a pre-bump `--baseline=…:content` would pair
+      // content alone against "topic — content" under ONE name. The baseline arm is compared as what IT measured — its
+      // saved input, or HISTORY's for its date — against what the same name means in THIS run, and a difference is
+      // written into the header and a note rather than left for the reader to know.
+      const meantThen = bArm.judgeInput ?? null;
+      const meansHere = (arms.find((a) => a.key === bArm.key) ?? armConfigFor(bArm.key, meta.at)).judgeInput ?? null;
+      const renamed = meantThen !== meansHere;
+      const label = `${baseline.arm}@${path.basename(baseline.file, '.json')}${renamed ? ` [${bArm.label}]` : ''}`;
+      if (renamed) {
+        const inputName = (i) => JUDGE_INPUT_NAMES[i] ?? 'no judge';
+        const note = `the baseline arm '${bArm.key}' showed the judge ${inputName(meantThen)}; in this run an arm named `
+          + `'${bArm.key}' ${meansHere === null && !arms.some((a) => a.key === bArm.key) ? 'cannot run at all' : `shows ${inputName(meansHere)}`}`
+          + ` — the pairing below compares ${inputName(meantThen)} against each arm of this run, not one configuration with itself`;
+        console.log(`\nNOTE: ${note}`);
+        out.notes.push(note);
+        out.crossRun.baseline.judgeInput = meantThen;
+        out.crossRun.baseline.meaningChanged = true;
+      }
       const comps = arms.map((a) => ({ key: a.key, label: a.label, arm: a, base: bArm }));
       out.crossRun.paired = printPaired(`PAIRED ACROSS RUNS vs ${label} — digest, order seed, facts and fixture all match;`
         + ` b = baseline hit & arm miss, c = the reverse`, comps);
@@ -1670,13 +1720,16 @@ const queryOrder = (facts, seed) => {
 };
 /** What an arm key means, when nothing else recorded it: the arm table, or a local-model key's own shape —
  *  `rr:`/`rrf:`/`rrk:` a reranker under partition/fuse/partition-chunked, `lc:`/`lcb:` a llama.cpp chat judge reading content alone (the
- *  shipped default) or "topic — content". ONE writer: the live run builds those arms from this too. */
-const armConfigFor = (key) => {
+ *  shipped default) or "topic — content" (`lcb:`, a saved run's only — it cannot run since 2026-09-27). ONE writer: the live run builds those arms from this too. `at` is the run's
+ *  timestamp: for a run before 2026-09-27 a Claude-judge name means what HISTORY says it meant then. */
+const armConfigFor = (key, at = RUN_AT) => {
   // `<arm>@tags` / `<arm>@replay` is the same arm started from a local-tag seed (Run 7) — its own label says so.
   if (seedOfKey(key) !== 'default') {
-    const base = armConfigFor(baseKeyOf(key));
+    const base = armConfigFor(baseKeyOf(key), at);
     return { ...base, label: `${base.label} · on ${SEED_NAME[seedOfKey(key)]}`, seed: seedOfKey(key) };
   }
+  const then = beforeContentChars(at) ? BEFORE_CONTENT_CHARS[key] : null;
+  if (then) return { ...then, reranker: null, chatJudge: null };
   if (ARMS[key]) return { label: ARMS[key].label, enrichment: ARMS[key].enrichment, judgeInput: ARMS[key].judgeInput ?? null, reranker: null, chatJudge: null };
   const m = /^(rr[fk]?):(.+)$/.exec(key);
   if (m) return { label: `reranker ${m[2]} · ${RERANK_ARM_KINDS[m[1]].suffix}`, enrichment: true, judgeInput: null, reranker: m[2], chatJudge: null };
@@ -1780,7 +1833,7 @@ const recoverFromRows = (file) => {
     order: { seed: orderSeed, queries: queriesPerArm, adjacentSameFact },
     concurrency: keys.length,
     latencySample: lat.length ? Math.max(...keys.map((k) => lat.filter((r) => r.arm === k).length)) : null,
-    arms: (order ?? keys).map((k) => ({ key: k, ...armConfigFor(k), router: router[k] ?? null })),
+    arms: (order ?? keys).map((k) => ({ key: k, ...armConfigFor(k, runAt), router: router[k] ?? null })),
     rows: byArm(acc),
     ...(lat.length ? { latencyRows: byArm(lat) } : {}),
   };
@@ -1825,7 +1878,8 @@ const live = async () => {
   const facts = sampleFacts(int('n', FIXTURE.facts.length, 1));
   const N = facts.length;
 
-  const arms = list('arms', 'formula,formula2,topic,content,content2,contentonly,fuse').map((k) => {
+  const arms = list('arms', 'formula,formula2,content,content2,fuse').map((k) => {
+    if (CANNOT_REPRODUCE[k]) die(cannotReproduce(k));
     if (!ARMS[k]) die(`unknown arm '${k}' — one of ${Object.keys(ARMS).join(', ')}`);
     return { key: k, ...ARMS[k] };
   });
@@ -1854,8 +1908,6 @@ const live = async () => {
       const kind = RERANK_ARM_KINDS[k];
       arms.push({ key: `${k}:${m}`, ...armConfigFor(`${k}:${m}`), env: { ...kind.env }, ...(kind.knob ? { knob: kind.knob } : {}) });
     }
-  // A llama.cpp CHAT judge, both ways it can be shown a candidate. `lc` sets NO knob — it is the shipped default,
-  // so the knob-less check below proves nothing leaked in — and `lcb` must announce the one it sets.
   // Run 8: the CPU-only arms — the same reranker arms, each run alone on a CPU-only router of its own (header).
   const cpuRerankers = list('cpu-rerankers', '');
   const cpuKinds = list('cpu-rerank-arms', 'rr,rrk');
@@ -1885,12 +1937,22 @@ const live = async () => {
   if (chatJudges.find((m) => cpuRerankers.includes(m) || igpuRerankers.includes(m))) die('a model is in both --cpu-rerankers and --chat-judges — a GGUF is one kind');
   const both = chatJudges.find((m) => rerankers.includes(m));
   if (both) die(`'${both}' is in both --rerankers and --chat-judges — a GGUF is one kind, and the router's preset gives it one`);
-  const chatKinds = list('chat-arms', 'lc,lcb');
-  for (const k of chatKinds) if (k !== 'lc' && k !== 'lcb') die(`--chat-arms: unknown kind '${k}' — one of lc, lcb`);
-  for (const m of chatJudges) {
-    if (chatKinds.includes('lc')) arms.push({ key: `lc:${m}`, ...armConfigFor(`lc:${m}`), env: {} });
-    if (chatKinds.includes('lcb')) arms.push({ key: `lcb:${m}`, ...armConfigFor(`lcb:${m}`), env: { GATHERLIGHT_JUDGE_INPUT: 'both' }, knob: /judge input = both \(/ });
+  // A llama.cpp CHAT judge, as it ships. `lc` sets NO knob, so the knob-less check below proves nothing leaked in. It is
+  // the only kind left: `lcb` pinned the judge-input knob to "topic — content", and that knob is gone (THE JUDGE'S INPUT,
+  // header) — refused by name, so a registered Run 3/5/5b command says why rather than failing on a knob that "did not
+  // announce itself".
+  const chatKinds = list('chat-arms', 'lc');
+  for (const k of chatKinds) {
+    if (CANNOT_REPRODUCE[k]) die(`--chat-arms: ${cannotReproduce(k)}`);
+    if (k !== 'lc') die(`--chat-arms: unknown kind '${k}' — the one kind is lc`);
   }
+  for (const m of chatJudges) arms.push({ key: `lc:${m}`, ...armConfigFor(`lc:${m}`), env: {} });
+  // The registered commands of Runs 3, 5 and 5b name no --chat-arms: they took the old default `lc,lcb`, so re-launched
+  // now they run their `lc` arms only. Said before anything starts, since such a command no longer measures what it did.
+  if (chatJudges.length > 0 && !opts['chat-arms'])
+    console.log('NOTE: --chat-arms defaults to lc since 2026-09-27 (it was lc,lcb) — each chat judge runs content alone '
+      + 'only; its "topic — content" twin cannot run (THE JUDGE\'S INPUT, header), so a Run 3/5/5b command re-launched '
+      + 'now measures half of what it did');
   // THE LOCAL-TAG SEEDS (Run 7): each listed arm runs TWICE more, started from the replay seed (`<arm>@replay`) and from
   // the tag seed (`<arm>@tags`). Nothing else about them changes — same knobs, same binding — so the @tags/@replay pair
   // differs only in the tags.
@@ -1965,6 +2027,12 @@ const live = async () => {
     if (!b.arms.some((a) => a.key === 'formula')) pre.push('it has no formula arm, so its digest cannot be compared');
     if (!arms.some((a) => a.key === 'formula')) pre.push('this run has no formula arm, so the digests cannot be compared — add formula');
     if (pre.length) die(`--baseline ${rel(BASELINE.file)} cannot be paired with this run: ${pre.join('; ')}`);
+    // Said before the hour is spent too: a name that meant another judge input then (THE JUDGE'S INPUT, header).
+    const bArm = b.arms.find((a) => a.key === BASELINE.arm);
+    const here = arms.find((a) => a.key === bArm.key) ?? armConfigFor(bArm.key);
+    if ((bArm.judgeInput ?? null) !== (here.judgeInput ?? null))
+      console.log(`NOTE: the --baseline arm '${bArm.key}' showed the judge ${JUDGE_INPUT_NAMES[bArm.judgeInput] ?? 'no judge'}, and `
+        + `'${bArm.key}' here shows ${JUDGE_INPUT_NAMES[here.judgeInput] ?? 'no judge'} — the cross-run pairing is labelled with what it measured`);
   }
 
   // THE LONG FIXTURE NEVER REACHES A REAL CLI: its seed is written with 判断 off and its arms are formula, rerankers or
@@ -2783,8 +2851,8 @@ const live = async () => {
           + '(e.g. a fact-index layout rebuild) and no longer starts from the seed; pass --reseed');
       const c = makeClient(arm.srv.base);
       // NON-VACUITY: an arm whose knob or binding did not take would silently duplicate another arm. `knob` may
-      // be one regex or an array (an arm can pin more than one env var, e.g. `fuse` pins both the verdict
-      // combination AND the judge input) — every entry must announce itself, or a second knob failing silently
+      // be one regex or an array (an arm can pin more than one env var, e.g. `rrf` pins both the verdict
+      // combination AND the rerank chunking) — every entry must announce itself, or a second knob failing silently
       // would go unnoticed behind the first one's success.
       const log = arm.srv.log();
       const announced = log.split(/\r?\n/).filter((l) => l.includes('[measurement]'));
