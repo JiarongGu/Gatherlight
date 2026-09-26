@@ -403,7 +403,9 @@ public static class GgufCatalog
         // THE LOCAL CHAT JUDGE THAT MEASURED BETTER (docs/judge-bench.md Run 5b, committed 1e8e743), offered and NOT
         // recommended: RecommendedReranker stays the local default by the owner's decision (2026-09-24). Every figure
         // is Run 5b's and carries its configuration — the 240-question fixture, 语义 off, content-only judge input,
-        // thinking off with the 512-token cap (the preset LlamaServerRuntime.WritePresets writes for a chat model),
+        // thinking off with the 512-token cap (then the preset's `reasoning = off`; since 2026-09-26 the request's
+        // enable_thinking = false, which renders the same prompt — docs/self-managed-llm-runtime.md; the note's
+        // parenthesis said 「应用启动它时就这样设置」 until then, and says the app asks it on every call now),
         // one chat model per run beside 公式 and BGE. top-1 79 → 110 (+12.9pp, p < 0.001) and found@8 125 → 148
         // (+9.6pp, p < 0.001) against no judge; against BGE in the same run, top-1 +8.3pp (p = 0.002) and found@8
         // 148 against 203 (−22.9pp). Serial median 381 ms against the run's 公式 220 ms. Coverage 226/234.
@@ -436,7 +438,7 @@ public static class GgufCatalog
             "Qwen3-0.6B-Q8_0.gguf",
             "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031", 639_446_688,
             "判断用的对话模型:写入时的主题标注和检索时的判断都在本机完成,不消耗账号额度。"
-            + "本应用双语测试集 240 道提问、不开语义、判断按默认只读事实内容、关闭思考(应用启动它时就这样设置),"
+            + "本应用双语测试集 240 道提问、不开语义、判断按默认只读事实内容、关闭思考(应用每次调用它时都这样要求),"
             + "每轮只测这一个对话模型:答案排第一从不开判断的 79 题增加到 110 题,带进前八从 125 题增加到 148 题,"
             + "两项都显著变好。和同一轮的 BGE 重排模型比:它把答案排在第一的次数更多(多 8.3 个百分点,显著),"
             + "BGE 把答案带进前八的次数多得多(203 对 148)。每次检索约 0.38 秒,同一轮不开判断约 0.22 秒"
