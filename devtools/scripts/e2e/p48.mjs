@@ -19,6 +19,9 @@
 //  10. a back-fill never runs BESIDE a rebuild: a memory import landing while a backup import rebuilds starts a
 //      detached back-fill, which waits for the rebuild and then indexes only what is still unindexed — rather than
 //      reading every fact the rebuild had just detached as pending and annotating each a second time
+//  11. a SINGLE write racing a rebuild leaves no stale ref: a remember_fact held open across a backup import's rebuild
+//      does not put back the ref it read (a node the rebuild forgot), and an edit landing after the rebuild's snapshot
+//      is not overwritten by the ref of the content it replaced — both ref writes are conditional
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -46,6 +49,10 @@ const HANG = 'zzhangindex';
 /** A fact whose content carries this marker takes 6 s to annotate while the server runs with
  *  GATHERLIGHT_STUB_SLOW_ANNOTATION set to it — case 10's rebuild, kept in progress. */
 const SLOW = 'zzslowindex';
+
+/** A fact whose content carries this marker has ONE annotation held open (30 s) while the race server runs with
+ *  GATHERLIGHT_STUB_HANG_ONCE_FILE: the one that creates the claim file — case 11's single write. */
+const HANG_ONCE = 'zzhangonce';
 
 let server = null;
 let restoreServer = null;
@@ -670,8 +677,12 @@ try {
   makeTestData(raceDir);
   const argsLog = path.join(raceDir, '..', '_p48-race-args.log');
   fs.rmSync(argsLog, { force: true });
+  // Case 11's hang-once knob, kept QUIET by its claim file until case 11 deletes it to arm it.
+  const hangOnceFile = path.join(raceDir, '..', '_p48-hang-once.claim');
+  fs.writeFileSync(hangOnceFile, 'claimed');
   race = startServer({ dataDir: raceDir, port: RACE_PORT, env: {
-    GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_SLOW_ANNOTATION: SLOW, GATHERLIGHT_STUB_ARGS_LOG: argsLog } });
+    GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_SLOW_ANNOTATION: SLOW, GATHERLIGHT_STUB_ARGS_LOG: argsLog,
+    GATHERLIGHT_STUB_HANG_ANNOTATION: HANG_ONCE, GATHERLIGHT_STUB_HANG_ONCE_FILE: hangOnceFile } });
   const rbase = `http://127.0.0.1:${RACE_PORT}`;
   await waitHealthy(rbase);
   const raceLogDir = path.join(raceDir, 'state', 'logs');
@@ -739,6 +750,98 @@ try {
     !!late2?.ref && late2.node === newFact.content, JSON.stringify(late2));
   ok('…and every fact\'s ref names a node that exists',
     rows.length === 7 && rows.every((r) => r.ref && r.node), JSON.stringify(rows.map((r) => [r.topic, r.ref, !!r.node])));
+
+  // --- 11. a SINGLE write racing a rebuild leaves no stale ref ----------------------------------------------------
+  // A rebuild forgets the graph, clears every graph_ref and re-indexes from a snapshot; remember_fact takes no lock beside
+  // it. Two races on graph_ref came out of that, both leaving a NON-empty ref no back-fill ever returns to:
+  //   (a) a remember_fact of UNCHANGED content reads the row's ref before it indexes; when its index fails (here: its
+  //       caller gives up while the annotation hangs) it restores that ref — which the rebuild meanwhile forgot;
+  //   (b) an EDIT landing after the rebuild's snapshot is overwritten when the rebuild, re-remembering the OLD content,
+  //       writes that node's ref.
+  // Both writes are now conditional (IKnowledgeStore.SetGraphRefIfAsync / SetGraphRefIfContentAsync): the tool's only
+  // while the row still holds the ref it read, the rebuild's only while the row still holds the content it indexed.
+  // Staged on case 10's server: the stub hangs the annotation of ONE write (GATHERLIGHT_STUB_HANG_ONCE_FILE — the rebuild's
+  // own annotation of the same fact answers), and case 10's slow marker keeps the rebuild's re-remember of the edited
+  // fact 6 s long, so the edit lands inside it.
+  {
+    const RACE_U = raceFact('race2 harbour desk', `The harbour ${HANG_ONCE} ferry desk opens at eight on weekdays.`);
+    const RACE_E = raceFact('race2 lighthouse museum', `The old lighthouse ${SLOW} museum closes at five in winter.`);
+    const RACE_E_NEW = 'The old lighthouse museum now closes at six all year round.';
+    const raceDbFile = path.join(raceDir, 'state', 'gatherlight.db');
+    const rowNode = (topic) => {
+      const db = new DatabaseSync(raceDbFile);
+      try {
+        return db.prepare(`SELECT k.content, COALESCE(k.graph_ref, '') AS ref, n.content AS node
+          FROM knowledge k LEFT JOIN lyntai_memory_node n
+            ON n.engine = 'facts/graph' AND n.id = CAST(substr(k.graph_ref, instr(k.graph_ref, '#') + 1) AS INTEGER)
+          WHERE k.topic = ?`).get(topic) ?? null;
+      } finally { db.close(); }
+    };
+    const rebuildsLogged = () => (raceLog().match(/fact index: rebuilding \d+ facts/g) ?? []).length;
+    const hangAnnotations = () => (fs.existsSync(argsLog) ? fs.readFileSync(argsLog, 'utf8') : '').split('\n')
+      .filter(Boolean).map((l) => JSON.parse(l))
+      .filter((e) => e.kind === 'annotation' && String(e.tail).split('Fact:\n').pop().includes(HANG_ONCE)).length;
+
+    await importMemory([RACE_U, RACE_E]);
+    for (let i = 0; i < 240 && !(rowNode(RACE_U.topic)?.ref && rowNode(RACE_E.topic)?.ref); i++)
+      await new Promise((r) => setTimeout(r, 250));
+    const refUBefore = rowNode(RACE_U.topic)?.ref;
+    ok('(fixture 11) both race facts imported and indexed, their refs naming their own content',
+      !!refUBefore && rowNode(RACE_U.topic).node === RACE_U.content && rowNode(RACE_E.topic)?.node === RACE_E.content,
+      JSON.stringify({ u: rowNode(RACE_U.topic), e: rowNode(RACE_E.topic) }));
+    const zip2 = Buffer.from(await (await fetch(`${rbase}/api/backup/export`)).arrayBuffer());
+
+    // (a): arm the hang, and start a remember_fact of U's UNCHANGED content — its annotation now hangs.
+    fs.rmSync(hangOnceFile, { force: true });
+    const hangsBefore = hangAnnotations();
+    const abort = new AbortController();
+    const held = fetch(`${rbase}/api/tools/call`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, signal: abort.signal,
+      body: JSON.stringify({ name: 'remember_fact', arguments: { kind: RACE_U.kind, topic: RACE_U.topic,
+        content: RACE_U.content, source: RACE_U.source, confidence: 0.8 } }),
+    }).catch(() => null);
+    for (let i = 0; i < 120 && hangAnnotations() <= hangsBefore; i++) await new Promise((r) => setTimeout(r, 100));
+    ok('(fixture 11a) the single write is held open in its annotation', hangAnnotations() > hangsBefore,
+      `${hangAnnotations()} hanging annotation(s)`);
+
+    // …while a backup import rebuilds the index under it.
+    const rebuildsBefore = rebuildsLogged();
+    let restore2Done = false;
+    const restoring2 = fetch(`${rbase}/api/backup/import`, {
+      method: 'POST', headers: { 'content-type': 'application/zip' }, body: zip2,
+    }).then((r) => { restore2Done = true; return r; });
+    for (let i = 0; i < 300 && rebuildsLogged() <= rebuildsBefore; i++) await new Promise((r) => setTimeout(r, 100));
+
+    // (b): the EDIT, landing after the rebuild's snapshot — while its re-remember of E's OLD content is 6 s long.
+    const edited = await makeClient(rbase).call('remember_fact', { kind: RACE_E.kind, topic: RACE_E.topic,
+      content: RACE_E_NEW, source: RACE_E.source, confidence: 0.8 });
+    ok('(fixture 11b) the edit landed WHILE the rebuild ran, after its snapshot',
+      edited.result?.ok === true && rebuildsLogged() > rebuildsBefore && !restore2Done,
+      JSON.stringify({ edited: edited.result, rebuilding: rebuildsLogged() > rebuildsBefore, restore2Done }));
+
+    // Let the rebuild re-index U, THEN give up on the held write: its index fails and it restores the ref it read.
+    for (let i = 0; i < 300 && !(rowNode(RACE_U.topic)?.ref && rowNode(RACE_U.topic).ref !== refUBefore); i++)
+      await new Promise((r) => setTimeout(r, 100));
+    ok('(fixture 11a) the rebuild re-indexed U first — its row holds the rebuild\'s ref', !!rowNode(RACE_U.topic)?.ref
+      && rowNode(RACE_U.topic).ref !== refUBefore, JSON.stringify({ before: refUBefore, now: rowNode(RACE_U.topic) }));
+    abort.abort();
+    await held;
+    const restored2 = await restoring2;
+    for (let i = 0; i < 40 && !new RegExp(`could not index schedule/${RACE_U.topic}`).test(raceLog()); i++)
+      await new Promise((r) => setTimeout(r, 250));
+    ok('(fixture 11a) the held write\'s index FAILED — the path that falls back to the ref it read',
+      new RegExp(`could not index schedule/${RACE_U.topic}`).test(raceLog()) && restored2.status === 200,
+      `restore ${restored2.status}`);
+    await new Promise((r) => setTimeout(r, 1500));
+    fs.writeFileSync(hangOnceFile, 'claimed');
+
+    const u = rowNode(RACE_U.topic);
+    ok('THE POINT (11a): the held write did NOT put back the ref it read — U names a node that exists, with its content',
+      !!u?.ref && u.ref !== refUBefore && u.node === RACE_U.content, JSON.stringify({ before: refUBefore, u }));
+    const e = rowNode(RACE_E.topic);
+    ok('THE POINT (11b): the rebuild did NOT overwrite the edit — E names a node holding its NEW content',
+      e?.content === RACE_E_NEW && !!e?.ref && e.node === RACE_E_NEW, JSON.stringify(e));
+  }
 
 } catch (err) {
   fail('e2e-p48 fatal: ' + (err?.stack || err?.message || String(err)));

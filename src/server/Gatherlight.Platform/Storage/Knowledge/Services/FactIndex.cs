@@ -174,12 +174,13 @@ public interface IFactIndex
     /// build. Forgets THROUGH THE ENGINE (<c>IForgettableMemory</c>), whose removal lock every write's vector index and
     /// every re-embed batch wait on, so no vector outlives it (Lyntai 3.5.1); serialised with
     /// <see cref="ReembedInPlaceAsync"/> and <see cref="SyncAsync"/> besides.</para>
-    /// <para><b>NOT serialised with a single write</b> (<c>remember_fact</c>; the memory import's rows), and two app-level
-    /// races remain, both on <c>graph_ref</c>, which no Lyntai lock sees: a write that stored its node before the forget
-    /// and writes its ref after this pass re-indexed that row leaves the row naming a forgotten node; and an EDIT landing
-    /// after this pass's snapshot is overwritten by a ref to the node of the content it replaced. Either ref is non-empty,
-    /// so no back-fill returns to it; the fact stays findable by its words until the next rebuild. Neither is closed:
-    /// the choices are an owner decision (see the dev-conventions bullet on the fact index).</para></summary>
+    /// <para><b>NOT serialised with a single write</b> (<c>remember_fact</c>; the memory import's rows) — and the two races
+    /// that left on <c>graph_ref</c>, which no Lyntai lock sees, are closed by CONDITIONAL ref writes rather than a lock
+    /// (owner decision, 2026-09-27): a write that read a ref and writes or restores it after this pass re-indexed the row
+    /// writes only while the ref is still the one it read (<c>IKnowledgeStore.SetGraphRefIfAsync</c>), so it cannot put back
+    /// a ref to a node this pass forgot; and this pass writes only while the row still holds the content it indexed
+    /// (<c>SetGraphRefIfContentAsync</c>), so an EDIT landing after its snapshot is not overwritten by the ref of the content
+    /// it replaced. A lost race leaves the ref current, or empty for the back-fill. Proof: e2e-p48 case 11.</para></summary>
     Task<int> RebuildAsync(CancellationToken ct = default);
 
     /// <summary>Re-embed every graph entry IN PLACE with the embedder that is wired now — Lyntai's
@@ -300,7 +301,7 @@ public sealed class FactIndex : IFactIndex
     /// take it and re-read their entry — now that the rebuild forgets through the engine. What that lock cannot see is the
     /// app's own half: the rebuild clears every <c>graph_ref</c> and re-indexes from a snapshot, so a back-fill beside it
     /// would read every fact as pending and index each a second time. <b>Single writes do not take this</b> —
-    /// <c>remember_fact</c> runs beside a rebuild, and what that leaves is stated at <see cref="RebuildAsync"/>. None of
+    /// <c>remember_fact</c> runs beside a rebuild, and its ref writes are conditional instead (see <see cref="RebuildAsync"/>). None of
     /// the three takes <c>DataWriteLock</c>, so holding this inside it (the import's rebuild runs outside it anyway)
     /// cannot deadlock, and none calls another while holding it.</summary>
     private readonly SemaphoreSlim _bulk = new(1, 1);
@@ -857,8 +858,20 @@ public sealed class FactIndex : IFactIndex
                 var reference = await IndexAsync(fact.Kind, fact.Topic, fact.Content, fact.Id, ct);
                 // Written even when null: it clears a ref left over from a discarded index, so a row is
                 // never pointing at a node that no longer exists.
-                await _store.SetGraphRefAsync(fact.Id, reference);
-                if (reference is not null) Interlocked.Increment(ref indexed);
+                //
+                // …and ONLY WHILE THE ROW STILL HOLDS THE CONTENT THIS INDEXED. The pass works from a snapshot, and a
+                // single write (remember_fact, the memory import) takes no lock beside it: an EDIT landing after the
+                // snapshot was overwritten by the ref of the node holding the content it replaced — a non-empty ref, so no
+                // back-fill ever returned to it, and the new text stayed out of the graph until the next rebuild. The edit
+                // writes its own ref; losing this race leaves the row with that one, or empty for the back-fill.
+                // Proof: e2e-p48 case 11.
+                if (await _store.SetGraphRefIfContentAsync(fact.Id, reference, fact.Content))
+                {
+                    if (reference is not null) Interlocked.Increment(ref indexed);
+                }
+                else
+                    _log?.LogInformation("fact index: {Kind}/{Topic} changed while it was being indexed; its ref is left " +
+                        "to the write that changed it", fact.Kind, fact.Topic);
                 // Counts every fact VISITED, not every one indexed: a fact the engine refused still moved
                 // the work forward, and a bar that stalls on it would report a hang that is not happening.
                 if (progress is not null) progress.Report((Interlocked.Increment(ref seen), total));

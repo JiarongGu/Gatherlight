@@ -86,10 +86,20 @@ public interface IKnowledgeStore
     /// <summary>EMA reinforcement: confirmations pull confidence toward 1, refutations toward 0.</summary>
     Task ReinforceAsync(long id, bool positive);
 
-    /// <summary>Record where this fact lives in the derived graph index. Null clears it — which is how an index
-    /// attempt that failed hands the fact to the startup back-fill, so every caller writes the result unconditionally
-    /// (<c>RememberFactTool</c>, <c>FactIndex</c>'s back-fill and rebuild).</summary>
-    Task SetGraphRefAsync(long id, string? graphRef);
+    /// <summary>Record where this fact lives in the derived graph index — ONLY while the row still holds
+    /// <paramref name="content"/>, the text that was indexed; true when it was written. Null clears it, which is how an
+    /// index attempt that failed hands the fact to the startup back-fill. Conditional because a bulk pass
+    /// (<c>FactIndex</c>'s back-fill and rebuild) indexes from a snapshot while single writes run beside it: an edit
+    /// landing after the snapshot must not be overwritten by the ref of the content it replaced. A lost race leaves
+    /// the edit's own ref, or an empty one the back-fill heals.</summary>
+    Task<bool> SetGraphRefIfContentAsync(long id, string? graphRef, string content);
+
+    /// <summary>Record where this fact lives in the derived graph index — ONLY while its ref is still
+    /// <paramref name="expected"/> (null or empty for none), the ref the writer read before it indexed; true when it was
+    /// written. <c>RememberFactTool</c>'s write, which runs beside a rebuild: one that read a ref, and restores or
+    /// replaces it after the rebuild cleared and re-indexed every row, would otherwise put back a ref to a node the
+    /// rebuild forgot — non-empty, so no back-fill returns to it.</summary>
+    Task<bool> SetGraphRefIfAsync(long id, string? graphRef, string? expected);
 
     /// <summary>The fact's index address as stored, or null when it has none. Read by <c>RememberFactTool</c> right
     /// after <see cref="LearnAsync"/>, where a non-null answer means the content did not change: an edit clears it.</summary>
@@ -236,13 +246,23 @@ public sealed class KnowledgeStore : IKnowledgeStore
             new { a = Alpha, target = positive ? 1.0 : 0.0, now = DateTime.UtcNow.ToString("o"), id });
     }
 
-    public async Task SetGraphRefAsync(long id, string? graphRef)
+    // Both deliberately NOT touching updated_at: indexing is bookkeeping about a fact, not a change to it, and
+    // bumping the timestamp would make every rebuild look like the household edited everything they know.
+    public async Task<bool> SetGraphRefIfContentAsync(long id, string? graphRef, string content)
     {
         using var conn = _db.Open();
-        // Deliberately NOT touching updated_at: indexing is bookkeeping about a fact, not a change to
-        // it, and bumping the timestamp would make every rebuild look like the household edited
-        // everything they know.
-        await conn.ExecuteAsync("UPDATE knowledge SET graph_ref = @graphRef WHERE id = @id", new { graphRef, id });
+        return await conn.ExecuteAsync(
+            "UPDATE knowledge SET graph_ref = @graphRef WHERE id = @id AND content = @content",
+            new { graphRef, id, content }) == 1;
+    }
+
+    public async Task<bool> SetGraphRefIfAsync(long id, string? graphRef, string? expected)
+    {
+        using var conn = _db.Open();
+        // NULLIF on both sides: an empty ref means none, which is how GraphRefAsync reads it.
+        return await conn.ExecuteAsync(
+            "UPDATE knowledge SET graph_ref = @graphRef WHERE id = @id AND NULLIF(graph_ref, '') IS NULLIF(@expected, '')",
+            new { graphRef, id, expected }) == 1;
     }
 
     public async Task<string?> GraphRefAsync(long id)

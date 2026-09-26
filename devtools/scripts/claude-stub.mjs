@@ -246,8 +246,17 @@ if (prompt.includes('{"subjects"')) {
   // tool deadline ends a real hung annotator (e2e-p48 case 9). An env var rather than a prompt token, so the SAME
   // fact annotates normally once a server without it back-fills it. Bounded: the server kills this process on
   // cancellation, and if nothing does it still exits.
+  // ONCE, on request: with GATHERLIGHT_STUB_HANG_ONCE_FILE naming a claim file, only the annotation that CREATES it
+  // hangs — every later one answers, the same fact's included — so a single write can be held open while a rebuild
+  // re-annotates that very fact normally beside it (e2e-p48 case 11). A suite plants the file to keep the knob quiet
+  // and deletes it to arm the next one.
   const hangOn = process.env.GATHERLIGHT_STUB_HANG_ANNOTATION;
-  if (hangOn && fact.includes(hangOn)) {
+  let hangNow = !!hangOn && fact.includes(hangOn);
+  const hangOnce = process.env.GATHERLIGHT_STUB_HANG_ONCE_FILE;
+  if (hangNow && hangOnce) {
+    try { fs.writeFileSync(hangOnce, String(process.pid), { flag: 'wx' }); } catch { hangNow = false; }
+  }
+  if (hangNow) {
     await new Promise((r) => setTimeout(r, 30000));
     process.exit(1);
   }

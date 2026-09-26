@@ -57,7 +57,14 @@ public sealed class RememberFactTool : IGatherlightTool
         // whenever the embedder was down at the moment of an unchanged write. Kept, it stays exactly as good as it was.
         // Proof: e2e-p52 case 9 (an unchanged re-remember while the embedder is down keeps its ref).
         if (reference is null && unchanged is not null) reference = unchanged;
-        await _store.SetGraphRefAsync(id, reference);
+        // ONLY WHILE THE ROW'S REF IS STILL THE ONE READ ABOVE. This write takes no lock, and a backup import's rebuild
+        // can run while it is out indexing: it forgets the graph, clears every ref and re-indexes each row. Restoring the
+        // ref read before that — or writing the ref of a node the forget took — left the row naming a node that no
+        // longer exists, a non-empty ref no back-fill returns to. When the rebuild got there first the row holds its
+        // ref, or none yet, and that is the one to keep; an empty ref is the back-fill's to heal. (The rebuild's own
+        // write is conditional the other way — on the content it indexed — so an edit is not overwritten by it either.)
+        // Proof: e2e-p48 case 11.
+        await _store.SetGraphRefIfAsync(id, reference, unchanged);
 
         return new JsonObject { ["ok"] = true, ["id"] = id }.ToJsonString();
     }
