@@ -400,7 +400,25 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `IRecordIndex`, because that collection is rebuilt at every startup and the discard would erase the
   decay positions and links the index spends weeks accumulating — startup gets `SyncAsync` (back-fill
   only, via `FactIndexStep`) and a backup import gets the destructive `RebuildAsync`, because there the
-  facts themselves were replaced. An EMPTY `graph_ref` is the index's retry queue: a write that failed — or kept no
+  facts themselves were replaced. **Where only the VECTORS need redoing, nothing is rebuilt** (Lyntai D194, adopted at
+  the 3.5 bump, owner decision 2026-09-26): an embedding model turned on or changed (the console's semantic reindex), a
+  vector address moved (layout "2" at startup) and the one-off for facts an old embedder batch refused each re-embed
+  every entry IN PLACE — `FactIndex.ReembedInPlaceAsync` over Lyntai's `IReindexableMemory.ReindexAsync`, which writes
+  vectors and nothing else, so node ids, links, decay positions, reinforcement and subject handles all stay and no fact
+  is annotated. The destructive rebuild is left for the two cases where the ENTRIES are wrong: a backup import and a
+  pre-marker layout. Before D194 re-remembering was the only way to give an entry a new vector, so every one of those
+  vector passes paid a rebuild — and an annotation per fact. The two passes are serialised (`FactIndex._bulk`), because
+  the rebuild forgets through the graph STORE, which the engine's removal lock (the one D194's pass takes for each
+  write, re-reading which entries still exist) does not cover. One embed per entry (`FactIndex.ReindexBatchSize` = 1):
+  D194 counts a whole BATCH failed when its one embed call fails, and llama.cpp refuses a request whole when one input
+  is past the window, so at Lyntai's default of 32 one long fact cost every other entry its new vector (confirmed:
+  「0 条向量已原地重新计算;5 条没能计算」). An entry the embedder refuses keeps the vector it had, or none, and is never
+  retried within the pass — nothing loops; a pass whose failures come with the embedder DOWN (the probe after them
+  unanswered) does not complete, and leaves the layout marker owed for the next start. Measured on the real binary
+  (`docs/self-managed-llm-runtime.md`, 2026-09-27): 100 facts, 100 embeds and one probe, no stub spawn, every graph
+  table byte-identical, 2.6 s on one GPU and 5.6 s on the CPU. Proof: `e2e-p52` case 11, confirmed to FAIL with the
+  old rebuild restored (links 32 → 0, an annotation per fact), with the owed marker removed, at batch size 32, and
+  with the failures never classified. An EMPTY `graph_ref` is the index's retry queue: a write that failed — or kept no
   vector while its embedder was DOWN — is left that way on purpose, and the back-fill returns to it. The graph
   dedups on **content hash**, so editing a fact orphans its
   previous node; recall over-asks and filters to resolvable refs so an orphan never shrinks the page.
@@ -687,13 +705,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   annotation: Lyntai 3.5.0 made a graph write EMBED BEFORE IT ANNOTATES (3.4 annotated first), yet a write whose embed
   failed goes on to annotate unless `SkipAnnotationWithoutVector` is set, which stays off (below) — so with 判断 on the
   Claude CLI, each is an annotation call against the household's quota, for a fact that loses its vector again and is
-  walked again by the next pass. It gates EVERY bulk path that re-remembers facts but
-  one: `FactIndexStep`'s back-fill and layout rebuild at startup, which keeps its household warning (「「语义」的嵌入模型
-  这次启动没有响应…」); `DetachedFactBackfill`'s after a memory import or the startup seed, which skips with a log line;
-  and the console's semantic REINDEX (`MemoryRecallController`), which answers 409 before touching anything —
-  「「语义」的嵌入模型现在没有响应 —— 现在重建会先丢掉已有的索引,却建立不起任何向量,所以没有开始。等它恢复后再重建。」 — because
-  an embedder rebuild forgets the graph and clears every ref first, so run during an outage it discarded the index, paid
-  an annotation per fact and left every row for the next start to pay again. The CLI rephrasing arm's reindex embeds
+  walked again by the next pass. It gates EVERY bulk path that re-remembers or re-embeds facts but
+  one: `FactIndexStep`'s back-fill, re-embed and layout rebuild at startup, which keeps its household warning
+  (「「语义」的嵌入模型这次启动没有响应…」); `DetachedFactBackfill`'s after a memory import or the startup seed, which skips
+  with a log line; and the console's semantic REINDEX (`MemoryRecallController`), which answers 409 before touching
+  anything, the layout marker included — 「「语义」的嵌入模型现在没有响应 —— 现在重建算不出任何向量,所以没有开始(已有的向量和
+  索引都没有动)。等它恢复后再重建。」. Until the 3.5 bump that reindex was a destructive rebuild, so run during an outage it
+  discarded the index, paid an annotation per fact and left every row for the next start to pay again; since it
+  re-embeds in place a failed pass loses nothing, and what the gate spares is a pass that computes no vector and the
+  back-fill after it, whose writes would lose their vector again, an annotation each. The CLI rephrasing arm's reindex embeds
   nothing and answers the probe as ready, so it runs as before. The ONE exception is a backup import's rebuild: its facts
   were replaced, so the old refs must go whatever the embedder says, and with it down each write stays unindexed for the
   startup back-fill — its annotation paid then and again later. It is a gate, not the detection: a probe can pass a
@@ -948,8 +968,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   instead of settling into the silent FTS fallback. **Layout 3 is a move WE did not make**: Lyntai 3.2 changed
   the vector collection address (U+001F separator) and orphans vectors under the old one — its changelog says
   "a deployment re-indexes", and `IVectorStore` has no way to read a vector back out to move it. Only the
-  VECTORS moved, so 2 → 3 rebuilds only where an embedder is wired (`IFactIndex.Embeds`); an install without
-  one keeps its graph, decay and links. `e2e-p48` case 8 asserts the kept node ids and was confirmed to FAIL
+  VECTORS moved, so 2 → 3 touches the graph only where an embedder is wired (`IFactIndex.Embeds`) — and since the
+  Lyntai 3.5 bump it re-embeds the entries IN PLACE there rather than rebuilding them (D194; the old-address
+  collection is left unread, swept only by a rebuild); an install without one keeps its graph, decay and links. `e2e-p48` case 8 asserts the kept node ids and was confirmed to FAIL
   with the rebuild forced; the embedder branch is not drivable there (no local model) — a stated gap. Proof lives in `e2e-p48`, which asserts the ONE SCOPE
   against the store (no API response shows it, and the suite runs without an embedder so it cannot see
   vectors at all) and was confirmed to FAIL against kind-as-scope. **Lyntai 3.0.2 added a wiring finding for
@@ -1339,17 +1360,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   What 8,192 costs a model whose own context is that large is unmeasured. No `ctx-size` on an embedder: the child takes
   its model's own. Past the window a fact is kept without a vector (workaround (3)). `p51` pins both keys on both kinds
   of embedder section; confirmed to FAIL with the keys removed, and with the row's window removed (8,192, not 2,048).
-  **The facts the OLD batch refused are handed back once.** On 1.3.x a fact past ~510 tokens kept its graph ref WITHOUT
+  **The facts the OLD batch refused get their vector once.** On 1.3.x a fact past ~510 tokens kept its graph ref WITHOUT
   a vector, and the back-fill revisits only empty refs — so the wider window would never have reached them short of a
-  destructive reindex. Checked in Lyntai 3.4.0: re-remembering IDENTICAL content refreshes the same node (the graph store
-  upserts on engine, task, scope and content hash, `RETURNING id`) and the write's vector is then indexed under that id
-  (`GraphMemoryEngine.RememberAsync` → its enrichment → the vector store's upsert). So `FactIndexStep` runs a one-off step
-  (`facts.index.embed-window`, only with a llama.cpp embedder wired, after the gate): it clears the ref of every indexed
-  fact long enough to have been refused at 512 — estimated by `RerankPace.Tokens`, whose rates OVERESTIMATE
-  EmbeddingGemma's (0.83 against 0.68 per CJK character, 0.25 against 0.19 per other), above 400 — and the gated
-  back-fill that follows remembers each onto the node it already had, decay, links and subjects kept, its vector
-  added. No API says whether a node HAS a vector, so length stands in: a fact revisited needlessly costs one
-  re-remember, once. `e2e-p52` case 9e, confirmed to FAIL with the step removed.
+  reindex. So `FactIndexStep` runs a one-off step (`facts.index.embed-window`, only with a llama.cpp embedder wired,
+  after the gate): when any indexed fact is long enough to have been refused at 512 — estimated by `RerankPace.Tokens`,
+  whose rates OVERESTIMATE EmbeddingGemma's (0.83 against 0.68 per CJK character, 0.25 against 0.19 per other), above
+  400 — it records the vectors as owed (layout "2"), and the same start re-embeds every entry IN PLACE (Lyntai D194):
+  one embed each, no fact re-remembered or annotated, decay, links and subjects untouched. At the 3.4 bump it cleared
+  those facts' refs instead, so the gated back-fill re-remembered each onto the node it already had (Lyntai 3.4's graph
+  store upserts on engine, task, scope and content hash) — which kept the node but advanced its position and paid one
+  annotation per fact revisited. Length decides only WHETHER the pass is owed; the pass re-embeds every entry, because no
+  API narrows it. `e2e-p52` case 9e (the graph rows byte-identical across the start, each entry embedded once),
+  confirmed to FAIL with the step removed.
   Also: models are NOT portable — Ollama's own `embeddinggemma:300m` blob is a GGUF and llama.cpp refuses it
   (`expected 316 tensors, got 314`), so every model is a fresh sha256-pinned download and "reuse what is
   already there" is not on the table. And `LlamaServerRuntime` deliberately does **not** search PATH: a
@@ -1396,16 +1418,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (entries at the current address, vectors not) where it used to record "3". "3" told the start that had the
   embedder back that nothing was owed: it only synced, the vectors Lyntai 3.2's address change orphaned were
   never re-embedded, and semantic recall stayed empty without a word. Same rule as (2), a marker says only what
-  happened. An install with NO marker yet and an owed embedder therefore pays TWO rebuilds — one now, for the
-  scope move, and one when the embedder returns — because Lyntai can re-embed only by re-remembering. That is
-  the price of the vectors, not a bug. `e2e-p52` case 10, confirmed to FAIL with the rule removed.
+  happened. An install with NO marker yet and an owed embedder therefore pays a rebuild now, for the scope move, and a
+  re-embed IN PLACE when the embedder returns (one embed per entry, nothing learned lost — Lyntai D194; before the 3.5
+  bump that second pass was a rebuild too, because Lyntai could re-embed only by re-remembering). `e2e-p52` case 10,
+  confirmed to FAIL with the rule removed; the in-place pass at "2" is case 11.
   **It covers only a start that REACHES the marker write** — one with no marker yet, or with "2" or older stored.
   With "3" already stored, `FactIndexStep` syncs and returns before it ever asks whether an embedder is owed, so
   a model that vanishes AFTER an install reached "3" leaves the marker at "3": the facts written while it was
   gone keep no vector, and the start that has it back only syncs. The per-write check does not reach them either:
   with no embedder WIRED no vector is owed, so each of those writes kept its ref. Those facts are recovered only by
-  the manual rebuild that the gone-model startup warning (`LlamaWarmStep`) asks for — 「再在「记忆检索」重新建立一次语义
-  索引」 — which is why that warning carries the rebuild and not only the restart.
+  the manual reindex that the gone-model startup warning (`LlamaWarmStep`) asks for — 「再在「记忆检索」重新建立一次语义
+  索引」, which re-embeds every entry in place, so a vector-less one gains its vector — which is why that warning carries
+  the reindex and not only the restart.
 - **A model downloaded while OUR router runs is restarted in — within limits, each for a failure found in
   review.** The router reads its models directory and preset file ONCE (measured: `400 model not found`
   before and after the presets are rewritten, until a restart), so `LlamaServerRuntime.EnsureServesAsync`
@@ -1940,29 +1964,41 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   nothing by design, so for a household bound to it `ReindexSemanticAsync` returned 0 and did nothing —
   while the endpoint still accepted and the detached run still "finished". The effect: binding that arm
   reached FUTURE writes only, an existing knowledge base could never gain phrasings, and the single control
-  offered for exactly that reported success having done nothing. Both arms re-derive the same way (re-remember
-  every fact), so the question is not "is there an embedder" but "is anything bound that a rewrite would
-  re-derive". **They do NOT cost the same thing, and routing both through the rebuild was the next mistake.**
-  The rephrasing arm's output is a knowledge COLUMN (`aka`, picked up by the FTS trigger on UPDATE) — none
-  of it lives in the graph — so rebuilding to produce it discards every decay position and link the
-  household has accumulated in exchange for nothing. An embedder is the opposite: its vectors belong to the
-  graph's entries and are written as each is remembered, so re-embedding really is re-remembering. The CLI
-  arm gets `ExpandEachAsync` instead, which touches only the column. That is not a tidiness point: the
+  offered for exactly that reported success having done nothing. So the question is not "is there an embedder" but
+  "is anything bound that a pass would re-derive". **They do NOT cost the same thing, and routing both through the
+  rebuild was the next mistake.** The rephrasing arm's output is a knowledge COLUMN (`aka`, picked up by the FTS
+  trigger on UPDATE) — none of it lives in the graph — so rebuilding to produce it discards every decay position and
+  link the household has accumulated in exchange for nothing; the CLI arm gets `ExpandEachAsync`, which touches only
+  the column. An embedder's vectors DO belong to the graph's entries, and until Lyntai 3.5 the only way to recompute
+  one was to re-remember it — so that arm's reindex was the destructive rebuild, an annotation per fact included. Since
+  D194 it re-embeds every entry in place (see «The fact index is DERIVED»), so NEITHER arm's reindex discards anything
+  the graph has learned, and neither annotates: the back-fill that follows an embedder's pass, for facts with no index
+  entry at all, is the one part that does. That is not a tidiness point: the
   over-broad version made "bind it, then rebuild" advice with a hidden price, and made measuring the arm's
   own benefit an operation nobody should agree to. Proof lives in `e2e-p48`, which writes facts BEFORE binding the arm
   and was confirmed to FAIL against the old guard — the phrasings stay empty. Note this also makes the
   advice "bind it, then rebuild" true; it was not, and the panel gave no sign.
 - **A rebuild runs detached, and the console reports COVERAGE rather than a run history.** `ReindexSemanticAsync`
-  re-remembers every fact (a model call each with enrichment on), so running it inside the POST gave a
-  greyed-out button for minutes — indistinguishable from a hang, over a request the browser may abandon while
-  the server carries on. It returns 202 and reports progress through `GET /api/manage/memory`; the status is
+  can take minutes — it used to re-remember every fact (a model call each with enrichment on); it is a Claude call per
+  fact for the rephrasing arm, and an embed per entry for an embedder (2.6 s per 100 short facts on one GPU, 5.6 s on
+  the CPU) — so running it inside the POST gave a greyed-out button for minutes, indistinguishable from a hang, over a
+  request the browser may abandon while the server carries on. It returns 202 and reports progress through `GET /api/manage/memory`; the status is
   deliberately **not** bound to the request's `CancellationToken` (that would cancel the work when the browser
   stopped waiting) and deliberately **not** persisted: the run is an in-process `Task`, so a stored `running`
-  would outlive the work it describes — the same lie `SelfHealStateStep` refuses. Durability is unnecessary
-  because an interrupted rebuild already heals: `RebuildAsync` clears every `graph_ref` up front, which is
-  exactly what the startup back-fill repairs (measured 2026-08-21: 2/6 → 6/6 across a restart). So the panel
-  answers "is what I know searchable NOW" with `coverage {indexed,total}`, shown only when short — state is
-  self-correcting where an event log is not.
+  would outlive the work it describes — the same lie `SelfHealStateStep` refuses. The run's STATUS needs no
+  durability; its OBLIGATION does, and each path keeps it in state that already exists. An interrupted REBUILD heals
+  itself: `RebuildAsync` clears every `graph_ref` up front, which is exactly what the startup back-fill repairs
+  (measured 2026-08-21: 2/6 → 6/6 across a restart). An interrupted RE-EMBED clears nothing, so no back-fill would ever
+  return to it — the entries after the cut would stay on the old model with their refs intact — so the pass records the
+  vectors as owed in the layout marker (`FactIndexLayout.VectorsOwed`, "2") before it starts and the current layout only
+  once it COMPLETED, and the next start re-embeds in place (`FactIndexStep`). `e2e-p52` case 11b kills a pass mid-way
+  and sees the next start finish it — confirmed to FAIL with the owed marker removed. So the panel answers "is what I
+  know searchable NOW" with `coverage {indexed,total}`, shown only when short — state is self-correcting where an event
+  log is not. The PROGRESS is the server's words (`ReindexSnapshot.Phase` and `ReindexSnapshot.Summary`): a re-embed is ONE engine
+  call that reports nothing on the way, so it shows indeterminate, with the fact count in its sentence, where a bar
+  pinned at 0% would read as stuck; the back-fill after it and the phrasings count fact by fact. The client wrote its
+  own cost clause, 「开启了判断,每条事实会多一次模型调用」, for every pass; the in-place re-embed made it false, and the
+  server now says it only for the back-fill, whose writes are annotated.
 - **Data where it churns, code where it doesn't** — `fill_itinerary`'s form map. A form's *shape*
   (field names, `{n}` row templates, `maxRows`, font sizes, flatten) lives in `.claude/forms/*.json`,
   seeded by the template and editable by the agent through the normal diff gate; the PDF machinery

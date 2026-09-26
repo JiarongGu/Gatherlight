@@ -112,8 +112,10 @@ returns ONE list where `installed` is a field, not two arrays: the pinned GGUFs 
 ONNX embedder, each with its measured ranking, all deletable, beside chromium, git and llama.cpp. It renders
 as one table with one row shape, because "downloaded" is a state of a model rather than a different kind of
 object — it was three components and three left edges before. 记忆检索 keeps only the recall decision: which
-model each layer uses. Rebuilding the index runs detached with progress, and the panel reports index
-COVERAGE rather than a history of runs. Lyntai's measurement that 0% of recall misses are retrieval failures
+model each layer uses. A semantic reindex runs detached with progress, and the panel reports index
+COVERAGE rather than a history of runs. For an embedder it re-embeds the graph IN PLACE (Lyntai D194): one embed per
+entry, no annotation, nothing the graph has learned lost. The destructive rebuild is left for when the facts
+themselves were replaced (a backup import) or sit at a pre-marker address. Lyntai's measurement that 0% of recall misses are retrieval failures
 is **attributed as Lyntai's, on Lyntai's corpus** — it is a statement about a stack that HAS an embedder, so
 it cannot also be the reason an install without one is offered nothing.
 

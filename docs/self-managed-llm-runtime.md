@@ -765,3 +765,62 @@ preset and no `--reasoning` at all on the final build.
 
 Scratch scripts, not committed; each router and its children were ended by PID as a process tree, and each data folder
 was a fresh fixture under `devtools/`.
+
+### 2026-09-27 — a semantic reindex re-embeds IN PLACE (Lyntai D194): what the real binary does
+
+The Lyntai 3.5 bump brought D194's `IReindexableMemory.ReindexAsync`, which re-embeds a graph's entries without
+forgetting or re-remembering any of them. The console's semantic reindex now uses it for an embedder arm
+(`FactIndex.ReembedInPlaceAsync`) where it used to call the destructive `RebuildAsync` (`dev-conventions.md`, «The fact
+index is DERIVED»). This entry is the check on the real binary that it keeps what it claims to keep, calls no model
+besides the embedder, and costs what the panel's note says.
+
+**Setup.** b10549, `embeddinggemma-300M-Q8_0` from the bench's resources. The app itself, in a fresh fixture data folder
+under `devtools/`, with the claude CLI a STUB (no account quota; 判断 on, so the stub annotates each write and verifies
+each recall with a canned verdict). The script did four things in order:
+1. **Write.** With 语义 unbound, it wrote 100 invented household facts through `remember_fact`, each ANNOTATED (100
+   annotation spawns in the stub's args log). Then it made 5 `recall_facts`, which produced 140 links and moved the
+   decay positions.
+2. **Bind and start.** It bound 语义 to the GGUF in `settings.json` and started the app, which launched its own router
+   from its own `presets.ini`. It recorded the router's command line and stopped the app.
+3. **Relaunch behind a proxy.** It relaunched the router with that exact argv, behind a recording proxy the app adopts
+   through `GATHERLIGHT_LLAMACPP_URL`. For the CPU runs, the relaunch used a copy of the preset with `device = none`
+   added to the embedder section; the child's argv read back carried `--device none`. For the GPU runs, llama.cpp chose
+   the device (the RTX 4080 Laptop GPU, Vulkan).
+4. **Reindex.** It posted the console's reindex and polled the panel until it finished.
+
+It snapshotted every row of Lyntai's graph tables (`lyntai_memory_node`, `_edge`, `_entry`, `_position`, `_review`,
+`_subject`) and the fact index's vectors before and after. It counted every request the proxy forwarded and every stub
+spawn in between.
+
+| run | reindex, POST → summary | the pass (first → last embed) | embed requests | embed median | stub spawns / chat calls | graph tables | vectors |
+|---|---|---|---|---|---|---|---|
+| GPU 1 | 2.7 s | 2.5 s | 101 (100 entries + the gate's probe), all 200 | 13 ms | 0 / 0 | byte-identical | 0 → 100 × 768, one collection |
+| GPU 2 | 2.6 s | 2.4 s | 101, all 200 | 24 ms | 0 / 0 | byte-identical | 0 → 100 × 768 |
+| CPU 1 | 5.4 s | 5.2 s | 101, all 200 | 41 ms | 0 / 0 | byte-identical | 0 → 100 × 768 |
+| CPU 2 | 5.8 s | 5.6 s | 101, all 200 | 46 ms | 0 / 0 | byte-identical | 0 → 100 × 768 |
+
+- **Kept, exactly.** Node ids, content, `last_recalled_position`, `recall_count`, `stability`, the engine's position,
+  the 140 links, the reviews and the subject handles were all unchanged. The layout marker was "3" before and after:
+  the console pass records "2" while it runs, so a pass cut short is finished by the next start.
+- **No annotation.** The stub CLI was not spawned during the pass and no chat request reached the router. One embed
+  per entry (`FactIndex.ReindexBatchSize` = 1) and one probe. The destructive path this replaces would have
+  re-remembered all 100 facts, each an annotation call, and discarded the links. Not re-run on the real binary;
+  `e2e-p52` case 11, with the old path restored, loses its links (32 → 0) and spawns 5 annotations for 5 facts.
+- **Meaning-based recall works after it.** Four paraphrases share no content word with their target fact beyond
+  function words: "how much is a swimming ticket for grown-ups", 「成年人去游泳一次多少钱」, "when can I leave the car
+  near the pictures for nothing" and "what time do they start selling vegetables at the Saturday stalls". Their
+  target's rank on a page of 8, before the pass → after:
+  - GPU: not on the page → 8, not on the page → 4, 6 → 6, 3 → 1.
+  - CPU: not on the page → not on the page, not on the page → 4, 6 → 6, 3 → 1.
+
+  That is one run each over a canned stub verdict, a capability check and not a measurement of recall quality. The
+  first paraphrase sits at the page's edge, and the CPU's vectors differ from the GPU's in the last digits.
+- **What the household note says**, from these runs: 「实测一百条短事实:有显卡约 3 秒,只用 CPU 约 5 秒;长的事实会慢一些」.
+  The facts were 21–64 characters. A long fact embeds more slowly: 453 ms for 3,000 Chinese characters on this GPU (the
+  2026-09-26 entry above).
+- **Not driven here:** a model CHANGE between two real embedders. The one catalogued GGUF embedder and the built-in ONNX
+  embedder are the same model at the same width. The e2e suite stands in for it with a fake whose vectors change width
+  (`e2e-p52` case 11), where every entry the new "model" could embed was rewritten to the new width.
+
+A scratch script, not committed; each router and its child were ended by PID as a process tree, and each data folder
+was a fresh fixture under `devtools/`.
