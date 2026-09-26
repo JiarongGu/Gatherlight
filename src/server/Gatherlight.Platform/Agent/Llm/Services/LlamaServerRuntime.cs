@@ -192,6 +192,18 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// reranker's query against (<see cref="RerankInputCap.UndeclaredQueryMaxChars"/>) — one writer for both.</summary>
     public const int RerankBatch = 4096;
 
+    /// <summary>The physical batch an EMBEDDER is launched with when its catalogue row declares no window
+    /// (<see cref="GgufCatalog.DeclaredWindow"/>) — written as <c>batch-size</c> and <c>ubatch-size</c>. Launch CONTRACT,
+    /// like <see cref="RerankBatch"/>: a non-causal embedder takes its whole input in ONE physical batch, and llama.cpp
+    /// refuses a longer one whole — its default is 512, so an embedder launched without this refused every fact past ~510
+    /// tokens (about 750 Chinese characters) while its model reads 2,048. Measured on b10549 with EmbeddingGemma, context
+    /// 2,048 (docs/self-managed-llm-runtime.md, 2026-09-26): a batch past the model's context costs NOTHING more than one
+    /// equal to it — the compute buffer is sized to the smaller of the two (55.05 MiB at 2,048 and at 8,192; 10.76 MiB at
+    /// 2,048 over a 512 context, the same as 512) — so the MODEL's context becomes the limit, and an input past it is
+    /// refused as "larger than the max context size". 8,192 covers the usual embedder windows; a model with a larger one
+    /// is capped at it, and what its memory costs at 8,192 is unmeasured.</summary>
+    public const int EmbedBatch = 8192;
+
     /// <summary>The most a CHAT child generates for one request — written as <c>n-predict</c>, which llama-server
     /// uses as the default for a request naming no <c>max_tokens</c> and as the ceiling for one that does. Lyntai's
     /// memory seams send none, so without it a small model's runaway reply fills the child's whole context (Run 5's
@@ -456,9 +468,17 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
         var keys = new List<(string, string)> { ("n-gpu-layers", GpuLayers.ToString()) };
         switch (ResourceProvisioner.GgufKind(model))
         {
-            // `embeddings` RESTRICTS a child to embedding-only. Right for an embedder, fatal for a judge.
+            // `embeddings` RESTRICTS a child to embedding-only. Right for an embedder, fatal for a judge. And the physical
+            // batch is its WINDOW: llama.cpp embeds an input in one physical batch (default 512) and refuses a longer one
+            // whole, so without these keys a fact past ~510 tokens never got a vector — see EmbedBatch, and the row's
+            // declared window where it has one (EmbeddingGemma: 2,048, its GGUF's context_length). Past the window the
+            // fact index keeps the fact without a vector rather than retrying it (FactIndex.IndexAsync). No ctx-size: the
+            // child takes its model's own context, the one every figure here was measured under. p51 pins both keys.
             case GgufCapability.Embedding:
+                var embedWindow = (GgufCatalog.DeclaredWindow(model) ?? EmbedBatch).ToString();
                 keys.Add(("embeddings", "true"));
+                keys.Add(("batch-size", embedWindow));
+                keys.Add(("ubatch-size", embedWindow));
                 break;
             // A CHAT child — the only kind that generates — launches with thinking OFF, a generation cap and a
             // context cap.

@@ -638,18 +638,46 @@ retry pending from naming a device in the preset — llama.cpp chooses, as above
 spent its attempts — and made a timed-out call a LOWER BOUND for the too-slow verdict (`dev-conventions.md` launch item
 (6)); neither was re-run on the real binary.
 
-### 2026-09-26 — an EMBEDDING input past the physical batch is refused whole
+### 2026-09-26 — an EMBEDDER reads its whole window: the physical batch is launch contract
 
-Checked for the Lyntai 3.4 bump, which leaves a fact whose write kept no vector UNINDEXED so the back-fill retries it
-(`dev-conventions.md`, the Lyntai list's workaround (3)): a fact the embedder can never embed is retried at every start.
-Same build (b10549), `embeddinggemma-300M-Q8_0`, launched standalone with `--embeddings --device none` and no batch
-flags — which is what our embedder preset leaves it (`embeddings = true` and nothing else), so the default physical
-batch of 512 applies. One `/v1/embeddings` call per input, a Chinese sentence repeated: 280 and 560 characters embedded
-(768 dimensions); 840 characters, 572 tokens, came back **500** `input (572 tokens) is too large to process. increase
-the physical batch size (current batch size: 512)`, and 1,120 and 1,680 the same. So on llama.cpp a fact past ~512
-tokens — here about 750 Chinese characters — never gets a vector: before the bump it was graph-indexed without one,
-since the bump it stays keyword-only and every start's back-fill re-remembers it. Not changed here: the cure is the
-embedder's launch contract — a physical batch as large as the context it is to embed (the server logs that it
-lowers the logical batch to the physical one, `n_batch = n_ubatch = 512`, for an embedder) — and that needs its own
-measurement, as the reranker's 4,096 did. Scratch script, not committed; the process it started was ended by
-its PID.
+Found for the Lyntai 3.4 bump, which reads each fact write's report (`Ran`) and so SEES a write that kept no vector:
+llama.cpp embeds an input in one physical batch and refuses a longer one whole, and our embedder preset set none, so
+the default of 512 applied while the model reads 2,048. Same build (b10549), `embeddinggemma-300M-Q8_0` from the
+bench's resources, launched the way the product launches it — ROUTER mode, `--models-dir` with the GGUF hard-linked in
+and a `--models-preset` section, `--models-max 2`, `n-gpu-layers = 99` and `embeddings = true` — and llama.cpp choosing
+the device (the RTX 4080 Laptop GPU). One `/v1/embeddings` call per input; the router's own log shows the child's argv
+and its `llama_context` lines.
+
+- **The window.** The GGUF header's `gemma-embedding.context_length` is 2,048, and the child reports `n_ctx = 2048`,
+  `n_ctx_slot = 2048`, 4 slots with `kv_unified = true`, `causal_attn = 0`. Without batch keys it logs `embeddings
+  enabled with n_batch (2048) > n_ubatch (512)` / `setting n_batch = n_ubatch = 512`.
+- **Before — the preset as it was (no batch keys).** A Chinese sentence repeated: 560, 700 and 750 characters embedded
+  (382, 477, 511 tokens); 840 characters, 572 tokens, came back **500** `input (572 tokens) is too large to process.
+  increase the physical batch size (current batch size: 512)`, and every longer one the same. English: 1,500–2,500
+  characters embedded (284–472 tokens); 4,000, 753 tokens, the same 500.
+- **After — `batch-size = 2048`, `ubatch-size = 2048` on the section.** The router passed both to the child
+  (`--batch-size`, `--ubatch-size` in its argv; `n_batch = n_ubatch = 2048`). Chinese up to 3,000 characters embedded
+  (2,037 tokens, 453 ms); 3,200 (2,173 tokens) came back 500 with `current batch size: 2048`. English up to 10,000
+  characters embedded (1,878 tokens, 84 ms); 12,000 (2,253 tokens) the same 500.
+- **Memory.** The compute buffer went from 10.76 MiB (+4.01 host) to 55.05 MiB (+28.05 host). By nvidia-smi, total used
+  on the GPU (3,697 MiB with the router up and no child; another process on it idle throughout): child loaded **4,043
+  → 4,087 MiB** (+44), after the long inputs **4,083 → 4,162 MiB** (+79). All of it went when the router's process tree
+  was ended.
+- **The recall path is no slower.** A short query, 60 warm serial calls each after 5 to warm: 「市场周末几点开门?」
+  median **30.9 → 31.0 ms** (p90 39.6 → 33.0), "When does the weekend market open?" **30.2 → 29.5 ms** (p90 32.4 →
+  32.9).
+- **A batch PAST the context costs nothing more.** `batch-size`/`ubatch-size = 8192` on the same 2,048-context model:
+  the same 55.05 MiB compute buffer and the same GPU figures (4,087 / 4,162 MiB), medians 30.5 / 28.8 ms — and an input
+  past the context comes back **400** `input (2173 tokens) is larger than the max context size (2048 tokens). skipping`
+  instead of the batch 500. With `ctx-size = 512` under a 2,048 batch the buffer was 10.76 MiB, the same as 512/512:
+  llama.cpp sizes it to the smaller of the two. So `LlamaServerRuntime.EmbedBatch` (8,192) is the default for an
+  embedder whose row declares no window — the model's own context becomes the limit — and a row that declares one (this
+  model's, 2,048) is launched with exactly that. What 8,192 costs a model whose OWN context is that large is unmeasured.
+- **Past the window**, a fact still gets no vector — refused whole, whichever message. Since the same bump the fact
+  index probes the embedder once when a write kept no vector, and an embedder that answers means the input was refused:
+  the fact is kept graph-indexed without a vector and never retried, where it used to be retried at every start
+  (`dev-conventions.md`, the Lyntai list's workaround (3)). Lyntai 3.3's input segmentation on the embedding
+  registration (D177: `MaxInputChars`, pieces embedded and pooled into one vector) would give such a fact a vector; it
+  is unmeasured here and not built.
+
+Scratch scripts, not committed; each router and its child were ended by the router's PID, as a process tree.

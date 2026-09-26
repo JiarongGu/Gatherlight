@@ -1635,6 +1635,9 @@ try {
     // row gets rather than proving the row exists (the shelf block does that).
     const QWEN3 = 'Qwen3-0.6B-Q8_0';
     fs.writeFileSync(path.join(ggufDir, `${QWEN3}.gguf`), 'x');
+    // …and the catalogued EMBEDDER, whose row declares its 2,048-token window (EmbeddingGemma's GGUF context_length).
+    const GEMMA_EMBED = 'embeddinggemma-300M-Q8_0';
+    fs.writeFileSync(path.join(ggufDir, `${GEMMA_EMBED}.gguf`), 'x');
 
     await post('/api/manage/models/llama/start');   // spawn fails; presets are written first
 
@@ -1657,7 +1660,7 @@ try {
     // `device = none` that keeps a batch off a visible GPU (Run 8: `n-gpu-layers = 0` alone does not). No section here is
     // measured (the stub binary answers neither --version nor --list-devices, so there is no key to measure under, and
     // no section gets a device key); e2e-p53 drives the measurement and asserts both lines on a CPU section.
-    const allSections = ['zztest-embed-model', 'zztest-chat-model', 'zztest-rerank-model', WINDOWED];
+    const allSections = ['zztest-embed-model', 'zztest-chat-model', 'zztest-rerank-model', WINDOWED, GEMMA_EMBED];
     ok('(D) with no measurement possible, no section names a device — llama.cpp chooses, as before',
       allSections.every((id) => !/^device\s*=/m.test(sectionOf(id))),
       JSON.stringify(Object.fromEntries(allSections.map((id) => [id, sectionOf(id)]))));
@@ -1712,6 +1715,24 @@ try {
       /embeddings\s*=\s*true/.test(sectionOf('zztest-embed-model'))
         && !/embeddings\s*=\s*true/.test(sectionOf('zztest-chat-model')),
       JSON.stringify({ embed: sectionOf('zztest-embed-model'), chat: sectionOf('zztest-chat-model') }));
+
+    // AN EMBEDDER READS ITS WHOLE WINDOW (2026-09-26). llama.cpp embeds an input in ONE physical batch and refuses a longer
+    // one whole — its default is 512, so without these keys every fact past ~510 tokens (~750 Chinese characters) never got
+    // a vector, while EmbeddingGemma reads 2,048 (docs/self-managed-llm-runtime.md: before, 511 tokens embedded and 572
+    // refused; after, 2,037 embedded, no slower on a short query, +44 MiB of compute buffer). The row's declared window
+    // where there is one, LlamaServerRuntime.EmbedBatch (8,192) where not — a batch past the model's own context costs
+    // nothing more, measured, so the model's context is then the limit. No ctx-size (asserted above): the child takes
+    // its model's own. Confirmed to FAIL with the keys removed.
+    ok('THE POINT: an embedder whose row declares a 2,048-token window is launched with that physical batch',
+      /embeddings\s*=\s*true/.test(sectionOf(GEMMA_EMBED))
+        && /^batch-size\s*=\s*2048\s*$/m.test(sectionOf(GEMMA_EMBED))
+        && /^ubatch-size\s*=\s*2048\s*$/m.test(sectionOf(GEMMA_EMBED))
+        && !/ctx-size|reranking|reasoning|n-predict/.test(sectionOf(GEMMA_EMBED)),
+      JSON.stringify({ gemmaEmbed: sectionOf(GEMMA_EMBED) }));
+    ok('…and one whose row declares none gets the stated default, 8,192 — never llama.cpp\'s 512',
+      /^batch-size\s*=\s*8192\s*$/m.test(sectionOf('zztest-embed-model'))
+        && /^ubatch-size\s*=\s*8192\s*$/m.test(sectionOf('zztest-embed-model')),
+      JSON.stringify({ embed: sectionOf('zztest-embed-model') }));
 
     ok('a RERANKER gets reranking = true and a whole-pair batch — and nothing else does',
       /reranking\s*=\s*true/.test(sectionOf('zztest-rerank-model'))

@@ -34,7 +34,9 @@ public enum GgufCapability
 /// 2026-09-24; with chunking off the cap cuts the candidate itself). Past it llama.cpp refuses the WHOLE
 /// <c>/v1/rerank</c> call — one over-long pair and no candidate is scored — and the verifier fails open, so a missing
 /// declaration is a silent loss of verification on exactly the recalls that surface a long fact. Declared from the
-/// GGUF header's <c>context_length</c> and the served slot size, both measured, never guessed.</param>
+/// GGUF header's <c>context_length</c> and the served slot size, both measured, never guessed. Read for an EMBEDDER too:
+/// it is the physical batch the preset launches it with (<see cref="LlamaServerRuntime.EmbedBatch"/> when undeclared),
+/// so a fact up to that window embeds — llama.cpp refuses a longer embedding input whole.</param>
 public sealed record GgufModel(
     string Id,
     string Name,
@@ -355,7 +357,11 @@ public static class GgufCatalog
             // measurements, so the note cannot disagree with the table it sits in.
             "语义检索用,由 llama.cpp 运行。和内置的 ONNX 版本是同一个 EmbeddingGemma 模型:这一版首位命中多一题"
             + "(10 题中 9 对 8),代价是多一个运行时(约 35 MB)和一个常驻服务。",
-            new EmbeddingMeasurement(9, 10, 25, 10, "2026-08-22")),
+            new EmbeddingMeasurement(9, 10, 25, 10, "2026-08-22"),
+            // Its GGUF header's gemma-embedding.context_length, and the n_ctx its child reports: the preset launches it
+            // with this physical batch, so a fact up to 2,048 tokens (~3,000 Chinese characters) embeds, where
+            // llama.cpp's default 512 refused past ~750 (docs/self-managed-llm-runtime.md, 2026-09-26).
+            ContextTokens: 2048),
 
         // DESCRIBED BY ITS MEASUREMENT, NOT RECOMMENDED (docs/judge-bench.md Run 3, 2026-09-24). Every figure carries
         // the configuration it was measured in — the 240-question fixture, 语义 off (no embedder), the default
@@ -547,7 +553,9 @@ public static class GgufCatalog
 
     /// <summary>The token window a model's row DECLARES, or null — the ONE read behind both halves of a reranker's
     /// input contract: the window <see cref="LlamaServerRuntime"/> launches it with, and the window
-    /// <see cref="RerankInputCap"/> fits each (query, document) pair to. Two lookups could disagree; one cannot.
+    /// <see cref="RerankInputCap"/> fits each (query, document) pair to. Two lookups could disagree; one cannot. For an
+    /// EMBEDDER it is the physical batch the preset launches it with, and nothing reads it on the input side: an
+    /// embedding input past it is refused and the fact kept without a vector (<c>FactIndex.IndexAsync</c>).
     ///
     /// <para><b>A GGUF the household dropped in has no row, so no declared window — a STATED limit.</b> What then
     /// happens to a small-window model depends on its NAME, because that is all <c>ResourceProvisioner.GgufKind</c>
