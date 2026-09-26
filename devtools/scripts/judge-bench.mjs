@@ -90,9 +90,10 @@
 // `--chat-judges=<m,…>` adds `lc:<m>` (content alone — the shipped default, no knob) and `lcb:<m>`
 // (`GATHERLIGHT_JUDGE_INPUT=both`, "topic — content") per llama.cpp CHAT model, paired against each other — the
 // question docs/judge-bench.md Run 3 asks — as well as against `formula`. All of them share ONE real router,
-// launched with the preset section the product writes for each model's kind — for a chat model, `reasoning = off`,
-// the `n-predict` generation cap and the `ctx-size` context cap; for a reranker, its declared window or 4096 (see
-// presetSection, mirrorGuard, and docs/judge-bench.md Runs 5 and 5b).
+// launched with the preset section the product writes for each model's kind — for a chat model, the `n-predict`
+// generation cap and the `ctx-size` context cap (thinking is off by the product's own REQUEST field since 2026-09-26,
+// not by a `reasoning` key — see presetSection); for a reranker, its declared window or 4096 (see presetSection,
+// mirrorGuard, and docs/judge-bench.md Runs 5 and 5b).
 //
 // PRIVACY. The fixture is invented and committed; this touches no household data. Local-model arms READ the
 // llama.cpp binary and GGUFs from --resources and nothing else there. Its default is local/state/resources —
@@ -403,6 +404,15 @@ function mirrorGuard() {
   }
   if (JSON.stringify(Object.entries(declared).sort()) !== JSON.stringify(Object.entries(DECLARED_WINDOW).sort()))
     drift.push(`declared windows ${JSON.stringify(declared)} ≠ ${JSON.stringify(DECLARED_WINDOW)}`);
+  // THINKING OFF lives in the REQUEST since 2026-09-26 (Lyntai D179): the product's chat preset writes no `reasoning` key
+  // and neither does the bench's (presetSection) — so the chat arms rely on the product's own SuppressReasoningFields
+  // reaching the router. Both halves are the product's, and both are guarded: a key re-added to the preset would
+  // launch the bench's children differently from the product's, and a field gone from LlamaCppSource would put every
+  // Qwen arm back to thinking on every call.
+  if (/keys\.Add\(\("reasoning"/.test(runtime)) drift.push('LlamaServerRuntime writes a `reasoning` launch key again; the bench\'s preset writes none');
+  const source = fs.readFileSync(path.join(repo, 'src', 'server', 'Gatherlight.Platform', 'Agent', 'Llm', 'Sources', 'LlamaCppSource.cs'), 'utf8');
+  if (!source.includes('SuppressReasoningFields = """{"chat_template_kwargs":{"enable_thinking":false}}"""'))
+    drift.push('LlamaCppSource no longer sets SuppressReasoningFields = {"chat_template_kwargs":{"enable_thinking":false}}');
   if (drift.length) die(`the bench's launch numbers drifted from the product's — update them together: ${drift.join('; ')}`);
 }
 // RerankPace's counting rule, restated for Run 8's per-call record (pair tokens, and the rate the pace would read off an
@@ -2027,15 +2037,19 @@ const live = async () => {
     // whatever 4096 the preset claimed); a CHAT model gets its context cap (CHAT_CONTEXT_TOKENS), and never `embeddings`
     // or `reranking`, either of which restricts the child to one route and refuses chat. mirrorGuard holds all three
     // numbers to the C#.
-    // A CHAT section gets `reasoning = off` and `n-predict = 512`, exactly as WritePresets writes it since round 2's
-    // Task P (LlamaServerRuntime.ChatMaxTokens). Run 5 wrote `reasoning = off` alone, ahead of the product: Lyntai's
-    // OpenAI-shaped payload drops TextReasoning.Suppress, and llama-server's default `--reasoning auto` then opens a
-    // thinking block for any template that supports one (Qwen3, and Qwen3.5 against its own default). The key
-    // renders the template's pre-closed think block and leaves a template without thinking byte-identical (gemma-3),
-    // so Run 3's control was unchanged by it. `reasoning-budget = 0` is NOT equivalent: the template stays in
-    // thinking mode and the model writes its reasoning into the reply. `n-predict` caps a runaway reply (Run 5: an
-    // uncapped one filled its child's shared context, and llama-server keeps decoding a request nobody waits for).
-    // Runs 2–5b re-analyse identically: a preset is a launch setting, and no saved row depends on this text.
+    // A CHAT section gets `n-predict = 512`, exactly as LaunchKeys writes it since round 2's Task P
+    // (LlamaServerRuntime.ChatMaxTokens), and NO `reasoning` key — as the product since 2026-09-26. Runs 5–7 launched
+    // with `reasoning = off` (Run 5 ahead of the product, then as WritePresets wrote it): Lyntai's OpenAI-shaped payload
+    // dropped TextReasoning.Suppress, and llama-server's default `--reasoning auto` then opens a thinking block for any
+    // template that supports one (Qwen3, and Qwen3.5 against its own default). Since Lyntai 3.3.0 (D179) the product's
+    // own chat registration sends `chat_template_kwargs: {"enable_thinking": false}` on every memory-seam call, which
+    // renders the SAME prompt the key rendered — byte-identical, full prompts, for Qwen3-0.6B and both Gemma 3 rows
+    // (docs/self-managed-llm-runtime.md, 2026-09-26) — so those runs' chat arms re-run on the prompt they ran on, and mirrorGuard
+    // holds both halves (no key in the product's preset, the field in LlamaCppSource). `reasoning-budget = 0` is NOT
+    // equivalent: the template stays in thinking mode and the model writes its reasoning into the reply. `n-predict`
+    // caps a runaway reply (Run 5: an uncapped one filled its child's shared context, and llama-server keeps decoding a
+    // request nobody waits for). Runs 2–5b re-analyse identically: a preset is a launch setting, and no saved row depends
+    // on this text.
     mirrorGuard();
     const windowOf = (m) => DECLARED_WINDOW[m] ?? RERANK_WINDOW;
     // Run 8's CPU-only launch. `n-gpu-layers = 0` ALONE is not a CPU run on this build: op-offload defaults on, and b10549
@@ -2047,7 +2061,7 @@ const live = async () => {
     const presetSection = (m, kind) => [`[${m}]`, ...devices,
       ...(kind === 'reranking'
         ? ['reranking = true', `ctx-size = ${windowOf(m)}`, `batch-size = ${windowOf(m)}`, `ubatch-size = ${windowOf(m)}`]
-        : ['reasoning = off', `n-predict = ${CHAT_MAX_TOKENS}`, `ctx-size = ${CHAT_CONTEXT_TOKENS}`]),
+        : [`n-predict = ${CHAT_MAX_TOKENS}`, `ctx-size = ${CHAT_CONTEXT_TOKENS}`]),
       ''].join('\n');
     const preset = path.join(dir, `presets${tag}.ini`);
     const presetText = [...rerankerModels.map((m) => presetSection(m, 'reranking')),
@@ -2285,6 +2299,9 @@ const live = async () => {
           else if (kind === 'other') state.other++;
           const rec = { at: new Date().toISOString(), method: req.method, url: req.url, kind, model: parsed?.model ?? null };
           if (kind === 'annotation') {
+            // What the request asked of the template: `false` from the product's SuppressReasoningFields (Lyntai D179),
+            // the one thing turning thinking off since the chat preset lost its `reasoning` key (2026-09-26).
+            rec.enableThinking = parsed?.chat_template_kwargs?.enable_thinking ?? null;
             rec.fact = user.split('Fact:\n').pop();
             const known = /Existing subjects[^\n]*\n((?:- [^\n]*\n?)*)/.exec(user);
             rec.knownOffered = known ? known[1].split('\n').filter((l) => l.startsWith('- ')).length : 0;
@@ -2407,13 +2424,14 @@ const live = async () => {
         cappedAtLength: annotations.filter((r) => r.finish === 'length').length,
         withReasoning: annotations.filter((r) => r.reasoning).length,
         withThinkTag: annotations.filter((r) => /<think>/i.test(r.content ?? '')).length,
+        askedNoThinking: annotations.filter((r) => r.enableThinking === false).length,
         maxCompletionTokens: Math.max(0, ...annotations.map((r) => r.completionTokens ?? 0)),
         medianCompletionTokens: median(annotations.map((r) => r.completionTokens).filter((x) => x != null)),
         eachFactOnce: FIXTURE.facts.every((f) => annotations.filter((r) => r.fact === f.content).length === 1),
       };
       // THE BUILD GUARDS (Run 7): no CLI; one annotation per write, each answered, each through the router's log; every
       // forward seen by the router; the tag seed's annotations all from the model (none replayed), the replay seed's all
-      // replayed (none reaching the model); no reasoning returned.
+      // replayed (none reaching the model); every annotation request asking for no thinking, and no reasoning returned.
       const guards = {
         noClaudeCli: cliCalls.ok + cliCalls.failed === 0,
         oneAnnotationPerWrite: annotations.length === n && replies.eachFactOnce,
@@ -2423,12 +2441,15 @@ const live = async () => {
         noOtherChatRequest: recorder.state.other === 0,
         annotatedBy: replay ? replies.replayed === n && recorder.state.forwarded === recorder.state.warms
           : replies.replayed === 0 && recorder.state.forwarded === n + recorder.state.warms,
+        // The request half of thinking off (the product's SuppressReasoningFields) — asked of every annotation, replayed
+        // ones included, since the replay seed's requests are the product's too.
+        everyAnnotationAskedNoThinking: replies.askedNoThinking === n,
         noReasoningReturned: replies.withReasoning === 0 && replies.withThinkTag === 0,
       };
       console.log(`  ${seed}: claude-cli ${cliCalls.ok}/${cliCalls.failed} (ok/failed); llama.cpp chat calls in the seed server's log`
         + ` ${chatCalls.ok - before.chat.ok}/${chatCalls.failed} during the writes; annotation requests ${annotations.length}`
         + ` (${replies.answered200} answered 200, ${replies.replayed} replayed, ${replies.cappedAtLength} capped at ${CHAT_MAX_TOKENS},`
-        + ` ${replies.withReasoning} with reasoning); warm ${recorder.state.warms}; forwarded ${recorder.state.forwarded} to ${TAG_MODEL},`
+        + ` ${replies.askedNoThinking} asking enable_thinking=false, ${replies.withReasoning} with reasoning); warm ${recorder.state.warms}; forwarded ${recorder.state.forwarded} to ${TAG_MODEL},`
         + ` the router proxied ${proxied}`);
       fs.writeFileSync(settingsPath, settingsBefore);
       fs.rmSync(resourcesDir, { recursive: true, force: true });
@@ -2461,7 +2482,9 @@ const live = async () => {
       // What the two builds share: the one router, its child's launch, the model file.
       const routerGuards = {
         childSpawnedOnce: args.spawns === 1,
-        thinkingOffInArgv: args.reasoning === 'off',
+        // Launched as the product launches it: NO --reasoning (thinking is off by the request since 2026-09-26 — the
+        // annotation guards' everyAnnotationAskedNoThinking). A --reasoning here would be a launch the product no longer makes.
+        noReasoningKeyInArgv: args.reasoning === null,
         capsInArgv: args.nPredict === String(CHAT_MAX_TOKENS) && args.ctxSize === String(CHAT_CONTEXT_TOKENS),
       };
       const file = path.join(RESOURCES, 'gguf', `${TAG_MODEL}.gguf`);
@@ -2486,7 +2509,7 @@ const live = async () => {
       }
       fs.writeFileSync(path.join(tagsRoot, 'tags.json'), JSON.stringify(Object.fromEntries(FIXTURE.facts.map((f) =>
         [f.id, { group: groupOf(f.id), claude: claude[f.id], [TAG_MODEL]: local[f.id] }])), null, 2));
-      console.log(`  router: ${TAG_MODEL}'s child spawned ${args.spawns}× with --reasoning ${args.reasoning} --n-predict ${args.nPredict}`
+      console.log(`  router: ${TAG_MODEL}'s child spawned ${args.spawns}× with --reasoning ${args.reasoning ?? "(none)"} --n-predict ${args.nPredict}`
         + ` --ctx-size ${args.ctxSize}`);
       console.log(`  tags vs replay: ${JSON.stringify({ ...tagsVsReplay, counts: undefined })}`);
       console.log(`  replay vs default: ${JSON.stringify({ ...replayVsDefault, counts: undefined })}; counts ${JSON.stringify(replayVsDefault.counts)}`);

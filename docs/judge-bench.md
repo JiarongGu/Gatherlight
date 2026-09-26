@@ -1989,6 +1989,9 @@ example.
   needs a Lyntai task naming it; this session is read-only on Lyntai and filed none.
 - **What the bench does:** its `presetSection` now adds `reasoning = off` to every CHAT section. Run 5 therefore
   measures the two Qwens as the product WOULD launch them after that follow-up, not as it launches them today.
+  (Superseded 2026-09-26: neither the product nor the bench writes the key any more — the product's own request carries
+  `chat_template_kwargs.enable_thinking = false` (Lyntai D179), which renders the same prompt byte for byte;
+  `docs/self-managed-llm-runtime.md`, 2026-09-26.)
 
 **Verdict screen**, with every model launched as the bench launches it: router, its preset section, and
 `reasoning = off`. Gemma's no-key calls are pooled in, since the rendered prompt is identical. Six of Qwen3's twelve ran
