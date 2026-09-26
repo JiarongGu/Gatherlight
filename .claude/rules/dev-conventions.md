@@ -523,37 +523,58 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   takes, so only one of the two copies is gone.
   **Six were open at Lyntai 3.2.0, and each says what ends it. (2) and (4) are CLOSED — their fixes shipped in
   3.3.0 and the 3.4 bump adopted them. (3) is CLOSED as a workaround: the bump adopted its per-write detection, and
-  the probe it named stays as a cost policy of OUR OWN, which the entry says how to end.**
-  **(1) `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170.** Lyntai's LLM judge
-  rendered each candidate as its headline alone, and our headline is the fact's TOPIC, so the judge decided
-  "did this answer?" from topics; the decorator shows it the content. Upstream closed the gap with
-  `LlmVerificationOptions.ContentChars`, shipping in the release after 3.2.0 — content ALONE, not "topic —
+  the probe it named stays as a cost policy of OUR OWN, which the entry says how to end. (1) and (6) stay OPEN by
+  decision although their fixes shipped in 3.3.0 too — (1) because the shipped cut guts a long CJK note, (6) until
+  Run 10 and the owner decide.**
+  **(1) OPEN, by owner decision — `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170, shipped
+  in 3.3.0 and NOT adopted by the 3.4 bump (2026-09-26).** Lyntai's LLM judge rendered each candidate as its headline
+  alone, and our headline is the fact's TOPIC, so the judge decided "did this answer?" from topics; the decorator shows
+  it the content. Upstream closed the gap with `LlmVerificationOptions.ContentChars` — content ALONE, not "topic —
   content" — and Part 276's own outcome names our decorator as the thing to remove. Whether the topic was worth
   keeping was MEASURED rather than argued: `docs/judge-bench.md` Run 1 found content alone EQUIVALENT to topic —
   content on top-1 and found@8 (2/0 pairs, p = 0.500, 95% [−2.2, +0.6]pp, inside ±3pp) with ~24% less
   candidate text. **Content alone is the default since 2026-09-24** (owner-approved on the measured equivalence
-  above). **On the bump**, four things, because the bench and a suite pin this knob to `both`: (a) set
-  `ContentChars = JudgeSeesContentPolicy.MaxChars` where `JudgeWiring.Llm` builds the verifier, and delete the
-  class and its `GATHERLIGHT_JUDGE_INPUT` knob, both announcements included — not both mechanisms: with
+  above). **Why the bump kept the class: the CUT.** `ContentChars` renders through Lyntai's `MemoryHeadline.Derive`,
+  which in 3.3.0 and 3.4.0 cuts content past the cap at the LAST space at or before it, however early, and hard-cuts
+  at the cap — splitting a surrogate pair if one sits there — only when there is none. So a long Chinese note whose one
+  space follows a leading date or a "Wi-Fi" reaches the judge as those few characters and "…"; ours cuts at 400
+  without splitting a pair. The two are identical at or below 400 characters — every judge-bench fixture fact (≤ 101)
+  and most household facts — and diverge exactly on long notes (Run 6c's 883–1,241 characters), where no LLM judge
+  has been measured. `JudgeWiring.Llm` therefore leaves `ContentChars` at 0, and says why. **What ends it:** Lyntai
+  `docs/task-archive.md` Part 310's item "Cut a derived headline or a judge note where the text allows, not at its
+  last space however early" — closed there as Part 302 (2026-09-26), committed after 3.4.0 and NOT released: a space
+  counts only in the cap's latter half, else the cut falls at the last text-element boundary, never inside a
+  surrogate pair. On the release that carries it, what still differs is a note cut at a space in the latter half — at
+  a word, at worst half the cap — where ours reads to 400, and Lyntai's wider flattening (`MemoryLine.Flatten` also
+  folds U+000B and U+001C–U+001E, a strict improvement); accepting that residual is the owner's call then. **On
+  adopting it** — none of this ran in the 3.4 bump — five things, because the bench and a suite pin this knob to
+  `both`: (a) set `ContentChars = JudgeSeesContentPolicy.MaxChars` where `JudgeWiring.Llm` builds the verifier, and
+  delete the class and its `GATHERLIGHT_JUDGE_INPUT` knob, both announcements included — not both mechanisms: with
   `ContentChars` above 0 upstream reads the content itself and ignores the decorator's rewritten headline, so
-  keeping it would be dead code running on every recall; (b) in `judge-bench.mjs`, `topic` and `contentonly` go,
-  `content` and `content2` COLLAPSE into the content-only default (no env, no knob, relabelled — they stay,
-  because `content` is the paired reference arm and `content2` the judge's A/A twin), and `fuse` drops its
-  judge-input pin and second knob regex, keeping the verdict-combination one — left pinned, those three
-  would each throw "its knob did not announce itself"; (c) `e2e-p52` case 7b, which asserts `judge input = both` in
-  state/logs, moves to the other knob — `GATHERLIGHT_VERDICT_COMBINATION=fuse` on the same signed-in server
-  (non-default, so the logged value can only come from the knob; case 7 makes no recall there, so Fuse changes
-  nothing it asserts); (d) accept that `both` can no longer be reproduced: Run 1's `content` rows become its only
-  record, which is fine because Run 1 measured it equivalent — but a `--baseline=…:content` against a pre-bump
-  results file then pairs content-only with `both` under one arm name. The full list is in the class comment.
+  keeping it would be dead code running on every recall. Re-home the 400 first: two XML crefs name `MaxChars`
+  (`LlamaServerRuntime`'s chat context cap and `RerankInputCap`), and no build flags a dangling cref; the live docs
+  naming the class — this file, `docs/judge-bench.md`, `docs/self-managed-llm-runtime.md` — fail `check-doc-refs`;
+  (b) in `judge-bench.mjs`, `topic` and `contentonly` go, `content` and `content2` COLLAPSE into the content-only
+  default (no env, no knob, relabelled — they stay, because `content` is the paired reference arm and `content2` the
+  judge's A/A twin), and `fuse` drops its judge-input pin and second knob regex, keeping the verdict-combination one;
+  (c) the `lcb:<model>` chat arms — which pin `both` with the same knob and are in the default `--chat-arms lc,lcb` —
+  go or become a documented cannot-reproduce arm; left pinned, every arm in (b) and (c) would throw "its knob did not
+  announce itself", the `lcb:` ones on any chat-judge run (this item was missing from the list until the 3.4 bump's
+  review); (d) `e2e-p52` case 7b, which asserts `judge input = both` in state/logs, moves to the other knob —
+  `GATHERLIGHT_VERDICT_COMBINATION=fuse` on the same signed-in server (non-default, so the logged value can only come
+  from the knob; case 7 makes no recall there, so Fuse changes nothing it asserts); (e) accept that `both` can no
+  longer be reproduced: Run 1's `content` rows and Run 3's `lcb` rows become its only record, which is fine because
+  Run 1 measured it equivalent — but a `--baseline=…:content` against a pre-bump results file then pairs content-only
+  with `both` under one arm name. `e2e-p48`'s judge-view assertion stays green (its facts are short, so both cuts
+  agree). The full list is in the class comment.
   **The flip also moved the llama.cpp CHAT judge, and `docs/judge-bench.md` Run 3 measured that.** `JudgeWiring.Llm`
   builds the verifier for both LLM judges (`ClaudeCliJudgeSource`, and `LlamaCppSource` bound to a chat GGUF). Run 3
   benched `gemma-3-1b-it-Q4_K_M` on both inputs, under a rule written before the run: stop and ask the owner only
   if content alone is significantly worse. It is not significantly worse, but it is not equivalent either. Content
   alone trails `topic — content` by 4.6pp top-1 (23/12, p = 0.090, 95% [−9.4, +0.3]pp) and by 4.2pp found@8 (18/8,
   p = 0.076, [−8.3, +0.04]pp). Part of that gap is `both` failing to give a verdict more often (75% coverage
-  against 86%), since a recall with no verdict keeps the engine's page. So the flip stays unscoped: the bump gives
-  every LLM verifier the same content-only rendering through `ContentChars` anyway. Quote the lean with the
+  against 86%), since a recall with no verdict keeps the engine's page. So the flip stays unscoped: adopting
+  `ContentChars` would give every LLM verifier the same content-only rendering anyway. Quote the lean with the
   figures, never as "equivalent". The same run found the bigger thing: in EITHER mode this 1B judge is
   significantly WORSE than no judge (top-1 79 → 33 / 44 of 240, −19.2 / −14.6pp, p < 0.001), because partition
   promotes whatever it endorses.

@@ -333,9 +333,11 @@ const formulaKeyFor = (seed) => (seed === 'default' ? 'formula' : `formula@${see
 
 // Every arm pins BOTH knobs; the server treats a blank value as unset. Without the pin, a knob exported in
 // the shell that launched the bench would leak into every arm that did not set it.
-// GATHERLIGHT_JUDGE_INPUT is deleted on the Lyntai bump that ships ContentChars, and these arms change with it —
-// `topic`/`contentonly` go, `content`/`content2` become knob-less content-only arms, `fuse` keeps one knob. The
-// full list is JudgeSeesContentPolicy's class comment, "ON THE BUMP"; after it, `both` cannot be reproduced.
+// GATHERLIGHT_JUDGE_INPUT lives as long as JudgeSeesContentPolicy does. Lyntai shipped ContentChars in 3.3.0, but the 3.4
+// bump kept the class (its cut guts a long CJK note — the class comment says what ends that). When it goes, these arms
+// change with it — `topic`/`contentonly` go, `content`/`content2` become knob-less content-only arms, `fuse` keeps one
+// knob, and the `lcb:` chat arms (default `--chat-arms lc,lcb`) go or become a documented cannot-reproduce arm. The
+// full list is the class comment, "ON ADOPTING IT"; after it, `both` cannot be reproduced.
 // GATHERLIGHT_JUDGE_DEADLINE_SECONDS (VerificationDeadlinePolicy's test knob) is pinned blank for the same reason, so
 // every arm runs the product's default verification deadline; startup below refuses an arm that announces it.
 // GATHERLIGHT_RERANK_CHUNKING (RerankChunking, Runs 6b/6c) is pinned blank the same way, and every reranker arm then
@@ -422,7 +424,8 @@ const ARMS = {
     env: { GATHERLIGHT_JUDGE_INPUT: 'both' }, knob: /judge input = both \(/ },
   content2: { label: 'Claude judge · topic — content · partition · A/A twin', enrichment: true, judgeInput: 'both',
     env: { GATHERLIGHT_JUDGE_INPUT: 'both' }, knob: /judge input = both \(/ },
-  // How Lyntai's upcoming LlmVerificationOptions.ContentChars renders a candidate: content ALONE (Part 276 / D170).
+  // How Lyntai's LlmVerificationOptions.ContentChars (3.3.0; Part 276 / D170) renders a candidate of at most 400
+  // characters: content ALONE. Past 400 the two cut differently, which is why the app has not adopted it.
   // Kept explicitly pinned (rather than left to the now-default) so the non-vacuity check below still confirms
   // the knob took, instead of this arm becoming indistinguishable from one that sets nothing.
   contentonly: { label: 'Claude judge · content only · partition', enrichment: true, judgeInput: 'content',

@@ -204,49 +204,64 @@ public sealed class VerificationDeadlinePolicy : IMemoryVerificationPolicy
 /// <see cref="MemoryVerificationCandidate.Content"/> and left the choice of text to the POLICY; its reranker
 /// policy reads content, its LLM policy has no option to.</para>
 ///
-/// <para><b>UPSTREAM SHIPPED PART OF THIS, AND IT DOES NOT REPLACE THE CLASS OUTRIGHT.</b> Lyntai
-/// <c>docs/task-archive.md</c> Part 276 (decision D170) added <c>LlmVerificationOptions.ContentChars</c>
-/// (default 0), shipping in the release AFTER 3.2.0 — the one this app currently consumes. It renders the
-/// candidate's content ALONE, not <c>"topic — content"</c>: D170 rejected the combined shape because, for an
-/// engine-DERIVED headline (the first <c>HeadlineChars</c> of the content), it repeats the content's opening
-/// and so doubles the tokens. Ours is AUTHORED — <c>FactIndex.IndexAsync</c> passes <c>Headline: topic</c> —
-/// which is the very case D170 cites as the reason for adding <c>ContentChars</c> at all ("an application
-/// that authors headlines hands the judge a label"). So <c>both</c> adds a label rather than a copy — though
-/// household facts often restate their own topic in the content, so it may still pay for it twice. Whether
-/// the topic earns its tokens is the MEASURED decision this class exists to let happen —
-/// <c>dev.mjs judge-bench</c> compares this class's <c>both</c> and <c>content</c> modes: if <c>content</c>
-/// scores as well, the bump replaces this class with <c>ContentChars</c> (below); if the topic earns its tokens,
-/// keep this class and leave <c>ContentChars</c> at 0 — with it &gt; 0, upstream reads <c>Content</c> itself and
-/// ignores this class's rewritten <c>Headline</c>, which would make this class dead code running for
-/// nothing.</para>
+/// <para><b>UPSTREAM SHIPPED IT IN 3.3.0, AND THE 3.4 BUMP KEPT THIS CLASS ANYWAY (owner decision, 2026-09-26).</b>
+/// Lyntai <c>docs/task-archive.md</c> Part 276 (decision D170) added <c>LlmVerificationOptions.ContentChars</c>
+/// (default 0), released in 3.3.0. It renders the candidate's content ALONE, not <c>"topic — content"</c>: D170
+/// rejected the combined shape because, for an engine-DERIVED headline (the first <c>HeadlineChars</c> of the content),
+/// it repeats the content's opening and so doubles the tokens. Ours is AUTHORED — <c>FactIndex.IndexAsync</c> passes
+/// <c>Headline: topic</c> — which is the very case D170 cites as the reason for adding <c>ContentChars</c> at all ("an
+/// application that authors headlines hands the judge a label"). Whether the topic earns its tokens was MEASURED: with
+/// <c>ContentChars</c> &gt; 0 upstream reads <c>Content</c> itself and ignores this class's rewritten
+/// <c>Headline</c>, so the two cannot usefully run together, and <c>dev.mjs judge-bench</c> compared this class's
+/// <c>both</c> and <c>content</c> modes to decide between them.</para>
 ///
-/// <para><b>MEASURED, and the first branch won.</b> <c>docs/judge-bench.md</c> Run 1 (2026-09-23): content
-/// alone is EQUIVALENT to <c>both</c> on top-1 and on found@8 (2/0 pairs, p = 0.500, 95% [−2.2, +0.6] pp,
-/// inside ±3 pp), with ~24% less candidate text. The topic does not earn its tokens. Content alone has been the
-/// default since 2026-09-24; <c>both</c> stays selectable, for the bench, until the bump deletes this class.</para>
+/// <para><b>MEASURED, and content alone won.</b> <c>docs/judge-bench.md</c> Run 1 (2026-09-23): content alone is
+/// EQUIVALENT to <c>both</c> on top-1 and on found@8 (2/0 pairs, p = 0.500, 95% [−2.2, +0.6] pp, inside ±3 pp), with
+/// ~24% less candidate text. The topic does not earn its tokens. Content alone has been the default since 2026-09-24;
+/// <c>both</c> stays selectable, for the bench, while this class stays.</para>
 ///
-/// <para><b>ON THE BUMP</b> — the Lyntai release carrying Part 276. Lyntai's side of this note is Part 276's own
-/// outcome, which names this decorator as the thing to remove (dev-conventions: a workaround is recorded on both
-/// sides). It is more than one line, because the bench and <c>e2e-p52</c> pin this class's knob to <c>both</c>:
+/// <para><b>WHY IT STAYS: THE CUT.</b> <c>ContentChars</c> renders through Lyntai's internal <c>MemoryHeadline.Derive</c>,
+/// which in 3.3.0 and 3.4.0 cuts content longer than the cap at the LAST space at or before it, however early, and
+/// hard-cuts at the cap only when there is no space at all — splitting a surrogate pair if one sits there. So a long
+/// Chinese note whose one space follows a leading date or a "Wi-Fi" reaches the judge as those few characters and "…".
+/// <see cref="Line"/> cuts at <see cref="MaxChars"/> without splitting a pair. The two are identical at or below
+/// <see cref="MaxChars"/>, which covers every judge-bench fixture fact (≤ 101 characters) and most household facts; they
+/// diverge exactly on long notes (Run 6c's 883–1,241 characters), where no LLM judge has been measured at all.</para>
+///
+/// <para><b>What ends it:</b> Lyntai <c>docs/task-archive.md</c> Part 310's item "Cut a derived headline or a judge
+/// note where the text allows, not at its last space however early" — closed there as Part 302 (2026-09-26), committed
+/// after 3.4.0 and NOT released. <c>Derive</c> then takes a space only in the cap's latter half, else cuts at the last
+/// text-element boundary, never inside a surrogate pair. On the release that carries it, what still differs from ours:
+/// a note with a space in the latter half is cut there, at a word — at worst half the cap — where ours reads to 400;
+/// and Lyntai's flattening (<c>MemoryLine.Flatten</c>) also folds U+000B and U+001C–U+001E, a strict improvement.
+/// Whether that residual is acceptable is the owner's call on that release.</para>
+///
+/// <para><b>ON ADOPTING IT</b> — none of this ran in the 3.4 bump. Lyntai's side of this note is Part 276's own outcome,
+/// which names this decorator as the thing to remove (dev-conventions: a workaround is recorded on both sides). It is
+/// more than one line, because the bench and <c>e2e-p52</c> pin this class's knob to <c>both</c>:
 /// <list type="number">
-/// <item>Set <c>ContentChars = MaxChars</c> where <c>JudgeWiring.Llm</c> builds the verifier; delete this class
-/// and the <c>GATHERLIGHT_JUDGE_INPUT</c> knob (its two announcements in <c>GatherlightApp</c>, console and
-/// logger).</item>
-/// <item><c>judge-bench.mjs</c>: <c>topic</c> and <c>contentonly</c> go. <c>content</c> and <c>content2</c> stay —
-/// the paired reference arm and the judge's A/A twin — but COLLAPSE into the content-only default: no env, no
-/// <c>knob</c>, relabelled. <c>fuse</c> drops its <c>GATHERLIGHT_JUDGE_INPUT</c> pin and its second knob regex,
-/// keeping only the verdict-combination one; <c>PINNED</c> and the default <c>--arms</c> list lose the knob and
-/// the two arms. Left pinned, the three arms that stay would each throw "its knob did not announce
-/// itself".</item>
-/// <item><c>e2e-p52</c> case 7b asserts <c>judge input = both</c> reaches state/logs. It moves to the other knob:
-/// start the signed-in server with <c>GATHERLIGHT_VERDICT_COMBINATION=fuse</c> (non-default, so the logged value
-/// can only have come from the knob; case 7 makes no recall on that server, so Fuse changes nothing it asserts)
-/// and match <c>Measurement knob set: verdict combination = Fuse</c>.</item>
+/// <item>Set <c>ContentChars = MaxChars</c> where <c>JudgeWiring.Llm</c> builds the verifier; delete this class and the
+/// <c>GATHERLIGHT_JUDGE_INPUT</c> knob (its two announcements in <c>GatherlightApp</c>, console and logger). Give the 400
+/// a new home first: <c>LlamaServerRuntime.ChatContextTokens</c> and <see cref="RerankInputCap"/> name
+/// <see cref="MaxChars"/> in XML crefs, which no build flags when they dangle, and the live docs naming this class
+/// (dev-conventions, <c>docs/judge-bench.md</c>, <c>docs/self-managed-llm-runtime.md</c>) fail <c>check-doc-refs</c>.</item>
+/// <item><c>judge-bench.mjs</c>: <c>topic</c> and <c>contentonly</c> go. <c>content</c> and <c>content2</c> stay — the
+/// paired reference arm and the judge's A/A twin — but COLLAPSE into the content-only default: no env, no <c>knob</c>,
+/// relabelled. <c>fuse</c> drops its <c>GATHERLIGHT_JUDGE_INPUT</c> pin and its second knob regex, keeping only the
+/// verdict-combination one; <c>PINNED</c> and the default <c>--arms</c> list lose the knob and the two arms. And the
+/// <c>lcb:&lt;model&gt;</c> chat arms, which pin <c>both</c> with the same knob and are in the default
+/// <c>--chat-arms lc,lcb</c>, go or become a documented cannot-reproduce arm. Left pinned, every one of those arms would
+/// throw "its knob did not announce itself" — the <c>lcb:</c> ones on any chat-judge run.</item>
+/// <item><c>e2e-p52</c> case 7b asserts <c>judge input = both</c> reaches state/logs. It moves to the other knob: start
+/// the signed-in server with <c>GATHERLIGHT_VERDICT_COMBINATION=fuse</c> (non-default, so the logged value can only have
+/// come from the knob; case 7 makes no recall on that server, so Fuse changes nothing it asserts) and match
+/// <c>Measurement knob set: verdict combination = Fuse</c>.</item>
 /// </list>
-/// After that, <c>both</c> cannot be reproduced at all: the bench measures content alone, and Run 1's <c>content</c>
-/// rows stay the only record of "topic — content". That is acceptable because Run 1 measured the two
-/// equivalent; but a <c>--baseline=…:content</c> against a pre-bump results file then pairs content-only against
-/// <c>both</c> under one arm name, so say so when quoting such a comparison.</para>
+/// After that, <c>both</c> cannot be reproduced at all: the bench measures content alone, and Run 1's <c>content</c> rows
+/// and Run 3's <c>lcb</c> rows stay the only record of "topic — content". That is acceptable because Run 1 measured the
+/// two equivalent; but a <c>--baseline=…:content</c> against a pre-bump results file then pairs content-only against
+/// <c>both</c> under one arm name, so say so when quoting such a comparison. <c>e2e-p48</c>'s judge-view assertion
+/// stays green, since its facts are short and both cuts agree there.</para>
 ///
 /// <para><b>THE LOCAL CHAT JUDGE WAS FLIPPED TOO, AND RUN 3 MEASURED IT.</b> <c>JudgeWiring.Llm</c> builds the
 /// verifier for BOTH LLM judges — <c>ClaudeCliJudgeSource</c> and <c>LlamaCppSource</c> bound to a chat GGUF — so
@@ -256,7 +271,7 @@ public sealed class VerificationDeadlinePolicy : IMemoryVerificationPolicy
 /// but not equivalence either. Content alone trails "topic — content" by 4.6 pp top-1 (23/12, p = 0.090,
 /// 95% [−9.4, +0.3]) and by 4.2 pp found@8 (18/8, p = 0.076, [−8.3, +0.04]); part of that is the longer input
 /// failing to yield a verdict more often (75% against 86% coverage), which leaves the engine's page. So the default
-/// stays unscoped. It only brings forward what Lyntai's <c>ContentChars</c> gives every LLM verifier on the bump
+/// stays unscoped. It only brings forward what adopting Lyntai's <c>ContentChars</c> would give every LLM verifier
 /// anyway. The same run found something larger: in EITHER mode, this 1B judge is significantly WORSE than no judge
 /// (top-1 −19.2 / −14.6 pp), because partition promotes whatever it endorses. That is a statement about the model,
 /// not about this class.</para>

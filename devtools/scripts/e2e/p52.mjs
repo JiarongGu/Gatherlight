@@ -1608,8 +1608,9 @@ try {
   // The judge-input knob rides along on this server (case 7b): it only affects an LLM verifier, and this one
   // runs a reranker, so it changes nothing here except whether the logs say it is set. Pinned to `both` —
   // NOT the default since 2026-09-24 — so the case is still exercising a knob that was actually SET, rather
-  // than a value that would now be there anyway. The Lyntai bump that ships ContentChars deletes this knob; 7b
-  // then moves to GATHERLIGHT_VERDICT_COMBINATION=fuse (JudgeSeesContentPolicy's class comment, "ON THE BUMP").
+  // than a value that would now be there anyway. Lyntai shipped ContentChars in 3.3.0, but the 3.4 bump kept this knob
+  // with JudgeSeesContentPolicy; when the class goes, 7b moves to GATHERLIGHT_VERDICT_COMBINATION=fuse (its class
+  // comment, "ON ADOPTING IT").
   signedInServer = startServer({
     dataDir: signedInDir, port: SIGNED_IN_PORT,
     env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_INPUT: 'both' },

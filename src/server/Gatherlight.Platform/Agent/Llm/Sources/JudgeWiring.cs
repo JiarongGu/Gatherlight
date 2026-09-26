@@ -35,7 +35,11 @@ public sealed record JudgeWiring(
     /// It serves BOTH LLM judges — the Claude CLI and a llama.cpp chat GGUF — so whatever it shows one it shows
     /// the other. Both inputs were measured: the Claude judge's in docs/judge-bench.md Run 1 (content alone
     /// equivalent), the local chat judge's in Run 3 (no significant difference, not equivalent, leaning against
-    /// content alone). <see cref="JudgeSeesContentPolicy"/> quotes the figures.</summary>
+    /// content alone). <see cref="JudgeSeesContentPolicy"/> quotes the figures.
+    /// <para>Lyntai's own <c>LlmVerificationOptions.ContentChars</c> (3.3.0) is left at 0 ON PURPOSE: set, the policy
+    /// reads the content itself and ignores the decorator, and in 3.4.0 it cuts a long note at its last space however
+    /// early — a Chinese note whose one space follows a leading date reaches the judge as the date.
+    /// <see cref="JudgeSeesContentPolicy"/> says what ends that and what adopting it takes.</para></summary>
     public static JudgeWiring Llm(string? client, string model) => new(client, model, sp =>
     {
         IMemoryVerificationPolicy llm = new LlmMemoryVerificationPolicy(

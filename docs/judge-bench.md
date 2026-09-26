@@ -313,7 +313,10 @@ No `judge failed open` warning fired for any arm (see the CLI-failures bullet be
   about 24% smaller, for a result the paired test cannot tell apart from partition's. Applying the plan's decision
   rule literally: the equivalence holds on `all`, so **the topic prefix does not earn its tokens** — when Lyntai
   ships `LlmVerificationOptions.ContentChars` (content alone; task-archive Part 276 / D170), the `JudgeSeesContentPolicy`
-  topic-prefix decorator should be deleted in favor of it.
+  topic-prefix decorator should be deleted in favor of it. *(2026-09-26: it shipped in Lyntai 3.3.0, and the 3.4 bump
+  kept the decorator by owner decision — `ContentChars` cuts a note over 400 characters at its last space however
+  early, which guts a long Chinese note. This run's finding stands; dev-conventions workaround (1) says what ends the
+  decorator.)*
 - **topic — content (partition) vs fuse — does fuse change the default?** No. Against `content`, `fuse` is
   significantly **worse** on top-1 (69/0, p < 0.001, net -69 = -28.8pp, 95% CI [-34.3, -22.8]pp, not equivalent),
   and the direction holds in every set (same -48.3pp p<.001, cross -16.7pp p=.002, third -25.0pp p<.001, mixed
