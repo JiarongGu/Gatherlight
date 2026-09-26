@@ -22,6 +22,8 @@
 //  11. a SINGLE write racing a rebuild leaves no stale ref: a remember_fact held open across a backup import's rebuild
 //      does not put back the ref it read (a node the rebuild forgot), and an edit landing after the rebuild's snapshot
 //      is not overwritten by the ref of the content it replaced — both ref writes are conditional
+//  12. the rephrasing arm's reindex counts the facts it REPHRASED: one failure is said, and a pass that rephrased
+//      nothing (a signed-out CLI) is an error, not 「N 条事实补写了检索用的说法」
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -54,12 +56,16 @@ const SLOW = 'zzslowindex';
  *  GATHERLIGHT_STUB_HANG_ONCE_FILE: the one that creates the claim file — case 11's single write. */
 const HANG_ONCE = 'zzhangonce';
 
+/** Case 12: the rephrasing arm's counts, on a folder of its own — booted on a working stub, then on a signed-out one. */
+const PHRASE_PORTS = [5611, 5612];
+
 let server = null;
 let restoreServer = null;
 let upgraded = null;
 let vectorMove = null;
 let backfill = null;
 let race = null;
+let phrase = null;
 
 const remember = (c, kind, topic, content, confidence = 0.8) =>
   c.call('remember_fact', { kind, topic, content, source: `https://example.test/${encodeURIComponent(topic)}`, confidence });
@@ -843,6 +849,82 @@ try {
       e?.content === RACE_E_NEW && !!e?.ref && e.node === RACE_E_NEW, JSON.stringify(e));
   }
 
+  // --- 12. the rephrasing arm's reindex says how many facts it REPHRASED, not how many it visited -------------------
+  // ExpandAkaAsync swallowed every failure and ExpandEachAsync counted visits, so a signed-out CLI — which rephrases
+  // nothing — was reported as 「N 条事实补写了检索用的说法」. Now it counts what it stored: a fact whose rephrasing failed
+  // (the stub answers nothing for FORCE_ERROR) is counted apart, and a pass that stored nothing is an error.
+  {
+    const phraseDir = dataDirFor('p48-phrase');
+    fs.rmSync(phraseDir, { recursive: true, force: true });
+    makeTestData(phraseDir);
+    fs.writeFileSync(path.join(phraseDir, 'state', 'settings.json'), JSON.stringify({
+      memory: { semanticSource: 'claude-cli', embeddingModel: 'haiku' },
+    }, null, 2), 'utf8');
+    const reindexOnce = async (base) => {
+      const c = makeClient(base);
+      const started = await c.post('/api/manage/memory/layer/semantic/reindex');
+      let view = null;
+      for (let i = 0; i < 240; i++) {
+        view = (await c.getJson('/api/manage/memory')).layers.find((l) => l.id === 'semantic')?.reindex;
+        if (view && !view.running && (view.summary || view.error)) break;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      return { status: started.status, view };
+    };
+    phrase = startServer({ dataDir: phraseDir, port: PHRASE_PORTS[0], env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+    const pbase = `http://127.0.0.1:${PHRASE_PORTS[0]}`;
+    await waitHealthy(pbase);
+    const pc = makeClient(pbase);
+    await remember(pc, 'schedule', 'phrase bakery', 'The corner bakery sells rye bread until two in the afternoon.');
+    await remember(pc, 'schedule', 'phrase pool', 'The public pool keeps one lane for lessons each evening.');
+    await remember(pc, 'schedule', 'phrase broken', 'The FORCE_ERROR note about the tram timetable changes on Mondays.');
+    const mixed = await reindexOnce(pbase);
+    ok('THE POINT: a pass with one failed rephrasing says so — 2 rephrased, 1 not, rather than 3',
+      mixed.status === 202 && /为 2 条事实补写了检索用的说法;1 条没有成功/.test(String(mixed.view?.summary))
+        && mixed.view?.embedded === 2,
+      JSON.stringify(mixed));
+    phrase.stop();
+    phrase = null;
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // The same folder on a CLI that is installed and SIGNED OUT: every rephrasing fails, and that is an error.
+    const signedOut = path.join(phraseDir, '..', '_p48-signed-out-claude.mjs');
+    fs.writeFileSync(signedOut, `const args = process.argv.slice(2);
+if (args[0] === 'auth' && args[1] === 'status') {
+  process.stdout.write(JSON.stringify({ loggedIn: false, authMethod: 'none', apiProvider: 'firstParty' }));
+  process.exit(1);
+}
+process.exit(1);
+`);
+    phrase = startServer({ dataDir: phraseDir, port: PHRASE_PORTS[1], env: { GATHERLIGHT_CLAUDE_CMD: `node ${signedOut}` } });
+    const pbase2 = `http://127.0.0.1:${PHRASE_PORTS[1]}`;
+    await waitHealthy(pbase2);
+    const none = await reindexOnce(pbase2);
+    ok('THE POINT: a pass that rephrased NOTHING — a signed-out CLI — is an ERROR naming the likely cause, not a success',
+      none.status === 202 && !none.view?.summary && /没有为任何事实补写说法:3 条都没有成功/.test(String(none.view?.error))
+        && /Claude CLI/.test(String(none.view?.error)),
+      JSON.stringify(none));
+
+    // ONE LINE PER BULK PASS for writes kept without their subject handles. While the annotator fails — this signed-out
+    // CLI — every write of a back-fill loses its subjects the same way, and a Warning per fact buried the log under N
+    // copies of one cause. A memory import's back-fill of two facts: one summary line, and no per-write line for either.
+    const phraseLogDir = path.join(phraseDir, 'state', 'logs');
+    const phraseLog = () => (fs.existsSync(phraseLogDir)
+      ? fs.readdirSync(phraseLogDir).map((n) => fs.readFileSync(path.join(phraseLogDir, n), 'utf8')).join('\n') : '');
+    await fetch(`${pbase2}/api/memory/import`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ gatherlightMemory: 1, knowledge: [
+        { kind: 'schedule', topic: 'phrase tally one', content: 'The tally bakery opens early on Fridays.', confidence: 0.8 },
+        { kind: 'schedule', topic: 'phrase tally two', content: 'The tally pool closes for cleaning each Tuesday.', confidence: 0.8 },
+      ] }) });
+    for (let i = 0; i < 120 && !/back-fill after a memory import indexed/.test(phraseLog()); i++)
+      await new Promise((r) => setTimeout(r, 250));
+    const tallyLines = phraseLog().split('\n').filter((l) => /fact\(s\) in this pass were stored without their subject handles/.test(l));
+    const perWrite = phraseLog().split('\n').filter((l) => /schedule\/phrase tally (one|two) was stored without its subject handles/.test(l));
+    ok('THE POINT: a back-fill whose annotator fails logs ONE line for the pass, naming the count — none per write',
+      tallyLines.some((l) => / 2 fact\(s\) in this pass/.test(l) && /WARN/.test(l)) && perWrite.length === 0,
+      JSON.stringify({ tallyLines, perWrite }));
+  }
+
 } catch (err) {
   fail('e2e-p48 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {
@@ -852,6 +934,7 @@ try {
   try { vectorMove?.stop(); } catch {}
   try { backfill?.stop(); } catch {}
   try { race?.stop(); } catch {}
+  try { phrase?.stop(); } catch {}
 }
 
 done();

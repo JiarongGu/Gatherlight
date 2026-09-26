@@ -124,7 +124,9 @@ public sealed class FactIndexStep : IMigrationStep
         var facts = await _store.AllAsync();
         var alreadyIndexed = facts.Any(f => !string.IsNullOrEmpty(f.GraphRef));
         if (!alreadyIndexed) await _index.SyncAsync(ct);
-        else if (stored == VectorsOnlyMoved && !_index.Embeds)
+        // "Owed" is read through FactIndexLayout.IsVectorsOwed: a plain "2", or the token a console re-embed writes for
+        // its pass — which a restart that cut that pass short leaves here, to be finished below.
+        else if (FactIndexLayout.IsVectorsOwed(stored) && !_index.Embeds)
         {
             // Nothing reads a vector on this install, so nothing was stranded, and the graph is kept as it is. If an
             // embedder is bound LATER, binding it asks for a semantic reindex, which re-embeds every entry in place. One
@@ -135,7 +137,7 @@ public sealed class FactIndexStep : IMigrationStep
                 "embedder is wired; keeping the graph as it is", stored);
             await _index.SyncAsync(ct);
         }
-        else if (stored == VectorsOnlyMoved)
+        else if (FactIndexLayout.IsVectorsOwed(stored))
         {
             // ONLY THE VECTORS ARE OWED, AND AN EMBEDDER IS WIRED: re-embed every entry IN PLACE (Lyntai D194). This used
             // to be a destructive rebuild — every entry forgotten and re-remembered, every decay position and link
@@ -150,6 +152,9 @@ public sealed class FactIndexStep : IMigrationStep
             // loops. Proof: e2e-p52 case 11 (11b: a pass a restart cut short is finished here; 11c: one the embedder goes
             // down during keeps the marker owed and warns, and the next start finishes it) and 9e.
             _log?.LogInformation("fact index: layout {Stored} -> {Layout}; re-embedding every entry in place", stored, Layout);
+            // The migration overlay shows this step while it runs, and this can be a minute on a CPU with a large corpus —
+            // so it says what it is doing rather than sitting on the step's title (a 语义 bind now owes this on purpose).
+            _state?.SetStepDetail(Id, $"正在原地重新计算 {facts.Count(f => !string.IsNullOrEmpty(f.GraphRef))} 条事实的向量……");
             var reembed = await _index.ReembedInPlaceAsync(ct);
             if (!reembed.Completed)
             {

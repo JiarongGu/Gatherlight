@@ -15,6 +15,11 @@ public interface IAppConfigService
     void Set(string key, string value);
     void Delete(string key);
 
+    /// <summary>Set <paramref name="key"/> to <paramref name="value"/> only while it still holds
+    /// <paramref name="expected"/>, in ONE statement; true when it did. For a value two writers race on — the fact
+    /// index's layout marker, which a re-embed hands back only if no 语义 bind replaced it meanwhile.</summary>
+    bool CompareAndSet(string key, string expected, string value);
+
     /// <summary>Every key, or only those starting with <paramref name="prefix"/> (case-sensitive
     /// starts-with; null = all), in ordinal order — backs Lyntai's <c>IKeyValueStore.ListKeysAsync</c>
     /// so a namespaced consumer can enumerate its own <c>ns.*</c> slice.</summary>
@@ -46,6 +51,13 @@ public sealed class AppConfigService : IAppConfigService
             "INSERT INTO app_config(key, value) VALUES (@key, @value) " +
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             new { key, value });
+    }
+
+    public bool CompareAndSet(string key, string expected, string value)
+    {
+        using var conn = _db.Open();
+        return conn.Execute("UPDATE app_config SET value = @value WHERE key = @key AND value = @expected",
+            new { key, expected, value }) == 1;
     }
 
     public void Delete(string key)

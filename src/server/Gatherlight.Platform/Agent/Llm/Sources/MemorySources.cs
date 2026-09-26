@@ -99,10 +99,12 @@ public static class MemorySources
     /// <para>Earlier rewrites, still true as rules: it once said a local model meant installing Ollama
     /// yourself (false since the app provisions llama.cpp, 2026-08-22), and it once called the group 「内置」,
     /// the word that now names this very arm.</para></summary>
+    // Said as what THIS APP has and has not done. It used to say 「在应用内直接运行…现在已经可行」 — Lyntai's claim,
+    // never verified here, stated as a fact about this app.
     private const string BuiltInCannotJudge =
-        "「判断」也可以用重排模型来做,但「内置」这条还没做:在应用内直接运行支持中文的重排模型 mMiniLMv2 现在已经可行,"
-        + "但它还没有和 llama.cpp 上运行的同一个模型对比实测过。在那之前,请先用同一组「本机模型」里的 llama.cpp "
-        + "运行重排模型,mMiniLMv2 在那里也能选。无论哪种,写入事实时的主题标注都由 Claude CLI 完成。";
+        "「判断」也可以用重排模型来做,但「内置」这条还没做:在应用内直接运行支持中文的重排模型 mMiniLMv2 还没有接入,"
+        + "也还没有和 llama.cpp 上的同一个模型对比实测过。在那之前请用同一组「本机模型」里的 llama.cpp,"
+        + "mMiniLMv2 在那里可以选。无论哪种,写入事实时的主题标注都由 Claude CLI 完成。";
 
     public const string DefaultJudgeSource = "claude-cli";
 

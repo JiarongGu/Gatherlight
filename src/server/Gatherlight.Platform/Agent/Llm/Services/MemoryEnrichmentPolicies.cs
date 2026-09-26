@@ -61,6 +61,17 @@ public static class MemoryEnrichment
 /// <param name="Model">The model in effect on it.</param>
 public sealed record MemoryJudgeWiring(string Transport, string? Model);
 
+/// <summary>What 语义 is actually wired to — the embedder arm and model registered at startup, or nulls when none
+/// was (the arm unbound, a write-time arm like the Claude CLI's, or a bound model missing when the container was built).
+/// <para>The saved binding and the running one disagree between a bind and the restart that wires it, and until this
+/// existed the console could not tell: a semantic reindex started in that window re-embedded every entry with the OLD
+/// model, reported success and recorded the vectors as current — after the restart they were the wrong width, and
+/// semantic recall came back empty without a word. The reindex endpoint refuses while the two disagree, and the panel
+/// reports what runs.</para></summary>
+/// <param name="Source">The wired embedder arm's id (<c>llama-cpp</c>, <c>builtin</c>), or null.</param>
+/// <param name="Model">The model it embeds with, or null.</param>
+public sealed record MemorySemanticWiring(string? Source, string? Model);
+
 /// <summary>Runs the real annotator only while the switch is on. Registered BEFORE
 /// <c>AddMemoryAnnotation()</c>, whose <c>TryAddSingleton</c> then stands down — the BYO seam that
 /// registration documents. Off returns <see cref="MemoryAnnotation.None"/>, deliberately NOT

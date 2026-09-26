@@ -133,6 +133,11 @@ public static class GatherlightApp
             // reports it beside the saved setting so its backend badge names the model doing the work
             // rather than the one chosen a moment ago and not yet restarted into.
             .AddSingleton(new Platform.Agent.Llm.Services.MemoryJudgeWiring(judgeSource.Id, judgeModel))
+            // …and 语义's, for the same reason: only an arm that REGISTERS something is wired here (TakesEffectOnRestart —
+            // an embedder); a write-time arm runs as soon as it is saved and needs no record of it.
+            .AddSingleton(new Platform.Agent.Llm.Services.MemorySemanticWiring(
+                semanticOn && semanticSource!.TakesEffectOnRestart ? semanticSource.Id : null,
+                semanticOn && semanticSource!.TakesEffectOnRestart ? embeddingModel : null))
             // The config resolved above (one instance, one settings.json reader).
             .AddSingleton(config)
             .AddSingleton<Platform.Site.Services.ISiteManifestStore, Platform.Site.Services.SiteManifestStore>()

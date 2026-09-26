@@ -103,9 +103,13 @@
 //  11. A semantic reindex re-embeds IN PLACE (Lyntai D194, the 3.5 bump): node ids, links, decay positions and subjects
 //      byte-identical, one embed per entry, an input the embedder refuses tried once and kept, no annotation (no chat call,
 //      no stub spawn), the vectors rewritten at the new width, the layout marker OWED for the pass and current after, the
-//      progress and coverage still reported — confirmed to FAIL with the old RebuildAsync path restored. 11b: a pass cut
-//      short by a restart is finished by the next start, in place; 11c: a start the embedder goes down during keeps the
-//      marker owed and says so, and the next finishes it. (9e's one-off for long facts re-embeds in place the same way.)
+//      progress and coverage still reported — confirmed to FAIL with the old RebuildAsync path restored. 11a2: a pass
+//      with failures runs once more (Lyntai's recipe): an entry refused once is healed, one refused twice keeps its old
+//      vector and is counted. 11b: a pass cut short by a restart is finished by the next start, in place, and a pre-3.2
+//      vector collection is swept; 11c: a start the embedder goes down during keeps the marker owed and says so, and the
+//      next finishes it. 11d: a MODEL CHANGE — a bind landing mid-pass is not undone by the pass's end (compare-and-set),
+//      a reindex before the restart is refused, and the restart re-embeds with the new model on its own. (9e's one-off
+//      for long facts re-embeds in place the same way.)
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -159,9 +163,12 @@ const UPGRADE_PORT = 5411;
 const GONE_PORT = 5420;
 // Case 10c: a folder whose settings name a gone RERANKER, booted against a signed-out CLI.
 const GONE_OUT_PORT = 5421;
-// Case 11: one folder booted four times — the reindex and the pass cut short (11a, 11b), the start that finishes it, a
-// start the embedder goes down during (11c), and the one after — each on a port of its own.
-const REEMBED_PORTS = [5602, 5603, 5604, 5605];
+// Case 11: one folder booted five times — the reindex and the pass cut short (11a, 11b), the start that finishes it, a
+// start the embedder goes down during (11c), the one after, and the restart after a model change (11d) — each on a port
+// of its own.
+const REEMBED_PORTS = [5602, 5603, 5604, 5605, 5606];
+// Case 11d: the embedding model a bind changes to. "embed" in the name types it an embedder.
+const NEW_EMBED_MODEL = 'zzroute2-embed';
 
 // Case 6: a SECOND server that boots already bound to the reranker, in a data folder of its own. Its own
 // port too — never 5412/5413, which cases 1–5 used.
@@ -2026,8 +2033,10 @@ try {
       layout() === null, `facts.index.layout=${JSON.stringify(layout())}`);
     ok('…and the startup says so, in a sentence', downWarnings.some((w) => /嵌入模型这次启动没有响应/.test(w)),
       JSON.stringify(downWarnings));
-    // The console's semantic REINDEX while it is down: an embedder rebuild forgets the graph and clears every ref before
-    // it re-remembers anything, so run now it would discard the index for nothing — refused, before anything is touched.
+    // The console's semantic REINDEX while it is down: refused, before anything is touched. Until the Lyntai 3.5 bump
+    // that pass was a rebuild, which forgot the graph and cleared every ref first, so run now it discarded the index for
+    // nothing; it re-embeds in place now and would lose nothing, but it would compute no vector either, and the back-fill
+    // after it would annotate facts whose writes lose their vector again.
     const beforeReindex = hits.length;
     const reindex = await fetch(`${downBase}/api/manage/memory/layer/semantic/reindex`, { method: 'POST' });
     const reindexBody = await reindex.json().catch(() => ({}));
@@ -2378,7 +2387,9 @@ try {
         && annotatedAtWrite >= 5 && reWidths().zzreembedE === 0 && letters.every((l) => reWidths()[`zzreembed${l}`] === 8),
       JSON.stringify({ edgesBefore, annotatedAtWrite, widths: reWidths() }));
 
-    // 11a — the pass, under "a new model": wider vectors, and slow enough that the marker can be read while it runs.
+    // 11a — the pass, under "a new model": wider vectors, and slow enough that the marker can be read while it runs. The
+    // fact the embedder refused at write time fits now, so nothing fails and nothing reruns: one embed per entry.
+    refuseEmbedToken = null;
     vectorDims = 12;
     embedDelayMs = 250;
     const graphBefore = reGraph();
@@ -2389,13 +2400,17 @@ try {
     const started = await fetch(`${reBase}/api/manage/memory/layer/semantic/reindex`, { method: 'POST' });
     const layoutsSeen = new Set();
     const phasesSeen = new Set();
-    let view = null;
-    await until(async () => {
-      layoutsSeen.add(reLayout());
-      view = layerOf(await rc.getJson('/api/manage/memory'), 'semantic').reindex;
-      if (view?.phase) phasesSeen.add(view.phase);
-      return view && !view.running && (view.summary || view.error);
-    }, 120000, 100);
+    const finish = async (label) => {
+      let view = null;
+      await until(async () => {
+        layoutsSeen.add(reLayout());
+        view = layerOf(await rc.getJson('/api/manage/memory'), 'semantic').reindex;
+        if (view?.phase) phasesSeen.add(view.phase);
+        return view && !view.running && (view.summary || view.error);
+      }, 120000, 100).catch(() => { throw new Error(`${label}: the reindex never finished`); });
+      return view;
+    };
+    const view = await finish('11a');
     const passCalls = reStub().slice(stubBefore);
     ok('(fixture 11a) the reindex was accepted and ran detached to a summary', started.status === 202 && !!view?.summary,
       JSON.stringify({ status: started.status, view }));
@@ -2404,27 +2419,31 @@ try {
         && reCount("SELECT COUNT(*) n FROM knowledge WHERE COALESCE(graph_ref, '') <> ''") === refsBefore
         && reCount('SELECT COUNT(*) n FROM lyntai_memory_edge') === edgesBefore,
       JSON.stringify({ edgesBefore, edgesAfter: reCount('SELECT COUNT(*) n FROM lyntai_memory_edge'), refsBefore }));
-    ok('THE POINT (11a): the fake embedder received ONE embed per entry — each content once, the refused one tried once',
+    ok('THE POINT (11a): the fake embedder received ONE embed per entry — each content once',
       [...letters, 'E'].every((l) => reEmbeds(beforePass, `zzreembed${l} `).length === 1)
         && hits.slice(beforePass).filter((h) => h.path === '/v1/embeddings' && !h.body.includes('index probe')).length === nodes,
       reTrace(beforePass));
     ok('THE POINT (11a): no annotation — no chat call reached the fake, and the stub CLI was not spawned at all',
       !hits.slice(beforePass).some((h) => h.path === '/v1/chat/completions') && passCalls.length === 0,
       JSON.stringify(passCalls.map((x) => x.kind)));
-    ok('…and the vectors really were rewritten: every entry the new "model" could embed now has its width',
-      letters.every((l) => reWidths()[`zzreembed${l}`] === 12) && reWidths().zzreembedE === 0, JSON.stringify(reWidths()));
-    ok('THE POINT (11a): the layout marker said the vectors were OWED while the pass ran, and current after it',
-      layoutsSeen.has('2') && reLayout() === '3', JSON.stringify({ seen: [...layoutsSeen], now: reLayout() }));
+    ok('…and the vectors really were rewritten: every entry now has the new "model"\'s width, the once-refused one included',
+      [...letters, 'E'].every((l) => reWidths()[`zzreembed${l}`] === 12), JSON.stringify(reWidths()));
+    ok('THE POINT (11a): the layout marker said the vectors were OWED while the pass ran (the pass\'s own token), and current after it',
+      [...layoutsSeen].some((v) => /^2:/.test(String(v))) && reLayout() === '3',
+      JSON.stringify({ seen: [...layoutsSeen], now: reLayout() }));
     const semAfter = layerOf(await rc.getJson('/api/manage/memory'), 'semantic');
-    ok('…the progress path reported the in-place stage, and the summary says what was kept and what failed',
+    ok('…the progress path reported the in-place stage, and the summary says what was recomputed and kept',
       [...phasesSeen].some((p) => /原地重新计算/.test(p) && /不调用模型标注/.test(p))
-        && /4 条向量已原地重新计算/.test(view.summary) && /1 条没能计算/.test(view.summary) && view.embedded === 4,
+        && /5 条向量已原地重新计算,已学到的排序、关联和主题都保留/.test(view.summary) && view.embedded === 5,
       JSON.stringify({ phases: [...phasesSeen], summary: view.summary, embedded: view.embedded }));
     ok('…and coverage still reads as STATE: every fact indexed', semAfter.coverage?.indexed === 5 && semAfter.coverage?.total === 5,
       JSON.stringify(semAfter.coverage));
-    ok('…and the layer note says what a reindex costs for this arm now — in place, one embed each, no annotation',
-      /原地重新计算向量/.test(String(semAfter.note)) && /不调用模型标注/.test(String(semAfter.note))
-        && !/重置已积累的排序权重/.test(String(semAfter.note)), String(semAfter.note));
+    ok('…and the layer note says what it costs on THIS backend — the restart does it, in place, one embed each, the back-fill '
+      + 'annotates, and the timing is llama.cpp\'s measured one',
+      /重启服务时会自动为每条已有的事实原地重新计算向量/.test(String(semAfter.note)) && /不调用模型标注/.test(String(semAfter.note))
+        && /之前没有索引的事实会顺带补建/.test(String(semAfter.note)) && /llama\.cpp 上的 EmbeddingGemma/.test(String(semAfter.note))
+        && /只用 CPU 约 6 秒/.test(String(semAfter.note)) && !/重置已积累的排序权重/.test(String(semAfter.note)),
+      String(semAfter.note));
     // Recall reads the new vectors: its query is embedded (the semantic seed channel), at the new width.
     const beforeRecall = hits.length;
     const afterPass = await rc.call('recall_facts', { query: 'zzreembedfact pool', limit: 5 });
@@ -2432,9 +2451,32 @@ try {
       afterPass.result?.ranked === 'graph' && reEmbeds(beforeRecall, 'zzreembedfact pool').length > 0,
       JSON.stringify({ ranked: afterPass.result?.ranked, trace: reTrace(beforeRecall) }));
 
+    // 11a2 — FAILURES: Lyntai's recipe runs a pass with failures ONCE MORE and only what fails twice is classified. B is
+    // refused once (a blip), E every time (past the window): the rerun heals B; E, refused twice while the embedder answers
+    // a probe, keeps the vector it had and is counted. Nothing loops — two passes, then done.
+    vectorDims = 13;
+    embedDelayMs = 0;
+    refuseOnceToken = 'zzreembedB ';
+    refuseEmbedToken = 'zzreembedrefused';
+    const beforeFailPass = hits.length;
+    await fetch(`${reBase}/api/manage/memory/layer/semantic/reindex`, { method: 'POST' });
+    const failView = await finish('11a2');
+    ok('THE POINT (11a2): an entry refused ONCE is healed by the rerun — it has the new width',
+      reWidths().zzreembedB === 13 && refuseOnceToken === null && ['A', 'C', 'D'].every((l) => reWidths()[`zzreembed${l}`] === 13),
+      JSON.stringify(reWidths()));
+    ok('THE POINT (11a2): an entry refused TWICE keeps the vector it had, tried exactly twice — the pass and its one rerun',
+      reWidths().zzreembedE === 12 && reEmbeds(beforeFailPass, 'zzreembedE ').length === 2
+        && [...letters].every((l) => reEmbeds(beforeFailPass, `zzreembed${l} `).length === 2),
+      JSON.stringify({ widths: reWidths(), trace: reTrace(beforeFailPass) }));
+    ok('…and the summary counts it, while the pass counts as done — the marker current',
+      /4 条向量已原地重新计算;1 条没能计算/.test(String(failView.summary)) && reLayout() === '3',
+      JSON.stringify({ summary: failView.summary, error: failView.error, layout: reLayout() }));
+    refuseEmbedToken = null;
+
     // 11b — a pass CUT SHORT: the old rebuild healed an abort by clearing every ref first, so the back-fill finished it;
     // a re-embed clears nothing, so only the owed marker brings the next start back to it. Slow enough to be killed
-    // mid-pass, then a start under yet another "model".
+    // mid-pass, then a start under yet another "model". A vector collection at the PRE-3.2 address is planted too: the
+    // start's completed pass sweeps it (it holds a stale copy of the facts' content, and no recall reads it).
     embedDelayMs = 1500;
     vectorDims = 14;
     const graphBeforeAbort = reGraph();
@@ -2447,8 +2489,17 @@ try {
     const layoutAfterAbort = reLayout();
     const widthsAfterAbort = reWidths();
     ok('(fixture 11b) the pass was cut short: the marker is still owed, and some entries are on the old width',
-      layoutAfterAbort === '2' && letters.some((l) => widthsAfterAbort[`zzreembed${l}`] === 12),
+      /^2/.test(String(layoutAfterAbort)) && letters.some((l) => widthsAfterAbort[`zzreembed${l}`] === 13),
       JSON.stringify({ layout: layoutAfterAbort, widths: widthsAfterAbort }));
+    const pre32 = (op) => {
+      const db = new DatabaseSync(reDb);
+      try {
+        if (op === 'plant')
+          db.prepare("INSERT INTO lyntai_vector (collection, vec_id, vector, payload) VALUES ('facts/graph|facts|all', '999', '[0.1,0.2]', 'zzstale payload')").run();
+        return db.prepare("SELECT COUNT(*) n FROM lyntai_vector WHERE collection = 'facts/graph|facts|all'").get().n;
+      } finally { db.close(); }
+    };
+    ok('(fixture 11b) a pre-3.2 vector collection is planted', pre32('plant') === 1);
     embedDelayMs = 0;
     vectorDims = 16;
     const stubBeforeRestart = reStub().length;
@@ -2456,18 +2507,21 @@ try {
     reembedServer = startServer({ dataDir: reDir, port: REEMBED_PORTS[1], env: reEnv });
     await waitHealthy(`http://127.0.0.1:${REEMBED_PORTS[1]}`);
     ok('THE POINT (11b): the next START finishes it IN PLACE — every entry on the new width, the marker current',
-      reLayout() === '3' && letters.every((l) => reWidths()[`zzreembed${l}`] === 16) && reWidths().zzreembedE === 0,
+      reLayout() === '3' && [...letters, 'E'].every((l) => reWidths()[`zzreembed${l}`] === 16),
       JSON.stringify({ layout: reLayout(), widths: reWidths() }));
     ok('…nothing re-remembered or annotated — the graph rows as they were, each entry embedded once, the stub not spawned',
       reGraph() === graphBeforeAbort && [...letters, 'E'].every((l) => reEmbeds(beforeRestart, `zzreembed${l} `).length === 1)
         && reStub().slice(stubBeforeRestart).length === 0,
       JSON.stringify({ trace: reTrace(beforeRestart), stub: reStub().slice(stubBeforeRestart).map((x) => x.kind) }));
+    ok('…and the collection at the pre-3.2 address is swept, the current one kept',
+      pre32() === 0 && [...letters, 'E'].every((l) => reWidths()[`zzreembed${l}`] === 16), String(pre32()));
     await reStop();
 
     // 11c — a start whose pass the embedder goes DOWN during: the gate's probe is answered, then the refused entry fails
-    // and the probe after it is refused too — an outage, so the marker stays owed and the startup says so. The next start,
-    // everything answering, finishes it — and the entry refused all along now fits, and gets its vector.
+    // on the pass and on its rerun, and the probe after them is refused too — an outage, so the marker stays owed and the
+    // startup says so. The next start, everything answering, finishes it, the entry refused all along included.
     reSetLayout('2');
+    refuseEmbedToken = 'zzreembedrefused';
     probeBudget = 1;
     vectorDims = 18;
     reembedServer = startServer({ dataDir: reDir, port: REEMBED_PORTS[2], env: reEnv });
@@ -2482,13 +2536,62 @@ try {
     await reStop();
     const beforeRecover = hits.length;
     reembedServer = startServer({ dataDir: reDir, port: REEMBED_PORTS[3], env: reEnv });
-    await waitHealthy(`http://127.0.0.1:${REEMBED_PORTS[3]}`);
+    const recoverBase = `http://127.0.0.1:${REEMBED_PORTS[3]}`;
+    await waitHealthy(recoverBase);
     ok('…and the next start finishes it — every entry, the once-refused one included, on the new width, the marker current',
       reLayout() === '3' && [...letters, 'E'].every((l) => reWidths()[`zzreembed${l}`] === 18)
         && [...letters, 'E'].every((l) => reEmbeds(beforeRecover, `zzreembed${l} `).length === 1),
       JSON.stringify({ layout: reLayout(), widths: reWidths(), trace: reTrace(beforeRecover) }));
+
+    // 11d — A MODEL CHANGE. Binding a new embedder owes every entry a vector from it, and the model is wired only by a
+    // restart. (a) A reindex before that restart would re-embed with the OLD model, report success and record the
+    // vectors as current — refused. (b) The bind records the vectors as owed, so the restart re-embeds on its own. And a
+    // bind landing IN THE MIDDLE of a pass is not undone by that pass's end: it hands the marker back by compare-and-set.
+    const rc3 = makeClient(recoverBase);
+    fs.writeFileSync(path.join(reRes, 'gguf', `${NEW_EMBED_MODEL}.gguf`), '');
+    served.add(NEW_EMBED_MODEL);
+    // Slow enough that the bind — whose own proof embeds through the same fake — lands well inside the pass.
+    embedDelayMs = 800;
+    await fetch(`${recoverBase}/api/manage/memory/layer/semantic/reindex`, { method: 'POST' });
+    await until(() => /^2:/.test(String(reLayout())), 30000, 50);
+    const bindNew = await rc3.post('/api/manage/memory/layer/semantic', { source: 'llama-cpp', model: NEW_EMBED_MODEL });
+    let midView = null;
+    await until(async () => {
+      midView = layerOf(await rc3.getJson('/api/manage/memory'), 'semantic').reindex;
+      return midView && !midView.running && (midView.summary || midView.error);
+    }, 120000, 100);
+    ok('(fixture 11d) the bind landed while the pass ran, and says the restart re-embeds — no reindex to remember',
+      bindNew.status === 200 && bindNew.body?.vectorsOwed === true && bindNew.body?.reindexRequired === false
+        && /重启时会自动为已有的事实重新计算向量/.test(String(bindNew.body?.note)) && !!midView?.summary,
+      JSON.stringify({ status: bindNew.status, body: bindNew.body, midView }));
+    ok('THE POINT (11d): the pass that finished after the bind did NOT hand the marker back — the new model\'s vectors are still owed',
+      reLayout() === '2', `facts.index.layout=${JSON.stringify(reLayout())}`);
+    const semBound = layerOf(await rc3.getJson('/api/manage/memory'), 'semantic');
+    ok('…and the panel says what RUNS: the saved model is the new one, the running one still the old — a restart owed',
+      semBound.model === NEW_EMBED_MODEL && semBound.activeModel === EMBED_MODEL,
+      JSON.stringify({ model: semBound.model, active: semBound.activeModel }));
+    const early = await rc3.post('/api/manage/memory/layer/semantic/reindex');
+    ok('THE POINT (11d, a): a reindex before the restart is REFUSED, saying the restart does it — and touches nothing',
+      early.status === 409 && /请先重启服务/.test(String(early.body?.error)) && reLayout() === '2',
+      JSON.stringify({ status: early.status, body: early.body, layout: reLayout() }));
+    embedDelayMs = 0;
+    await reStop();
+    vectorDims = 22;
+    const graphBeforeSwap = reGraph();
+    const stubBeforeSwap = reStub().length;
+    const beforeSwap = hits.length;
+    reembedServer = startServer({ dataDir: reDir, port: REEMBED_PORTS[4], env: reEnv });
+    await waitHealthy(`http://127.0.0.1:${REEMBED_PORTS[4]}`);
+    ok('THE POINT (11d, b): the restart re-embeds every entry with the NEW model, in place, on its own — the marker current',
+      reLayout() === '3' && [...letters, 'E'].every((l) => reWidths()[`zzreembed${l}`] === 22)
+        && hits.slice(beforeSwap).some((h) => h.path === '/v1/embeddings' && h.model === NEW_EMBED_MODEL),
+      JSON.stringify({ layout: reLayout(), widths: reWidths() }));
+    ok('…nothing re-remembered or annotated — the graph rows as they were, the stub not spawned',
+      reGraph() === graphBeforeSwap && reStub().slice(stubBeforeSwap).length === 0,
+      JSON.stringify(reStub().slice(stubBeforeSwap).map((x) => x.kind)));
     vectorDims = 8;
   }
+
 } catch (err) {
   fail('e2e-p52 fatal: ' + (err?.stack || err?.message || String(err)));
 } finally {

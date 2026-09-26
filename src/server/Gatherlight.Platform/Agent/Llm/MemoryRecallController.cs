@@ -61,6 +61,8 @@ public sealed class MemoryRecallController : ControllerBase
     private readonly Storage.Knowledge.Services.IKnowledgeStore _knowledge;
     // The reranker judge's pace, when one is running: its skip count is the one place a skipped recall becomes visible.
     private readonly RerankPace? _pace;
+    // What 语义 is RUNNING on — the embedder arm and model wired at startup — as opposed to what is saved.
+    private readonly MemorySemanticWiring? _semanticWiring;
 
     public MemoryRecallController(IClaudeCliRuntime claude,
         ILlamaServerRuntime llama, ServerConfigService config,
@@ -71,9 +73,11 @@ public sealed class MemoryRecallController : ControllerBase
         ILogger<MemoryRecallController> log,
         Lyntai.Memory.ISemanticMemory? semantic = null,
         Lyntai.Inference.ITextClient? llm = null,
-        RerankPace? pace = null)
+        RerankPace? pace = null,
+        MemorySemanticWiring? semanticWiring = null)
     {
         _pace = pace;
+        _semanticWiring = semanticWiring;
         _judgeWiring = judgeWiring;
         _claude = claude;
         _llama = llama;
@@ -264,8 +268,8 @@ public sealed class MemoryRecallController : ControllerBase
                     // container holds one — it cannot until a restart. For an arm whose effect is at write
                     // time, saved IS running: asking whether an ISemanticMemory exists would answer no for
                     // ever and make the restart banner permanent.
-                    activeSource = SemanticIsRunning(boundSemantic) ? boundSemantic?.Id : null,
-                    activeModel = SemanticIsRunning(boundSemantic) ? mem.EmbeddingModel : null,
+                    activeSource = RunningSemantic(boundSemantic).Source,
+                    activeModel = RunningSemantic(boundSemantic).Model,
                     groups = semanticGroups,
                     // A saved backend that no longer exists is SAID, never silently
                     // swapped — see RetiredNote.
@@ -365,6 +369,26 @@ public sealed class MemoryRecallController : ControllerBase
     /// running as soon as it is saved.</para></summary>
     private bool SemanticIsRunning(Sources.IMemorySemanticSource? bound) =>
         bound is not null && (!bound.TakesEffectOnRestart || _semantic is not null);
+
+    /// <summary>What 语义 is RUNNING on, in the saved setting's vocabulary: a write-time arm as saved; an embedder arm as
+    /// WIRED at startup (<see cref="MemorySemanticWiring"/>), which after a bind names the model still doing the work until
+    /// the restart — so the panel's saved-versus-running comparison shows the restart owed, where it used to report the
+    /// saved model as running and a model change looked applied.</summary>
+    private (string? Source, string? Model) RunningSemantic(Sources.IMemorySemanticSource? bound)
+    {
+        if (!SemanticIsRunning(bound)) return (null, null);
+        if (!bound!.TakesEffectOnRestart || _semanticWiring?.Source is null) return (bound.Id, _config.Current.Memory.EmbeddingModel);
+        return (_semanticWiring.Source, _semanticWiring.Model);
+    }
+
+    /// <summary>Is the bound EMBEDDER the one wired at startup — same arm, same model? False between a bind and the
+    /// restart that wires it (or while a bound model was missing when the container was built). A reindex in that window
+    /// would re-embed every entry with the OLD model and report success.</summary>
+    private bool BoundEmbedderIsRunning(Sources.IMemorySemanticSource bound) =>
+        _semantic is not null && _semanticWiring?.Source is { } wired
+        && string.Equals(wired, bound.Id, StringComparison.OrdinalIgnoreCase)
+        && _semanticWiring.Model is { } running && _config.Current.Memory.EmbeddingModel is { } saved
+        && ModelId.Matches(running, saved);
 
     /// <summary>Project a <see cref="RuntimeOrigin"/> for the wire. A named projection rather than an
     /// inline anonymous object because a DECLINED backend needs one too — it has no source to ask, so the
@@ -689,6 +713,7 @@ public sealed class MemoryRecallController : ControllerBase
                 });
 
             var previous = _config.Current.Memory.EmbeddingModel;
+            var previousSource = _config.Current.Memory.SemanticSource;
             _config.Update(c =>
             {
                 c.Memory.SemanticSource = source.Id;
@@ -699,16 +724,32 @@ public sealed class MemoryRecallController : ControllerBase
             // matches nothing rather than erroring — so the reindex is not optional, and saying so here is
             // what stops a household sitting on silently empty recall.
             var modelChanged = previous is not null && !ModelId.Matches(previous, model!);
-            _log.LogInformation("semantic recall bound to {Source}/{Model} ({Dims}d)",
-                source.Id, model, probe.Dimensions);
+            // THE RESTART RE-EMBEDS, now that a re-embed is in place and loses nothing (Lyntai D194). An embedder arm newly
+            // bound, or bound to a different model, owes every entry a vector from THIS model: the layout marker records
+            // it (FactIndexLayout.VectorsOwed) and the start that wires the model re-embeds in place (FactIndexStep) — no
+            // reindex to remember afterwards, and none possible before it (the endpoint refuses while the bound embedder
+            // is not the running one). Recorded over the current layout or an owed one — including a console pass's token,
+            // which that pass then fails to swap back (its compare-and-set), so a bind landing mid-pass is not lost.
+            // Any other value already makes the next start rebuild, which re-embeds too.
+            var owesVectors = source.TakesEffectOnRestart && (previous is null || modelChanged
+                || !string.Equals(previousSource, source.Id, StringComparison.OrdinalIgnoreCase));
+            if (owesVectors && _appConfig.Get(Storage.Knowledge.Services.FactIndexLayout.Key) is { } marker
+                && (marker == Storage.Knowledge.Services.FactIndexLayout.Current
+                    || Storage.Knowledge.Services.FactIndexLayout.IsVectorsOwed(marker)))
+                _appConfig.Set(Storage.Knowledge.Services.FactIndexLayout.Key,
+                    Storage.Knowledge.Services.FactIndexLayout.VectorsOwed);
+            _log.LogInformation("semantic recall bound to {Source}/{Model} ({Dims}d){Owed}",
+                source.Id, model, probe.Dimensions, owesVectors ? "; the next start re-embeds every entry" : "");
 
             return Ok(new
             {
                 // An arm that registers nothing is live on the next WRITE, so telling the household to
                 // restart would be asking for something that changes nothing. The reindex is still offered:
                 // phrasings attach as facts are written, so what they already know needs a pass to gain them.
+                // An embedder arm needs no reindex from the household any more: the restart re-embeds (vectorsOwed).
                 ok = true, layer, source = source.Id, model,
-                restartRequired = source.TakesEffectOnRestart, reindexRequired = true,
+                restartRequired = source.TakesEffectOnRestart, reindexRequired = !source.TakesEffectOnRestart,
+                vectorsOwed = owesVectors,
                 // `proved` says what the number IS: a vector width for an embedding arm, "phrasings" for
                 // the CLI one. Without it `dimensions: 4` from a rephrasing probe reads as a 4-dimensional
                 // embedding, which is the kind of confident-and-wrong label this surface keeps removing.
@@ -720,10 +761,12 @@ public sealed class MemoryRecallController : ControllerBase
                 // for the CLI arm — the response contradicting itself in the one field a household
                 // actually reads. That arm registers nothing and is read per write, so telling someone to
                 // restart is both wrong and a reason to distrust the rest of the message.
-                note = source.TakesEffectOnRestart
-                    ? "设置已保存。重启服务后生效,然后请重新建立一次语义索引。"
-                    : "设置已保存,立即生效。现有的事实还没有改写说法 —— 请重新建立一次语义索引,"
-                        + "只补写检索用的说法,不会动图谱已经学到的东西。",
+                note = !source.TakesEffectOnRestart
+                    ? "设置已保存,立即生效。现有的事实还没有改写说法 —— 请重新建立一次语义索引,"
+                        + "只补写检索用的说法,不会动图谱已经学到的东西。"
+                    : owesVectors
+                        ? "设置已保存。重启服务后生效 —— 重启时会自动为已有的事实重新计算向量,不需要再手动重建索引。"
+                        : "设置已保存。重启服务后生效。",
             });
         }
 
@@ -769,8 +812,16 @@ public sealed class MemoryRecallController : ControllerBase
     [HttpPost("api/manage/memory/layer/semantic/reindex")]
     public async Task<IActionResult> Reindex(CancellationToken ct)
     {
-        if (MemorySources.ResolveSemantic(Settings()) is null)
+        var bound = MemorySources.ResolveSemantic(Settings());
+        if (bound is null)
             return StatusCode(409, new { error = "「语义」这一层尚未启用。" });
+        // THE BOUND EMBEDDER MUST BE THE RUNNING ONE. An embedder is wired at startup, so between a bind and its restart
+        // a pass would re-embed every entry with the OLD model, report success and record the vectors as current — and
+        // after the restart they were the wrong width, semantic recall empty without a word. Refused, and nothing is
+        // touched: the bind recorded the vectors as owed, so the restart re-embeds on its own. Proof: e2e-p52 case 11d.
+        if (bound.TakesEffectOnRestart && !BoundEmbedderIsRunning(bound))
+            return StatusCode(409, new { error = "请先重启服务 —— 新的嵌入模型要在重启后才会生效;重启时会自动为已有的事实"
+                + "重新计算向量,不需要再手动重建。" });
         // GATED, like both back-fills (IFactIndex.EmbedderReadyAsync) and BEFORE anything is touched — the layout marker
         // included. A re-embed in place loses nothing when the embedder is down (each entry keeps the vector it had), so
         // this no longer protects the index the way it did when the pass was a destructive rebuild; what it spares is a
@@ -843,18 +894,30 @@ public sealed class MemoryRecallController : ControllerBase
             // embedder that is wired and FAILS is the gate's 409 or a pass that does not complete (below), where it used to
             // come here as a zero from the rebuild — which is why this sentence no longer lists a stopped runtime or an
             // incomplete model file. (It blamed Ollama once, a backend retired on 2026-08-22.)
-            null => ("没有建立任何索引:嵌入模型只在服务启动时装载,而这次启动时它还没有绑定(或模型文件还不在)。"
-                + "请重启服务,再重建一次。", null),
+            null => ("没有建立任何索引:嵌入模型只在服务启动时装载,而这次启动时它还没有绑定、模型文件还不在,"
+                + "或者 llama.cpp 运行时还没有下载。请重启服务,再重建一次。", null),
+            // THE REPHRASING ARM, COUNTED BY WHAT IT STORED. It said 「{N} 条事实补写了检索用的说法」 with N the facts it
+            // VISITED — so a signed-out CLI, which rephrases nothing, was reported as having rephrased every fact.
+            Storage.Knowledge.Services.SemanticReindexStage.Rephrase when r.Rederived == 0 && r.Failed > 0 => (
+                $"没有为任何事实补写说法:{r.Failed} 条都没有成功(详见「日志」)。多半是 Claude CLI 没有登录或调用失败 —— "
+                + "可以在「资源 · Resources」查看它的状态,再重建一次。", null),
+            Storage.Knowledge.Services.SemanticReindexStage.Rephrase when r.Rederived == 0 => (null,
+                "上次重建完成:还没有事实,没有需要补写的说法。"),
+            Storage.Knowledge.Services.SemanticReindexStage.Rephrase when r.Failed > 0 => (null,
+                $"上次重建完成:为 {r.Rederived} 条事实补写了检索用的说法;{r.Failed} 条没有成功(详见「日志」),"
+                + "它们和之前一样能按原文找到。图谱没有改动。"),
             Storage.Knowledge.Services.SemanticReindexStage.Rephrase => (null,
-                $"上次重建完成:{r.Rederived} 条事实补写了检索用的说法,图谱没有改动。"),
-            // Entries failed and the embedder then stopped answering a probe: the marker stays owed, so the next start
-            // re-embeds again. Nothing was lost — a failed entry is left as it was before the pass.
+                $"上次重建完成:为 {r.Rederived} 条事实补写了检索用的说法,图谱没有改动。"),
+            // Entries failed twice and the embedder then stopped answering a probe. Nothing was lost — a failed entry is
+            // left as it was before the pass. "下次启动会自动再试": the marker stays owed when this pass owned it (the
+            // current layout, or an owed one), so the next start re-embeds in place; any other marker already makes the
+            // next start REBUILD, which re-embeds too — true either way, which is why it names no mechanism.
             _ when !r.Completed && r.Failed > 0 => ($"向量没有全部重新计算:嵌入模型在途中停止了响应({r.Rederived} 条已算好,"
-                + $"{r.Failed} 条没算成,保持重建前的样子)。下次启动会自动再算一次;也可以等它恢复后再点「重建索引」。", null),
-            // The pass THREW — Lyntai throws when a vector WRITE fails, the index itself being broken — before or after
-            // embedding anything; nothing was forgotten, and the marker stays owed.
-            _ when !r.Completed => ("向量没有重新计算:重新计算时出了错(详见「日志」)。图谱和已有的向量都没有动,"
-                + "下次启动会自动再试一次。", null),
+                + $"{r.Failed} 条没算成,保持重建前的样子)。下次启动会自动再试一次;也可以等它恢复后再点「重建索引」。", null),
+            // The pass THREW — Lyntai throws when a vector WRITE fails, the index itself being broken — possibly after
+            // earlier batches were written, which stay re-embedded; the result cannot say how many. Nothing was forgotten.
+            _ when !r.Completed => ("向量没有全部重新计算:重新计算时出了错(详见「日志」)。图谱没有动(已学到的排序和关联都保留),"
+                + "部分向量可能已经更新;下次启动会自动再试一次。", null),
             _ when r.Rederived == 0 && r.Failed == 0 => (null,
                 "上次重建完成:还没有已索引的事实,没有需要重新计算的向量。" + backFilled),
             _ when r.Failed > 0 => (null, $"上次重建完成:{r.Rederived} 条向量已原地重新计算;{r.Failed} 条没能计算"
@@ -870,17 +933,31 @@ public sealed class MemoryRecallController : ControllerBase
         public void Report(T value) => report(value);
     }
 
-    /// <summary>What 重建索引 does for the bound 语义 arm, said where the household decides. Null when nothing is bound.
-    /// The timings are the real binary's (docs/self-managed-llm-runtime.md, 2026-09-27).</summary>
+    /// <summary>What a reindex does for the bound 语义 arm, said where the household decides. Null when nothing is bound.
+    /// The timing is PER BACKEND (<see cref="ReembedTiming"/>): only what was measured is quoted, with its configuration.</summary>
     private static string? ReindexNote(Sources.IMemorySemanticSource? bound) => bound is null ? null
         : bound.Group == MemoryGroups.Cli
             ? "开启后请重新建立一次语义索引,为已有的事实补写检索用的说法 —— 每条一次 Claude 调用(消耗账号额度);"
               + "图谱已经学到的排序和关联不受影响。"
-            : "开启或更换嵌入模型后,请重新建立一次语义索引:为每条已有的事实原地重新计算向量 —— 每条一次嵌入,"
-              + "不调用模型标注;已经学到的排序、关联和主题都保留。" + ReembedTiming;
+            : "开启或更换嵌入模型后,重启服务时会自动为每条已有的事实原地重新计算向量 —— 每条一次嵌入,不调用模型标注;"
+              + "已经学到的排序、关联和主题都保留。之前没有索引的事实会顺带补建,开启判断时每条多一次模型调用。"
+              + "「重建索引」可以随时再做一次。" + ReembedTiming(bound.Id);
 
-    /// <summary>How long the in-place re-embed takes, as measured — see <see cref="ReindexNote"/>.</summary>
-    private const string ReembedTiming = "实测一百条短事实:有显卡约 3 秒,只用 CPU 约 5 秒;长的事实会慢一些。";
+    /// <summary>How long the in-place re-embed takes on <paramref name="sourceId"/>, as measured
+    /// (docs/self-managed-llm-runtime.md, 2026-09-27), or that it was not. POST to summary, 100 short facts (21–64
+    /// characters): llama.cpp b10549 with EmbeddingGemma-300M Q8_0, 2.6–2.7 s on one discrete GPU and 5.4–5.8 s on the
+    /// CPU (<c>device = none</c>); the built-in ONNX EmbeddingGemma-300M q4 in this process — ONNX Runtime's CPU provider,
+    /// the only one referenced — 4.5–4.8 s on the same laptop.</summary>
+    private static string ReembedTiming(string sourceId) => sourceId switch
+    {
+        MemoryBackends.LlamaCpp => "llama.cpp 上的 EmbeddingGemma,实测一百条短事实:一块独立显卡约 3 秒,只用 CPU 约 6 秒;"
+            + "长的事实会慢一些。",
+        MemoryBackends.BuiltIn => BuiltInReembedTiming,
+        _ => "这个后端重新计算向量要多久还没有实测过。",
+    };
+
+    /// <summary>The built-in embedder's measured figure — see <see cref="ReembedTiming"/>.</summary>
+    private const string BuiltInReembedTiming = "应用内置的 EmbeddingGemma 在 CPU 上运行,实测一百条短事实约 5 秒;长的事实会慢一些。";
 
     private object ReindexView()
     {

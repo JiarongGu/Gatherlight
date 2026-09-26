@@ -41,6 +41,23 @@ public static class FactIndexLayout
     /// short (a restart, an update) is finished by the next start. With an embedder wired, the start that finds it
     /// re-embeds every entry IN PLACE (<see cref="IFactIndex.ReembedInPlaceAsync"/>); with none, it keeps the graph.</summary>
     public const string VectorsOwed = "2";
+
+    /// <summary>The marker a CONSOLE re-embed writes for the length of its pass: <see cref="VectorsOwed"/> with a token of
+    /// its own after it ("2:…"). Owed, like "2", to every reader (<see cref="IsVectorsOwed"/>) — so a pass a restart cuts
+    /// short is finished by the next start — and the token is what lets the pass hand the marker back to
+    /// <see cref="Current"/> by COMPARE-AND-SET: a 语义 bind that lands mid-pass writes a plain "2" (the new model's
+    /// vectors are owed), the pass's swap from its own token then finds something else and leaves it, and the restart
+    /// re-embeds with the new model. With one value for both, the pass would clear the bind's debt and the vectors would
+    /// stay on the old model after the restart — the wrong width, semantic recall silently empty. An older build reads a
+    /// token as an unknown layout and rebuilds, which is safe.</summary>
+    public const string PassPrefix = VectorsOwed + ":";
+
+    /// <summary>Is a stored marker "the vectors are owed" — plain <see cref="VectorsOwed"/>, or a console pass's token?</summary>
+    public static bool IsVectorsOwed(string? stored) =>
+        stored == VectorsOwed || (stored?.StartsWith(PassPrefix, StringComparison.Ordinal) ?? false);
+
+    /// <summary>A fresh console-pass marker (<see cref="PassPrefix"/> and a token).</summary>
+    public static string NewPassMarker() => PassPrefix + Guid.NewGuid().ToString("N")[..12];
 }
 
 /// <summary>What a re-embed in place did: how many graph entries got a vector from the wired embedder, how many it could
@@ -377,8 +394,13 @@ public sealed class FactIndex : IFactIndex
         }
     }
 
-    public async Task<string?> IndexAsync(string kind, string topic, string content, long? factId = null,
-        CancellationToken ct = default)
+    public Task<string?> IndexAsync(string kind, string topic, string content, long? factId = null,
+        CancellationToken ct = default) => IndexCoreAsync(kind, topic, content, factId, null, ct);
+
+    /// <summary><see cref="IndexAsync"/>, with a bulk pass's <paramref name="tally"/> — null for a single write, whose
+    /// lost subjects get a line of their own.</summary>
+    private async Task<string?> IndexCoreAsync(string kind, string topic, string content, long? factId,
+        UnansweredTally? tally, CancellationToken ct)
     {
         if (_engine is null) return null;
         try
@@ -458,11 +480,18 @@ public sealed class FactIndex : IFactIndex
             // it returns None without asking anything — answered, about nothing — so an "off" write sets the flag and says
             // nothing here. Asked only on the path that KEEPS the reference: a write returned unindexed above is
             // re-remembered by the next back-fill, which annotates it again.
+            // ONE LINE PER WRITE for a single write, ONE PER PASS for a bulk one (UnansweredTally): while the annotator
+            // fails, every write of a back-fill or rebuild loses its subjects the same way.
             if (!written.Ran.HasFlag(Lyntai.Memory.MemorySources.Annotation))
-                _log?.LogWarning("fact index: {Kind}/{Topic} was stored without its subject handles — its annotation got " +
-                    "no answer (a signed-out or failing CLI, a reply that is not the JSON asked for) or its subjects could " +
-                    "not be recorded; nothing re-tags it until it is written again or the index is rebuilt (it stays " +
-                    "findable by its words)", kind, topic);
+            {
+                if (tally is not null) tally.Add(kind, topic);
+                else
+                    _log?.LogWarning("fact index: {Kind}/{Topic} was stored without its subject handles — its annotation " +
+                        "got no answer (the annotator, the Claude CLI or a local chat model, failed, refused or replied " +
+                        "with something other than the JSON asked for) or its subjects could not be recorded; nothing " +
+                        "re-tags it until it is written again or the index is rebuilt (it stays findable by its words)",
+                        kind, topic);
+            }
             return Encode(written.Reference);
         }
         catch (Exception ex)
@@ -481,32 +510,44 @@ public sealed class FactIndex : IFactIndex
     ///
     /// <para>NEVER throws and never blocks the write. A fact that failed to gain phrasings is a fact that
     /// is merely as findable as it was before; a fact that failed to be written is data loss. Which way
-    /// round that trade goes is not a close call.</para></summary>
-    private async Task ExpandAkaAsync(string kind, string topic, string content, CancellationToken ct)
+    /// round that trade goes is not a close call.</para>
+    /// <para>Returns whether phrasings were STORED — false for a fact the arm is not bound for, and for one whose call
+    /// failed or came back empty, which is what a signed-out CLI does to every fact. A pass counts this, not the facts
+    /// it visited, so it can say how many it really rephrased.</para></summary>
+    private async Task<bool> ExpandAkaAsync(string kind, string topic, string content, CancellationToken ct)
     {
-        if (_llm is null || _config is null) return;
+        if (_llm is null || _config is null) return false;
         var mem = _config.Current.Memory;
         // The SAVED binding, read per write rather than captured at startup: this arm registers nothing,
         // so there is no DI-time snapshot to go stale, and binding it must take effect on the next fact
         // rather than after a restart.
         if (!string.Equals(mem.SemanticSource, Agent.Llm.Sources.MemoryBackends.ClaudeCli,
                 StringComparison.OrdinalIgnoreCase))
-            return;
+            return false;
         try
         {
             var phrasings = await Agent.Llm.Sources.ClaudeCliSemanticSource.RephraseAsync(
                 _llm, mem.EmbeddingModel, content, ct);
-            if (phrasings.Count == 0) return;
+            if (phrasings.Count == 0)
+            {
+                // Information, not Warning: a pass over a signed-out CLI would otherwise log one per fact, and it reports
+                // the count itself (ExpandEachAsync) — the same volume rule as the annotation tally.
+                _log?.LogInformation("fact index: no phrasings came back for {Kind}/{Topic} (the Claude CLI failed, refused " +
+                    "or answered nothing); it stays as findable as before", kind, topic);
+                return false;
+            }
             // Addressed by KEY. Searching for the fact we had just written could attach its phrasings to a
             // different one — see IKnowledgeStore.SetAkaAsync for how.
             await _store.SetAkaAsync(kind, topic, string.Join('\n', phrasings));
             _log?.LogInformation("fact index: stored {Count} phrasings for {Kind}/{Topic}",
                 phrasings.Count, kind, topic);
+            return true;
         }
         catch (Exception ex)
         {
             _log?.LogWarning(ex,
                 "fact index: could not expand {Kind}/{Topic}; it stays as findable as before", kind, topic);
+            return false;
         }
     }
 
@@ -686,27 +727,40 @@ public sealed class FactIndex : IFactIndex
             var clock = System.Diagnostics.Stopwatch.StartNew();
             // ONE scope — every entry lives in AllFacts (FactIndexStep's layout), and it is the only one recall reads.
             var result = await reindexable.ReindexAsync(TaskKey, AllFacts, ct);
+            // LYNTAI'S OWN RECIPE for a pass with failures (docs/memory.md, "Re-embed after changing the embedding
+            // model"): run it once more. A failure that PASSED — a child crash the next request reloads, the tail of a
+            // router restart — is then gone, and only what fails TWICE is classified. A rerun re-embeds the whole task,
+            // not only the failed entries (no API narrows it): one more embed per entry, no annotation. Without it a
+            // single blip read as a refused input, and that entry kept its old vector until the next reindex.
+            var firstFailed = result.Failed;
+            if (result.Failed > 0) result = await reindexable.ReindexAsync(TaskKey, AllFacts, ct);
             clock.Stop();
-            // Failures are CLASSIFIED once, for the whole pass, as a write's are: a probe answered means the embedder
-            // refused those inputs and the pass is done; unanswered, it is down and the pass must be run again. A failed
-            // entry keeps the vector it had — Lyntai writes nothing for a batch whose embed failed — so nothing is lost
-            // either way, and nothing here retries it: an input refused for its length would be refused again.
+            // What failed twice is CLASSIFIED once, for the whole pass, as a write's loss is: a probe answered means the
+            // embedder refused those inputs and the pass is done; unanswered, it is down and the pass must be run again.
+            // A failed entry keeps the vector it had — Lyntai writes nothing for a batch whose embed failed — so nothing is
+            // lost either way, and nothing retries it past the rerun: an input refused for its length would be refused
+            // again. THE RESIDUAL: an input refused on both passes while the probe is answered is read as refused for good
+            // — an outage that lifts between the second pass and the probe is read that way too.
             var completed = result.Failed == 0 || await EmbedderReadyAsync(ct);
             _log?.LogInformation("fact index: re-embedded {Indexed} graph entries IN PLACE in {Ms} ms ({Facts} indexed " +
-                "facts; nodes, links, decay and subjects untouched; no annotation){Failed}", result.Indexed,
+                "facts; nodes, links, decay and subjects untouched; no annotation){Rerun}{Failed}", result.Indexed,
                 clock.ElapsedMilliseconds, facts,
+                firstFailed == 0 ? "" : $"; {firstFailed} failed on the first pass, so it ran once more",
                 result.Failed == 0 ? "" : completed
-                    ? $" — {result.Failed} could not be embedded while the embedder answers a probe (most likely past its " +
-                      "window); they keep the vector they had, or none, and are not retried"
-                    : $" — {result.Failed} failed and the embedder no longer answers a probe; the pass is owed again");
+                    ? $" — {result.Failed} could not be embedded twice while the embedder answers a probe (most likely " +
+                      "past its window); they keep the vector they had, or none, and are not retried"
+                    : $" — {result.Failed} failed twice and the embedder no longer answers a probe; the pass is owed again");
+            if (completed) await DropPre32VectorsAsync(ct);
             return new ReembedResult(result.Indexed, result.Failed, completed);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            // A write that FAILS throws in Lyntai's pass (the vector index itself is broken). Nothing was forgotten, so
-            // the graph is as it was; the pass is simply not done.
-            _log?.LogWarning(ex, "fact index: re-embedding in place failed; the graph is unchanged and the pass is owed");
+            // A write that FAILS throws in Lyntai's pass (the vector index itself is broken) — possibly after earlier
+            // batches were written: those entries are re-embedded and stay so. Nothing was forgotten, so the graph is as it
+            // was; the pass is simply not done, and the result cannot say how far it got.
+            _log?.LogWarning(ex, "fact index: re-embedding in place failed part-way; the graph is unchanged, some vectors " +
+                "may already be recomputed, and the pass is owed");
             return new ReembedResult(0, 0, Completed: false);
         }
         finally
@@ -744,8 +798,12 @@ public sealed class FactIndex : IFactIndex
         // silently cost weeks of accumulated ranking, and made measuring the arm's benefit an operation
         // nobody should agree to.
         if (_semantic is null)
-            return new SemanticReindexResult(SemanticReindexStage.Rephrase, await ExpandEachAsync(ct, progress), 0,
-                true, 0);
+        {
+            // STORED, not visited: a fact whose rephrasing failed (a signed-out CLI, a refused call, an empty reply) is
+            // counted as failed, so the panel cannot report phrasings nobody wrote.
+            var (rephrased, visited) = await ExpandEachAsync(ct, progress);
+            return new SemanticReindexResult(SemanticReindexStage.Rephrase, rephrased, visited - rephrased, true, 0);
+        }
 
         // AN EMBEDDER'S VECTORS ARE RE-EMBEDDED IN PLACE (Lyntai D194, 3.5.0). They belong to the graph's entries, and
         // until 3.5 the engine offered no way to recompute one except re-remembering it — so this was RebuildAsync, which
@@ -758,15 +816,26 @@ public sealed class FactIndex : IFactIndex
         // THE MARKER SAYS THE VECTORS ARE OWED for the length of the pass. The old rebuild healed an interrupted run by
         // clearing every ref up front, so the startup back-fill finished it; a re-embed clears nothing, so a pass cut short
         // by a restart or an update would leave the rest on the OLD model with refs intact — and no back-fill ever returns
-        // to a row that has a ref. Recording VectorsOwed first makes the next start finish it (FactIndexStep re-embeds in
-        // place at that marker). Moved only from the CURRENT layout: any other value is a move of the ENTRIES the next start
-        // still owes (a rebuild), and "vectors owed" would understate it; and back to Current only by a pass that
-        // COMPLETED — one the embedder went down during stays owed. "2" is left as "2" if the pass does not complete.
+        // to a row that has a ref. Recording the vectors as owed first makes the next start finish it (FactIndexStep
+        // re-embeds in place at that marker). Moved only from the current layout or an owed one: any other value is a move
+        // of the ENTRIES the next start still owes (a rebuild), and "vectors owed" would understate it.
+        //
+        // BACK TO CURRENT BY COMPARE-AND-SET, and only by a pass that COMPLETED — one the embedder went down during stays
+        // owed. The pass writes a token of its own (FactIndexLayout.NewPassMarker) and swaps THAT for Current: a 语义 bind
+        // landing mid-pass writes a plain "2", because the new model's vectors are owed, and a plain Set here would erase
+        // that debt — the restart would then only sync, and the vectors stay on the model this pass used.
         var stored = _layout?.Get(FactIndexLayout.Key);
-        var ownsMarker = stored is FactIndexLayout.Current or FactIndexLayout.VectorsOwed;
-        if (stored == FactIndexLayout.Current) _layout!.Set(FactIndexLayout.Key, FactIndexLayout.VectorsOwed);
+        string? passMarker = null;
+        if (stored == FactIndexLayout.Current || FactIndexLayout.IsVectorsOwed(stored))
+        {
+            passMarker = FactIndexLayout.NewPassMarker();
+            if (!_layout!.CompareAndSet(FactIndexLayout.Key, stored!, passMarker)) passMarker = null;   // someone got there first
+        }
         var reembed = await ReembedInPlaceAsync(ct, progress);
-        if (ownsMarker && reembed.Completed) _layout!.Set(FactIndexLayout.Key, FactIndexLayout.Current);
+        if (passMarker is not null && reembed.Completed
+            && !_layout!.CompareAndSet(FactIndexLayout.Key, passMarker, FactIndexLayout.Current))
+            _log?.LogInformation("fact index: the layout marker changed during the re-embed (a 语义 bind, most likely); " +
+                "leaving it owed for the next start");
 
         // Then the facts that have NO entry — what the panel's coverage line counts as missing and offers this button for.
         // These are ordinary back-fill writes: each is remembered (an annotation with 判断 on) and its write embeds. Only
@@ -807,6 +876,33 @@ public sealed class FactIndex : IFactIndex
         }
     }
 
+    /// <summary>After a re-embed in place that COMPLETED, drop the vector collections a pre-3.2 build left at the OLD
+    /// address — <c>{member}|{task}|{scope}</c>, which Lyntai 3.2 replaced with a U+001F separator.
+    /// <para><b>Why.</b> A 2 → 3 move that used to rebuild now re-embeds every entry at the CURRENT address, so the old
+    /// collection is never read again — and it holds a copy of each fact's content, as it was when last embedded, as its
+    /// payload: stale text in the database for as long as nothing rebuilds.</para>
+    /// <para><b>Why this prefix is safe.</b> It names the OLD format, which is history and cannot change; the pass never
+    /// writes there (it writes at the address Lyntai composes today, which has no <c>|</c> after the member), so nothing
+    /// this sweep can reach is live. It restates nothing about the current address. After a COMPLETED pass only: one that
+    /// did not complete is run again, and the sweep has nothing to add to it. Best-effort, like the rebuild's sweep.</para></summary>
+    private async Task DropPre32VectorsAsync(CancellationToken ct)
+    {
+        if (_vectors is not IListableVectorStore listable) return;
+        try
+        {
+            var stale = await listable.ListCollectionsAsync(GraphMember + "|", ct);
+            foreach (var collection in stale) await listable.RemoveCollectionAsync(collection, ct);
+            if (stale.Count > 0)
+                _log?.LogInformation("fact index: dropped {Count} vector collection(s) left at the pre-3.2 address, " +
+                    "which no recall reads", stale.Count);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "fact index: could not drop the pre-3.2 vector collections; they stay, unread");
+        }
+    }
+
     /// <summary>How many facts index concurrently in a backfill/rebuild. Each index write can carry a
     /// model call (annotation), so serial cost is seconds PER FACT and a restore of a real corpus paid
     /// it N times over. Bounded, not unbounded: every slot is a spawned claude CLI process, and
@@ -826,21 +922,27 @@ public sealed class FactIndex : IFactIndex
     /// exactly that. Progress is reported per fact because this is minutes of work on a real corpus.</para>
     ///
     /// <para>Never throws — <c>ExpandAkaAsync</c> swallows its own failures, so a fact that could not be
-    /// rephrased is simply as findable as it was.</para></summary>
-    private async Task<int> ExpandEachAsync(CancellationToken ct, IProgress<SemanticReindexProgress>? progress)
+    /// rephrased is simply as findable as it was. Returns the facts it STORED phrasings for and the facts it VISITED:
+    /// counting only the visits reported every fact rephrased on a signed-out CLI, where none was.</para></summary>
+    private async Task<(int Stored, int Visited)> ExpandEachAsync(CancellationToken ct,
+        IProgress<SemanticReindexProgress>? progress)
     {
         var facts = await _store.AllAsync();
-        var done = 0;
+        var (done, stored) = (0, 0);
         progress?.Report(new(SemanticReindexStage.Rephrase, 0, facts.Count));
         foreach (var (row, _) in facts)
         {
             ct.ThrowIfCancellationRequested();
-            await ExpandAkaAsync(row.Kind, row.Topic, row.Content, ct);
+            if (await ExpandAkaAsync(row.Kind, row.Topic, row.Content, ct)) stored++;
             progress?.Report(new(SemanticReindexStage.Rephrase, ++done, facts.Count));
         }
-        _log?.LogInformation(
-            "fact index: re-derived phrasings for {Done} fact(s) — graph, decay and links untouched", done);
-        return done;
+        _log?.LogInformation("fact index: re-derived phrasings for {Stored} of {Done} fact(s) — graph, decay and links " +
+            "untouched", stored, done);
+        if (stored < done)
+            _log?.LogWarning("fact index: {Failed} of {Done} fact(s) got no phrasings in this pass — the Claude CLI failed, " +
+                "refused or answered nothing for them (a signed-out CLI fails every one); they stay as findable as before",
+                done - stored, done);
+        return (stored, done);
     }
 
     private async Task<int> IndexEachAsync(IEnumerable<KnowledgeRow> facts, CancellationToken ct,
@@ -848,6 +950,7 @@ public sealed class FactIndex : IFactIndex
     {
         var indexed = 0;
         var seen = 0;
+        var tally = new UnansweredTally();
         using var slots = new SemaphoreSlim(IndexConcurrency, IndexConcurrency);
         var tasks = facts.Select(async fact =>
         {
@@ -855,7 +958,7 @@ public sealed class FactIndex : IFactIndex
             try
             {
                 ct.ThrowIfCancellationRequested();
-                var reference = await IndexAsync(fact.Kind, fact.Topic, fact.Content, fact.Id, ct);
+                var reference = await IndexCoreAsync(fact.Kind, fact.Topic, fact.Content, fact.Id, tally, ct);
                 // Written even when null: it clears a ref left over from a discarded index, so a row is
                 // never pointing at a node that no longer exists.
                 //
@@ -882,7 +985,38 @@ public sealed class FactIndex : IFactIndex
             }
         }).ToList();
         await Task.WhenAll(tasks);
+        tally.Report(_log);
         return indexed;
+    }
+
+    /// <summary>A bulk pass's writes kept WITHOUT their subject handles, counted for ONE line at the end of the pass rather
+    /// than one per write: while the annotator fails — a signed-out CLI, a local chat model that is down — every write of a
+    /// back-fill or rebuild loses its subjects the same way, and a Warning per fact buried the log under N copies of one
+    /// cause. A single write (<c>remember_fact</c>) still gets its own line.</summary>
+    private sealed class UnansweredTally
+    {
+        private readonly object _gate = new();
+        private readonly List<string> _examples = new(3);
+        private int _count;
+
+        public void Add(string kind, string topic)
+        {
+            lock (_gate)
+            {
+                _count++;
+                if (_examples.Count < 3) _examples.Add($"{kind}/{topic}");
+            }
+        }
+
+        public void Report(ILogger? log)
+        {
+            if (_count > 0)
+                log?.LogWarning("fact index: {Count} fact(s) in this pass were stored without their subject handles — " +
+                    "their annotation got no answer (the annotator, the Claude CLI or a local chat model, failed, refused or " +
+                    "replied with something other than the JSON asked for) or their subjects could not be recorded; nothing " +
+                    "re-tags them until they are written again or the index is rebuilt (they stay findable by their words). " +
+                    "For example: {Examples}", _count, string.Join(", ", _examples));
+        }
     }
 
     /// <summary>An <see cref="IProgress{T}"/> that reports on the caller's thread, in order — unlike

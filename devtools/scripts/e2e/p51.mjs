@@ -905,9 +905,11 @@ try {
   if (anyEmbedder) {
     const bindSem = await post('/api/manage/memory/layer/semantic',
       { source: 'llama-cpp', model: anyEmbedder.id });
-    ok('(this machine has an embedder) binding 语义 asks for a restart and a reindex',
+    // Since the in-place re-embed (Lyntai D194) the bind records the vectors as owed and the restart re-embeds on its
+    // own, so an embedder arm no longer asks for a reindex — e2e-p52 case 11d drives it against a fake.
+    ok('(this machine has an embedder) binding 语义 asks for a restart, and the restart re-embeds — no reindex asked',
       bindSem.status === 200 && bindSem.body?.restartRequired === true
-        && bindSem.body?.reindexRequired === true,
+        && bindSem.body?.reindexRequired === false && typeof bindSem.body?.vectorsOwed === 'boolean',
       JSON.stringify(bindSem.body));
     ok('and reports the vector width it actually measured, rather than one looked up',
       typeof bindSem.body?.dimensions === 'number' && bindSem.body.dimensions > 0
