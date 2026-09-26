@@ -418,7 +418,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (`docs/self-managed-llm-runtime.md`, 2026-09-27): 100 facts, 100 embeds and one probe, no stub spawn, every graph
   table byte-identical, 2.6 s on one GPU and 5.6 s on the CPU. Proof: `e2e-p52` case 11, confirmed to FAIL with the
   old rebuild restored (links 32 → 0, an annotation per fact), with the owed marker removed, at batch size 32, and
-  with the failures never classified. An EMPTY `graph_ref` is the index's retry queue: a write that failed — or kept no
+  with the failures never classified. **Stated residuals:** the write-time `similar` links stay as the model that wrote
+  them scored them, or absent when none did — D194 recomputes no edge, and recall reads the new vectors through the
+  semantic seed channel, which is what the paraphrase check measured; an entry the NEW model refuses keeps the old
+  model's vector, which scores 0 at another width but is in the wrong space at the same one; a pre-3.2 address
+  collection is swept only by a rebuild; and the serialisation with a rebuild is not driven by any suite (a race on
+  demand). An EMPTY `graph_ref` is the index's retry queue: a write that failed — or kept no
   vector while its embedder was DOWN — is left that way on purpose, and the back-fill returns to it. The graph
   dedups on **content hash**, so editing a fact orphans its
   previous node; recall over-asks and filters to resolvable refs so an orphan never shrinks the page.
