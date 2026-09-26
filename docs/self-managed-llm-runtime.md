@@ -637,3 +637,19 @@ It now tries up to 128 times, holding each refused port until the search ends; t
 retry pending from naming a device in the preset — llama.cpp chooses, as above, until every device has a result or has
 spent its attempts — and made a timed-out call a LOWER BOUND for the too-slow verdict (`dev-conventions.md` launch item
 (6)); neither was re-run on the real binary.
+
+### 2026-09-26 — an EMBEDDING input past the physical batch is refused whole
+
+Checked for the Lyntai 3.4 bump, which leaves a fact whose write kept no vector UNINDEXED so the back-fill retries it
+(`dev-conventions.md`, the Lyntai list's workaround (3)): a fact the embedder can never embed is retried at every start.
+Same build (b10549), `embeddinggemma-300M-Q8_0`, launched standalone with `--embeddings --device none` and no batch
+flags — which is what our embedder preset leaves it (`embeddings = true` and nothing else), so the default physical
+batch of 512 applies. One `/v1/embeddings` call per input, a Chinese sentence repeated: 280 and 560 characters embedded
+(768 dimensions); 840 characters, 572 tokens, came back **500** `input (572 tokens) is too large to process. increase
+the physical batch size (current batch size: 512)`, and 1,120 and 1,680 the same. So on llama.cpp a fact past ~512
+tokens — here about 750 Chinese characters — never gets a vector: before the bump it was graph-indexed without one,
+since the bump it stays keyword-only and every start's back-fill re-remembers it. Not changed here: the cure is the
+embedder's launch contract — a physical batch as large as the context it is to embed (the server logs that it
+lowers the logical batch to the physical one, `n_batch = n_ubatch = 512`, for an embedder) — and that needs its own
+measurement, as the reranker's 4,096 did. Scratch script, not committed; the process it started was ended by
+its PID.

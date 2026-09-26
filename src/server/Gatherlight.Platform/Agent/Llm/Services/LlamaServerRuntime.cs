@@ -1038,7 +1038,8 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
     /// <item><b>Ours</b> — a router we adopted (an orphan of an earlier run, or a household's own) is not ours
     /// to kill, and an app restart would only adopt it again; the household is told which process to end.</item>
     /// <item><b>Loses nothing</b> — <see cref="ILlamaRestartPolicy"/>. While the router is down every call to
-    /// it fails, and a fact written then is stored WITHOUT its vector — or, under a chat judge, its subject tags —
+    /// it fails, and a fact written then is stored WITHOUT its vector — keyword-only until the next start's back-fill
+    /// re-indexes it (the fact index leaves such a write unindexed) — or, under a chat judge, its subject tags,
     /// permanently and silently (the engine catches a failed write-time embed; annotation fails open). So it is
     /// refused while 语义 embeds through this router or 判断 annotates through it (a chat model, switched on) —
     /// which covers every reindex that reaches llama.cpp — with a sentence saying so; and, saying only that a

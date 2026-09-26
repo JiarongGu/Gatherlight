@@ -410,7 +410,8 @@ public static class GatherlightApp
             // Ollama, which was retired as a backend on 2026-08-22 (MemoryBackends.IsRetired).
             .AddSingleton<ILlamaServerRuntime, LlamaServerRuntime>()
             // When the runtime may restart ITS router to load a model it does not list: never while anything
-            // would write through it — a fact written then is stored without its vector, for good.
+            // would write through it — a fact written then loses its vector until the next start's back-fill,
+            // and under a chat judge its subject tags for good.
             .AddSingleton<ILlamaRestartPolicy, LlamaRestartPolicy>()
             // One reindex at a time, and its progress. A singleton because the run outlives the request
             // that started it — see IReindexStatus for why that had to change.
@@ -490,8 +491,9 @@ public static class GatherlightApp
                     // case that read the column — nothing else could have.
                     sp.GetService<Lyntai.Inference.ITextClient>(),
                     sp.GetService<Platform.Kernel.Services.ServerConfigService>(),
-                    // The embedding backends, for one probe embed before a startup back-fill or rebuild — an
-                    // embedder that is wired and down makes every write store its fact WITHOUT a vector.
+                    // The embedding backends, for one probe embed before a startup back-fill or rebuild — our
+                    // quota gate: an embedder that is wired and down makes every write lose its vector, and
+                    // each retried write would first pay its annotation (IFactIndex.EmbedderReadyAsync).
                     sp.GetServices<Lyntai.Inference.IModelProvider>(),
                     sp.GetService<Lyntai.Inference.IProviderRouterFactory>()))
             // The import endpoint's and the seed step's back-fill, detached and serialised — see DetachedFactBackfill.

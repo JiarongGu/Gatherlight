@@ -19,10 +19,12 @@ public interface ILlamaRestartPolicy
 /// waiting for the service restart that wires it.
 ///
 /// <para><b>Why a restart is not harmless.</b> For the seconds the router is down every call to it fails, and
-/// what fails at WRITE time is lost for good. Lyntai's graph engine catches a failed write-time embed and stores
-/// the fact anyway — without its vector (<c>GraphMemoryEngine.SearchAsync</c>: "storing without signals or
-/// links"); the fact gets its graph reference, so nothing ever back-fills it. Annotation is fail-open the same
-/// way: a fact written while a CHAT judge's router is down is stored without subject tags, permanently.</para>
+/// what fails at WRITE time is lost. Lyntai's graph engine catches a failed write-time embed and stores the fact
+/// anyway — without its vector (<c>GraphMemoryEngine.SearchAsync</c>: "storing without signals or links"). Until the
+/// Lyntai 3.4 bump the fact kept its graph reference and nothing ever back-filled it; now the fact index reads the
+/// write's <c>Ran</c> and leaves it unindexed, so the next START's back-fill gives it its vector — but until then it
+/// is found by keyword only, and the retry pays its annotation again. Annotation is fail-open and is NOT retried: a
+/// fact written while a CHAT judge's router is down is stored without subject tags, permanently.</para>
 ///
 /// <para><b>Refused because a restart LOSES something</b>, each with a sentence in the present tense: while 语义
 /// RUNS on llama.cpp (its provider is registered), while 判断 RUNS on a llama.cpp chat model and its switch is on

@@ -51,44 +51,36 @@ public interface IFactIndex
 
     /// <summary>Can a write be embedded RIGHT NOW? True when no embedder is wired — there is nothing to reach —
     /// or when one answered a probe embed.
-    /// <para><b>Asked before any bulk write, because a failed write-time embed is not an error.</b> Lyntai's graph
-    /// engine catches it and stores the fact anyway, WITHOUT its vector ("storing without signals or links"),
-    /// and the fact gets its graph reference — so no back-fill ever returns to it. An upgrade rebuild against a
-    /// router that had not started yet stripped every vector from a real install that way while coverage read
-    /// 100% (see <c>FactIndexStep</c>).</para>
-    /// <para><b>A WORKAROUND FOR A LYNTAI GAP — Lyntai <c>docs/task-archive.md</c> Part 285 / D175 — and D175
-    /// says to REPLACE this method, not to keep it.</b> D175's own words: "<c>Ran</c> serves the rebuild, and
-    /// a public probe would publish the internal embedding route's filter for a need nobody has shown." Its
-    /// deferred trigger is "a consumer that must decide BEFORE writing anything" — but this method's only
-    /// caller, <c>FactIndexStep</c>, guards exactly <see cref="SyncAsync"/> and the layout
-    /// <see cref="RebuildAsync"/>: the rebuild/back-fill case D175 puts on the <c>Ran</c> side, not the
-    /// deferred one. So the honest instruction is NOT "keep restating the filter until Lyntai ships a probe" —
-    /// it is: on the bump, replace this pre-flight probe with <c>Ran</c>-based detection, and that has TWO
-    /// halves, not one. (1) The REBUILD half: a re-remember whose <c>Ran</c> lacks the vector tier means THAT
-    /// write kept no vector; <c>FactIndexStep</c> then records no layout marker and the next start retries,
-    /// exactly as it does today. (2) The BACK-FILL half, which the rebuild half alone does not cover:
-    /// <see cref="SyncAsync"/> writes NO marker at all — it back-fills whatever row has an empty
-    /// <c>graph_ref</c> — so on <c>FactIndexStep</c>'s steady-state path (<c>stored == Layout</c>, or
-    /// <c>!alreadyIndexed</c>) the only thing that makes a vector-less write retryable is <see cref="IndexAsync"/>
-    /// itself: it must return null — leaving <c>graph_ref</c> UNSET, the same as today's "index nothing" —
-    /// when an embedder <see cref="Embeds"/> but this write's <c>Ran</c> lacks
-    /// <c>Lyntai.Memory.MemorySources.Similarity</c> (a different type from this app's own <c>MemorySources</c>
-    /// catalog in <c>Agent/Llm/Sources/MemorySources.cs</c> — "on a write it reports CONTRIBUTION: this write's
-    /// vector was indexed"). Without (2), a write during a transient embedder outage keeps its (vector-less)
-    /// ref forever and <see cref="SyncAsync"/>'s own filter — rows with an EMPTY ref — never revisits it; that
-    /// is the ORIGINAL bug this probe exists to prevent, and only today's ALL-OR-NOTHING pre-flight check
-    /// (skip the whole batch rather than one row) currently avoids it. The app's one <c>RememberAsync</c> call
-    /// site, <see cref="IndexAsync"/>'s <c>Encode(reference)</c>, needs <c>.Reference</c> added regardless
-    /// (<c>Encode</c> takes a <c>MemoryRef</c>; <c>MemoryWriteResult</c> has no implicit conversion to it — a
-    /// caller that merely DISCARDS the result compiles unchanged, but this one does not). Only with BOTH
-    /// halves does this method (and the routing it restates below) get deleted, and <c>e2e-p52</c> case 9 —
-    /// the embedder-down/no-marker-written assertion — has to keep passing against the new mechanism. (A
-    /// genuinely different argument for a real pre-flight — skipping the cost of walking every fact when the
-    /// whole batch will fail anyway — is not what D175's deferred trigger names, and would need its OWN
-    /// Lyntai item if it turns out to matter.)</para></summary>
+    /// <para><b>OUR COST POLICY, not a Lyntai gap</b> (owner decision, 2026-09-26, at the Lyntai 3.4 bump). It gates
+    /// <c>FactIndexStep</c>'s back-fill and rebuild: with an embedder wired and not answering, a start re-remembers
+    /// NOTHING. What makes a lost vector RETRYABLE is no longer this probe but <see cref="IndexAsync"/>, which reads each
+    /// write's <c>Ran</c> (Lyntai D175, shipped in 3.3.0) and leaves a vector-less write unindexed. So without this gate
+    /// nothing would be lost — every pending fact would simply be re-remembered on every start of an outage, and in
+    /// Lyntai 3.4 a graph write ANNOTATES BEFORE IT EMBEDS: with 判断 on the Claude CLI, each of those writes is an
+    /// annotation call against the household's quota, for a fact that then loses its vector and is retried again at the
+    /// next start. The probe is one embed; skipping the batch costs nothing a later start does not recover.</para>
+    /// <para><b>A gate, not the detection.</b> A probe can pass a moment before a write fails (Lyntai's D175 says so of
+    /// the probe it deferred, as amended after 3.4.0), which is why a vector lost AFTER it passed is caught per write by
+    /// <see cref="IndexAsync"/> and not here. Only the startup step asks: the detached back-fill after an import or the
+    /// seed (<c>DetachedFactBackfill</c>) and a backup import's rebuild are not gated, so during an outage they pay each
+    /// fact's annotation once and leave the rows for the next start.</para>
+    /// <para><b>It restates the engine's embedding route</b> — Lyntai's own filter (a backend producing vectors from
+    /// text) is internal, so the implementation below repeats it. Should the library's filter change, this probe could
+    /// answer differently from a write: a probe that passes wrongly costs one start's annotations (the per-write check
+    /// still leaves every vector-less write retryable), one that fails wrongly defers the indexing with
+    /// <c>FactIndexStep</c>'s warning. <b>What would end it</b>: Lyntai <c>TASKS.md</c> Part 301's item "Let a graph
+    /// write skip its annotation when its vector fails" — closed upstream the same day as <c>docs/task-archive.md</c>
+    /// Part 304, <c>GraphMemoryOptions.SkipAnnotationWithoutVector</c>, committed after 3.4.0 and NOT released. On the
+    /// release that carries it, set that option on the facts engine: a retried write during an outage then costs no
+    /// annotation, the quota reason is gone, and this method and its restated route can be deleted. The household warning
+    /// <c>FactIndexStep</c> attaches to a failed probe would then need another source — a start with nothing pending
+    /// makes no write, so there is nothing to observe; <c>LlamaWarmStep</c> warns for a llama.cpp model that fails to
+    /// warm, and nothing warns for the built-in embedder.</para></summary>
     Task<bool> EmbedderReadyAsync(CancellationToken ct = default);
 
-    /// <summary>Index one fact; returns its address, or null if the index is unavailable or refused it.</summary>
+    /// <summary>Index one fact; returns its address, or null if the index is unavailable, refused it, or — with an
+    /// embedder wired — stored it WITHOUT its vector: a null leaves the row's <c>graph_ref</c> empty, which is what
+    /// makes the back-fill (<see cref="SyncAsync"/>) and <c>FactIndexStep</c>'s rebuild count come back to it.</summary>
     Task<string?> IndexAsync(string kind, string topic, string content, CancellationToken ct = default);
 
     /// <summary>Rank facts for a query, best first. Empty means "use FTS", never "you have nothing".</summary>
@@ -102,7 +94,9 @@ public interface IFactIndex
     /// knew when this index first shipped, and picks up anything written while it was unavailable.</summary>
     Task<int> SyncAsync(CancellationToken ct = default);
 
-    /// <summary>Discard the index and rebuild it from the record of truth. Returns facts indexed.
+    /// <summary>Discard the index and rebuild it from the record of truth. Returns facts indexed — fewer than the
+    /// facts there are when a write kept no vector (<see cref="IndexAsync"/>), which is why <c>FactIndexStep</c>
+    /// compares the count with its total rather than with zero.
     /// <para><b>Destructive of everything the index has learned</b> — decay positions, reinforcement and
     /// links all go. Reserved for when the facts themselves were replaced underneath it (a backup
     /// import); at startup use <see cref="SyncAsync"/>, or every restart would erase the accumulated
@@ -223,11 +217,10 @@ public sealed class FactIndex : IFactIndex
         if (!Embeds) return true;
         try
         {
-            // The same routing the engine embeds a write through (Lyntai's EmbeddingRouting is internal, so this
-            // restates its one filter: a backend that produces vectors from text), so a pass here means a write
-            // would embed too. D175 says to DELETE this restatement on the bump, in favor of Ran-based
-            // detection — see the workaround note on EmbedderReadyAsync above (docs/task-archive.md Part 285 /
-            // D175 — D175 disagrees with keeping this method at all).
+            // The same routing the engine embeds a write through. Lyntai's EmbeddingRouting and its filter
+            // (ProviderShapes.Embeds) are internal, so this RESTATES that one filter — a backend producing vectors
+            // from text — and a pass here means a write would embed too. It stays as our quota gate, not as the
+            // detection (that is IndexAsync's Ran check); the interface doc says what ends it.
             Func<Lyntai.Inference.ProviderCapabilities, bool> embeds = c => c.Supports(
                 Lyntai.Inference.ProviderKinds.Vector, Lyntai.Inference.ProviderOperation.Complete,
                 accepts: Lyntai.Inference.ProviderKinds.Text);
@@ -265,11 +258,36 @@ public sealed class FactIndex : IFactIndex
             // exempt them from the decay that is the whole reason for indexing them.
             // One write, one embedding: the graph member embeds its own entry when an embedder is wired.
             // The fact's kind rides on the knowledge row, which is what the recall filters on.
-            // Lyntai 3.3 (D175) returns what the write did, not only where it went: the bump's Task 3 reads
-            // `.Ran` here to leave a vector-less write retryable; for now only its reference is used.
             var written = await _engine.RememberAsync(
                 new MemoryWrite(TaskKey, AllFacts, content, Headline: topic), ct);
             await ExpandAkaAsync(kind, topic, content, ct);
+
+            // A WRITE THAT KEPT NO VECTOR IS LEFT UNINDEXED, so the back-fill comes back to it. A failed write-time
+            // embed is not an error to the engine: it stores the fact anyway and hands back a reference, and a row
+            // holding that reference is never revisited — SyncAsync back-fills only EMPTY refs — so the fact stayed
+            // out of semantic recall for good while coverage read 100%. Since Lyntai 3.3 (D175) a write reports what
+            // it did: `Ran` carries Lyntai.Memory.MemorySources.Similarity exactly when THIS write's vector was
+            // indexed. (That is Lyntai's flags enum — not this app's own MemorySources catalog in Agent/Llm/Sources.)
+            // Asked only when an embedder is wired: without one no write carries a vector, and none is owed. The
+            // graph node the engine did store is not wasted — it dedups by content, so the retry refreshes it with
+            // its vector. The graph's SimilarityK stays at Lyntai's default: at 0 no write indexes a vector, so this
+            // rule would leave every fact unindexed.
+            //
+            // A fact the embedder can NEVER embed takes the same branch, at every start. Measured on llama.cpp b10549
+            // with its default 512-token physical batch (the embedder preset sets none): an embedding input past it
+            // is refused whole — 840 Chinese characters, 572 tokens, a 500 — so such a fact stays FTS-only and is
+            // re-remembered by every start's back-fill (dev-conventions.md, the Lyntai list's workaround (3)).
+            //
+            // 3.4's MemorySources.Annotation is deliberately NOT read here: the shipped LLM annotator catches its own
+            // failures and returns MemoryAnnotation.None, which the engine counts as an answer, so the flag is set
+            // for a signed-out CLI too (Lyntai TASKS.md Part 301, "Let the shipped LLM annotator say it did not
+            // answer…" — closed upstream as docs/task-archive.md Part 303, MemoryAnnotation.Unanswered, not released).
+            if (Embeds && !written.Ran.HasFlag(Lyntai.Memory.MemorySources.Similarity))
+            {
+                _log?.LogWarning("fact index: {Kind}/{Topic} was stored without its vector; leaving it unindexed " +
+                    "so the next back-fill retries it (it stays findable by FTS)", kind, topic);
+                return null;
+            }
             return Encode(written.Reference);
         }
         catch (Exception ex)

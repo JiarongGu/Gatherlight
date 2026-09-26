@@ -384,7 +384,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `IRecordIndex`, because that collection is rebuilt at every startup and the discard would erase the
   decay positions and links the index spends weeks accumulating — startup gets `SyncAsync` (back-fill
   only, via `FactIndexStep`) and a backup import gets the destructive `RebuildAsync`, because there the
-  facts themselves were replaced. The graph dedups on **content hash**, so editing a fact orphans its
+  facts themselves were replaced. An EMPTY `graph_ref` is the index's retry queue: a write that failed — or, with
+  an embedder wired, kept no vector — is left that way on purpose, and the back-fill returns to it. The graph
+  dedups on **content hash**, so editing a fact orphans its
   previous node; recall over-asks and filters to resolvable refs so an orphan never shrinks the page.
   And every operation degrades to FTS rather than throwing — an index that fails closed is worse than
   one that ranks by relevance alone, and an empty result reads to the agent as "the household knows
@@ -509,7 +511,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   fallback chain stays, because it takes a parsed `JsonElement` for a UI label, not the `ToolCall` `FilePathOf`
   takes, so only one of the two copies is gone.
   **Six were open at Lyntai 3.2.0, and each says what ends it. (2) and (4) are CLOSED — their fixes shipped in
-  3.3.0 and the 3.4 bump adopted them.**
+  3.3.0 and the 3.4 bump adopted them. (3) is CLOSED as a workaround: the bump adopted its per-write detection, and
+  the probe it named stays as a cost policy of OUR OWN, which the entry says how to end.**
   **(1) `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170.** Lyntai's LLM judge
   rendered each candidate as its headline alone, and our headline is the fact's TOPIC, so the judge decided
   "did this answer?" from topics; the decorator shows it the content. Upstream closed the gap with
@@ -587,33 +590,53 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   spawn's `--model`; a clear gives the consumer default, haiku, never no `--model`) and M1–M3 the migration;
   `e2e-p14` the bundle; `e2e-p47` the reconcile. Each is confirmed to fail with its own half removed (the suites'
   headers name which).
-  **(3) `IFactIndex.EmbedderReadyAsync` ↔ `docs/task-archive.md` Part 285 / D175 — and D175 says REPLACE it, not
-  keep it.** A failed write-time embed is silent — Lyntai's graph engine catches it, stores the fact anyway
-  WITHOUT its vector, and gives it a graph reference regardless, so no back-fill ever returns to it (measured: a
-  real install came up 6/6 "indexed" with 0 vectors, coverage reading 100%). D175's own words: "`Ran` serves the
-  rebuild, and a public probe would publish the internal embedding route's filter for a need nobody has shown."
-  Its deferred trigger is "a consumer that must decide BEFORE writing anything" — but this method's only caller,
-  `FactIndexStep`, guards exactly `SyncAsync` and the layout `RebuildAsync`: the rebuild/back-fill case D175
-  puts on the `Ran` side, not the deferred one. So the honest instruction is not "keep restating the filter
-  until Lyntai ships a probe" — it is: on the bump, replace the pre-flight probe with `Ran`-based detection, in
-  TWO halves. (1) REBUILD: a re-remember whose `Ran` lacks the vector tier means THAT write kept no vector;
-  `FactIndexStep` records no layout marker and the next start retries, exactly as it does today. (2) BACK-FILL,
-  which (1) alone does not cover: `SyncAsync` writes NO marker at all — it back-fills whatever row has an empty
-  `graph_ref` — so on the steady-state path the only thing that makes a vector-less write retryable is
-  `IndexAsync` itself: it must return null, leaving `graph_ref` unset, when an embedder `Embeds` but this
-  write's `Ran` lacks `Lyntai.Memory.MemorySources.Similarity` (a different type from this app's own
-  `MemorySources` catalog in `Agent/Llm/Sources/MemorySources.cs` — "on a write it reports CONTRIBUTION: this
-  write's vector was indexed"). Without (2), a write during a transient embedder outage keeps its vector-less
-  ref forever and `SyncAsync` never revisits it — the ORIGINAL bug this probe exists to prevent, which only
-  today's all-or-nothing pre-flight check (skip the whole batch, not one row) currently avoids. The app's one
-  `RememberAsync` call site (`FactIndex.cs`'s `IndexAsync`, `Encode(reference)`) needs `.Reference` added
-  regardless, since `MemoryWriteResult` has no implicit conversion to the `MemoryRef` `Encode` takes (a caller
-  that merely DISCARDS the result compiles unchanged — this one does not). Only with BOTH halves does
-  `EmbedderReadyAsync` and the routing it restates get deleted, and `e2e-p52` case 9 — the
-  embedder-down/no-marker-written assertion — has to keep passing against the new mechanism. (A genuinely
-  different argument for a real pre-flight — skipping the cost of walking every fact when the whole batch will
-  fail anyway — is not what D175's deferred trigger names, and would need its OWN Lyntai item if it turns out
-  to matter.)
+  **(3) CLOSED as a workaround — `IFactIndex.EmbedderReadyAsync` ↔ `docs/task-archive.md` Part 285 / D175, shipped
+  in 3.3.0, adopted with the 3.4 bump (2026-09-26); the probe STAYS, as our cost policy.** A failed write-time embed
+  is not an error to Lyntai's graph engine: it stores the fact WITHOUT its vector and hands back a reference, and a
+  row holding one is never revisited — `SyncAsync` back-fills only EMPTY refs (measured: a real install came up 6/6
+  "indexed" with 0 vectors, coverage reading 100%). Until the bump only an all-or-nothing pre-flight probe kept that
+  from happening. D175 made a write REPORT what it did — `MemoryWriteResult.Ran`, where
+  `Lyntai.Memory.MemorySources.Similarity` (Lyntai's flags enum, not this app's `MemorySources` catalog in
+  `Agent/Llm/Sources/MemorySources.cs`) means THIS write's vector was indexed — and the bump adopted it in both
+  halves. **Per write:** `FactIndex.IndexAsync` returns null, leaving `graph_ref` empty, when an embedder is wired
+  (`Embeds`) and the write's `Ran` lacks it, so the back-fill comes back to the row; it logs one Warning naming the
+  fact. **Rebuild:** `FactIndexStep` compares `RebuildAsync`'s count with the fact TOTAL, where it compared with 0
+  — with the per-write half a partial outage returns a count above zero, and the marker would have claimed a
+  rebuild whose vectors are partly missing — so a partial rebuild writes no marker and adds the startup warning
+  「事实索引的重建没有完成(只建立了 N/M 条) —— 其余的事实仍能按关键词找到,下次启动会重试。」.
+  **The probe stays, as a gate, by owner decision** — our quota, not a library gap. Without it nothing would be
+  lost any more, but every start during an embedder outage would re-remember each pending fact, and in 3.4 a graph
+  write ANNOTATES BEFORE IT EMBEDS: with 判断 on the Claude CLI, each is an annotation call against the household's
+  quota, for a fact that loses its vector again. It gates `FactIndexStep` only — the detached back-fill after an
+  import or the seed and a backup import's rebuild are not gated, so during an outage they pay each fact's
+  annotation once and leave the row for the next start — and it keeps its household warning (「「语义」的嵌入模型这次
+  启动没有响应…」). It is a gate, not the detection: a probe can pass a moment before a write fails (D175 says so of
+  the probe it deferred), which is what the per-write half is for. **It still restates the engine's embedding
+  route** (Lyntai's filter — a backend producing vectors from text — is internal), so a filter change upstream could
+  make the probe answer differently from a write: wrongly passing costs one start's annotations, wrongly failing
+  defers the indexing with the warning. **What ends it:** Lyntai `TASKS.md` Part 301's item "Let a graph write skip
+  its annotation when its vector fails" — closed upstream the same day as `docs/task-archive.md` Part 304,
+  `GraphMemoryOptions.SkipAnnotationWithoutVector` (with the write embedding before it annotates), committed after
+  3.4.0 and NOT released. On the release that carries it, set the option on the facts engine: a retried write
+  during an outage then costs no annotation, and the probe and its restated route can go. Its household warning
+  then needs another source — a start with nothing pending makes no write, so there is nothing to observe;
+  `LlamaWarmStep` warns for a llama.cpp model that fails to warm, and nothing warns for the built-in embedder.
+  **Not adopted: 3.4's `Lyntai.Memory.MemorySources.Annotation` flag.** The shipped LLM annotator catches its own failures and
+  returns `MemoryAnnotation.None`, which the engine counts as an answer, so the flag is set for a signed-out CLI
+  too — Lyntai `TASKS.md` Part 301, "Let the shipped LLM annotator say it did not answer…", closed upstream as
+  `docs/task-archive.md` Part 303 (`MemoryAnnotation.Unanswered`), not released. **Stated limit — measured on the
+  real binary:** llama.cpp refuses an embedding input past its physical batch, and our embedder preset sets none,
+  so it is llama-server's default 512 tokens (b10549, `embeddinggemma-300M-Q8_0`: 560 Chinese characters embedded;
+  840, 572 tokens, a 500 「input (572 tokens) is too large to process. increase the physical batch size」). A fact
+  that long can NEVER be embedded there, so it is never indexed — keyword-only — and every start's back-fill
+  re-remembers it (an annotation each, with 判断 on the CLI); while a layout rebuild is owed, it holds the marker
+  back and every start rebuilds in full, warning each time. Before the bump such a fact was graph-indexed without
+  its vector. Not fixed here: the cure is the embedder's launch contract (a batch as large as its context), which
+  needs its own measurement. Proof: `e2e-p52` case 9 — 9a (a write while the fake refuses embeds leaves its row's
+  ref empty, and the next start's back-fill re-indexes it) confirmed to FAIL with the `Ran` check removed; 9b (a
+  rebuild whose fake refuses ONE fact's content writes no marker and says so) confirmed to FAIL with the count
+  compared against zero; and the embedder-down start re-remembers nothing — no fact's content reaches the fake —
+  confirmed to FAIL with the probe removed.
   **(4) CLOSED — `AgentRunner`'s once-per-run `SessionStarted` guard ↔ `docs/task-archive.md` Part 275, shipped
   in 3.3.0, adopted with the 3.4 bump (2026-09-26).** Lyntai 3.2's stream reader yielded a `SessionStarted` for
   EVERY `system` event carrying a session id, and claude 2.1.28x's `system/thinking_tokens` progress events carry
@@ -782,8 +805,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   3/3 improved and unscoped 0/3; after (2), unscoped 3/3 and one embedding per fact. **Do not adopt 3.0.1's
   `FanOutWrites()` here** — fan-out propagates a member's write failure, so a stopped Ollama would fail
   `RememberAsync`, `IndexAsync` would null the row's `graph_ref`, and every new fact would silently lose
-  GRAPH recall too. **3.0.2 fixes (2) upstream — the graph's semantic half now spans scopes on a null-scope
-  recall — and one scope stays anyway**: spanning rests on the OPTIONAL `IListableVectorStore`, so a store
+  GRAPH recall too. (Since the Lyntai 3.4 bump `IndexAsync` chooses that outcome on purpose for ONE case, and says
+  so in a log line: a write that kept no vector while an embedder is wired is left unindexed — keyword-only until
+  the next start's back-fill gives it its vector — which is workaround (3)'s price, stated there.) **3.0.2 fixes
+  (2) upstream — the graph's semantic half now spans scopes on a null-scope recall — and one scope stays anyway**: spanning rests on the OPTIONAL `IListableVectorStore`, so a store
   without it yields nothing on the DEFAULT recall, silently, which is the failure class this bullet exists
   to record; and it searches one collection per kind for the same vectors. Note also what one scope did NOT
   buy: cross-kind LINKING already worked, because the graph's lexical recall spans scopes when the query
@@ -1175,17 +1200,28 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   than recording.
 - **A FAILED EMBED IS NOT AN ERROR TO THE ENGINE — so nothing may write through a router that is down.**
   Lyntai's graph engine catches a failed write-time embed and stores the fact anyway, without its vector
-  ("storing without signals or links"), and the fact still gets its graph reference, so no back-fill ever
-  returns to it: semantic recall simply never finds it again, and coverage reads 100%. Four things follow,
+  ("storing without signals or links"), and hands back its graph reference. Until the Lyntai 3.4 bump the fact
+  kept it, so no back-fill ever returned: semantic recall never found it again, and coverage read 100%. Since the
+  bump `FactIndex.IndexAsync` reads the write's `Ran` and leaves such a fact UNINDEXED (workaround (3) in the Lyntai
+  list above), so the next start's back-fill gives it its vector — keyword-only until then, and the retry pays its
+  annotation again, which is why the rest of this bullet still keeps writes off a down router. Four things follow,
   all found by review, the first three confirmed on the real binary (`docs/self-managed-llm-runtime.md`):
   **(1) `LlamaWarmStep` runs BEFORE `FactIndexStep`.** The other way round, the 3.2 layout rebuild re-remembered
   every fact before anything had started llama-server (a graceful shutdown kills it): a real install came up
   with 6 of 6 facts indexed and **0 vectors**, marker written. Fixed, the same repro keeps 6.
   **(2) `FactIndexStep` probes one embed first** (`IFactIndex.EmbedderReadyAsync`, the engine's own routing)
-  and, when an embedder is wired but does not answer, indexes nothing, writes no marker and warns — the rule
-  being that a marker is written only after work that actually happened. `e2e-p52` case 9 boots one folder
-  up, down (the fake refuses embeds), up, and fails without the probe: the marker is written against the
-  refusing embedder and the facts are never re-embedded.
+  and, when an embedder is wired but does not answer, indexes nothing, writes no marker and warns. Since the 3.4
+  bump that is a COST gate (workaround (3)): the per-write check already keeps a lost vector retryable, and what
+  the probe spares is an annotation per pending fact on every start of an outage. A marker is written only after
+  work that actually happened — so a layout rebuild counts against the fact TOTAL, and one that reached only part
+  of the facts writes no marker and says so. A back-fill records the marker whatever it indexed: what it left are
+  empty refs, which the next back-fill finishes at any layout. Holding a REBUILD to every fact is a decision, not a
+  difference in what it left (the same empty refs), and its price is that the retry is a whole rebuild. `e2e-p52` case 9 boots one folder up
+  (9a: a write while the fake refuses embeds stays unindexed), up again (its back-fill re-indexes that row), down
+  (the fake refuses embeds: no fact's content reaches it — which fails with the probe removed, the rebuild then
+  re-remembering every fact while the total rule alone still keeps the marker back, so the gate is asserted by what
+  reaches the embedder — no marker, the warning), partly down (9b: the fake refuses one fact's content — no
+  marker, the other warning) and up (the rebuild, the marker).
   **(3) A router restart is refused while anything writes through it** — see the next bullet.
   **(4) An embedder that is BOUND but not WIRED leaves the vector rebuild owed.** When the saved 语义 arm is one
   that registers an embedder (`TakesEffectOnRestart` — for this layer that IS "embeds") but none is wired this
@@ -1199,8 +1235,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   **It covers only a start that REACHES the marker write** — one with no marker yet, or with "2" or older stored.
   With "3" already stored, `FactIndexStep` syncs and returns before it ever asks whether an embedder is owed, so
   a model that vanishes AFTER an install reached "3" leaves the marker at "3": the facts written while it was
-  gone keep no vector, and the start that has it back only syncs. Those facts are recovered only by the manual
-  rebuild that the gone-model startup warning (`LlamaWarmStep`) asks for — 「再在「记忆检索」重新建立一次语义
+  gone keep no vector, and the start that has it back only syncs. The per-write check does not reach them either:
+  with no embedder WIRED no vector is owed, so each of those writes kept its ref. Those facts are recovered only by
+  the manual rebuild that the gone-model startup warning (`LlamaWarmStep`) asks for — 「再在「记忆检索」重新建立一次语义
   索引」 — which is why that warning carries the rebuild and not only the restart.
 - **A model downloaded while OUR router runs is restarted in — within limits, each for a failure found in
   review.** The router reads its models directory and preset file ONCE (measured: `400 model not found`
@@ -1214,8 +1251,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the restart window is exactly the failed-embed case above, so the bind says to restart the service instead.
   A reindex needs no check of its own: it reaches llama.cpp only through those two (the CLI arm's rephrasing is
   on the default client, the CLI), and the separate reindex check it had refused, with a sentence about lost
-  vectors, reindexes that touch no llama.cpp at all. A chat judge's annotation is lost the same way a vector
-  is: fail-open, at write time, for good. Verified on the real binary (the runtime doc), because no fake can be a router we started.
+  vectors, reindexes that touch no llama.cpp at all. A chat judge's annotation is lost the way a vector used to
+  be: fail-open, at write time, for good. A vector lost in that window is, since the Lyntai 3.4 bump, retried by
+  the next start's back-fill — keyword-only until then, and paying its annotation again. Verified on the real
+  binary (the runtime doc), because no fake can be a router we started.
   "Annotates" means RUNNING with 判断 switched on: switched off, the chat judge makes no call and the restart
   goes ahead. A binding that is only SAVED loses nothing either, and is refused anyway because the service
   restart it is owed loads the new model too — in its own sentence (「设置的是这个 llama.cpp 的…模型,但还没有
