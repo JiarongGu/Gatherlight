@@ -22,7 +22,8 @@ namespace Gatherlight.Server.Platform.Storage.Knowledge.Services;
 /// <para><b>Detached, and not bound to the request</b>, like the semantic reindex: each fact is a model call when 判断
 /// is on, so a large bundle takes minutes, and a browser that stops waiting must not cancel the work. Runs are
 /// SERIALISED: a second import's back-fill starts after the first ends and finds only what is still unindexed, so no
-/// fact is annotated twice. Nothing is persisted about a run — the rows ARE the state: a run cut short by a shutdown
+/// fact is annotated twice — unless the embedder dies MID-RUN: a write that kept no vector while it was down stays
+/// unindexed (<see cref="IFactIndex.IndexAsync"/>), and the next start's back-fill annotates it again. Nothing is persisted about a run — the rows ARE the state: a run cut short by a shutdown
 /// leaves its remaining refs empty, and the startup back-fill finishes them. A judge that hangs meets the provider's
 /// own timeout here as it would at startup, and annotation fails open to no subjects, as it does there.</para>
 ///

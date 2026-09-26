@@ -39,15 +39,24 @@ public sealed class RememberFactTool : IGatherlightTool
         // The row is the record of truth and is written first — the index is derived, so a fact must
         // never depend on the index succeeding to be remembered at all.
         var id = await _store.LearnAsync(kind, topic, content, a.Source, a.Confidence ?? 0.7);
-        var reference = await _index.IndexAsync(kind, topic, content, ct, id);
-        // WRITTEN EVEN WHEN NULL — the rule IndexEachAsync already follows. Same kind+topic is an EDIT, and the
-        // graph dedups by content hash, so the ref this row carried points at a node holding the PREVIOUS text.
+        // Non-null only when the content did NOT change: LearnAsync clears the ref of an edit (below).
+        var unchanged = await _store.GraphRefAsync(id);
+        var reference = await _index.IndexAsync(kind, topic, content, id, ct);
+        // WRITTEN EVEN WHEN NULL — the rule IndexEachAsync already follows — for an EDIT. Same kind+topic is an edit,
+        // and the graph dedups by content hash, so the ref this row carried points at a node holding the PREVIOUS text.
         // When the re-index fails (the tool's deadline cancelling the annotation, an engine error, a write that kept no
         // vector while the embedder is down — IndexAsync leaves that one unindexed on purpose), writing only a
         // non-null ref left that old ref in place — and the startup back-fill revisits only EMPTY refs, so the new
         // content and its subjects stayed out of the graph until a rebuild. Null clears it, so the back-fill
         // retries. (LearnAsync also detaches a row whose content changed, which covers the memory import — an
         // edit path that never indexes at all.) Proof: e2e-p48 case 9.
+        //
+        // …but NOT for a re-remember of UNCHANGED content. Its ref still addresses the node holding exactly this text —
+        // the node the failed re-index deduped onto, with whatever vector it already had — so clearing it detached a
+        // good entry and handed it to the back-fill, which then re-remembered it at an annotation's cost, for nothing,
+        // whenever the embedder was down at the moment of an unchanged write. Kept, it stays exactly as good as it was.
+        // Proof: e2e-p52 case 9 (an unchanged re-remember while the embedder is down keeps its ref).
+        if (reference is null && unchanged is not null) reference = unchanged;
         await _store.SetGraphRefAsync(id, reference);
 
         return new JsonObject { ["ok"] = true, ["id"] = id }.ToJsonString();

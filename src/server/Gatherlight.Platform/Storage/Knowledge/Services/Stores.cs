@@ -91,6 +91,10 @@ public interface IKnowledgeStore
     /// (<c>RememberFactTool</c>, <c>FactIndex</c>'s back-fill and rebuild).</summary>
     Task SetGraphRefAsync(long id, string? graphRef);
 
+    /// <summary>The fact's index address as stored, or null when it has none. Read by <c>RememberFactTool</c> right
+    /// after <see cref="LearnAsync"/>, where a non-null answer means the content did not change: an edit clears it.</summary>
+    Task<string?> GraphRefAsync(long id);
+
     /// <summary>Store alternate phrasings for a fact, addressed by its unique <c>(kind, topic)</c>.
     ///
     /// <para><b>By key, not by search.</b> The first version looked the row up with <c>RecallAsync(topic)</c>
@@ -239,6 +243,13 @@ public sealed class KnowledgeStore : IKnowledgeStore
         // it, and bumping the timestamp would make every rebuild look like the household edited
         // everything they know.
         await conn.ExecuteAsync("UPDATE knowledge SET graph_ref = @graphRef WHERE id = @id", new { graphRef, id });
+    }
+
+    public async Task<string?> GraphRefAsync(long id)
+    {
+        using var conn = _db.Open();
+        return await conn.QuerySingleOrDefaultAsync<string?>(
+            "SELECT NULLIF(graph_ref, '') FROM knowledge WHERE id = @id", new { id });
     }
 
     public async Task<List<(KnowledgeRow Row, string GraphRef)>> ByGraphRefsAsync(
