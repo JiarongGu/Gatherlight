@@ -85,8 +85,8 @@ nobody built — the in-process cross-encoder path reads WordPiece only, so the 
 English-only, while the multilingual rerankers run through llama.cpp (the design spec's §Constraints).
 
 **判断 can run on a llama.cpp RERANKER** (2026-09-23, `docs/judge-bench.md` Run 2). It VERIFIES locally and
-never annotates, so tagging stays on the Claude CLI and `llm.model.memory` holds the CLI's model, never the
-reranker's id. Measured: it puts the answer on the 8-row page far more often than the Claude judge (203–208
+never annotates, so tagging stays on the Claude CLI and the live route `llm.route.memory` is the CLI's model on the
+CLI (`claude-cli:haiku`), never the reranker's id. Measured: it puts the answer on the 8-row page far more often than the Claude judge (203–208
 vs 131 of 240), but first far less often (86–90 vs 130), at ~0.5 s against ~8.7 s — the Claude figures from Run
 1's content-only arm, the judge input that ships (its topic — content arm, the 1.3.0 input, read 133 / 132 /
 ~9.5 s and was measured equivalent). Those are Run 2's two rerankers; with mMiniLMv2 (Run 4) the picker's three span

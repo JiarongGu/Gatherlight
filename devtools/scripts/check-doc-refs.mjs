@@ -50,6 +50,9 @@ const ALLOWED = new Map([
   ['.claude/rules/dev-conventions.md::GgufCatalog.RecommendedJudge',
     'RETIRED on 2026-09-24 when Run 3 measured its model worse than no judge; the rule names it to say what '
     + 'it claimed and why it went — the same sentence names its replacement, RecommendedReranker'],
+  ['.claude/rules/dev-conventions.md::JudgeScopedModelRoutingStore',
+    'DELETED by the Lyntai 3.4 bump when D176 routes made it redundant; the closed workaround (2) names it to '
+    + 'say what the routes replaced and why it could go'],
   ['docs/DEPLOYMENT.md::IncludeNativeLibrariesForSelfExtract',
     'an MSBuild property quoted while explaining why the shipped host is framework-dependent and does '
     + 'NOT use it'],

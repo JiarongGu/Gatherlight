@@ -507,7 +507,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Lyntai's source on 2026-09-24 and switched to `FilePathOf` there — `ToolDetail`'s OWN copy of the same
   fallback chain stays, because it takes a parsed `JsonElement` for a UI label, not the `ToolCall` `FilePathOf`
   takes, so only one of the two copies is gone.
-  **Six are open today, and each says what ends it.**
+  **Six were open at Lyntai 3.2.0, and each says what ends it. (2) is CLOSED — its fix shipped in 3.3.0 and the
+  3.4 bump adopted it.**
   **(1) `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170.** Lyntai's LLM judge
   rendered each candidate as its headline alone, and our headline is the fact's TOPIC, so the judge decided
   "did this answer?" from topics; the decorator shows it the content. Upstream closed the gap with
@@ -541,56 +542,50 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   figures, never as "equivalent". The same run found the bigger thing: in EITHER mode this 1B judge is
   significantly WORSE than no judge (top-1 79 → 33 / 44 of 240, −19.2 / −14.6pp, p < 0.001), because partition
   promotes whatever it endorses.
-  **(2) `JudgeScopedModelRoutingStore` ↔ `docs/task-archive.md` Part 284 / D176, closed the same day it was
-  filed.** Lyntai's live override (`IModelRoutingStore`, which served `llm.model.memory`) was keyed by CONSUMER
-  alone, so it could not know which client or provider a model name was written for, and a key written for one
-  binding was read by another — after a fallback, or between a rebind and its restart (previous bullet). The app
-  withholds the key while the saved binding would annotate through a different client than the running one.
-  D176 retires `GetModelOverrideAsync`: a live override is now a ROUTE, provider AND model together —
-  `GetRouteAsync`, value `provider:model[, …]` — and a route naming a provider THIS ROUTER does not hold is
-  ignored, with a warning, while the given candidates serve: `TextRouter.LiveRouteAsync` checks its OWN
-  `_byId`, built from the providers THAT router was constructed with, never every provider the container knows.
-  That is exactly the two situations this class exists for: after a fallback, `GatherlightApp` registers the
-  FALLBACK-RESOLVED source (the CLI; see `ResolveJudge`), so a stale route still naming the old runtime names a
-  provider no router built this session holds; between a rebind and its restart, the newly-bound provider is
-  equally unheld until the restart wires it. **The reverse direction holds too, for a reason "`claude-cli` is
-  always registered" gets wrong** — that is true of the DEFAULT client's router and false of the one a
-  chat-GGUF judge actually calls through: its annotation runs on its OWN named client, `memory-llamacpp`
-  (`LlamaCppSource.ClientId`), whose router is narrowed to exactly `llamacpp` (`UseProviders(ProviderId)` —
-  Lyntai builds one `TextRouter` PER named client, holding only its declared ids; only the default client's
-  router holds every registered provider). So while that GGUF runs and the household rebinds to the CLI without
-  restarting, a stale `claude-cli:…` route is checked against `memory-llamacpp`'s router too — which does not
-  hold `claude-cli` either — so it is held back there as well, and the RUNNING GGUF keeps annotating: the
-  correct, safe outcome, and what makes the redundancy argument hold in BOTH directions. Two caveats: the
-  argument depends on the judge's chat provider id, `llamacpp`, staying distinct from the embedder's
-  (`llamacpp-embed`) and the reranker's (`llamacpp-rerank`) — `LlamaCppSource.Register` gives each its OWN id
-  (Lyntai D133), so a stale route naming one is never mistaken for a live registration of another; and the
-  held-back path LOGS a warning on every call while the stale route stands, where this class's own withholding
-  is completely silent — replacing it trades silence for a warning per call, not for a worse outcome. On the
-  bump: this class stops COMPILING (`GetModelOverrideAsync` is gone); `GatherlightApp.cs` ~173/~190 break too
-  (`ModelKeyPrefix` → `RouteKeyPrefix`). Only the TWO consumers Lyntai's router actually resolves move to a
-  route, `llm.route.scorer` and `llm.route.memory` — `scorer` (`BuiltInScorers.cs` ~203, "no explicit Model =
-  Lyntai routes") and `memory` (this class) are the only ones that ever reach `IModelRoutingStore`.
-  `llm.model.chat`/`extract`/`validate` must NOT become routes: the app reads each ITSELF and feeds
-  `ClaudeAgentOptions.Model` — the agent CLI's `--model` — directly, never through Lyntai routing (`chat`:
-  `ChatSessionService.cs` ~497, `UnattendedRunService.cs` ~112, `PlaygroundService.cs` ~78, `ZhikuMigrator.cs`
-  ~166; `extract`: `ExtractTool.cs` ~65; `validate`: `ClaudeValidateService.cs` ~55) — migrating them leaves the
-  reader finding nothing (silent fallback to a default model) or hands `provider:model` straight to `--model`.
-  A migration moves what is already stored for `scorer`/`memory` only, and `MemoryService.cs`'s export/import
-  (~154, the memory bundle's `SetModel` import over `_cortex.Models()`'s tunable-consumer list) has to SPLIT the
-  same way — `chat`/`extract`/`validate` keep `llm.model.<consumer>` in the bundle (round 2 gave `validate` a
-  cortex row too, so it is tunable now and travels exactly like `chat`/`extract` — it stays a plain
-  `llm.model.` key on the bump, never a route, for the same reason those two do), `scorer` alone becomes
-  `llm.route.scorer` (`memory` already never travels in it — `ExportAsync`'s own comment says why). D176's own
-  warn-once for a leftover key covers only ITS `lyntai.model.` prefix (`IModelRoutingStore.cs` ~37-47, a
-  Lyntai-namespaced constant, not our configured one) — our `llm.model.` namespace gets no such warning, so this
-  migration has no safety net if a key is missed. `MemoryRecallController.cs` ~550 and `BackupService.cs` ~242's
-  delete both move from `llm.model.memory` to `llm.route.memory`. Once the route write carries the provider:
-  delete `JudgeScopedModelRoutingStore` and its registration ahead of the live routing, have the binding
-  endpoint write the route directly, and confirm `e2e-p52` case 4 — which fails TODAY with either half of
-  today's fix removed (this class, and `MemorySources.ResolveJudgeModel`'s saved-source rule) — still passes on
-  the route mechanism alone; case 4b is a POSITIVE control, catching a store that withholds UNCONDITIONALLY, and
-  stays green either way.
+  **(2) CLOSED — the app-side routing store ↔ `docs/task-archive.md` Part 284 / D176, shipped in 3.3.0, adopted with
+  the 3.4 bump (2026-09-26).** Lyntai's live override was a bare MODEL keyed by CONSUMER alone, so a key written for
+  one 判断 binding was read by another — after a fallback, or between a rebind and its restart (previous bullet) — and
+  `JudgeScopedModelRoutingStore` withheld it while the saved binding annotated through a different client. D176 made
+  the override a ROUTE, provider AND model (`provider:model[, …]`), and a router ignores, with a warning, a route
+  naming a provider IT does not hold — Lyntai builds one router per named client, over that client's providers only.
+  That covers both situations the store existed for, so the bump DELETED it: after a fallback the route still names
+  `llamacpp`, which the CLI's router does not hold; between a rebind and its restart the newly bound provider is
+  unheld the same way. The reverse holds too: a chat GGUF annotates on its own client, `memory-llamacpp`, whose router
+  holds only `llamacpp`, so a `claude-cli:…` route written by a rebind is ignored there and the running GGUF keeps
+  annotating. Two caveats stand: the argument needs the chat provider id distinct from the embedder's and the
+  reranker's (`LlamaCppSource.Register` gives each its own, Lyntai D133, and D176 skips a provider serving no text
+  anyway); and the ignored path LOGS a warning on every call, where the store was silent. **What the bump did, as ONE
+  unit** — renaming the prefix without writing routes would have silently dropped every live model change:
+  - `RouteKeyPrefix` is `llm.route.`, its own namespace — NEVER `llm.model.`, where a bare `haiku` is read as a
+    provider id and live routing stops for that consumer. `LiveRoutes` reads and writes every route: each write is
+    `provider:model`, and a blank model DELETES the key, because a bare provider means the backend's own default,
+    never `DefaultModelByConsumer`.
+  - Only `scorer` and `memory` are routes — the two consumers Lyntai's router resolves. `chat`/`extract`/`validate`
+    stay `llm.model.<consumer>`: the app reads each itself and hands it to the agent CLI's `--model`
+    (`ChatSessionService`, `UnattendedRunService`, `PlaygroundService`, `ZhikuMigrator`, `ExtractTool`,
+    `ClaudeValidateService`), where a route would arrive as `claude-cli:opus`.
+  - The provider is STATED beside the model, on the source: `IMemoryJudgeSource.AnnotationProvider` — the CLI's id
+    for the CLI arm and for a reranker's tagging, `llamacpp` for a chat GGUF. The binding endpoint writes
+    `AnnotationProvider:AnnotationModel`.
+  - Cortex's scorer row (`CortexConfigService`, marked `Routed` in its catalog) stores `llm.route.scorer =
+    claude-cli:<model>`, shows the model half, and deletes the route on a clear or a reset.
+  - The memory bundle carries each model as cortex STORES it (`ModelKeys`), so the scorer travels as its route, and
+    imports through cortex's writer (`SetModelFromKey`): an older bundle's `llm.model.scorer` lands as the route; a
+    route cortex could not have written (a bare provider, another backend) is refused; the judge's route never
+    travels. An install from before the routes skips `llm.route.scorer`, so its scorer stays on the default.
+  - The backup reconcile deletes `llm.route.memory`, and any leftover `llm.model.memory`.
+  - `LiveRouteMigrationStep`, right after `db-migrate`, moves what an install stored and LOGS each key, because our
+    namespace gets no warn-once from Lyntai (its check covers only `lyntai.model.`): `llm.model.scorer = X` becomes
+    `claude-cli:X`; `llm.model.memory` takes the SAVED binding's `AnnotationProvider` — the provider the key was
+    written for, which reproduces exactly what the deleted store did with it — becomes `claude-cli:X` when nothing
+    is bound, and is DROPPED where there is no provider to derive (a retired backend, a source saved with no model:
+    both keys the store never read). A route already present wins over the old key beside it.
+  Proof: `e2e-p52` case 4 passes on routes alone, and fails when a chat GGUF's route names the CLI (read straight
+  through after the fallback); 4b is its positive control, a route for the running provider read live; case 5 reads
+  `claude-cli:haiku` from the database. `e2e-p16` S1–S3 drive a real scoring pass (the route reaches the judge
+  spawn's `--model`; a clear gives the consumer default, haiku, never no `--model`) and M1–M3 the migration;
+  `e2e-p14` the bundle; `e2e-p47` the reconcile. Each is confirmed to fail with its own half removed (the suites'
+  headers name which).
   **(3) `IFactIndex.EmbedderReadyAsync` ↔ `docs/task-archive.md` Part 285 / D175 — and D175 says REPLACE it, not
   keep it.** A failed write-time embed is silent — Lyntai's graph engine catches it, stores the fact anyway
   WITHOUT its vector, and gives it a graph reference regardless, so no back-fill ever returns to it (measured: a
@@ -747,8 +742,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   claiming a model it did not use. `validate` needs no `memory`-style exclusion: nothing else writes
   `llm.model.validate`, so a cortex row is not a second writer of anything. Proof lives in `e2e-p16`
   (listed + settable + round-trips) and `e2e-p14` (a bundle carrying `llm.model.validate` imports it, now
-  that `validate` is tunable and travels in the bundle — see the `JudgeScopedModelRoutingStore` class doc's
-  D176 bump note for what stays true on the Lyntai bump). **The key-to-ARGV step is asserted too**, by a
+  that `validate` is tunable and travels in the bundle — it stays a plain `llm.model.` key under the live routes,
+  like `chat`/`extract`: workaround (2) under the Lyntai list). **The key-to-ARGV step is asserted too**, by a
   real validate pass in `e2e-p16` (cases V1/V2). It was a stated gap for a round: the pass runs only when the
   diff at the gate touches `.claude/`, and every suite with files there PLANTED them on disk rather than
   writing them through a turn, so no suite ever reached one. `KBEDITTEST` makes the stub's execute turn
@@ -1631,11 +1626,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   **What was written for one binding must not be read by another.** When 判断 FALLS BACK to the CLI (a chat
   GGUF bound, then its runtime deleted), both the saved `judgeModel` and the live key still named the GGUF —
   the badge read `claude-cli · <gguf>` and the CLI was asked for it, zero enrichment and no error. So
-  `ResolveJudgeModel` counts the saved model only when the saved source is the one that resolved, and
-  `JudgeScopedModelRoutingStore` withholds the live key while the saved binding annotates through a
-  different CLIENT than the running one (which also covers a rebind before its restart). By client, not by
-  source: a reranker and the CLI arm share the default client, and a reranker's key — the CLI's model — is
-  right even after its runtime goes. `e2e-p52` case 4 fails with either half removed.
+  `ResolveJudgeModel` counts the saved model only when the saved source is the one that resolved, and the
+  live key is a ROUTE (`llm.route.memory`, Lyntai D176 since the 3.4 bump) naming the PROVIDER it was written
+  for, which a router that does not hold it ignores — the CLI's after a fallback from a GGUF, and the running
+  judge's between a rebind and its restart. By provider, not by source: a reranker and the CLI arm both tag on
+  the CLI, so a reranker's route — the CLI's model on the CLI — is right even after its runtime goes. Until the
+  bump an app-side store withheld the model-only key by CLIENT to the same effect (workaround (2)). `e2e-p52`
+  case 4 fails with either half broken — the route's provider (a chat GGUF's route naming the CLI, confirmed on
+  the bump) or the saved-source rule (confirmed before it, against the store the route replaced).
   **The trap (fixed upstream in Lyntai 3.1, its D87):** a named client used to narrow its provider POOL but
   reuse the global candidates, so a client pooled over a local provider still resolved candidates from
   `UseDefaultCandidates("claude-cli")` — a provider absent from its own pool. Every call logged `router:
@@ -1653,16 +1651,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `app_config`, including `memory`, whose meaning depends on a `settings.json` binding — one that
   `/api/memory/export` and the startup seed do not carry at all, so the key alone named a model for a
   backend the target install never bound. It now carries a model key only if cortex can set it, exported by
-  cortex's own list and imported through `SetModel`. That is one rule for "the household's tuning", and it
-  refuses `memory` for the same reason the cortex row is gone. Proof: `e2e-p14`.
+  cortex's own list (`ModelKeys` — each key as cortex stores it, so the scorer as its live route) and imported
+  through cortex's writer (`SetModelFromKey`). That is one rule for "the household's tuning", and it refuses
+  `memory` for the same reason the cortex row is gone. Proof: `e2e-p14`.
   **The whole-install backup carries BOTH files, and the bundle's own filter isn't enough there.**
   `app_config` is only MERGED (the memory bundle inside the zip is the same upsert as above) while
-  `settings.json` is copied wholesale — so a target's own `llm.model.memory`, bound before the restore,
-  survives untouched beside a freshly restored binding it can now disagree with, and the scoped routing
-  store only withholds it across a CLIENT mismatch (a saved binding sharing the running client reads it
-  straight through). `BackupService.ImportAsync` reconciles by deleting the key right after it copies
-  `settings.json` in: after the restart the restored binding is the only answer, and before it the running
-  wiring's own default answers, which belongs to the running client — consistent either way. Proof: `e2e-p47`.
+  `settings.json` is copied wholesale — so a target's own `llm.route.memory`, bound before the restore,
+  survives untouched beside a freshly restored binding it can now disagree with, and a route is read wherever
+  its PROVIDER is held (a target on the CLI at opus, restored from a backup on the CLI at sonnet, keeps judging
+  on opus). `BackupService.ImportAsync` reconciles by deleting the route — and any leftover pre-route
+  `llm.model.memory` — right after it copies `settings.json` in: after the restart the restored binding is the
+  only answer, and before it the running wiring's own default answers, which belongs to the running client —
+  consistent either way. Proof: `e2e-p47`.
 - **A reranker verifies; it never annotates.** A cross-encoder scores (query, document) pairs and never
   generates, so it can do the half of 判断 that checks a recall and none of the half that tags a write — the
   subject handles need a model that writes. A reranker binding is therefore TWO backends, and `JudgeWiring`
@@ -1676,12 +1676,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   halves by ROUTING — a fact write makes no chat call to llama.cpp and is tagged by the CLI on `haiku`, and a
   recall's `/v1/rerank` request carries both the query and the written fact's CONTENT (a token only its content
   holds, not its topic). One fact, so it proves the reranker reads content — not that every candidate is sent.
-  **`llm.model.memory` holds the ANNOTATION model, never the reranker's id.** The binding writes
-  `AnnotationModel(model)`, which for a reranker is the CLI's. Writing the id would hand it to Claude on every
-  fact write: fail-open, zero tagging, no error. `p52` case 5 calls it THE TRAP and reads the key from the
-  database, because no API response carries it. The scoped routing store (previous bullet) compares by CLIENT
-  for the same reason: a reranker and the CLI arm share the default client, so a reranker's key — the CLI's
-  model — stays right even after its runtime goes.
+  **`llm.route.memory` is the ANNOTATION route, never the reranker's id.** The binding writes
+  `AnnotationProvider(model):AnnotationModel(model)`, which for a reranker is `claude-cli:haiku`. Writing the id
+  would hand it to Claude on every fact write: fail-open, zero tagging, no error; and writing llama.cpp's provider
+  would name one the tagging client's router does not hold, so the route would never be read. `p52` case 5 calls
+  it THE TRAP and reads the key from the database, because no API response carries it. The route names a
+  PROVIDER (previous bullet) for the same reason: a reranker and the CLI arm both tag on the CLI, so a reranker's
+  route stays right even after its runtime goes.
   **`ChecksOnly` is STATED beside `AnnotationModel`, never inferred.** The bind toast said 「标注与核对」 for
   every binding, which a reranker made false. The first fix DERIVED "checks only" as "the annotation model
   differs from the bound one" — which reads any source whose `AnnotationModel` merely normalises a name (an
