@@ -265,10 +265,12 @@ public sealed class FactIndex : IFactIndex
             // exempt them from the decay that is the whole reason for indexing them.
             // One write, one embedding: the graph member embeds its own entry when an embedder is wired.
             // The fact's kind rides on the knowledge row, which is what the recall filters on.
-            var reference = await _engine.RememberAsync(
+            // Lyntai 3.3 (D175) returns what the write did, not only where it went: the bump's Task 3 reads
+            // `.Ran` here to leave a vector-less write retryable; for now only its reference is used.
+            var written = await _engine.RememberAsync(
                 new MemoryWrite(TaskKey, AllFacts, content, Headline: topic), ct);
             await ExpandAkaAsync(kind, topic, content, ct);
-            return Encode(reference);
+            return Encode(written.Reference);
         }
         catch (Exception ex)
         {

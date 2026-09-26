@@ -70,7 +70,7 @@ public sealed class ScoringService : IScoringService
         // ones, so older unscored conversations aren't shut out once the total exceeds 500 (the filter must
         // apply BEFORE the cap, not after).
         var scored = (await _store.ExportAsync(ct)).Select(r => r.SessionId).ToHashSet();
-        var threads = await _convo.ListThreadsAsync(100_000, ct);
+        var threads = await _convo.ListThreadsAsync(100_000, ct: ct);
         var ids = threads
             .Where(t =>
             {
