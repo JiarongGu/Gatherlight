@@ -87,7 +87,8 @@ public sealed class LlamaRestartPolicy : ILlamaRestartPolicy
     {
         // --- a restart would LOSE something ------------------------------------------------------------------
         if (_providers.Any(p => string.Equals(p.Id, LlamaCppSource.EmbedProviderId, StringComparison.OrdinalIgnoreCase)))
-            return "「语义」正在用这个 llama.cpp 做嵌入:重启它的那几秒里写入的事实会永久丢掉向量,所以应用不会自动重启它"
+            return "「语义」正在用这个 llama.cpp 做嵌入:重启它的那几秒里写入的事实拿不到向量,在下次启动补上之前只能按关键词"
+                + "找到,补的时候(「判断」开着的话)还要再做一次主题标注,所以应用不会自动重启它"
                 + " —— 请重启服务,新模型会随 llama.cpp 一起载入;" + ReselectAfterRestart;
 
         if (MemoryEnrichment.IsOn(_appConfig) && AnnotatesHere(_runningJudge.Transport, _runningJudge.Model))

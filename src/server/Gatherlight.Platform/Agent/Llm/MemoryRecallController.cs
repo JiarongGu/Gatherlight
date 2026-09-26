@@ -765,10 +765,19 @@ public sealed class MemoryRecallController : ControllerBase
     /// populated, so the ordinary back-fill (which touches only rows with no ref) would embed nothing —
     /// and after any model change.</summary>
     [HttpPost("api/manage/memory/layer/semantic/reindex")]
-    public IActionResult Reindex()
+    public async Task<IActionResult> Reindex(CancellationToken ct)
     {
         if (MemorySources.ResolveSemantic(Settings()) is null)
             return StatusCode(409, new { error = "「语义」这一层尚未启用。" });
+        // GATED, like both back-fills (IFactIndex.EmbedderReadyAsync) — and here the gate protects more than quota. An
+        // embedder rebuild FORGETS the graph and clears every ref before it re-remembers a single fact, so during an
+        // outage it discarded the index and every decay position and link with it, paid an annotation per fact, and
+        // left every row unindexed for the next start to pay again. Refused BEFORE anything is touched. The CLI
+        // rephrasing arm registers no embedder, so the probe answers true for it and its non-destructive path runs as
+        // before. Proof: e2e-p52 case 9 (a reindex while the fake refuses embeds is refused, and every ref is kept).
+        if (!await _facts.EmbedderReadyAsync(ct))
+            return StatusCode(409, new { error = "「语义」的嵌入模型现在没有响应 —— 现在重建会先丢掉已有的索引,"
+                + "却建立不起任何向量,所以没有开始。等它恢复后再重建。" });
         if (!_reindex.TryStart())
             return StatusCode(409, new { error = "已经有一次重建在进行中。" });
 
