@@ -11,7 +11,15 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// reranker was measured under in Runs 2–6, so judge-bench pins it on its <c>rr</c>/<c>rrf</c> arms and those runs
 /// re-launch as they ran. Announced at startup whenever it is SET, raw value beside what it resolved to, on
 /// the console (what judge-bench reads) and through the logger at Warning (what state/logs keeps) — the pattern every
-/// measurement knob follows. It is a benchmark setting, not a household one.</summary>
+/// measurement knob follows. It is a benchmark setting, not a household one.
+///
+/// <para><b>A THIRD value, <c>d177</c> — a measurement mode, never a default</b> (<c>docs/judge-bench.md</c> Run 10,
+/// 2026-09-27): Lyntai's own segmentation in place of ours, so the two can be compared within one run. The candidates are
+/// prepared exactly as with chunking on — the query fitted, NFKC under a declared window, and NOT cut — but no
+/// <see cref="ChunkedScoreProvider"/> wraps the provider (so there is no pace and no <c>RerankAdmission</c>), and the
+/// <c>llamacpp-rerank</c> registration carries <c>MaxInputChars</c> and <c>Segmentation</c> instead
+/// (<see cref="LyntaiSegmentation"/>), so Lyntai's HTTP reranker segments each over-long document itself and scores it
+/// as its best piece (its D177, with Parts 305 and 306).</para></summary>
 public static class RerankChunking
 {
     /// <summary>The knob's name.</summary>
@@ -23,13 +31,64 @@ public static class RerankChunking
     /// <summary>The default when the knob is unset or unrecognised: ON (Run 6c).</summary>
     public const bool Default = true;
 
-    /// <summary>Whether chunking is on for this process.</summary>
-    public static readonly bool On = (Raw ?? "").Trim().ToLowerInvariant() switch
+    /// <summary>How long candidates are read, for this process.</summary>
+    public enum Modes
     {
-        "on" => true,
-        "off" => false,
-        _ => Default,
+        /// <summary><c>off</c>: each candidate CUT to its first window (<see cref="RerankInputCap"/>) — Runs 2–6.</summary>
+        Cut,
+
+        /// <summary><c>on</c>, the default: read in windows by <see cref="ChunkedScoreProvider"/>, sized by the pace.</summary>
+        Windows,
+
+        /// <summary><c>d177</c>, a measurement mode: read in pieces by Lyntai's HTTP reranker (<see cref="LyntaiSegmentation"/>).</summary>
+        Lyntai,
+    }
+
+    /// <summary>The mode this process runs.</summary>
+    public static readonly Modes Mode = (Raw ?? "").Trim().ToLowerInvariant() switch
+    {
+        "on" => Modes.Windows,
+        "off" => Modes.Cut,
+        "d177" => Modes.Lyntai,
+        _ => Default ? Modes.Windows : Modes.Cut,
     };
+
+    /// <summary>Whether OUR chunking is on for this process (<see cref="ChunkedScoreProvider"/> wraps the reranker).</summary>
+    public static readonly bool On = Mode == Modes.Windows;
+
+    /// <summary>Whether <see cref="RerankInputCap"/> leaves candidates UNCUT — true unless the mode is the cut, because
+    /// both segmenting modes read the whole text downstream.</summary>
+    public static bool Uncut => Mode != Modes.Cut;
+
+    /// <summary>The mode as the knob spells it — what the startup announcement prints.</summary>
+    public static string Name => Mode switch { Modes.Windows => "on", Modes.Lyntai => "d177", _ => "off" };
+
+    /// <summary>What the <c>d177</c> mode sets on the <c>llamacpp-rerank</c> registration for a reranker with declared
+    /// window <paramref name="window"/> — the configuration Run 10 states per model, mapped onto ours as closely as
+    /// Lyntai 3.5.1 allows:
+    /// <list type="bullet">
+    /// <item>a DECLARED window (mMiniLMv2, 512): the pair bound is the window less a pair's overhead (506), the query keeping at
+    /// most half (253) — our <see cref="RerankInputCap.Fit"/> exactly — and a document what the query leaves;</item>
+    /// <item>NO declared window (BGE, LAMAR, launched at the 4,096-token batch): the bound is that batch less the overhead
+    /// (4,090), so the query keeps at most 2,045 (<see cref="RerankInputCap.UndeclaredQueryMaxChars"/>), and a document
+    /// piece is at most <see cref="RerankInputCap.MaxChars"/> (1,000) whatever the query;</item>
+    /// <item>both: an overlap of a quarter (an UPPER bound in Lyntai, a lower one in ours) and at most
+    /// <see cref="RerankInputCap.MaxWindows"/> pieces per document.</item>
+    /// </list>
+    /// What no setting can match: Lyntai cuts each piece at a boundary in its latter half and lets the last one run short,
+    /// where ours cuts every window to the full budget and anchors the last at the tail; Lyntai COUNTS the normalised text
+    /// and sends the original, which here is already normalised under a declared window (<see cref="RerankInputCap"/> stays
+    /// in front); and it has no per-call total, where ours caps a call at <see cref="RerankInputCap.MaxWindowsPerCall"/>.</summary>
+    public static (int MaxInputChars, InputSegmentation Segmentation) LyntaiSegmentation(int? window) =>
+        RerankInputCap.UsableWindow(window) is { } tokens
+            ? (tokens - RerankInputCap.PairOverheadTokens,
+                new InputSegmentation { MinDocumentShare = 0.5, Overlap = 0.25, MaxPiecesPerInput = RerankInputCap.MaxWindows })
+            : (LlamaServerRuntime.RerankBatch - RerankInputCap.PairOverheadTokens,
+                new InputSegmentation
+                {
+                    MinDocumentShare = 0.5, Overlap = 0.25, MaxPiecesPerInput = RerankInputCap.MaxWindows,
+                    MaxDocumentPiece = RerankInputCap.MaxChars,
+                });
 }
 
 /// <summary>A reranker that scores each candidate in overlapping WINDOWS and answers with its best window's score — so
