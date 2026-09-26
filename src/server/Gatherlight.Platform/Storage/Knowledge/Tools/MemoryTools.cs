@@ -39,11 +39,11 @@ public sealed class RememberFactTool : IGatherlightTool
         // The row is the record of truth and is written first — the index is derived, so a fact must
         // never depend on the index succeeding to be remembered at all.
         var id = await _store.LearnAsync(kind, topic, content, a.Source, a.Confidence ?? 0.7);
-        var reference = await _index.IndexAsync(kind, topic, content, ct);
+        var reference = await _index.IndexAsync(kind, topic, content, ct, id);
         // WRITTEN EVEN WHEN NULL — the rule IndexEachAsync already follows. Same kind+topic is an EDIT, and the
         // graph dedups by content hash, so the ref this row carried points at a node holding the PREVIOUS text.
         // When the re-index fails (the tool's deadline cancelling the annotation, an engine error, a write that kept no
-        // vector while an embedder is wired — IndexAsync leaves that one unindexed on purpose), writing only a
+        // vector while the embedder is down — IndexAsync leaves that one unindexed on purpose), writing only a
         // non-null ref left that old ref in place — and the startup back-fill revisits only EMPTY refs, so the new
         // content and its subjects stayed out of the graph until a rebuild. Null clears it, so the back-fill
         // retries. (LearnAsync also detaches a row whose content changed, which covers the memory import — an

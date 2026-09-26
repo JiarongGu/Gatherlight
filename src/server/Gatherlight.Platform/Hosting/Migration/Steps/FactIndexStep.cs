@@ -72,7 +72,8 @@ public sealed class FactIndexStep : IMigrationStep
         // NOTHING is written while an embedder is wired but not answering — no back-fill, no rebuild, no
         // marker. That is our COST POLICY, not what keeps a vector from being lost: a write whose embed fails is
         // not an error to the engine (it stores the fact without its vector), and since the Lyntai 3.4 bump
-        // IndexAsync reads each write's Ran and leaves such a fact unindexed, so the back-fill comes back to it.
+        // IndexAsync reads each write's Ran and, when the embedder is down, leaves such a fact unindexed, so the
+        // back-fill comes back to it.
         // What the gate saves is the cost of coming back for nothing: every pending fact re-remembered on every
         // start of an outage, each an annotation call against the household's quota when 判断 is on the CLI
         // (IFactIndex.EmbedderReadyAsync says what would end it). History: a real install came up after the 3.2
@@ -121,26 +122,34 @@ public sealed class FactIndexStep : IMigrationStep
             _log?.LogInformation(
                 "fact index: layout {Stored} -> {Layout}; rebuilding so recall can reach the entries again",
                 stored ?? "(pre-marker)", Layout);
-            // A count against the TOTAL, not a bare await and not against zero. RebuildAsync degrades rather
-            // than throwing (the whole index does — an unindexed fact is still found by FTS), so a failed
-            // migration returns a short count here and would otherwise be recorded as done. It compared with
-            // zero until the Lyntai 3.4 bump, which was complete only while every write got a reference: now a
-            // write that kept no vector gets none (IndexAsync reads its Ran), so an embedder that answered the
-            // probe and then failed part-way returns a count above zero and below the total — and the marker
-            // would have claimed a rebuild whose vectors are partly missing. The facts it did not reach are
-            // unindexed rows, found by FTS, and the next start rebuilds AGAIN — a whole rebuild, every fact
-            // re-remembered, so a fact the embedder can never embed (one past llama.cpp's physical batch) repeats
-            // it at every start; the warning below says so each time rather than letting it loop unseen. Proof:
-            // e2e-p52 case 9, where a fake embedder refuses one fact's content; confirmed to FAIL with this
-            // compared against zero.
+            // A PARTIAL REBUILD STILL WRITES THE MARKER; its empty refs are the retry queue. RebuildAsync forgets the
+            // old graph and clears every ref BEFORE it re-indexes, so every entry it writes is at the current address,
+            // and a fact it did not index — IndexAsync leaves a write unindexed when the embedder went down during the
+            // pass — is a row with an EMPTY ref, which the next start's gated back-fill finishes right here, at the
+            // current address. So the marker ("the entries are at the current address") is true after the pass. For a
+            // round of the 3.4 bump it was held back until the count reached the fact TOTAL, and that made every retry
+            // a whole DESTRUCTIVE rebuild — re-spending an annotation on every fact and discarding the decay and links
+            // accumulated since — for the few facts a back-fill would have finished.
+            //
+            // ZERO is still no marker, because a zero is ambiguous: RebuildAsync degrades rather than throwing, so it
+            // returns 0 both when every write stayed unindexed AND when it failed before it cleared the old refs,
+            // which would then still address the old layout. Holding the marker costs nothing in the first case — with
+            // every ref empty the next start takes the back-fill path above, not a rebuild — and is required in the
+            // second. Proof: e2e-p52 case 9b, where the fake embedder goes down for one fact mid-pass: the marker is
+            // written and the next start back-fills that fact and keeps every other node; confirmed to FAIL against
+            // the total rule.
             var indexed = await _index.RebuildAsync(ct);
             if (indexed < facts.Count)
             {
-                _log?.LogWarning("fact index: the layout rebuild indexed {Indexed} of {Total} facts; leaving the " +
-                    "marker unset so the next start retries rather than recording a migration that did not happen",
-                    indexed, facts.Count);
-                _state?.AddWarning($"事实索引的重建没有完成(只建立了 {indexed}/{facts.Count} 条) —— "
-                    + "其余的事实仍能按关键词找到,下次启动会重试。");
+                _log?.LogWarning("fact index: the layout rebuild indexed {Indexed} of {Total} facts; the rest stay " +
+                    "unindexed (found by keyword) until the next start's back-fill", indexed, facts.Count);
+                _state?.AddWarning($"事实索引的重建没有全部完成(建立了 {indexed}/{facts.Count} 条) —— "
+                    + "其余的事实仍能按关键词找到,下次启动会补上。");
+            }
+            if (indexed == 0)
+            {
+                _log?.LogWarning("fact index: the layout rebuild indexed nothing; leaving the marker unset so the " +
+                    "next start retries rather than recording a migration that may not have happened");
                 return;
             }
         }
@@ -153,11 +162,8 @@ public sealed class FactIndexStep : IMigrationStep
         // turns 语义 off), and so do a deleted runtime and the built-in embedder's missing files. Proof: e2e-p52
         // case 10.
         //
-        // The SyncAsync branches above reach this whatever they indexed: a fact a back-fill left unindexed (a write
-        // that kept no vector) is a row with an empty ref, which the next start's back-fill finishes at any layout.
-        // The rebuild is held to every fact (above) by DECISION (the 3.4 bump), not because its unreached facts
-        // differ — they are rows of the same kind. What the rule buys is that the marker never records a rebuild
-        // that did not reach every fact; what it costs is a whole rebuild, not a back-fill, on the retry.
+        // The SyncAsync branches above reach this whatever they indexed, for the reason the rebuild does: a fact a
+        // back-fill left unindexed (the embedder down) is a row with an empty ref, which the next back-fill finishes.
         var layout = EmbedderOwed() ? VectorsOnlyMoved : Layout;
         if (layout != Layout)
             _log?.LogWarning("fact index: 语义 is bound to an embedder that is not wired this start; recording " +

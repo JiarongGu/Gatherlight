@@ -64,18 +64,19 @@
 //   8. A model downloaded AFTER the router started is unknown to it (the real router reads its models
 //      directory once). A router the app did not start is not restarted for it, and the refusal says what
 //      would load the model rather than quoting a 400 — on the 语义 bind too, and in the startup warning.
-//   9. An embedder that is WIRED but DOWN at startup: the fact index re-remembers NOTHING and leaves its layout
-//      marker, and the next start does the work. That gate is our COST policy since the Lyntai 3.4 bump — it spares
-//      the household's quota the annotation of every pending fact on every start of an outage (asserted as "no
-//      fact's content reaches the embedder", which fails with the probe removed: the rebuild then re-remembers
-//      every fact, each refused — while "no marker" still holds, the rebuild indexing 0 of 3 and the total rule
-//      keeping the marker back, which is why the gate is asserted by what reaches the embedder); what keeps a
-//      vector from being lost is the per-write check below. 9a: a write while the embedder refuses leaves its row
-//      UNINDEXED (an empty graph_ref: IndexAsync reads the write's Ran and finds no Similarity), and the next start's
-//      back-fill re-indexes it once the embedder answers — confirmed to FAIL with the Ran check removed (the row got a
-//      ref and was never revisited). 9b: a layout rebuild whose embedder refuses ONE fact's content indexes the rest
-//      and writes NO marker, and says so — confirmed to FAIL with FactIndexStep comparing its count against zero
-//      instead of the fact total (the marker was written over the missing vector).
+//   9. A write that keeps NO VECTOR is classified by one probe (Lyntai 3.4 bump). 9a: the embedder refuses one fact's
+//      CONTENT and answers the probe — the fact keeps its ref, indexed without a vector, the log names it, and the next
+//      start does not retry it (confirmed to FAIL with every vector-less write left unindexed: its ref empty, and the next
+//      start embedding it again); the embedder is DOWN, probe included — the row is left UNINDEXED and the next start's
+//      back-fill re-indexes it (confirmed to FAIL with the probe's answer ignored and the ref kept). An embedder that is
+//      down at startup: the fact index re-remembers NOTHING and leaves its layout marker — our COST policy, sparing the
+//      household's quota an annotation per pending fact per start of an outage (asserted as "no fact's content reaches
+//      the embedder", which fails with the probe removed). 9c: a memory import while the embedder is down — its
+//      detached back-fill is gated too, skips, and the next start indexes the fact (confirmed to FAIL with that gate
+//      removed). 9b: a rebuild the embedder goes down during writes its marker anyway — the facts it left are empty
+//      refs, the retry queue — and the next start back-fills them WITHOUT a rebuild, every other node kept (confirmed to
+//      FAIL against the rule it replaced, no marker until the count reached the total, under which the next start
+//      rebuilt everything again).
 //  10. A BOUND model whose file is gone falls back at startup — 判断 to the CLI, 语义 off — even while another
 //      model of its kind remains on disk; the startup warnings name the model, what the fallback costs and what
 //      brings it back; and the fact index's layout marker keeps the vector rebuild owed rather than claiming it done.
@@ -250,8 +251,12 @@ const hits = [];
 // so a GGUF dropped in later is unknown to it until a restart (measured, docs/self-managed-llm-runtime.md).
 // Case 8 plants a model outside this set to be exactly that; adding it later stands in for the restart.
 let refuseEmbeddings = false;
-// Case 9b: refuse only an embed whose input contains this token — a rebuild whose embedder fails PART of the facts.
+// Case 9: refuse only an embed whose input contains this token — an input the embedder will not take (9a) or one fact
+// of a rebuild (9b).
 let refuseEmbedToken = null;
+// Case 9b: how many of the fact index's probes (FactIndex.EmbedderReadyAsync, by their text) are answered before every
+// later one is refused — 1 lets the startup gate pass and then takes the embedder DOWN for the rebuild's own probe.
+let probeBudget = Infinity;
 // Case 8a: a router that ACCEPTS and never answers /v1/models — counted, so the case can prove it was asked.
 let hangModels = false;
 let modelsHung = 0;
@@ -289,7 +294,9 @@ const fake = http.createServer((req, res) => {
     hits.push({ path: req.url, model: json.model, body, at: Date.now() });
     if (req.url === '/v1/embeddings') {
       // Case 9: an embedder that is wired and DOWN — what a router that has not started looks like to a write.
-      if (refuseEmbeddings || (refuseEmbedToken && body.includes(refuseEmbedToken))) {
+      const probe = body.includes('index probe');
+      const overBudget = probe && probeBudget-- <= 0;
+      if (refuseEmbeddings || overBudget || (refuseEmbedToken && body.includes(refuseEmbedToken))) {
         res.writeHead(503, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { code: 503, message: 'zzfake embedder down' } }));
         return;
@@ -1677,13 +1684,15 @@ try {
     lateSem.status === 409 && /重启/.test(lateSemErr) && /llama-server/.test(lateSemErr) && !/没有返回向量/.test(lateSemErr),
     `${lateSem.status} ${lateSemErr || JSON.stringify(lateSem.body)}`);
 
-  // --- 9. an embedder that is wired but DOWN at startup: nothing is indexed, and the marker waits ------------
+  // --- 9. a write that keeps no vector, an embedder that is down, and a rebuild it goes down during -------------
   // Lyntai's engine stores a fact whose write-time embed FAILED without its vector, and hands back its graph
   // reference anyway. On the 3.2 upgrade the layout rebuild ran before llama.cpp had started and a real install came
-  // up with every fact indexed and no vector at all, marker written, coverage 100%. Since the Lyntai 3.4 bump the
-  // write's own report (Ran) keeps such a fact UNINDEXED so the back-fill returns to it (9a), a rebuild counts
-  // against the fact total (9b), and the startup probe stays as a gate that spares the quota: when the embedder does
-  // not answer, index nothing — no annotation per pending fact — and leave the marker for next time.
+  // up with every fact indexed and no vector at all, marker written, coverage 100%. Since the Lyntai 3.4 bump the fact
+  // index reads the write's own report (Ran) and CLASSIFIES a vector-less write by one probe: an embedder that answers
+  // refused THIS input, and the fact keeps its ref without a vector, never retried (9a, input); one that does not
+  // answer is down, and the row is left UNINDEXED for the gated back-fill (9a, outage). Both back-fills are gated (the
+  // startup one here, the import's in 9c), and a partial rebuild writes its marker — its empty refs are the retry
+  // queue (9b).
   {
     const probeDir = dataDirFor('p52-rebuild');
     makeTestData(probeDir);
@@ -1706,45 +1715,99 @@ try {
       try { return db.prepare("SELECT COALESCE(graph_ref, '') AS ref FROM knowledge WHERE topic = ?").get(topic)?.ref ?? null; }
       finally { db.close(); }
     };
-    // 9's third fact. Its content carries the token 9b refuses, and nothing else's does.
-    const TOPIC_C = 'zzrebuildC 图书馆';
-    const CONTENT_C = 'The zzrebuildfact zzpartialfact library closes at nine on weekdays.';
+    const logText = () => {
+      const dir = path.join(probeDir, 'state', 'logs');
+      return fs.existsSync(dir) ? fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n') : '';
+    };
+    // Every fact carries `zzrebuildfact`; each of D, C and E also carries the one token its case refuses or looks for.
+    const FACT_A = ['zzrebuildA 周末市场', 'The zzrebuildfact market opens at seven on weekends.'];
+    const FACT_B = ['zzrebuildB 游泳馆', 'The zzrebuildfact pool charges forty yuan for an adult.'];
+    const FACT_D = ['zzrebuildD 公园', 'The zzrebuildfact zzrefusedfact park note is refused by the embedder, whose probe answers.'];
+    const FACT_C = ['zzrebuildC 图书馆', 'The zzrebuildfact zzpartialfact library closes at nine on weekdays.'];
+    const FACT_E = ['zzrebuildE 博物馆', 'The zzrebuildfact zzimportfact museum is free on Sundays.'];
     const embedsOf = (since, needle) => hits.slice(since).filter((h) => h.path === '/v1/embeddings' && h.body.includes(needle));
+    // The fact index's probe, by its text (FactIndex.EmbedderReadyAsync) — the gate's and the classification's alike.
+    const probesOf = (since) => embedsOf(since, 'index probe');
+    const remember = (client, [topic, content]) =>
+      client.call('remember_fact', { kind: 'household', topic, content, source: 'https://example.test/zzr', confidence: 0.8 });
 
     // A: facts written while the embedder answers — each one embedded.
     rebuildServer = startServer({ dataDir: probeDir, port: REBUILD_PORTS[0], env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
-    await waitHealthy(`http://127.0.0.1:${REBUILD_PORTS[0]}`);
-    const cA = makeClient(`http://127.0.0.1:${REBUILD_PORTS[0]}`);
-    for (const [topic, content] of [
-      ['zzrebuildA 周末市场', 'The zzrebuildfact market opens at seven on weekends.'],
-      ['zzrebuildB 游泳馆', 'The zzrebuildfact pool charges forty yuan for an adult.'],
-    ]) await cA.call('remember_fact', { kind: 'household', topic, content, source: 'https://example.test/zzr', confidence: 0.8 });
+    const baseA = `http://127.0.0.1:${REBUILD_PORTS[0]}`;
+    await waitHealthy(baseA);
+    const cA = makeClient(baseA);
+    await remember(cA, FACT_A);
+    await remember(cA, FACT_B);
 
-    // 9a: a write while the embedder REFUSES. The engine stores the fact without its vector and hands back a ref;
-    // the fact index reads the write's Ran, finds no Similarity, and leaves the row unindexed so a back-fill returns.
+    // 9a, INPUT: the embedder refuses ONE fact's content and answers the probe — what llama.cpp does with an input past its
+    // window. Retrying it would fail the same way at every start, an annotation each; it is kept without a vector instead.
+    refuseEmbedToken = 'zzrefusedfact';
+    const beforeD = hits.length;
+    await remember(cA, FACT_D);
+    ok('(fixture 9a, input) the write asked the embedder and was refused — and ONE probe followed, which it answered',
+      embedsOf(beforeD, 'zzrefusedfact').length > 0 && probesOf(beforeD).length === 1,
+      JSON.stringify(hits.slice(beforeD).map((h) => `${h.path} ${h.body.slice(0, 60)}`)));
+    const refD = refOf(FACT_D[0]);
+    ok('THE POINT (9a, input): a write whose CONTENT the embedder refused, while it answers a probe, keeps its ref — indexed without a vector',
+      !!refD, `graph_ref=${JSON.stringify(refD)}`);
+    let refusedLine = false;
+    try { await until(() => (refusedLine = /refused the content of fact \d+ \(household\/zzrebuildD/.test(logText())), 15000, 300); }
+    catch { /* reported below */ }
+    ok('…and state/logs names the fact whose content was refused', refusedLine);
+
+    // 9a, OUTAGE: the embedder refuses everything, the probe included — it is down, and the row is left for the back-fill.
     refuseEmbeddings = true;
     const beforeC = hits.length;
-    await cA.call('remember_fact', { kind: 'household', topic: TOPIC_C, content: CONTENT_C,
-      source: 'https://example.test/zzr', confidence: 0.8 });
+    await remember(cA, FACT_C);
+    ok('(fixture 9a, outage) the write asked the embedder and was refused — and ONE probe followed, refused too',
+      embedsOf(beforeC, 'zzpartialfact').length > 0 && probesOf(beforeC).length === 1,
+      JSON.stringify(hits.slice(beforeC).map((h) => `${h.path} ${h.body.slice(0, 60)}`)));
+    ok('THE POINT (9a, outage): a write that kept no vector while the embedder is DOWN leaves its row UNINDEXED — an empty graph_ref',
+      refOf(FACT_C[0]) === '', `graph_ref=${JSON.stringify(refOf(FACT_C[0]))}`);
+
+    // 9c: a memory IMPORT while the embedder is down. Its detached back-fill is gated like the startup one: walking would
+    // re-remember each imported fact (an annotation each) for writes that stay unindexed and are walked again next start.
+    const beforeE = hits.length;
+    const imported = await fetch(`${baseA}/api/memory/import`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ gatherlightMemory: 1, knowledge: [
+        { kind: 'household', topic: FACT_E[0], content: FACT_E[1], source: 'https://example.test/zzr', confidence: 0.8 },
+      ] }),
+    });
+    let backfillLine = '';
+    try {
+      await until(() => (backfillLine = logText().match(/back-fill after a memory import (skipped|indexed)[^\n]*/)?.[0] ?? ''),
+        30000, 300);
+    } catch { /* reported below */ }
+    ok('(fixture 9c) the import succeeded and its detached back-fill ran', imported.status === 200 && !!backfillLine,
+      `${imported.status} ${backfillLine}`);
+    ok('THE POINT (9c): with the embedder down, the import\'s back-fill SKIPS — no imported fact\'s content reaches the embedder',
+      /skipped/.test(backfillLine) && embedsOf(beforeE, 'zzimportfact').length === 0 && refOf(FACT_E[0]) === '',
+      JSON.stringify({ line: backfillLine, embeds: embedsOf(beforeE, 'zzimportfact').length, ref: refOf(FACT_E[0]) }));
     refuseEmbeddings = false;
-    ok('(fixture 9a) the write asked the embedder for its vector, and was refused',
-      embedsOf(beforeC, 'zzpartialfact').length > 0, JSON.stringify(hits.slice(beforeC).map((h) => h.path)));
-    ok('THE POINT (9a): a write that kept no vector leaves its row UNINDEXED — an empty graph_ref the back-fill returns to',
-      refOf(TOPIC_C) === '', `graph_ref=${JSON.stringify(refOf(TOPIC_C))}`);
     rebuildServer.stop();
     rebuildServer = null;
     await new Promise((r) => setTimeout(r, 1200));
 
-    // …and the next start, at the current layout and with the embedder answering, back-fills exactly that row.
+    // …and the next start, at the current layout and with the embedder answering (D's content still refused), back-fills
+    // the rows the outage left — and leaves D alone.
     const beforeBackfill = hits.length;
     rebuildServer = startServer({ dataDir: probeDir, port: BACKFILL_PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
     await waitHealthy(`http://127.0.0.1:${BACKFILL_PORT}`);
-    ok('THE POINT (9a): the next start re-indexes it once the embedder answers — its embed arrives, its row gets a ref',
-      layout() === '3' && embedsOf(beforeBackfill, 'zzpartialfact').length > 0 && !!refOf(TOPIC_C),
-      JSON.stringify({ layout: layout(), embeds: embedsOf(beforeBackfill, 'zzpartialfact').length, ref: refOf(TOPIC_C) }));
+    ok('THE POINT (9a, outage): the next start re-indexes it once the embedder answers — its embed arrives, its row gets a ref',
+      layout() === '3' && embedsOf(beforeBackfill, 'zzpartialfact').length > 0 && !!refOf(FACT_C[0]),
+      JSON.stringify({ layout: layout(), embeds: embedsOf(beforeBackfill, 'zzpartialfact').length, ref: refOf(FACT_C[0]) }));
+    ok('…and so does the import the outage skipped (9c)',
+      embedsOf(beforeBackfill, 'zzimportfact').length > 0 && !!refOf(FACT_E[0]),
+      JSON.stringify({ embeds: embedsOf(beforeBackfill, 'zzimportfact').length, ref: refOf(FACT_E[0]) }));
+    ok('THE POINT (9a, input): the refused fact is NEVER retried — no embed of its content, its ref as it was',
+      embedsOf(beforeBackfill, 'zzrefusedfact').length === 0 && refOf(FACT_D[0]) === refD,
+      JSON.stringify({ embeds: embedsOf(beforeBackfill, 'zzrefusedfact').length, ref: refOf(FACT_D[0]), was: refD }));
+    refuseEmbedToken = null;
     rebuildServer.stop();
     rebuildServer = null;
     await new Promise((r) => setTimeout(r, 1200));
+
     // The upgrade: this install is still at layout 2, so the next start REBUILDS — with the embedder refusing.
     { const db = new DatabaseSync(path.join(probeDir, 'state', 'gatherlight.db'));
       db.prepare("UPDATE app_config SET value = '2' WHERE key = 'facts.index.layout'").run(); db.close(); }
@@ -1757,8 +1820,8 @@ try {
     const downWarnings = ((await (await fetch(`${downBase}/api/migration/status`)).json()).warnings ?? []).map(String);
     ok('(fixture) the embedder was really asked, and refused',
       hits.slice(beforeDown).some((h) => h.path === '/v1/embeddings'), JSON.stringify(hits.slice(beforeDown).map((h) => h.path)));
-    // The gate's own point since the per-write check (9a/9b) keeps a lost vector retryable anyway: without it this
-    // start would rebuild — re-remembering, and with 判断 on the CLI annotating, every fact — for vectors it cannot get.
+    // The gate's own point since the per-write check keeps a lost vector retryable anyway: without it this start would
+    // rebuild — re-remembering, and with 判断 on the CLI annotating, every fact — for vectors it cannot get.
     ok('THE POINT: with the embedder down, NO fact is re-remembered — the start sent the embedder its probe and no fact',
       embedsOf(beforeDown, 'zzrebuildfact').length === 0,
       JSON.stringify(hits.slice(beforeDown).filter((h) => h.path === '/v1/embeddings').map((h) => h.body.slice(0, 80))));
@@ -1770,37 +1833,43 @@ try {
     rebuildServer = null;
     await new Promise((r) => setTimeout(r, 1200));
 
-    // 9b: the rebuild runs — the probe is answered — and the embedder refuses ONE fact's content. The rebuild indexes
-    // the rest, so its count is above zero and below the total: compared against zero, the marker was written over
-    // the missing vector. The fixture check proves the rebuild really was PARTIAL, which is what makes the case able
-    // to tell the two comparisons apart.
+    // 9b: the rebuild runs — the gate's probe is answered — and the embedder goes DOWN for one fact mid-pass: C's content
+    // is refused and so is every probe after the gate's, so C's write is classified as an outage and left unindexed. The
+    // others are indexed at the current address, so the marker is TRUE after the pass: the one empty ref is the retry
+    // queue the next start's back-fill finishes, with no second destructive rebuild. Confirmed to FAIL against the rule
+    // it replaced — no marker until the count reached the total — under which the next start rebuilt everything again.
     refuseEmbeddings = false;
     refuseEmbedToken = 'zzpartialfact';
+    probeBudget = 1;
+    const beforePartial = hits.length;
     const partialBase = `http://127.0.0.1:${PARTIAL_PORT}`;
     rebuildServer = startServer({ dataDir: probeDir, port: PARTIAL_PORT, env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
     await waitHealthy(partialBase);
     const partialWarnings = ((await (await fetch(`${partialBase}/api/migration/status`)).json()).warnings ?? []).map(String);
-    ok('(fixture 9b) the rebuild ran and was PARTIAL — the other facts re-indexed, the refused one left unindexed',
-      !!refOf('zzrebuildA 周末市场') && !!refOf('zzrebuildB 游泳馆') && refOf(TOPIC_C) === '',
-      JSON.stringify({ A: refOf('zzrebuildA 周末市场'), B: refOf('zzrebuildB 游泳馆'), C: refOf(TOPIC_C) }));
-    ok('THE POINT (9b): a rebuild that indexed only part of the facts writes NO layout marker',
-      layout() === '2', `facts.index.layout=${JSON.stringify(layout())}`);
-    ok('…and the startup says so, in a sentence', partialWarnings.some((w) => /事实索引的重建没有完成/.test(w)),
+    const kept = Object.fromEntries([FACT_A, FACT_B, FACT_D, FACT_E].map(([t]) => [t, refOf(t)]));
+    ok('(fixture 9b) the rebuild ran and was PARTIAL — the others re-indexed, C left unindexed after a probe the fake refused',
+      Object.values(kept).every((r) => !!r) && refOf(FACT_C[0]) === '' && probesOf(beforePartial).length >= 2,
+      JSON.stringify({ ...kept, C: refOf(FACT_C[0]), probes: probesOf(beforePartial).length }));
+    ok('THE POINT (9b): a PARTIAL rebuild writes the layout marker — the entries are at the current address',
+      layout() === '3', `facts.index.layout=${JSON.stringify(layout())}`);
+    ok('…and the startup says so, in a sentence', partialWarnings.some((w) => /事实索引的重建没有全部完成/.test(w)),
       JSON.stringify(partialWarnings));
     rebuildServer.stop();
     rebuildServer = null;
     refuseEmbedToken = null;
+    probeBudget = Infinity;
     await new Promise((r) => setTimeout(r, 1200));
 
-    // B (control): the embedder answers again, and the next start does the work — every fact re-embedded.
-    refuseEmbeddings = false;
+    // …and the next start, the embedder answering, BACK-FILLS C — no rebuild: every other fact keeps its node.
     const beforeUp = hits.length;
     rebuildServer = startServer({ dataDir: probeDir, port: REBUILD_PORTS[2], env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl } });
     await waitHealthy(`http://127.0.0.1:${REBUILD_PORTS[2]}`);
-    const reEmbedded = hits.slice(beforeUp).filter((h) => h.path === '/v1/embeddings' && h.body.includes('zzrebuildfact'));
-    ok('(control) once the embedder answers, the next start rebuilds, re-embeds every fact and writes the marker',
-      layout() === '3' && reEmbedded.length >= 3 && !!refOf(TOPIC_C),
-      JSON.stringify({ layout: layout(), reEmbedded: reEmbedded.length, refC: refOf(TOPIC_C) }));
+    const after = Object.fromEntries(Object.keys(kept).map((t) => [t, refOf(t)]));
+    ok('THE POINT (9b): the next start back-fills the fact the rebuild left, WITHOUT a rebuild — every other node id kept',
+      layout() === '3' && embedsOf(beforeUp, 'zzpartialfact').length > 0 && !!refOf(FACT_C[0])
+        && Object.keys(kept).every((t) => after[t] === kept[t]) && embedsOf(beforeUp, 'seven on weekends').length === 0,
+      JSON.stringify({ layout: layout(), C: refOf(FACT_C[0]), kept, after,
+        reEmbeddedA: embedsOf(beforeUp, 'seven on weekends').length }));
   }
 
   // --- 10. a BOUND model whose file is gone falls back — even while another model of its kind remains ---

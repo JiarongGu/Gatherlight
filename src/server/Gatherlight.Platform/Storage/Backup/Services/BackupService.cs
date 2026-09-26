@@ -290,7 +290,10 @@ public sealed class BackupService : IBackupService
             // accumulates. Import is the one moment a full rebuild is right: the facts themselves were
             // just replaced, so every graph_ref restored from the archive addresses a node that this
             // install's index never had. Left alone, recall would rank confidently against nothing and
-            // silently fall through to FTS for the household's entire history.
+            // silently fall through to FTS for the household's entire history. NOT gated on the embedder
+            // (IFactIndex.EmbedderReadyAsync), unlike both back-fills: the old refs must go whatever the embedder
+            // says. With it down, each write stays unindexed (IFactIndex.IndexAsync) — an empty ref the next start's
+            // gated back-fill finishes — at the price of each fact's annotation paid now and again then.
             var reindexed = await _factIndex.RebuildAsync(ct);
             if (reindexed > 0) _log.LogInformation("restore: re-indexed {N} fact(s) for recall", reindexed);
             // Re-taken for the commit, so the restored tree and the re-issued files land in one
