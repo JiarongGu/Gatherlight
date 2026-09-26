@@ -138,6 +138,9 @@
 // every reranker arm must announce the knob it sets. The default stays `rr,rrf`, so the registered commands of Runs 2–7
 // re-launch as they ran; a run with rerankers and no arm measuring what ships (read from RerankChunking.Default) prints a
 // WARNING before any arm starts.
+// `rrd` (Run 10) is the same partition arm with the knob's `d177` MEASUREMENT mode: Lyntai's HTTP reranker segments each
+// long candidate itself (RerankChunking.LyntaiSegmentation), with no ChunkedScoreProvider, pace or admission — paired
+// against `rrk` in its own block (RUN 10).
 // `--claude-stub` points every server at the e2e claude STUB on ANY fixture (the long fixture always does), refusing a
 // Claude-judge arm, so a reranker-only run on the bilingual seed cannot spend quota even by accident.
 // `--rerank-memo` puts a small proxy in front of the router for each local-model arm: during the ACCURACY pass an
@@ -365,6 +368,10 @@ const RERANK_ARM_KINDS = {
   rrf: { suffix: 'fuse · cut', env: { GATHERLIGHT_VERDICT_COMBINATION: 'fuse', GATHERLIGHT_RERANK_CHUNKING: 'off' },
     knob: [/verdict combination = Fuse/, /rerank chunking = off \(/] },
   rrk: { suffix: 'partition · chunked', env: { GATHERLIGHT_RERANK_CHUNKING: 'on' }, knob: /rerank chunking = on \(/ },
+  // Run 10: Lyntai's own segmentation (its D177, with Parts 305/306) in place of ours — the knob's `d177` measurement
+  // mode: candidates uncut, no ChunkedScoreProvider (so no pace and no admission), and MaxInputChars/Segmentation on the
+  // rerank registration (RerankChunking.LyntaiSegmentation). Never what ships.
+  rrd: { suffix: 'partition · Lyntai D177 pieces', env: { GATHERLIGHT_RERANK_CHUNKING: 'd177' }, knob: /rerank chunking = d177 \(/ },
 };
 // THE PRODUCT'S LAUNCH NUMBERS, restated here because the bench writes its own router preset — and GUARDED against the
 // C# they restate (mirrorGuard, below, before anything starts), because a bench that launches a model differently
@@ -1064,6 +1071,41 @@ const printByPosition = (run) => {
   return out;
 };
 
+/** RUN 10 (docs/judge-bench.md, registered before the run): Lyntai's segmentation (`rrd`, the knob's d177 mode) against
+ *  ours (`rrk`, as shipped), per reranker, paired per query within the run. Per pair: whether every row is IDENTICAL
+ *  (the short fixture's check — position, verdict, graph/FTS, rows, the whole page and every rerank body hash), `all`
+ *  both metrics, and each position group (start/middle/end/beyond on the long fixture; short/long/end/beyond on the
+ *  mixed one), each with McNemar's exact p. The run's share of the rule: D177 significantly BETTER on `all` found@8
+ *  (p < 0.05 and c − b > 0), and the groups where it is significantly WORSE on found@8. The rule itself spans the runs
+ *  (docs/judge-bench.md), so it is read there. Printed only for a run with both arms of a reranker. */
+const printD177 = (run) => {
+  const pairs = run.arms.filter((a) => /^rrk:/.test(a.key))
+    .map((rrk) => ({ model: rrk.key.slice(4), rrk, rrd: run.arms.find((a) => a.key === `rrd:${rrk.key.slice(4)}`) }))
+    .filter((p) => p.rrd);
+  if (!pairs.length) return null;
+  const { groups, at } = run.meta.positions ? positionGroups(run.meta.positions) : { groups: [], at: null };
+  const out = { pairs: {} };
+  console.log('\nRUN 10 — Lyntai D177 pieces (rrd) against ours (rrk), per reranker; b = ours hit & D177 miss, c = the reverse');
+  const tx = (x) => `${x.b}/${x.c}, p ${pv(x.p)}${x.netPp === null ? '' : `, ${signed(x.netPp, 1)}pp`}`;
+  for (const p of pairs) {
+    const all = pairedTest(p.rrd, p.rrk, 'all');
+    const byGroup = Object.fromEntries(groups.map((g) => [g, pairedTest(p.rrd, p.rrk, null, at(g))]));
+    const identity = identityOf(p.rrd, p.rrk);
+    const betterAll = all.found.p < 0.05 && all.found.c - all.found.b > 0;
+    const worseAt = groups.filter((g) => byGroup[g].found.p < 0.05 && byGroup[g].found.c - byGroup[g].found.b < 0);
+    const sOurs = stat(p.rrk.rows), sD = stat(p.rrd.rows);
+    out.pairs[p.model] = { identity, all: { top1: all.top1, found: all.found, pairs: all.pairs }, byGroup, betterAll, worseAt,
+      counts: { ours: { top1: sOurs.top1, found: sOurs.found }, d177: { top1: sD.top1, found: sD.found } } };
+    console.log(`  ${p.model}: found@8 ours ${sOurs.found} → D177 ${sD.found} (${tx(all.found)}); top-1 ${sOurs.top1} → ${sD.top1} (${tx(all.top1)});`
+      + ` identical rows: ${identity.identical ? 'YES' : `no — ${identity.differingQueries} of ${identity.pairs} differ (pos/ans/rank/ret/err/page/body `
+      + `${Object.values(identity.differ).join('/')})`}`);
+    for (const g of groups)
+      console.log(`    ${pad(g, 8)} found@8 ${tx(byGroup[g].found)} · top-1 ${tx(byGroup[g].top1)} (${byGroup[g].pairs} pairs)`);
+    console.log(`    D177 significantly BETTER on all found@8: ${betterAll ? 'YES' : 'no'}; significantly WORSE on found@8 at: ${worseAt.join(', ') || 'none'}`);
+  }
+  return out;
+};
+
 /** RUN 9'S QUESTION AND RULE (docs/judge-bench.md, registered before the run): on the MIXED fixture, does scoring long
  *  notes in windows cost the SHORT facts they compete with? Per reranker, chunked (`rrk`) against cut (`rr`), paired per
  *  query, on questions whose target is SHORT, on those whose target is LONG, and on `all`, both metrics. The rule reads
@@ -1426,6 +1468,8 @@ const analyse = (run, { baseline = null } = {}) => {
   if (meta.positions) out.byPosition = printByPosition(run);
   // Run 9: the mixed fixture's rule — only for a fixture with short and long targets and a run with rr and rrk arms.
   if (meta.positions) { const mr = printMixedRule(run); if (mr) out.mixedRule = mr; }
+  // Run 10: D177 (`rrd`) against ours (`rrk`), when both ran. Nothing for any earlier run.
+  { const r10 = printD177(run); if (r10) out.run10 = r10; }
 
   // THE A/A SANITY CHECK. Each twin ran the identical configuration from the identical snapshot, so the paired
   // test must stay quiet on `all`. Per-set p is shown but not warned on (ten tests at 0.05 alarm by themselves).
@@ -1731,7 +1775,7 @@ const armConfigFor = (key, at = RUN_AT) => {
   const then = beforeContentChars(at) ? BEFORE_CONTENT_CHARS[key] : null;
   if (then) return { ...then, reranker: null, chatJudge: null };
   if (ARMS[key]) return { label: ARMS[key].label, enrichment: ARMS[key].enrichment, judgeInput: ARMS[key].judgeInput ?? null, reranker: null, chatJudge: null };
-  const m = /^(rr[fk]?):(.+)$/.exec(key);
+  const m = /^(rr[fkd]?):(.+)$/.exec(key);
   if (m) return { label: `reranker ${m[2]} · ${RERANK_ARM_KINDS[m[1]].suffix}`, enrichment: true, judgeInput: null, reranker: m[2], chatJudge: null };
   // Run 8: the same reranker arm on a CPU-only router (`cpu: true` is what exempts it from the pace guard).
   const cpu = /^cpu-(rr[fk]?):(.+)$/.exec(key);
