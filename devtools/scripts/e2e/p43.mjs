@@ -71,8 +71,9 @@ try {
   ok('events are in the SSE wire shape (every one has a kind)',
     (t?.events ?? []).every((e) => typeof e.kind === 'string'));
   // ONE session announcement per agent run. claude 2.1.28x sends `system/thinking_tokens` progress events
-  // carrying the session id (the stub does too), and Lyntai's reader turns each into a SessionStarted —
-  // without AgentRunner's guard every progress tick became a stored, invisible "system" row.
+  // carrying the session id (the stub does too), and Lyntai 3.2's reader turned each into a SessionStarted —
+  // every progress tick a stored, invisible "system" row. AgentRunner guarded it until Lyntai 3.3.0 fixed the
+  // reader (Part 275: one SessionStarted per session id); the guard is gone, so this asserts the upstream fix.
   const systems = (t?.events ?? []).filter((e) => e.kind === 'system');
   ok('each agent run is announced ONCE, however many system events the CLI sends',
     systems.length > 0 && systems.length === new Set(systems.map((e) => e.sessionId)).size,

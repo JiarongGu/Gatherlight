@@ -72,8 +72,9 @@ const sessionId = `stub-${Date.now().toString(36)}`;
 
 emit({ type: 'system', subtype: 'init', session_id: sessionId });
 // What claude 2.1.28x really emits next on a thinking turn: `system` PROGRESS events that also carry the
-// session id. Emitted here so every suite runs against the real stream shape — Lyntai's reader yields a
-// SessionStarted for each of them, which AgentRunner must collapse to one (p43 counts them).
+// session id. Emitted here so every suite runs against the real stream shape — Lyntai 3.2's reader yielded a
+// SessionStarted for each of them; 3.3.0 announces an id once (its Part 275), and the app no longer collapses
+// them itself, so p43's count of stored `system` rows is the regression test for that upstream fix.
 emit({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 12, estimated_tokens_delta: 12, session_id: sessionId });
 emit({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 30, estimated_tokens_delta: 18, session_id: sessionId });
 

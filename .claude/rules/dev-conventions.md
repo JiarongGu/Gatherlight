@@ -245,10 +245,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   its stream-json as garbage, every suite boots with a spurious "not logged in" warning, and the
   diagnosis rewrites the failed-turn messages other suites assert on. **It also emits what claude 2.1.28x
   really sends** — `system/thinking_tokens` progress events carrying the session id — because Lyntai 3.2's
-  reader turns each into a `SessionStarted`, and without `AgentRunner`'s once-per-run guard every tick was a
-  stored `system` row (`e2e-p43` counts them). Fixed upstream as Lyntai `docs/task-archive.md` Part 275 — one
-  SessionStarted per session id — shipping in the release after 3.2.0: delete the guard on that bump. A stub that only speaks the stream shape of a year ago keeps every suite green against a CLI
-  nobody runs any more.
+  reader turned each into a `SessionStarted`, and every tick became a stored `system` row (`e2e-p43` counts
+  them). `AgentRunner` collapsed them with a once-per-run guard until Lyntai 3.3.0 fixed the reader (its
+  `docs/task-archive.md` Part 275 — one SessionStarted per session id); the 3.4 bump deleted the guard, so these
+  events are now the regression test for the upstream fix, not for code of ours. A stub that only speaks the
+  stream shape of a year ago keeps every suite green against a CLI nobody runs any more.
 
 ## Security / remote access (`Platform/Hosting/Security`)
 
@@ -507,8 +508,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Lyntai's source on 2026-09-24 and switched to `FilePathOf` there — `ToolDetail`'s OWN copy of the same
   fallback chain stays, because it takes a parsed `JsonElement` for a UI label, not the `ToolCall` `FilePathOf`
   takes, so only one of the two copies is gone.
-  **Six were open at Lyntai 3.2.0, and each says what ends it. (2) is CLOSED — its fix shipped in 3.3.0 and the
-  3.4 bump adopted it.**
+  **Six were open at Lyntai 3.2.0, and each says what ends it. (2) and (4) are CLOSED — their fixes shipped in
+  3.3.0 and the 3.4 bump adopted them.**
   **(1) `JudgeSeesContentPolicy` ↔ Lyntai `docs/task-archive.md` Part 276 / D170.** Lyntai's LLM judge
   rendered each candidate as its headline alone, and our headline is the fact's TOPIC, so the judge decided
   "did this answer?" from topics; the decorator shows it the content. Upstream closed the gap with
@@ -613,14 +614,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   different argument for a real pre-flight — skipping the cost of walking every fact when the whole batch will
   fail anyway — is not what D175's deferred trigger names, and would need its OWN Lyntai item if it turns out
   to matter.)
-  **(4) `AgentRunner`'s once-per-run `SessionStarted` guard ↔ `docs/task-archive.md` Part 275.** Lyntai 3.2's
-  stream reader yields a `SessionStarted` for EVERY `system` event carrying a session id, and claude 2.1.28x's
-  `system/thinking_tokens` progress events carry one, so without the guard every tick of a thinking turn was a
-  stored, invisible `system` row. Part 275 makes the reader yield one per session id, shipping in the release
-  after 3.2.0, and the guard's own comment says to delete it then. On the bump: delete the `sessionAnnounced`
-  flag and its check — nothing else in the bridge depends on it — and keep `e2e-p43` green: it counts the stored
-  `system` rows against a stub that really emits those progress events, so it fails if the upstream fix did not
-  land (the stub bullet under *LLM / process spawning* records the stub's half).
+  **(4) CLOSED — `AgentRunner`'s once-per-run `SessionStarted` guard ↔ `docs/task-archive.md` Part 275, shipped
+  in 3.3.0, adopted with the 3.4 bump (2026-09-26).** Lyntai 3.2's stream reader yielded a `SessionStarted` for
+  EVERY `system` event carrying a session id, and claude 2.1.28x's `system/thinking_tokens` progress events carry
+  one, so without the guard every tick of a thinking turn was a stored, invisible `system` row. 3.3.0's reader
+  keeps the last id it announced (per reader, and the session builds a reader per turn) and yields one per id, so
+  the bump DELETED the `sessionAnnounced` flag and its check; nothing else in the bridge depended on it. One
+  difference, equivalent in practice: Lyntai still announces a genuinely DIFFERENT id, where the guard dropped any
+  second `SessionStarted` — a claude run has one id. Proof: `e2e-p43` stays green against a stub that still emits
+  those progress events (the stub bullet under *LLM / process spawning*), so it now fails if the upstream fix
+  regresses rather than if our guard does.
   **(5) `reasoning = off` on every CHAT preset section ↔ Lyntai `docs/task-archive.md` Part 288 / D179 — CLOSED
   upstream, NOT released (no version promised).** Both memory seams ask for no reasoning, and Lyntai 3.2.0's OpenAI-shaped payload
   (`OpenAiPayload.Build`) never reads the field while its Ollama payload maps it to `think: false` — so against
