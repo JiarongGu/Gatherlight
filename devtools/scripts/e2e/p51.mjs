@@ -1299,8 +1299,8 @@ try {
           n.slice(n.indexOf('长短事实'), n.indexOf('长短事实') + 200));
         // The pace starts from this machine's MEASUREMENT of the reranker where there is one (RerankDeviceVerdict.PaceSeed,
         // e2e-p53), never faster than the GPU figure — it said 「先按显卡上的速度估计」, false once a device is measured.
-        ok(`${id}: …that the pace restarts at every launch from the rate measured on this machine (the GPU reference figure without one, or when faster) — a first recall can still wait the minute — and that a truly slow machine waits TWICE, because one wait is damped`,
-          /每次启动后它先按应用在这台机器上为它实测的速度估计\(没有实测、或实测比一块独立显卡上的参考速度还快时,按那个参考速度\)/.test(n)
+        ok(`${id}: …that the pace restarts at every launch from the rate measured on this machine (the GPU reference figure without one, when faster, or with no device pinned yet; the lower bound when every device timed out) — a first recall can still wait the minute — and that a truly slow machine waits TWICE, because one wait is damped`,
+          n.includes('每次启动后它先按应用在这台机器上为它实测的速度估计(没有实测、实测比一块独立显卡上的参考速度还快、或还有设备没测完而没定下设备时,按那个参考速度;每个设备都在限定时间内没打完时,按测出的下限)')
             && /估计偏快时,启动后头一次要读的长事实太多,仍可能等满一分钟、按没有判断时的顺序返回/.test(n)
             && !/先按显卡上的速度估计/.test(n)
             && /单独一次等满,应用只把速度估计放慢几倍/.test(n) && /真正慢的机器一般要等满两次/.test(n),

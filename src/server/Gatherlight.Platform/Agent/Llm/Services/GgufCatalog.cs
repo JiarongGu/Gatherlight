@@ -218,7 +218,9 @@ public static class GgufCatalog
     /// <list type="bullet">
     /// <item>After every launch the pace starts from the rate the app MEASURED for this reranker on the device it runs on
     /// (<see cref="RerankDeviceMeter"/>, <see cref="RerankDeviceVerdict.PaceSeed"/>) — never faster than the GPU figure, which
-    /// is also where it starts with no measurement — and learns only from the calls it times, so an estimate that is too
+    /// is also where it starts with no measurement, and while a device of unknown speed is still to be measured, so none is
+    /// pinned; when every device timed out, from the lower bound that proved (re-review: the clause named only the first
+    /// two) — and learns only from the calls it times, so an estimate that is too
     /// fast still lets the first recall after a launch with too many long facts to read run to the full minute and come
     /// back unjudged (the verification cut there is NoOpinion, the engine's own order). The GPU figure is a measurement on
     /// one discrete GPU (<see cref="RerankPace.SeedMsPerToken"/>), hence 「一块独立显卡上的参考速度」.</item>
@@ -255,7 +257,8 @@ public static class GgufCatalog
         + "较长的事实会分段打分、每段算一次,在同一块显卡上、60 条约 900–1,200 字的长笔记上,"
         + "BGE 与 LAMAR 每次检索约 3.2 秒,mMiniLMv2 约 1.2 秒。"
         + "机器较慢时,应用按测到的速度让长事实少读几段,最少只读开头一段(写在后面的答案就读不到)。"
-        + "每次启动后它先按应用在这台机器上为它实测的速度估计(没有实测、或实测比一块独立显卡上的参考速度还快时,按那个参考速度);"
+        + "每次启动后它先按应用在这台机器上为它实测的速度估计(没有实测、实测比一块独立显卡上的参考速度还快、"
+        + "或还有设备没测完而没定下设备时,按那个参考速度;每个设备都在限定时间内没打完时,按测出的下限);"
         + "估计偏快时,启动后头一次要读的长事实太多,仍可能等满一分钟、按没有判断时的顺序返回;"
         + "单独一次等满,应用只把速度估计放慢几倍,免得一次偶然的卡顿就停掉判断,所以真正慢的机器一般要等满两次,应用才信它慢。"
         + "等满之后,遇到长事实的检索先每条只读开头一段,等有一次在时限内做完、测出这台机器的速度,再按它分段。"
