@@ -138,7 +138,7 @@ const REBUILD_PORTS = [5417, 5418, 5419];
 const BACKFILL_PORT = 5442;
 const PARTIAL_PORT = 5443;
 // Case 9d: a rebuild that indexes nothing, and the start after it; case 9e: the one-off revisit of long facts.
-const ZERO_PORTS = [5444, 5445];
+const ZERO_PORTS = [5600, 5601];
 const UPGRADE_PORT = 5411;
 // Case 10: a folder whose settings name GGUFs that are no longer on disk.
 const GONE_PORT = 5420;
