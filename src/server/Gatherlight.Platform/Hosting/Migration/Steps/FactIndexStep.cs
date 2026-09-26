@@ -14,40 +14,44 @@ namespace Gatherlight.Server.Platform.Hosting.Migration.Steps;
 /// discard the decay positions, reinforcement and links it has accumulated — erasing at each restart
 /// the very ranking it exists to build.</para>
 ///
-/// <para>The destructive rebuild is reserved for the two events that leave the existing entries WRONG or
+/// <para>The destructive rebuild is reserved for the two events that leave the existing ENTRIES wrong or
 /// unreachable rather than merely stale: a backup import (handled elsewhere — the facts themselves were
-/// replaced), and a LAYOUT change here, which happens once per affected install and is gated by the
-/// marker below.</para>
+/// replaced), and a pre-marker LAYOUT here, which happens once per affected install and is gated by the
+/// marker below. Where only the VECTORS are owed — the marker at <see cref="FactIndexLayout.VectorsOwed"/> — the
+/// entries are re-embedded IN PLACE (<see cref="IFactIndex.ReembedInPlaceAsync"/>, Lyntai D194): nothing the graph
+/// has learned is lost and nothing is annotated.</para>
 ///
 /// <para>Not essential: an unindexed fact is still found by FTS, so a failure here costs ranking, not
 /// recall.</para>
 /// </summary>
 public sealed class FactIndexStep : IMigrationStep
 {
-    /// <summary>Which (task, scope) layout the entries in the graph were written under. Bumped when a
-    /// change moves them, because the graph is addressed BY scope: entries left at the old address are
-    /// not corrupt, they are unreachable, and recall answers from the FTS floor instead — a quiet loss
-    /// of ranking that nothing else in the app would report.
+    /// <summary>Which (task, scope) layout the entries in the graph were written under — <see cref="FactIndexLayout"/>,
+    /// shared with the console's re-embed. Bumped when a change moves them, because the graph is addressed BY scope:
+    /// entries left at the old address are not corrupt, they are unreachable, and recall answers from the FTS floor
+    /// instead — a quiet loss of ranking that nothing else in the app would report.
     /// <para>v2 (2026-08-21) put every fact in one scope so that a recall naming no kind still searches
     /// a populated vector collection. See <c>FactIndex.AllFacts</c>.</para>
     /// <para>v3 (Lyntai 3.2) is a move WE did not make: the library changed the vector collection address
     /// from <c>{engine}|{task}|{scope}</c> to a U+001F separator, so two task/scope pairs could no longer
     /// compose to one collection. Vectors under the old address are orphaned, not migrated — Lyntai's
-    /// changelog says "a deployment re-indexes" — and the vector store offers no way to read a vector back
-    /// out to move it. So a household with an embedder wired would get a semantic channel searching an EMPTY
-    /// collection, fail-open and therefore silently. Only the vectors moved, though: a graph read by no
-    /// embedder is still exactly where it was, which is why v2 → v3 rebuilds only when one is wired.</para></summary>
-    private const string LayoutKey = "facts.index.layout";
-    private const string Layout = "3";
+    /// changelog says "a deployment re-indexes". Only the vectors moved, though: a graph read by no embedder is
+    /// still exactly where it was, which is why v2 → v3 touches the graph only when one is wired — and since
+    /// Lyntai 3.5 (D194) it re-embeds the entries IN PLACE rather than rebuilding them. The old-address collection
+    /// is then never read again and is left where it is: only a rebuild (a backup import) sweeps it.</para></summary>
+    private const string LayoutKey = FactIndexLayout.Key;
+    private const string Layout = FactIndexLayout.Current;
 
-    /// <summary>The layout whose ENTRIES are at the current address and whose VECTORS are not: the pre-3.2 layout,
-    /// and also what is recorded while a bound embedder is not wired (<see cref="EmbedderOwed"/>) — either way, the
-    /// next start with an embedder wired rebuilds, re-embedding every indexed fact.</summary>
-    private const string VectorsOnlyMoved = "2";
+    /// <summary>The layout whose ENTRIES are at the current address and whose VECTORS are not
+    /// (<see cref="FactIndexLayout.VectorsOwed"/>): the pre-3.2 layout, and also what is recorded while a bound
+    /// embedder is not wired (<see cref="EmbedderOwed"/>), when the long facts an old batch refused are due a vector
+    /// (<see cref="RevisitLongFactsOnceAsync"/>), and by a console re-embed for the length of its pass — each way, the
+    /// next start with an embedder wired re-embeds every entry in place.</summary>
+    private const string VectorsOnlyMoved = FactIndexLayout.VectorsOwed;
 
-    /// <summary>Set once the facts a llama.cpp embedder refused at its OLD 512-token physical batch have been handed back
-    /// to the back-fill (<see cref="RevisitLongFactsOnceAsync"/>). A one-off, like the layout marker, and for the same
-    /// reason: running it again would re-remember — and re-annotate — facts that already got their vectors.</summary>
+    /// <summary>Set once the facts a llama.cpp embedder refused at its OLD 512-token physical batch have been given their
+    /// vector (<see cref="RevisitLongFactsOnceAsync"/>). A one-off, like the layout marker, and for the same reason: running
+    /// it again would re-embed every entry for facts that already have their vectors.</summary>
     private const string EmbedWindowKey = "facts.index.embed-window";
     private const string EmbedWindowRevisited = "1";
 
@@ -55,8 +59,8 @@ public sealed class FactIndexStep : IMigrationStep
     /// refused at the old 512-token batch. That estimate's rates (0.83 per CJK character, 0.25 per other) were measured
     /// on the rerankers' tokenizer, and they OVERESTIMATE EmbeddingGemma's (0.68 and 0.19, measured on b10549 —
     /// docs/self-managed-llm-runtime.md): a fact that really was refused estimates at ~625 tokens or more. 400 leaves
-    /// room beside that for scripts neither rate was measured on, at the price of revisiting some facts that did get a
-    /// vector — one re-remember each, once.</summary>
+    /// room beside that for scripts neither rate was measured on. It decides only WHETHER the one-off pass runs — the pass
+    /// itself re-embeds every entry — so an overestimate costs one pass an install did not need, once.</summary>
     private const double LongAtOldBatchTokens = 400;
 
     private readonly IFactIndex _index;
@@ -83,7 +87,7 @@ public sealed class FactIndexStep : IMigrationStep
 
     public async Task RunAsync(CancellationToken ct)
     {
-        // NOTHING is written while an embedder is wired but not answering — no back-fill, no rebuild, no
+        // NOTHING is written while an embedder is wired but not answering — no back-fill, no rebuild or re-embed, no
         // marker. That is our COST POLICY, not what keeps a vector from being lost: a write whose embed fails is
         // not an error to the engine (it stores the fact without its vector), and since the Lyntai 3.4 bump
         // IndexAsync reads each write's Ran and, when the embedder is down, leaves such a fact unindexed, so the
@@ -122,15 +126,40 @@ public sealed class FactIndexStep : IMigrationStep
         if (!alreadyIndexed) await _index.SyncAsync(ct);
         else if (stored == VectorsOnlyMoved && !_index.Embeds)
         {
-            // Nothing reads a vector on this install, so nothing was stranded. A rebuild here would throw
-            // away the decay positions and links the household has accumulated in exchange for nothing. If an
-            // embedder is bound LATER, binding it already asks for a re-index, which drops every collection
-            // under the graph's prefix — the orphaned old-address ones included. One bound but NOT wired (its
-            // model file gone) asks for nothing, which is why the marker below then stays at this layout.
-            // No target layout named here: which one is recorded is decided below (EmbedderOwed), and naming "3"
-            // beside a later line recording "2" contradicted it.
+            // Nothing reads a vector on this install, so nothing was stranded, and the graph is kept as it is. If an
+            // embedder is bound LATER, binding it asks for a semantic reindex, which re-embeds every entry in place. One
+            // bound but NOT wired (its model file gone) asks for nothing, which is why the marker below then stays at
+            // this layout. No target layout named here: which one is recorded is decided below (EmbedderOwed), and
+            // naming "3" beside a later line recording "2" contradicted it.
             _log?.LogInformation("fact index: layout {Stored} is behind only in its vector addresses, and no " +
                 "embedder is wired; keeping the graph as it is", stored);
+            await _index.SyncAsync(ct);
+        }
+        else if (stored == VectorsOnlyMoved)
+        {
+            // ONLY THE VECTORS ARE OWED, AND AN EMBEDDER IS WIRED: re-embed every entry IN PLACE (Lyntai D194). This used
+            // to be a destructive rebuild — every entry forgotten and re-remembered, every decay position and link
+            // discarded, an annotation paid per fact — because until Lyntai 3.5 re-remembering was the only way to give an
+            // entry a vector. The pass writes vectors and nothing else, onto the entries' existing ids.
+            //
+            // A pass that did not COMPLETE — it threw, or entries failed and the embedder then stopped answering — writes
+            // no marker, so the next start re-embeds again (one embed per entry, no annotation: cheap to repeat, and gated
+            // like everything here on the probe above). One that completed with failures the embedder refused while
+            // answering a probe (inputs past its window) writes it: those entries keep the vector they had, or none, as the
+            // write classifier keeps a refused input, and running the pass again would only be refused again — so nothing
+            // loops. Proof: e2e-p52 case 11 (11b: a pass a restart cut short is finished here; 11c: one the embedder goes
+            // down during keeps the marker owed and warns, and the next start finishes it) and 9e.
+            _log?.LogInformation("fact index: layout {Stored} -> {Layout}; re-embedding every entry in place", stored, Layout);
+            var reembed = await _index.ReembedInPlaceAsync(ct);
+            if (!reembed.Completed)
+            {
+                _log?.LogWarning("fact index: the re-embed did not complete ({Failed} entries failed, or it threw); " +
+                    "leaving the marker owed so the next start re-embeds again", reembed.Failed);
+                _state?.AddWarning("「语义」的向量这次启动没有全部重新计算 —— 嵌入模型途中停止了响应,或写入时出了错"
+                    + "(详见「日志」)。已有的事实仍能找到,下次启动会再算一次(只算向量,不动已学到的排序和关联)。");
+                return;
+            }
+            // Then the rows with no entry, as every start does.
             await _index.SyncAsync(ct);
         }
         else
@@ -153,12 +182,12 @@ public sealed class FactIndexStep : IMigrationStep
             // every ref empty the next start takes the back-fill path above, not a rebuild — and is required in the
             // second. Proof: e2e-p52 case 9b, where the fake embedder goes down for one fact mid-pass: the marker is
             // written and the next start back-fills that fact and keeps every other node; confirmed to FAIL against
-            // the total rule.
+            // the total rule. (A pre-marker install since the 3.5 bump: 9b and 9d stage one by deleting the marker.)
             //
             // Its sentence says only that the rebuild did not complete and will be tried again — never a count, never
             // "补上": a zero also covers a rebuild that THREW after indexing some facts (RebuildAsync's catch returns
             // 0), where "none were built" would be false, and the next start then REBUILDS again (it finds refs) — and
-            // only if the embedder answers its gate. Proof: e2e-p52 case 9, whose zero pass keeps the marker and whose
+            // only if the embedder answers its gate. Proof: e2e-p52 case 9d, whose zero pass keeps the marker and whose
             // next start back-fills onto the zero pass's own nodes.
             var indexed = await _index.RebuildAsync(ct);
             if (indexed == 0)
@@ -187,6 +216,7 @@ public sealed class FactIndexStep : IMigrationStep
         //
         // The SyncAsync branches above reach this whatever they indexed, for the reason the rebuild does: a fact a
         // back-fill left unindexed (the embedder down) is a row with an empty ref, which the next back-fill finishes.
+        // The re-embed reaches it only when it COMPLETED (above).
         var layout = EmbedderOwed() ? VectorsOnlyMoved : Layout;
         if (layout != Layout)
             _log?.LogWarning("fact index: 语义 is bound to an embedder that is not wired this start; recording " +
@@ -196,44 +226,40 @@ public sealed class FactIndexStep : IMigrationStep
         _config.Set(LayoutKey, layout);
     }
 
-    /// <summary>ONCE, with a llama.cpp embedder wired: hand the back-fill every indexed fact long enough to have been
-    /// refused at the OLD 512-token physical batch.
+    /// <summary>ONCE, with a llama.cpp embedder wired: when any indexed fact is long enough to have been refused at the
+    /// OLD 512-token physical batch, record the vectors as owed, so this very start re-embeds every entry in place.
     /// <para><b>Why.</b> Until the Lyntai 3.4 bump the embedder section set no batch, so llama.cpp refused every fact past
     /// ~510 tokens whole, and the engine stored such a fact WITHOUT its vector while handing back its reference. Those
     /// rows kept their refs, and the back-fill revisits only EMPTY ones — so the window the preset launches with now
     /// (<see cref="Agent.Llm.Services.LlamaServerRuntime.EmbedBatch"/>, the row's declared one) would never reach them
-    /// short of a destructive reindex.</para>
-    /// <para><b>Non-destructive.</b> Clearing a ref drops nothing: re-remembering IDENTICAL content refreshes the same
-    /// node — Lyntai 3.4's graph store upserts on (engine, task, scope, content hash) and returns the existing id — and the
-    /// write's vector is then indexed under that id (<c>GraphMemoryEngine.RememberAsync</c> → its enrichment). So the
-    /// gated back-fill that follows, in this very start, gives each fact its vector on the node it already had: decay,
-    /// links and subjects kept. What it costs is one re-remember per fact revisited — an annotation each when 判断 is on
-    /// the CLI — once.</para>
-    /// <para><b>Which facts.</b> No API says whether a node HAS a vector (the vector store reads by similarity, never by
-    /// id), so length stands in for it, estimated generously (<see cref="LongAtOldBatchTokens"/>): a fact revisited
-    /// needlessly costs one re-remember, a fact missed keeps no vector. Only a llama.cpp embedder, the one that refused
-    /// at 512; only an INDEXED fact — an unindexed one is the back-fill's anyway. A fact that is still past the NEW window
-    /// is refused again and kept without a vector (<c>FactIndex.IndexAsync</c>). Run after the gate, so a start whose
-    /// embedder is down leaves this for the next; the key is set BEFORE the back-fill, and a back-fill cut short leaves
-    /// empty refs the next one finishes. Proof: e2e-p52 case 9e, confirmed to FAIL with this step removed.</para></summary>
+    /// short of a reindex.</para>
+    /// <para><b>In place since the Lyntai 3.5 bump</b> (D194). It used to clear the ref of each long fact and let the
+    /// back-fill re-remember it onto the same node — which kept the node, but advanced its position, reset its age and
+    /// paid one annotation per fact revisited (with 判断 on the CLI, the household's quota). The in-place pass writes
+    /// only vectors: no fact is re-remembered or annotated, and decay, links and subjects stay exactly as they were. It
+    /// re-embeds EVERY entry rather than the long ones, because no API narrows the pass — one embed each, once, where
+    /// the old way paid a remember and an annotation per long fact.</para>
+    /// <para><b>Which installs.</b> Length decides only whether the pass is owed (<see cref="LongAtOldBatchTokens"/>,
+    /// estimated generously): with no long fact nothing is owed and nothing runs. Only a llama.cpp embedder, the one that
+    /// refused at 512. Moved only from the CURRENT layout — at any other the start re-embeds or rebuilds anyway. A fact
+    /// that is still past the NEW window is refused again, counted, and keeps no vector. Run after the gate, so a start
+    /// whose embedder is down leaves this for the next; the key is set here, and the owed marker makes a pass that does
+    /// not complete run again at the next start. Proof: e2e-p52 case 9e, confirmed to FAIL with this step removed.</para></summary>
     private async Task RevisitLongFactsOnceAsync()
     {
         if (!_index.Embeds || _config.Get(EmbedWindowKey) == EmbedWindowRevisited
             || !string.Equals(_settings.Current.Memory.SemanticSource, Agent.Llm.Sources.MemoryBackends.LlamaCpp,
                 StringComparison.OrdinalIgnoreCase))
             return;
-        var revisited = 0;
-        foreach (var (row, graphRef) in await _store.AllAsync())
+        var longFacts = (await _store.AllAsync()).Count(f => !string.IsNullOrEmpty(f.GraphRef)
+            && Agent.Llm.Services.RerankPace.Tokens(f.Row.Content) > LongAtOldBatchTokens);
+        if (longFacts > 0 && _config.Get(LayoutKey) == Layout)
         {
-            if (string.IsNullOrEmpty(graphRef)
-                || Agent.Llm.Services.RerankPace.Tokens(row.Content) <= LongAtOldBatchTokens) continue;
-            await _store.SetGraphRefAsync(row.Id, null);
-            revisited++;
+            _config.Set(LayoutKey, VectorsOnlyMoved);
+            _log?.LogInformation("fact index: {Count} long fact(s) may have been refused their vectors by the embedder's " +
+                "old 512-token batch, and its window is wider now; re-embedding every entry in place, once", longFacts);
         }
         _config.Set(EmbedWindowKey, EmbedWindowRevisited);
-        if (revisited > 0)
-            _log?.LogInformation("fact index: handing {Count} long fact(s) back to the back-fill, once — the embedder's " +
-                "old 512-token batch may have refused them their vectors, and its window is wider now", revisited);
     }
 
     /// <summary>Is 语义 bound to an EMBEDDER arm that is not wired this start?

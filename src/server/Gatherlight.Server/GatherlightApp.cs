@@ -256,10 +256,19 @@ public static class GatherlightApp
                 // the graph's `facts/graph#<id>`. Resolution is an exact ref match, so those hits are
                 // dropped on the way out: a second embedding per fact, bought and discarded. Measured
                 // 2026-08-21 — 12 vectors for 6 facts, and paraphrase queries answering nothing.
+                //
+                // ReindexBatchSize = 1: a re-embed in place (FactIndex.ReembedInPlaceAsync, Lyntai D194) sends the embedder
+                // one entry per call, so one input llama.cpp refuses for its length costs only that entry its new vector —
+                // see FactIndex.ReindexBatchSize. The rest of the options are Lyntai's defaults (UseGraph reads a null as
+                // `new GraphMemoryOptions()`), the verdict combination apart when the measurement knob asks for Fuse.
                 .AddMemoryEngine("facts", e => e.UseGraph(fuseVerdicts
                     ? new Lyntai.Memory.GraphMemoryOptions
-                        { VerdictCombination = Lyntai.Memory.Verification.MemoryVerdictCombination.Fuse }
-                    : null));
+                    {
+                        ReindexBatchSize = Platform.Storage.Knowledge.Services.FactIndex.ReindexBatchSize,
+                        VerdictCombination = Lyntai.Memory.Verification.MemoryVerdictCombination.Fuse,
+                    }
+                    : new Lyntai.Memory.GraphMemoryOptions
+                        { ReindexBatchSize = Platform.Storage.Knowledge.Services.FactIndex.ReindexBatchSize }));
 
                 // Recall quality is THREE independent switches, not one setting, because they cost
                 // different things and improve different things:
@@ -510,7 +519,10 @@ public static class GatherlightApp
                     // each retried write would still pay its annotation — after its failed embed since Lyntai 3.5,
                     // SkipAnnotationWithoutVector being left off (IFactIndex.EmbedderReadyAsync).
                     sp.GetServices<Lyntai.Inference.IModelProvider>(),
-                    sp.GetService<Lyntai.Inference.IProviderRouterFactory>()))
+                    sp.GetService<Lyntai.Inference.IProviderRouterFactory>(),
+                    // The layout marker, which the console's re-embed in place records as owed for the length of its pass
+                    // (FactIndexLayout.VectorsOwed) so a pass a restart cuts short is finished by the next start.
+                    sp.GetService<IAppConfigService>()))
             // The import endpoint's and the seed step's back-fill, detached and serialised — see DetachedFactBackfill.
             .AddSingleton<Platform.Storage.Knowledge.Services.DetachedFactBackfill>()
             .AddSingleton<Platform.Storage.Knowledge.Services.IProcessLog, Platform.Storage.Knowledge.Services.ProcessLog>()

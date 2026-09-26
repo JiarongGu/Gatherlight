@@ -34,10 +34,11 @@ public interface ILlamaRestartPolicy
 ///
 /// <para><b>A reindex needs no check of its own</b>, and had one that was false. <c>ReindexSemanticAsync</c> takes
 /// one of two paths: with no embedder registered (the Claude CLI arm) it runs <c>ExpandEachAsync</c>, whose
-/// rephrasing goes through the DEFAULT text client, which is the CLI alone; otherwise it runs <c>RebuildAsync</c>,
-/// which re-remembers every fact — embedding through the registered embedder (llama.cpp only when its provider is
-/// registered: the 语义 check) and annotating through the judge (llama.cpp only for a running chat judge with the
-/// switch on: the 判断 check). So every reindex that touches llama.cpp was already refused above, and one that
+/// rephrasing goes through the DEFAULT text client, which is the CLI alone; otherwise it re-embeds every entry in
+/// place (<c>ReembedInPlaceAsync</c>, since the Lyntai 3.5 bump — it used to be <c>RebuildAsync</c>), embedding
+/// through the registered embedder (llama.cpp only when its provider is registered: the 语义 check) and annotating
+/// nothing, then back-fills the facts with no entry, which annotate through the judge (llama.cpp only for a running
+/// chat judge with the switch on: the 判断 check). So every reindex that touches llama.cpp was already refused above, and one that
 /// does not — 语义 on the built-in embedder or the CLI, no chat judge — was refused with 「会让正在重建的事实丢掉
 /// 向量」, which it would not.</para>
 ///

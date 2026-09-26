@@ -51,8 +51,13 @@ interface LayerView {
   reindex?: {
     running: boolean; done: number; total: number;
     embedded: number | null; error: string | null;
-    // Null until the run has counted its facts: a bar pinned at 0% reads as stuck.
+    // Null while the run cannot count its progress: a bar pinned at 0% reads as stuck.
     percent: number | null;
+    /** The server's sentences, one writer each: what the running pass is doing (a re-embed in place, the back-fill
+     *  after it, or the phrasings), and how the last one went. The client adds no words of its own about cost — it
+     *  said 「开启了判断,每条事实会多一次模型调用」 for every pass, which a re-embed in place made false. */
+    phase?: string | null;
+    summary?: string | null;
   };
   // STATE, not history: how much of what the household knows is actually searchable.
   coverage?: { indexed: number; total: number };
@@ -233,10 +238,10 @@ export function MemoryRecallPanel(
                   <span className="res-bar" style={{ width: `${semantic.reindex.percent ?? 8}%` }} />
                 </div>
                 <div className="mem-fine">
-                  {semantic.reindex.total > 0
-                    ? `重建索引中:${semantic.reindex.done}/${semantic.reindex.total} 条事实`
-                    : '重建索引中:正在统计事实…'}
-                  {judge.on && ' · 开启了判断,每条事实会多一次模型调用,请耐心等待'}
+                  {semantic.reindex.phase
+                    ?? (semantic.reindex.total > 0
+                      ? `重建索引中:${semantic.reindex.done}/${semantic.reindex.total} 条事实`
+                      : '重建索引中:正在统计事实…')}
                 </div>
               </div>
             )}
@@ -252,9 +257,9 @@ export function MemoryRecallPanel(
             {!semantic.reindex?.running && semantic.reindex?.error && (
               <div className="mem-fine danger">上次重建:{semantic.reindex.error}</div>
             )}
-            {!semantic.reindex?.running && semantic.reindex?.embedded ? (
-              <div className="mem-fine">上次重建完成:{semantic.reindex.embedded} 条事实已重新索引。</div>
-            ) : null}
+            {!semantic.reindex?.running && semantic.reindex?.summary && (
+              <div className="mem-fine">{semantic.reindex.summary}</div>
+            )}
           </div>
           <div className="mem-layer-side">
             {semantic.on && (

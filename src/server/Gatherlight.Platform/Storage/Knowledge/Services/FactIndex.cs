@@ -25,6 +25,52 @@ public sealed record FactRanking(IReadOnlyList<FactHit> Hits, bool? Answered)
     public static readonly FactRanking Empty = new([], null);
 }
 
+/// <summary>The fact index's LAYOUT MARKER — one <c>app_config</c> key saying where the graph's entries and vectors are.
+/// Written by <c>FactIndexStep</c> at startup and, around its own pass, by <see cref="IFactIndex.ReindexSemanticAsync"/>;
+/// the two never overlap, because the console is reachable only once the startup steps have run.</summary>
+public static class FactIndexLayout
+{
+    public const string Key = "facts.index.layout";
+
+    /// <summary>Entries and vectors at the current address (Lyntai 3.2's vector collection address, one scope).</summary>
+    public const string Current = "3";
+
+    /// <summary>Entries at the current address, VECTORS NOT — or not all of them from the model that is wired. The
+    /// pre-3.2 layout; what <c>FactIndexStep</c> records while a bound embedder is not wired; what a revisit of facts the
+    /// embedder's old batch refused records; and what a console re-embed records for the length of its pass, so a pass cut
+    /// short (a restart, an update) is finished by the next start. With an embedder wired, the start that finds it
+    /// re-embeds every entry IN PLACE (<see cref="IFactIndex.ReembedInPlaceAsync"/>); with none, it keeps the graph.</summary>
+    public const string VectorsOwed = "2";
+}
+
+/// <summary>What a re-embed in place did: how many graph entries got a vector from the wired embedder, how many it could
+/// not embed (each keeps whatever vector it had, or none), and whether the pass COMPLETED — false when it threw, or when
+/// entries failed and the embedder then did not answer a probe either (an outage, retried by the next start), true when
+/// the embedder answers and the failures were its refusals of those inputs (past its window, above all: kept as they are
+/// and never retried, as a write's classifier keeps a refused input).</summary>
+public sealed record ReembedResult(int Reembedded, int Failed, bool Completed)
+{
+    public static readonly ReembedResult NotRun = new(0, 0, true);
+}
+
+/// <summary>Which part of a semantic reindex is running: re-embedding the graph in place (an embedder arm), back-filling
+/// facts that had no index entry (after that), or storing phrasings (the Claude CLI arm).</summary>
+public enum SemanticReindexStage { Reembed, BackFill, Rephrase }
+
+/// <summary>Progress of a semantic reindex. <c>Reembed</c> reports once, before the pass, with the number of indexed facts
+/// as its total and 0 done: the engine re-embeds in one call and reports nothing on the way.</summary>
+public sealed record SemanticReindexProgress(SemanticReindexStage Stage, int Done, int Total);
+
+/// <summary>What a semantic reindex did. <paramref name="Arm"/> is null when nothing is bound that it could re-derive.
+/// <paramref name="Rederived"/> counts vectors re-embedded (graph entries, which may exceed facts: an edit leaves the old
+/// content's entry behind) for an embedder arm, facts visited for the rephrasing arm. <paramref name="BackFilled"/> is
+/// facts that had no index entry and were indexed after the pass.</summary>
+public sealed record SemanticReindexResult(SemanticReindexStage? Arm, int Rederived, int Failed, bool Completed,
+    int BackFilled)
+{
+    public static readonly SemanticReindexResult Nothing = new(null, 0, 0, true, 0);
+}
+
 /// <summary>
 /// The graph recall index over <c>knowledge</c> — Lyntai's <see cref="IMemoryEngine"/> in the shape this
 /// app needs. DERIVED, always: <c>knowledge</c> is the record of truth, this ranks it.
@@ -53,9 +99,11 @@ public interface IFactIndex
     /// or when one answered a probe embed.
     /// <para><b>A GATE, BY OUR COST POLICY — not a Lyntai gap</b> (owner decision, 2026-09-26, at the Lyntai 3.4 bump).
     /// Every path that re-remembers facts in bulk asks it first — <c>FactIndexStep</c>'s back-fill and layout rebuild at
-    /// startup, <c>DetachedFactBackfill</c>'s after a memory import or the seed, and the console's semantic reindex,
-    /// which refuses with a sentence rather than discard the index for nothing — and with an embedder wired and not
-    /// answering, they re-remember NOTHING. What keeps a lost vector RETRYABLE is no longer this probe but <see
+    /// startup, <c>DetachedFactBackfill</c>'s after a memory import or the seed — and with an embedder wired and not
+    /// answering, they re-remember NOTHING. So does every re-embed IN PLACE (<see cref="ReembedInPlaceAsync"/>: the
+    /// startup one and the console's semantic reindex, which refuses with a sentence), though a failed re-embed loses
+    /// nothing — each entry keeps the vector it had — because the pass would compute no vector, and the back-fill after it
+    /// would re-remember, and annotate, facts whose writes lose their vector again. What keeps a lost vector RETRYABLE is no longer this probe but <see
     /// cref="IndexAsync"/>, which reads each write's <c>Ran</c> (Lyntai D175, shipped in 3.3.0). So without this gate
     /// nothing would be lost — every pending fact would simply be re-remembered on every pass of an outage, and each of
     /// those writes still pays its annotation: since Lyntai 3.5.0 a graph write EMBEDS BEFORE IT ANNOTATES (3.4 annotated
@@ -116,31 +164,52 @@ public interface IFactIndex
     /// unindexed), which <c>FactIndexStep</c> reports without holding its layout marker back: the empty refs are the
     /// retry queue the next back-fill finishes at the current address.
     /// <para><b>Destructive of everything the index has learned</b> — decay positions, reinforcement and
-    /// links all go. Reserved for when the facts themselves were replaced underneath it (a backup
-    /// import); at startup use <see cref="SyncAsync"/>, or every restart would erase the accumulated
-    /// ranking this exists to build.</para></summary>
+    /// links all go, and each fact pays its annotation again. Reserved for when the ENTRIES are wrong rather than
+    /// their vectors: the facts themselves were replaced underneath it (a backup import), or the entries sit at an
+    /// address recall no longer reads (a pre-marker layout, at startup). Where only the vectors need redoing — a
+    /// model turned on or changed, a vector address moved — use <see cref="ReembedInPlaceAsync"/>; at an ordinary
+    /// startup use <see cref="SyncAsync"/>, or every restart would erase the accumulated ranking this exists to
+    /// build. Serialised with <see cref="ReembedInPlaceAsync"/>: this forgets through the graph STORE, which the
+    /// engine's own removal lock does not cover, so a re-embed racing it could write vectors back for forgotten
+    /// entries.</para></summary>
     Task<int> RebuildAsync(CancellationToken ct = default);
 
-    /// <summary>Re-derive every fact's SEMANTIC material. "Embed" for an embedder arm, "rephrase" for the
-    /// Claude CLI one — both re-remember the fact, which is why one method serves both. Guarding this on
-    /// "is an embedder registered" made it a silent no-op for the CLI arm, whose whole effect is at write
-    /// time: binding it then reached future writes only, and an existing knowledge base could never gain
-    /// phrasings from the one control offered for exactly that.
+    /// <summary>Re-embed every graph entry IN PLACE with the embedder that is wired now — Lyntai's
+    /// <c>IReindexableMemory.ReindexAsync</c> (D194, 3.5.0), which writes ONLY vectors: no entry is forgotten or
+    /// re-remembered, so node ids, links, decay positions, reinforcement and subject handles all stay, and no fact is
+    /// annotated. One embed per entry (<see cref="FactIndex.ReindexBatchSize"/>) and nothing else.
+    /// <para>An entry the embedder cannot embed keeps the vector it had — none, when it never had one — and is counted
+    /// <see cref="ReembedResult.Failed"/>; nothing retries it within the pass and nothing loops. When some failed, one
+    /// probe decides what the pass was: answered, the embedder refused those inputs (past its window) and the pass
+    /// COMPLETED; unanswered, it went down and the pass did not — the caller leaves the layout marker owed, so the next
+    /// start re-embeds again. <b>Not gated here</b>: the callers ask <see cref="EmbedderReadyAsync"/> before they call
+    /// it. A no-op (<see cref="ReembedResult.NotRun"/>) when no embedder is wired.</para></summary>
+    Task<ReembedResult> ReembedInPlaceAsync(CancellationToken ct = default,
+        IProgress<SemanticReindexProgress>? progress = null);
+
+    /// <summary>Re-derive every fact's SEMANTIC material: vectors for an embedder arm, phrasings for the
+    /// Claude CLI one. Guarding this on "is an embedder registered" made it a silent no-op for the CLI arm,
+    /// whose whole effect is at write time: binding it then reached future writes only, and an existing
+    /// knowledge base could never gain phrasings from the one control offered for exactly that.
     /// <para>Two occasions need it and neither is served by
     /// <see cref="SyncAsync"/>, which back-fills only rows with an empty ref and so would embed nothing:
-    /// turning semantic recall on over an already-populated graph, and CHANGING the embedding model.
-    /// <para>The model change is the sharp one: vectors keep the width of the model that wrote them, and
-    /// Lyntai's semantic search is fail-open on a dimension mismatch — it returns NOTHING rather than
-    /// throwing. So a switched model without this leaves recall silently, permanently empty, looking
-    /// exactly like a household that has no facts.</para>
-    /// <para><b>This REBUILDS</b> — an entry is embedded as it is written and there is no re-embed door,
-    /// so decay positions and links reset with it. Returns how many facts were indexed; 0 when NEITHER a
-    /// semantic backend nor the rephrasing arm is bound — there is nothing to re-derive.</para>
-    /// <para><paramref name="progress"/> reports (done, total) as each fact lands. It exists because this
-    /// is MINUTES of work on a real corpus — annotation is a model call per fact — and an operation that
-    /// long with no signal is indistinguishable from one that hung.</para></summary>
-    Task<int> ReindexSemanticAsync(CancellationToken ct = default,
-        IProgress<(int Done, int Total)>? progress = null);
+    /// turning semantic recall on over an already-populated graph, and CHANGING the embedding model.</para>
+    /// <para>The model change is the sharp one: vectors keep the width of the model that wrote them, and a vector of
+    /// another width scores 0 against every query (Lyntai's <c>VectorMath.Cosine</c>) — unfindable rather than wrong,
+    /// so a switched model without this leaves semantic recall silently empty, looking exactly like a household that
+    /// has no facts.</para>
+    /// <para><b>An embedder arm re-embeds IN PLACE</b> (<see cref="ReembedInPlaceAsync"/>) — nothing the graph has
+    /// learned is lost and nothing is annotated — with the layout marker recording the vectors as owed for the length
+    /// of the pass, and then back-fills any fact that had no index entry (those DO pay an annotation each, as every
+    /// back-fill does). The rephrasing arm writes a knowledge column and touches no graph at all.
+    /// <see cref="SemanticReindexResult.Nothing"/> when NEITHER a semantic backend nor the rephrasing arm is
+    /// bound — there is nothing to re-derive.</para>
+    /// <para><paramref name="progress"/> reports each stage (<see cref="SemanticReindexStage"/>). It exists because
+    /// this can be minutes on a real corpus — the rephrasing arm is a model call per fact, the re-embed an embed per
+    /// entry on whatever device the machine has — and an operation that long with no signal is indistinguishable
+    /// from one that hung.</para></summary>
+    Task<SemanticReindexResult> ReindexSemanticAsync(CancellationToken ct = default,
+        IProgress<SemanticReindexProgress>? progress = null);
 }
 
 public sealed class FactIndex : IFactIndex
@@ -203,13 +272,37 @@ public sealed class FactIndex : IFactIndex
     private readonly Lyntai.Inference.ITextClient? _llm;
     private readonly Kernel.Services.ServerConfigService? _config;
 
+    /// <summary>Where the layout marker lives (<see cref="FactIndexLayout"/>) — read and written only by the console's
+    /// re-embed, which records the vectors as owed for the length of its pass. Null leaves the marker alone.</summary>
+    private readonly Kernel.Services.IAppConfigService? _layout;
+
+    /// <summary>How many entries a re-embed in place sends the embedder per call — <c>GraphMemoryOptions.ReindexBatchSize</c>,
+    /// set from this in <c>GatherlightApp</c>. <b>One, and why</b>: Lyntai's pass embeds a batch in ONE call and counts
+    /// the whole batch <c>Failed</c> when that call fails (<c>GraphMemoryEngine.ReindexAsync</c>, D194), and llama.cpp
+    /// refuses a request whole when ONE of its inputs is past the embedder's window
+    /// (<c>docs/self-managed-llm-runtime.md</c>, 2026-09-26) — so at Lyntai's default of 32 a single over-long fact would
+    /// cost 31 others their new vector, silently, on every pass. At one, only that fact keeps its old vector. The price is
+    /// a request per entry, which at household scale is what the write path already pays (measured on the real binary —
+    /// the runtime doc, 2026-09-27).</summary>
+    public const int ReindexBatchSize = 1;
+
+    /// <summary>Serialises the two bulk passes that touch every graph entry: <see cref="RebuildAsync"/>, which forgets
+    /// through the graph STORE, and <see cref="ReembedInPlaceAsync"/>. Lyntai's pass holds the ENGINE's removal lock for
+    /// each write and re-reads which entries still exist, so it never writes a vector back for an entry the engine's own
+    /// forget removed (D194) — but a store-level forget takes no part in that lock, so a re-embed racing a backup import's
+    /// rebuild could put vectors back for entries the rebuild had just forgotten. Neither pass takes
+    /// <c>DataWriteLock</c>, so holding this inside it (the import's rebuild runs outside it anyway) cannot deadlock.</summary>
+    private readonly SemaphoreSlim _bulk = new(1, 1);
+
     public FactIndex(IMemoryEngineFactory? engines, IKnowledgeStore store,
         IMemoryGraphStore? graph = null, ILogger<FactIndex>? log = null,
         ISemanticMemory? semantic = null, IVectorStore? vectors = null,
         Lyntai.Inference.ITextClient? llm = null, Kernel.Services.ServerConfigService? config = null,
         IEnumerable<Lyntai.Inference.IModelProvider>? providers = null,
-        Lyntai.Inference.IProviderRouterFactory? routing = null)
+        Lyntai.Inference.IProviderRouterFactory? routing = null,
+        Kernel.Services.IAppConfigService? layout = null)
     {
+        _layout = layout;
         _providers = providers;
         _routing = routing;
         _llm = llm;
@@ -457,14 +550,19 @@ public sealed class FactIndex : IFactIndex
         }
     }
 
-    public async Task<int> SyncAsync(CancellationToken ct = default)
+    public Task<int> SyncAsync(CancellationToken ct = default) => SyncAsync(ct, null);
+
+    private async Task<int> SyncAsync(CancellationToken ct, IProgress<SemanticReindexProgress>? progress)
     {
         if (_engine is null) return 0;
         try
         {
             var pending = (await _store.AllAsync()).Where(f => string.IsNullOrEmpty(f.GraphRef)).ToList();
             if (pending.Count == 0) return 0;
-            var indexed = await IndexEachAsync(pending.Select(p => p.Row), ct);
+            progress?.Report(new(SemanticReindexStage.BackFill, 0, pending.Count));
+            var indexed = await IndexEachAsync(pending.Select(p => p.Row), ct, pending.Count,
+                progress is null ? null : new Relay<(int Done, int Total)>(p =>
+                    progress.Report(new(SemanticReindexStage.BackFill, p.Done, p.Total))));
             _log?.LogInformation("fact index: back-filled {Indexed}/{Pending} previously unindexed facts",
                 indexed, pending.Count);
             return indexed;
@@ -476,11 +574,11 @@ public sealed class FactIndex : IFactIndex
         }
     }
 
-    public Task<int> RebuildAsync(CancellationToken ct = default) => RebuildAsync(ct, null);
-
-    private async Task<int> RebuildAsync(CancellationToken ct, IProgress<(int Done, int Total)>? progress)
+    public async Task<int> RebuildAsync(CancellationToken ct = default)
     {
         if (_engine is null) return 0;
+        // Serialised with a re-embed in place — see _bulk.
+        await _bulk.WaitAsync(ct);
         try
         {
             // Discard first. Anything that replaces the facts underneath the index — a backup import
@@ -490,11 +588,11 @@ public sealed class FactIndex : IFactIndex
             // the decay positions, reinforcement and links that are the whole point.
             if (_graph is not null) await _graph.ForgetAsync(GraphMember, TaskKey, scope: null, ct);
             // The vectors go with them. Forgetting a NODE does not reach its embedding — that lives in the
-            // vector store keyed by node id, and a rebuilt node takes a fresh id — so every caller of this
-            // method would otherwise leave the old ones behind. All three want them gone: an import
-            // replaced the facts, a layout change moved them to a new collection, and a MODEL change made
-            // the stored widths unusable. That last one is the dangerous case, since mixed widths in one
-            // collection break every search against it, fail-open and therefore silently.
+            // vector store keyed by node id, and a rebuilt node takes a fresh id — so this would otherwise leave
+            // the old ones behind, holding the old content as their payload. Both callers want them gone: an
+            // import replaced the facts, and a pre-marker layout left them at an address recall no longer reads
+            // (the prefix sweep also reaches collections a pre-3.2 build named). A MODEL change no longer comes
+            // here — it re-embeds in place (ReembedInPlaceAsync), overwriting each entry's vector at its address.
             await DropGraphVectorsAsync(ct);
             // Detach every row NOW, not one-by-one as each re-index lands: annotation makes this
             // loop minutes long on a real corpus, and an abort mid-way (client gone, an update
@@ -507,8 +605,7 @@ public sealed class FactIndex : IFactIndex
             _log?.LogInformation(
                 "fact index: rebuilding {Count} facts ({Concurrency} at a time; annotation may add a model call each)",
                 facts.Count, IndexConcurrency);
-            progress?.Report((0, facts.Count));
-            var indexed = await IndexEachAsync(facts.Select(f => f.Row), ct, facts.Count, progress);
+            var indexed = await IndexEachAsync(facts.Select(f => f.Row), ct);
             _log?.LogInformation("fact index: rebuilt — {Indexed}/{Total} facts indexed", indexed, facts.Count);
             return indexed;
         }
@@ -517,10 +614,69 @@ public sealed class FactIndex : IFactIndex
             _log?.LogWarning(ex, "fact index: rebuild failed; recall stays on FTS");
             return 0;
         }
+        finally
+        {
+            _bulk.Release();
+        }
     }
 
-    public async Task<int> ReindexSemanticAsync(CancellationToken ct = default,
-        IProgress<(int Done, int Total)>? progress = null)
+    public async Task<ReembedResult> ReembedInPlaceAsync(CancellationToken ct = default,
+        IProgress<SemanticReindexProgress>? progress = null)
+    {
+        // Nothing to re-embed INTO without an embedder: Lyntai's pass throws for a graph with no vector index or no
+        // embedding backend, and a no-op is the honest answer here (the callers ask Embeds first anyway).
+        if (!Embeds) return ReembedResult.NotRun;
+        // Lyntai's graph engine and its composite both implement it (3.5.0); an engine that does not is a wiring change
+        // this would otherwise pass over in silence, reporting a pass that re-embedded nothing as done. Not completed, so
+        // the marker stays owed and every start says so in the log until the wiring is fixed.
+        if (_engine is not IReindexableMemory reindexable)
+        {
+            _log?.LogWarning("fact index: the memory engine {Engine} cannot re-embed in place (no IReindexableMemory); " +
+                "no vector was recomputed", _engine?.GetType().Name);
+            return new ReembedResult(0, 0, Completed: false);
+        }
+        await _bulk.WaitAsync(ct);
+        try
+        {
+            // The count is the FACTS a household knows (rows with an entry); the pass visits every ENTRY, which is more
+            // when an edit left its previous content's node behind (the graph dedups by content hash). Reported up front
+            // because the engine re-embeds in one call and says nothing until it returns.
+            var facts = (await _store.AllAsync()).Count(f => !string.IsNullOrEmpty(f.GraphRef));
+            progress?.Report(new(SemanticReindexStage.Reembed, 0, facts));
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            // ONE scope — every entry lives in AllFacts (FactIndexStep's layout), and it is the only one recall reads.
+            var result = await reindexable.ReindexAsync(TaskKey, AllFacts, ct);
+            clock.Stop();
+            // Failures are CLASSIFIED once, for the whole pass, as a write's are: a probe answered means the embedder
+            // refused those inputs and the pass is done; unanswered, it is down and the pass must be run again. A failed
+            // entry keeps the vector it had — Lyntai writes nothing for a batch whose embed failed — so nothing is lost
+            // either way, and nothing here retries it: an input refused for its length would be refused again.
+            var completed = result.Failed == 0 || await EmbedderReadyAsync(ct);
+            _log?.LogInformation("fact index: re-embedded {Indexed} graph entries IN PLACE in {Ms} ms ({Facts} indexed " +
+                "facts; nodes, links, decay and subjects untouched; no annotation){Failed}", result.Indexed,
+                clock.ElapsedMilliseconds, facts,
+                result.Failed == 0 ? "" : completed
+                    ? $" — {result.Failed} could not be embedded while the embedder answers a probe (most likely past its " +
+                      "window); they keep the vector they had, or none, and are not retried"
+                    : $" — {result.Failed} failed and the embedder no longer answers a probe; the pass is owed again");
+            return new ReembedResult(result.Indexed, result.Failed, completed);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            // A write that FAILS throws in Lyntai's pass (the vector index itself is broken). Nothing was forgotten, so
+            // the graph is as it was; the pass is simply not done.
+            _log?.LogWarning(ex, "fact index: re-embedding in place failed; the graph is unchanged and the pass is owed");
+            return new ReembedResult(0, 0, Completed: false);
+        }
+        finally
+        {
+            _bulk.Release();
+        }
+    }
+
+    public async Task<SemanticReindexResult> ReindexSemanticAsync(CancellationToken ct = default,
+        IProgress<SemanticReindexProgress>? progress = null)
     {
         // TWO ARMS NEED THIS, and guarding on `_semantic` alone silently served only one of them.
         //
@@ -532,45 +688,61 @@ public sealed class FactIndex : IFactIndex
         // effect. Same shape as everything else in this area — a capability that appears available and
         // quietly is not.
         //
-        // Both arms re-derive the same way (re-remember every fact), so the question is not "is there an
-        // embedder" but "is anything bound that a rewrite would re-derive".
+        // So the question is not "is there an embedder" but "is anything bound that a pass would re-derive".
         var rephrasing = _llm is not null
             && string.Equals(_config?.Current.Memory.SemanticSource,
                 Agent.Llm.Sources.MemoryBackends.ClaudeCli, StringComparison.OrdinalIgnoreCase);
-        if (_semantic is null && !rephrasing) return 0;
+        if (_semantic is null && !rephrasing) return SemanticReindexResult.Nothing;
 
         // …AND THE TWO ARMS DO NOT COST THE SAME THING, which the first version of this got wrong by
         // routing both through the destructive path. The rephrasing arm's output is a knowledge COLUMN
         // (`aka`, picked up by the FTS trigger on UPDATE). Nothing of it lives in the graph, so rebuilding
         // the graph to produce it discards every decay position and link the household has accumulated in
-        // exchange for absolutely nothing. An embedder is the opposite: its vectors belong to the graph's
-        // entries and are written as each one is remembered, so re-embedding really is re-remembering.
+        // exchange for absolutely nothing.
         //
         // Being over-broad here is not a small matter — it made "bind the arm, then rebuild" advice that
         // silently cost weeks of accumulated ranking, and made measuring the arm's benefit an operation
         // nobody should agree to.
-        if (_semantic is null) return await ExpandEachAsync(ct, progress);
+        if (_semantic is null)
+            return new SemanticReindexResult(SemanticReindexStage.Rephrase, await ExpandEachAsync(ct, progress), 0,
+                true, 0);
 
-        // The vectors a recall reads belong to the GRAPH's entries, written as each one was remembered —
-        // so re-embedding means re-remembering, which is exactly RebuildAsync. There is no cheaper door:
-        // the engine embeds on write and offers no "re-embed what you already hold".
+        // AN EMBEDDER'S VECTORS ARE RE-EMBEDDED IN PLACE (Lyntai D194, 3.5.0). They belong to the graph's entries, and
+        // until 3.5 the engine offered no way to recompute one except re-remembering it — so this was RebuildAsync, which
+        // forgot the graph, discarded every decay position, reinforcement and link, and paid an annotation per fact
+        // (with 判断 on the Claude CLI, against the household's quota) for a pass whose only job was the vectors.
+        // ReindexAsync writes vectors and nothing else. Both occasions that need it are served: turning the model ON (the
+        // entries have no vector, so each gains one) and CHANGING it (each vector is overwritten at its address; one the
+        // new model cannot embed keeps the old one, whose other width scores 0 — unfindable, not wrong).
         //
-        // That makes this destructive of decay positions and links, which SyncAsync never is. Both
-        // occasions that need it have already lost the vectors anyway — turning the model ON (the graph
-        // was built without an embedder, so its entries have none) and CHANGING it. Clearing the old
-        // vectors is RebuildAsync's job, not this method's: every caller of it needs the same thing.
-        _log?.LogInformation("fact index: re-embedding by rebuilding the index — decay positions and links reset");
-        return await RebuildAsync(ct, progress);
+        // THE MARKER SAYS THE VECTORS ARE OWED for the length of the pass. The old rebuild healed an interrupted run by
+        // clearing every ref up front, so the startup back-fill finished it; a re-embed clears nothing, so a pass cut short
+        // by a restart or an update would leave the rest on the OLD model with refs intact — and no back-fill ever returns
+        // to a row that has a ref. Recording VectorsOwed first makes the next start finish it (FactIndexStep re-embeds in
+        // place at that marker). Moved only from the CURRENT layout: any other value is a move of the ENTRIES the next start
+        // still owes (a rebuild), and "vectors owed" would understate it; and back to Current only by a pass that
+        // COMPLETED — one the embedder went down during stays owed. "2" is left as "2" if the pass does not complete.
+        var stored = _layout?.Get(FactIndexLayout.Key);
+        var ownsMarker = stored is FactIndexLayout.Current or FactIndexLayout.VectorsOwed;
+        if (stored == FactIndexLayout.Current) _layout!.Set(FactIndexLayout.Key, FactIndexLayout.VectorsOwed);
+        var reembed = await ReembedInPlaceAsync(ct, progress);
+        if (ownsMarker && reembed.Completed) _layout!.Set(FactIndexLayout.Key, FactIndexLayout.Current);
+
+        // Then the facts that have NO entry — what the panel's coverage line counts as missing and offers this button for.
+        // These are ordinary back-fill writes: each is remembered (an annotation with 判断 on) and its write embeds. Only
+        // after a pass that completed — the embedder answered — which is the back-fills' own gate.
+        var backFilled = reembed.Completed ? await SyncAsync(ct, progress) : 0;
+        return new SemanticReindexResult(SemanticReindexStage.Reembed, reembed.Reembedded, reembed.Failed,
+            reembed.Completed, backFilled);
     }
 
-    /// <summary>Drop the graph member's vector collections, so a rebuild does not write NEW vectors into a
-    /// collection still holding the OLD model's.
-    /// <para>This is the model-change case, and it is the sharp one: a vector keeps the width of the model
-    /// that wrote it, so mixing widths in one collection corrupts every search against it — and Lyntai's
-    /// search is fail-open, returning nothing rather than throwing, which reads exactly like a household
-    /// that has no facts. Forgetting the graph's NODES does not reach the vectors: they are the vector
-    /// store's rows, keyed by node id, and a rebuilt node takes a fresh id — so the old rows would simply
-    /// stay, unreferenced and still matched against.</para>
+    /// <summary>Drop the graph member's vector collections before a REBUILD, which gives every entry a new id.
+    /// <para>Forgetting the graph's NODES does not reach the vectors: they are the vector store's rows, keyed by
+    /// node id, and a rebuilt node takes a fresh id — so the old rows would simply stay, unreferenced, still
+    /// matched against, and holding the old content as their payload. (A vector of another WIDTH is not the danger
+    /// this once said it was: Lyntai's <c>VectorMath.Cosine</c> scores it 0, so it ranks last rather than breaking
+    /// the search. A re-embed in place, which keeps the ids, overwrites each entry's vector and needs none of
+    /// this.)</para>
     /// <para>Located by PREFIX rather than by rebuilding the collection name: the name is Lyntai's to
     /// compose (member, task and scope — the separator changed in Lyntai 3.2, which is exactly why this
     /// does not restate it), and the one part of it this app can rely on is that it starts with the
@@ -590,8 +762,8 @@ public sealed class FactIndex : IFactIndex
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            _log?.LogWarning(ex, "fact index: could not drop the old vectors; a model CHANGE may leave " +
-                "mixed-width vectors that match nothing");
+            _log?.LogWarning(ex, "fact index: could not drop the old vectors; the rebuild leaves them behind, " +
+                "addressed by ids no entry has any more");
         }
     }
 
@@ -615,15 +787,16 @@ public sealed class FactIndex : IFactIndex
     ///
     /// <para>Never throws — <c>ExpandAkaAsync</c> swallows its own failures, so a fact that could not be
     /// rephrased is simply as findable as it was.</para></summary>
-    private async Task<int> ExpandEachAsync(CancellationToken ct, IProgress<(int Done, int Total)>? progress)
+    private async Task<int> ExpandEachAsync(CancellationToken ct, IProgress<SemanticReindexProgress>? progress)
     {
         var facts = await _store.AllAsync();
         var done = 0;
+        progress?.Report(new(SemanticReindexStage.Rephrase, 0, facts.Count));
         foreach (var (row, _) in facts)
         {
             ct.ThrowIfCancellationRequested();
             await ExpandAkaAsync(row.Kind, row.Topic, row.Content, ct);
-            progress?.Report((++done, facts.Count));
+            progress?.Report(new(SemanticReindexStage.Rephrase, ++done, facts.Count));
         }
         _log?.LogInformation(
             "fact index: re-derived phrasings for {Done} fact(s) — graph, decay and links untouched", done);
@@ -658,6 +831,13 @@ public sealed class FactIndex : IFactIndex
         }).ToList();
         await Task.WhenAll(tasks);
         return indexed;
+    }
+
+    /// <summary>An <see cref="IProgress{T}"/> that reports on the caller's thread, in order — unlike
+    /// <see cref="Progress{T}"/>, which posts each report to the thread pool and may deliver them out of order.</summary>
+    private sealed class Relay<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
     }
 
     // A MemoryRef is (engine, id) and has to survive a round trip through a TEXT column. '#' cannot

@@ -270,9 +270,10 @@ public sealed class MemoryRecallController : ControllerBase
                     // A saved backend that no longer exists is SAID, never silently
                     // swapped — see RetiredNote.
                     retired = RetiredNote(mem.SemanticSource, MemoryLayers.Semantic),
-                    // Turning this on re-embeds by REBUILDING, so say so where the household decides: the
-                    // ranking the index has accumulated is reset, and on a large corpus it is not quick.
-                    note = "开启或更换模型后需要重建索引:会重新计算全部向量,并重置已积累的排序权重(事实本身不受影响)。",
+                    // What the reindex costs and keeps, FOR THE BOUND ARM — the cost line's rule. It said "会重新计算全部
+                    // 向量,并重置已积累的排序权重" for every arm: false for the CLI arm always (it writes a column and never
+                    // touched the graph), and false for an embedder since the Lyntai 3.5 bump, which re-embeds in place.
+                    note = ReindexNote(boundSemantic),
                     reindex = ReindexView(),
                     // COVERAGE, not a history of rebuilds. It answers the question a household actually
                     // has — is what I know searchable right now — and it is self-correcting: an interrupted
@@ -761,47 +762,41 @@ public sealed class MemoryRecallController : ControllerBase
         });
     }
 
-    /// <summary>(Re)build the vector index over every fact. Needed on first bind — the graph is already
-    /// populated, so the ordinary back-fill (which touches only rows with no ref) would embed nothing —
+    /// <summary>Re-derive 语义's material over every fact: for an embedder arm, re-embed the graph IN PLACE (Lyntai D194)
+    /// and back-fill any fact with no index entry; for the Claude CLI arm, store phrasings. Needed on first bind — the
+    /// graph is already populated, so the ordinary back-fill (which touches only rows with no ref) would embed nothing —
     /// and after any model change.</summary>
     [HttpPost("api/manage/memory/layer/semantic/reindex")]
     public async Task<IActionResult> Reindex(CancellationToken ct)
     {
         if (MemorySources.ResolveSemantic(Settings()) is null)
             return StatusCode(409, new { error = "「语义」这一层尚未启用。" });
-        // GATED, like both back-fills (IFactIndex.EmbedderReadyAsync) — and here the gate protects more than quota. An
-        // embedder rebuild FORGETS the graph and clears every ref before it re-remembers a single fact, so during an
-        // outage it discarded the index and every decay position and link with it, paid an annotation per fact, and
-        // left every row unindexed for the next start to pay again. Refused BEFORE anything is touched. The CLI
-        // rephrasing arm registers no embedder, so the probe answers true for it and its non-destructive path runs as
-        // before. Proof: e2e-p52 case 9 (a reindex while the fake refuses embeds is refused, and every ref is kept).
+        // GATED, like both back-fills (IFactIndex.EmbedderReadyAsync) and BEFORE anything is touched — the layout marker
+        // included. A re-embed in place loses nothing when the embedder is down (each entry keeps the vector it had), so
+        // this no longer protects the index the way it did when the pass was a destructive rebuild; what it spares is a
+        // pass that computes no vector, the marker left owed for the next start, and the back-fill after it, which would
+        // re-remember — and annotate, with 判断 on — facts whose writes lose their vector again. The CLI rephrasing arm
+        // registers no embedder, so the probe answers true for it and its path runs as before. Proof: e2e-p52 case 9 (a
+        // reindex while the fake refuses embeds is refused, and every ref is kept).
         if (!await _facts.EmbedderReadyAsync(ct))
-            return StatusCode(409, new { error = "「语义」的嵌入模型现在没有响应 —— 现在重建会先丢掉已有的索引,"
-                + "却建立不起任何向量,所以没有开始。等它恢复后再重建。" });
+            return StatusCode(409, new { error = "「语义」的嵌入模型现在没有响应 —— 现在重建算不出任何向量,所以没有开始"
+                + "(已有的向量和索引都没有动)。等它恢复后再重建。" });
         if (!_reindex.TryStart())
             return StatusCode(409, new { error = "已经有一次重建在进行中。" });
 
+        // Read NOW, for the back-fill stage's sentence: that stage's writes are annotated exactly when 判断 is on.
+        var judgeOn = MemoryEnrichment.IsOn(_appConfig);
         // DETACHED, and deliberately not tied to the request's CancellationToken: the work outlives the
-        // POST, so binding it would cancel the rebuild the moment the browser stopped waiting — which is
+        // POST, so binding it would cancel the pass the moment the browser stopped waiting — which is
         // precisely what happens on an operation this long. Progress is read back from GET /api/manage/memory.
         _ = Task.Run(async () =>
         {
             try
             {
-                var embedded = await _facts.ReindexSemanticAsync(
-                    CancellationToken.None,
-                    new Progress<(int Done, int Total)>(p => _reindex.Report(p.Done, p.Total)));
-                // What can make it 0, read off ReindexSemanticAsync: an embedder bound since the last start
-                // (it is loaded only at startup), or an embedder that failed on every fact — llama.cpp not
-                // answering, or the built-in model's files failing to load. A MISSING built-in model never
-                // gets here: ResolveSemantic is null without it, and the 409 above answers first. The CLI arm
-                // counts every fact it visits, so it reaches 0 only with no facts at all. This used to blame
-                // Ollama, a backend retired on 2026-08-22.
-                _reindex.Finish(embedded, embedded == 0
-                    ? "没有建立任何索引。如果已经有事实,通常是服务尚未重启(嵌入模型只在启动时装载);"
-                      + "已经重启过的话:用 llama.cpp 时多半是本机模型运行时没有在运行,"
-                      + "用内置嵌入模型时多半是模型文件不完整,可在「资源 · Resources」面板删除后重新下载。"
-                    : null);
+                var result = await _facts.ReindexSemanticAsync(CancellationToken.None,
+                    new Relay<Storage.Knowledge.Services.SemanticReindexProgress>(p => ReportStage(p, judgeOn)));
+                var (error, summary) = ReindexOutcome(result);
+                _reindex.Finish(result.Rederived, error, summary);
             }
             catch (Exception ex)
             {
@@ -814,12 +809,87 @@ public sealed class MemoryRecallController : ControllerBase
         return Accepted(new { ok = true, started = true });
     }
 
+    /// <summary>The running sentence for each stage the fact index reports. The re-embed is ONE engine call that reports
+    /// nothing on the way, so it is shown as indeterminate (total 0 — a bar pinned at 0% reads as stuck) with the count in
+    /// the sentence; the back-fill and the phrasings count fact by fact.</summary>
+    private void ReportStage(Storage.Knowledge.Services.SemanticReindexProgress p, bool judgeOn)
+    {
+        switch (p.Stage)
+        {
+            case Storage.Knowledge.Services.SemanticReindexStage.Reembed:
+                _reindex.Report(0, 0, $"正在原地重新计算 {p.Total} 条事实的向量 —— 每条一次嵌入,不调用模型标注,"
+                    + "已学到的排序、关联和主题都保留……");
+                break;
+            case Storage.Knowledge.Services.SemanticReindexStage.BackFill:
+                _reindex.Report(p.Done, p.Total, $"补建之前没有索引的事实:{p.Done}/{p.Total} 条"
+                    + (judgeOn ? " · 开启了判断,这些事实每条会多一次模型调用" : ""));
+                break;
+            default:
+                _reindex.Report(p.Done, p.Total, $"补写检索用的说法:{p.Done}/{p.Total} 条事实 · 每条一次 Claude 调用");
+                break;
+        }
+    }
+
+    /// <summary>How a finished pass is told: an error for one that did not do its job, else a summary. Read off
+    /// <see cref="Storage.Knowledge.Services.IFactIndex.ReindexSemanticAsync"/>'s result.</summary>
+    private static (string? Error, string? Summary) ReindexOutcome(Storage.Knowledge.Services.SemanticReindexResult r)
+    {
+        var backFilled = r.BackFilled > 0 ? $"另外补建了 {r.BackFilled} 条之前没有索引的事实。" : "";
+        return r.Arm switch
+        {
+            // Nothing bound that a pass could re-derive, as far as the RUNNING process knows. The settings resolve an
+            // embedder (the 409 above answers first otherwise), and the container holds none: an embedder is wired only at
+            // startup, so it was bound — or its model file came back — since this start. That is the one cause left: an
+            // embedder that is wired and FAILS is the gate's 409 or a pass that does not complete (below), where it used to
+            // come here as a zero from the rebuild — which is why this sentence no longer lists a stopped runtime or an
+            // incomplete model file. (It blamed Ollama once, a backend retired on 2026-08-22.)
+            null => ("没有建立任何索引:嵌入模型只在服务启动时装载,而这次启动时它还没有绑定(或模型文件还不在)。"
+                + "请重启服务,再重建一次。", null),
+            Storage.Knowledge.Services.SemanticReindexStage.Rephrase => (null,
+                $"上次重建完成:{r.Rederived} 条事实补写了检索用的说法,图谱没有改动。"),
+            // Entries failed and the embedder then stopped answering a probe: the marker stays owed, so the next start
+            // re-embeds again. Nothing was lost — a failed entry is left as it was before the pass.
+            _ when !r.Completed && r.Failed > 0 => ($"向量没有全部重新计算:嵌入模型在途中停止了响应({r.Rederived} 条已算好,"
+                + $"{r.Failed} 条没算成,保持重建前的样子)。下次启动会自动再算一次;也可以等它恢复后再点「重建索引」。", null),
+            // The pass THREW — Lyntai throws when a vector WRITE fails, the index itself being broken — before or after
+            // embedding anything; nothing was forgotten, and the marker stays owed.
+            _ when !r.Completed => ("向量没有重新计算:重新计算时出了错(详见「日志」)。图谱和已有的向量都没有动,"
+                + "下次启动会自动再试一次。", null),
+            _ when r.Rederived == 0 && r.Failed == 0 => (null,
+                "上次重建完成:还没有已索引的事实,没有需要重新计算的向量。" + backFilled),
+            _ when r.Failed > 0 => (null, $"上次重建完成:{r.Rederived} 条向量已原地重新计算;{r.Failed} 条没能计算"
+                + "(多半是超出了嵌入模型的长度上限,仍能按关键词和图谱找到)。" + backFilled),
+            _ => (null, $"上次重建完成:{r.Rederived} 条向量已原地重新计算,已学到的排序、关联和主题都保留。" + backFilled),
+        };
+    }
+
+    /// <summary>Reports on the caller's thread, in order — <see cref="Progress{T}"/> posts each report to the thread
+    /// pool, where a later stage's report can land before an earlier one's.</summary>
+    private sealed class Relay<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
+    }
+
+    /// <summary>What 重建索引 does for the bound 语义 arm, said where the household decides. Null when nothing is bound.
+    /// The timings are the real binary's (docs/self-managed-llm-runtime.md, 2026-09-27).</summary>
+    private static string? ReindexNote(Sources.IMemorySemanticSource? bound) => bound is null ? null
+        : bound.Group == MemoryGroups.Cli
+            ? "开启后请重新建立一次语义索引,为已有的事实补写检索用的说法 —— 每条一次 Claude 调用(消耗账号额度);"
+              + "图谱已经学到的排序和关联不受影响。"
+            : "开启或更换嵌入模型后,请重新建立一次语义索引:为每条已有的事实原地重新计算向量 —— 每条一次嵌入,"
+              + "不调用模型标注;已经学到的排序、关联和主题都保留。" + ReembedTiming;
+
+    /// <summary>How long the in-place re-embed takes, as measured — see <see cref="ReindexNote"/>.</summary>
+    private const string ReembedTiming = "实测一百条短事实:有显卡约 3 秒,只用 CPU 约 5 秒;长的事实会慢一些。";
+
     private object ReindexView()
     {
         var r = _reindex.Current;
         return new
         {
             running = r.Running, done = r.Done, total = r.Total, embedded = r.Embedded, error = r.Error,
+            // The server's sentences, one writer each: what the run is doing, and how the last one went.
+            phase = r.Phase, summary = r.Summary,
             // Computed here rather than in the client so "no total yet" reads as indeterminate rather than
             // as 0% — a bar pinned at zero looks stuck, which is the impression this exists to remove.
             percent = r.Total > 0 ? (int)Math.Round(100.0 * r.Done / r.Total) : (int?)null,
