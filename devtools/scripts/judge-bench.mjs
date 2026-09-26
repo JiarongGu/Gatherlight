@@ -391,6 +391,12 @@ function mirrorGuard() {
   for (const row of catalogue.split('new GgufModel(').slice(1)) {
     const window = Number((/ContextTokens:\s*(\d+)/.exec(row) ?? [])[1]);
     if (!window) continue;
+    // RERANKER rows only — the third argument, read positionally so a comment trailing the row cannot answer. The bench
+    // launches rerankers and chat models, never an embedder, and DECLARED_WINDOW is the reranker's launch window; since
+    // 8229353 the EmbeddingGemma row declares its 2,048 too, and counting it made this guard fail on an unchanged tree,
+    // so no local-model arm could start.
+    const kind = (/^\s*(?:"[^"]+"|\w+)\s*,\s*"[^"]*"\s*,\s*GgufCapability\.(\w+)/.exec(row) ?? [])[1];
+    if (kind !== 'Reranking') continue;
     const id = (/^\s*"([^"]+)"/.exec(row) ?? [])[1] ?? constants[(/^\s*(\w+)\s*,/.exec(row) ?? [])[1]];
     if (!id) { drift.push('a GgufCatalog row declares ContextTokens under a non-literal id'); continue; }
     if (window > 6) declared[id] = window;
