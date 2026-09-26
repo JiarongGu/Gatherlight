@@ -81,8 +81,11 @@ chose — and switched 语义 off, both invisibly.
 cannot. Broken twice here (语义's missing Claude arm; Ollama's deleted pull/delete), both times by reasoning
 that sounded like engineering judgement; `.claude/rules/dev-conventions.md` carries the rule and both
 failures. A declined entry is only for a real impossibility. `builtin` on 判断 is NOT one: it is an option
-nobody built — the in-process cross-encoder path reads WordPiece only, so the one model it can run is
-English-only, while the multilingual rerankers run through llama.cpp (the design spec's §Constraints).
+nobody built. Its first reason — the in-process cross-encoder path read WordPiece only, so its one model was
+English-only (the design spec's §Constraints) — went false with Lyntai 3.5.0, whose ONNX provider reads SentencePiece
+and runs the multilingual `mmarco-mMiniLMv2` end to end (its D191). What remains is ours: it is not built and not
+measured against llama.cpp's mMiniLMv2, and the owner decided (2026-09-26) to build it in a later round; until then
+the multilingual rerankers run through llama.cpp, and the declined entry says exactly that.
 
 **判断 can run on a llama.cpp RERANKER** (2026-09-23, `docs/judge-bench.md` Run 2). It VERIFIES locally and
 never annotates, so tagging stays on the Claude CLI and the live route `llm.route.memory` is the CLI's model on the

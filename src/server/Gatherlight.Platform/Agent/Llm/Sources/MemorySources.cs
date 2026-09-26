@@ -80,20 +80,29 @@ public static class MemorySources
     /// cross-encoder (<c>AddOnnxProvider</c> with <c>Produces = Score</c>, its D157). So an in-process verifier
     /// for 判断 is BUILDABLE, the same shape as the llama.cpp reranker. It was not built, for a measured reason
     /// recorded in <c>docs/superpowers/specs/2026-09-23-reranker-judge-and-verdict-bench-design.md</c>
-    /// §Constraints: that path reads WordPiece tokenizers only, so the one model proven through it
+    /// §Constraints: that path read WordPiece tokenizers only, so the one model proven through it
     /// (ms-marco-MiniLM-L6-v2) is English-only — +3.0 of 9.5 on Lyntai's English LoCoMo (2026-09-15,
     /// nomic-embed-text, base 83.0%), −5.4 on multi-hop —
-    /// while the multilingual rerankers (LAMAR, BGE) are SentencePiece, which is why they run on llama.cpp.
-    /// By dev-conventions' own rule this is "an option nobody built", so it says that and why, and does not
-    /// steer: it names where the multilingual ones run and that tagging would need the CLI either way.</para>
+    /// while the multilingual rerankers (LAMAR, BGE, mMiniLMv2) are SentencePiece, which is why they run on llama.cpp.</para>
+    ///
+    /// <para><b>Lyntai 3.5.0 made that reason false too</b> (its D191, 2026-09-26): the ONNX provider now reads a
+    /// SentencePiece tokenizer from a model's <c>tokenizer.json</c>, and Lyntai's <c>docs/model-tasks.md</c> records the
+    /// <c>mmarco-mMiniLMv2</c> reranker — the multilingual one this app already catalogues for llama.cpp — running end to
+    /// end through it. So the gap is no longer the format; it is that nobody has BUILT or MEASURED the option. Building it
+    /// takes <c>Lyntai.Providers.Onnx</c> (not referenced here), an ONNX export of the model, a catalogue row, and a bench
+    /// run against llama.cpp's mMiniLMv2 — loading is not fitting, and "the same model" in two runtimes is a claim until
+    /// it is measured. The owner decided on 2026-09-26 to build it in a later round. Until then it stays declined as
+    /// UNBUILT — dev-conventions' "an option nobody built", never "cannot" — and the sentence says so, says why, and
+    /// names what to use meanwhile: llama.cpp in the same group, where that very model runs today. Tagging would need
+    /// the CLI either way.</para>
     ///
     /// <para>Earlier rewrites, still true as rules: it once said a local model meant installing Ollama
     /// yourself (false since the app provisions llama.cpp, 2026-08-22), and it once called the group 「内置」,
     /// the word that now names this very arm.</para></summary>
     private const string BuiltInCannotJudge =
-        "「判断」也可以用重排模型来做,但「内置」这条还没做:应用内直接运行的方式目前读不了多语言重排模型的格式,"
-        + "验证过的唯一一个只懂英文。支持中文的重排模型在同一组「本机模型」里的 llama.cpp 上运行。"
-        + "无论哪种,写入事实时的主题标注都由 Claude CLI 完成。";
+        "「判断」也可以用重排模型来做,但「内置」这条还没做:在应用内直接运行支持中文的重排模型 mMiniLMv2 现在已经可行,"
+        + "但它还没有和 llama.cpp 上运行的同一个模型对比实测过。在那之前,请先用同一组「本机模型」里的 llama.cpp "
+        + "运行重排模型,mMiniLMv2 在那里也能选。无论哪种,写入事实时的主题标注都由 Claude CLI 完成。";
 
     public const string DefaultJudgeSource = "claude-cli";
 

@@ -351,8 +351,9 @@ try {
   // nobody could add the source without noticing the suite's claim about it had changed.
   //
   // It stays DECLINED for 判断 — as an option nobody BUILT, not an impossibility: an in-process reranker
-  // could verify (Lyntai 3.2 ships one), but that path reads only English-only models today, so the
-  // multilingual rerankers run on llama.cpp (MemorySources.BuiltInCannotJudge says so to the household).
+  // could verify (Lyntai 3.2 ships one, and since 3.5 — its D191 — it runs the multilingual mMiniLMv2), but it is
+  // not built and not measured against llama.cpp's, so the multilingual rerankers run on llama.cpp for now
+  // (MemorySources.BuiltInCannotJudge says so to the household).
   ok('the built-in runtime is bindable on 语义 now, and still declined on 判断',
     bindable(semantic, 'builtin') === true && bindable(judge, 'builtin') === false,
     JSON.stringify({ judge: bindable(judge, 'builtin'), semantic: bindable(semantic, 'builtin') }));
