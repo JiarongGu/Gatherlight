@@ -53,10 +53,12 @@
          PDFsharp's appearance/import paths throw. Avoid iText (AGPL). -->
     <PackageReference Include="PdfPig" Version="0.1.15" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
-    <!-- Direct pin: Microsoft.Data.Sqlite 10.0.0 pulled SQLitePCLRaw 2.1.11 whose bundled
-         e_sqlite3 has a known CVE (GHSA-2m69-gcr7-jv3q); 3.0.x ships the patched build, and
-         the pin is what keeps us on it (10.0.12 pulls 2.1.12, which the pin outranks).
-         Runtime-verified against Microsoft.Data.Sqlite 10. -->
+    <!-- Direct pin, and today it MIRRORS Lyntai.Storage.Sqlite's own floor (3.0.5), which already
+         resolves this version transitively. It was added for a CVE: Microsoft.Data.Sqlite 10.0.0
+         pulled SQLitePCLRaw 2.1.11, whose bundled e_sqlite3 was SQLite 3.49.1 (GHSA-2m69-gcr7-jv3q),
+         and 3.0.x shipped the patched build. That reason is gone — 10.0.12 pulls 2.1.12, which bundles
+         a patched SQLite (3.53.3) — so what the pin records now is the choice to stay on 3.0.x even if
+         Lyntai ever drops its floor. Runtime-verified against Microsoft.Data.Sqlite 10. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <!-- Lyntai (灵台) — the shared LLM library extracted from this family, consumed from NuGet. LLM-judge
          scorers route through its ITextClient front door + ClaudeCli provider (neutral cwd, verdict-classified,
