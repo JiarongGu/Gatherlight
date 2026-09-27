@@ -7684,3 +7684,219 @@ chat-judge arm. Any other WARNING fails it.
   reserved, none listening, none used before). Then 11b and 11c, on their registered ports. Everything else is unchanged.
 - **If this attempt fails a guard, the sequence stops and is reported.** There is no further amendment in this session.
 - The checker (`devtools/_run11/guards11.mjs`, scratch) exempts exactly the two result warnings, on `lc:` arms only.
+
+## Run 11 — the local judges on Lyntai 3.5.1 (2026-09-27, llama.cpp b10549, Lyntai 3.5.1; claude never called — every server on the stub)
+
+**Commands**, as registered in `09852e8` and amended twice before the reading runs (`c5b6e52`, `a7571cb`, the two
+amendments above). The server was built from `085398c` and not rebuilt. The scratch driver `devtools/_run11/drive.sh`
+ran every attempt, each exiting 0 on its first try:
+
+| attempt | from – to (UTC) | app HEAD | results | status |
+|---|---|---|---|---|
+| 11a, first | 06:10:58 – 06:14:01 | `09852e8` | `results-2026-09-27T061058.150Z.json` | guard 3 failed as then written; **not read** |
+| 11a, second (ports 7030 / 7093) | 06:16:06 – 06:18:59 | `c5b6e52` | `results-2026-09-27T061606.804Z.json` | guard 3 failed as then written; **not read** |
+| **11a · Qwen3** (ports 7040 / 7094) | 06:20:48 – 06:24:04 | `a7571cb` | `results-2026-09-27T062048.196Z.json` | **the reading** |
+| **11b · Gemma** | 06:24:06 – 06:27:02 | `a7571cb` | `results-2026-09-27T062406.919Z.json` | **the reading** |
+| **11c · rerankers** | 06:27:07 – 06:30:15 | `a7571cb` | `results-2026-09-27T062707.803Z.json` | **the reading** |
+
+The evidence (results, rows, router log, preset, and every arm's logs and settings) is under `devtools/_run11/<run>/`.
+The two unread attempts are under `qwen3-attempt1/` and `qwen3-attempt2/`.
+
+**Every guard held in all three reading runs.** They were checked by the scratch `devtools/_run11/guards11.mjs`, whose
+output is each folder's `guards.txt`:
+
+| guard | 11a · Qwen3 | 11b · Gemma | 11c · rerankers |
+|---|---|---|---|
+| 1. instrument | fixture `9680443e…`, seed re-verified, `formula` digest `2e323182c81a` | the same | the same |
+| 2. engine A/A | byte-identical, p = 1.000 | the same | the same |
+| 3. startup and warnings | read-back `llama-cpp · <m>`, no startup warning, only `rrk`'s `on`; 0 claude-cli calls; warnings: Qwen3's two coverage warnings only (16/234 accuracy, 2/12 latency) | the same; Gemma's two (31/234, 3/12) | no warning at all |
+| 4. router | each model spawned once; the chat child `--n-predict 512 --ctx-size 16384`, no `--reasoning`; BGE `--reranking`, 4,096; 0 unload/evict/exit/OOM, 0 error lines, 0 context refusals | the same | BGE and LAMAR 4,096, mMiniLMv2 **512**; the same zeros |
+| 5. the cap held | 247 chat tasks, none over 512; 13 capped at 512 | 247, none over 512; 2 capped | — |
+| 6. thinking off | median 12 generated tokens per task | median 14 | — |
+| 7. no FTS fallback | 0 in every arm; 0 deadline NoOpinions; every llama.cpp chat call Ok (234 + 12) | the same | 0; 0 |
+| 8. reranker coverage | `judged` = `graph`, 0 errors, every set | the same | the same, all three |
+| 9. the pace | 0 pace lines in every arm | the same | the same |
+| 10. one build | `715b91b3b197afd6` / `0c7d745c25c6070d` / `318ca094393afd75` before the first attempt and after the last | | |
+| 11. complete | every arm 240 + 12 rows, 0 errors | the same | the same |
+
+- **Router traffic.** The router proxied 494 requests in each two-judge run (2 arms × 247: 234 graph recalls, 12 latency
+  recalls, 1 warm) and 741 in 11c (3 × 247).
+- **Prompt size.** The largest chat prompt was 1,392 tokens (Qwen3) and 1,556 (Gemma), far inside 16,384.
+
+**The instrument agreed with itself.**
+
+- `formula` and `formula2` read `2e323182c81a` in every run, Run 10's short-fact digest on this build.
+- BGE's positions digest is `2d3a61cc78db` in all five attempts.
+- BGE's, LAMAR's (`c109b9c957a5`) and mMiniLMv2's (`3fbef3fe03e5`) digests equal their Run 10 short runs', where each
+  ran alone. On this fixture the rerankers are deterministic on 3.5.1.
+
+### The headline — every judge against no judge, within its own run
+
+All figures are Lyntai 3.5.1. b = `formula` hit & arm miss.
+
+- **Serial medians** are over the first 12 queries. Judge arms count only verdict-carrying recalls: Qwen3 10 of 12,
+  Gemma 9 of 12, every reranker 12.
+- **"added"** is the arm's serial median minus its own run's `formula` (245 ms in 11a and 11c, 257 ms in 11b).
+
+| judge | run | coverage | top-1 / found@8 (公式 80 / 127) | top-1 vs 公式 | found@8 vs 公式 | serial · added |
+|---|---|---|---|---|---|---|
+| **Qwen3 0.6B** (`lc`) | 11a | 218/234 (93.2%) | **107 / 152** | 6/33, p < 0.001, **+11.3pp** [+6.2, +16.1] | 4/29, p < 0.001, **+10.4pp** [+5.8, +14.9] | 382 ms · +137 |
+| **Gemma 3 1B** (`lc`) | 11b | 203/234 (86.8%) | **36 / 123** | 53/9, p < 0.001, **−18.3pp** [−24.2, −12.2] | 9/5, p = 0.424, −1.7pp [−4.8, +1.5] | 338 ms · +81 |
+| **BGE** (`rrk`) | 11c | 234/234 | **91 / 208** | 3/14, p = 0.013, **+4.6pp** [+1.2, +7.9] | 1/82, p < 0.001, **+33.8pp** [+27.4, +39.6] | 464 ms · +219 |
+| **LAMAR** (`rrk`) | 11c | 234/234 | **89 / 207** | 1/10, p = 0.012, **+3.8pp** [+1.0, +6.5] | 0/80, p < 0.001, **+33.3pp** [+27.1, +39.0] | 454 ms · +209 |
+| **mMiniLMv2** (`rrk`) | 11c | 234/234 | **100 / 203** | 4/24, p < 0.001, **+8.3pp** [+4.0, +12.5] | 1/77, p < 0.001, **+31.7pp** [+25.4, +37.4] | 342 ms · +97 |
+
+- **BGE in 11a and 11b** read the same 91 / 208, digest for digest (serial 461 ms · +216 and 484 ms · +227).
+- **Cross-language found@8** (`cross`, 60 questions): 公式 6, BGE 49, LAMAR 49, mMiniLMv2 48, Qwen3 20, Gemma 8.
+
+### Chat judge against BGE, and reranker against reranker
+
+b = the reference's hit & the arm's miss.
+
+| pair | run | top-1 | found@8 |
+|---|---|---|---|
+| **Qwen3 vs BGE** | 11a | 107 vs 91: 10/26, p = 0.011, **+6.7pp** [+1.8, +11.5] | 152 vs 208: 57/1, p < 0.001, **−23.3pp** [−28.6, −17.6] |
+| Gemma vs BGE (new: Run 3 had no reranker) | 11b | 36 vs 91: 65/10, p < 0.001, −22.9pp [−29.2, −16.3] | 123 vs 208: 86/1, p < 0.001, −35.4pp [−41.3, −28.9] |
+| LAMAR vs BGE | 11c | 89 vs 91: 7/5, p = 0.774, −0.8pp [−3.7, +2.1] | 207 vs 208: 4/3, p = 1.000, −0.4pp [−2.7, +1.9], **equivalent** |
+| mMiniLMv2 vs BGE | 11c | 100 vs 91: 4/13, p = 0.049, +3.8pp [+0.3, +7.1] | 203 vs 208: 8/3, p = 0.227, −2.1pp [−4.9, +0.7], not equivalent |
+| mMiniLMv2 vs LAMAR | 11c | 100 vs 89: 3/14, p = 0.013, +4.6pp [+1.2, +7.9] | 203 vs 207: 8/4, p = 0.388, −1.7pp [−4.6, +1.3], not equivalent |
+
+### The decision rule, applied
+
+| # | comparison | metric | stated today | Run 11 | category now | |
+|---|---|---|---|---|---|---|
+| C1 | Qwen3 vs no judge | top-1 | significantly better | +11.3pp, p < 0.001 | significantly better | unchanged |
+| C2 | Qwen3 vs no judge | found@8 | significantly better | +10.4pp, p < 0.001 | significantly better | unchanged |
+| C3 | Qwen3 vs BGE | top-1 | significantly better | +6.7pp, p = 0.011 | significantly better | unchanged |
+| C4 | Qwen3 vs BGE | found@8 | significantly worse | −23.3pp, p < 0.001 | significantly worse | unchanged |
+| C5 | Gemma vs no judge | top-1 | significantly worse | −18.3pp, p < 0.001 | significantly worse | unchanged |
+| **C6** | **Gemma vs no judge** | **found@8** | significantly worse | −1.7pp, **p = 0.424** | **no significant difference** | **CHANGED** |
+| C7 | BGE vs no judge | top-1 | significantly better | +4.6pp, p = 0.013 | significantly better | unchanged |
+| C8 | BGE vs no judge | found@8 | significantly better | +33.8pp, p < 0.001 | significantly better | unchanged |
+| C9 | LAMAR vs no judge | top-1 | significantly better | +3.8pp, p = 0.012 | significantly better | unchanged |
+| C10 | LAMAR vs no judge | found@8 | significantly better | +33.3pp, p < 0.001 | significantly better | unchanged |
+| C11 | mMiniLMv2 vs no judge | top-1 | significantly better | +8.3pp, p < 0.001 | significantly better | unchanged |
+| C12 | mMiniLMv2 vs no judge | found@8 | significantly better | +31.7pp, p < 0.001 | significantly better | unchanged |
+| C13 | mMiniLMv2 vs BGE | found@8 | no significant difference | −2.1pp, p = 0.227 | no significant difference | unchanged |
+| **C14** | **mMiniLMv2 vs LAMAR** | **found@8** | significantly worse | −1.7pp, **p = 0.388** | **no significant difference** | **CHANGED** |
+| C15 | LAMAR vs BGE | found@8 | no significant difference | −0.4pp, p = 1.000 | no significant difference | unchanged |
+
+**Two conclusions changed, so the sentences resting on them change wording:**
+
+- **C6.** Gemma 3 1B is still significantly worse than no judge at putting the answer FIRST (80 → 36). On this build it
+  is no longer significantly worse at getting the answer onto the page (127 → 123, p = 0.424). Run 3's "both metrics
+  significantly worse" is no longer what the evidence says; "worse at ranking first" is.
+- **C14.** mMiniLMv2 is no longer significantly behind LAMAR on found@8 (8/4, p = 0.388). Run 4's 9/0 did not
+  replicate.
+
+**The other thirteen are unchanged.** Their sentences keep their wording and take the new numbers.
+
+**Qualifiers the refreshed numbers contradict.** These are reported for the owner; the rule does not decide them.
+
+- **LAMAR vs BGE on found@8 is now EQUIVALENT** (the interval is inside ±3pp).
+  - The household note's "两边并不对称 … 偏向 LAMAR —— 5 题只有 LAMAR 做到 … 95% 区间不含零" is false on this build, and
+    so is dev-conventions' "leans LAMAR 5–0". It is now 3 LAMAR-only against 4 BGE-only.
+  - On every Chinese-worded question (120: `same` × zh, `cross` × en, `third` × ja, every `mixed`), the two differ on 9
+    questions and on none by both metrics: top-1 5 LAMAR-only against 2 BGE-only; found@8 2 BGE-only against 0.
+  - BGE stays the recommendation by the same registered tie-break. That tie-break now rests on a found@8 equivalence
+    rather than a lean.
+- **mMiniLMv2's top-1 is now significantly above BGE's (p = 0.049) and LAMAR's (p = 0.013).**
+  - The note's "和 BGE 的差距不足以下结论" is false on this build.
+  - These are two of three uncorrected reranker-pair tests, and 0.049 is marginal.
+- **mMiniLMv2 now runs at its declared 512** (guard 4). The note's and the recall-layers table's caveat that its figures
+  were "measured under a 4096 launch" does not apply to the refreshed figures.
+
+### Coverage, capped replies and latency
+
+- **Coverage** (`judged`/`graph` on `all`): Qwen3 218/234 (93.2%), Gemma 203/234 (86.8%). Lyntai 3.2 read 226/234 (Run
+  5b) and 202/234 (Run 3).
+  - Every llama.cpp chat call answered Ok (234 + 12 per judge). So every no-verdict recall is a reply the verifier could
+    not use: capped at 512 tokens (Qwen3 13 tasks, Gemma 2) or otherwise unparseable.
+- **Latency on EVERY graph recall**, verdict or not (serial):
+  - Qwen3: median 387 ms, max 3,045. Its 2 no-verdict recalls took 2,049 ms median (the capped runaways).
+  - Gemma: median 363 ms, max 3,928. Its 3 no-verdict recalls took 459 ms.
+  - No recall of the accuracy pass came near the 60 s deadline. The slowest, in parallel, took 4.8 s (Qwen3) and 5.5 s
+    (Gemma).
+- **Added cost per recall** (verdict-carrying, serial):
+  - chat judges: +0.08 s (Gemma), +0.14 s (Qwen3);
+  - rerankers: +0.10 s (mMiniLMv2), +0.21–0.22 s (LAMAR, BGE); BGE +0.22–0.23 in 11a and 11b.
+- **Whole recalls**: Qwen3 0.38 s, Gemma 0.34 s, BGE 0.46 s, LAMAR 0.45 s, mMiniLMv2 0.34 s; 公式 0.25 s (0.26 in 11b).
+
+### Descriptive only — the two unread 11a attempts, beside the reading
+
+These are three runs of one configuration, from one seed, on one build. They are not a finding (measuring rule 2), and
+neither attempt is read under the rule. They size how far the sampling chat judge wanders between identical runs, which
+no judge A/A arm did.
+
+| attempt | Qwen3 top-1 / found@8 | coverage | vs 公式 top-1 · found@8 | vs BGE top-1 · found@8 | serial |
+|---|---|---|---|---|---|
+| first | 109 / 151 | 227/234 | +12.1pp · +10.0pp, both p < 0.001 | +7.5pp p = 0.008 · −23.8pp | 460 ms (公式 277) |
+| second | 116 / 151 | 226/234 | +15.0pp · +10.0pp, both p < 0.001 | +10.4pp p < 0.001 · −23.8pp | 367 ms (公式 230) |
+| **reading** | **107 / 152** | **218/234** | **+11.3pp · +10.4pp, both p < 0.001** | **+6.7pp p = 0.011 · −23.3pp** | 382 ms (公式 245) |
+
+- All three give the same category for C1–C4. The reading attempt happens to be the lowest of the three on top-1 and on
+  coverage.
+- Across the three attempts, Qwen3's outcome differs on 46 of 240 questions for top-1, 36 for found@8, and 28 for whether
+  a verdict came back. `formula` and BGE were identical in all three.
+
+### Descriptive only — per set, and across versions
+
+- **Where Gemma loses top-1**: `same` 26/2 and `mixed` 25/2 (b/c against 公式), the two sets where 公式 is already strong.
+  On `cross` and `third` there is no difference. No set shows a found@8 loss.
+- **Qwen3 against 公式, by set**: top-1 and found@8 are both significant on `cross` and `third`, and neither is on `same`
+  or `mixed`.
+- **Qwen3 against BGE, by set**: its top-1 lead is not significant on any single set (`mixed` 2/9, p = 0.065). BGE's
+  found@8 lead is on `cross` (29/0), `third` (19/1) and `mixed` (9/0).
+- **Against the 3.2 runs** (descriptive only; the engine moved, so even 公式 differs):
+
+  | arm | Run 11 (3.5.1) | Lyntai 3.2 |
+  |---|---|---|
+  | 公式 | 80 / 127 | 79 / 125 |
+  | Qwen3 | 107 / 152 | 110 / 148 (Run 5b) |
+  | Gemma | 36 / 123 | 33 / 111 (Run 3) |
+  | BGE | 91 / 208 | 90 / 203 (Run 2), 90 / 204 (Run 4) |
+  | LAMAR | 89 / 207 | 86 / 208 (Runs 2 and 4) |
+  | mMiniLMv2 | 100 / 203 | 99 / 199 (Run 4) |
+
+- **Why Gemma's found@8 moved, this run cannot say.** Candidates: the engine, the request-field thinking switch, the
+  context cap, or sampling. Gemma's template has no thinking to switch off.
+
+### What it says
+
+- **On Lyntai 3.5.1, the local judges' household conclusions hold, except two:**
+  - Gemma 3 1B's found@8 loss against no judge is gone (C6);
+  - mMiniLMv2's found@8 loss against LAMAR is gone (C14).
+- **Qwen3 0.6B** is still significantly better than no judge on both metrics. Against BGE it is still better on top-1
+  and far worse on found@8.
+- **Every reranker** is still significantly better than no judge on both metrics.
+- **LAMAR and BGE** are now equivalent on found@8.
+
+### What it does NOT say
+
+- **Anything about the Claude judge on 3.5.1.** It was not run. Every sentence setting a local judge against it keeps
+  Runs 1–2's figures, from one base.
+- **Anything about Qwen3's own tags** (Run 7), long notes (Runs 6–10), a CPU or an integrated GPU, or a household's own
+  facts.
+- **Why two conclusions moved.**
+  - There was one run per configuration, and the change of version bundles four changes: the engine, thinking off by
+    request, the context cap, and the judge's input mechanism.
+  - The Qwen3 attempts show a sampling chat judge moving several top-1 points between identical runs.
+  - Gemma's found@8 (a 4-question gap, p = 0.424) and mMiniLMv2 against LAMAR (4 questions, p = 0.388) are both inside
+    what one run can resolve.
+- **That Gemma is now acceptable.** It is still significantly worse than no judge at ranking first, by 18.3pp.
+
+### What the household sentences can now say (routed; not changed here)
+
+The exact old and new text of every sentence in the pre-registered inventory (U1–U17) goes to the owner with this
+record. A separate task edits them.
+
+- **Wording changes for C6**: U1, U11, U13's Gemma clause, U14's chat row, U16's Gemma lines and U17's Gemma line.
+- **Wording changes for C14**: U5 and U14's mMiniLMv2 clause. U17's mMiniLMv2 line compares it with BGE only (C13,
+  unchanged).
+- **Everything else** takes the new numbers and keeps its wording. The exceptions are the contradicted qualifiers above,
+  which are flagged.
+- **The `p51` pins** named in the inventory move with the text:
+  - the Gemma note's `79`/`33`/`125`/`111`;
+  - the mMiniLMv2 note's `199/240`;
+  - the Qwen3 note's `79 题增加到 110 题`/`125 题增加到 148 题`/`203 对 148`;
+  - the layer sentence's hard-coded 125 and 79.
