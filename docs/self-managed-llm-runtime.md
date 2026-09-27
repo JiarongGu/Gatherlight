@@ -845,3 +845,31 @@ proxy to count its embeds; the pass's time is the app log's `re-embedded … IN 
 
 A scratch script, not committed; each router and its child were ended by PID as a process tree, and each data folder
 was a fresh fixture under `devtools/`.
+
+### 2026-09-28 — an inherited `LLAMA_API_KEY` locks the app out of its own router
+
+llama.cpp reads an environment variable for nearly every command-line option (`LLAMA_ARG_*`, and `LLAMA_API_KEY` for
+`--api-key`), and argv wins only for the options the launch passes. So a variable in the environment the app was
+started with reaches every option the launch contract does NOT pass — and before round 6 the router, its probes and the
+reranker device measurement all inherited the server's whole environment.
+
+**Measured** on b10549 (the bench's resources): a router started in router mode with an empty models directory, on
+loopback, with `LLAMA_API_KEY=<a value>` in its environment. `GET /v1/models` without a key answered **401**
+(`{"error":{"message":"Invalid API Key","type":"authentication_error","code":401}}`), and the same request with
+`Authorization: Bearer <the value>` answered 200. The app's clients send no key, and the runtime reads a port that
+accepts but gives no model list as HELD («a port that accepts and never answers is HELD», above) — so a household with
+that variable set for a llama-server of their own would have had the app refuse to spawn beside its own router, and
+every judge and embed call fail open, with no error naming the key.
+
+The provisioned build's DLLs name, besides `LLAMA_API_KEY`, the other variables that change how the router must be
+ADDRESSED (`LLAMA_ARG_API_KEY_FILE`, `LLAMA_ARG_API_PREFIX`, `LLAMA_ARG_SSL_CERT_FILE`/`_KEY_FILE`), whether it serves
+at all (`LLAMA_ARG_MODELS_AUTOLOAD`), and the router's own child protocol (`LLAMA_SERVER_CHILD_MODE`,
+`LLAMA_SERVER_ROUTER_PORT`). `ChildEnvironment.ForLlamaServer` strips `LLAMA_API_KEY`, every `LLAMA_ARG_*` except the
+`LLAMA_ARG_LOG_*` family, and `LLAMA_SERVER_*` from the router, its `--version`/`--list-devices` probes and the
+measurement children. It keeps `LLAMA_ARG_LOG_*` and `GGML_*`, which the 2026-09-26 entry above uses through the app's
+environment as the diagnostic and device-emulation levers, and `LLAMA_CACHE`. Only the key's effect was measured; the
+others are stripped by the rule that the launch is the app's contract, not by a measurement each. `e2e-p53` case A
+asserts the measurement children's inherited names; the router spawn itself is not drivable in e2e (a fake router is
+always adopted).
+
+A scratch run, not committed: the router was ended by PID as a process tree.

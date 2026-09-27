@@ -179,6 +179,26 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   for it. The launcher **fails closed**: no runtime supporting `--permission` + `module.registerHooks`,
   or a missing preload, means a Script capability refuses to run rather than running unsandboxed.
   Proof lives in `e2e-p38`, whose denials are real attempts paired with positive controls.
+  **The ENVIRONMENT is part of the sandbox, so it is an allow-list** (`ChildEnvironment.ForSandbox`, applied by
+  `NodeCapabilityLauncher.Build` and by `CapabilityRuntime`'s probe, so the probe tests what will run). Measured on Node
+  24.15 under the exact launch, with `NODE_OPTIONS` inherited from the server: `--require <file>` ran that file — outside
+  every read grant — BEFORE `cap-guard.mjs`, and it handed the capability `require('net')`/`require('http')` through a
+  global, so the network denial the card promises was gone; `--allow-child-process` and `--allow-worker` reopened the
+  two denials that denial rests on; `--allow-fs-read=*`/`--allow-fs-write=*` widened the jail to the disk; and
+  `--allow-addons` re-enabled native addons (only `--import` from `NODE_OPTIONS` was refused, an ESM load being checked
+  against the read grant). And `process.env` showed agent-written code every variable the app was started with,
+  `GATHERLIGHT_ACCESS_TOKEN` too when the token is given that way. A deny-list would have to track every variable a future node reads (`NODE_*`,
+  `OPENSSL_*`, `UV_*`) and drift; the allow-list is what node needs on this OS (`SystemRoot`, `windir`, `SystemDrive`,
+  `TEMP`/`TMP`/`TMPDIR`, `USERPROFILE`/`HOME`, `PATH`) plus `TZ`/`LANG`/`LC_ALL`, and under `net: true` the proxy
+  variables, `NODE_USE_ENV_PROXY` and `NODE_EXTRA_CA_CERTS`. `.claude/tool-spec.md` renders that list from the same
+  constants (`TOOL_CONTRACT_VERSION` 2), so the contract cannot drift from it. Nothing about it can fail open: removing a
+  variable cannot widen the sandbox, and the fail-closed launcher is unchanged. Proof: `e2e-p38` case 2b — a server
+  started with `NODE_OPTIONS=--require _node-inject.cjs`: the capability runs and reads its grant (positive control), the
+  preload never ran in it and left no `net`, no `NODE_OPTIONS` and none of the server's variables reach it, and the
+  claude stub, which KEEPS `NODE_OPTIONS`, logs that it ran the preload — proving the injection real. Confirmed to FAIL
+  with `ForSandbox` removed from the launcher (2026-09-28): the capability reported the preload ran, a working `net`
+  (`typeof connect` = `function`), `NODE_OPTIONS` and every server variable — 4 checks — while its positive controls
+  (it runs, reads its grant, cap-guard still blocks `node:net`) stayed green.
 - **Split a growing class into SERVICES, not `partial`s.** `ChatSessionService` reached 1615 lines;
   a `partial` split made the files smaller and changed nothing that mattered, because the class could
   still absorb anything and nobody ever felt the cost. It is now four types — `ChatSessionService`
@@ -2366,7 +2386,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `GIT_CONFIG_PARAMETERS`. A fixture server passed them on to its own git, so its data-repo commands ran against the
   developer's MAIN repository: `git init` set `core.bare = true`, the fixture's commits landed on the worktree's HEAD, and
   `DataRepoMaintenance`'s `reflog expire --expire=now --all` + `gc --prune=now` erased every reflog. The walk-up the
-  ceiling closed, one door over. **Now `GitEnvironment.ConfineTo`** is the one place every git spawn is confined —
+  ceiling closed, one door over. **Now `ChildEnvironment.ForGit`** is the one place every git spawn is confined —
   today `GitCliService.RunAsync`, which 系统模式's `CodeRepoGit` inherits; nothing else in the app starts git — and it
   strips `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
   `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`; `GIT_CONFIG` (it redirects `git config`'s WRITES, so the data
@@ -2380,11 +2400,59 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `user.name` injected through `GIT_CONFIG_PARAMETERS`: the data repo is the data folder's and carries the fixture's
   commits, none signed with the injected name, and not one file under the scratch's `.git` changes. Confirmed to FAIL
   without the strip (`core.bare` false → true, the worktree's HEAD moved — 7 checks) and with `GIT_CONFIG_PARAMETERS`
-  kept (3 of 3 commits signed with it). **Still: never run e2e — or anything that boots a fixture server — under `git
-  bisect run` from a linked worktree**, nor from a git hook (git hands a hook `GIT_INDEX_FILE` and `GIT_AUTHOR_*`,
-  measured). The app and the harness strip what they can, but every OTHER child the server starts — the agent CLI, an
-  external MCP server, a node leaf — inherits the server's environment as it came, and whatever git THEY run is not
-  confined. To bisect a fixture regression, have the bisect script clear the `GIT_*` variables before it runs anything.
+  kept (3 of 3 commits signed with it) — measured when the per-spawn strip was the only one; since round 6 the whole
+  process forgets the same set at startup (next bullet), so F holds on either half and case G is what fails without the
+  process-level one. **Still: never run e2e — or anything that boots a fixture server — under `git bisect run` from a
+  linked worktree**, nor from a git hook (git hands a hook `GIT_INDEX_FILE` and `GIT_AUTHOR_*`, measured). The server
+  now forgets them for every child it starts, but the harness's own processes and whatever a suite spawns directly are
+  outside the server; to bisect a fixture regression, have the bisect script clear the `GIT_*` variables before it runs
+  anything.
+- **Every child the app starts inherits the app's environment NARROWED, per class, in ONE helper —
+  `ChildEnvironment` (`Platform/Kernel/Services`), never a copy per site.** Two mechanisms, because three spawns have no
+  seam. **(1) The process forgets the launcher's context** at the top of `GatherlightApp.Build`, before anything spawns
+  (`ForgetLauncherContext`): the repository set above, and the Claude Code session it was started from
+  (`ParentSessionVariables` — `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`/`_SESSION_ID`/`_CHILD_SESSION`/`_SESSION_ATTENDED`/
+  `_MESSAGING_SOCKET`/`_MESSAGING_TOKEN`/`_EXECPATH`/`_SSE_PORT`, `CLAUDE_PID`), logging the NAMES dropped, never a value
+  (one is a token). The session markers were in the environment of every Bash command a Claude Code session ran here
+  (2026-09-28), and the installed CLI names each: so every dev and fixture server started from one announced its agent
+  to the CLI as a child of the developer's session, with that session's messaging pipe. Why the PROCESS and not the
+  spawn: Lyntai's CLI runs (agent session and one-shot provider alike) go through its sealed `ProcessRunner`, whose
+  `environment` argument can only SET; a BYO `IProcessRunner` is Lyntai's documented seam, but
+  `CliProviderEngine.IsAvailable` is optimistic for any runner that is not its own, so a missing CLI would stop being
+  skipped by the router and become a failed call instead — and the process environment is already the app's seam into
+  those spawns (`ClaudeCliRuntime.Apply` sets `CLAUDE_CMD`/`CLAUDE_CONFIG_DIR` there). The ShellExecute login and
+  Playwright's driver (which builds its `ProcessStartInfo` inside the library) inherit the process's too. **(2) A class
+  that needs less is narrowed at its own spawn:**
+
+  | class | sites | narrowed to | why |
+  |---|---|---|---|
+  | git | `GitCliService.RunAsync` | − the repository set, + the ceiling (`ForGit`) | the bullet above |
+  | the claude CLI | Lyntai's `ProcessRunner` (chat, jobs, playground, validation; scorers, memory judge, rephrase), `ClaudeCliRuntime`'s `auth status`/`logout`, `StartLogin` | the floor only | the household's own CLI: keeps `NODE_OPTIONS`, proxies, CA files, `ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `CLAUDE_EFFORT`; `CLAUDE_CONFIG_DIR`/`CLAUDE_CMD` are the app's own |
+  | external stdio MCP | `StdioMcpConnection.Start` | the floor only | the household's program, unsandboxed by design: its environment is theirs to configure, and the app has no policy over what it needs |
+  | node leaf | `NodeLeafTool.RunAsync` (both shapes, the whole `npx tsx` tree) | − `NODE_OPTIONS`, `NODE_PATH` (`ForPlatformNode`) | code we ship: `--require` runs a file first, `--allow-*` makes a node without `--permission` refuse to start (measured, Node 24.15), and the leaf runs on one of three nodes |
+  | capability sandbox | `NodeCapabilityLauncher.Build`, `CapabilityRuntime`'s probe | an ALLOW-LIST (`ForSandbox`) | the capability bullet under *Backend* |
+  | llama-server | the router spawn, its `--version`/`--list-devices` probes, `RerankDeviceMeter` | − `LLAMA_API_KEY`, every `LLAMA_ARG_*` but `LLAMA_ARG_LOG_*`, `LLAMA_SERVER_*` (`ForLlamaServer`) | measured on b10549: an inherited `LLAMA_API_KEY` makes the router answer the app 401, which the runtime reads as a port HELD by a stranger; every other `LLAMA_ARG_*` is a launch argument the contract did not choose (argv wins only for the keys we pass). KEPT: `LLAMA_ARG_LOG_*` and `GGML_*`, the diagnostic and device-emulation levers `docs/self-managed-llm-runtime.md` uses through the app's environment, and `LLAMA_CACHE` |
+  | 系统模式 build gate | `BuildVerifyService` (`npm run build`) | the floor only | a developer's toolchain |
+  | the rest | Playwright's driver, `where.exe`, the desktop host's ShellExecute launches | the floor only | no seam (Playwright), or nothing read beyond PATH |
+
+  Proof: `e2e-p49` case G (the startup probe, an agent turn and a one-shot annotation: no spawn got a marker, the
+  agent's own `git rev-parse` finds the data repo and not the scratch one `GIT_DIR` named, a control variable still
+  arrives, the log names without values), `e2e-p38` case 2b (the sandbox, capability bullet), `e2e-p10` (both leaf
+  shapes under an inherited `NODE_OPTIONS`, the stub proving the injection real) and `e2e-p53` case A (the measurement
+  children, with the logging and device variables as positive controls). **Confirmed to FAIL** (2026-09-28, one build
+  with all four strips removed; each suite exercises one mechanism, and each failed on exactly its new assertions while
+  the rest stayed green): p49 G 3 of its checks — the startup probe, the agent turn and the annotation each carried
+  `GIT_DIR`, `GIT_CONFIG_PARAMETERS` and nine session markers (all but `_SSE_PORT`, which no shell here sets), the
+  agent's git found the SCRATCH worktree's gitdir, no log line; p10 2 — `npx-cli.js`, tsx's `cli.mjs` and `src/*.ts` ran the
+  preload in the source shape, `inspect.cjs`/`fill.cjs` in the bundled one (each phase reads its own log, so neither can
+  pass on the other's evidence); p53 1 — every measurement child carried all three. With only `ForGit`'s strip removed,
+  F and G both pass: the startup forget alone holds F. **Not driven, and why it does not need its own
+  case:** the router spawn (a fake router is always ADOPTED, and the stand-in binary is `more.com`), the login window, an
+  MCP server, the build gate and Playwright each inherit the one process environment case G proves clean, and none builds
+  its own. **An open question, not a decision:** `ANTHROPIC_API_KEY` is still inherited by the CLI, which in `-p` mode
+  uses a present key instead of the subscription login (the CLI's own documentation; not measured here, since measuring
+  it bills an account) — against the rule that the app never uses an API key — but
+  stripping it changes which account a household's app runs on, so it waits for the owner.
 - The spawned agent is **jailed** by the PreToolUse scope-guard hook
   (`ChatEnvironmentService.ScopeGuardMjs` planner / `guard/system-scope-guard.mjs`
   系统模式 — identical logic, different write-scope; `e2e-p24` runs both): **reads**
