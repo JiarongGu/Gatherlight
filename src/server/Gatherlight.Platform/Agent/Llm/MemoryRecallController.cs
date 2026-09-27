@@ -834,10 +834,11 @@ public sealed class MemoryRecallController : ControllerBase
         // included. A re-embed in place loses nothing when the embedder is down (each entry keeps the vector it had), so
         // this no longer protects the index the way it did when the pass was a destructive rebuild; what it spares is a
         // pass that computes no vector, the marker left owed for the next start, and the back-fill after it, which would
-        // re-remember — and annotate, with 判断 on — facts whose writes lose their vector again. The CLI rephrasing arm
-        // registers no embedder, so the probe answers true for it and its path runs as before. Proof: e2e-p52 case 9 (a
-        // reindex while the fake refuses embeds is refused, and every ref is kept).
-        if (!await _facts.EmbedderReadyAsync(ct))
+        // re-remember — and annotate, with 判断 on — facts whose writes lose their vector again. Asked for an EMBEDDER arm
+        // only: the CLI rephrasing arm's pass embeds nothing, and between a rebind to it and the restart the embedder still
+        // wired is the one it replaced, whose outage would refuse a pass that never calls it. Proof: e2e-p52 case 9 (a
+        // reindex while the fake refuses embeds is refused, and every ref is kept) and case 11e (the rephrasing arm).
+        if (bound.TakesEffectOnRestart && !await _facts.EmbedderReadyAsync(ct))
             return StatusCode(409, new { error = "「语义」的嵌入模型现在没有响应 —— 现在重建算不出任何向量,所以没有开始"
                 + "(已有的向量和索引都没有动)。等它恢复后再重建。" });
         if (!_reindex.TryStart())
@@ -896,14 +897,15 @@ public sealed class MemoryRecallController : ControllerBase
         var backFilled = r.BackFilled > 0 ? $"另外补建了 {r.BackFilled} 条之前没有索引的事实。" : "";
         return r.Arm switch
         {
-            // Nothing bound that a pass could re-derive, as far as the RUNNING process knows. The settings resolve an
-            // embedder (the 409 above answers first otherwise), and the container holds none: an embedder is wired only at
-            // startup, so it was bound — or its model file came back — since this start. That is the one cause left: an
-            // embedder that is wired and FAILS is the gate's 409 or a pass that does not complete (below), where it used to
-            // come here as a zero from the rebuild — which is why this sentence no longer lists a stopped runtime or an
-            // incomplete model file. (It blamed Ollama once, a backend retired on 2026-08-22.)
-            null => ("没有建立任何索引:嵌入模型只在服务启动时装载,而这次启动时它还没有绑定、模型文件还不在,"
-                + "或者 llama.cpp 运行时还没有下载。请重启服务,再重建一次。", null),
+            // Nothing bound that a pass could re-derive, as far as the RUNNING process knows — a BACKSTOP, not a path the
+            // endpoint reaches: the saved arm is the rephrasing one (which always has work) or an embedder, and an embedder
+            // that is not the running one is refused above with 「请先重启服务」 before anything starts. So this is only ever
+            // the two views disagreeing, and it says what is true whichever way they do. It used to end 「请重启服务,再重建
+            // 一次」, which the restart made false: an embedder bound since this start is re-embedded BY that restart (the
+            // bind's owed marker, or a bound model missing at this start — layout "2" — FactIndexStep). A reindex after it
+            // has nothing left to do. (It blamed Ollama once, a backend retired on 2026-08-22.)
+            null => ("没有建立任何索引:这次启动没有装载嵌入模型,「语义」也没有绑定 Claude CLI,没有可以重新计算的东西。"
+                + "刚绑定的嵌入模型要在重启服务后才会装载,重启时会自动为已有的事实计算向量,不需要再手动重建。", null),
             // THE REPHRASING ARM, COUNTED BY WHAT IT STORED. It said 「{N} 条事实补写了检索用的说法」 with N the facts it
             // VISITED — so a signed-out CLI, which rephrases nothing, was reported as having rephrased every fact.
             Storage.Knowledge.Services.SemanticReindexStage.Rephrase when r.Rederived == 0 && r.Failed > 0 => (

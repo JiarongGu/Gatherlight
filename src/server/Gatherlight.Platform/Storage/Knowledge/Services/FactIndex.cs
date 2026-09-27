@@ -227,7 +227,8 @@ public interface IFactIndex
     /// <para><b>An embedder arm re-embeds IN PLACE</b> (<see cref="ReembedInPlaceAsync"/>) — nothing the graph has
     /// learned is lost and nothing is annotated — with the layout marker recording the vectors as owed for the length
     /// of the pass, and then back-fills any fact that had no index entry (those DO pay an annotation each, as every
-    /// back-fill does). The rephrasing arm writes a knowledge column and touches no graph at all.
+    /// back-fill does). The rephrasing arm writes a knowledge column and touches no graph at all — and it is the SAVED
+    /// arm that decides, so a rebind to it before the restart rephrases, though the embedder it replaced is still wired.
     /// <see cref="SemanticReindexResult.Nothing"/> when NEITHER a semantic backend nor the rephrasing arm is
     /// bound — there is nothing to re-derive.</para>
     /// <para><paramref name="progress"/> reports each stage (<see cref="SemanticReindexStage"/>). It exists because
@@ -783,6 +784,13 @@ public sealed class FactIndex : IFactIndex
         // quietly is not.
         //
         // So the question is not "is there an embedder" but "is anything bound that a pass would re-derive".
+        //
+        // AND THE SAVED ARM DECIDES, not what happens to be wired. `_semantic` is the embedder this process was STARTED
+        // with; the rephrasing arm registers nothing and is read per write, so it is live from its bind on. Between a
+        // rebind from an embedder to the CLI arm and the restart, both are true at once — and choosing by "an embedder is
+        // wired" re-embedded every entry with the arm the household had just left, then reported 「N 条向量…」 for a layer
+        // that now stores phrasings. The opposite rebind (CLI arm → an embedder) is the controller's to refuse before this
+        // runs: that embedder is not wired until the restart, which re-embeds on its own (e2e-p52 case 11d).
         var rephrasing = _llm is not null
             && string.Equals(_config?.Current.Memory.SemanticSource,
                 Agent.Llm.Sources.MemoryBackends.ClaudeCli, StringComparison.OrdinalIgnoreCase);
@@ -797,7 +805,7 @@ public sealed class FactIndex : IFactIndex
         // Being over-broad here is not a small matter — it made "bind the arm, then rebuild" advice that
         // silently cost weeks of accumulated ranking, and made measuring the arm's benefit an operation
         // nobody should agree to.
-        if (_semantic is null)
+        if (rephrasing)
         {
             // STORED, not visited: a fact whose rephrasing failed (a signed-out CLI, a refused call, an empty reply) is
             // counted as failed, so the panel cannot report phrasings nobody wrote.

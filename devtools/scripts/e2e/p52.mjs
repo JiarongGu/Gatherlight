@@ -2591,6 +2591,57 @@ try {
     ok('…nothing re-remembered or annotated — the graph rows as they were, the stub not spawned',
       reGraph() === graphBeforeSwap && reStub().slice(stubBeforeSwap).length === 0,
       JSON.stringify(reStub().slice(stubBeforeSwap).map((x) => x.kind)));
+
+    // 11e — A REBIND TO THE CLI REPHRASING ARM, before any restart. That arm registers nothing and is read per write, so
+    // it is live from its bind — while the embedder this process started with is still wired. A reindex follows the SAVED
+    // arm: it rephrases, and no fact's content reaches the embedder. It used to choose by "an embedder is wired", re-embed
+    // every entry with the arm just left, and report 「N 条向量已原地重新计算」 for a layer that now stores phrasings. (a) with
+    // the old embedder answering; (b) with it DOWN, which the reindex's embedder gate used to refuse (409) although the
+    // rephrasing pass never calls it.
+    const rc5 = makeClient(`http://127.0.0.1:${REEMBED_PORTS[4]}`);
+    const bindCli = await rc5.post('/api/manage/memory/layer/semantic', { source: 'claude-cli', model: 'haiku' });
+    ok('(fixture 11e) 语义 rebinds to the CLI rephrasing arm, live at once — no restart asked',
+      bindCli.status === 200 && bindCli.body?.restartRequired === false,
+      JSON.stringify({ status: bindCli.status, body: bindCli.body }));
+    const reAka = () => {
+      const db = new DatabaseSync(reDb, { readOnly: true });
+      try { return db.prepare("SELECT topic, COALESCE(aka, '') AS aka FROM knowledge WHERE topic LIKE 'zzreembed%' ORDER BY topic").all(); }
+      finally { db.close(); }
+    };
+    const cliPass = async (label) => {
+      const stubBefore = reStub().length;
+      const before = hits.length;
+      const graphBefore = reGraph();
+      const started = await rc5.post('/api/manage/memory/layer/semantic/reindex');
+      let view = null;
+      if (started.status === 202) {
+        await until(async () => {
+          view = layerOf(await rc5.getJson('/api/manage/memory'), 'semantic').reindex;
+          return view && !view.running && (view.summary || view.error);
+        }, 120000, 100).catch(() => { throw new Error(`${label}: the reindex never finished`); });
+      }
+      return {
+        started, view, graphSame: reGraph() === graphBefore,
+        rephrased: reStub().slice(stubBefore).filter((x) => x.kind === 'rephrase').length,
+        factEmbeds: hits.slice(before).filter((h) => h.path === '/v1/embeddings' && h.body.includes('zzreembed')).length,
+        trace: reTrace(before),
+      };
+    };
+    const cliA = await cliPass('11e a');
+    ok('THE POINT (11e, a): the reindex REPHRASES — the saved arm — though an embedder is still wired',
+      cliA.started.status === 202 && /为 5 条事实补写了检索用的说法/.test(String(cliA.view?.summary))
+        && !/向量/.test(String(cliA.view?.summary)) && cliA.rephrased === 5,
+      JSON.stringify({ status: cliA.started.status, body: cliA.started.body, view: cliA.view, rephrased: cliA.rephrased }));
+    ok('…no fact\'s content reached the embedder, the graph is untouched, and every fact now carries phrasings',
+      cliA.factEmbeds === 0 && cliA.graphSame && reAka().length === 5 && reAka().every((r) => r.aka.length > 0),
+      JSON.stringify({ factEmbeds: cliA.factEmbeds, graphSame: cliA.graphSame, trace: cliA.trace,
+        aka: reAka().map((r) => [r.topic, r.aka.length]) }));
+    refuseEmbeddings = true;
+    const cliB = await cliPass('11e b');
+    refuseEmbeddings = false;
+    ok('THE POINT (11e, b): with the old embedder DOWN the rephrasing reindex still runs — the embedder gate is an embedder arm\'s',
+      cliB.started.status === 202 && /为 5 条事实补写了检索用的说法/.test(String(cliB.view?.summary)) && cliB.rephrased === 5,
+      JSON.stringify({ status: cliB.started.status, body: cliB.started.body, view: cliB.view }));
     vectorDims = 8;
   }
 

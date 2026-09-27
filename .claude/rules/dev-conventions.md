@@ -2094,7 +2094,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   an error naming the likely cause (`e2e-p48` case 12, a FORCE_ERROR fact and a signed-out stub, confirmed to FAIL on the
   old count). Proof lives in `e2e-p48`, which writes facts BEFORE binding the arm
   and was confirmed to FAIL against the old guard — the phrasings stay empty. Note this also makes the
-  advice "bind it, then rebuild" true; it was not, and the panel gave no sign.
+  advice "bind it, then rebuild" true; it was not, and the panel gave no sign. **And the SAVED arm picks which pass
+  runs, never what is wired** (2026-09-27). `_semantic` is the embedder this process STARTED with, and the rephrasing
+  arm is live from its bind, so between a rebind from an embedder to the CLI arm and the restart both are true — and
+  choosing by `_semantic` re-embedded every entry with the arm just left and reported 「5 条向量已原地重新计算」 for a
+  layer that now stores phrasings. The reindex's embedder gate (`EmbedderReadyAsync`) is likewise asked only for an
+  EMBEDDER arm: with the old embedder down it refused (409) a rephrasing pass that never calls it. The reverse rebind
+  (CLI arm → an embedder) is the 409 「请先重启服务」 (case 11d). Proof: `e2e-p52` case 11e, on the server case 11d
+  leaves running with an embedder wired — (a) confirmed to FAIL with the arm chosen by `_semantic` (the summary, 5
+  content embeds, no phrasing), (b) with the gate asked for every arm (409).
 - **A rebuild runs detached, and the console reports COVERAGE rather than a run history.** `ReindexSemanticAsync`
   can take minutes — it used to re-remember every fact (a model call each with enrichment on); it is a Claude call per
   fact for the rephrasing arm, and an embed per entry for an embedder (2.6 s per 100 short facts on one GPU, 5.6 s on
