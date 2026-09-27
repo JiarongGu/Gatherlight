@@ -268,7 +268,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 ## LLM / process spawning
 
-- **claude CLI only, never API keys.** Resolve the executable via `where.exe` once, preferring
+- **claude CLI only, never API keys** — enforced at spawn since round 6: the process forgets every variable that would
+  put the CLI on an API key, another provider or another endpoint (`ChildEnvironment.OffSubscriptionVariables`, under
+  *Data folder discipline*). Resolve the executable via `where.exe` once, preferring
   `.cmd`/`.exe` (the first `where` hit can be an extensionless bash shim Windows can't run).
   `ArgumentList` only — never a shell (newlines + metacharacters in prompts). Prompts over
   stdin. BOM-less UTF-8 both directions. `Kill(entireProcessTree: true)` on abort.
@@ -2410,10 +2412,13 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - **Every child the app starts inherits the app's environment NARROWED, per class, in ONE helper —
   `ChildEnvironment` (`Platform/Kernel/Services`), never a copy per site.** Two mechanisms, because three spawns have no
   seam. **(1) The process forgets the launcher's context** at the top of `GatherlightApp.Build`, before anything spawns
-  (`ForgetLauncherContext`): the repository set above, and the Claude Code session it was started from
-  (`ParentSessionVariables` — `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`/`_SESSION_ID`/`_CHILD_SESSION`/`_SESSION_ATTENDED`/
-  `_MESSAGING_SOCKET`/`_MESSAGING_TOKEN`/`_EXECPATH`/`_SSE_PORT`, `CLAUDE_PID`), logging the NAMES dropped, never a value
-  (one is a token). The session markers were in the environment of every Bash command a Claude Code session ran here
+  (`ForgetLauncherContext`), four families, logging the NAMES dropped, never a value (several are credentials): the
+  repository set above; the Claude Code session it was started from (`ParentSessionVariables` — `CLAUDECODE`,
+  `CLAUDE_CODE_ENTRYPOINT`/`_SESSION_ID`/`_CHILD_SESSION`/`_SESSION_ATTENDED`/`_MESSAGING_SOCKET`/`_MESSAGING_TOKEN`/
+  `_EXECPATH`/`_SSE_PORT`, `CLAUDE_PID`, and — the security review, from the same per-session builder —
+  `CLAUDE_EFFORT`, `TRACEPARENT`/`TRACESTATE`; `AI_AGENT` stays, the CLI sets it for itself); what would take the claude
+  CLI OFF the subscription login (`OffSubscriptionVariables`, below the table); and the app's own secrets
+  (`AppSecretVariables`, likewise). The session markers were in the environment of every Bash command a Claude Code session ran here
   (2026-09-28), and the installed CLI names each: so every dev and fixture server started from one announced its agent
   to the CLI as a child of the developer's session, with that session's messaging pipe. Why the PROCESS and not the
   spawn: Lyntai's CLI runs (agent session and one-shot provider alike) go through its sealed `ProcessRunner`, whose
@@ -2427,7 +2432,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   | class | sites | narrowed to | why |
   |---|---|---|---|
   | git | `GitCliService.RunAsync` | − the repository set, + the ceiling (`ForGit`) | the bullet above |
-  | the claude CLI | Lyntai's `ProcessRunner` (chat, jobs, playground, validation; scorers, memory judge, rephrase), `ClaudeCliRuntime`'s `auth status`/`logout`, `StartLogin` | the floor only | the household's own CLI: keeps `NODE_OPTIONS`, proxies, CA files, `ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `CLAUDE_EFFORT`; `CLAUDE_CONFIG_DIR`/`CLAUDE_CMD` are the app's own |
+  | the claude CLI | Lyntai's `ProcessRunner` (chat, jobs, playground, validation; scorers, memory judge, rephrase), `ClaudeCliRuntime`'s `auth status`/`logout`, `StartLogin` | the floor only | the household's own CLI: keeps `NODE_OPTIONS`, proxies, CA files, the subscription login (`CLAUDE_CODE_OAUTH_TOKEN`) and the model settings; `CLAUDE_CONFIG_DIR`/`CLAUDE_CMD` are the app's own. Loses whatever picks another account or endpoint (below) |
   | external stdio MCP | `StdioMcpConnection.Start` | the floor only | the household's program, unsandboxed by design: its environment is theirs to configure, and the app has no policy over what it needs |
   | node leaf | `NodeLeafTool.RunAsync` (both shapes, the whole `npx tsx` tree) | − `NODE_OPTIONS`, `NODE_PATH` (`ForPlatformNode`) | code we ship: `--require` runs a file first, `--allow-*` makes a node without `--permission` refuse to start (measured, Node 24.15), and the leaf runs on one of three nodes |
   | capability sandbox | `NodeCapabilityLauncher.Build`, `CapabilityRuntime`'s probe | an ALLOW-LIST (`ForSandbox`) | the capability bullet under *Backend* |
@@ -2449,10 +2454,46 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   F and G both pass: the startup forget alone holds F. **Not driven, and why it does not need its own
   case:** the router spawn (a fake router is always ADOPTED, and the stand-in binary is `more.com`), the login window, an
   MCP server, the build gate and Playwright each inherit the one process environment case G proves clean, and none builds
-  its own. **An open question, not a decision:** `ANTHROPIC_API_KEY` is still inherited by the CLI, which in `-p` mode
-  uses a present key instead of the subscription login (the CLI's own documentation; not measured here, since measuring
-  it bills an account) — against the rule that the app never uses an API key — but
-  stripping it changes which account a household's app runs on, so it waits for the owner.
+  its own.
+  **"Never an API key" is enforced at spawn** (owner decision, 2026-09-28; the security review widened it to the family).
+  The CLI's authentication docs rank a provider switch, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` ABOVE the `/login`
+  subscription, and in `-p` mode — how the app runs it — a present key "is always used": an inherited key billed the
+  household's API account while 资源 said the CLI was signed in. `OffSubscriptionVariables`, each name checked in the
+  installed binary (2.1.283): CREDENTIALS (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, the providers' own keys
+  `ANTHROPIC_AWS_API_KEY`/`_FOUNDRY_API_KEY`/`_FOUNDRY_AUTH_TOKEN`, the federation `ANTHROPIC_IDENTITY_TOKEN`/`_FILE`,
+  `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`); SELECTORS (`CLAUDE_CODE_USE_BEDROCK`/`_VERTEX`/`_FOUNDRY` and the siblings the
+  binary names, `_ANTHROPIC_AWS`/`_ANTHROPIC_GOOGLE_CLOUD`/`_GATEWAY`/`_MANTLE`; `ANTHROPIC_PROFILE`,
+  `ANTHROPIC_FEDERATION_RULE_ID` and `ANTHROPIC_CONFIG_DIR`, which pick a Console profile or federation credential the
+  docs rank above `/login`); ENDPOINTS (`ANTHROPIC_BASE_URL`, `CLAUDE_CODE_API_BASE_URL`, every `ANTHROPIC_*_BASE_URL`
+  through `ChildEnvironment.IsOffSubscriptionVariable`, `ANTHROPIC_API_HOST`, `ANTHROPIC_UNIX_SOCKET`,
+  `ANTHROPIC_CUSTOM_HEADERS` — the review rated the base URL highest: it sends every prompt, and the household's data in
+  it, to another host). KEPT: `CLAUDE_CODE_OAUTH_TOKEN` and its refresh and descriptor siblings — `claude setup-token`'s
+  token, which the docs say "authenticates with your Claude subscription"; it outranks `/login`, so while set it picks
+  WHICH subscription, over the app's own login mode — `AWS_*`/`GOOGLE_*` (other programs read them, and without the
+  stripped switch they select nothing for the CLI), the providers' ids, the model settings, and the CLI's feature
+  `CLAUDE_CODE_USE_*` (`_POWERSHELL_TOOL`, `_NATIVE_FILE_SEARCH`, `_COWORK_PLUGINS`, `_CCR_V2`). The probe (`auth
+  status`) runs in the same process environment as every CLI spawn, so it reports the account the app will use; a
+  Warning names what was ignored, once (「Claude CLI: ignored …」). What an environment strip CANNOT reach: an `env`
+  block or `apiKeyHelper` in the CLI's own settings files (the machine's `~/.claude/settings.json` in machine login
+  mode, managed settings) and an active federation profile in the default Anthropic configuration directory — the CLI's
+  configuration, read by the CLI. And since the strip is process-wide, an external MCP server that calls the Anthropic
+  API itself takes its key from its own configured `env`, applied after the inherited one.
+  **The app's own secrets are withheld from every child**: `GATHERLIGHT_ACCESS_TOKEN` and
+  `GATHERLIGHT_TLS_CERT_PASSWORD`, the two secret-bearing `GATHERLIGHT_*` the server reads (the rest are URLs, paths,
+  ports, flags and test knobs — kept; the stub and the measurement fake read their own). The agent's Bash could print
+  the access token and an external MCP server is someone else's code; no child needs it, since the agent reaches the
+  app through the loopback channel's own token. The app reads both through `ChildEnvironment.Launched`, which remembers
+  what the floor removed: the desktop host re-resolves them on every start of its in-process server (`BuildOptions` →
+  `ResolveAccessToken`), and the settings panel's `envOverrides` says which settings the environment overrides.
+  Proof: `e2e-p49` case G2, the same boot as G — a fake `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`,
+  `CLAUDE_CODE_USE_BEDROCK` and `GATHERLIGHT_ACCESS_TOKEN` reach no stub spawn, `CLAUDE_CODE_OAUTH_TOKEN` reaches every
+  one (the positive control), the Warning names the three once, the panel still lists `accessToken` as env-overridden,
+  and no value is in the server's stdout, its file log or the stub's. Confirmed to FAIL (2026-09-28, two builds, each
+  failing only its own checks): on one, the off-subscription strip removed (all three names in every spawn, no
+  Warning), the settings reader on the raw environment (`["port"]` only), `CLAUDE_EFFORT`/`TRACEPARENT` removed from
+  the session set (case G) and a secret's value logged; on the other, the secret strip removed and the OAuth token
+  over-stripped. Not driven: the host's restart path (`desktop-e2e` is out of the fleet); it reads `Launched` exactly as
+  the settings panel does, which is asserted.
 - The spawned agent is **jailed** by the PreToolUse scope-guard hook
   (`ChatEnvironmentService.ScopeGuardMjs` planner / `guard/system-scope-guard.mjs`
   系统模式 — identical logic, different write-scope; `e2e-p24` runs both): **reads**

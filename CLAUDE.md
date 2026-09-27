@@ -155,7 +155,8 @@ Anything that replaces a record subtree — notably backup import — must re-is
   `devtools/scripts/check-sensitive.mjs` (private tokens in gitignored
   `local/sensitive-patterns.txt`). History was reset on 2026-07-13 to remove exactly such leaks.
 - **User data lives ONLY in `local/`** (own private git repo). Never move it back into this repo.
-- **LLM via the authenticated `claude` CLI only — never an API key.** The CLI is a *provisioned resource*
+- **LLM via the authenticated `claude` CLI only — never an API key**, and the app enforces it at spawn: no claude it
+  starts inherits an API key, a provider switch or another endpoint (`ChildEnvironment.OffSubscriptionVariables`). The CLI is a *provisioned resource*
   (资源 panel → `{data}/state/resources/claude`), not a machine dependency we assume; `ClaudeCliRuntime`
   resolves + probes it. **The app STARTS the browser login** (资源 → the CLI's row → 登录, spawning the
   RESOLVED binary — the old advice "run `claude auth login` in a terminal" was unactionable for a copy we
