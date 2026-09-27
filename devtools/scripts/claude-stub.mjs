@@ -37,6 +37,8 @@ const recordEnv = (kind) => {
       kind, pid: process.pid, cwd: process.cwd(),
       watched: Object.keys(process.env).filter((k) => WATCHED_ENV.test(k)).sort(),
       kept: process.env.ZZE2E_KEPT ?? null,
+      // The Git Bash path the app handed this spawn (e2e-p50 git-bash offer). A file path, not a secret.
+      gitBash: process.env.CLAUDE_CODE_GIT_BASH_PATH ?? null,
       gitDir,
     }) + '\n', 'utf8');
   } catch { /* a log that cannot be written must not change what the stub answers */ }

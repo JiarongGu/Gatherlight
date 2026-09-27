@@ -84,6 +84,11 @@ public interface IClaudeCliRuntime
     /// <summary>Drop the cached probe — called after provisioning, so the panel reflects it at once.</summary>
     void Invalidate();
 
+    /// <summary>Which shell the agent's Bash tool uses, for the 资源 Git-Bash row — the household's own Git
+    /// for Windows if the CLI discovers one, else the provisioned PortableGit if installed, else none (the
+    /// agent has no shell and uses the file tools). Null off Windows. Never spawns.</summary>
+    string? AgentShellDetail();
+
     /// <summary>Start <c>claude auth login</c> in a window the household can see, and return at once.
     ///
     /// <para><b>Why the app has to do this rather than print a command.</b> The instruction we gave was
@@ -236,6 +241,10 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
             Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", null);
         }
 
+        // Guarantee the agent a shell the app can guard — BEFORE the claude-override return, because a
+        // household running their own claude still needs a Git Bash the CLI will use.
+        ApplyGitBash();
+
         if (ExplicitOverride() is not null) return;          // a deliberate choice outranks ours
         var provisioned = ResourceProvisioner.ProvisionedClaude(_platform.ResourcesPath);
         if (!File.Exists(provisioned)) return;               // nothing of ours to point at; PATH stands
@@ -248,6 +257,121 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
             _log.LogInformation("Agent CLI: using the provisioned claude at {Path}", provisioned);
         }
         Environment.SetEnvironmentVariable("CLAUDE_CMD", provisioned);
+    }
+
+    // The last git-bash path THIS class set, so a later probe can tell its own value from the household's.
+    private string? _appliedGitBash;
+
+    /// <summary>Point the CLI at a Git Bash the app can guard, on Windows, when it would otherwise find NONE.
+    ///
+    /// <para><b>Why.</b> The scope guard runs behind the CLI's <c>Bash</c> tool, which needs a POSIX shell —
+    /// Git Bash. Without one the CLI falls back to the <c>PowerShell</c> tool, which <see cref="UnguardedTools"/>
+    /// removes from every run — so a household with no Git Bash has no shell at all (the file tools are the
+    /// substitute). If they install our provisioned PortableGit, this hands the CLI its <c>bin\bash.exe</c> so
+    /// the agent gets a guarded Bash. MinGit — what the DATA REPO runs on — ships no <c>bash.exe</c> and cannot
+    /// serve (measured, <c>docs/self-managed-llm-runtime.md</c>), which is why this is a separate resource.</para>
+    ///
+    /// <para><b>Never overrules the household.</b> Their own <c>CLAUDE_CODE_GIT_BASH_PATH</c>, or a Git for
+    /// Windows the CLI already discovers (<c>C:\Program Files\Git</c>, <c>(x86)</c>, or <c>git</c> on PATH →
+    /// <c>..\..\bin\bash.exe</c>), wins — we set the variable only when the CLI would find nothing. Re-applied
+    /// per probe, so a PortableGit installed mid-life is adopted with no restart; cleared (if we set it) once a
+    /// real Git Bash appears.</para></summary>
+    private void ApplyGitBash()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var current = Environment.GetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH");
+        // Set by the household (or anything other than us) → leave it entirely.
+        if (!string.IsNullOrWhiteSpace(current)
+            && !string.Equals(current, _appliedGitBash, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // The CLI can already find one → do not compete; drop ours if we had set it.
+        if (GitBashDiscoverable())
+        {
+            if (_appliedGitBash is not null)
+            {
+                Environment.SetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH", null);
+                _appliedGitBash = null;
+                _log.LogInformation("Agent shell: a Git Bash is now discoverable; using it instead of the provisioned one");
+            }
+            return;
+        }
+
+        var provisioned = ProvisionedGitBash(_platform.ResourcesPath);
+        if (provisioned is null)
+        {
+            // Nothing to offer yet. If we had set one and it has since vanished, stop naming it.
+            if (_appliedGitBash is not null)
+            {
+                Environment.SetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH", null);
+                _appliedGitBash = null;
+            }
+            return;
+        }
+
+        if (!string.Equals(_appliedGitBash, provisioned, StringComparison.OrdinalIgnoreCase))
+        {
+            _appliedGitBash = provisioned;
+            _log.LogInformation("Agent shell: the CLI found no Git Bash, so using the provisioned one at {Path}", provisioned);
+        }
+        Environment.SetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH", provisioned);
+    }
+
+    public string? AgentShellDetail()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        var household = Environment.GetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH");
+        if (!string.IsNullOrWhiteSpace(household)
+            && !string.Equals(household, _appliedGitBash, StringComparison.OrdinalIgnoreCase))
+            return "系统已设置了 Git Bash,规划助手用它作为命令行(应用不改这个设置)。";
+        if (GitBashDiscoverable())
+            return "系统已装 Git for Windows,规划助手用它作为命令行 —— 无需下载。";
+        if (ProvisionedGitBash(_platform.ResourcesPath) is not null)
+            return "规划助手用这个 Git Bash 作为命令行(应用能对它把关)。";
+        return "未安装 —— 规划助手现在没有命令行(PowerShell 已移除)。下载后它就有一个应用能把关的命令行;"
+            + "不下载也行,助手仍可用文件工具(移动/重命名/删除、看大小)和读取/搜索。";
+    }
+
+    /// <summary>The provisioned PortableGit's <c>bin\bash.exe</c> — a real Git-for-Windows bash the CLI drives,
+    /// unlike MinGit's — or null when it is not installed.</summary>
+    public static string? ProvisionedGitBash(string resourcesPath)
+    {
+        var bash = System.IO.Path.Combine(resourcesPath, "git-bash", "bin", "bash.exe");
+        return File.Exists(bash) ? bash : null;
+    }
+
+    /// <summary>Would the CLI find a Git Bash on its own? Mirrors its discovery order (its docs): the
+    /// default installs, then <c>git</c> on PATH's sibling <c>..\..\bin\bash.exe</c>. Used to NOT set our
+    /// variable when the household already has one.</summary>
+    private static bool GitBashDiscoverable()
+    {
+        // Test seam: a dev machine has Git for Windows installed at the default path, so a fixture cannot
+        // otherwise exercise the "no Git Bash" branch. GATHERLIGHT_ASSUME_NO_GIT_BASH=1 forces "none".
+        if (Environment.GetEnvironmentVariable("GATHERLIGHT_ASSUME_NO_GIT_BASH") == "1") return false;
+        foreach (var root in new[] { @"C:\Program Files\Git", @"C:\Program Files (x86)\Git" })
+            if (File.Exists(System.IO.Path.Combine(root, "bin", "bash.exe"))) return true;
+        try
+        {
+            var where = System.Diagnostics.Process.Start(new ProcessStartInfo("where.exe", "git")
+            {
+                RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true,
+            });
+            if (where is not null)
+            {
+                var outText = where.StandardOutput.ReadToEnd();
+                where.WaitForExit(3000);
+                foreach (var line in outText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    // <git>\cmd\git.exe or <git>\bin\git.exe → <git>\bin\bash.exe is ..\..\bin\bash.exe.
+                    var dir = System.IO.Path.GetDirectoryName(line);
+                    var gitRoot = dir is null ? null : System.IO.Path.GetDirectoryName(dir);
+                    if (gitRoot is not null && File.Exists(System.IO.Path.Combine(gitRoot, "bin", "bash.exe"))) return true;
+                }
+            }
+        }
+        catch { /* a probe that cannot run means no discoverable Git Bash we can prove */ }
+        return false;
     }
 
     // One login attempt at a time. A second window for the same browser flow helps nobody, and the flow is

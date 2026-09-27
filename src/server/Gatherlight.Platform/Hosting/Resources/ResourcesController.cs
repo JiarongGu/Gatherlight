@@ -46,9 +46,14 @@ public sealed class ResourcesController : ControllerBase
 
         var state = _claude.Cached;
         if (state is null) _ = _claude.ProbeAsync(ct: CancellationToken.None);
+        // The Git-Bash row says WHICH shell the agent uses — the household's own Git for Windows, the
+        // provisioned one, or none (file tools only). Computed without a spawn (AgentShellDetail).
+        var shell = _claude.AgentShellDetail();
         rows = rows.Select(r => r.Id == "claude"
             ? r with { Detail = state is null ? null : ClaudeDetail(state) }
-            : r).ToList();
+            : r.Id == "git-bash"
+                ? r with { Detail = shell }
+                : r).ToList();
 
         // Opening the panel is the natural moment to learn whether a newer CLI exists. Detached: a slow or
         // absent network must not hold the panel, and the answer only decorates a row.
