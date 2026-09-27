@@ -7900,3 +7900,258 @@ record. A separate task edits them.
   - the mMiniLMv2 note's `199/240`;
   - the Qwen3 note's `79 题增加到 110 题`/`125 题增加到 148 题`/`203 对 148`;
   - the layer sentence's hard-coded 125 and 79.
+
+## Run 12 — our windows at text boundaries (design)
+
+Written and committed BEFORE the runs; the results section that follows names this commit. The knob mode (`1848c3d`),
+the bench arm (`269185f`) and the plumbing checks below came first, because this design quotes them.
+
+**The question.** Run 10 found mMiniLMv2 better under Lyntai's D177 than under our windows:
+
+- long fixture, found@8 182 → 196 (10/24, p = 0.024);
+- mixed fixture, 184 → 198 (1/15, p < 0.001).
+
+The gain concentrated where the answer sits late in a note. The untested reading was that a piece cut at a sentence
+boundary splits an answer less often than a fixed-position window. D177 cannot carry our pace, so the question is
+whether OUR `ChunkedScoreProvider` should place its windows at boundaries.
+
+**Is our windowing, with each window's edges moved onto text boundaries (`rrb`), significantly better than the same
+windows evenly spaced (`rrk`, as shipped)?**
+
+### What was found before the runs: our windows never split an answer here (measuring rule 1)
+
+The stated reading needs our windows to split answers, so that was checked first. The check mirrors `WindowSpans` for
+each question's TARGET note (scratch `devtools/_run12/split-check.mjs`), at mMiniLMv2's fitted budgets and at BGE's
+1,000 characters:
+
+| fixture | answers split by our windows (of 240 targets) | the longest answer | the least overlap between consecutive windows |
+|---|---|---|---|
+| long | **0** | 101 characters | 98 (mMiniLMv2), 759 (BGE) |
+| mixed | **0** | 101 | 95, 783 |
+
+Every answer is shorter than the least overlap, and none of these notes needs more than five windows. So on these
+fixtures a sentence-length answer always lies whole inside at least one of our windows. **This run cannot test "a
+boundary splits an answer less often"**: there is nothing for it to act on. What it can test is the rest of what a
+boundary changes. Our windows begin and end mid-sentence (9–15% of interior edges fall on a boundary, below), so a window
+opens and closes on fragments; at boundaries it does not. If `rrb` gains nothing, D177's gain for mMiniLMv2 is not
+explained by where our windows' edges fall.
+
+What would still differ from D177 afterwards, and is not tested here:
+
+- D177's piece lengths: each is cut in its latter half, so pieces are between half the budget and all of it;
+- D177's overlap: at most a quarter, where ours is at least a quarter;
+- D177's piece count, and its last piece running short.
+
+### What is compared
+
+Two arms per reranker, both partition, both reading the whole of every candidate:
+
+| | `rrk` — ours, as shipped | `rrb` — ours at boundaries |
+|---|---|---|
+| knob | `GATHERLIGHT_RERANK_CHUNKING=on` | `GATHERLIGHT_RERANK_CHUNKING=boundary` (`1848c3d`), a measurement mode, never a default |
+| windows | `ChunkedScoreProvider`, `RerankInputCap.WindowSpans`, evenly spaced | the same, with each window moved onto boundaries |
+| budget, count, overlap floor, first at 0, last at the tail, NFKC | as shipped | identical, by construction |
+| pace, admission, skip, per-call ceiling | as shipped | identical: the same wrapper and the same `RerankPace` |
+
+**The placement** (`RerankInputCap.SnapToBoundaries`, used only when the mode is on):
+
+- **Boundaries** are Lyntai D177's (its `InputSegmenter`), in its order of preference:
+  - a blank line, else a line break, else a sentence end, else whitespace;
+  - a sentence end is 。！？；, or .!?; followed by whitespace;
+  - an edge sits "on a boundary" when it is just after one.
+  - Under a declared window the text is already NFKC, so a fullwidth ！？； is ASCII by then and counts only before
+    whitespace, as in D177. These fixtures use 。 throughout.
+- **The slack** is an eighth of the window (`BoundarySlackDivisor` = 8): 125 characters at the 1,000-character cap, and
+  42–61 at mMiniLMv2's budgets here (342–490).
+  - An interior window's start moves either way by at most the slack.
+  - The last window's start moves only forward.
+  - A window's end moves only back from its own start + the budget, by at most the slack. Relative to the even end, that
+    is at most twice the slack.
+- **Kept by construction:**
+  - the NUMBER of windows, so the pace and the per-call ceiling count what they counted;
+  - the first window starting at 0 and the last ending at the tail;
+  - no window longer than the budget;
+  - each consecutive pair overlapping by at least a quarter of a window, or by what the even placement gave it when
+    that was already less (a text past four window-lengths).
+- **Chosen**: among the placements that keep all of that, the one with the most interior edges on a boundary, then the
+  most on a preferred kind, then the least total movement. The chain is chosen whole: each window's candidates are its
+  even placement, the nearest boundary start of each kind on each side, and for each start the latest boundary end of
+  each kind. The even placement is always a candidate, so an edge with no boundary in reach stays where it was.
+- **Unchanged**: a text that fits one window, and a call sized to one window per candidate (the cut), are placed exactly
+  as under `on`.
+
+**Checked on the built code** (scratch `devtools/_run12/snapcheck/`, calling `RerankInputCap.WindowSpans` from the
+server build). It covered every fixture note at every question's budget, and every window count from 5 down to 1:
+
+| fixture | model | windowed texts | windows even = boundary | interior edges on a boundary: even → boundary | invariant violations |
+|---|---|---|---|---|---|
+| long | BGE / LAMAR | 31 of 60 | 62 = 62 | 14.5% → 100.0% | 0 |
+| long | mMiniLMv2 (87 budgets) | 5,220 | 17,258 = 17,258 | 9.0% → 96.2% | 0 |
+| mixed | BGE / LAMAR | 15 of 60 | 30 = 30 | 10.0% → 100.0% | 0 |
+| mixed | mMiniLMv2 | 2,610 of 5,220 | 8,632 = 8,632 | 8.6% → 96.4% | 0 |
+| short | all | 0 | — | — | 0 (every text one window, identical) |
+
+- The invariants checked: the same count, first at 0, last at the tail, each window ≤ the budget, the overlap floor,
+  edges strictly advancing, and one-window texts identical.
+- The largest single edge move was 65 characters on BGE and 79 on mMiniLMv2.
+
+### The instrument
+
+The same three fixtures, seeds and questions as Run 10:
+
+| fixture | file (sha256) | seed |
+|---|---|---|
+| **long** (Run 6) | `recall-bilingual-long.json` (`1f48f1be…4f17`) | `devtools/_judge-bench-seed-long/`, 判断 off, no tags |
+| **mixed** (Run 9) | `recall-bilingual-mixed.json` (`e1c9b4d5…5032`) | `devtools/_judge-bench-seed-mixed/`, 判断 off, no tags |
+| **short** (Runs 1–5b) | `recall-bilingual.json` (`9680443e…f555`) | `devtools/_judge-bench-seed/`, Claude's tags; `--claude-stub` |
+
+- 240 questions each, order seed 12345.
+- 判断 verification by the reranker only (tagging is on the CLI and nothing is written), 语义 off, partition, a page
+  of 8, the product's 60 s deadline.
+- Every server is on the claude stub, so no quota can be spent.
+
+**Nine runs, one reranker and one fixture each** — two reranker arms on the GPU at once. Each has `formula`, `formula2`,
+`rrk:<m>` and `rrb:<m>`, and is paired only within itself:
+
+```
+node devtools/scripts/judge-bench.mjs <--fixture=long --reuse-seed | --fixture=mixed --reuse-seed | --reuse-seed --claude-stub> \
+  --arms=formula,formula2 --rerankers=<m> --rerank-arms=rrk,rrb --rerank-memo --resources=devtools/_rr-res \
+  --port-base=<7300 + 10k> --llama-port=<7390 + k>
+```
+
+- **Order**: long BGE, long LAMAR, long mMiniLMv2; then mixed in the same order; then short. Run k (0–8) gets port base
+  7300 + 10k and router port 7390 + k.
+  - None of those ports is in a range Windows had reserved that day. It was checked just before; the reserved ranges
+    include 5458–5557, 5768–5967 and 8270–8469.
+  - None was listening; another process holds 7269 and 7271, outside them.
+  - None is reused: the smokes used 7100–7194. The proxies take ephemeral ports.
+- **The driver** is scratch `devtools/_run12/drive.sh`, Run 10's with the arm kinds and ports changed.
+  - It copies each run's results, rows, router log, preset and every arm's logs to `devtools/_run12/<fixture>-<model>/`
+    before the next run rewrites the work folder.
+  - It stops at the first run that exits non-zero. A run that exits 127 before any arm starts is re-run once, unchanged.
+- **`--rerank-memo`**, as in Runs 6c, 9 and 10:
+  - where the two arms send the SAME bytes, they get the same reply, so llama.cpp's third-decimal drift cannot tell them
+    apart;
+  - where they differ, both are computed fresh;
+  - the serial latency pass is never memoised.
+- **The build.** App HEAD is this design's commit, on `round-6`, which carries Task E. The server was built from `1848c3d`
+  and not rebuilt since. Fingerprint (Platform / Planner / Server): `65a2061158a63a7a` / `f80b5a07302df787` /
+  `b6e6c7f48b691523`.
+- **The device measurement is not in play.** Every arm ADOPTS the bench's router, so the pace starts from its GPU seed,
+  as in Runs 6c, 9 and 10.
+- **Estimated time**: about 1.5 hours.
+
+### Measured
+
+Per run, as the bench prints it:
+
+- the four sets and `all` for every arm (top-1, found@8, MRR, `judged`/`graph`);
+- by position or target group, each arm's cells;
+- paired, McNemar exact with the Agresti–Min 95% interval: each arm against `formula`, and `rrb` against `rrk` (the RUN
+  12 block);
+- the identity check of `rrb` against `rrk`: position, verdict flag, graph or FTS, rows returned, errors, the whole page,
+  and every rerank body's hash;
+- the RUN 12 block's new readings:
+  - where each arm's interior window edges fell (on a boundary or not);
+  - queries whose target note was sent with its answer in no document whole;
+  - the link-dynamics split, below;
+- what each arm sent: calls, documents per call, the longest;
+- serial latency (12 queries, verdict-carrying recalls only) and the parallel mean.
+
+### Decision rule
+
+As written by the owner, **verbatim**: **"boundary windows become the DEFAULT only if (a) mMiniLMv2 is significantly
+better on long-fixture `all` found@8 (paired exact, p < 0.05), AND (b) no reranker is significantly worse anywhere (the
+four positions, the mixed fixture's short targets), AND (c) short facts are byte-identical. Otherwise the mode stays a
+knob, and the notes say what was measured."**
+
+It is read as follows, fixed before the runs. b = `rrk` hit & `rrb` miss, c = the reverse; paired within one run.
+
+- **(a) Better for mMiniLMv2.** In mMiniLMv2's long run, on `all` (240 pairs), found@8: exact McNemar p < 0.05 AND
+  c − b > 0.
+- **(b) Worse nowhere.** "Anywhere" is read as the parenthesis defines it, the same fifteen tests as Run 10's clause (B).
+  It blocks if, for ANY of BGE, LAMAR and mMiniLMv2, either of these holds (p < 0.05 AND c − b < 0):
+  - found@8 in one of the long fixture's four positions (60 pairs each);
+  - found@8 over the mixed fixture's 120 short-target questions.
+  - Each test is at 0.05, with no correction; any one blocks. That errs toward keeping the even windows.
+- **Reported beside (b), not deciding**: `all` found@8 on the long and mixed fixtures, the mixed fixture's `long`, `end`
+  and `beyond` groups, and top-1 everywhere. A significant loss on any of them is flagged to the owner in the record,
+  because "anywhere" might be read to include it.
+- **(c) Short facts unaffected.** For each reranker, the short run's identity check of `rrb` against `rrk` reads YES:
+  - all 240 rows identical in position, verdict flag, graph or FTS, rows returned and errors;
+  - the whole page compared on 240/240;
+  - every rerank body's hash compared on 240/240.
+  - If any differs, (c) fails, and the record says what differed and why.
+- **Boundary windows qualify iff (a), (b) and (c) all hold.** Either way, nothing in the product changes here. The default
+  is NOT flipped by this run: the result goes to the owner, and an implementer makes any change.
+
+### The link-dynamics confound, and how a difference arising that way is read
+
+Run 10's BGE loss was almost all on one question set (`third`, Japanese-worded). There, many recalls return a page of
+only the four Japanese notes. Whether an arm's recalls opened those questions up depended on the co-recall links the
+arm's own earlier recalls had built — a recall-reinforcement divergence (measuring rule 2) rather than how either
+segmenter scored a note. 26 of BGE's 31 losses were such pages, where the target was never a candidate.
+
+The same dynamic can arise here: the two arms start from one seed, but their first different page reinforces different
+facts, and from then on they may gather different candidates. The plumbing smoke already shows this after 16 queries: 5
+of 16 queries sent different candidate notes. So the RUN 12 block sorts every discordant query (on `all`, per metric) by
+whether the two arms sent the reranker the SAME candidate notes at that query:
+
+- **same notes**: only the windows differed there, so placement alone made the difference;
+- **different notes**: the engine had already gathered a different set — the divergence came from earlier.
+
+**How it is read, fixed now:**
+
+- **The rule is read on ALL pairs, as registered.** The split does not change the verdict.
+- **Beside the verdict, the exact test is repeated on the same-notes discordant pairs alone.**
+  - If (a) holds on all pairs but NOT on the same-notes pairs (p ≥ 0.05, or c − b ≤ 0), the record says the gain is not
+    shown to come from placement itself. The report to the owner says so in the same sentence as the verdict.
+  - A blocker in (b) is read the same way.
+- **The same split per question set** is reported where a difference concentrates in one set, as Run 10's did.
+
+### Guards, checked per run before the rule is read
+
+A failed guard leaves the rule unread, and it is reported, not worked around. They are checked by the scratch
+`devtools/_run12/guards12.mjs`.
+
+1. **The instrument.** The fixture is accepted and the seed re-verified. `formula`'s digest is Run 10's on this Lyntai:
+   long `976af4663b6e`, mixed `25d70cd4d6b0`, short `2e323182c81a`.
+2. **The engine A/A.** `formula` against `formula2` is quiet on `all` (p ≥ 0.05).
+3. **Startup.**
+   - Both reranker arms read back `llama-cpp · <m>` and raise no startup warning.
+   - They announce their knob: `rrk` `on`, `rrb` `boundary`.
+   - They make 0 claude-cli calls over the run, and the bench prints no WARNING.
+4. **The router log.** The model spawned once, with its window (`n_ctx_slot` 512 for mMiniLMv2, 4,096 otherwise). The
+   largest task fits it. There is no error line and no truncated task.
+5. **Coverage.** `judged` = `graph` in every set, and in every position or group, of both reranker arms. A reranker
+   abstains only on a fault.
+6. **Every request reached the model.** The proxies' forwarded `/v1/rerank` requests equal the router's `proxying request
+   to model` lines; no forward failed.
+7. **The pace did not act.** 0 pace lines in every arm; the bench voids the run otherwise.
+   - The pace is WIRED in `rrb` exactly as in `rrk`: the same `ChunkedScoreProvider`, `RerankPace` and `RerankAdmission`.
+   - Positive control, before this design: `e2e-p52` with every server in the `boundary` mode passed every check. That
+     includes the pace cases 6e–6i, which assert pace lines and window counts. Its fixtures logged 27 servers announcing
+     `boundary` and 14 pace lines.
+8. **One build.** The fingerprint above, the same before and after every run.
+9. **The mode did what it says.** On the long and mixed runs, at least 90% of `rrb`'s interior window edges sat on a text
+   boundary (the proxy's count, over what was actually sent). On the short runs, neither arm sent a window.
+
+### Plumbing checks, before this design
+
+- **All 57 saved runs re-analyse byte-identically** under the bench of `269185f` (scratch `devtools/_reanalyse-compare.mjs`).
+- **Long, mMiniLMv2** (`--n=4`, 16 questions):
+  - `rrb` announced `rerank chunking = boundary`;
+  - interior edges on a boundary: `rrk` 177/1,432 (12.4%), `rrb` 1,375/1,392 (98.8%);
+  - no answer split by either arm;
+  - forwarded = proxied 38/38, 0 pace lines, no warning.
+- **Short, mMiniLMv2** (`--claude-stub`, `--n=6`): the identity check read **YES**, bodies included; 24 of 24 queries sent
+  the same notes.
+- **Mixed, BGE** (`--n=4`): the RUN 12 block printed the `short` / `long` / `end` groups; `rrb` edges 220/220 on a
+  boundary, `rrk` 28/216.
+- **A CPU pace control** (`--cpu-rerankers`, BGE, `--n=1`): both arms judged 4 of 4 with no pace line. Four recalls of
+  at most 16 notes were too small to make the pace act, so it controls nothing. The `e2e-p52` run in guard 7 is the
+  positive control.
+- **`e2e-p52` on the default mode** passed (415 s). A first attempt stopped at check 80 with the recurring Windows
+  teardown abort (exit 0xC0000409); the re-run passed, and so did the `boundary` run (403 s).
+
+The smokes' numbers inform nothing (16–24 questions at most, early in a run).
