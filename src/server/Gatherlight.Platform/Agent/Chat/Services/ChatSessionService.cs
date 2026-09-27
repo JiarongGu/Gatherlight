@@ -592,7 +592,13 @@ public sealed class ChatSessionService : IChatGateHost
         {
             var scanner = new UiBlockScanner(_uiValidator);
             var res = await _agent.RunAsync(
-                BaseRunOptions(s, prompt, readOnly: true),
+                BaseRunOptions(s, prompt, readOnly: true) with
+                {
+                    // A plan run is read-only, but "read-only" is not "confined": without a settings file a
+                    // read-only Bash could read outside the data folder. This settings file fences reads to
+                    // the working directory (blockReadsOutsideWorkingDirectories) and registers the guard.
+                    SettingsPath = IsSystem(s) ? _env.SystemReadOnlySettingsPath : _env.ReadOnlySettingsPath,
+                },
                 label: $"chat:{s.Mode}:plan", onEvent: ev => EmitScanned(s, scanner, ev), ct: s.Abort.Token);
             FlushScanned(s, scanner);
             if (s.Cancelled) return; // cancel() owns the terminal state
@@ -710,7 +716,11 @@ public sealed class ChatSessionService : IChatGateHost
                 : _harness.RevisePlanPrompt(s.PlanText, feedback));
             var scanner = new UiBlockScanner(_uiValidator);
             var res = await _agent.RunAsync(
-                BaseRunOptions(s, revisePrompt, readOnly: true) with { ResumeToken = s.ClaudeSessionId },
+                BaseRunOptions(s, revisePrompt, readOnly: true) with
+                {
+                    ResumeToken = s.ClaudeSessionId,
+                    SettingsPath = IsSystem(s) ? _env.SystemReadOnlySettingsPath : _env.ReadOnlySettingsPath,
+                },
                 label: $"chat:{s.Mode}:revise-plan", onEvent: ev => EmitScanned(s, scanner, ev), ct: s.Abort.Token);
             FlushScanned(s, scanner);
             if (s.Cancelled) return;

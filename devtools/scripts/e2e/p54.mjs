@@ -58,6 +58,17 @@ try {
   ok('plan spawn excludes fs_move from --allowedTools', !planArgs.includes('mcp__planner-tools__fs_move'), planArgs.slice(0, 200));
   ok('plan spawn still lists a read tool', planArgs.includes('mcp__planner-tools__file_info') || planArgs.includes('mcp__planner-tools__scrape'), planArgs.slice(0, 200));
 
+  // Item 5 — a plan (read-only) run is CONFINED to the data folder: it passes the read-only settings
+  // file, which sets permissions.blockReadsOutsideWorkingDirectories and registers the guard hook.
+  ok('plan spawn passes the read-only settings', planArgs.includes('settings.chat.readonly.json'), planArgs.slice(0, 260));
+  const roSettingsRaw = (() => { try { return fs.readFileSync(`${dataDir}/state/settings.chat.readonly.json`, 'utf8'); } catch { return ''; } })();
+  const roSettings = (() => { try { return JSON.parse(roSettingsRaw); } catch { return {}; } })();
+  ok('read-only settings block reads outside the working dir',
+    roSettings.permissions?.blockReadsOutsideWorkingDirectories === true, roSettingsRaw.slice(0, 200));
+  ok('read-only settings register the guard hook and do not acceptEdits',
+    roSettings.permissions?.defaultMode === 'default' && JSON.stringify(roSettings.hooks ?? {}).includes('scope-guard'),
+    roSettingsRaw.slice(0, 300));
+
   await post(`/api/chat/${id}/plan/approve`);
   const diff = await waitPhase(id, 'awaiting-diff-approval');
 
