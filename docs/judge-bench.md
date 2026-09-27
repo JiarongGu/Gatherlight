@@ -8155,3 +8155,53 @@ A failed guard leaves the rule unread, and it is reported, not worked around. Th
   teardown abort (exit 0xC0000409); the re-run passed, and so did the `boundary` run (403 s).
 
 The smokes' numbers inform nothing (16–24 questions at most, early in a run).
+
+## Run 12 — amendment: the arms run one at a time (design, after a VOID first run)
+
+Written and committed after the first of the nine runs and BEFORE any other.
+
+**What happened.** The first run, long · BGE (`results-2026-09-27T191956.963Z.json`, 19:19:56Z–19:43:45Z), was VOID by the
+bench's own pace guard (guard 7): one `RerankPace` line in `rrb`. That run's tables are not read.
+
+- **Disclosure.** The bench prints its RUN 12 block before the VOID line, and I saw it:
+  - found@8 201 → 197 (5/1, p = 0.219);
+  - top-1 87 → 86;
+  - no significant difference anywhere.
+  - Nothing below depends on those numbers: a VOID run is re-run whatever it showed.
+- **The mechanism, from the rows and the arm's log.**
+  - At seq 81, `rrb` sent a call of 6 documents (the long fixture's four Japanese notes). It took 2,879 ms, where `rrk`'s
+    call for the same query took 280 ms.
+  - Both arms share one router, and `rrb`'s small call had queued behind `rrk`'s ~5-second call of 80+ windows. So the
+    pace measured 541 ms per 1,000 pair tokens.
+  - After the slow seq-74 call, that was a second slow call in a row, so it was believed. The seq-82 call was sized to
+    one window per long candidate: "1 window(s) per long candidate instead of 5, so the call fits ~30 s at the 541.159
+    ms per 1,000 pair tokens … measured here".
+- **Why Run 10 never met this.** Its `rrd` arm has no pace. Here BOTH arms are paced, and each can queue behind the
+  other's calls. It is the contention Run 9's VOID came from, at two arms instead of six.
+
+**The remedy, fixed now.**
+
+- **The arms run one at a time.** `judge-bench.mjs --serial-arms` (`741a20c`) runs every arm's ACCURACY pass alone, in
+  arm order (`formula`, `formula2`, `rrk`, `rrb`), on the same shared router. The latency pass was already serial.
+  - It is still one run, so every comparison stays within-run: one seed snapshot per arm, one query order, one router,
+    one build.
+  - No arm ever shared state with another. Concurrency was never part of the pairing; it was only a source of
+    contention.
+  - `--rerank-memo` still shares identical bodies. The second arm now always reuses the first's reply, where before the
+    two raced for it.
+  - What changes in the output: the "parallel" latency mean is now each arm's mean alone.
+- **Checked before this amendment:**
+  - all 62 saved runs re-analyse byte-identically under `741a20c`;
+  - a short smoke (`--serial-arms`, `--n=2`) printed "4 arms one at a time", read the identity check YES, and `rrb`'s 8
+    calls were all answered from `rrk`'s identical bodies.
+- **All nine runs are run again from the start, with `--serial-arms`**, in the registered order. The VOID long · BGE run
+  is re-run, and the re-run is the reading, whatever it shows.
+  - **Ports:** base 7500 + 10k and router 7590 + k (k = 0–8). None is in a reserved range or listening (checked just
+    before), and none is used before. 7300–7390 is not reused, and another process holds 7452.
+  - **The build is unchanged:** fingerprint `65a2061158a63a7a` / `f80b5a07302df787` / `b6e6c7f48b691523`.
+  - **Everything else in the design is unchanged:** arms, rule, guards and the link-dynamics reading.
+- **If any run is VOID again, or fails another guard, the sequence stops and is reported.** There is no further
+  amendment in this session.
+- **Estimated time:** about 2.5 hours, since the arms no longer overlap.
+- **Another session is using this machine**: a `dotnet test` of another project started at 19:48Z, after the first run
+  had ended (19:43:45Z), so it played no part in the VOID. The pace guard is what would catch its load in a later run.
