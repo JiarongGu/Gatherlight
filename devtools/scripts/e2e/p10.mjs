@@ -235,6 +235,8 @@ try {
   fs.mkdirSync(stagedLeaf, { recursive: true });
   for (const e of entries) fs.copyFileSync(path.join(dist, e), path.join(stagedLeaf, e));
 
+  // A fresh injection log for this phase, so what it asserts is THIS phase's nodes, not the source shape's.
+  fs.rmSync(injectLog, { force: true });
   srv2 = startServer({ dataDir, port: 5391, env: nodeInjection(injectLog) });
   const c2 = makeClient(srv2.base);
   await waitHealthy(srv2.base);
@@ -245,6 +247,8 @@ try {
     templatePath: 'uploads/form.pdf', values: { applicant: 'Bundled' }, outPath: 'uploads/bundled.pdf',
   });
   ok('bundled leaf: pdf_fill writes output', bFill.status === 200 && onDisk(dataDir, 'uploads/bundled.pdf'), JSON.stringify(bFill.result));
+  ok('(fixture) …and in this phase too: the stub ran the preload', nodeInjections(injectLog).some(isStubNode),
+    JSON.stringify(nodeInjections(injectLog).map((e) => e.argv[0])));
   ok('THE POINT: the bundled leaf — plain `node <entry>.cjs` — did not run the inherited preload either',
     leafInjections().length === 0, JSON.stringify(leafInjections().map((e) => e.argv.slice(0, 2))));
 } catch (err) {
