@@ -46,6 +46,16 @@ const restart = async (between = async () => {}) => {
 const snap = async (id) => (await j(`/api/chat/${id}`)).body;
 const phaseIs = (id, want, ms = 60000) =>
   until(async () => ((await snap(id))?.phase === want ? true : null), ms);
+// THE KILL FOLLOWS THE API'S WORD AS CLOSELY AS WE CAN MAKE IT. What this suite asserts is that once
+// /api/chat/{id} SAYS a session is parked, a hard kill cannot lose it. Polling every 250 ms sampled that claim up
+// to a quarter-second late, and a quarter-second is exactly where a gate shown before it was durable could hide:
+// the in-memory phase flipped tens of milliseconds before its thread metadata committed, so the suite passed or
+// failed on where the poll happened to land relative to the flip (2026-09-27 — "consistent" on one tree, 1 in 3 on
+// another, same commit). So the wait for a parked phase polls fast, returns the snapshot it saw, and the restart
+// follows at once. It must never wait for the durable row instead: that would test the fixture's patience, not the
+// product. Against the old ordering this loses the plan gate every time (4 of 4).
+const parkedNow = (id, want, ms = 60000) =>
+  until(async () => { const b = await snap(id); return b?.phase === want ? b : null; }, ms, 10);
 
 try {
   await waitHealthy(base);
@@ -54,8 +64,7 @@ try {
   const started = await post('/api/chat', { message: '给明天建一个日计划,这次提交' });
   const id = started.body?.id;
   ok('chat started', !!id);
-  await phaseIs(id, 'awaiting-plan-approval');
-  const planBefore = (await snap(id))?.plan ?? '';
+  const planBefore = (await parkedNow(id, 'awaiting-plan-approval'))?.plan ?? '';
   ok('a plan is parked for approval', planBefore.length > 0);
 
   await restart();
@@ -74,11 +83,11 @@ try {
   // THE POINT: this is a real gate, not a replayed card. Approving it runs the agent.
   const approved = await post(`/api/chat/${id}/plan/approve`);
   ok('the restored plan gate accepts approval', approved.status === 200, String(approved.status));
-  await phaseIs(id, 'awaiting-diff-approval');
+  const parkedDiff = await parkedNow(id, 'awaiting-diff-approval');
   ok('approving a restored plan drove the run to the diff gate', true);
 
   // --- the diff gate survives, and is rebuilt from the WORKING TREE --------------------------
-  const filesBefore = ((await snap(id))?.review?.files ?? []).map((f) => f.path);
+  const filesBefore = (parkedDiff?.review?.files ?? []).map((f) => f.path);
   ok('the diff gate lists the edited file', filesBefore.includes('plans/daily/2026-07-14.md'),
     JSON.stringify(filesBefore));
 
@@ -134,8 +143,7 @@ try {
   const askId = ask.body?.id;
   await phaseIs(askId, 'awaiting-plan-approval');
   await post(`/api/chat/${askId}/plan/approve`);
-  await phaseIs(askId, 'awaiting-input');
-
+  await parkedNow(askId, 'awaiting-input');
   await restart();
   ok('a parked input gate survives a restart', (await snap(askId))?.phase === 'awaiting-input',
     `${(await snap(askId))?.phase} / ${(await snap(askId))?.error ?? ''}`);

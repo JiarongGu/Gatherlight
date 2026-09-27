@@ -48,6 +48,16 @@ public static class ChatPhase
     public const string Error = "error";
 
     public static readonly string[] Terminal = { Committed, Rejected, Cancelled, Error };
+
+    /// <summary>Phases where a HUMAN owes a decision: nothing in flight, so a restart restores them
+    /// (<c>ChatRepository.ReconcileInterruptedAsync</c>) — and, for the same reason, a session enters one only
+    /// once its thread metadata says so durably (<c>ChatSessionService.ParkAsync</c>). ONE list for both
+    /// because they are one promise: a gate the API shows is a gate a restart brings back.</summary>
+    public static readonly string[] Parked =
+    {
+        AwaitingPlanApproval, AwaitingDiffApproval, AwaitingInput, AwaitingMcpApproval,
+        AwaitingLogin, AwaitingDraftApproval, AwaitingCapabilityApproval,
+    };
 }
 
 /// <summary>What the diff gate shows. <see cref="Pages"/> rides on the PAYLOAD rather than on

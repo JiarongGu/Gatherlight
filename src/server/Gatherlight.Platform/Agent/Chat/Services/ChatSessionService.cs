@@ -177,6 +177,10 @@ public sealed class ChatSessionService : IChatGateHost
 
     private void SetPhase(ChatSession s, string phase, object? data = null)
     {
+        // A gate is entered through ParkAsync, never here: this sets the phase FIRST and persists it behind the
+        // event log, which is fine for a phase a restart fails anyway and exactly wrong for one it restores.
+        if (Array.IndexOf(ChatPhase.Parked, phase) >= 0)
+            throw new InvalidOperationException($"'{phase}' is a gate — enter it with ParkAsync, which makes it durable first");
         s.Phase = phase;
         // Keep the card so a restart can put it back on screen verbatim. Round-tripped through JSON
         // here rather than held as the live object: what has to survive is what the client was SHOWN.
@@ -204,15 +208,72 @@ public sealed class ChatSessionService : IChatGateHost
         }
     }
 
-    private void PersistSession(ChatSession s)
+    /// <summary>
+    /// Enter a phase where a HUMAN owes a decision — DURABLE FIRST, THEN VISIBLE.
+    ///
+    /// <para>A parked gate is the one state a restart brings back (<see cref="RestoreParkedAsync"/>), and what it
+    /// brings back is the thread METADATA, not the event log. <see cref="SetPhase"/> flips the in-memory phase, emits,
+    /// and only then queues the metadata write behind the event append — so for tens of milliseconds
+    /// <c>GET /api/chat/{id}</c> and the stream both said "parked" while the stored phase still said "planning"
+    /// (measured: still "planning" 17 ms after the API said parked). A hard kill in that window — a crash, an update
+    /// restart, e2e-p46's TerminateProcess — left a session the restart failed as "mid-run": the plan the household had
+    /// been shown, gone. A race from the start, found when p46 began losing it to one machine's timing (2026-09-27).
+    /// So the metadata naming this phase and its card is committed FIRST, and the in-memory phase, the snapshot and
+    /// the phase event follow it: nothing reports a gate a restart could lose.</para>
+    ///
+    /// <para>A failed write is logged and the gate shown anyway — the decision can still be made now, only its
+    /// survival of a restart is lost, which is the old behaviour rather than a wedged session. A cancel that lands
+    /// while the write is in flight wins: its own terminal write is queued behind this one, and the flip is
+    /// skipped so it cannot overwrite the cancelled phase in memory.</para>
+    /// </summary>
+    private async Task ParkAsync(ChatSession s, string phase, object data)
     {
-        var gate = GateStateOf(s);
+        if (Array.IndexOf(ChatPhase.Parked, phase) < 0)
+            throw new InvalidOperationException($"'{phase}' is not a gate — use SetPhase");
+        var card = JsonSerializer.SerializeToElement(data, AgentEvent.WireJson);
+        try { await PersistSession(s, phase, card); }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Chat session {Session}: could not store {Phase} before showing it — a restart " +
+                "before its next write would lose this gate", s.Id, phase);
+        }
+        if (s.Cancelled) return;   // CancelAsync owns the terminal state (and wrote it after ours)
+        s.Phase = phase;
+        s.LastPhaseCard = card;
+        Emit(s, new AgentEvent { Kind = "phase", Phase = phase, Data = data });
+    }
+
+    private void PersistSession(ChatSession s) => _ = PersistSession(s, s.Phase, s.LastPhaseCard);
+
+    // The PHASE and CARD are passed rather than read off the session, because ParkAsync writes them before the
+    // session holds them; the rest is read when the write runs, as it always was.
+    private Task PersistSession(ChatSession s, string phase, JsonElement? card)
+    {
+        var gate = GateStateOf(s, phase, card);
         s.PersistChain = s.PersistChain.ContinueWith(
             _ => _repo.UpsertSessionAsync(
-                s.Id, s.Phase, s.Mode, s.UserMessage,
+                s.Id, phase, s.Mode, s.UserMessage,
                 JsonSerializer.Serialize(s.Attachments), s.PlanText, s.ClaudeSessionId,
                 s.CommitSha, s.Error, s.CreatedAt.ToString("o"), s.ConversationId, gate),
             TaskContinuationOptions.ExecuteSynchronously).Unwrap();
+        return s.PersistChain;
+    }
+
+    /// <summary>Wait for every session's queued writes — for a GRACEFUL stop (an update restart, Ctrl+C), which
+    /// otherwise ends the process with the last phase change and its events still queued on
+    /// <see cref="ChatSession.PersistChain"/>. Bounded by <paramref name="ct"/>; never throws. A hard kill gets no
+    /// such chance, which is why a gate is made durable before it is shown (<see cref="ParkAsync"/>) and this is
+    /// only the second line.</summary>
+    public async Task FlushPersistenceAsync(CancellationToken ct = default)
+    {
+        var pending = _sessions.Values.Select(s => s.PersistChain).Where(t => !t.IsCompleted).ToArray();
+        if (pending.Length == 0) return;
+        try { await Task.WhenAll(pending).WaitAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _log.LogWarning("chat: {N} session(s) still had writes queued when shutdown stopped waiting", pending.Length);
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "chat: a queued session write failed during shutdown"); }
     }
 
     /// <summary>
@@ -226,16 +287,12 @@ public sealed class ChatSessionService : IChatGateHost
     /// Null while the session is running: there is no decision outstanding, and a mid-run session is
     /// not restorable anyway.
     /// </summary>
-    private static string? GateStateOf(ChatSession s) => s.Phase switch
-    {
-        ChatPhase.AwaitingPlanApproval or ChatPhase.AwaitingInput or ChatPhase.AwaitingDiffApproval
-            or ChatPhase.AwaitingMcpApproval or ChatPhase.AwaitingLogin
-            or ChatPhase.AwaitingDraftApproval or ChatPhase.AwaitingCapabilityApproval =>
-            JsonSerializer.Serialize(new GateState(
-                s.Tracker.List(), s.LastPhaseCard, s.McpProposal, s.McpLogin, s.PendingDraft,
-                s.PendingDenial, s.PendingDenialReason, s.PendingDenialGrant)),
-        _ => null,
-    };
+    private static string? GateStateOf(ChatSession s, string phase, JsonElement? card) =>
+        Array.IndexOf(ChatPhase.Parked, phase) >= 0
+            ? JsonSerializer.Serialize(new GateState(
+                s.Tracker.List(), card, s.McpProposal, s.McpLogin, s.PendingDraft,
+                s.PendingDenial, s.PendingDenialReason, s.PendingDenialGrant))
+            : null;
 
     private void Fail(ChatSession s, string message, Exception? ex = null)
     {
@@ -546,7 +603,7 @@ public sealed class ChatSessionService : IChatGateHost
                 Fail(s, await DiagnoseFailedRun(s, res, "计划阶段"));
                 return;
             }
-            SetPhase(s, ChatPhase.AwaitingPlanApproval, new { plan = s.PlanText });
+            await ParkAsync(s, ChatPhase.AwaitingPlanApproval, new { plan = s.PlanText });
         }
         catch (OperationCanceledException) when (s.Cancelled) { /* cancel owns terminal state */ }
         catch (Exception ex)
@@ -663,7 +720,7 @@ public sealed class ChatSessionService : IChatGateHost
                 return;
             }
             s.PlanText = text;
-            SetPhase(s, ChatPhase.AwaitingPlanApproval, new { plan = s.PlanText });
+            await ParkAsync(s, ChatPhase.AwaitingPlanApproval, new { plan = s.PlanText });
         }
         catch (OperationCanceledException) when (s.Cancelled) { }
         catch (Exception ex)
@@ -736,7 +793,7 @@ public sealed class ChatSessionService : IChatGateHost
         }
 
         s.Review = new ReviewPayload(files, claudeFiles.Count > 0, validation, build, pages);
-        SetPhase(s, ChatPhase.AwaitingDiffApproval, s.Review);
+        await ParkAsync(s, ChatPhase.AwaitingDiffApproval, s.Review);
     }
 
     // --- gate 2: diff approval --------------------------------------------------------------
@@ -901,7 +958,7 @@ public sealed class ChatSessionService : IChatGateHost
         // files for it. Checked before NEEDS_INPUT so a proposal isn't mistaken for a free-text pause.
         if (GateMarkers.TryExtractMcpAdd(res.FinalText, out var proposal))
         {
-            _gates.EnterAwaitingMcpApproval(this, s, proposal);
+            await _gates.EnterAwaitingMcpApprovalAsync(this, s, proposal);
             return;
         }
         // The agent hit a login-walled server and asked for interactive login — show the QR/URL in
@@ -923,7 +980,7 @@ public sealed class ChatSessionService : IChatGateHost
                 Emit(s, new AgentEvent { Kind = "notice", Text = $"⚠️ 找不到草稿工具「{draftId}」,已忽略该标记。" });
             else
             {
-                _gates.EnterAwaitingDraftApproval(this, s, draft);
+                await _gates.EnterAwaitingDraftApprovalAsync(this, s, draft);
                 return;
             }
         }
@@ -938,13 +995,13 @@ public sealed class ChatSessionService : IChatGateHost
                 Emit(s, new AgentEvent { Kind = "notice", Text = $"⚠️ 找不到能力「{capId}」的拒绝记录,已忽略该标记。" });
             else
             {
-                _gates.EnterAwaitingCapabilityApproval(this, s, denial, agentReason);
+                await _gates.EnterAwaitingCapabilityApprovalAsync(this, s, denial, agentReason);
                 return;
             }
         }
         if (GateMarkers.TryExtractNeedsInput(res.FinalText, out var question, out var options))
         {
-            _gates.EnterAwaitingInput(this, s, question, options);
+            await _gates.EnterAwaitingInputAsync(this, s, question, options);
             return;
         }
         BuildResult? build = null;
@@ -972,6 +1029,7 @@ public sealed class ChatSessionService : IChatGateHost
     // IChatGateHost — explicit, so the gate seam does not widen ChatSessionService's public surface.
     ChatSession IChatGateHost.RequirePhase(string id, string phase) => RequirePhase(id, phase);
     void IChatGateHost.SetPhase(ChatSession s, string phase, object? data) => SetPhase(s, phase, data);
+    Task IChatGateHost.ParkAsync(ChatSession s, string phase, object data) => ParkAsync(s, phase, data);
     void IChatGateHost.Emit(ChatSession s, AgentEvent ev) => Emit(s, ev);
     void IChatGateHost.Fail(ChatSession s, string message, Exception? ex) => Fail(s, message, ex);
     void IChatGateHost.RecordOutcome(ChatSession s, string outcome) => RecordOutcome(s, outcome);

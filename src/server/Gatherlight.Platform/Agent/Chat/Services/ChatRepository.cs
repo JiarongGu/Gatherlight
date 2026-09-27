@@ -98,13 +98,9 @@ public sealed class ChatRepository : IChatRepository
 
     /// <summary>Phases where a HUMAN owes a decision. Nothing is in flight — no child process, no
     /// half-written run — so a restart is not a reason to throw the work away. Everything else
-    /// non-terminal was mid-run and still fails, which is the honest outcome for it.</summary>
-    private static readonly string[] ParkedPhases =
-    {
-        "awaiting-plan-approval", "awaiting-diff-approval", "awaiting-input",
-        "awaiting-mcp-approval", "awaiting-login", "awaiting-draft-approval",
-        "awaiting-capability-approval",
-    };
+    /// non-terminal was mid-run and still fails, which is the honest outcome for it. The SAME list the
+    /// session pipeline makes durable before it shows one (<see cref="ChatPhase.Parked"/>).</summary>
+    private static readonly string[] ParkedPhases = ChatPhase.Parked;
 
     // Bound what a resumed conversation drags into the prompt — the same spirit as
     // ChatSessionService.ThreadMaxTurns, applied to replay rather than to the live window.

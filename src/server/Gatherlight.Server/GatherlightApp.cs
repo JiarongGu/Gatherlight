@@ -801,6 +801,18 @@ public static class GatherlightApp
             });
         });
 
+        // A GRACEFUL stop — an update restart, Ctrl+C — must not end the process with a chat session's last phase
+        // change still queued behind its event writes: a parked gate is only restored from what reached the database.
+        // Bounded, because a stop that never ends is worse than the write it waited for. A gate is already stored
+        // before it is shown (ChatSessionService.ParkAsync); this covers every other write, and a hard kill still
+        // gets nothing.
+        life.ApplicationStopping.Register(() =>
+        {
+            using var flush = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try { app.Services.GetRequiredService<ChatSessionService>().FlushPersistenceAsync(flush.Token).GetAwaiter().GetResult(); }
+            catch (Exception ex) { app.Logger.LogWarning(ex, "chat: flushing queued session writes at shutdown failed"); }
+        });
+
         // Block /api + /mcp (except health + /api/migration) while the startup migration runs.
         app.UseMiddleware<Platform.Hosting.Migration.MigrationGateMiddleware>();
         // Defense-in-depth response headers (CSP + framing/sniffing) on everything.

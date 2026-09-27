@@ -11,7 +11,11 @@ namespace Gatherlight.Server.Platform.Agent.Chat.Services;
 /// <summary>
 /// What a gate needs back from the session it is deciding for: find it, move its phase, speak to the
 /// household, and resume the agent. Deliberately this small — it is the whole seam between the two,
-/// so anything a gate wants beyond these six is a design question, not a convenience.
+/// so anything a gate wants beyond these eight is a design question, not a convenience.
+///
+/// Moving the phase is TWO members on purpose. <see cref="ParkAsync"/> is the only way INTO a gate: it stores the
+/// parked phase before anything can see it, so a restart right after the household is shown a card still brings the
+/// card back. <see cref="SetPhase"/> is every other move, and refuses a gate phase rather than half-enter one.
 ///
 /// Passed per call rather than injected, which is what keeps the two services from depending on each
 /// other in a cycle: <see cref="ChatSessionService"/> owns sessions and holds the gate service;
@@ -21,6 +25,7 @@ internal interface IChatGateHost
 {
     ChatSession RequirePhase(string id, string phase);
     void SetPhase(ChatSession s, string phase, object? data = null);
+    Task ParkAsync(ChatSession s, string phase, object data);
     void Emit(ChatSession s, AgentEvent ev);
     void Fail(ChatSession s, string message, Exception? ex = null);
     void RecordOutcome(ChatSession s, string outcome);
@@ -78,7 +83,7 @@ public sealed class ChatGateService
     // held and any edits made so far stay on disk, so the reply resumes the same claude session. When
     // the agent offered discrete choices (OPTION: lines), they ride in the phase data so the UI can
     // render click-to-select buttons; the chosen label comes back as the reply message either way.
-    internal void EnterAwaitingInput(IChatGateHost host, ChatSession s, string question, IReadOnlyList<string>? options = null)
+    internal Task EnterAwaitingInputAsync(IChatGateHost host, ChatSession s, string question, IReadOnlyList<string>? options = null)
     {
         var q = string.IsNullOrWhiteSpace(question) ? "AI 需要你的补充信息才能继续。" : question.Trim();
         var opts = options ?? Array.Empty<string>();
@@ -86,7 +91,7 @@ public sealed class ChatGateService
         // question and telling the user to pick an option (with none shown) is confusing.
         var how = opts.Count > 0 ? "请选择一个选项或在下方输入框回复" : "请在下方输入框回复";
         host.Emit(s, new AgentEvent { Kind = "notice", Text = $"⏸️ AI 需要你的回复才能继续 — {how}(或点「放弃任务」)。" });
-        host.SetPhase(s, ChatPhase.AwaitingInput, new { question = q, options = opts });
+        return host.ParkAsync(s, ChatPhase.AwaitingInput, new { question = q, options = opts });
     }
 
     // --- gate: approve/reject adding an external MCP server (awaiting-mcp-approval) ----------
@@ -148,7 +153,7 @@ public sealed class ChatGateService
     }
 
     // Park waiting for the human to confirm the CONCRETE spec. Non-terminal (holds the agent slot).
-    internal void EnterAwaitingMcpApproval(IChatGateHost host, ChatSession s, McpProposal proposal)
+    internal Task EnterAwaitingMcpApprovalAsync(IChatGateHost host, ChatSession s, McpProposal proposal)
     {
         s.McpProposal = proposal;
         host.Emit(s, new AgentEvent
@@ -156,7 +161,7 @@ public sealed class ChatGateService
             Kind = "notice",
             Text = "⏸️ AI 想添加一个外部 MCP 服务 — 请核对下面的启动方式后确认(或点「放弃任务」)。",
         });
-        host.SetPhase(s, ChatPhase.AwaitingMcpApproval, GateCards.McpProposal(proposal));
+        return host.ParkAsync(s, ChatPhase.AwaitingMcpApproval, GateCards.McpProposal(proposal));
     }
 
     // --- gate: approve/reject an agent-drafted tool (awaiting-draft-approval) ----------------
@@ -199,7 +204,7 @@ public sealed class ChatGateService
     }
 
     // Park waiting for the human's enable/decline decision. Non-terminal (holds the agent slot).
-    internal void EnterAwaitingDraftApproval(IChatGateHost host, ChatSession s, CapabilityDraft draft)
+    internal Task EnterAwaitingDraftApprovalAsync(IChatGateHost host, ChatSession s, CapabilityDraft draft)
     {
         s.PendingDraft = draft;
         host.Emit(s, new AgentEvent
@@ -207,7 +212,7 @@ public sealed class ChatGateService
             Kind = "notice",
             Text = $"⏸️ AI 起草了一个新工具「{draft.Title}」— 请核对下面的权限后决定是否启用(或点「放弃任务」)。",
         });
-        host.SetPhase(s, ChatPhase.AwaitingDraftApproval, GateCards.DraftApproval(draft));
+        return host.ParkAsync(s, ChatPhase.AwaitingDraftApproval, GateCards.DraftApproval(draft));
     }
 
     // --- gate: allow/deny a refused capability call (awaiting-capability-approval) -----------
@@ -301,7 +306,7 @@ public sealed class ChatGateService
     }
 
     // Park waiting for the human's allow/deny decision. Non-terminal (holds the agent slot).
-    internal void EnterAwaitingCapabilityApproval(IChatGateHost host, ChatSession s, CapabilityDenial denial, string agentReason)
+    internal Task EnterAwaitingCapabilityApprovalAsync(IChatGateHost host, ChatSession s, CapabilityDenial denial, string agentReason)
     {
         s.PendingDenial = denial;
         s.PendingDenialReason = agentReason;
@@ -311,7 +316,7 @@ public sealed class ChatGateService
             Kind = "notice",
             Text = $"⏸️ 有一次调用被拦下(「{denial.Id}」)— 请核对后决定是否允许(或点「放弃任务」)。",
         });
-        host.SetPhase(s, ChatPhase.AwaitingCapabilityApproval, GateCards.CapabilityApproval(denial, s.PendingDenialGrant, agentReason));
+        return host.ParkAsync(s, ChatPhase.AwaitingCapabilityApproval, GateCards.CapabilityApproval(denial, s.PendingDenialGrant, agentReason));
     }
 
     // --- gate: interactive login for an MCP server (awaiting-login) -------------------------
@@ -352,7 +357,7 @@ public sealed class ChatGateService
                 Kind = "notice",
                 Text = $"🔐 「{cfg.Name}」需要登录 — {challenge.Message}。登录完成后我会自动继续。",
             });
-            host.SetPhase(s, ChatPhase.AwaitingLogin, GateCards.McpLogin(s.McpLogin));
+            await host.ParkAsync(s, ChatPhase.AwaitingLogin, GateCards.McpLogin(s.McpLogin));
         }
         catch (Exception ex)
         {

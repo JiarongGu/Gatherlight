@@ -187,8 +187,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   structural: `ChatGateService`'s constructor takes the provision/login/draft/capability/manifest
   services the session pipeline does not need, so a sixth gate lands where those dependencies already
   are. The cycle you would expect is avoided by passing the host per CALL rather than injecting it —
-  `ChatSessionService` implements `IChatGateHost` explicitly (seven members), so the seam does not
-  widen its public API and anything a gate wants beyond those seven is a design question. `GateCards`
+  `ChatSessionService` implements `IChatGateHost` explicitly (eight members — `ParkAsync` beside
+  `SetPhase`, because entering a gate is the one phase move that must be durable before it is visible;
+  see the restart bullet below), so the seam does not widen its public API and anything a gate wants
+  beyond those eight is a design question. `GateCards`
   gains a real guarantee from the move: unable to reach session state or a service, a card cannot
   describe anything other than what is enforced.
 - **Chat gates are between-turns markers, not suspensions.** There is no mid-run suspend: the agent
@@ -199,7 +201,22 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   decide wedges the session and holds the app-wide agent lease.
 - **A gate parked on a human decision survives a restart; a mid-run session still fails.** Those are
   opposite cases and `SelfHealStateStep` used to treat them alike. A running session's child process
-  is gone — `error` is honest. A parked one has nothing in flight and its state is already durable, so
+  is gone — `error` is honest. A parked one has nothing in flight and its state is durable — **because
+  it is stored BEFORE it is shown**, which it was not until 2026-09-27: `SetPhase` flipped the in-memory
+  phase, emitted the card, and only then queued the metadata write behind the event append, so for tens
+  of milliseconds `GET /api/chat/{id}` said "parked" while the stored phase still said `planning`. A hard
+  kill in that window — a crash, an update restart — had the restart fail the session as mid-run and
+  throw away the plan the household had just been shown. It surfaced only when `p46`'s 250 ms poll
+  happened to land in the window on one machine's timing, "consistently" there and 1 in 3 on another
+  tree, same commit. Now a gate is entered ONLY through `ParkAsync`, which commits the thread metadata
+  naming the phase and its card and then flips and emits; `SetPhase` refuses a gate phase; and
+  `ChatPhase.Parked` is ONE list shared with `ReconcileInterruptedAsync`, so a gate that can be shown is a
+  gate a restart looks for. A graceful stop also flushes every session's queued writes
+  (`FlushPersistenceAsync` on `ApplicationStopping`, bounded at 5 s) — the second line; a hard kill gets
+  no such chance, and no suite asserts the flush, because every suite stops its server by TerminateProcess. `p46` waits for a parked phase at a 10 ms poll and kills at once, and never waits for
+  the durable row, which would test the fixture's patience rather than the product: against the old
+  ordering it lost the plan gate 4 runs of 4, and against the fix with only the flip moved back ahead of
+  the write, 2 of 2. So
   `ReconcileInterruptedAsync` returns the newest parked thread (ONE — the agent lease admits one
   holder) and `RestoreParkedAsync` rebuilds it, **re-taking the lease**: restoring the gate without it
   would silently remove the single-writer guarantee the gate exists to provide. What gets persisted is
