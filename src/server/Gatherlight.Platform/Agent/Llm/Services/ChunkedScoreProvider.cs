@@ -28,7 +28,18 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// <see cref="ChunkedScoreProvider"/>, budget, number of windows per candidate, overlap floor, first window at the start
 /// and last at the tail, NFKC handling, pace, admission and skip — and each window's interior edges move, within a slack,
 /// onto the nearest text boundary (<see cref="RerankInputCap.WindowSpans(string, int, int, bool)"/>). A candidate that
-/// fits one window, and a call sized down to one window per candidate, are sent exactly as under <c>on</c>.</para></summary>
+/// fits one window, and a call sized down to one window per candidate, are sent exactly as under <c>on</c>.</para>
+///
+/// <para><b>What Run 12 measured, and why it stays a knob</b> (2026-09-28, Lyntai 3.5.1, one GPU, the bench's long,
+/// mixed and short fixtures, each reranker in its own run, arms one at a time). The mode put 97–100% of interior window
+/// edges on a text boundary, where the default puts 9–15% there. The owner's rule needed mMiniLMv2 significantly better
+/// on the long fixture's found@8. It was not: 182 → 188 of 240 (3/9, p = 0.146). Nothing was significantly worse
+/// anywhere, and short facts were sent identically. Mixed-fixture BGE gained (196 → 207), but every one of those queries
+/// had different candidate notes in the two arms: a recall-reinforcement divergence on the Japanese questions, not the
+/// placement. On these fixtures neither placement ever splits an answer, since every answer is shorter than the least
+/// overlap, so Lyntai D177's lead for mMiniLMv2 (Run 10) is not explained by where our windows' edges fall. Two runs
+/// failed a guard on a ~21 s local connection timeout, so the rule was formally unread. Its clause (a) was false on a run
+/// whose every guard held, so no re-run could change the outcome.</para></summary>
 public static class RerankChunking
 {
     /// <summary>The knob's name.</summary>
