@@ -9,6 +9,23 @@ import { fileURLToPath } from 'node:url';
 
 // this file is devtools/scripts/e2e/_e2e-common.mjs → three levels up is the repo root.
 export const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+// A SUITE INHERITS NO GIT STATE FROM WHATEVER LAUNCHED IT. `git bisect run` exports GIT_DIR (in a linked worktree,
+// `.git/worktrees/<name>`) and GIT_EXEC_PATH to every child — and `git -c k=v …` adds GIT_CONFIG_PARAMETERS — so a suite
+// run under it handed them to its fixture servers AND to its own git calls: `git -C <fixture> gc --prune=now` (p47) or
+// `git -C <fixture> init` (p7) then operates on the repository GIT_DIR names, because GIT_DIR skips discovery and `-C`
+// changes only the working directory. That is how the developer's MAIN repository got `core.bare = true`, a fixture's
+// commits on its worktree's HEAD and its reflogs erased (2026-09-27). The app strips the repository-selecting ones from
+// every git it spawns (GitEnvironment, in the server), but the harness's own git calls are not the app's; so every GIT_*
+// goes here, before any suite runs git or boots a server. A suite that WANTS one in a server (p49 case F) passes it
+// through startServer's `env`, which lands after this. Blanket rather than a copy of the app's list: nothing a fixture
+// does needs a GIT_* from the launching shell, and a second list would drift from the first.
+{
+  const inherited = Object.keys(process.env).filter((k) => /^GIT_/i.test(k));
+  for (const k of inherited) delete process.env[k];
+  if (inherited.length)
+    console.log(`  · e2e: dropped ${inherited.join(', ')} inherited from the launching process (git bisect run exports them)`);
+}
 export const claudeStubCmd = `node ${path.join(repo, 'devtools', 'scripts', 'claude-stub.mjs')}`;
 export const dataDirFor = (suite) => path.join(repo, 'devtools', `_e2e-${suite}-data`);
 

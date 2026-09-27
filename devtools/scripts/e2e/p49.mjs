@@ -15,8 +15,11 @@
 //   C  no git, but a provisioned copy     → boots with NO download, ON that copy (the stale-resolve bug)
 //   D  git on PATH                        → boots, and downloads NOTHING (no surprise 37MB)
 //   E  no git, real MinGit on loopback    → the actual first-boot path, end to end (needs the cache)
+//   F  GIT_DIR inherited from the launcher → the data repo is still the data folder's, and the repo GIT_DIR names is
+//                                            untouched (a SCRATCH repo, never the working one)
 import { execFileSync } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -30,6 +33,10 @@ const PORT_TAMPERED = 5502;
 const PORT_PROVISIONED = 5503;
 const PORT_ON_PATH = 5504;
 const PORT_REAL = 5505;
+// Case F's. Outside every Windows-excluded tcp range of 2026-09-27 (one of which holds the five above, so this suite
+// runs shifted there) and outside p17's wildcard probe window, where a port of ours would have to join p17's list. (No
+// range is written out here on purpose: the runner's port scan reads comments too.)
+const PORT_INHERITED_GIT = 5381;
 // Nothing binds this one, ever — it is the "there is no network" fixture: a download URL that cannot
 // connect. Kept out of the range above so a future suite doesn't take it and quietly make cases pass.
 const DEAD_URL = 'http://127.0.0.1:5599/MinGit.zip';
@@ -265,6 +272,101 @@ try {
     ok('the wait was explained while it happened',
       /首次启动已自动安装便携版 Git/.test(JSON.stringify(snap.warnings)), JSON.stringify(snap.warnings));
     srv.stop(); srv = undefined;
+  }
+
+  // ---- F · git state INHERITED from whatever launched the app must not choose its repository --------
+  // The incident (2026-09-27): a debugging agent ran `git bisect run` from a linked WORKTREE, and bisect run exports
+  // GIT_DIR (`.git/worktrees/<name>`) to every child. A fixture server's git commands inherited it — and GIT_DIR skips
+  // discovery, so the ceiling that stops a walk-up (GIT_CEILING_DIRECTORIES) never came into it. The data repo's
+  // `git init` set core.bare = true on the developer's MAIN repository, the fixture's commits landed on the worktree's
+  // HEAD, and DataRepoMaintenance's `reflog expire --expire=now --all` + `gc --prune=now` erased every reflog.
+  // GitEnvironment now strips the repository-selecting variables from every git the app spawns. This is the incident
+  // against a SCRATCH repo of the same shape — a main repo with one linked worktree, GIT_DIR naming the worktree's
+  // gitdir — NEVER the working repository. Plus a config injection (GIT_CONFIG_PARAMETERS, which `git -c k=v bisect
+  // run` exports): the data repo's `git config user.name` probe would read an injected name as already set, and every
+  // commit of the audit trail would carry it.
+  {
+    const scratch = path.join(repo, 'devtools', '_e2e-p49-scratch-repo');
+    fs.rmSync(scratch, { recursive: true, force: true });
+    const scratchMain = path.join(scratch, 'main');
+    const scratchWt = path.join(scratch, 'wt');
+    fs.mkdirSync(scratchMain, { recursive: true });
+    // Every harness git call on the scratch is pinned to it: the ceiling keeps a missing .git from walking up into
+    // the working repository this suite runs inside, and the identity is given per call, never configured.
+    const sgit = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=p49', '-c', 'user.email=p49@localhost', ...args],
+      { cwd, encoding: 'utf8', env: { ...process.env, GIT_CEILING_DIRECTORIES: scratch } });
+    sgit(scratchMain, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(scratchMain, 'a.txt'), 'one\n');
+    sgit(scratchMain, 'add', 'a.txt');
+    sgit(scratchMain, 'commit', '-q', '-m', 'scratch one');
+    fs.writeFileSync(path.join(scratchMain, 'a.txt'), 'two\n');
+    sgit(scratchMain, 'commit', '-q', '-am', 'scratch two');
+    sgit(scratchMain, 'worktree', 'add', '-q', '-b', 'side', scratchWt);
+    const scratchGit = path.join(scratchMain, '.git');
+    const worktreeGitDir = path.join(scratchGit, 'worktrees', 'wt');
+    ok('(fixture F) a scratch repo with a linked worktree, whose gitdir is what bisect run exports as GIT_DIR',
+      fs.existsSync(path.join(worktreeGitDir, 'HEAD')) && fs.existsSync(path.join(worktreeGitDir, 'commondir')),
+      worktreeGitDir);
+
+    // Every file under the scratch's .git, by content — read directly, never through git, so taking the snapshot
+    // cannot itself touch what it measures.
+    const snapshot = () => {
+      const out = new Map();
+      const walk = (d) => {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          const p = path.join(d, e.name);
+          if (e.isDirectory()) walk(p);
+          else out.set(path.relative(scratchGit, p), crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'));
+        }
+      };
+      walk(scratchGit);
+      return out;
+    };
+    const lines = (rel) => { try { return fs.readFileSync(path.join(scratchGit, rel), 'utf8').split('\n').filter(Boolean).length; } catch { return -1; } };
+    const bare = () => (fs.readFileSync(path.join(scratchGit, 'config'), 'utf8').match(/^\s*bare\s*=\s*(\S+)/m) ?? [])[1] ?? '(unset)';
+    const before = snapshot();
+    const bareBefore = bare();
+    const reflogsBefore = { main: lines('logs/HEAD'), side: lines('worktrees/wt/logs/HEAD') };
+    const wtHeadBefore = sgit(scratchWt, 'rev-parse', 'HEAD').trim();
+
+    const dirF = freshDir('f');
+    srv = startServer({
+      dataDir: dirF, port: PORT_INHERITED_GIT,
+      env: { GIT_DIR: worktreeGitDir, GIT_CONFIG_PARAMETERS: "'user.name'='zzp49-inherited-author'" },
+    });
+    snap = await settled(srv.base);
+    ok('with GIT_DIR and an injected config inherited, the boot still completes', snap.phase === 'completed', snap.error ?? '');
+    const dataGit = path.join(dirF, '.git');
+    ok('THE POINT (F): the data repo is created IN the data folder', fs.existsSync(path.join(dataGit, 'HEAD')), dataGit);
+    let dataLog = [];
+    if (fs.existsSync(path.join(dataGit, 'HEAD'))) {
+      try {
+        dataLog = execFileSync('git', ['--git-dir', dataGit, 'log', '--format=%an%x1f%s'], { encoding: 'utf8' })
+          .split('\n').filter(Boolean).map((l) => l.split('\x1f'));
+      } catch { /* an empty repo reads as no log — the assertion below says so */ }
+    }
+    ok('…and holds the fixture\'s own commits (the initial import at least)',
+      dataLog.some(([, s]) => s === 'data: initial import'), JSON.stringify(dataLog));
+    // Never the INJECTED name — not "always Gatherlight": EnsureRepoAsync sets that identity only when `git config
+    // user.name` answers nothing, and on a machine with a global identity it answers with that one.
+    ok('…and none of them is signed with the injected identity',
+      dataLog.length > 0 && !dataLog.some(([a]) => a === 'zzp49-inherited-author'),
+      `${dataLog.filter(([a]) => a === 'zzp49-inherited-author').length} of ${dataLog.length} commit(s) carry it`);
+    srv.stop(); srv = undefined;
+    // The server is gone before the scratch is read, so nothing is still writing when it is measured.
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const changed = (() => {
+      const after = snapshot();
+      return [...new Set([...before.keys(), ...after.keys()])].filter((k) => before.get(k) !== after.get(k));
+    })();
+    ok('THE POINT (F): the repo GIT_DIR named is untouched — core.bare as it was', bare() === bareBefore,
+      `core.bare ${bareBefore} → ${bare()}`);
+    ok('…its worktree\'s HEAD unmoved (no fixture commit landed on it)',
+      sgit(scratchWt, 'rev-parse', 'HEAD').trim() === wtHeadBefore, `${wtHeadBefore} → ${sgit(scratchWt, 'rev-parse', 'HEAD').trim()}`);
+    ok('…its reflogs intact', lines('logs/HEAD') === reflogsBefore.main && lines('worktrees/wt/logs/HEAD') === reflogsBefore.side,
+      JSON.stringify({ before: reflogsBefore, after: { main: lines('logs/HEAD'), side: lines('worktrees/wt/logs/HEAD') } }));
+    ok('…and not one file under its .git changed', changed.length === 0, changed.slice(0, 12).join(', '));
   }
 } catch (err) {
   fail('e2e-p49 fatal: ' + err.message);

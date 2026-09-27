@@ -14,6 +14,7 @@ public sealed record DataCommitInfo(string Sha, string Subject, string Date);
 /// (`cat-file -e`, `diff --no-index` against NUL). The CLI is resolved per call (see
 /// <c>GitCliService.Exe</c>): an explicit override, else the portable git provisioned into the data
 /// folder, else a bundled copy, else PATH — so no separate git install is needed on the host.
+/// Every command is confined to the data root's repository (<see cref="GitEnvironment.ConfineTo"/>).
 /// All paths are data-root-relative with forward slashes.
 /// </summary>
 public interface IGitCliService
@@ -152,18 +153,12 @@ public class GitCliService : IGitCliService
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        // STOP GIT WALKING UP. Without a ceiling, a git command run in a data folder whose own repo is
-        // missing or damaged discovers the nearest ANCESTOR repo and operates on that instead — silently
-        // and successfully. Observed for real: a restore into a data folder with a broken .git committed
-        // the surrounding project's staged changes under the message "restore: import backup (N files)".
-        // For a household whose data folder happens to sit inside any other repository, that is the
-        // app committing their files somewhere they never chose.
-        //
-        // The ceiling is the data root's PARENT, so discovery may find _root/.git and may not climb past
-        // it. `git init` still works — the ceiling bounds the SEARCH, not creation — and a genuinely
-        // missing repo now fails where it should, instead of quietly succeeding against someone else's.
-        var parent = Path.GetDirectoryName(_root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        if (!string.IsNullOrEmpty(parent)) psi.Environment["GIT_CEILING_DIRECTORIES"] = parent;
+        // THIS REPO AND NO OTHER, by either route git picks one: the ceiling stops a walk-up past _root (a data
+        // folder with a broken .git once committed the surrounding project's staged changes), and an INHERITED
+        // GIT_DIR — which skips discovery, so the ceiling never sees it — is stripped with its siblings (`git
+        // bisect run` from a linked worktree once pointed a fixture's data repo at the developer's own). Both
+        // live in GitEnvironment, the one place every git spawn is confined.
+        GitEnvironment.ConfineTo(psi, _root);
 
         foreach (var a in args) psi.ArgumentList.Add(a);
 

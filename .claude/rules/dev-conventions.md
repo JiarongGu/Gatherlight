@@ -2339,6 +2339,34 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   it has its own private git repo. The server never edits `state/`-external data outside the
   reviewed flows (chat gates, fs ops, seeder) — and those all serialize on `DataWriteLock`
   (one writer, or git index.lock collisions + corrupted review diffs).
+- **A git the app runs works on the repository its working directory holds — never one the ENVIRONMENT names.** Git
+  picks a repository two ways: by discovery (walking up from the working directory), which `GIT_CEILING_DIRECTORIES`
+  bounds, and by NAME — `GIT_DIR` and its siblings — which skips discovery; git's own docs say the ceiling "will not
+  exclude … a GIT_DIR set … in the environment". **The incident (2026-09-27):** a debugging agent ran `git bisect run`
+  from a LINKED WORKTREE, and bisect run there exports `GIT_DIR` (`.git/worktrees/<name>`, absolute) and `GIT_EXEC_PATH`
+  to every child — measured; from a main checkout it exported no `GIT_DIR`, and `git -c k=v …` adds
+  `GIT_CONFIG_PARAMETERS`. A fixture server passed them on to its own git, so its data-repo commands ran against the
+  developer's MAIN repository: `git init` set `core.bare = true`, the fixture's commits landed on the worktree's HEAD, and
+  `DataRepoMaintenance`'s `reflog expire --expire=now --all` + `gc --prune=now` erased every reflog. The walk-up the
+  ceiling closed, one door over. **Now `GitEnvironment.ConfineTo`** is the one place every git spawn is confined —
+  today `GitCliService.RunAsync`, which 系统模式's `CodeRepoGit` inherits; nothing else in the app starts git — and it
+  strips `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`; `GIT_CONFIG` (it redirects `git config`'s WRITES, so the data
+  repo's `user.name` would land in someone else's file); `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and its
+  `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` (a parent's `-c`, which ANSWERED the data repo's `git config user.name`
+  probe, so an injected identity signed every commit of the audit trail); and `GIT_EXEC_PATH` (the parent git's
+  helpers, while ours may be the provisioned MinGit) — then sets the ceiling. What it keeps, and why, is in its doc. The
+  e2e harness drops EVERY `GIT_*` from its own process at import (`_e2e-common.mjs`): its own git calls — p47's `gc
+  --prune=now`, p7's `init`/`add -A`/`commit` — are not the app's, and `-C` moves only the working directory. Proof:
+  `e2e-p49` case F, against a SCRATCH main repo with one linked worktree, `GIT_DIR` naming the worktree's gitdir and a
+  `user.name` injected through `GIT_CONFIG_PARAMETERS`: the data repo is the data folder's and carries the fixture's
+  commits, none signed with the injected name, and not one file under the scratch's `.git` changes. Confirmed to FAIL
+  without the strip (`core.bare` false → true, the worktree's HEAD moved — 7 checks) and with `GIT_CONFIG_PARAMETERS`
+  kept (3 of 3 commits signed with it). **Still: never run e2e — or anything that boots a fixture server — under `git
+  bisect run` from a linked worktree**, nor from a git hook (git hands a hook `GIT_INDEX_FILE` and `GIT_AUTHOR_*`,
+  measured). The app and the harness strip what they can, but every OTHER child the server starts — the agent CLI, an
+  external MCP server, a node leaf — inherits the server's environment as it came, and whatever git THEY run is not
+  confined. To bisect a fixture regression, have the bisect script clear the `GIT_*` variables before it runs anything.
 - The spawned agent is **jailed** by the PreToolUse scope-guard hook
   (`ChatEnvironmentService.ScopeGuardMjs` planner / `guard/system-scope-guard.mjs`
   系统模式 — identical logic, different write-scope; `e2e-p24` runs both): **reads**
