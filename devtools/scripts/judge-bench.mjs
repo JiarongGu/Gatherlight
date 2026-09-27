@@ -141,6 +141,11 @@
 // `rrd` (Run 10) is the same partition arm with the knob's `d177` MEASUREMENT mode: Lyntai's HTTP reranker segments each
 // long candidate itself (RerankChunking.LyntaiSegmentation), with no ChunkedScoreProvider, pace or admission — paired
 // against `rrk` in its own block (RUN 10).
+// `--serial-arms` (Run 12's amendment) runs every arm's ACCURACY pass one at a time, in arm order, on the same shared
+// router, instead of all at once — still one run: one seed snapshot per arm, one query order, one router, one build. Two
+// PACED arms side by side (`rrk` and `rrb`) queue behind each other's calls on that router, and a small call that waited
+// behind a large one measures the machine as slow: Run 12's first attempt was VOID on one such call. Alone, each arm's
+// pace times only its own calls. The serial latency pass is unchanged; the "parallel" mean becomes the mean alone.
 // `rrb` (Run 12) is `rrk` with the knob's `boundary` MEASUREMENT mode: OUR windows, pace, admission and skip, with each
 // window's interior edges moved onto a text boundary (RerankInputCap.WindowSpans) — paired against `rrk` in its own block
 // (RUN 12), which also splits every discordant query by whether the two arms sent the reranker the same candidate notes.
@@ -218,6 +223,7 @@
 //   node devtools/dev.mjs judge-bench --fixture=mixed --reuse-seed --arms=formula,formula2 --rerankers=… --rerank-arms=rr,rrk --rerank-memo --resources=devtools/_rr-res
 // Flags: --arms= --rerankers= --rerank-arms=rr,rrf,rrk --chat-judges= --chat-arms=lc --n= --port-base= --llama-port= --resources=
 //        --seed= --latency-sample=   --fixture=bilingual|long|mixed   --reuse-seed | --reseed   --seed-only   --claude-stub   --rerank-memo
+//        --serial-arms
 //        --tag-seed=<chat model>   --build-tag-seed   --tag-seed-arms=<arm keys>
 //        --cpu-rerankers=<m,…>   --cpu-rerank-arms=rr,rrf,rrk   --cpu-llama-port=
 //        --igpu-rerankers=<m,…>   --igpu-rerank-arms=rr,rrf,rrk   --igpu-visible=<raw Vulkan device index>
@@ -237,7 +243,7 @@ import { expectedMixedBytes } from './judge-bench-mixed-fixture.mjs';
 const VALUED = ['arms', 'rerankers', 'rerank-arms', 'chat-judges', 'chat-arms', 'n', 'port-base', 'llama-port', 'resources', 'seed',
   'latency-sample', 'report-only', 'baseline', 'fixture', 'tag-seed', 'tag-seed-arms', 'cpu-rerankers', 'cpu-rerank-arms',
   'cpu-llama-port', 'igpu-rerankers', 'igpu-rerank-arms', 'igpu-visible'];
-const BOOLEAN = ['reuse-seed', 'reseed', 'seed-only', 'claude-stub', 'rerank-memo', 'build-tag-seed'];
+const BOOLEAN = ['reuse-seed', 'reseed', 'seed-only', 'claude-stub', 'rerank-memo', 'build-tag-seed', 'serial-arms'];
 const die = (msg) => { console.error(`judge-bench: ${msg}`); process.exit(2); };
 const KNOWN = `known flags: ${[...VALUED.map((k) => `--${k}=…`), ...BOOLEAN.map((k) => `--${k}`)].join(' ')}`;
 const opts = {};
@@ -796,6 +802,7 @@ const loadRun = (json, source) => {
       queries: json.order?.queries ?? Math.max(0, ...arms.map((a) => a.rows.length)),
       adjacentSameFact: json.order?.adjacentSameFact ?? null,
       concurrency: json.concurrency ?? arms.length, latencySample: json.latencySample ?? null,
+      ...(json.serialArms ? { serialArms: true } : {}),
       claudeVersion: json.claudeVersion ?? null, appHead: json.appHead ?? null, appVersion: json.appVersion ?? null,
       seedFolder: json.seedFolder ?? null,
       // The fixture a run used, and where each fact's answer sat in its note (the long fixture; null before it).
@@ -1401,7 +1408,8 @@ const analyse = (run, { baseline = null } = {}) => {
   const COLS = [['n', 5], ['err', 5], ['graph', 7], ['judged', 8], ['endorsed', 10], ['top-1', 10], ['found@8', 10], ['MRR', 8], ['ms (parallel)', 15]];
 
   console.log(`\n${meta.facts ?? '?'} facts × ${QUESTION_SETS.length} sets = ${meta.queries} queries per arm, order seed ${meta.orderSeed ?? 'unrecorded'}`
-    + `${meta.adjacentSameFact === null ? '' : ` (${meta.adjacentSameFact} same-fact adjacencies left)`}, ${meta.concurrency} arms in parallel`
+    + `${meta.adjacentSameFact === null ? '' : ` (${meta.adjacentSameFact} same-fact adjacencies left)`}, `
+    + `${meta.serialArms ? `${arms.filter((a) => !solo(a)).length} arms one at a time (--serial-arms)` : `${meta.concurrency} arms in parallel`}`
     + `${meta.cpuSerial ? `, then ${meta.cpuSerial.length} CPU-only arm(s) one at a time (${meta.cpuSerial.join(', ')})` : ''}`
     + `${meta.igpuSerial ? `, then ${meta.igpuSerial.length} iGPU-only arm(s) one at a time (${meta.igpuSerial.join(', ')})` : ''}`);
   for (const set of SETS) {
@@ -2776,6 +2784,7 @@ const live = async () => {
     // Bodies name the model, so two models never share one. The latency pass is never memoised: it is where time is
     // measured.
     const MEMO = opts['rerank-memo'] === true;
+    const SERIAL_ARMS = opts['serial-arms'] === true;
     const memo = new Map();
     const answerOf = new Map();
     for (const f of FIXTURE.facts) {
@@ -3100,7 +3109,9 @@ const live = async () => {
 
     const parallel = arms.filter((a) => !solo(a));
     for (const arm of parallel) if (arm.proxy) arm.proxy.state.phase = 'accuracy';
-    await Promise.all(parallel.map(accuracyPass));
+    // --serial-arms (Run 12's amendment): one arm at a time, so no paced arm's call queues behind another arm's.
+    if (SERIAL_ARMS) for (const arm of parallel) await accuracyPass(arm);
+    else await Promise.all(parallel.map(accuracyPass));
     for (const arm of parallel) if (arm.proxy) arm.proxy.state.phase = 'latency';
     for (const arm of parallel) {
       arm.routerAccuracy = routerOutcomes(arm.dir);
@@ -3299,8 +3310,10 @@ const live = async () => {
         },
       } : {}),
       order: { seed: ORDER_SEED, queries: queries.length, adjacentSameFact },
-      // The arms that ran in PARALLEL; the CPU-only arms (Run 8) ran one at a time after them.
-      concurrency: parallel.length,
+      // The arms that ran in PARALLEL; the CPU-only arms (Run 8) ran one at a time after them. With --serial-arms every arm
+      // ran alone, so one at a time.
+      concurrency: SERIAL_ARMS ? 1 : parallel.length,
+      ...(SERIAL_ARMS ? { serialArms: true } : {}),
       ...(arms.some((a) => a.cpu) ? { cpuSerial: arms.filter((a) => a.cpu).map((a) => a.key), serverBinary } : {}),
       ...(arms.some((a) => a.igpu) ? { igpuSerial: arms.filter((a) => a.igpu).map((a) => a.key), serverBinary } : {}),
       latencySample: sample.length,
