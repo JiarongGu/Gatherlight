@@ -140,11 +140,12 @@ public static class RerankChunking
 /// be a provider call: the sizing above, the timing every call feeds <see cref="RerankPace"/>, and the probe the admission
 /// asks for (<see cref="ProbeAsync"/>) — the provider is the one place that can time a call to the router.</para>
 ///
-/// <para><b>A WORKAROUND FOR A LYNTAI GAP, recorded on both sides</b> (dev-conventions: open workaround (6)). Lyntai
-/// closed the gap upstream — <c>docs/task-archive.md</c> Part 287 / D177, with Part 289 closed into it — and RELEASED it
-/// in 3.3.0 (read first at Lyntai commit <c>e6fa579b</c>; nothing after it changed the segmentation described here). The 3.4
-/// bump KEPT this class: which of the two scores long notes is decided by Run 10 and then the owner (below), and until
-/// then nothing on the <c>llamacpp-rerank</c> registration segments. D177 as released: a provider given
+/// <para><b>A WORKAROUND FOR A LYNTAI GAP, recorded on both sides — and KEPT by measurement</b> (dev-conventions:
+/// workaround (6)). Lyntai closed the gap upstream — <c>docs/task-archive.md</c> Part 287 / D177, with Part 289 closed into
+/// it — and RELEASED it in 3.3.0 (read first at Lyntai commit <c>e6fa579b</c>; nothing through 3.5.1 changed the
+/// segmentation described here). The 3.4 and 3.5 bumps KEPT this class, and Run 10 (below) kept it for good under the
+/// owner's rule; outside the <c>d177</c> measurement mode nothing on the <c>llamacpp-rerank</c> registration segments.
+/// D177 as released: a provider given
 /// <c>HttpModelOptions.MaxInputChars</c> SEGMENTS an over-long input (<c>InputSegmentation</c>) and scores a document as
 /// its best piece, as here; on a Score registration that bound is the PAIR window, the query keeping at most
 /// (1 − <c>MinDocumentShare</c>, default 0.5) of it, cut once per call at a word boundary; it counts characters after NFKC,
@@ -167,17 +168,19 @@ public static class RerankChunking
 /// (1,000 characters whatever the query) — read only where a window is set, so such a model needs <c>MaxInputChars</c>
 /// set generously beside it. What 3.5.0 still does not give such a decorator is what was SENT: D177 counts no pieces for
 /// its caller, and the HTTP reranker returns no usage, so the pace would learn from a bound rather than a count.
-/// <b>Run 10</b>: measure D177 against this class on Run 6's long fixture within ONE run — the rule, unchanged: not
-/// significantly worse at <c>end</c> or <c>beyond</c>, and identical on short facts. What follows is an OWNER
-/// decision, informed by that comparison: keep this class for the pace; configure <c>MaxInputChars</c>/
-/// <c>Segmentation</c> on the <c>llamacpp-rerank</c> registration (<c>LlamaCppSource.Register</c>) with a fixed
-/// <c>MaxPiecesPerInput</c> and lose time-sizing; or, since 3.5.0, keep only the pace, over D177's segmentation, as a
-/// thin decorator learning from that bound. Either way <see cref="RerankInputCap"/>'s query fit stays until D177's is
-/// measured beside it. If D177 fails the rule, keep this class and tell Lyntai why, with the run. The Lyntai half is
-/// complete: Part 289's outcome names an app-side segmenting score-provider decorator as the adopter's copy to remove when
-/// D177 releases — it has, so that instruction is now Run 10's to settle — and Lyntai's
-/// <c>docs/memory-measurements.md</c> records our Run 6c as
-/// <c>rerank-segmented-adopter-long-notes</c>.</para></summary>
+/// <b>Run 10 kept this class</b> (<c>docs/judge-bench.md</c> Run 10, 2026-09-27, Lyntai 3.5.1): the owner's rule was to
+/// switch only if D177 were significantly BETTER for BGE on the long fixture's found@8, worse for no reranker at any
+/// position or on the mixed fixture's short targets, and byte-identical on short facts. For BGE it was significantly
+/// WORSE (201 → 171 of 240, 31/1) — mostly, post hoc, through a co-recall link dynamic on the Japanese-worded questions
+/// rather than through how either segmenter scores a note — LAMAR could not tell the two apart, and short facts were
+/// byte-identical. mMiniLMv2 did significantly BETTER under D177 (long 182 → 196, mixed 184 → 198), most where the answer
+/// is late in a note; the likely reason, untested, is D177's sentence-boundary piece placement, so the follow-up worth
+/// measuring is boundary-cut windows in this class, not a switch. What would reopen it is a within-run result under the
+/// same rule in which D177 is better for BGE — worth running once a pace over D177 can learn from what was sent rather than
+/// a bound — or the owner changing the rule. The Lyntai half: Part 289's outcome still names an app-side segmenting
+/// score-provider decorator as the adopter's copy to remove when D177 releases; it has released and this class stays, so
+/// Run 10's answer is owed to Lyntai's side (dev-conventions says so). Lyntai's <c>docs/memory-measurements.md</c> records
+/// our Run 6c as <c>rerank-segmented-adopter-long-notes</c>.</para></summary>
 public sealed class ChunkedScoreProvider : IScoreProvider
 {
     // Set by RerankAdmission around a recall whose probe would have carried EVERY candidate: that probe IS the one-window

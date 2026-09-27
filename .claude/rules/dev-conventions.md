@@ -597,12 +597,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Lyntai's source on 2026-09-24 and switched to `FilePathOf` there — `ToolDetail`'s OWN copy of the same
   fallback chain stays, because it takes a parsed `JsonElement` for a UI label, not the `ToolCall` `FilePathOf`
   takes, so only one of the two copies is gone.
-  **Six were open at Lyntai 3.2.0, and each says what ends it. (2), (4) and (5) are CLOSED — their fixes shipped in
-  3.3.0 and the 3.4 bump adopted them, (5) after a real-binary check of every catalogued chat model. (3) is CLOSED as a workaround: the bump adopted its per-write detection, and
-  the probe it named stays as a cost policy of OUR OWN, which the entry says how to end. (1) is CLOSED since
-  2026-09-27: its fix shipped in 3.3.0 with a cut that gutted a long CJK note, Lyntai 3.5.0 (2026-09-26, its Part 302)
-  fixed the cut, and the app adopted it after the 3.5 bump. (6) stays OPEN by decision until Run 10 and the owner
-  decide; 3.5.0 gave it a per-request piece cap.**
+  **Six were open at Lyntai 3.2.0; on 3.5.1 four are CLOSED and two STAY, each by a decision of ours rather than a
+  gap left open.** CLOSED, each fix shipped in 3.3.0: (1) the judge-content decorator, for `ContentChars`, adopted on
+  2026-09-27 once 3.5.0 (its Part 302) had fixed the cut that gutted a long CJK note; (2) the scoped routing store, for
+  D176's routes, and (4) the `SessionStarted` guard, for the reader's one-per-id — both with the 3.4 bump; (5) the
+  chat preset's `reasoning = off`, for `SuppressReasoningFields`, with the 3.4 bump after a real-binary check of every
+  catalogued chat model. STAY: (3) — the workaround itself closed, since the 3.4 bump reads D175's per-write `Ran`,
+  but its embed probe stays as OUR quota gate (a retried write during an outage would still pay its annotation), and
+  the entry says what would end the gate; and (6) — our windows, pace and admission stay because Run 10 found D177, as
+  close to ours as 3.5.1 allows, not better for BGE, which is the owner's rule for keeping ours; the entry says what
+  would reopen it.
   **(1) CLOSED — the app-side judge-content decorator ↔ Lyntai `docs/task-archive.md` Part 276 / D170, shipped in 3.3.0,
   adopted on 2026-09-27 once Lyntai 3.5.0 had fixed its cut (Part 302).** Lyntai's LLM judge rendered each candidate as
   its headline alone, and our headline is the fact's TOPIC, so the judge decided "did this answer?" from topics;
@@ -868,10 +872,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   were never part of this workaround and stay: they are our own launch contract (`LlamaServerRuntime.ChatMaxTokens` —
   the memory seams send no `max_tokens`, and the router does not stop a child's generation when the app abandons a
   request; `LlamaServerRuntime.ChatContextTokens` — launch item (5)).
-  **(6) OPEN until Run 10 and the owner decide — `ChunkedScoreProvider` (with `RerankPace`) ↔ Lyntai
+  **(6) KEPT — ours, by Run 10 under the owner's rule (2026-09-27) — `ChunkedScoreProvider` (with `RerankPace`) ↔ Lyntai
   `docs/task-archive.md` Part 287 / D177, with Part 289 closed into it, RELEASED in 3.3.0 (first read at Lyntai commit
-  `e6fa579b`; nothing after it changed the segmentation described here) and not adopted by the 3.4 bump.** Lyntai
-  3.2.0 has no way to score a document longer than a reranker's window except to send it whole (one over-window pair
+  `e6fa579b`; nothing through 3.5.1 changed the segmentation described here) and adopted by neither the 3.4 nor the 3.5
+  bump.** Lyntai
+  3.2.0 had no way to score a document longer than a reranker's window except to send it whole (one over-window pair
   fails the WHOLE call) or cut it, and Run 6 measured the cut pushing a long note off the page; so the app scores each
   long candidate in windows and keeps its best (the reranker bullet below). D177 as released: a
   provider given `HttpModelOptions.MaxInputChars` SEGMENTS an over-long input (`InputSegmentation`) and scores a
@@ -898,16 +903,35 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   apart from the query, which can express our rule for a model declaring no window (read only where a window is set,
   so it needs `MaxInputChars` set generously beside it). What such a decorator still cannot see is what was SENT — D177
   counts no pieces for its caller and the HTTP reranker returns no usage — so its pace would learn from a bound, not a
-  count. Run 10 compares against D177 as 3.5.0 ships it. **Run 10**: measure D177 against ours on Run 6's long
-  fixture
-  WITHIN ONE RUN — the rule, unchanged: not significantly worse at `end` or `beyond`, and identical on short facts.
-  What follows is then an OWNER decision, informed by that comparison: keep `ChunkedScoreProvider` for the pace, or
-  configure `MaxInputChars`/`Segmentation` on the `llamacpp-rerank` registration (`LlamaCppSource.Register`) with a
-  fixed piece cap and lose time-sizing. If D177 fails the rule, keep ours and tell Lyntai why, with the run. **Both
-  halves are recorded**: Part 289's outcome names "an app-side segmenting score-provider decorator" as the adopter's
-  copy to remove when D177 releases — by its role, not its class name, as a library that names no adopter must; it has
-  released, so that instruction is now Run 10's to settle — and
-  Lyntai's `docs/memory-measurements.md` records our Run 6c as `rerank-segmented-adopter-long-notes`.
+  count. **Run 10 settled it: KEEP OURS** (`docs/judge-bench.md` Run 10, 2026-09-27, Lyntai 3.5.1, one GPU). The
+  owner's rule, fixed before the runs: switch only if, for the recommended BGE, D177 is significantly BETTER on the long
+  fixture's found@8, AND no reranker is significantly worse under D177 at any position or on the mixed fixture's
+  short-target questions, AND short facts are byte-identical; otherwise keep ours — switching also costs the pace its
+  precision. D177 ran configured as close to ours as 3.5.1 allows (the `d177` knob mode, under the reranker bullet), each
+  reranker paired with ours within its own run on the long, mixed and short fixtures. **For BGE on long notes D177 was
+  significantly WORSE**, not better — found@8 201 → 171 (31/1, p < 0.001), and worse at every one of the four positions —
+  so the rule's first clause failed and its second blocked; LAMAR could not tell the two apart on either fixture; short
+  facts were byte-identical for all three rerankers, bodies included. **What drove BGE's loss is a co-recall link
+  dynamic, not the segmenter** (post hoc, descriptive): 26 of its 31 losses are Japanese-worded questions whose pages held
+  only the fixture's four Japanese notes, because D177's arm never built the links that open those questions up and ours
+  did by mid-run — a recall-reinforcement effect (measuring rule 2), which on the mixed fixture ran the other way.
+  Outside that set the two differ 5/1. So the rule's result stands, and what it says is narrower than its size: D177 is
+  not better for BGE. **mMiniLMv2 did significantly BETTER under D177** — outside the rule, which reads BGE and only
+  blocks: long 182 → 196 (10/24, p = 0.024), mixed 184 → 198 (1/15, p < 0.001), concentrated where the answer is past the
+  first window, and not the Japanese-set dynamic. The likely reason, stated and untested, is D177's SENTENCE-BOUNDARY
+  piece placement, which splits an answer sentence less often than our fixed-position windows in mMiniLMv2's
+  250–500-character budget. That is a finding about placement, separable from the pace, so **the follow-up worth
+  measuring is boundary-cut windows INSIDE ours**, not a switch. Nothing in the product changed: `ChunkedScoreProvider`,
+  `RerankPace` and `RerankAdmission` stay, and `d177` stays a measurement mode, never a default. **What would reopen
+  it**: a within-run measurement under the same rule in which D177 is significantly better for BGE — worth running only
+  once D177 can also carry a pace that learns from what was SENT (it reports no piece count, and the HTTP reranker no
+  usage, so a pace over 3.5.0's per-request `MaxPiecesPerInput` would learn from bounds up to ~2× apart), since a D177
+  with no pace has no skip, and Run 8 measured what BGE does on a CPU without one — or the owner changing the rule.
+  **Both halves are recorded, and Lyntai's is now stale**: Part 289's outcome names "an app-side segmenting
+  score-provider decorator" as the adopter's copy to remove when D177 releases — by its role, not its class name, as a
+  library that names no adopter must. It has released and we kept the copy, so the answer — kept, why, and Run 10 — is
+  owed to Lyntai's `TASKS.md` (we are review-only there), or the next reader of that outcome deletes a decorator a
+  measurement kept. Lyntai's `docs/memory-measurements.md` records our Run 6c as `rerank-segmented-adopter-long-notes`.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
@@ -1060,7 +1084,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   that sentence attached and let the household weigh it. A DECLINED entry saying "cannot" is only for a real
   impossibility — never for an option nobody built. **The example this sentence used to give went false on
   2026-09-23**: "内置 on 判断 needs an in-process chat model, which does not exist". A reranker verifies without
-  chatting, and Lyntai 3.2.0 ships an in-process ONNX cross-encoder (`AddOnnxProvider` producing scores, its
+  chatting, and Lyntai 3.2.0 shipped an in-process ONNX cross-encoder (`AddOnnxProvider` producing scores, its
   D157), so 内置 on 判断 is now exactly an option nobody built — with tagging on the CLI, like the llama.cpp
   reranker. It was not built for a measured reason: that path read WordPiece tokenizers only, so the one model
   proven through it, ms-marco-MiniLM-L6-v2, is English-only (+3.0 of 9.5 on Lyntai's English LoCoMo, 2026-09-15,
@@ -1762,7 +1786,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   pace's Information lines in every arm's log and VOIDS a run in which they fired, and refuses a VOID run as a `--baseline`
   (`docs/judge-bench.md`, "The bench and the pace").
   `GATHERLIGHT_RERANK_CHUNKING=off` (`RerankChunking`) is KEPT as a measurement knob so the bench can reproduce the cut
-  Runs 2–6 measured; judge-bench's `rr`/`rrf` arms pin it off and `rrk` on. **Two traps met measuring it**: llama.cpp's
+  Runs 2–6 measured; judge-bench's `rr`/`rrf` arms pin it off and `rrk` on. **Its third value, `d177`, is a
+  measurement mode too** (`085398c`, for `docs/judge-bench.md` Run 10), never a default: `RerankInputCap` prepares the
+  candidates exactly as `on` does — the query fitted, NFKC under a declared window, NOTHING cut — but no
+  `ChunkedScoreProvider` wraps the reranker, so there is no pace and no `RerankAdmission` (no skip), and Lyntai's own
+  D177 segmentation does the reading instead, configured on the `llamacpp-rerank` registration in that mode only
+  (`RerankChunking.LyntaiSegmentation`): under a declared window (mMiniLMv2) a 506-character pair bound, the query at most
+  half; without one (BGE, LAMAR) a 4,090-character bound, the query at most 2,045 and each document piece at most 1,000;
+  overlap 0.25, at most 5 pieces. Set only in `d177`, so `off` still reproduces the cut and `on` is never segmented
+  twice. It is announced at startup like the other two values (`rerank chunking = d177`), and judge-bench's `rrd` arm
+  pins it. Run 10 kept ours over it — workaround (6) has the result. **Two traps met measuring it**: llama.cpp's
   scores drift in the third decimal between identical calls, so an A/B that must be byte-identical needs identical
   requests to get identical replies (the bench's `--rerank-memo`); and that memo's proxy, on Node's default keep-alive
   agent, lost one request in each run (of ~780 and ~1,500) before the router saw it — each an abstention that voided
@@ -1773,7 +1806,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   exactly as written), confirmed to FAIL with the knob off. **What reaches `/v1/rerank` is half a test**: a fault in the
   provider (a window count the scores do not match, an exception) is fail-open, so the engine's page stands and every
   window assertion stays green — confirmed by making the provider throw. So 6b/6c also assert the recall came back
-  judged (`answered`, which Lyntai 3.2.0 sets only when a verdict was judged), and case 6d asserts the MAPPING: a long
+  judged (`answered`, which Lyntai sets only when a verdict was judged — true from 3.2.0 through 3.5.1), and case 6d asserts the MAPPING: a long
   note whose only rewarded text is in its TAIL window, among 11 candidates for a page of 8, is on the page only when
   that window's score is credited to it — confirmed to fail under the cut, a first-window mapping and a mapping off by
   one window. The fake scores it 9.0 against the fillers' 3.2 so no tie is relied on (Lyntai's score ranking is a
