@@ -27,6 +27,19 @@ export const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
     console.log(`  · e2e: dropped ${inherited.join(', ')} inherited from the launching process (git bisect run exports them)`);
 }
 export const claudeStubCmd = `node ${path.join(repo, 'devtools', 'scripts', 'claude-stub.mjs')}`;
+
+// AN INHERITED NODE_OPTIONS, for a suite asserting which children of the app get one (ChildEnvironment in the server):
+// `--require` of _node-inject.cjs, which logs every node it runs in to `logFile` and leaves `net` on a global. The path
+// is quoted and forward-slashed, the two forms NODE_OPTIONS's own parser takes on Windows.
+export const nodeInjection = (logFile) => ({
+  NODE_OPTIONS: `--require "${path.join(repo, 'devtools', 'scripts', 'e2e', '_node-inject.cjs').replace(/\\/g, '/')}"`,
+  E2E_NODE_INJECT_LOG: logFile,
+});
+/** The nodes the injection ran in so far: `[{ pid, argv, execArgv }]`. */
+export const nodeInjections = (logFile) =>
+  fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+/** Whether an injection entry is the claude stub's — the one node child that KEEPS NODE_OPTIONS (the household's CLI). */
+export const isStubNode = (e) => (e.argv ?? []).some((a) => /claude-stub\.mjs$/.test(a));
 export const dataDirFor = (suite) => path.join(repo, 'devtools', `_e2e-${suite}-data`);
 
 /** Assert reporter. `ok(name, cond, extra?)` logs + counts; `done()` prints the PASS/FAIL line the

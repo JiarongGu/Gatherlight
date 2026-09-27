@@ -68,6 +68,9 @@ public sealed class CapabilityRuntime : ICapabilityRuntime
             psi.ArgumentList.Add("--permission");
             psi.ArgumentList.Add("-e");
             psi.ArgumentList.Add(Probe);
+            // In the environment a capability will get, so the probe tests what will run: an inherited NODE_OPTIONS
+            // this node refuses would otherwise fail the probe, and report the sandbox missing for the wrong reason.
+            Kernel.Services.ChildEnvironment.ForSandbox(psi, net: false);
             using var p = Process.Start(psi);
             if (p is null) return false;
             if (!p.WaitForExit(10_000)) { try { p.Kill(true); } catch { } return false; }

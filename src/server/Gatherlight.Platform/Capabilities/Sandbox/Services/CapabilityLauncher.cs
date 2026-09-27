@@ -42,6 +42,11 @@ public sealed class NodeCapabilityLauncher : ICapabilityLauncher
             CreateNoWindow = true,
         };
         psi.ArgumentList.Add("--permission");
+        // The environment is part of the sandbox: an inherited NODE_OPTIONS reaches this node like a command line
+        // (measured: `--require` ran a file before cap-guard and handed the capability `net`; `--allow-child-process`
+        // reopened spawn), and process.env would show agent-written code every variable the app was started with. So
+        // an allow-list, never the parent's environment minus a few names — see ChildEnvironment.ForSandbox.
+        Kernel.Services.ChildEnvironment.ForSandbox(psi, grant.Net);
 
         // The capability must be able to read its own code.
         psi.ArgumentList.Add($"--allow-fs-read={workingDir}");

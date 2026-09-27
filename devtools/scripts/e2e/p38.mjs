@@ -7,9 +7,12 @@
 // network verdicts), so a launcher that denies everything or never spawns the process cannot pass.
 // This is the evidence behind the S2b household-facing promise: "it can read your plans and save to
 // scratch; it cannot reach the internet, change your settings, or touch anything else."
+// Case 2b holds that promise against the SERVER's environment: with NODE_OPTIONS=--require <preload> inherited, the
+// preload never runs in the sandbox and leaves it no network, and the capability sees none of the server's variables
+// (ChildEnvironment.ForSandbox) — while the claude stub, which keeps NODE_OPTIONS, proves the injection was real.
 import fs from 'node:fs';
 import path from 'node:path';
-import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient } from './_e2e-common.mjs';
+import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, repo, nodeInjection, nodeInjections, isStubNode, until } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p38');
 const { ok, fail, done } = makeReporter('p38');
@@ -21,6 +24,8 @@ const PORT_NOT_ENABLED = 5466;
 const PORT_ENABLED = 5467;
 const PORT_NET_TRUE = 5468;
 const PORT_DENY = 5469;
+// Case 2b's (an inherited NODE_OPTIONS) — beside the others, and free in every suite.
+const PORT_INHERITED_NODE_OPTIONS = 5470;
 
 const toolDir = path.join(dataDir, 'tools', 'cap_escape');
 const manifestPath = path.join(dataDir, 'site.json');
@@ -75,6 +80,14 @@ const out = {
   netModule:    await probe(async () => { await import('node:net'); }),
   netBare:      await probe(async () => { await import('net'); }),
   httpModule:   await probe(async () => { await import('node:http'); }),
+  // What the capability INHERITED (case 2b). A preload named by an inherited NODE_OPTIONS runs before cap-guard.mjs and
+  // can leave the network behind on a global — _node-inject.cjs does exactly that — and process.env is the server's
+  // environment unless the launcher narrows it.
+  injected:     globalThis.__zzInjected === true,
+  leakedNet:    typeof globalThis.__zzNet?.connect,
+  nodeOptions:  process.env.NODE_OPTIONS ?? null,
+  serverSecret: process.env.ZZE2E_SERVER_SECRET ?? null,
+  envKeys:      Object.keys(process.env).sort(),
 };
 process.stdout.write(JSON.stringify(out));
 `, 'utf8');
@@ -142,6 +155,44 @@ try {
   ok('netModule = blocked (net:false — cap-guard.mjs blocks node:net)', v.netModule === 'blocked', v.netModule);
   ok('netBare = blocked (net:false — cap-guard.mjs blocks bare "net")', v.netBare === 'blocked', v.netBare);
   ok('httpModule = blocked (net:false — cap-guard.mjs blocks node:http)', v.httpModule === 'blocked', v.httpModule);
+
+  srv.stop();
+  srv = null;
+  await settle();
+
+  // --- 2b: an INHERITED NODE_OPTIONS must not reach the sandbox -----------------------------------------------------
+  // The server is started with NODE_OPTIONS=--require _node-inject.cjs, as a launcher's environment could carry it.
+  // Measured on Node 24.15 under this exact launch: that preload runs BEFORE cap-guard.mjs — `--require` is not checked
+  // against the read grant — and hands the capability `require('net')` through a global, so the network denial the card
+  // promises is simply gone (and `--allow-child-process` / `--allow-fs-write=*` in NODE_OPTIONS reopen spawn and the disk).
+  // ChildEnvironment.ForSandbox gives the capability an allow-list instead of the server's environment. The same
+  // battery is the positive control (it runs, reads its grant, and the preload's module block still holds), and the
+  // injection is proved REAL by a node child that keeps NODE_OPTIONS on purpose — the claude CLI (here the stub),
+  // spawned by the startup probe — logging that it ran.
+  const injectLog = path.join(repo, 'devtools', '_e2e-p38-node-inject.jsonl');
+  fs.rmSync(injectLog, { force: true });
+  srv = startServer({ dataDir, port: PORT_INHERITED_NODE_OPTIONS,
+    env: { ...nodeInjection(injectLog), ZZE2E_SERVER_SECRET: 'zzp38-must-not-reach-a-capability' } });
+  await waitHealthy(srv.base);
+  client = makeClient(srv.base);
+  const injectedBattery = await client.call('cap_escape', { site: dataDir });
+  ok('(2b) with NODE_OPTIONS inherited, the capability still runs (200) — the positive control',
+    injectedBattery.status === 200, JSON.stringify(injectedBattery).slice(0, 300));
+  const vi = injectedBattery.result ?? {};
+  console.log('  inherited-NODE_OPTIONS verdict:', JSON.stringify({ ...vi, envKeys: undefined }), 'env:', (vi.envKeys ?? []).join(','));
+  ok('(2b) …reads its granted plans/ as before', vi.readGranted === 'allowed', vi.readGranted);
+  ok('(2b) …and cap-guard still blocks node:net', vi.netModule === 'blocked', vi.netModule);
+  ok('(2b) (fixture) the injection is real: a node child that KEEPS NODE_OPTIONS — the claude stub — ran it',
+    await until(() => nodeInjections(injectLog).some(isStubNode), 30000).catch(() => false),
+    JSON.stringify(nodeInjections(injectLog).map((e) => e.argv[0])));
+  ok('THE POINT (2b): the inherited preload never ran inside the sandbox', vi.injected === false, String(vi.injected));
+  ok("THE POINT (2b): …so it left no network behind — cap-guard's denial holds", vi.leakedNet === 'undefined', vi.leakedNet);
+  ok("(2b) …NODE_OPTIONS is not in the capability's environment at all", vi.nodeOptions === null, String(vi.nodeOptions));
+  ok('(2b) …nor is anything else the server was started with (an allow-list, not the parent minus a few names)',
+    vi.serverSecret === null && !(vi.envKeys ?? []).some((k) => /^(GATHERLIGHT_|E2E_)/i.test(k)),
+    `${vi.serverSecret} · ${(vi.envKeys ?? []).join(',')}`);
+  ok('(2b) …while what node needs to run is there', ['SystemRoot', 'TEMP'].every((n) => (vi.envKeys ?? []).some((k) => k.toLowerCase() === n.toLowerCase())),
+    (vi.envKeys ?? []).join(','));
 
   srv.stop();
   srv = null;

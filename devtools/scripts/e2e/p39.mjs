@@ -281,6 +281,12 @@ try {
     /child_process/.test(spec) && /whatever the grant says/.test(spec));
   ok("it names THIS site's record dirs as the grant vocabulary", /`plans`/.test(spec) && /`cache`/.test(spec));
   ok('no placeholder survived rendering', !/__[A-Z_]+__/.test(spec), (spec.match(/__[A-Z_]+__/) ?? [''])[0]);
+  // The sandbox's environment is an allow-list (ChildEnvironment.ForSandbox), and the contract names it from that list:
+  // a capability reading process.env for anything else finds nothing, so the agent is told to take it from its input.
+  ok('it says what process.env holds — the allow-list the launcher applies, NODE_OPTIONS not among it',
+    /process\.env/.test(spec) && /`SystemRoot`/.test(spec) && /`TEMP`/.test(spec) && /`HTTPS_PROXY`/.test(spec)
+      && /no\s+`NODE_OPTIONS`/.test(spec),
+    (spec.match(/The environment.*/) ?? ['(absent)'])[0]);
   // S3a's lesson, re-applied: a contract nothing points at is a contract nobody reads.
   ok('the agent is told to read it before drafting', /tool-spec\.md/.test(fs.readFileSync(
     path.join(repo, 'src/server/Gatherlight.Platform/Agent/Llm/Services/PromptHarness.cs'), 'utf8')));
