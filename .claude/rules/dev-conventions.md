@@ -2417,8 +2417,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `CLAUDE_CODE_ENTRYPOINT`/`_SESSION_ID`/`_CHILD_SESSION`/`_SESSION_ATTENDED`/`_MESSAGING_SOCKET`/`_MESSAGING_TOKEN`/
   `_EXECPATH`/`_SSE_PORT`, `CLAUDE_PID`, and — the security review, from the same per-session builder —
   `CLAUDE_EFFORT`, `TRACEPARENT`/`TRACESTATE`; `AI_AGENT` stays, the CLI sets it for itself); what would take the claude
-  CLI OFF the subscription login (`OffSubscriptionVariables`, below the table); and the app's own secrets
-  (`AppSecretVariables`, likewise). The session markers were in the environment of every Bash command a Claude Code session ran here
+  CLI OFF the subscription login (`OffSubscriptionVariables`, below the table); the CLI switches that could add the
+  agent a tool past the scope guard (`AgentToolVariables`, likewise); and the app's own secrets (`AppSecretVariables`,
+  likewise). The session markers were in the environment of every Bash command a Claude Code session ran here
   (2026-09-28), and the installed CLI names each: so every dev and fixture server started from one announced its agent
   to the CLI as a child of the developer's session, with that session's messaging pipe. Why the PROCESS and not the
   spawn: Lyntai's CLI runs (agent session and one-shot provider alike) go through its sealed `ProcessRunner`, whose
@@ -2470,8 +2471,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   it, to another host). KEPT: `CLAUDE_CODE_OAUTH_TOKEN` and its refresh and descriptor siblings — `claude setup-token`'s
   token, which the docs say "authenticates with your Claude subscription"; it outranks `/login`, so while set it picks
   WHICH subscription, over the app's own login mode — `AWS_*`/`GOOGLE_*` (other programs read them, and without the
-  stripped switch they select nothing for the CLI), the providers' ids, the model settings, and the CLI's feature
-  `CLAUDE_CODE_USE_*` (`_POWERSHELL_TOOL`, `_NATIVE_FILE_SEARCH`, `_COWORK_PLUGINS`, `_CCR_V2`). The probe (`auth
+  stripped switch they select nothing for the CLI), the providers' ids and the model settings. The probe (`auth
   status`) runs in the same process environment as every CLI spawn, so it reports the account the app will use; a
   Warning names what was ignored, once (「Claude CLI: ignored …」). What an environment strip CANNOT reach: an `env`
   block or `apiKeyHelper` in the CLI's own settings files (the machine's `~/.claude/settings.json` in machine login
@@ -2494,6 +2494,19 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the session set (case G) and a secret's value logged; on the other, the secret strip removed and the OAuth token
   over-stripped. Not driven: the host's restart path (`desktop-e2e` is out of the fleet); it reads `Launched` exactly as
   the settings panel does, which is asserted.
+  **The CLI's feature switches, as a jail question** (the security review, 2026-09-28; `AgentToolVariables`). Each
+  non-account `CLAUDE_CODE_USE_*` the binary names was checked for whether it adds or replaces a tool, or changes how
+  file access is mediated: `_POWERSHELL_TOOL` STRIPPED (it turns on a shell tool the guard's matcher does not list —
+  but see the jail bullet below: on Windows that tool is on by DEFAULT, so the strip is not what closes it);
+  `_COWORK_PLUGINS` STRIPPED (undocumented — none of the CLI's 210 documentation pages names it — and by its name it
+  loads another product's plugins, which contribute MCP servers, hooks that run outside the permission checks, skills
+  and subagents); `_CCR_V2` STRIPPED, failing closed (undocumented; by its name the protocol of remote sessions another
+  client drives, which a local `-p` run never uses — stripped because nothing shows it leaves the tool set alone, not
+  because it was measured to add one); `_NATIVE_FILE_SEARCH` KEPT (documented: it discovers custom commands, subagents
+  and output styles with Node.js file APIs instead of ripgrep, and "does not affect the Grep or file search tools").
+  A Warning names what was ignored. Proof: `e2e-p49` case G3 — the three injected switches reach no stub spawn,
+  `_NATIVE_FILE_SEARCH` reaches every one (the control), the Warning names the three; confirmed to FAIL with the strip
+  removed.
 - The spawned agent is **jailed** by the PreToolUse scope-guard hook
   (`ChatEnvironmentService.ScopeGuardMjs` planner / `guard/system-scope-guard.mjs`
   系统模式 — identical logic, different write-scope; `e2e-p24` runs both): **reads**
@@ -2510,6 +2523,30 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   close (code run *inside* an agent-authored script; exfil via a fetched URL) need an OS sandbox —
   **declined**, and the reasoning is on the record in `docs/ROADMAP.md`: the `claude` CLI authenticates
   per-user, so a low-privilege service account breaks the mechanism the whole product rests on.
+  **A built-in the matcher does not name never reaches the guard — and two such built-ins run shell commands, so every
+  agent run REMOVES them** (`UnguardedTools`, applied in `AgentRunner.RunAsync`, the one door every run site uses:
+  chat plan/execute/revise/repair, jobs, the playground, validation, `extract` and the migrator; it becomes
+  `--disallowed-tools`, which "removes the matching tools from Claude's context", and subagents inherit only what the
+  main conversation has). Found 2026-09-28 from the CLI's tools reference, permission-modes and headless docs, not
+  measured on a real CLI (that would need a signed-in model call): **`PowerShell` is on by DEFAULT on Windows** —
+  "enabled automatically" without Git Bash, "on by default for claude.ai and Console accounts" with it — and in the
+  execute runs' `acceptEdits` mode the CLI auto-approves its `Set-Content`/`Add-Content`/`Clear-Content`/
+  `Remove-Item` on every path in the data folder but its own protected `.git`/`.claude`, so `state/`, `site.json`
+  and `uploads/` were writable and deletable with no prompt and no guard; and **`Monitor`** "uses the same permission
+  rules as Bash", so the execute settings' bare `Bash` allow pre-approved any background command, which the guard's Bash
+  checks (egress, inline eval, git history, path escape) never saw. The planner needs neither. What the docs say of the
+  rest: a tool that needs a permission and is not allowed is REFUSED in a `-p` run with no permission host, so it cannot
+  run (`Artifact`, `Workflow`, `EnterWorktree`…); `Agent` is guarded, since hooks fire for a subagent's tool calls;
+  `LSP` is inactive until a code-intelligence plugin is installed; `SendUserFile`, `RemoteTrigger`, `CronCreate` and
+  `ReadMcpResourceTool` need no permission but reach the household's own account, session or MCP servers, not a path
+  past the jail. **Two things that are true and stay as they are**: plan runs (and every read-only run) pass no
+  `--settings`, so they register NO guard — which costs no reach, because the guard's read rule is "only inside the data
+  folder", the same fence the CLI puts on reads outside its working directory, and writes are removed from those runs; and
+  Lyntai's one-shot calls (scorers, the memory judge, rephrasing) run with the CLI's default tool set minus
+  `AskUserQuestion` from a neutral cwd (`ClaudeArgs`), with no seam for the app to narrow it — read-only commands and
+  permission-free tools are available there, nothing that needs approval is. Proof: `e2e-p49` case G3 reads the stub's
+  argv: the plan and the execute run each name `PowerShell` and `Monitor` in `--disallowed-tools`; confirmed to FAIL
+  with the `AgentRunner` line removed.
 - **Egress is audited, not closed — and both planes are audited the same.** The agent reaches the
   network two ways: the CLI's built-in `WebFetch` and the registry's `scrape`. Neither can be shut for
   a planner whose job is reading arbitrary travel sites, and denying `WebFetch` alone only moves the
