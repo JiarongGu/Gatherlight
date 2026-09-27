@@ -7621,3 +7621,27 @@ and 7190. Every guard above held (the digest and completeness checks against the
 - 26 llama.cpp chat calls, all Ok; 0 claude-cli calls; 0 pace lines; judged = graph for both judges.
 
 The smoke's numbers inform nothing (24 questions).
+
+## Run 11 — amendment: guard 3 and the chat judge's coverage warning (design, after the first 11a attempt)
+
+Written and committed after the first attempt of 11a and BEFORE any other run. Nothing of that attempt was read except
+its guard output.
+
+**What happened.** The first 11a attempt (`results-2026-09-27T061058.150Z.json`, 06:10:58Z–06:14:01Z, exit 0) failed guard
+3 on one clause only. Guard 3 asked that "the bench prints no WARNING", and the bench printed one:
+`arm lc:Qwen3-0.6B-Q8_0 — judge failed open on 7/234 graph recalls`. That is the bench's own coverage warning, raised
+whenever a judge gives a verdict on fewer than 98% of its graph recalls. The same design says, in its last guard line,
+"A chat judge's coverage is NOT a guard: it is a result". Run 5b's Qwen3 (226/234) and Run 3's Gemma (202/234) would
+both have raised it. The two clauses contradict each other; the checker encoded the first. Every other guard held.
+
+**The resolution, fixed now.**
+
+- **Guard 3** reads: the bench prints no WARNING **other than its judge-coverage warning** (`judge failed open on N/M
+  graph recalls`), which is reported with the coverage it states. Any other WARNING still fails the guard.
+- **The first attempt's conclusions are not read** under the rule, because its guard failed as written. It is kept, and
+  reported afterwards beside the re-run as a descriptive instrument check only: the same configuration twice, which
+  sizes how far a sampling chat judge wanders between identical runs. It decides nothing.
+- **11a is re-run, and the re-run is the reading, whatever it shows.** Same arms and command, new ports (base 7030,
+  router 7093; none reserved, none listening, none used before). Order: the 11a re-run, then 11b, then 11c, as
+  registered. Everything else in the design is unchanged.
+- The checker (`devtools/_run11/guards11.mjs`, scratch) excludes exactly that warning text and no other.
