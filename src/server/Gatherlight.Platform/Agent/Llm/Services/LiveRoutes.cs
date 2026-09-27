@@ -72,8 +72,11 @@ public static class LiveRoutes
 
     /// <summary>Write <paramref name="consumer"/>'s route — or DELETE it when <paramref name="model"/> is blank,
     /// because a bare provider would mean that backend's default, not the consumer's. Throws on a model
-    /// <see cref="WhyNotAModel"/> refuses: every caller asks it first, so reaching here with one is a defect, and
-    /// storing it would route to a backend nobody chose.</summary>
+    /// <see cref="WhyNotAModel"/> refuses, because storing it would route to a backend nobody chose. The cortex row
+    /// (<c>CortexConfigService</c>) and the route migration (<c>LiveRouteMigrationStep</c>) ask it first; the 判断 bind
+    /// (<c>MemoryRecallController</c>) does NOT, and is safe only because its model has already passed
+    /// <c>EmbeddingCatalog.IsWellFormedId</c>, whose pattern admits no comma (a reranker's annotation model is the CLI's
+    /// own constant). A new caller must ask, or reaching here with a comma is a 500.</summary>
     public static void Set(IAppConfigService config, string consumer, string provider, string? model)
     {
         var m = model?.Trim();

@@ -26,8 +26,11 @@ public sealed record FactRanking(IReadOnlyList<FactHit> Hits, bool? Answered)
 }
 
 /// <summary>The fact index's LAYOUT MARKER — one <c>app_config</c> key saying where the graph's entries and vectors are.
-/// Written by <c>FactIndexStep</c> at startup and, around its own pass, by <see cref="IFactIndex.ReindexSemanticAsync"/>;
-/// the two never overlap, because the console is reachable only once the startup steps have run.</summary>
+/// THREE writers: <c>FactIndexStep</c> at startup; <see cref="IFactIndex.ReindexSemanticAsync"/>, around its own pass; and
+/// the 语义 bind (<c>MemoryRecallController</c>), which records a newly bound or changed embedder's vectors as owed
+/// (<see cref="VectorsOwed"/>) for the restart to pay. The startup step overlaps neither, because the console is reachable
+/// only once the startup steps have run; the bind and the pass CAN overlap — a bind landing mid-pass — which is why the
+/// pass hands the marker back by compare-and-set (<see cref="PassPrefix"/>).</summary>
 public static class FactIndexLayout
 {
     public const string Key = "facts.index.layout";

@@ -5,8 +5,9 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 
 /// <summary>Whether a reranker scores a long candidate in WINDOWS (<see cref="ChunkedScoreProvider"/>) — ON by default
 /// since 2026-09-24, when <c>docs/judge-bench.md</c> Run 6c's pre-registered rule held. Read ONCE at startup from the
-/// measurement knob <c>GATHERLIGHT_RERANK_CHUNKING</c>: <c>on</c> or <c>off</c>, anything else (and unset) meaning the
-/// default. <b>The knob is KEPT</b>, as the judge-input knob was when its default flipped (that one went on 2026-09-27,
+/// measurement knob <c>GATHERLIGHT_RERANK_CHUNKING</c>: <c>on</c>, <c>off</c> or <c>d177</c> (the third paragraph),
+/// anything else (and unset) meaning the default. <b>The knob is KEPT</b>, as the judge-input knob was when its default
+/// flipped (that one went on 2026-09-27,
 /// with the decorator it steered, when the app adopted Lyntai's <c>ContentChars</c>): <c>off</c> reproduces the cut every
 /// reranker was measured under in Runs 2–6, so judge-bench pins it on its <c>rr</c>/<c>rrf</c> arms and those runs
 /// re-launch as they ran. Announced at startup whenever it is SET, raw value beside what it resolved to, on

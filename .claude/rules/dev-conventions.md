@@ -418,7 +418,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   decay positions and links the index spends weeks accumulating — startup gets `SyncAsync` (back-fill
   only, via `FactIndexStep`) and a backup import gets the destructive `RebuildAsync`, because there the
   facts themselves were replaced. **Where only the VECTORS need redoing, nothing is rebuilt** (Lyntai D194, adopted at
-  the 3.5 bump, owner decision 2026-09-26): an embedding model turned on or changed (the console's semantic reindex), a
+  the 3.5 bump, owner decision 2026-09-26): an embedding model turned on or changed (paid by the RESTART that wires it —
+  the bind records the vectors as owed and `FactIndexStep` re-embeds at that marker; the console's semantic reindex is
+  refused until then, and afterwards re-embeds with the model already running), a
   vector address moved (layout "2" at startup) and the one-off for facts an old embedder batch refused each re-embed
   every entry IN PLACE — `FactIndex.ReembedInPlaceAsync` over Lyntai's `IReindexableMemory.ReindexAsync`, which writes
   vectors and nothing else, so node ids, links, decay positions, reinforcement and subject handles all stay and no fact
@@ -996,10 +998,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   controls across two stores also made it need a restart. The decorators that make it live are registered BEFORE
   `AddMemoryAnnotation`/`AddMemoryVerification`, whose `TryAddSingleton` then stands down — the BYO seam
   those registrations document — and "off" returns the library's own `MemoryAnnotation.None` /
-  `MemoryVerification.NoOpinion`, a state the engine already treats as "no policy registered", which is
-  what makes runtime flipping safe (in what it STORES; since Lyntai 3.5 an "off" write reports `Annotation` in its
-  `Ran` — `None` is an answer, about nothing — where no policy would not, which is right: nothing was asked, and it
-  keeps `FactIndex`'s unanswered-annotation warning for a real call). **NoOpinion, never `NothingRelevant`**: the latter asserts every recall
+  `MemoryVerification.NoOpinion`, which the engine STORES exactly as it would with no policy registered — what makes
+  runtime flipping safe. It does not REPORT them the same way since Lyntai 3.5: an "off" write sets `Annotation` in its
+  `Ran` — `None` is an answer, about nothing — where no policy would not, which is right (nothing was asked, and it
+  keeps `FactIndex`'s unanswered-annotation warning for a real call), so "off" and "no policy" are equal in the store,
+  not in `Ran`. **NoOpinion, never `NothingRelevant`**: the latter asserts every recall
   found nothing useful and teaches the engine exactly the wrong thing. The LOCAL MODEL is the honest
   exception and stays in `settings.json`: the embedder, vector store and engine member are consumed at DI
   REGISTRATION time, before the container — and therefore the DB — exists, the same reason `security.*`
