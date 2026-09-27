@@ -14,7 +14,8 @@ namespace Gatherlight.Server.Platform.Kernel.Services;
 /// <item><b>The whole process forgets the launcher's context at startup</b> (<see cref="ForgetLauncherContext"/>): the
 /// repository it named (<see cref="RepositoryVariables"/>), the Claude Code session it belonged to
 /// (<see cref="ParentSessionVariables"/>), whatever would take the claude CLI off the subscription login
-/// (<see cref="OffSubscriptionVariables"/>) and the app's own secrets (<see cref="AppSecretVariables"/>, which the app
+/// (<see cref="OffSubscriptionVariables"/>), whatever could add the agent a tool past the scope guard
+/// (<see cref="AgentToolVariables"/>) and the app's own secrets (<see cref="AppSecretVariables"/>, which the app
 /// itself reads through <see cref="Launched"/>). No child the app starts has any use for them, and three spawns cannot be
 /// reached per call: Lyntai's CLI runs go through its sealed <c>ProcessRunner</c>, whose <c>environment</c> argument can
 /// only SET variables (a BYO <c>IProcessRunner</c> would be the seam, but Lyntai then reports every CLI as available without looking —
@@ -136,8 +137,8 @@ public static class ChildEnvironment
     /// <c>ANTHROPIC_FEDERATION_RULE_ID</c>, which select a Console profile or federation credential ranked above
     /// <c>/login</c> (the federation needs <c>ANTHROPIC_ORGANIZATION_ID</c> beside it, so the rule id alone is enough to
     /// strip); and <c>ANTHROPIC_CONFIG_DIR</c>, the directory whose ACTIVE profile ranks above <c>/login</c> when it is a
-    /// federation one. The other <c>CLAUDE_CODE_USE_*</c> the binary names (<c>_POWERSHELL_TOOL</c>,
-    /// <c>_NATIVE_FILE_SEARCH</c>, <c>_COWORK_PLUGINS</c>, <c>_CCR_V2</c>) are features, not accounts, and stay.</item>
+    /// federation one. The other <c>CLAUDE_CODE_USE_*</c> the binary names are features, not accounts: those that can
+    /// change the agent's tools are <see cref="AgentToolVariables"/>, and <c>_NATIVE_FILE_SEARCH</c> stays.</item>
     /// <item><b>An endpoint</b>: <c>ANTHROPIC_BASE_URL</c> and <c>CLAUDE_CODE_API_BASE_URL</c>, every provider's
     /// <c>ANTHROPIC_*_BASE_URL</c> (<see cref="IsOffSubscriptionVariable"/> matches the family, so one the next CLI adds is
     /// covered), <c>ANTHROPIC_API_HOST</c> (undocumented; named in the binary, stripped by what its name says),
@@ -192,12 +193,36 @@ public static class ChildEnvironment
     /// none of them, by its allow-list.</para></summary>
     public static readonly IReadOnlyList<string> AppSecretVariables = ["GATHERLIGHT_ACCESS_TOKEN", "GATHERLIGHT_TLS_CERT_PASSWORD"];
 
+    /// <summary>The CLI's feature switches that can ADD a tool, or change how one is mediated, past what the app configures
+    /// and the scope guard sees (a jail question, security review 2026-09-28). Each <c>CLAUDE_CODE_USE_*</c> the installed
+    /// binary (2.1.283) names that is not an account selector (<see cref="OffSubscriptionVariables"/>) was checked:
+    /// <list type="bullet">
+    /// <item><c>CLAUDE_CODE_USE_POWERSHELL_TOOL</c> — STRIPPED. It turns on the PowerShell tool, which the guard's matcher
+    /// does not list. But on Windows the tool is on by DEFAULT without it (the CLI's tools reference), so stripping the
+    /// switch is not what closes the gap: every agent run disallows the tool (<c>UnguardedTools</c>).</item>
+    /// <item><c>CLAUDE_CODE_USE_COWORK_PLUGINS</c> — STRIPPED. Undocumented (none of the CLI's 210 documentation pages names
+    /// it); by its name it loads the plugins of another product's store, and plugins contribute exactly what the app
+    /// configures itself — MCP servers, hooks (which run outside the permission checks, and a PreToolUse hook can approve
+    /// a call), skills and subagents.</item>
+    /// <item><c>CLAUDE_CODE_USE_CCR_V2</c> — STRIPPED, failing closed. Undocumented too; by its name the protocol of
+    /// Claude Code Remote sessions, a channel by which another client drives a session — which a local <c>-p</c> run the
+    /// app starts never uses. It is stripped because nothing shows it leaves the tool set alone and the app has no use for
+    /// it, not because it was measured to add a tool.</item>
+    /// <item><c>CLAUDE_CODE_USE_NATIVE_FILE_SEARCH</c> — KEPT. Documented: it makes the CLI discover custom commands,
+    /// subagents and output styles with Node.js file APIs instead of ripgrep, and "does not affect the Grep or file search
+    /// tools" — no tool is added or replaced, and file access is mediated as before.</item>
+    /// </list>
+    /// The rest (<c>_BEDROCK</c> and its siblings) pick another account and are <see cref="OffSubscriptionVariables"/>.</summary>
+    public static readonly IReadOnlyList<string> AgentToolVariables =
+        ["CLAUDE_CODE_USE_POWERSHELL_TOOL", "CLAUDE_CODE_USE_COWORK_PLUGINS", "CLAUDE_CODE_USE_CCR_V2"];
+
     /// <summary>What <see cref="ForgetLauncherContext"/> removed, by kind — names only, for the startup log.</summary>
     public sealed record Forgotten(
-        IReadOnlyList<string> LauncherContext, IReadOnlyList<string> OffSubscription, IReadOnlyList<string> AppSecrets)
+        IReadOnlyList<string> LauncherContext, IReadOnlyList<string> OffSubscription, IReadOnlyList<string> AgentTools,
+        IReadOnlyList<string> AppSecrets)
     {
         /// <summary>Whether anything was removed.</summary>
-        public bool Any => LauncherContext.Count + OffSubscription.Count + AppSecrets.Count > 0;
+        public bool Any => LauncherContext.Count + OffSubscription.Count + AgentTools.Count + AppSecrets.Count > 0;
     }
 
     private static readonly object RememberedGate = new();
@@ -205,7 +230,8 @@ public static class ChildEnvironment
 
     /// <summary>Remove from THIS process's environment, so no child inherits them: the launcher's repository
     /// (<see cref="RepositoryVariables"/>) and Claude Code session (<see cref="ParentSessionVariables"/>), what would take
-    /// the claude CLI off the subscription login (<see cref="OffSubscriptionVariables"/>), and the app's own secrets
+    /// the claude CLI off the subscription login (<see cref="OffSubscriptionVariables"/>), what could add a tool past the
+    /// guard (<see cref="AgentToolVariables"/>), and the app's own secrets
     /// (<see cref="AppSecretVariables"/>, whose values it remembers for <see cref="Launched"/>). Called once at the top of
     /// <c>GatherlightApp.Build</c>, before anything is spawned; idempotent. Returns the NAMES removed — never their values,
     /// several of which are credentials — for the startup log.</summary>
@@ -213,6 +239,7 @@ public static class ChildEnvironment
     {
         var context = new List<string>();
         var offSubscription = new List<string>();
+        var agentTools = new List<string>();
         var secrets = new List<string>();
         foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
         {
@@ -220,6 +247,7 @@ public static class ChildEnvironment
             List<string>? into =
                 Matches(key, RepositoryVariables, RepositoryPrefixes) || Matches(key, ParentSessionVariables, []) ? context
                 : IsOffSubscriptionVariable(key) ? offSubscription
+                : Matches(key, AgentToolVariables, []) ? agentTools
                 : Matches(key, AppSecretVariables, []) ? secrets
                 : null;
             if (into is null) continue;
@@ -228,8 +256,8 @@ public static class ChildEnvironment
             Environment.SetEnvironmentVariable(key, null);
             into.Add(key);
         }
-        foreach (var list in new[] { context, offSubscription, secrets }) list.Sort(StringComparer.Ordinal);
-        return new Forgotten(context, offSubscription, secrets);
+        foreach (var list in new[] { context, offSubscription, agentTools, secrets }) list.Sort(StringComparer.Ordinal);
+        return new Forgotten(context, offSubscription, agentTools, secrets);
     }
 
     /// <summary>The value of <paramref name="name"/> as the app was LAUNCHED with it: the process environment while the

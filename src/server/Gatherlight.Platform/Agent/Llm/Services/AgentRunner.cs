@@ -36,6 +36,9 @@ public sealed class AgentRunner : IAgentRunner
     public async Task<AgentSessionResult> RunAsync(ClaudeAgentOptions options, string label,
         Action<AgentEvent>? onEvent = null, EditTracker? tracker = null, CancellationToken ct = default)
     {
+        // Every agent run, whichever site built it: the CLI built-ins the scope guard cannot see are removed here, the one
+        // door they all go through (UnguardedTools).
+        options = UnguardedTools.Apply(options);
         var emit = onEvent ?? (_ => { });
         var sw = Stopwatch.StartNew();
         // The one line that makes every LLM call traceable — consumer, cwd, model, policy, flags, prompt

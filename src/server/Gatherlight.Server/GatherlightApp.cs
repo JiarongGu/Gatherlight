@@ -752,6 +752,11 @@ public static class GatherlightApp
                 + "login only, never an API key, another provider or another endpoint; no claude it starts sees them, and its "
                 + "sign-in state is probed without them",
                 string.Join(", ", forgotten.OffSubscription));
+        if (forgotten.AgentTools.Count > 0)
+            app.Logger.LogWarning(
+                "Claude CLI: ignored {Names} from the environment the app was started with — each can add the agent a tool, or "
+                + "change how one is mediated, past the scope guard; the agent's tools are the ones the app configures",
+                string.Join(", ", forgotten.AgentTools));
         if (forgotten.AppSecrets.Count > 0)
             app.Logger.LogInformation(
                 "Child environment: {Names} kept for the app's own use and withheld from every process it starts",
