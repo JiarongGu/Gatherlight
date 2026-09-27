@@ -150,7 +150,8 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                         sp.GetService<Lyntai.Inference.IProviderRouterFactory>());
                 if (wrapped is not null)
                     verifier = new RerankAdmission(verifier, wrapped, pace, sp.GetService<ILogger<RerankAdmission>>());
-                // Uncut in BOTH segmenting modes: ours windows downstream, and in the d177 measurement mode Lyntai's
+                // Uncut in every segmenting mode: ours windows downstream (evenly, or at boundaries in the boundary
+                // measurement mode, Run 12), and in the d177 measurement mode Lyntai's
                 // provider segments (Register) — with no wrapper, no pace and no admission (Run 10).
                 return new RerankInputCap(verifier, window, RerankChunking.Uncut);
             });

@@ -482,8 +482,16 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
     }
 
     /// <summary>Where each of <see cref="Windows"/>'s windows starts and ends in <paramref name="text"/> — computed
-    /// once, here, so the windows sent and the windows the time budget counts cannot differ.</summary>
-    public static IReadOnlyList<(int Start, int End)> WindowSpans(string text, int size, int maxWindows = MaxWindows)
+    /// once, here, so the windows sent and the windows the time budget counts cannot differ. The edges are placed as this
+    /// process's chunking mode says (<see cref="RerankChunking.AtBoundaries"/>), so every caller cuts the same windows.</summary>
+    public static IReadOnlyList<(int Start, int End)> WindowSpans(string text, int size, int maxWindows = MaxWindows) =>
+        WindowSpans(text, size, maxWindows, RerankChunking.AtBoundaries);
+
+    /// <summary><see cref="WindowSpans(string, int, int)"/> with the placement named: evenly spaced (false, the default
+    /// mode), or with each window's interior edges moved onto text boundaries (true, the <c>boundary</c> measurement
+    /// mode, <c>docs/judge-bench.md</c> Run 12 — see <see cref="SnapToBoundaries"/>). A text that fits one window, and a
+    /// call of one window per candidate (the cut), are placed identically either way.</summary>
+    public static IReadOnlyList<(int Start, int End)> WindowSpans(string text, int size, int maxWindows, bool atBoundaries)
     {
         if (size <= 0 || text.Length <= size) return [(0, text.Length)];
         var n = Math.Clamp(WindowsNeeded(text.Length, size), 1, Math.Max(1, maxWindows));
@@ -498,7 +506,151 @@ public sealed class RerankInputCap : IMemoryVerificationPolicy
             if (end < text.Length && char.IsHighSurrogate(text[end - 1]) && char.IsLowSurrogate(text[end])) end--;
             spans[i] = (start, end);
         }
-        return spans;
+        return atBoundaries ? SnapToBoundaries(text, size, spans) : spans;
+    }
+
+    /// <summary>How far, in UTF-16 units, the <c>boundary</c> mode may move a window's edge to reach a text boundary: an
+    /// eighth of the window (125 at the 1,000-character cap; 31–63 at mMiniLMv2's fitted budgets of 253–506).</summary>
+    public const int BoundarySlackDivisor = 8;
+
+    /// <summary>The <c>boundary</c> mode's placement: <paramref name="spans"/> (evenly spaced, at least two) with each
+    /// window moved, within <see cref="BoundarySlackDivisor"/>'s slack, so that as many of its INTERIOR edges as possible
+    /// fall on a text boundary. Kept from the even placement, by construction:
+    /// <list type="bullet">
+    /// <item>the NUMBER of windows, so the pace and the per-call ceiling count what they counted;</item>
+    /// <item>the first window starts at 0 and the last ends at the text's end (the tail);</item>
+    /// <item>no window is longer than <paramref name="size"/>: an interior start moves either way by at most the slack, and
+    /// an end only BACK from start + <paramref name="size"/>, by at most the slack; the last window's start moves only
+    /// forward;</item>
+    /// <item>each consecutive pair overlaps by at least a quarter of a window (<see cref="OverlapDivisor"/>) — or by at least
+    /// what the even placement gave it, when that was already less (a text past four window-lengths).</item>
+    /// </list>
+    /// A boundary is Lyntai D177's (its <c>InputSegmenter</c>), in its order of preference: a blank line, else a line
+    /// break, else a sentence end (。！？；, or .!?; followed by whitespace), else whitespace — a position just AFTER one.
+    /// Under a declared window the text is already NFKC, so a fullwidth ！？； is ASCII by then and counts only before
+    /// whitespace, as in D177. Among the placements that keep every rule above, the one chosen puts the MOST edges on a
+    /// boundary, then the most on a preferred kind, then moves the edges least; the even placement is always among the
+    /// candidates, so a placement always exists and an edge with no boundary in reach stays where it was.</summary>
+    private static (int Start, int End)[] SnapToBoundaries(string text, int size, (int Start, int End)[] spans)
+    {
+        var n = spans.Length;
+        var slack = Math.Max(0, size / BoundarySlackDivisor);
+        if (n < 2 || slack == 0) return spans;
+        var floor = new int[n - 1];
+        for (var i = 0; i + 1 < n; i++) floor[i] = Math.Min(size / OverlapDivisor, spans[i].End - spans[i + 1].Start);
+        var placements = new List<Placement>[n];
+        for (var i = 0; i < n; i++) placements[i] = Placements(text, size, slack, spans, i);
+
+        // The best chain, window by window: a chain scores the sum of its placements' scores, and a step is allowed only
+        // when the pair keeps its overlap floor and both edges advance.
+        var best = new long[n][];
+        var from = new int[n][];
+        for (var i = 0; i < n; i++)
+        {
+            best[i] = new long[placements[i].Count];
+            from[i] = new int[placements[i].Count];
+            for (var j = 0; j < placements[i].Count; j++)
+            {
+                best[i][j] = long.MinValue;
+                from[i][j] = -1;
+                var q = placements[i][j];
+                if (i == 0) { best[i][j] = q.Score; continue; }
+                for (var k = 0; k < placements[i - 1].Count; k++)
+                {
+                    if (best[i - 1][k] == long.MinValue) continue;
+                    var p = placements[i - 1][k];
+                    if (p.End - q.Start < floor[i - 1] || q.Start <= p.Start || q.End <= p.End) continue;
+                    var total = best[i - 1][k] + q.Score;
+                    if (total > best[i][j]) { best[i][j] = total; from[i][j] = k; }
+                }
+            }
+        }
+        var last = -1;
+        for (var j = 0; j < placements[n - 1].Count; j++)
+            if (best[n - 1][j] != long.MinValue && (last < 0 || best[n - 1][j] > best[n - 1][last])) last = j;
+        if (last < 0) return spans;                          // unreachable: the even placement is always a chain
+        var snapped = new (int Start, int End)[n];
+        for (var i = n - 1; i >= 0; i--)
+        {
+            snapped[i] = (placements[i][last].Start, placements[i][last].End);
+            last = from[i][last];
+        }
+        return snapped;
+    }
+
+    /// <summary>One window's candidate placement and its score: interior edges on a boundary first, then their kinds (rank
+    /// 0 best; an edge on no boundary costs <see cref="NoBoundaryRank"/>), then how far both edges moved.</summary>
+    private readonly record struct Placement(int Start, int End, int OnBoundary, int KindCost, int Moved)
+    {
+        public long Score => OnBoundary * 1_000_000_000L - KindCost * 1_000_000L - Moved;
+    }
+
+    private const int NoBoundaryRank = 4;
+
+    /// <summary>The placements window <paramref name="i"/> may take: its even placement, and every start and end on a
+    /// boundary — the NEAREST start of each kind on each side of the even start (within the slack; only forward for the
+    /// last window) and, for each start, the LATEST end of each kind within the slack below start + <paramref name="size"/>.
+    /// The first window's start and the last window's end are the text's own edges and never move.</summary>
+    private static List<Placement> Placements(string text, int size, int slack, (int Start, int End)[] spans, int i)
+    {
+        var n = spans.Length;
+        var (s0, e0) = spans[i];
+        var starts = new List<int> { s0 };
+        if (i > 0)
+        {
+            var lo = i == n - 1 ? s0 : Math.Max(1, s0 - slack);
+            var hi = Math.Min(text.Length - 1, s0 + slack);
+            for (var kind = 0; kind < NoBoundaryRank; kind++)
+            {
+                for (var c = s0; c >= lo; c--) if (BoundaryRank(text, c) == kind) { starts.Add(c); break; }
+                for (var c = s0 + 1; c <= hi; c++) if (BoundaryRank(text, c) == kind) { starts.Add(c); break; }
+            }
+        }
+        var list = new List<Placement>();
+        foreach (var a in starts.Distinct())
+        {
+            var ends = new List<int>();
+            if (i == n - 1) ends.Add(text.Length);
+            else
+            {
+                var max = a == s0 ? e0 : Math.Min(text.Length, a + size);
+                if (max < text.Length && char.IsHighSurrogate(text[max - 1]) && char.IsLowSurrogate(text[max])) max--;
+                ends.Add(max);
+                for (var kind = 0; kind < NoBoundaryRank; kind++)
+                    for (var c = max; c >= Math.Max(a + 1, max - slack); c--)
+                        if (BoundaryRank(text, c) == kind) { ends.Add(c); break; }
+            }
+            foreach (var e in ends.Distinct())
+            {
+                if (e <= a) continue;
+                int on = 0, cost = 0;
+                if (i > 0) { var r = BoundaryRank(text, a); if (r >= 0) on++; cost += r >= 0 ? r : NoBoundaryRank; }
+                if (i < n - 1) { var r = BoundaryRank(text, e); if (r >= 0) on++; cost += r >= 0 ? r : NoBoundaryRank; }
+                list.Add(new Placement(a, e, on, cost, Math.Abs(a - s0) + Math.Abs(e - e0)));
+            }
+        }
+        return list;
+    }
+
+    /// <summary>The kind of text boundary just BEFORE index <paramref name="c"/> (after <c>text[c - 1]</c>), in Lyntai
+    /// D177's order of preference: 0 a blank line, 1 a line break, 2 a sentence end, 3 whitespace; −1 for none, and for
+    /// the text's own edges, which are not interior.</summary>
+    public static int BoundaryRank(string text, int c)
+    {
+        if (c <= 0 || c >= text.Length) return -1;
+        var prev = text[c - 1];
+        if (prev == '\n')
+        {
+            for (var j = c - 2; j >= 0; j--)
+            {
+                if (text[j] == '\n') return 0;
+                if (text[j] is not (' ' or '\t' or '\r')) break;
+            }
+            return 1;
+        }
+        if (prev is '。' or '！' or '？' or '；') return 2;
+        if ((prev is '.' or '!' or '?' or ';') && char.IsWhiteSpace(text[c])) return 2;
+        return char.IsWhiteSpace(prev) ? 3 : -1;
     }
 
     /// <summary>A declared window, or null when it cannot hold even a pair's overhead — the ONE rule

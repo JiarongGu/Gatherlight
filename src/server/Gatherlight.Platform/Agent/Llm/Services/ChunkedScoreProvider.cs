@@ -5,7 +5,8 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 
 /// <summary>Whether a reranker scores a long candidate in WINDOWS (<see cref="ChunkedScoreProvider"/>) — ON by default
 /// since 2026-09-24, when <c>docs/judge-bench.md</c> Run 6c's pre-registered rule held. Read ONCE at startup from the
-/// measurement knob <c>GATHERLIGHT_RERANK_CHUNKING</c>: <c>on</c>, <c>off</c> or <c>d177</c> (the third paragraph),
+/// measurement knob <c>GATHERLIGHT_RERANK_CHUNKING</c>: <c>on</c>, <c>off</c>, <c>d177</c> (the third paragraph) or
+/// <c>boundary</c> (the fourth),
 /// anything else (and unset) meaning the default. <b>The knob is KEPT</b>, as the judge-input knob was when its default
 /// flipped (that one went on 2026-09-27,
 /// with the decorator it steered, when the app adopted Lyntai's <c>ContentChars</c>): <c>off</c> reproduces the cut every
@@ -20,7 +21,14 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// <see cref="ChunkedScoreProvider"/> wraps the provider (so there is no pace and no <c>RerankAdmission</c>), and the
 /// <c>llamacpp-rerank</c> registration carries <c>MaxInputChars</c> and <c>Segmentation</c> instead
 /// (<see cref="LyntaiSegmentation"/>), so Lyntai's HTTP reranker segments each over-long document itself and scores it
-/// as its best piece (its D177, with Parts 305 and 306).</para></summary>
+/// as its best piece (its D177, with Parts 305 and 306).</para>
+///
+/// <para><b>A FOURTH value, <c>boundary</c> — a measurement mode, never a default</b> (<c>docs/judge-bench.md</c> Run 12,
+/// 2026-09-28): OUR windows with one thing changed, WHERE their edges fall. Everything else is <c>on</c>'s — the same
+/// <see cref="ChunkedScoreProvider"/>, budget, number of windows per candidate, overlap floor, first window at the start
+/// and last at the tail, NFKC handling, pace, admission and skip — and each window's interior edges move, within a slack,
+/// onto the nearest text boundary (<see cref="RerankInputCap.WindowSpans(string, int, int, bool)"/>). A candidate that
+/// fits one window, and a call sized down to one window per candidate, are sent exactly as under <c>on</c>.</para></summary>
 public static class RerankChunking
 {
     /// <summary>The knob's name.</summary>
@@ -43,6 +51,9 @@ public static class RerankChunking
 
         /// <summary><c>d177</c>, a measurement mode: read in pieces by Lyntai's HTTP reranker (<see cref="LyntaiSegmentation"/>).</summary>
         Lyntai,
+
+        /// <summary><c>boundary</c>, a measurement mode: <see cref="Windows"/> with each window's edges on text boundaries.</summary>
+        Boundary,
     }
 
     /// <summary>The mode this process runs.</summary>
@@ -51,18 +62,27 @@ public static class RerankChunking
         "on" => Modes.Windows,
         "off" => Modes.Cut,
         "d177" => Modes.Lyntai,
+        "boundary" => Modes.Boundary,
         _ => Default ? Modes.Windows : Modes.Cut,
     };
 
-    /// <summary>Whether OUR chunking is on for this process (<see cref="ChunkedScoreProvider"/> wraps the reranker).</summary>
-    public static readonly bool On = Mode == Modes.Windows;
+    /// <summary>Whether OUR chunking is on for this process (<see cref="ChunkedScoreProvider"/> wraps the reranker) — in the
+    /// default mode and in <c>boundary</c>, which differs from it only in where the windows' edges fall.</summary>
+    public static readonly bool On = Mode is Modes.Windows or Modes.Boundary;
+
+    /// <summary>Whether this process's windows have their edges moved onto text boundaries (the <c>boundary</c> mode) —
+    /// what <see cref="RerankInputCap.WindowSpans(string, int, int)"/> reads, so every caller cuts the same windows.</summary>
+    public static readonly bool AtBoundaries = Mode == Modes.Boundary;
 
     /// <summary>Whether <see cref="RerankInputCap"/> leaves candidates UNCUT — true unless the mode is the cut, because
-    /// both segmenting modes read the whole text downstream.</summary>
+    /// every segmenting mode reads the whole text downstream.</summary>
     public static bool Uncut => Mode != Modes.Cut;
 
     /// <summary>The mode as the knob spells it — what the startup announcement prints.</summary>
-    public static string Name => Mode switch { Modes.Windows => "on", Modes.Lyntai => "d177", _ => "off" };
+    public static string Name => Mode switch
+    {
+        Modes.Windows => "on", Modes.Lyntai => "d177", Modes.Boundary => "boundary", _ => "off",
+    };
 
     /// <summary>What the <c>d177</c> mode sets on the <c>llamacpp-rerank</c> registration for a reranker with declared
     /// window <paramref name="window"/> — the configuration Run 10 states per model, mapped onto ours as closely as
