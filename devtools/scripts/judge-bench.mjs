@@ -141,6 +141,9 @@
 // `rrd` (Run 10) is the same partition arm with the knob's `d177` MEASUREMENT mode: Lyntai's HTTP reranker segments each
 // long candidate itself (RerankChunking.LyntaiSegmentation), with no ChunkedScoreProvider, pace or admission — paired
 // against `rrk` in its own block (RUN 10).
+// `rrb` (Run 12) is `rrk` with the knob's `boundary` MEASUREMENT mode: OUR windows, pace, admission and skip, with each
+// window's interior edges moved onto a text boundary (RerankInputCap.WindowSpans) — paired against `rrk` in its own block
+// (RUN 12), which also splits every discordant query by whether the two arms sent the reranker the same candidate notes.
 // `--claude-stub` points every server at the e2e claude STUB on ANY fixture (the long fixture always does), refusing a
 // Claude-judge arm, so a reranker-only run on the bilingual seed cannot spend quota even by accident.
 // `--rerank-memo` puts a small proxy in front of the router for each local-model arm: during the ACCURACY pass an
@@ -372,6 +375,10 @@ const RERANK_ARM_KINDS = {
   // mode: candidates uncut, no ChunkedScoreProvider (so no pace and no admission), and MaxInputChars/Segmentation on the
   // rerank registration (RerankChunking.LyntaiSegmentation). Never what ships.
   rrd: { suffix: 'partition · Lyntai D177 pieces', env: { GATHERLIGHT_RERANK_CHUNKING: 'd177' }, knob: /rerank chunking = d177 \(/ },
+  // Run 12: OUR windows with their edges on text boundaries — the knob's `boundary` measurement mode. The same
+  // ChunkedScoreProvider, pace, admission and skip as `rrk`; only WHERE each window's interior edges fall differs. Never
+  // what ships unless its registered rule says so.
+  rrb: { suffix: 'partition · chunked at boundaries', env: { GATHERLIGHT_RERANK_CHUNKING: 'boundary' }, knob: /rerank chunking = boundary \(/ },
 };
 // THE PRODUCT'S LAUNCH NUMBERS, restated here because the bench writes its own router preset — and GUARDED against the
 // C# they restate (mirrorGuard, below, before anything starts), because a bench that launches a model differently
@@ -1106,6 +1113,90 @@ const printD177 = (run) => {
   return out;
 };
 
+/** Lyntai D177's text boundaries (its InputSegmenter), mirrored from RerankInputCap.BoundaryRank: the kind of boundary
+ *  just BEFORE index c — 0 a blank line, 1 a line break, 2 a sentence end, 3 whitespace; -1 none, and at the text's own
+ *  edges. Used only to COUNT which window edges fall on one (RUN 12), never to cut anything. */
+const boundaryRank = (text, c) => {
+  if (c <= 0 || c >= text.length) return -1;
+  const prev = text[c - 1];
+  if (prev === '\n') {
+    for (let j = c - 2; j >= 0; j--) { if (text[j] === '\n') return 0; if (!' \t\r'.includes(text[j])) break; }
+    return 1;
+  }
+  if ('。！？；'.includes(prev)) return 2;
+  if ('.!?;'.includes(prev) && /\s/.test(text[c])) return 2;
+  return /\s/.test(prev) ? 3 : -1;
+};
+
+/** RUN 12 (docs/judge-bench.md, registered before the run): OUR windows with their edges on text boundaries (`rrb`, the
+ *  knob's boundary mode) against the same windows evenly spaced (`rrk`, as shipped), per reranker, paired per query
+ *  within the run — the RUN 10 block's shape, plus two things Run 10 taught:
+ *  - WHERE THE EDGES FELL: of every window edge that is not the note's own start or end, how many sat on a text boundary,
+ *    per arm (the proxy's `edges`) — the check that the mode did what it says (measuring rule 1);
+ *  - THE LINK-DYNAMICS SPLIT: every discordant query (on all, found@8 and top-1) sorted by whether the two arms sent the
+ *    reranker the SAME candidate notes at that query. Only there can placement alone have made the difference; where the
+ *    notes differ, the engine had already gathered a different set — a recall-reinforcement divergence from an earlier
+ *    query (Run 10's BGE, four-fact Japanese pages) — and the exact test is repeated on the same-notes queries alone.
+ *  Printed only for a run with both arms of a reranker. */
+const printBoundary = (run) => {
+  const pairs = run.arms.filter((a) => /^rrk:/.test(a.key))
+    .map((rrk) => ({ model: rrk.key.slice(4), rrk, rrb: run.arms.find((a) => a.key === `rrb:${rrk.key.slice(4)}`) }))
+    .filter((p) => p.rrb);
+  if (!pairs.length) return null;
+  const { groups, at } = run.meta.positions ? positionGroups(run.meta.positions) : { groups: [], at: null };
+  const out = { pairs: {} };
+  console.log('\nRUN 12 — our windows at text boundaries (rrb) against evenly spaced (rrk), per reranker; b = even hit & boundary miss, c = the reverse');
+  const tx = (x) => `${x.b}/${x.c}, p ${pv(x.p)}${x.netPp === null ? '' : `, ${signed(x.netPp, 1)}pp`}`;
+  const edgesOf = (arm) => arm.rows.reduce((a, r) => (r.rerank?.edges ? [a[0] + r.rerank.edges[0], a[1] + r.rerank.edges[1]] : a), [0, 0]);
+  const sameNotes = (r, q) => Array.isArray(r.rerank?.notes) && Array.isArray(q.rerank?.notes)
+    && JSON.stringify(r.rerank.notes) === JSON.stringify(q.rerank.notes);
+  for (const p of pairs) {
+    const all = pairedTest(p.rrb, p.rrk, 'all');
+    const byGroup = Object.fromEntries(groups.map((g) => [g, pairedTest(p.rrb, p.rrk, null, at(g))]));
+    const identity = identityOf(p.rrb, p.rrk);
+    const betterAll = all.found.p < 0.05 && all.found.c - all.found.b > 0;
+    const worseAll = all.found.p < 0.05 && all.found.c - all.found.b < 0;
+    const worseAt = groups.filter((g) => byGroup[g].found.p < 0.05 && byGroup[g].found.c - byGroup[g].found.b < 0);
+    const sEven = stat(p.rrk.rows), sB = stat(p.rrb.rows);
+    const eEven = edgesOf(p.rrk), eB = edgesOf(p.rrb);
+    // The split: per metric, the discordant queries where both arms sent the same candidate notes, and the rest.
+    const bySeq = new Map(p.rrk.rows.map((r) => [r.seq, r]));
+    const split = {};
+    for (const [k, hit] of Object.entries(HITS)) {
+      const x = { same: { b: 0, c: 0 }, differ: { b: 0, c: 0 }, unknown: { b: 0, c: 0 } };
+      for (const r of p.rrb.rows) {
+        const q = bySeq.get(r.seq);
+        if (!q || r.error !== null || q.error !== null || hit(q) === hit(r)) continue;
+        const where = !Array.isArray(r.rerank?.notes) || !Array.isArray(q.rerank?.notes) ? 'unknown' : sameNotes(r, q) ? 'same' : 'differ';
+        x[where][hit(q) ? 'b' : 'c']++;
+      }
+      x.same.p = mcnemarP(x.same.b, x.same.c);
+      split[k] = x;
+    }
+    const sameAll = p.rrb.rows.filter((r) => { const q = bySeq.get(r.seq); return q && sameNotes(r, q); }).length;
+    out.pairs[p.model] = { identity, all: { top1: all.top1, found: all.found, pairs: all.pairs }, byGroup, betterAll, worseAll, worseAt,
+      counts: { even: { top1: sEven.top1, found: sEven.found }, boundary: { top1: sB.top1, found: sB.found } },
+      edges: { even: eEven, boundary: eB }, sameNotesQueries: sameAll, split };
+    const pct = (e) => (e[0] ? `${e[1]}/${e[0]} (${(100 * e[1] / e[0]).toFixed(1)}%)` : '—');
+    console.log(`  ${p.model}: found@8 even ${sEven.found} → boundary ${sB.found} (${tx(all.found)}); top-1 ${sEven.top1} → ${sB.top1} (${tx(all.top1)});`
+      + ` identical rows: ${identity.identical ? 'YES' : `no — ${identity.differingQueries} of ${identity.pairs} differ (pos/ans/rank/ret/err/page/body `
+      + `${Object.values(identity.differ).join('/')})`}`);
+    // An answer SPLIT: the target's note was sent, and no document held its answer whole.
+    const splitAnswers = (arm) => arm.rows.filter((r) => r.rerank?.targetSent === true && r.rerank?.answerSent === false).length;
+    out.pairs[p.model].answerSplit = { even: splitAnswers(p.rrk), boundary: splitAnswers(p.rrb) };
+    console.log(`    interior window edges on a text boundary: even ${pct(eEven)}, boundary ${pct(eB)};`
+      + ` queries whose target note was sent with its answer in no document whole: even ${splitAnswers(p.rrk)}, boundary ${splitAnswers(p.rrb)}`);
+    for (const g of groups)
+      console.log(`    ${pad(g, 8)} found@8 ${tx(byGroup[g].found)} · top-1 ${tx(byGroup[g].top1)} (${byGroup[g].pairs} pairs)`);
+    for (const [k, x] of Object.entries(split))
+      console.log(`    discordant ${k === 'found' ? 'found@8' : 'top-1  '}: same candidate notes ${x.same.b}/${x.same.c} (p ${pv(x.same.p)}), different notes ${x.differ.b}/${x.differ.c}`
+        + `${x.unknown.b + x.unknown.c ? `, not recorded ${x.unknown.b}/${x.unknown.c}` : ''} — ${sameAll} of ${p.rrb.rows.length} queries sent the same notes`);
+    console.log(`    boundary significantly BETTER on all found@8: ${betterAll ? 'YES' : 'no'}; significantly WORSE on all found@8: ${worseAll ? 'YES' : 'no'};`
+      + ` significantly WORSE on found@8 at: ${worseAt.join(', ') || 'none'}`);
+  }
+  return out;
+};
+
 /** RUN 9'S QUESTION AND RULE (docs/judge-bench.md, registered before the run): on the MIXED fixture, does scoring long
  *  notes in windows cost the SHORT facts they compete with? Per reranker, chunked (`rrk`) against cut (`rr`), paired per
  *  query, on questions whose target is SHORT, on those whose target is LONG, and on `all`, both metrics. The rule reads
@@ -1472,6 +1563,8 @@ const analyse = (run, { baseline = null } = {}) => {
   if (meta.positions) { const mr = printMixedRule(run); if (mr) out.mixedRule = mr; }
   // Run 10: D177 (`rrd`) against ours (`rrk`), when both ran. Nothing for any earlier run.
   { const r10 = printD177(run); if (r10) out.run10 = r10; }
+  // Run 12: boundary windows (`rrb`) against even ones (`rrk`), when both ran. Nothing for any earlier run.
+  { const r12 = printBoundary(run); if (r12) out.run12 = r12; }
 
   // THE A/A SANITY CHECK. Each twin ran the identical configuration from the identical snapshot, so the paired
   // test must stay quiet on `all`. Per-set p is shown but not warned on (ten tests at 0.05 alarm by themselves).
@@ -1777,14 +1870,14 @@ const armConfigFor = (key, at = RUN_AT) => {
   const then = beforeContentChars(at) ? BEFORE_CONTENT_CHARS[key] : null;
   if (then) return { ...then, reranker: null, chatJudge: null };
   if (ARMS[key]) return { label: ARMS[key].label, enrichment: ARMS[key].enrichment, judgeInput: ARMS[key].judgeInput ?? null, reranker: null, chatJudge: null };
-  const m = /^(rr[fkd]?):(.+)$/.exec(key);
+  const m = /^(rr[fkdb]?):(.+)$/.exec(key);
   if (m) return { label: `reranker ${m[2]} · ${RERANK_ARM_KINDS[m[1]].suffix}`, enrichment: true, judgeInput: null, reranker: m[2], chatJudge: null };
   // Run 8: the same reranker arm on a CPU-only router (`cpu: true` is what exempts it from the pace guard).
-  const cpu = /^cpu-(rr[fk]?):(.+)$/.exec(key);
+  const cpu = /^cpu-(rr[fkdb]?):(.+)$/.exec(key);
   if (cpu) return { label: `reranker ${cpu[2]} · ${RERANK_ARM_KINDS[cpu[1]].suffix} · CPU-only router`, enrichment: true, judgeInput: null,
     reranker: cpu[2], chatJudge: null, cpu: true };
   // Run 8b: the same on an iGPU-only router.
-  const igpu = /^igpu-(rr[fk]?):(.+)$/.exec(key);
+  const igpu = /^igpu-(rr[fkdb]?):(.+)$/.exec(key);
   if (igpu) return { label: `reranker ${igpu[2]} · ${RERANK_ARM_KINDS[igpu[1]].suffix} · iGPU-only router`, enrichment: true, judgeInput: null,
     reranker: igpu[2], chatJudge: null, igpu: true };
   const c = /^(lcb?):(.+)$/.exec(key);
@@ -2714,6 +2807,31 @@ const live = async () => {
       for (let i = 0; i < s.length; i++) t += s.charCodeAt(i) >= PACE.cjkFrom ? PACE.cjk : PACE.other;
       return t;
     };
+    // Run 12: the fixture note each document came from (the whole note, or a window of it — raw, or NFKC under a declared
+    // window), whether the question's TARGET note was among them, and — for a window — whether each of its interior edges
+    // (not the note's own start or end) sits on a text boundary (boundaryRank, D177's kinds).
+    const targetOf = new Map();
+    FIXTURE.facts.forEach((f, i) => { for (const q of Object.values(f.questions ?? {})) { targetOf.set(q, i); targetOf.set(q.normalize('NFKC'), i); } });
+    const segmentsOf = (docs, target) => {
+      const notes = new Set();
+      let interior = 0, onBoundary = 0;
+      for (const d of docs) {
+        let found = false;
+        for (let i = 0; i < NOTE_TEXTS.length && !found; i++)
+          for (const text of NOTE_TEXTS[i]) {
+            const at = text.indexOf(d);
+            if (at < 0) continue;
+            found = true;
+            notes.add(i);
+            if (d.length < text.length) {
+              if (at > 0) { interior++; if (boundaryRank(text, at) >= 0) onBoundary++; }
+              if (at + d.length < text.length) { interior++; if (boundaryRank(text, at + d.length) >= 0) onBoundary++; }
+            }
+            break;
+          }
+      }
+      return { notes: [...notes].sort((a, b) => a - b), targetSent: target === undefined ? null : notes.has(target), edges: [interior, onBoundary] };
+    };
     const pairTokensOf = (q, docs) => { const qt = tokensOf(String(q ?? '')); return docs.reduce((a, d) => a + qt + tokensOf(d), 0); };
     /** A proxy in front of a router. `memo` shares identical accuracy-pass bodies (--rerank-memo). `cpu` (Run 8) is a
      *  CPU-only arm's: never memoised, an abandoned request closed upstream too, and each call's windows, notes, pair
@@ -2776,10 +2894,14 @@ const live = async () => {
               try { parsed = JSON.parse(body.toString('utf8')); } catch { /* recorded as unparsed */ }
               const docs = Array.isArray(parsed.documents) ? parsed.documents.map(String) : [];
               const ans = answerOf.get(String(parsed.query ?? ''));
+              const seg = segmentsOf(docs, targetOf.get(String(parsed.query ?? '')));
               rec = {
                 hash: hash.slice(0, 16), documents: docs.length, maxChars: docs.reduce((m, d) => Math.max(m, d.length), 0),
                 answerSent: ans === undefined ? null : docs.some((d) => d.includes(ans) || d.includes(ans.normalize('NFKC'))),
                 ...(cpu ? { ...notesOf(docs), pairTokens: pairTokensOf(parsed.query, docs) } : {}),
+                // Run 12, every proxied arm: the candidate NOTES this call sent (fixture indices), whether the target's
+                // was among them, and [interior window edges, those on a text boundary].
+                notes: seg.notes, targetSent: seg.targetSent, edges: seg.edges,
               };
               state.requests++;
               if (!state.records.has(state.seq)) state.records.set(state.seq, []);
@@ -2831,6 +2953,12 @@ const live = async () => {
           calls: recs.length, hash: recs.map((r) => r.hash).join('+'),
           documents: recs.reduce((a, r) => a + r.documents, 0), maxChars: recs.reduce((m, r) => Math.max(m, r.maxChars), 0),
           answerSent: recs.length === 0 || recs.every((r) => r.answerSent === null) ? null : recs.some((r) => r.answerSent === true),
+          // Run 12: the candidate notes sent (union over the query's calls), whether the target's was, and the edges.
+          ...(recs.some((r) => Array.isArray(r.notes)) ? {
+            notes: [...new Set(recs.flatMap((r) => r.notes ?? []))].sort((a, b) => a - b),
+            targetSent: recs.every((r) => r.targetSent === null) ? null : recs.some((r) => r.targetSent === true),
+            edges: recs.reduce((a, r) => (r.edges ? [a[0] + r.edges[0], a[1] + r.edges[1]] : a), [0, 0]),
+          } : {}),
           // Run 8, a CPU-only arm: the notes the windows came from, the pair tokens, the call time, and the abandonment.
           ...(solo(arm) ? {
             candidates: recs.reduce((a, r) => a + r.candidates, 0), unmatched: recs.reduce((a, r) => a + r.unmatched, 0),
