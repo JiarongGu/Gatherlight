@@ -2539,14 +2539,50 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   run (`Artifact`, `Workflow`, `EnterWorktree`…); `Agent` is guarded, since hooks fire for a subagent's tool calls;
   `LSP` is inactive until a code-intelligence plugin is installed; `SendUserFile`, `RemoteTrigger`, `CronCreate` and
   `ReadMcpResourceTool` need no permission but reach the household's own account, session or MCP servers, not a path
-  past the jail. **Two things that are true and stay as they are**: plan runs (and every read-only run) pass no
-  `--settings`, so they register NO guard — which costs no reach, because the guard's read rule is "only inside the data
-  folder", the same fence the CLI puts on reads outside its working directory, and writes are removed from those runs; and
-  Lyntai's one-shot calls (scorers, the memory judge, rephrasing) run with the CLI's default tool set minus
-  `AskUserQuestion` from a neutral cwd (`ClaudeArgs`), with no seam for the app to narrow it — read-only commands and
-  permission-free tools are available there, nothing that needs approval is. Proof: `e2e-p49` case G3 reads the stub's
-  argv: the plan and the execute run each name `PowerShell` and `Monitor` in `--disallowed-tools`; confirmed to FAIL
-  with the `AgentRunner` line removed.
+  past the jail. **Plan (read-only) runs are CONFINED, not merely write-disallowed** (since 2026-09-28): they now pass a
+  generated read-only settings file (`ChatEnvironmentService.ReadOnlySettingsPath` / `SystemReadOnlySettingsPath`) that
+  sets `permissions.blockReadsOutsideWorkingDirectories` — the CLI v2.1.257+ fence that makes the file tools AND
+  recognized read-only Bash file-commands (cat, head) refuse a path outside the working directory in every mode — and
+  registers the SAME guard hook, so a plan-phase Bash is checked for egress / inline-eval / shell-launch too. Before, a
+  plan run passed no `--settings` and a read-only Bash could read outside the folder. `defaultMode` is `default`, not
+  acceptEdits (a plan writes nothing). `e2e-p54` asserts the plan spawn carries the read-only settings and the file sets
+  the key + the guard hook, confirmed to FAIL with the plan run's SettingsPath removed. **Still: Lyntai's one-shot calls**
+  (scorers, the memory judge, rephrasing) run with the CLI's default tool set minus `AskUserQuestion` from a neutral cwd
+  (`ClaudeArgs`), with no seam for the app to narrow them — read-only commands and permission-free tools are available
+  there, nothing that needs approval is; closing that is Lyntai's `TASKS.md` Part 330 (the reciprocal of the D190
+  per-consumer tool host), and when it ships the adopter drops its own `PowerShell`/`Monitor` removal for the library
+  seam. Proof: `e2e-p49` case G3 reads the stub's argv: the plan and the execute run each name `PowerShell` and `Monitor`
+  in `--disallowed-tools`; confirmed to FAIL with the `AgentRunner` line removed.
+- **Bash cannot launch ANOTHER shell or interpreter** (`GUARD_VERSION` 8 planner / 6 system, 2026-09-28). A built-in the
+  matcher does not see is one door past the guard; launching `powershell` / `pwsh` / `cmd` / `wscript` / `cscript` /
+  `mshta` / a nested `bash`|`sh` — or `Start-Process` — from inside Bash is another, because whatever runs in the child
+  shell never reaches the guard's Bash checks (and on Windows PowerShell is default-on with acceptEdits auto-approving
+  its `Set-Content`/`Remove-Item`). Both guards now deny the launch itself, whatever its arguments, matched against each
+  pipeline segment's COMMAND WORD (leading token, path and `.exe` stripped) so a shell NAME used as an argument
+  (`command -v sh`) is not caught. `e2e-p24` flips the old `bash <script>` allow-case to deny and adds the battery with
+  positive controls (plain `ls`/`mv`/`node x.mjs` stay allowed); confirmed to FAIL without the rule.
+- **The agent MOVES, RENAMES and DELETES files through scoped MCP tools, never a shell** (`fs_move` · `fs_delete` ·
+  `file_info`, `Platform/Capabilities/Tools/Services/Tools/FileOpsTools`). A tool beats a shell for this: its scope is
+  the guard's own write scope (`ISiteWriteScope`, rendered from the site manifest — one source of truth with the guard),
+  every call is audited (`AgentRunner.ToolDetail`), and the change lands at the diff gate (`AgentRunner` records the
+  touched paths into the run's `EditTracker`; the tools do NOT commit). The mutating two run in EXECUTE runs only —
+  `IAgentRunScope` (entered by `AgentRunner` per run, the server-side gate a fake CLI cannot bypass) refuses them in a
+  read-only plan run, and `ToolRegistry.McpAllowedToolNames(writable:false)` drops them from a plan run's allow-list.
+  `file_info` (size + mtime) is read-only, any path in the read jail — so `/cleanup` needs no `ls -l`. `e2e-p54` drives
+  both phases, the path guard and the overwrite refusal; confirmed to FAIL (7 assertions) with the run-scope forced
+  writable.
+- **A guarded Bash is GUARANTEED where the household wants one — offered, never forced.** With PowerShell and Monitor
+  removed, a household with no Git Bash has no shell; the file tools are the substitute, and 资源 OFFERS PortableGit as a
+  Git Bash the app can guard. MinGit — what the data repo runs on — ships NO `bash.exe` and cannot back the CLI's Bash
+  tool (measured, `docs/self-managed-llm-runtime.md`: MinGit's `sh.exe` as `CLAUDE_CODE_GIT_BASH_PATH` ran no command;
+  PortableGit's `bin\bash.exe` ran and beat WSL's on PATH), so it is a SEPARATE, sha256-pinned, opt-in resource
+  (`ResourceProvisioner` id `git-bash`, a 7-Zip self-extractor). `ClaudeCliRuntime.Apply` sets the variable only when the
+  CLI would find no Git Bash on its own (no household variable, nothing at `C:\Program Files\Git` / `(x86)`, no `git` on
+  PATH → `..\..\bin\bash.exe`) and our PortableGit is installed — re-applied per probe (a mid-life install is adopted
+  with no restart), never overruling the household's own or a discovered Git for Windows. The data repo stays on MinGit
+  (owner decision). `e2e-p55` (the `GATHERLIGHT_ASSUME_NO_GIT_BASH` seam) asserts the offer shows only when no Git Bash
+  is discoverable, the mid-life adopt, and the household's variable winning; confirmed to FAIL (the adopt) without the
+  `ApplyGitBash` call.
 - **Egress is audited, not closed — and both planes are audited the same.** The agent reaches the
   network two ways: the CLI's built-in `WebFetch` and the registry's `scrape`. Neither can be shut for
   a planner whose job is reading arbitrary travel sites, and denying `WebFetch` alone only moves the

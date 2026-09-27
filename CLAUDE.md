@@ -19,6 +19,11 @@ cwd = data folder, through a **two-gate flow** — agent drafts a plan (read-onl
 agent executes edits (scope-guarded to `plans/ household/ .claude/`) → user reviews the diff →
 commit to the data repo. Deterministic work (browsing, search, file ops, budget math, scraping)
 is server code / registered tools, never LLM calls — token spend is reserved for actual planning.
+The agent's shell is guarded (`PowerShell`/`Monitor` are removed from every run, and Bash may not launch
+another shell); where there is no Git Bash the agent has NO shell **by design** — the scoped MCP file tools
+(`fs_move`/`fs_delete`/`file_info`) are the substitute, and 资源 OFFERS PortableGit as a Git Bash the app can
+guard (MinGit, the data repo's git, ships no bash). Plan (read-only) runs are read-confined to the data
+folder. Details: `.claude/rules/dev-conventions.md` (Data folder discipline → the jail).
 
 ## Current state
 
