@@ -435,7 +435,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   import during a backup import — read every fact as pending and annotated each a second time; it now waits and finds
   only what is still unindexed. `e2e-p48` case 10 stages it (the stub keeps two facts' annotation 6 s long) and was
   confirmed to FAIL with the wait removed: the back-fill indexed 7/7 instead of 1/1, and each slow fact was annotated 3
-  times instead of 2. **Single writes racing a rebuild: CONDITIONAL REF WRITES** (owner decision 2026-09-27, no lock).
+  times instead of 2. **The rebuild's wait takes NO token, nor does its discard** (2026-09-27): it waited with the
+  caller's, outside its try, so a backup import whose client gave up while it queued behind a long console pass threw
+  out of a method whose contract is to degrade rather than throw, and the rebuild the import asked for never ran. The
+  facts underneath have already changed when it is called, so the forget, the vector sweep and the ref clear run to the
+  end whatever the caller does; only the re-indexing after them honours the token, since an empty ref is what the next
+  back-fill finishes. Clearing the refs BEFORE the wait was the other option and is wrong: a back-fill that got the
+  semaphore first would read every fact as pending and annotate each, and the rebuild would annotate each again — case
+  10's failure. Not driven by a suite (a client abort timed to land while the import queues). **Single writes racing a rebuild: CONDITIONAL REF WRITES** (owner decision 2026-09-27, no lock).
   `remember_fact` (and the memory import's rows) take no lock, and two races on `graph_ref` left a NON-empty ref no
   back-fill returns to. (1) A write that read the row's ref before indexing, and wrote or restored it after the rebuild
   had cleared and re-indexed that row, left a ref to a node the rebuild forgot — `RememberFactTool`'s fall-back to the

@@ -321,7 +321,8 @@ public sealed class FactIndex : IFactIndex
     /// would read every fact as pending and index each a second time. <b>Single writes do not take this</b> —
     /// <c>remember_fact</c> runs beside a rebuild, and its ref writes are conditional instead (see <see cref="RebuildAsync"/>). None of
     /// the three takes <c>DataWriteLock</c>, so holding this inside it (the import's rebuild runs outside it anyway)
-    /// cannot deadlock, and none calls another while holding it.</summary>
+    /// cannot deadlock, and none calls another while holding it. The rebuild waits for it with NO token — see
+    /// <see cref="RebuildAsync"/> — because by the time it is called the facts underneath have already changed.</summary>
     private readonly SemaphoreSlim _bulk = new(1, 1);
 
     public FactIndex(IMemoryEngineFactory? engines, IKnowledgeStore store,
@@ -642,8 +643,17 @@ public sealed class FactIndex : IFactIndex
     public async Task<int> RebuildAsync(CancellationToken ct = default)
     {
         if (_engine is null) return 0;
-        // Serialised with a re-embed in place — see _bulk.
-        await _bulk.WaitAsync(ct);
+        // Serialised with the other bulk passes — see _bulk — and WAITED FOR WITH NO TOKEN, like the discard below. A
+        // rebuild is asked for once the facts underneath have already been replaced (a backup import, a pre-marker
+        // layout), so what must happen whatever the caller does next is the discard and the clearing of every ref; only
+        // the re-indexing after it may be cut short, because an empty ref is exactly what the next back-fill finishes.
+        // The wait sat outside the try with the caller's token: a backup import whose client gave up while it queued
+        // behind a long console pass threw out of a method whose contract is to degrade rather than throw, and the
+        // rebuild the import asked for never ran. Clearing the refs BEFORE the wait instead would re-open what _bulk
+        // closes — a back-fill getting the semaphore first would read every fact as pending and annotate each, and the
+        // rebuild would then annotate each again (e2e-p48 case 10). The cost: a caller that gave up keeps this pass
+        // waiting until the one ahead of it ends.
+        await _bulk.WaitAsync(CancellationToken.None);
         try
         {
             // Discard first. Anything that replaces the facts underneath the index — a backup import
@@ -660,14 +670,17 @@ public sealed class FactIndex : IFactIndex
             // then index its vector for a node that no longer exists. The engine's verb holds the lock, clears the
             // similarity index first, then the nodes. `_engine` is the one instance every write goes through (the
             // factory builds each engine once), and the composite fans the verb out to its one graph member.
+            //
+            // The discard runs to the end with NO token — the forget, the vector sweep and the ref clear are one unit,
+            // short work, and a token honoured half-way through would leave refs naming what was just forgotten.
             if (_engine is IForgettableMemory forgettable)
-                await forgettable.ForgetAsync(TaskKey, scope: null, ct);
+                await forgettable.ForgetAsync(TaskKey, scope: null, CancellationToken.None);
             else if (_graph is not null)
             {
                 _log?.LogWarning("fact index: the memory engine {Engine} cannot forget (no IForgettableMemory); " +
                     "forgetting through the graph store, which a concurrent write's vector index does not wait on",
                     _engine.GetType().Name);
-                await _graph.ForgetAsync(GraphMember, TaskKey, scope: null, ct);
+                await _graph.ForgetAsync(GraphMember, TaskKey, scope: null, CancellationToken.None);
             }
             // The vectors go with them. The engine's forget clears the collections at the CURRENT address; this
             // prefix sweep also reaches the ones a pre-3.2 build named, which no forget of today's address touches
@@ -675,7 +688,7 @@ public sealed class FactIndex : IFactIndex
             // gone: an import replaced the facts, and a pre-marker layout left them at an address recall no longer
             // reads. A MODEL change no longer comes here — it re-embeds in place (ReembedInPlaceAsync), overwriting
             // each entry's vector at its address.
-            await DropGraphVectorsAsync(ct);
+            await DropGraphVectorsAsync(CancellationToken.None);
             // Detach every row NOW, not one-by-one as each re-index lands: annotation makes this
             // loop minutes long on a real corpus, and an abort mid-way (client gone, an update
             // restart) would otherwise strand refs pointing at the discarded graph — which
@@ -690,6 +703,14 @@ public sealed class FactIndex : IFactIndex
             var indexed = await IndexEachAsync(facts.Select(f => f.Row), ct);
             _log?.LogInformation("fact index: rebuilt — {Indexed}/{Total} facts indexed", indexed, facts.Count);
             return indexed;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Only the re-indexing honours the token, so this is always AFTER the discard: every ref is empty or names a
+            // node this pass wrote, and the next back-fill finishes the rest.
+            _log?.LogInformation("fact index: rebuild cut short by its caller after the discard; the facts it did not " +
+                "re-index have empty refs, which the next back-fill finishes (they stay findable by FTS)");
+            return 0;
         }
         catch (Exception ex)
         {
