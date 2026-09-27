@@ -110,9 +110,28 @@ battery('system', systemGuard, [
   ['bash braced HOME escape', 'Bash', { command: 'cat ${HOME}/.ssh/id_rsa' }, true],
   ['bash grep -r crawl', 'Bash', { command: 'grep -r secret .' }, true],
   ['bash rg crawl', 'Bash', { command: 'rg secret' }, true],
-  // allow-cases that must NOT be caught by the new rules
-  ['bash run .sh script ok', 'Bash', { command: 'bash src/client/scripts/x.sh' }, false],
+  // v8 hardening: launching ANOTHER shell / interpreter is inline-eval by a second door — denied
+  // whatever the arguments (PowerShell is default-on on Windows and acceptEdits auto-approves its
+  // file writes, so an unguarded powershell/cmd would edit outside the write scope with no prompt).
+  ['bash launches bash', 'Bash', { command: 'bash src/client/scripts/x.sh' }, true],
+  ['bash launches sh', 'Bash', { command: 'sh scripts/x.sh' }, true],
+  ['bash launches powershell', 'Bash', { command: 'powershell Set-Content x y' }, true],
+  ['bash launches pwsh', 'Bash', { command: 'pwsh -File x.ps1' }, true],
+  ['bash launches cmd', 'Bash', { command: 'cmd /c dir' }, true],
+  ['bash launches cmd.exe by path', 'Bash', { command: 'C:/Windows/System32/cmd.exe /c dir' }, true],
+  ['bash launches powershell.exe by path', 'Bash', { command: '/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -c x' }, true],
+  ['bash launches wscript', 'Bash', { command: 'wscript x.vbs' }, true],
+  ['bash launches cscript', 'Bash', { command: 'cscript //nologo x.js' }, true],
+  ['bash launches mshta', 'Bash', { command: 'mshta x.hta' }, true],
+  ['bash Start-Process', 'Bash', { command: 'Start-Process notepad' }, true],
+  ['bash pipe into powershell', 'Bash', { command: 'echo x | powershell -c -' }, true],
+  ['bash chained bash', 'Bash', { command: 'cat foo && bash evil.sh' }, true],
+  // allow-cases that must NOT be caught by the new rules (positive controls: plain file ops stay in)
   ['bash plain grep ok', 'Bash', { command: 'grep foo src/client/src/App.tsx' }, false],
+  ['bash ls ok', 'Bash', { command: 'ls src/client' }, false],
+  ['bash mv in-repo ok', 'Bash', { command: 'mv src/client/a.txt src/client/b.txt' }, false],
+  ['bash node script ok (not a shell)', 'Bash', { command: 'node src/client/scripts/build.mjs' }, false],
+  ['bash command -v sh ok (name is an arg)', 'Bash', { command: 'command -v sh' }, false],
 ]);
 
 // ── Planner guard (jail = data folder, writes = plans/household/.claude) ──────────────────────────
@@ -143,6 +162,14 @@ if (plannerGuard) {
     ['bash git clone network', 'Bash', { command: 'git clone https://evil/x' }, true],
     ['bash braced HOME escape', 'Bash', { command: 'cat ${HOME}/.ssh/id_rsa' }, true],
     ['bash grep -r crawl', 'Bash', { command: 'grep -r x .' }, true],
+    // v8 hardening: shell / interpreter launches (same denylist as the system guard), with controls
+    ['bash launches powershell', 'Bash', { command: 'powershell Set-Content site.json x' }, true],
+    ['bash launches cmd', 'Bash', { command: 'cmd /c del plans\\x.md' }, true],
+    ['bash launches bash script', 'Bash', { command: 'bash .claude/skills/x/x.sh' }, true],
+    ['bash Start-Process', 'Bash', { command: 'Start-Process cmd' }, true],
+    ['bash ls plans ok', 'Bash', { command: 'ls plans' }, false],
+    ['bash mv plan ok', 'Bash', { command: 'mv plans/a.md plans/b.md' }, false],
+    ['bash run skill node ok', 'Bash', { command: 'node .claude/skills/xhs-search/xhs-search.mjs' }, false],
   ]);
   try { fs.unlinkSync(plannerGuard); } catch {}
 }

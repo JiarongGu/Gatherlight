@@ -20,7 +20,7 @@
  * WRITE_DIRS + WRITE_EXTS + PROTECTED; the e2e suite (p24) runs both. GUARD_VERSION lets the server
  * re-issue newer logic.
  */
-// GUARD_VERSION: 5
+// GUARD_VERSION: 6
 import path from 'node:path';
 
 const WRITE_DIRS = [''];  // '' = the whole jail (repo); writes are gated by PROTECTED below
@@ -43,6 +43,27 @@ const EVALS = [
   /\b(powershell|pwsh)\b[\s\S]*\s-(e|enc|encodedcommand|command)\b/i, /(^|[\s;&|(])eval(\s|$)/,
   /\b(?:ba|z|k|da)?sh\s+-c\b/, /[|]\s*(?:ba|z|k|da)?sh\b/,   // inline shell eval / pipe-to-shell
 ];
+// Launching ANOTHER shell or interpreter is inline-eval by a second door: whatever runs inside
+// powershell / cmd / a nested bash never reaches this guard's Bash checks (egress, eval, crawl,
+// path-escape). On Windows the PowerShell tool is default-on, and acceptEdits auto-approves its
+// writes — so a `powershell Set-Content x …` or a `cmd /c …` would edit outside the write scope with
+// no prompt and no guard. Deny the launch ITSELF, whatever its arguments (so `bash x.sh`, not only
+// `bash -c`). Checked against each pipeline segment's COMMAND WORD — the leading token, path and .exe
+// stripped — so a shell NAME used as an argument (`command -v sh`) is not caught.
+const SHELLS = new Set([
+  'pwsh', 'powershell', 'powershell_ise', 'cmd', 'wscript', 'cscript', 'mshta',
+  'bash', 'sh', 'zsh', 'ksh', 'dash', 'ash', 'csh', 'tcsh', 'fish',
+]);
+function launchesShell(command) {
+  if (/\bStart-Process\b/i.test(command)) return true;     // a PowerShell cmdlet, not a leading word
+  for (const seg of String(command).split(/[;|&\n()]+/)) {
+    let word = seg.trim().split(/\s+/)[0] ?? '';
+    word = word.replace(/^["']+|["']+$/g, '');             // a quoted program name
+    const base = word.replace(/.*[\/\\]/, '').replace(/\.exe$/i, '').toLowerCase();
+    if (SHELLS.has(base)) return true;
+  }
+  return false;
+}
 const CRAWL = [
   /(^|[\s;&|(])find\s/, /(^|[\s;&|(])ls\s+-[a-zA-Z]*[Rr]/, /(^|[\s;&|(])dir\b[\s\S]*\/s/i,
   /(^|[\s;&|(])grep\b[^;&|\n]*\s-[a-zA-Z]*[rR]/, /(^|[\s;&|(])(rg|tree)(\s|$)/,
@@ -120,6 +141,8 @@ if (toolName === 'Bash') {
     deny('Blocked: no direct network access from the shell. Use WebFetch / WebSearch, or a server MCP tool for out-of-boundary fetches.');
   if (EVALS.some((re) => re.test(command)))
     deny('Blocked: no inline code-eval (node -e / python -c / sh -c / pipe-to-shell / powershell -Command). Run a committed script or use an MCP tool.');
+  if (launchesShell(command))
+    deny('Blocked: do not launch another shell or interpreter (powershell / pwsh / cmd / wscript / cscript / mshta / bash / sh / Start-Process) — it runs commands this guard cannot see. Use an MCP tool or a committed script instead.');
   if (CRAWL.some((re) => re.test(command)))
     deny('Blocked: use Read / Glob / Grep to explore — not Bash crawling (find / ls -R / dir /s).');
   if (bashEscapes(command, projectDir))

@@ -38,7 +38,7 @@ try {
 
   ok('the guard was issued into the data folder', fs.existsSync(guardPath));
   const guardBody = fs.existsSync(guardPath) ? fs.readFileSync(guardPath, 'utf8') : '';
-  ok('the guard carries the bumped version', /GUARD_VERSION:\s*7/.test(guardBody),
+  ok('the guard carries the bumped version', /GUARD_VERSION:\s*8/.test(guardBody),
     guardBody.match(/GUARD_VERSION:.*/)?.[0] ?? '(no guard)');
   ok('ui/ is in the write dirs', /WRITE_DIRS = \[[^\]]*'ui'/.test(guardBody),
     guardBody.match(/WRITE_DIRS = .*/)?.[0] ?? '(no guard)');
