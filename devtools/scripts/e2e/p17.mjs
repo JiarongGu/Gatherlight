@@ -25,7 +25,7 @@ const wildcardFree = (port) => new Promise((resolve) => {
   s.listen(port, '0.0.0.0', () => s.close(() => resolve(true)));
 });
 // The range is NOT clear of other suites, whatever this said before (that their ports begin further up): 5404–5433
-// holds p18 (5404–5406), p52 (5412–5427, 5430), p28 (5428), p29 (5429), p31 (5431–5432) and p32 (5433). The runner
+// holds p18 (5404–5406), p52 (5411–5427, 5430), p28 (5428), p29 (5429), p31 (5431–5432) and p32 (5433). The runner
 // keeps suites port-disjoint by scanning each file for literal 5xxx — comments included — and cannot see a port
 // chosen at runtime. So the list above is load-bearing, not decoration: naming those ports puts them in this file's
 // footprint, and the runner therefore never runs those suites beside this one. The probe still skips a port anything

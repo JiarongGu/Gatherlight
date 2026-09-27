@@ -400,6 +400,31 @@ switch (cmd) {
       new Set([...fs.readFileSync(path.join(scriptsDir, `${suite}.mjs`), 'utf8').matchAll(/\b5\d{3}\b/g)].map((m) => m[0]));
     const ports = new Map(suites.map((s) => [s, footprint(s)]));
 
+    // PREFLIGHT: which of these suites' ports Windows has RESERVED right now. Hyper-V/WSL/Docker reserve tcp ranges
+    // dynamically and move them (between reboots, even mid-session), and a server whose port is reserved never binds:
+    // its suite reports only `fatal: timeout` after the harness's full patience, which reads like a hang in the code
+    // under test. So say it up front, by suite and port. A WARNING, never a failure — the reservation is machine state,
+    // not the tree — and silent when netsh is absent or answers something unexpected.
+    if (process.platform === 'win32') {
+      try {
+        const r = spawnSync('netsh', ['interface', 'ipv4', 'show', 'excludedportrange', 'protocol=tcp'], { encoding: 'utf8' });
+        const ranges = (r.status === 0 ? r.stdout : '').split('\n')
+          .map((l) => l.match(/^\s*(\d+)\s+(\d+)\b/)).filter(Boolean).map((m) => [Number(m[1]), Number(m[2])]);
+        const blocked = suites
+          .map((s) => [s, [...ports.get(s)].map(Number).filter((p) => ranges.some(([lo, hi]) => p >= lo && p <= hi)).sort((a, b) => a - b)])
+          .filter(([, ps]) => ps.length > 0);
+        if (blocked.length) {
+          const hit = ranges.filter(([lo, hi]) => blocked.some(([, ps]) => ps.some((p) => p >= lo && p <= hi)));
+          console.log(`e2e: WARNING — Windows has RESERVED tcp ports these suites bind (excluded ranges ${hit.map(([lo, hi]) => `${lo}–${hi}`).join(', ')}):`);
+          for (const [s, ps] of blocked) console.log(`    ${s}: ${ps.join(', ')}`);
+          console.log('  Their servers cannot bind (WSAEACCES) and will report `fatal: timeout`. Run them SHIFTED — a copy of each'
+            + ' suite with those 5xxx literals moved out of the range (a local devtools/_run-shifted.mjs <lo> <hi> <shift>'
+            + ' <suites>, if you keep that scratch) — or once the reservation moves (`netsh interface ipv4 show'
+            + ' excludedportrange protocol=tcp`).');
+        }
+      } catch { /* a preflight that cannot run says nothing; the run goes ahead */ }
+    }
+
     // Run a suite as a child. Always pipe stdout/stderr (so we can read the suite's own PASS/FAIL
     // line); serial → also echo live (parallel buffers + dumps on finish, since interleaved logs from
     // N servers are unreadable). A suite passes on a clean exit-0, OR if it printed its "PASS" line —
