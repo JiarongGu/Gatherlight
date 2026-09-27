@@ -8205,3 +8205,169 @@ bench's own pace guard (guard 7): one `RerankPace` line in `rrb`. That run's tab
 - **Estimated time:** about 2.5 hours, since the arms no longer overlap.
 - **Another session is using this machine**: a `dotnet test` of another project started at 19:48Z, after the first run
   had ended (19:43:45Z), so it played no part in the VOID. The pace guard is what would catch its load in a later run.
+
+## Run 12 — our windows at text boundaries (2026-09-28, llama.cpp b10549, Lyntai 3.5.1; claude never called — every server on the stub) — RULE NOT READ
+
+**Commands**, as registered in `a972f26` and amended in `76de01a` (`--serial-arms`, ports 7500 + 10k / 7590 + k). App
+HEAD `76de01a`; the server built from `1848c3d` and not rebuilt. The scratch driver `devtools/_run12/drive.sh` ran the nine
+runs in order, each exiting 0 on its first attempt, 2026-09-27T19:49:59Z – 21:49:30Z:
+
+| run | from – to (UTC) | results | guards |
+|---|---|---|---|
+| long · BGE | 19:49:59 – 20:15:53 | `results-2026-09-27T195000.129Z.json` | held |
+| long · LAMAR | 20:15:55 – 20:42:22 | `results-2026-09-27T201555.462Z.json` | held |
+| long · mMiniLMv2 | 20:42:24 – 20:54:25 | `results-2026-09-27T204224.651Z.json` | held |
+| mixed · BGE | 20:54:28 – 21:10:21 | `results-2026-09-27T205428.233Z.json` | held |
+| mixed · LAMAR | 21:10:23 – 21:26:22 | `results-2026-09-27T211024.174Z.json` | held |
+| mixed · mMiniLMv2 | 21:26:25 – 21:35:29 | `results-2026-09-27T212625.959Z.json` | **3, 4, 5 failed** |
+| short · BGE | 21:35:32 – 21:40:10 | `results-2026-09-27T213532.176Z.json` | held |
+| short · LAMAR | 21:40:14 – 21:45:15 | `results-2026-09-27T214014.632Z.json` | **3, 5 failed** |
+| short · mMiniLMv2 | 21:45:18 – 21:49:30 | `results-2026-09-27T214519.022Z.json` | held |
+
+The VOID first attempt (long · BGE, before the amendment) is kept in `devtools/_run12/void-long-bge/`, and every run's
+evidence in `devtools/_run12/<fixture>-<model>/`. The checker's output is `devtools/_run12/guards.txt`.
+
+### Two guards failed, and the driver did not stop at the first
+
+**A deviation from the amendment.** The amendment says the sequence stops at the first failed guard. The driver, Run
+10's with two lines changed, stops only on a non-zero exit, and it checks no guards. So the three short runs ran after
+mixed · mMiniLMv2 had failed. The guards were checked afterwards, all nine together. Nothing else changed because of it.
+The short runs are reported like the rest, and short · LAMAR failed on its own.
+
+**Both failures are the same fault, a local TCP connection that went unanswered for ~21 s**, which is Windows' connect
+timeout (three SYN retransmissions). Neither involves the segmenter.
+
+| run | arm | recall | what the logs show |
+|---|---|---|---|
+| mixed · mMiniLMv2 | `rrk` (as shipped) | seq 195 (`hotel-lake`, `third`), 21,296 ms, no verdict | the router's one error line: `http client error: Could not establish connection` to its own child, 21.0 s after it began proxying the call; the next request went through |
+| short · LAMAR | `rrb` | seq 234 (`car-insurance`, `cross`), 21,291 ms, no verdict | no request reached the bench's proxy: the app's call to it never connected (no record, and forwarded = proxied 260/260) |
+
+- Each is a reranker abstention, which guard 5 forbids ("a reranker abstains only on a fault"). The bench warned on it
+  (guard 3). The first also left an error line in the router log (guard 4).
+- Short · LAMAR's identity check (clause (c)) reads "no" ONLY for that row: 1 of 240 differs, and it is the abstained
+  recall. The other 239 rows, pages and bodies are identical.
+- Another session was running tests of another project on this machine during these runs. Whether that is related is
+  not known.
+
+**By the pre-registration, a failed guard leaves the rule unread, so the rule is NOT READ.**
+
+### Why no re-run could make boundary windows the default
+
+Clause (a) is read from ONE run, long · mMiniLMv2, and every guard held there:
+
+- **found@8 182 → 188** (3/9, p = 0.146, +2.5pp [−0.4, +5.4]): not significantly better, so **(a) is false**.
+- The rule is a conjunction. A false (a), on a valid run, means the rule cannot hold whatever (b) and (c) show.
+- The two failed runs bear only on (b) (mixed · mMiniLMv2's short targets) and (c) (short · LAMAR). Re-running them
+  could not change the outcome.
+- **So the mode stays a knob either way**, and the default stays evenly spaced windows. Whether to re-run the two runs
+  for (b) and (c)'s own sake is the owner's call. Nothing here needs them.
+
+### The headline — ours evenly spaced (`rrk`) against at boundaries (`rrb`), each reranker within its own run
+
+Lyntai 3.5.1. b = `rrk` hit & `rrb` miss, c = the reverse. Serial medians over 12 queries. † = a run with a failed guard,
+descriptive only.
+
+| fixture | reranker | found@8 even → boundary | b/c, p | net, 95% | top-1 even → boundary | b/c, p | serial ms even → boundary |
+|---|---|---|---|---|---|---|---|
+| long | BGE | 201 → 199 | 2/0, 0.500 | −0.8pp [−2.2, +0.6], equivalent | 87 → 89 | 2/4, 0.688 | 3,265 → 3,390 |
+| long | LAMAR | 209 → 209 | 1/1, 1.000 | 0.0pp [−1.4, +1.4], equivalent | 76 → 73 | 3/0, 0.250 | 3,290 → 3,280 |
+| long | **mMiniLMv2** | **182 → 188** | **3/9, 0.146** | +2.5pp [−0.4, +5.4] | 79 → **90** | 4/15, **0.019** | 1,300 → 1,338 |
+| mixed | BGE | 196 → **207** | 1/12, **0.003** | +4.6pp [+1.6, +7.5] | 76 → 80 | 0/4, 0.125 | 1,759 → 1,734 |
+| mixed | LAMAR | 204 → 204 | 3/3, 1.000 | 0.0pp [−2.1, +2.1], equivalent | 82 → 81 | 1/0, 1.000 | 1,928 → 1,869 |
+| mixed | mMiniLMv2 † | 183 → 185 | 1/3, 0.625 | +0.8pp [−1.0, +2.6] | 79 → 76 | 3/0, 0.250 | 927 → 880 |
+| short | BGE | 208 → 208 | identical | — | 91 → 91 | identical | 562 → 506 |
+| short | LAMAR † | 207 → 206 | 1/0 (the abstained row) | — | 89 → 89 | 0/0 | 442 → 423 |
+| short | mMiniLMv2 | 203 → 203 | identical | — | 100 → 100 | identical | 328 → 299 |
+
+`formula` (no judge): long 68 / 104, mixed 70 / 108, short 80 / 127, every run on its registered digest.
+
+**The rule's clauses, as they read:**
+
+- **(a) false**, on a valid run (above).
+- **(b)**: none of the fifteen tests shows boundary windows significantly worse. Fourteen are from valid runs; the
+  fifteenth, mixed · mMiniLMv2's short targets (0/1), is from a run with a failed guard.
+  - Per position (long, found@8, b/c): BGE 0/0 · 0/0 · 2/0 · 0/0; LAMAR 0/1 · 1/0 · 0/0 · 0/0; mMiniLMv2 0/1 · 2/2 · 1/2 ·
+    0/4 (start · middle · end · beyond).
+  - Mixed short targets: BGE 1/4, LAMAR 1/1, mMiniLMv2 † 0/1.
+- **Beside (b), not deciding**: `all` found@8 on long and mixed, the mixed `long`/`end`/`beyond` groups, and top-1
+  everywhere. None shows boundary windows significantly worse.
+- **(c)**: short · BGE and short · mMiniLMv2 are identical (YES, bodies included). Short · LAMAR differs only in its
+  abstained row.
+
+### Where the edges fell, and what was split
+
+| run | interior window edges on a text boundary: even → boundary |
+|---|---|
+| long · BGE / LAMAR / mMiniLMv2 | 14.2% → 100.0% · 14.6% → 100.0% · 9.1% → 97.3% |
+| mixed · BGE / LAMAR / mMiniLMv2 | 10.1% → 100.0% · 10.2% → 100.0% · 8.9% → 97.3% |
+| short, all three | no window sent by either arm |
+
+- **Answers split** (the target's note sent with its answer whole in no document): **0 in every arm of every run**, as
+  the pre-run check predicted.
+- Guard 9 held everywhere: the mode placed what it says it places.
+
+### The link-dynamics split — the two significant differences are not shown to come from placement
+
+Every discordant query on `all`, by whether both arms sent the reranker the same candidate notes at that query:
+
+| run | metric | b/c | same notes | different notes | queries with the same notes |
+|---|---|---|---|---|---|
+| mixed · BGE | found@8 | 1/12 | **0/0** | 1/12 | 104 / 240 |
+| long · mMiniLMv2 | top-1 | 4/15 | 3/8 (p = 0.227) | 1/7 | 171 / 240 |
+| long · mMiniLMv2 | found@8 | 3/9 | 1/4 (p = 0.375) | 2/5 | 171 / 240 |
+
+- **Mixed · BGE's gain is Run 10's Japanese-question dynamic, as Run 10 met it on this same fixture.**
+  - All 13 discordant queries sent DIFFERENT notes, and 11 of them (1/10) are on the `third` set.
+  - `rrk` returned 29 short pages (fewer than 8 facts), 15/12/1/1 by quarter; `rrb` returned 16 (13/1/1/1).
+  - The target note was not a candidate at all on 43 of `rrk`'s recalls and 31 of `rrb`'s.
+  - It is the same shipped arm as in Run 10, which there returned the same 29 short pages and read the same 196. Any arm
+    whose recalls open up the Japanese questions beats it there. D177 did in Run 10 (0/12), and boundary windows do
+    here.
+  - Where the two arms sent the same notes, they never disagreed. By the reading registered in the design, this gain is
+    not shown to come from placement.
+- **Long · mMiniLMv2's top-1 gain** (79 → 90, p = 0.019, reported beside the rule) is not significant on the same-notes
+  queries (3/8, p = 0.227). 7 of its 11 net queries are on the `same` set (0/7). Not shown to come from placement.
+- **Short pages elsewhere** are equal between the arms (long · BGE 22/22, LAMAR 7/7, mMiniLMv2 17/16; mixed · LAMAR
+  11/11, mMiniLMv2 21/21).
+
+### Latency
+
+Serial medians (above) move within noise either way. `rrb` is faster on 7 runs and slower on 2 (−59 to +125 ms), and its
+windows are the same in number and at most as long.
+
+### Descriptive only — beside Run 10's D177, across runs
+
+On long · mMiniLMv2, the shipped arm's rows are byte-identical between Run 10 and Run 12 (positions digest
+`688aeb20c65c` both), so the two runs' other arms stand beside one baseline:
+
+| long · mMiniLMv2 | found@8 | top-1 |
+|---|---|---|
+| ours, evenly spaced (both runs) | 182 | 79 |
+| ours, at boundaries (Run 12) | 188 | 90 |
+| Lyntai D177 (Run 10) | 196 | 90 |
+
+Boundary edges reach D177's top-1 but only part of its found@8 lead. This is across runs, so it is not a finding
+(measuring rule 2). Since ours never splits an answer here, the rest of D177's lead must come from what this run did not
+change: its piece lengths (half to all of the budget), its overlap of at most a quarter, and its piece count.
+
+### What it says
+
+- **Boundary windows do not qualify as the default.** On the long fixture, mMiniLMv2's found@8 is not significantly
+  better with them (182 → 188, p = 0.146), and that run is valid. The mode stays a knob (`GATHERLIGHT_RERANK_CHUNKING=boundary`),
+  and the default is unchanged.
+- **Nothing is significantly worse with boundary windows** on any registered test, or on any test reported beside the
+  rule.
+- **The mode does what it says**: 97–100% of interior edges on a boundary, where evenly spaced windows put 9–15% there,
+  with the same number of windows, the same budget, overlap and tail, and the same pace.
+- **The "split answer" reading of Run 10 cannot be what D177 gained from on these fixtures**: no arm of either run splits
+  an answer.
+
+### What it does NOT say
+
+- **What (b) and (c) would read on clean re-runs of the two failed runs.** Both failures were connection timeouts, one in
+  each mode, and neither run is re-read.
+- **That boundary windows help BGE on mixed notes.** That gain is a recall-reinforcement divergence on the Japanese
+  questions, not placement.
+- **Why D177 is better for mMiniLMv2.** This run removes one candidate explanation (edge placement alone, for found@8) and
+  leaves the others untested.
+- **Anything about notes longer than five windows, real household notes, a CPU, or other languages' boundaries.**
