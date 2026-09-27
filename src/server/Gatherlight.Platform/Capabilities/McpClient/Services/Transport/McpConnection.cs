@@ -174,6 +174,8 @@ public sealed class StdioMcpConnection : McpConnectionBase
         psi.FileName = spec.Exe;
         if (spec.RawArguments is not null) psi.Arguments = spec.RawArguments;
         else foreach (var a in spec.Argv!) psi.ArgumentList.Add(a);
+        // The household's own program, so the household's environment — minus only what the whole process forgot at
+        // startup (the launcher's repository and Claude Code session; ChildEnvironment) — plus the server's configured env.
         foreach (var kv in env) psi.Environment[kv.Key] = kv.Value;
 
         Process proc;

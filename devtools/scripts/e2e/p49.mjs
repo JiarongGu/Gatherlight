@@ -17,6 +17,8 @@
 //   E  no git, real MinGit on loopback    → the actual first-boot path, end to end (needs the cache)
 //   F  GIT_DIR inherited from the launcher → the data repo is still the data folder's, and the repo GIT_DIR names is
 //                                            untouched (a SCRATCH repo, never the working one)
+//   G  …and a Claude Code session too     → no claude the app spawns (startup probe, agent turn, one-shot call) gets
+//                                            either, and the agent's own git finds the data repo; the rest still arrives
 import { execFileSync } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -37,6 +39,8 @@ const PORT_REAL = 5505;
 // runs shifted there) and outside p17's wildcard probe window, where a port of ours would have to join p17's list. (No
 // range is written out here on purpose: the runner's port scan reads comments too.)
 const PORT_INHERITED_GIT = 5381;
+// Case G's, beside it for the same reasons.
+const PORT_INHERITED_CLI = 5382;
 // Nothing binds this one, ever — it is the "there is no network" fixture: a download URL that cannot
 // connect. Kept out of the range above so a future suite doesn't take it and quietly make cases pass.
 const DEAD_URL = 'http://127.0.0.1:5599/MinGit.zip';
@@ -280,7 +284,8 @@ try {
   // discovery, so the ceiling that stops a walk-up (GIT_CEILING_DIRECTORIES) never came into it. The data repo's
   // `git init` set core.bare = true on the developer's MAIN repository, the fixture's commits landed on the worktree's
   // HEAD, and DataRepoMaintenance's `reflog expire --expire=now --all` + `gc --prune=now` erased every reflog.
-  // GitEnvironment now strips the repository-selecting variables from every git the app spawns. This is the incident
+  // ChildEnvironment now strips the repository-selecting variables from every git the app spawns — and, since case G,
+  // from the whole process at startup, so F passes on either half (G fails without the second). This is the incident
   // against a SCRATCH repo of the same shape — a main repo with one linked worktree, GIT_DIR naming the worktree's
   // gitdir — NEVER the working repository. Plus a config injection (GIT_CONFIG_PARAMETERS, which `git -c k=v bisect
   // run` exports): the data repo's `git config user.name` probe would read an injected name as already set, and every
@@ -367,6 +372,72 @@ try {
     ok('…its reflogs intact', lines('logs/HEAD') === reflogsBefore.main && lines('worktrees/wt/logs/HEAD') === reflogsBefore.side,
       JSON.stringify({ before: reflogsBefore, after: { main: lines('logs/HEAD'), side: lines('worktrees/wt/logs/HEAD') } }));
     ok('…and not one file under its .git changed', changed.length === 0, changed.slice(0, 12).join(', '));
+
+    // ---- G · the claude CLI — and the agent's own git — inherit neither the launcher's repository nor its session ----
+    // F is the app's OWN git. The claude CLI is another child that runs git in the data folder — its agent's Bash does —
+    // and Lyntai builds each CLI run's environment from this process's own, able only to ADD to it: so a launcher's
+    // GIT_DIR reached the agent untouched. And a server started from a Claude Code session (the dev loop, every fixture
+    // booted from one) handed every CLI it spawned THAT session's markers: its id, its pid, its messaging pipe and token.
+    // ChildEnvironment.ForgetLauncherContext drops both from the whole process at startup. The stub records, per spawn,
+    // the names it got and what a `git` run from its cwd finds — what the agent's Bash would work on. The control
+    // variable proves the environment was narrowed, not wiped; every value here is the fixture's own, never a real one.
+    const dirG = freshDir('g');
+    const envLog = path.join(repo, 'devtools', '_e2e-p49-g-stub-env.jsonl');
+    fs.rmSync(envLog, { force: true });
+    const TOKEN = 'zzp49-parent-session-token-never-logged';
+    srv = startServer({
+      dataDir: dirG, port: PORT_INHERITED_CLI,
+      env: {
+        GIT_DIR: worktreeGitDir, GIT_CONFIG_PARAMETERS: "'user.name'='zzp49-inherited-author'",
+        CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_CODE_SESSION_ID: 'zzp49-parent-session',
+        CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\zzp49-parent', CLAUDE_CODE_MESSAGING_TOKEN: TOKEN, CLAUDE_PID: '1',
+        ZZE2E_KEPT: 'kept', GATHERLIGHT_STUB_ENV_LOG: envLog,
+      },
+    });
+    snap = await settled(srv.base);
+    ok('(fixture G) with a repository and a Claude Code session inherited, the boot completes', snap.phase === 'completed', snap.error ?? '');
+    const cG = makeClient(srv.base);
+    // An agent turn (Lyntai's IAgentSession — chat, jobs, the playground and the validation pass all run there) …
+    const startedG = await cG.post('/api/chat', { message: '给明天建一个日计划' });
+    await cG.waitPhase(startedG.body?.id, 'awaiting-plan-approval');
+    // … and a one-shot call (Lyntai's ClaudeCliProvider — the scorers, the memory judge, 语义's rephrasing): a fact write
+    // is annotated by the judge, which is on by default.
+    await cG.call('remember_fact', { kind: 'preference', topic: 'zzp49 inherited env', content: 'zzp49 a fact to annotate',
+      source: 'https://example.test/zzp49', confidence: 0.9 });
+    const readEnvLog = () => (fs.existsSync(envLog)
+      ? fs.readFileSync(envLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+    await until(() => readEnvLog().some((s) => s.kind === 'annotation'), 60000).catch(() => {});
+    const spawns = readEnvLog();
+    const kinds = [...new Set(spawns.map((s) => s.kind))];
+    ok('(fixture G) the stub recorded the startup probe, an agent turn and a one-shot call',
+      ['auth-status', 'plan', 'annotation'].every((k) => kinds.includes(k)), JSON.stringify(kinds));
+    const LAUNCHER_CONTEXT = /^(GIT_DIR|GIT_WORK_TREE|GIT_CONFIG_PARAMETERS|GIT_CONFIG_COUNT|GIT_EXEC_PATH|CLAUDECODE|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|MESSAGING_SOCKET|MESSAGING_TOKEN|EXECPATH|SSE_PORT)|CLAUDE_PID)$/i;
+    const leaked = spawns.filter((s) => s.watched.some((n) => LAUNCHER_CONTEXT.test(n)));
+    ok('THE POINT (G): no claude the app spawned inherited the launcher\'s repository or its Claude Code session',
+      spawns.length > 0 && leaked.length === 0,
+      leaked.slice(0, 3).map((s) => `${s.kind}: ${s.watched.filter((n) => LAUNCHER_CONTEXT.test(n)).join(',')}`).join(' | '));
+    const norm = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const agentRuns = spawns.filter((s) => s.kind === 'plan');
+    ok('…so the agent\'s own git, run from its working directory, finds the DATA repo — never the one GIT_DIR named',
+      agentRuns.length > 0 && agentRuns.every((s) => norm(s.gitDir) === norm(path.join(dirG, '.git'))),
+      JSON.stringify(agentRuns.map((s) => s.gitDir)));
+    ok('…while everything else the app was started with still reaches it (narrowed, not wiped)',
+      spawns.length > 0 && spawns.every((s) => s.kept === 'kept'), JSON.stringify(spawns.map((s) => s.kept)));
+    const logsG = (() => {
+      const d = path.join(dirG, 'state', 'logs');
+      return fs.existsSync(d) ? fs.readdirSync(d).map((x) => fs.readFileSync(path.join(d, x), 'utf8')).join('\n') : '';
+    })();
+    const droppedLine = (logsG.match(/Child environment: dropped [^\n]*/) ?? [''])[0];
+    ok('…the startup log names what it dropped', ['GIT_DIR', 'GIT_CONFIG_PARAMETERS', 'CLAUDECODE', 'CLAUDE_CODE_MESSAGING_TOKEN']
+      .every((n) => new RegExp(`\\b${n}\\b`).test(droppedLine)), droppedLine || '(no line)');
+    ok('…and never a value: the session token is in no log', !logsG.includes(TOKEN) && !srv.log().includes(TOKEN));
+    srv.stop(); srv = undefined;
+    await new Promise((r) => setTimeout(r, 1500));
+    const changedG = (() => {
+      const after = snapshot();
+      return [...new Set([...before.keys(), ...after.keys()])].filter((k) => before.get(k) !== after.get(k));
+    })();
+    ok('…and not one file under the scratch repo\'s .git changed through G either', changedG.length === 0, changedG.slice(0, 12).join(', '));
   }
 } catch (err) {
   fail('e2e-p49 fatal: ' + err.message);

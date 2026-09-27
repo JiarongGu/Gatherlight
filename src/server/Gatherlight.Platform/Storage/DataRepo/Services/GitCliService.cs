@@ -14,7 +14,7 @@ public sealed record DataCommitInfo(string Sha, string Subject, string Date);
 /// (`cat-file -e`, `diff --no-index` against NUL). The CLI is resolved per call (see
 /// <c>GitCliService.Exe</c>): an explicit override, else the portable git provisioned into the data
 /// folder, else a bundled copy, else PATH — so no separate git install is needed on the host.
-/// Every command is confined to the data root's repository (<see cref="GitEnvironment.ConfineTo"/>).
+/// Every command is confined to the data root's repository (<see cref="ChildEnvironment.ForGit"/>).
 /// All paths are data-root-relative with forward slashes.
 /// </summary>
 public interface IGitCliService
@@ -157,8 +157,8 @@ public class GitCliService : IGitCliService
         // folder with a broken .git once committed the surrounding project's staged changes), and an INHERITED
         // GIT_DIR — which skips discovery, so the ceiling never sees it — is stripped with its siblings (`git
         // bisect run` from a linked worktree once pointed a fixture's data repo at the developer's own). Both
-        // live in GitEnvironment, the one place every git spawn is confined.
-        GitEnvironment.ConfineTo(psi, _root);
+        // live in ChildEnvironment.ForGit, the one place every git spawn is confined.
+        ChildEnvironment.ForGit(psi, _root);
 
         foreach (var a in args) psi.ArgumentList.Add(a);
 

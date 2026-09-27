@@ -30,6 +30,12 @@ public static class GatherlightApp
     {
         options ??= new GatherlightServerOptions();
 
+        // FIRST, before anything can spawn: this process forgets the repository and the Claude Code session it was
+        // LAUNCHED in (a `git bisect run`'s GIT_DIR, a developer session's CLAUDECODE and messaging pipe), so no child
+        // inherits them — including the three spawns with no seam of their own (Lyntai's CLI runs, the ShellExecute
+        // login, Playwright's driver). Each class of child is narrowed further at its own spawn. See ChildEnvironment.
+        var forgotten = Platform.Kernel.Services.ChildEnvironment.ForgetLauncherContext();
+
         // Bridge the CLI stub override to Lyntai's ClaudeCli provider: the native runner reads
         // GATHERLIGHT_CLAUDE_CMD, Lyntai's provider reads CLAUDE_CMD — point both at the same stubbed CLI
         // (tests/e2e) so the migrated one-shot scorers hit the stub, not a real claude. No-op in production.
@@ -729,6 +735,13 @@ public static class GatherlightApp
         app.Logger.LogInformation("=== Gatherlight starting === v{Ver} · level={Lvl} · data={Data} · bind={Bind}:{Port} · logs={Logs}",
             Platform.Kernel.Services.AppVersion.Semver,
             logLevel, options.DataPath, options.BindAddress, options.Port, logsDir);
+
+        // Names only: one of these is a session's messaging TOKEN, and none of their values belongs in a log.
+        if (forgotten.Count > 0)
+            app.Logger.LogInformation(
+                "Child environment: dropped {Names} — inherited from whatever launched the app, and no child of it may use them "
+                + "(a repository named by the launcher's git, or the Claude Code session it was started from)",
+                string.Join(", ", forgotten));
 
         // Loud, once-at-startup warning when the LAN opt-in is exposing the app unauthenticated.
         if (openBind && options.AllowLanWithoutToken)

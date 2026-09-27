@@ -10,11 +10,37 @@
 //     else                              -> plan text
 //   execute (--permission-mode acceptEdits):
 //     physically writes plans/daily/2026-07-14.md + emits the Edit tool_use for it
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 
 const args = process.argv.slice(2);
+
+// WHAT THIS SPAWN INHERITED, recorded on request (GATHERLIGHT_STUB_ENV_LOG, e2e-p49 case G). A CLI the app starts must
+// not inherit the repository or the Claude Code session the app was LAUNCHED in (ChildEnvironment in the server), and
+// only the stub can see what it was actually handed: one JSON line per spawn with the NAMES of the watched variables it
+// got (never their values — one is a session token), the value of the suite's own control variable, and what a `git`
+// run from this cwd finds — exactly what the agent's Bash would work on. The git runs with this process's own
+// environment, read-only (`rev-parse`), so it can report a leaked GIT_DIR without writing anywhere.
+const WATCHED_ENV = /^(GIT_|CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|NODE_OPTIONS$)/i;
+const recordEnv = (kind) => {
+  const log = process.env.GATHERLIGHT_STUB_ENV_LOG;
+  if (!log) return;
+  let gitDir;
+  try {
+    gitDir = execFileSync('git', ['rev-parse', '--absolute-git-dir'],
+      { cwd: process.cwd(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 }).trim();
+  } catch (e) { gitDir = `(none: ${String(e.stderr ?? e.message).trim().split('\n')[0].slice(0, 120)})`; }
+  try {
+    fs.appendFileSync(log, JSON.stringify({
+      kind, pid: process.pid, cwd: process.cwd(),
+      watched: Object.keys(process.env).filter((k) => WATCHED_ENV.test(k)).sort(),
+      kept: process.env.ZZE2E_KEPT ?? null,
+      gitDir,
+    }) + '\n', 'utf8');
+  } catch { /* a log that cannot be written must not change what the stub answers */ }
+};
 // Write (execute) runs add `--permission-mode acceptEdits` (Lyntai's ClaudeAgentArgs); read-only (plan)
 // runs never do. This is the robust signal — the disallowed-tools list is now a single comma-joined arg.
 const readOnly = !(args.includes('--permission-mode') && args.includes('acceptEdits'));
@@ -26,6 +52,7 @@ const readOnly = !(args.includes('--permission-mode') && args.includes('acceptEd
 // agent run and nothing is piped to it. Without this every suite boots with a spurious "not logged in"
 // warning and the diagnosis rewrites every failed-turn message the suites assert on.
 if (args[0] === 'auth' && args[1] === 'status') {
+  recordEnv('auth-status');
   process.stdout.write(JSON.stringify({
     loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty',
     email: 'e2e@example.invalid', subscriptionType: 'max',
@@ -50,21 +77,19 @@ const prompt = Buffer.concat(chunks).toString('utf8');
 // told apart too, by the marker their system prompt keeps for exactly this stub (e2e-p16's scorer case).
 // 语义's rephrasing is named as well, by the phrase its prompt asks for (同义扩展): with the judge spawns, it is
 // one of the one-shot calls that must get NO judge-tools host (e2e-p36), so it cannot stay lumped into `other`.
+// Lyntai's own prompt shapes — the same tests the branches below answer on.
+const spawnKind = prompt.includes('CURRENT PHASE: VALIDATION') ? 'validate'
+  : prompt.includes('SCORING TASK') ? 'scorer'
+  : prompt.includes('{"subjects"') ? 'annotation'
+  : prompt.includes('Notes:' + String.fromCharCode(10)) ? 'verification'
+  : prompt.includes('同义扩展') ? 'rephrase'
+  : prompt.includes('CURRENT PHASE: PLANNING') ? 'plan'
+  : prompt.includes('CURRENT PHASE: EXECUTING') ? 'execute' : 'other';
+recordEnv(spawnKind);
 if (process.env.GATHERLIGHT_STUB_ARGS_LOG) {
   try {
     fs.appendFileSync(process.env.GATHERLIGHT_STUB_ARGS_LOG,
-      JSON.stringify({
-        args,
-        // Lyntai's own prompt shapes — the same tests the branches below answer on.
-        kind: prompt.includes('CURRENT PHASE: VALIDATION') ? 'validate'
-          : prompt.includes('SCORING TASK') ? 'scorer'
-          : prompt.includes('{"subjects"') ? 'annotation'
-          : prompt.includes('Notes:' + String.fromCharCode(10)) ? 'verification'
-          : prompt.includes('同义扩展') ? 'rephrase'
-          : prompt.includes('CURRENT PHASE: PLANNING') ? 'plan'
-          : prompt.includes('CURRENT PHASE: EXECUTING') ? 'execute' : 'other',
-        tail: prompt.slice(-600),
-      }) + '\n', 'utf8');
+      JSON.stringify({ args, kind: spawnKind, tail: prompt.slice(-600) }) + '\n', 'utf8');
   } catch { /* a log that cannot be written must not change what the stub answers */ }
 }
 
