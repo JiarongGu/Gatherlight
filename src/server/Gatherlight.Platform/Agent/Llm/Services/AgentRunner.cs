@@ -26,11 +26,13 @@ public sealed class AgentRunner : IAgentRunner
 {
     private readonly IAgentSession _session;
     private readonly ILogger<AgentRunner> _log;
+    private readonly IAgentRunScope _runScope;
 
-    public AgentRunner(IAgentSession session, ILogger<AgentRunner> log)
+    public AgentRunner(IAgentSession session, ILogger<AgentRunner> log, IAgentRunScope runScope)
     {
         _session = session;
         _log = log;
+        _runScope = runScope;
     }
 
     public async Task<AgentSessionResult> RunAsync(ClaudeAgentOptions options, string label,
@@ -63,6 +65,11 @@ public sealed class AgentRunner : IAgentRunner
             // Part 275): claude 2.1.28x's `system/thinking_tokens` progress events carry the session id too, and
             // 3.2's reader announced each of them, so this bridge used to collapse them itself. That guard is
             // gone; e2e-p43 counts the stored `system` rows against a stub that really emits those events.
+            //
+            // The run scope is entered for the WHOLE run keyed on its tool policy, so the scoped MCP file tools
+            // (fs_move/fs_delete) — called over the loopback endpoint on another request — read one honest answer
+            // to "may this run write". Safe as a shared flag because the agent lease admits one run at a time.
+            using var _scope = _runScope.Enter(options.ToolPolicy);
             result = await _session.RunAsync(options, onEvent: e => Map(e, emit, tracker, options), ct);
         }
         catch (OperationCanceledException)
@@ -114,6 +121,14 @@ public sealed class AgentRunner : IAgentRunner
                 // First(...) chain over the parsed args for the UI detail string; only the tracker's copy of
                 // the duplicate is gone, because ToolDetail takes a JsonElement, not a ToolCall.
                 tracker?.Record(tc.Name, ClaudeToolCalls.FilePathOf(tc));
+                // The scoped MCP file tools mutate the working tree without an Edit/Write tool_use, so their
+                // touched paths would miss the diff gate unless recorded here — the from/to of a move (both
+                // ends belong in the diff), the path of a delete. Off the parsed args, by the tool's own name.
+                if (tracker is not null && Models.AgentFileTools.IsMutating(tc.Name))
+                {
+                    tracker.RecordExplicit(First(args, "from", "path"));
+                    tracker.RecordExplicit(First(args, "to"));
+                }
                 emit(new AgentEvent { Kind = "tool", Tool = new ToolInfo(tc.Name, ToolDetail(tc.Name, args)) });
                 break;
             }
@@ -179,7 +194,7 @@ public sealed class AgentRunner : IAgentRunner
     /// back. Truncated, because a detail line is a trace label, not a payload store.
     /// </summary>
     private static string? McpDetail(JsonElement input) =>
-        Trunc(First(input, "url", "query", "relPath", "path", "name", "key"), 120);
+        Trunc(First(input, "url", "query", "relPath", "path", "from", "to", "name", "key"), 120);
 
     private static string? First(JsonElement obj, params string[] keys)
     {

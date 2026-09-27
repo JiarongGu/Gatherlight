@@ -21,6 +21,12 @@ public interface IGatherlightTool
     Task<string> RunAsync(JsonElement args, CancellationToken ct);
 }
 
+/// <summary>Marks a tool that MUTATES the household's files, so it is pre-approved only on WRITE (execute)
+/// runs — <see cref="Services.IToolRegistry.McpAllowedToolNames"/> drops it from a read-only plan run's
+/// allow-list, keeping a real CLI from offering it there. The load-bearing gate is the tool's own
+/// <c>IAgentRunScope</c> check (a fake CLI does not honour the allow-list); this marker is the second layer.</summary>
+public interface IWriteScopedTool { }
+
 /// <summary>Error carrying an HTTP status the route maps straight through.</summary>
 public sealed class ToolException : Exception
 {

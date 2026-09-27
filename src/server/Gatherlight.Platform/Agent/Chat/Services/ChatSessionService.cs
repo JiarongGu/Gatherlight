@@ -558,8 +558,10 @@ public sealed class ChatSessionService : IChatGateHost
         // generated file, nothing on disk to go stale. Naming a server does not pre-approve its
         // tools, so AllowedTools below still does that job.
         McpServers = AgentMcpWiring.ServersFor(_internalMcp, _tools),
-        // Pre-approve registry tools so the headless run never stalls on a permission prompt.
-        AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : Array.Empty<string>(),
+        // Pre-approve registry tools so the headless run never stalls on a permission prompt. A read-only
+        // plan run drops the write-scoped file tools (move/delete) from the allow-list — a real CLI then
+        // never offers them where the tools' own run-scope check would refuse them anyway.
+        AllowedTools = _tools.McpAllowedToolNames(writable: !readOnly) is { Length: > 0 } names ? names : Array.Empty<string>(),
     };
 
     private async Task RunPlanningAsync(ChatSession s)

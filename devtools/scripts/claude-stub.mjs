@@ -221,6 +221,38 @@ const probeJudgeTools = async (server) => {
   return out;
 };
 
+// Drive the loopback MCP endpoint the way the real CLI does — used by the FSOPSTEST branch (e2e-p54) to
+// call the scoped file tools (fs_move / fs_delete / file_info) for real, so the run-scope gate, the write
+// scope and the overwrite refusal are exercised end to end. Returns [{op, status, isError, text}].
+const driveFsOps = async (server, calls) => {
+  let session = null;
+  const rpc = async (body) => {
+    const res = await httpPost(server.url, {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      ...(server.auth ? { authorization: server.auth } : {}),
+      ...(session ? { 'mcp-session-id': session } : {}),
+    }, JSON.stringify(body));
+    const sid = res.headers['mcp-session-id'];
+    if (sid) session = sid;
+    return { status: res.status, msg: parseRpc(res) };
+  };
+  await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'e2e-stub', version: '1' } } });
+  await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  const out = [];
+  for (const c of calls) {
+    const r = await rpc({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: c.name, arguments: c.args } });
+    out.push({ op: c.op, status: r.status, isError: r.msg?.result?.isError ?? null,
+      text: (r.msg?.result?.content?.[0]?.text ?? r.msg?.error?.message ?? '').slice(0, 200) });
+  }
+  return out;
+};
+const logFsOps = (phase, rows) => {
+  const f = process.env.GATHERLIGHT_STUB_FSOPS_LOG;
+  if (!f) return;
+  try { fs.appendFileSync(f, JSON.stringify({ phase, rows }) + '\n', 'utf8'); } catch {}
+};
+
 // LLM scorer judge (Platform/Ops/Scoring): return a canned {score, reason} verdict JSON so the automated
 // scorers produce a deterministic result under the stub. When the e2e plants JUDGE_TOOLS_PROBE in the
 // user message (which reaches the answer-relevancy prompt), first drive the hosted judge tools for
@@ -517,7 +549,18 @@ if (readOnly) {
     // e2e-p16 (validate model): the execute turn writes under .claude/, the one kind of diff that runs
     // the 智库 validation pass — so its spawn, and the --model it receives, can be observed at all.
     : userReq.includes('KBEDITTEST') ? ' [TRIG:KBEDIT]'
+    : userReq.includes('FSOPSTEST') ? ' [TRIG:FSOPS]'
     : userReq.includes('NOOPTEST') ? ' [TRIG:NOOP]' : '';
+  // e2e-p54: prove a scoped file tool is REFUSED in the read-only plan phase. The stub drives the loopback
+  // endpoint directly (a fake CLI does not honour --allowedTools), so the tool's own run-scope check is
+  // what must bounce it — the enforcement, not the allow-list.
+  if (userReq.includes('FSOPSTEST') && !systemMode) {
+    const server = mcpServerFromArgs();
+    if (server) {
+      try { logFsOps('plan', await driveFsOps(server, [{ op: 'move-in-plan', name: 'fs_move', args: { from: 'plans/trips/2026-08-kyoto.md', to: 'plans/trips/2026-08-kyoto-plan.md' } }])); }
+      catch (err) { logFsOps('plan', [{ op: 'move-in-plan', error: String(err?.message ?? err) }]); }
+    }
+  }
   const planText = systemMode ? text : text + trig;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
   done(planText);
@@ -602,6 +645,32 @@ if (readOnly) {
   // ignored rather than parking the gate.
   if (prompt.includes('[TRIG:CAPUNKNOWN]') && !prompt.includes("HUMAN'S FEEDBACK")) {
     done('这一步不需要改动文件(stub)。\n\nCAPABILITY_BLOCKED: totally_unknown_cap_xyz');
+    process.exit(0);
+  }
+  // Scoped file tools (e2e-p54): on the execute run, drive the loopback endpoint to MOVE and DELETE real
+  // seeded files (write phase → the run-scope permits it), plus two negatives (an out-of-scope target and an
+  // overwrite without the flag). Emit a tool_use event for each SUCCESSFUL mutation so AgentRunner records
+  // its path into the tracker — that is what carries a move/delete to the diff gate, since no Edit/Write fired.
+  if (prompt.includes('[TRIG:FSOPS]')) {
+    const server = mcpServerFromArgs();
+    const moveTo = 'plans/trips/2026-08-kyoto-moved.md';
+    const delPath = 'plans/budgets/2026-08-kyoto.md';
+    try {
+      const rows = server ? await driveFsOps(server, [
+        { op: 'move-ok', name: 'fs_move', args: { from: 'plans/trips/2026-08-kyoto.md', to: moveTo } },
+        { op: 'delete-ok', name: 'fs_delete', args: { path: delPath } },
+        { op: 'info-ok', name: 'file_info', args: { path: moveTo } },
+        { op: 'move-out-of-scope', name: 'fs_move', args: { from: moveTo, to: 'state/evil.md' } },
+        { op: 'move-overwrite-refused', name: 'fs_move', args: { from: moveTo, to: 'plans/visa/2026-08-kyoto/applicant-data.json' } },
+      ]) : [{ op: 'no-server' }];
+      logFsOps('execute', rows);
+    } catch (err) { logFsOps('execute', [{ op: 'execute', error: String(err?.message ?? err) }]); }
+    // The two successful mutations, as tool_use events, so the tracker records their paths for the diff gate.
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__planner-tools__fs_move', input: { from: 'plans/trips/2026-08-kyoto.md', to: moveTo } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__planner-tools__fs_delete', input: { path: delPath } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    done('已整理计划文件:移动了行程、删除了旧预算(stub,经 fs_move/fs_delete)。');
     process.exit(0);
   }
   // NOOP (e2e-p28): make NO change and ask nothing → empty diff → the flow ends 'rejected'. A pure

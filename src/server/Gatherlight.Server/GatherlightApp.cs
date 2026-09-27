@@ -433,6 +433,7 @@ public static class GatherlightApp
             // AddSingleton after AddLyntai wins over its TryAdd SqliteKeyValueStore.
             .AddSingleton<Lyntai.Storage.IKeyValueStore, Platform.Ops.Cortex.Services.AppConfigKeyValueStore>()
             // App-side adapter over Lyntai's IAgentSession — the two-gate / jobs / playground run through this.
+            .AddSingleton<IAgentRunScope, AgentRunScope>()
             .AddSingleton<IAgentRunner, AgentRunner>()
             // Resolves + inspects the claude CLI itself (present? runnable? signed in?). The CLI used to be
             // an ASSUMED machine dependency: absent on a fresh install, it died at spawn and surfaced as a
@@ -477,6 +478,12 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, ExtractTool>()
             .AddSingleton<IGatherlightTool, WebFetchTool>()   // registers as "scrape" (Playwright-native)
             .AddSingleton<IGatherlightTool, WikiInfoTool>()
+            // Scoped file tools: move/rename + delete within the guard's write scope (execute runs only),
+            // and a read-only size/mtime probe. The write scope is the site manifest's, shared with the guard.
+            .AddSingleton<Platform.Site.Services.ISiteWriteScope, Platform.Site.Services.SiteWriteScope>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Tools.Services.Tools.FsMoveTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Tools.Services.Tools.FsDeleteTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Tools.Services.Tools.FsInfoTool>()
             // Native C#/Playwright scraper ports (the Node puppeteer leaves are all gone)
             .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.FlightScheduleScraperTool>()
             .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.PolicyCheckScraperTool>()

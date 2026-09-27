@@ -30,6 +30,23 @@ public sealed class EditTracker
         lock (_lock) _paths.Add(rel);
     }
 
+    /// <summary>Record a path a NON-file-writing tool changed — the scoped MCP move/rename and delete tools,
+    /// whose effect on the working tree the diff gate must review even though no Edit/Write tool_use fired.
+    /// <c>AgentRunner</c> feeds the from/to/path off the mcp tool_use; a move records both ends (the source's
+    /// deletion and the target's addition both belong in the diff).</summary>
+    public void RecordExplicit(string? relOrAbs)
+    {
+        if (string.IsNullOrWhiteSpace(relOrAbs)) return;
+        var abs = Path.IsPathRooted(relOrAbs) ? relOrAbs : Path.Combine(_rootPath, relOrAbs);
+        var full = Path.GetFullPath(abs);
+        var rootWithSep = _rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase)) return;
+        var rel = full[rootWithSep.Length..].Replace('\\', '/');
+        if (rel.Length == 0) return;
+        lock (_lock) _paths.Add(rel);
+    }
+
     public List<string> List()
     {
         lock (_lock) return _paths.Order().ToList();
