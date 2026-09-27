@@ -7383,3 +7383,241 @@ boundary, so an answer sentence is less often split between two pieces than by o
 - the driver's log, `devtools/_run10/drive.log`;
 - the guard check, `devtools/_run10/guards.txt` (scratch `guards10.mjs`);
 - the smokes, `devtools/_run10/smoke-*.txt`.
+
+## Run 11 — the local judges on Lyntai 3.5.1 (design)
+
+Written and committed BEFORE the runs; the results section that follows names this commit. One plumbing smoke came
+first, because this design quotes it.
+
+**The question.** Every local-judge figure the household reads on the short-fact fixture was measured on Lyntai 3.2.0:
+the rerankers in Runs 2 and 4, Gemma 3 1B in Run 3, and Qwen3 0.6B in Run 5b. The app now runs Lyntai 3.5.1, and four
+things on a chat judge's path changed with it:
+
+- **the engine**. `formula` itself moved on this fixture: its positions digest is `2e323182c81a` in Run 10's three
+  short runs, where Runs 1–7 read `f661eb6a056e`, and it reads 80 / 127 (top-1 / found@8) where they read 79 / 125;
+- **thinking off** is now asked for in the REQUEST (`chat_template_kwargs.enable_thinking = false`, Lyntai D179, set in
+  `LlamaCppSource`). Runs 3–7 launched the chat child with `reasoning = off`, and that key is gone from the preset;
+- **the chat context** is capped at 16,384 tokens (`LlamaServerRuntime.ChatContextTokens`). Run 5b ran uncapped, at the
+  model's training context;
+- **the judge's input**, content alone, now comes from Lyntai's `ContentChars` (`JudgeWiring.ContentChars`), not the
+  app's own decorator.
+
+The shipped reranker also moved, from the cut (`rr`) to windows (`rrk`). On this fixture every fact is one window
+(≤ 101 characters), and Run 6c found `rrk` byte-identical to `rr` here, so that part is only a label.
+
+**Do the within-run conclusions the household sentences rest on still hold on 3.5.1?** Each judge against no judge, and
+Qwen3 against BGE, re-measured the way the product now runs them.
+
+### What is compared
+
+Three runs, one after another, each paired only within itself:
+
+| run | arms | GPU arms at once |
+|---|---|---|
+| **11a · Qwen3** | `formula`, `formula2`, `rrk:bge-reranker-v2-m3-Q5_K_M`, `lc:Qwen3-0.6B-Q8_0` | 2 |
+| **11b · Gemma** | `formula`, `formula2`, `rrk:bge-reranker-v2-m3-Q5_K_M`, `lc:gemma-3-1b-it-Q4_K_M` | 2 |
+| **11c · rerankers** | `formula`, `formula2`, `rrk:` BGE, `rrk:LAMAR-600m.Q5_K_M`, `rrk:mmarco-mMiniLMv2-L12-H384-v1-Q8_0` | 3 |
+
+- **One chat model per run**, beside `formula` and BGE, as in Run 5b. The router then holds two models, the most the
+  product ever holds.
+- **11c is the optional reranker run.** Run 10's short runs already measured each reranker against its own run's
+  `formula` on this build, but one reranker per run. The household sentences also quote rerankers against EACH OTHER
+  (mMiniLMv2 against BGE and LAMAR, LAMAR against BGE), which needs them in one run. Three reranker arms is the ceiling
+  (Run 9's VOID); on ≤ 60 candidates of ≤ 101 characters the pace has never acted (Runs 6c, 9, 10).
+- **`lcb` is gone** (the bench refuses it since 2026-09-27), and so is `rr`. Nothing here reproduces a 3.2 arm.
+
+### The instrument
+
+- **Fixture and seed.** `recall-bilingual.json` (sha256 `9680443e…f555`), 240 questions, order seed 12345. Run 1's
+  seed (`devtools/_judge-bench-seed/`), reused and re-verified, carries Claude's subject tags. Nothing is written, so
+  every judge recalls over Claude's tags, as in Runs 3 and 5b, and no tag is made here.
+- **No quota.** `--claude-stub` puts every server on the e2e claude stub, and the bench refuses a Claude-judge arm with
+  it. A reused seed writes nothing, so even a stub call would be a fault (guard 3).
+- **Every judge arm is wired as the product wires it**:
+  - 判断 on, `memory.judgeSource = llama-cpp`, the model bound by id;
+  - 语义 off, so candidates come from the graph and FTS trigram (≤ 60 per recall);
+  - partition; a page of 8; the 60 s verification deadline (the knob pinned blank);
+  - the judge shown each candidate's content alone (`ContentChars`, no knob);
+  - each arm adopts one shared router, launched with the section the product writes:
+    - a chat model: `n-gpu-layers = 99`, `n-predict = 512`, `ctx-size = 16384`, and no `reasoning` key;
+    - a reranker: `reranking = true`, and `ctx-size`/`batch-size`/`ubatch-size` at 4,096, or 512 for mMiniLMv2.
+  - The bench checks the product's source for both halves of thinking-off (no `reasoning` launch key; the request field
+    in `LlamaCppSource`) and stops on drift.
+- **A chat judge samples** at llama-server's default temperature, so its verdicts vary between identical runs, as the
+  product's do. No judge A/A twin runs; a gap of a few queries is read against that.
+- **The build.** App `ecf44d2` (v1.3.0 on Lyntai 3.5.1), the server built from `085398c` and not rebuilt since Run 10.
+  Fingerprint (Platform / Planner / Server): `715b91b3b197afd6` / `0c7d745c25c6070d` / `318ca094393afd75`.
+- **The machine.** llama.cpp `b10549` (Vulkan x64); the RTX 4080 Laptop GPU and the Intel Arc iGPU both visible, every
+  layer offloaded, no device selected, as the product launches it. The unrelated llama-server on port 8090 stays up
+  throughout and is not touched.
+
+### Commands
+
+Run by the scratch driver `devtools/_run11/drive.sh`, in this order:
+
+```
+node devtools/scripts/judge-bench.mjs --reuse-seed --claude-stub --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M --rerank-arms=rrk --chat-judges=Qwen3-0.6B-Q8_0 --chat-arms=lc \
+  --resources=devtools/_rr-res --port-base=7000 --llama-port=7090
+node devtools/scripts/judge-bench.mjs --reuse-seed --claude-stub --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M --rerank-arms=rrk --chat-judges=gemma-3-1b-it-Q4_K_M --chat-arms=lc \
+  --resources=devtools/_rr-res --port-base=7010 --llama-port=7091
+node devtools/scripts/judge-bench.mjs --reuse-seed --claude-stub --arms=formula,formula2 \
+  --rerankers=bge-reranker-v2-m3-Q5_K_M,LAMAR-600m.Q5_K_M,mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-arms=rrk \
+  --resources=devtools/_rr-res --port-base=7020 --llama-port=7092
+```
+
+- **Ports.** 7000–7004, 7010–7014 and 7020–7025 (the seed check takes the base, each arm the next); routers
+  7090–7092. None is in a range Windows had reserved that day (checked just before: 5357, 5458–5557, 5768–5967,
+  8270–8469, 8691–8890, 9855–9954, and ranges above 10,000), none was listening, and none is reused (the smoke used
+  7100–7104 and 7190).
+- **The driver** copies each run's results, rows, router log, preset, and every arm's logs and settings to
+  `devtools/_run11/<qwen3|gemma|rerankers>/` before the next run rewrites the work folder. It then checks the guards
+  with the scratch `devtools/_run11/guards11.mjs`, and stops at the first run that exits non-zero or fails a guard. A run
+  that exits 127 before any arm starts is re-run once, unchanged.
+- **Estimated time**: about 20 minutes.
+
+### Measured
+
+Per run, as the bench prints it:
+
+- the four sets and `all` for every arm: top-1, found@8, MRR, `judged`/`graph`, `endorsed`;
+- **verdict coverage** per chat judge: `judged`/`graph` on `all` (Run 3's Gemma read 202/234, Run 5b's Qwen3 226/234);
+- paired, McNemar exact with the Agresti–Min 95% interval: every arm against `formula`; each chat judge against `rrk:`
+  BGE (Gemma against BGE is new: Run 3 had no reranker); in 11c, every reranker against every other;
+- **serial latency**: one arm at a time over the first 12 queries, judge arms counting only verdict-carrying recalls; a
+  judge's added cost is its serial median minus its own run's `formula` serial median. The every-graph-recall block for
+  chat judges, and the parallel means;
+- llama.cpp chat calls ok/failed, claude-cli calls, and the chat child's generated tokens per task.
+
+### What this run updates — the quoted figures, found before the run
+
+An inventory of every sentence that quotes a local judge's or the no-judge floor's figure on this fixture, taken before
+the runs. Nothing is edited here: the proposed text goes to the owner, and a separate task edits it.
+
+| # | where | what it quotes today | updated from |
+|---|---|---|---|
+| U1 | `GgufCatalog` · `gemma-3-1b-it-Q4_K_M` note | 每次检索约 0.40 秒, 不开判断约 0.22 秒; 79 → 33, 125 → 111, 两项都是显著变差 (Run 3) | 11b |
+| U2 | `GgufCatalog` · `Qwen3-0.6B-Q8_0` note, first half | 79 → 110, 125 → 148, 两项都显著变好; against BGE +8.3 个百分点 (显著), 203 对 148; 约 0.38 秒, 不开判断约 0.22 秒 (Run 5b) | 11a |
+| U3 | `GgufCatalog` · `LAMAR-600m.Q5_K_M` note | 首位命中 86/240, 前八命中 208/240, 约 0.47 秒 (Run 2) | 11c |
+| U4 | `GgufCatalog` · BGE note (`RecommendedReranker`) | 首位命中 90/240, 前八命中 203/240, 约 0.49 秒 (Run 2) | 11c |
+| U5 | `GgufCatalog` · mMiniLMv2 note (`RerankerWithoutGpu`), short-fact half | base 79/240 与 125/240; 前八 199/240 against the same run's BGE 204/240, no significant difference, 最多少带进约 11 题; against LAMAR 208/240 significantly fewer, 9 对 0; 首位 99/240 against BGE 90 and LAMAR 86; 约 0.31 秒, BGE 约 0.45 秒 (Run 4) | 11c |
+| U6 | `GgufCatalog` · `RerankerPair` (LAMAR and BGE notes) | no difference; found@8 leans LAMAR 5–0 (p = 0.063, interval excluding zero); top-1 BGE 6 对 2; the 120 Chinese or code-switched questions (Run 2) | 11c |
+| U7 | `GgufCatalog` · `RerankerMeasuredAgainst` (LAMAR and BGE notes) | 不开判断 79/240 与 125/240 (约 0.23 秒), beside the Claude judge's 130/240 与 131/240 (Runs 1–2) | the floor from 11c; the Claude half is NOT re-measured |
+| U8 | `GgufCatalog` · class and `RecommendedReranker` doc comments | 203 against 148; LAMAR/BGE 5–0, p = 0.063, [−4.0, −0.1]; 6–2, p = 0.289 (Runs 2, 5b) | 11a, 11c |
+| U9 | `MemoryRecallController` · the 判断 layer's `what` | 从 125 题增加到 199–208 题, 排第一的多 7–20 题 (Runs 2, 4), in one sentence with the Claude judge's 79 → 130 (Run 1). `p51` derives the range from the reranker notes and hard-codes 125 and 79 | 11c; the Claude half is NOT re-measured |
+| U10 | `LlamaCppSource.Description` | 判断用对话模型时每次检索多约 0.16–0.18 秒 (Runs 3, 5b); 用重排模型时多约 0.08–0.26 秒 (Runs 2, 4) | 11a, 11b; 11c |
+| U11 | `MemorySourceTypes` · the managed group's 判断 sentence | wording only: Qwen3 0.6B 比不开判断好, 前八远不如重排模型; Gemma 3 1B 比不开判断更差 | C1, C2, C4, C5, C6 |
+| U12 | `ModelsController.Recommend` doc comment | 79 → 33; 203 against 148 (Runs 3, 5b) | 11a, 11b |
+| U13 | `CLAUDE.md` · the 判断 paragraph | the picker's three span 199–208 / 86–99 / 0.31–0.49 s (Runs 2, 4); Qwen3 beats no judge on both metrics (Run 5b); Gemma 3 1B loses to it (Run 3). Also 203–208 vs 131, 86–90 vs 130, ~0.5 s vs ~8.7 s (Run 2 against Run 1's Claude judge) | 11c, C1, C2, C5, C6; the Claude comparison is NOT re-measured |
+| U14 | `dev-conventions.md` · the recall-layers table | 公式 79/240, 125/240, ~0.23 s; the reranker row's Run 2 figures (found@8 208 / 203, +34.6 / +32.5pp; cross 6 → 49 / 48 of 60; top-1 86 / 90, +2.9pp p = 0.039 / +4.6pp p = 0.013; ~0.47–0.49 s), its Run 4 mMiniLMv2 figures (199, 99, +30.8 / +8.3pp; vs BGE 7/2 p = 0.180 [−4.6, +0.5]; vs LAMAR 9/0 p = 0.004; 0.31 s against 0.24 s) and its LAMAR-vs-BGE line; the chat row's Runs 3 and 5b figures (Gemma 33 / 111, −19.2 / −5.8pp, coverage 202/234, +0.18 s; Qwen3 110 / 148, +12.9 / +9.6pp, coverage 226/234, +0.16 s) | 11a, 11b, 11c |
+| U15 | `dev-conventions.md` · "the two judges are complements" | Qwen3 against BGE: 110 against 90, +8.3pp, p = 0.002; 148 against 203, −22.9pp (Run 5b) | 11a |
+| U16 | `dev-conventions.md` · the "measured worse / measured better" paragraphs, and the partition paragraph | Gemma 79 → 33, 125 → 111; Qwen3 79 → 110, 125 → 148, 203 against 148; found@8 +34.6 / +32.5pp, top-1 +2.9 / +4.6pp (Runs 2, 3, 5b) | 11a, 11b, 11c |
+| U17 | `docs/release-notes/next.md` — **reported, not edited** | Gemma 79 → 33; mMiniLMv2 前八和 BGE 测不出差别, 但也不能算一样好; Qwen3 79 → 110, 125 → 148, 排第一比 BGE 还多, 前八远不如 BGE | 11a, 11b, 11c |
+
+The e2e pins that move with the text: `p51` asserts the Gemma note's `79`, `33`, `125`, `111`; the mMiniLMv2 note's
+`199/240`; the Qwen3 note's `79 题增加到 110 题`, `125 题增加到 148 题`, `203 对 148` and `0.38 秒`; and the layer
+sentence's range, derived from the reranker notes (`前八命中 N/240`, `首位命中 N/240`) against a hard-coded 125 and 79.
+`p52` asserts the managed group's wording only.
+
+**NOT updated by this run, and why.**
+
+- **Anything set against the Claude judge** (U7's and U9's Claude half, U13's 203–208 vs 131, the complement paragraph's
+  −19.2 / −17.5pp and +31.3 / +29.2pp). The Claude judge is not re-run (no quota), and a 3.5.1 local count set beside a
+  3.2 Claude count is not a comparison (measuring rule 2). Those sentences keep Runs 1–2's figures, all from one base.
+- **Run 7** (Qwen3's own tags: the Qwen3 note's second half, the chat row's Run 7 sentence), **Run 3's `topic — content`
+  arm** (dev-conventions' input-mode paragraph), **Runs 6–10** (long notes, windows, CPU, iGPU) and the **embedder and
+  Lyntai LoCoMo** figures.
+- **The Claude CLI arm's own floor** (`ClaudeCliJudgeSource.Cost`, 不开判断约 0.21 秒): Run 1's `formula` arm, the pair of
+  the 8.7 s it stands beside.
+
+### Decision rule
+
+As written by the owner, **verbatim**: **"a household sentence changes if its within-run conclusion changes (a judge
+significant vs no judge no longer is, or the reverse; or Qwen3 vs BGE flips significance on top-1 or found@8).
+Otherwise its numbers are refreshed and its wording kept."**
+
+It is read as follows, fixed before the runs.
+
+- **A conclusion** is one paired comparison, on `all` (240 pairs), on one metric, within one run. Its **category** is
+  exactly one of:
+  - **significantly better**: exact McNemar p < 0.05 and c − b > 0;
+  - **significantly worse**: p < 0.05 and c − b < 0;
+  - **no significant difference**: p ≥ 0.05.
+  - b = the reference's hit and the arm's miss; the reference is `formula` or, for Qwen3 against BGE, `rrk:` BGE.
+- **A conclusion changes** when its category differs from the one the sentence states. That is the only thing that
+  changes a sentence's wording. The per-set tests are reported and do not decide.
+- **The conclusions under test**, with the category each sentence states today:
+
+  | # | comparison | metric | stated today | source |
+  |---|---|---|---|---|
+  | C1 | Qwen3 vs no judge | top-1 | significantly better | Run 5b |
+  | C2 | Qwen3 vs no judge | found@8 | significantly better | Run 5b |
+  | C3 | Qwen3 vs BGE | top-1 | significantly better | Run 5b |
+  | C4 | Qwen3 vs BGE | found@8 | significantly worse | Run 5b |
+  | C5 | Gemma vs no judge | top-1 | significantly worse | Run 3 |
+  | C6 | Gemma vs no judge | found@8 | significantly worse | Run 3 |
+  | C7 | BGE vs no judge | top-1 | significantly better | Run 2 |
+  | C8 | BGE vs no judge | found@8 | significantly better | Run 2 |
+  | C9 | LAMAR vs no judge | top-1 | significantly better | Run 2 |
+  | C10 | LAMAR vs no judge | found@8 | significantly better | Run 2 |
+  | C11 | mMiniLMv2 vs no judge | top-1 | significantly better | Run 4 |
+  | C12 | mMiniLMv2 vs no judge | found@8 | significantly better | Run 4 |
+  | C13 | mMiniLMv2 vs BGE | found@8 | no significant difference | Run 4 |
+  | C14 | mMiniLMv2 vs LAMAR | found@8 | significantly worse | Run 4 |
+  | C15 | LAMAR vs BGE | found@8 | no significant difference | Run 2 (and Run 4) |
+
+  C1–C4 come from 11a, C5–C6 from 11b, and C7–C15 from 11c, the run the reranker notes quote. BGE in 11a and 11b is the
+  reference for the chat judges there, and the three BGE arms side by side are an instrument check. A comparison a sentence quotes but this table does not name (top-1
+  between two rerankers, say) is reported and refreshed as a number; its category is flagged if it moved, and it does
+  not decide.
+- **Qualifiers beyond the category** (a sentence saying "not equivalent", "leans LAMAR 5–0", "p < 0.001") are numbers:
+  refreshed to what the run shows. Where the refreshed value contradicts the old qualifier (a "not equivalent" that is
+  now equivalent, a lean that reversed), the report says so for the owner; the rule itself decides on the category only.
+- **Latency and coverage** are numbers and are refreshed. A sentence whose wording rests on a latency ("about 1/20 of the
+  latency") keeps its wording unless the new figures contradict it, in which case the report says so.
+- **What is NOT re-measured and keeps its figures**: Run 7 (Qwen3's own tags), Run 1 (the Claude judge), Runs 6–10 (long
+  notes, windows, CPU and iGPU), and Lyntai's LoCoMo figures. A sentence quoting only those is not touched.
+- **Labelling.** Every absolute count from this run is labelled "Lyntai 3.5.1" wherever it is quoted beside a 3.2 figure.
+  A 3.5.1 count set beside a 3.2 count is descriptive only and is never a finding (measuring rule 2): the engine moved, so
+  even `formula` differs.
+- **Multiplicity.** Fifteen conclusions, each at 0.05 with no correction. That errs toward reporting a change.
+
+### Guards, checked per run before its conclusions are read
+
+A failed guard leaves that run's conclusions unread, and it is reported, not worked around.
+
+1. **The instrument.** The fixture is accepted and the seed re-verified. The `formula` digest is `2e323182c81a`, Run 10's
+   short runs on this build, in all three runs.
+2. **The engine A/A.** `formula` against `formula2` is quiet on `all` (p ≥ 0.05).
+3. **Startup.** Every judge arm reads back `llama-cpp · <m>`, raises no startup warning, announces no knob (`rrk`
+   announces `rerank chunking = on`, as shipped), and the bench prints no WARNING. 0 claude-cli calls by any arm over the
+   run.
+4. **The router log.** Each model spawned exactly once, and nothing else. The chat child's arguments carry
+   `--n-predict 512` and `--ctx-size 16384` and NO `--reasoning`; a reranker child `--reranking` and `--ctx-size` 4,096
+   (512 for mMiniLMv2). No unload, eviction, exit or out-of-memory line; no error line; no context-exceeded refusal.
+5. **The cap held.** No chat task generated more than 512 tokens. A task of exactly 512 is a capped runaway: counted and
+   reported, not a failure (Run 5b: Qwen3 16 of 494).
+6. **Thinking was off.** Each chat child's MEDIAN generated tokens per task is at most 60. Run 5b's Qwen3, with thinking
+   off by the launch key, read 12; a thinking reply runs to hundreds. The smoke read 10.
+7. **No FTS fallback** in any arm's log. Deadline NoOpinions (`memory verification gave no verdict within`) are counted
+   and reported, and are not a failure.
+8. **Reranker coverage.** `judged` = `graph`, 0 errors, in every set, for every `rrk` arm. A reranker abstains only on a
+   fault.
+9. **The pace did not act.** 0 pace lines in every arm; the bench voids the run otherwise.
+10. **One build.** The fingerprint above, before the first run and after the last.
+11. **Complete.** Every arm has 240 accuracy rows and 12 latency rows, and no row errored.
+
+A chat judge's coverage is NOT a guard: it is a result, stated beside every outcome.
+
+### Plumbing smoke, before this design
+
+`--n=6 --latency-sample=2` (24 queries), `formula`, `formula2`, `rrk:` BGE and `lc:Qwen3-0.6B-Q8_0`, ports 7100–7104
+and 7190. Every guard above held (the digest and completeness checks against the smoke's own size):
+
+- the chat child spawned once with `--n-predict 512 --ctx-size 16384` and no `--reasoning`; BGE with `--reranking` and
+  4,096;
+- Qwen3: 27 tasks, median 10 generated tokens, at most 15, none capped; the largest prompt 720 tokens;
+- 26 llama.cpp chat calls, all Ok; 0 claude-cli calls; 0 pace lines; judged = graph for both judges.
+
+The smoke's numbers inform nothing (24 questions).
