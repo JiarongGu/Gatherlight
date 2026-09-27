@@ -453,6 +453,8 @@ dedicated `llama-server --reranking --n-gpu-layers 99` per part, one laptop GPU.
   12 questions × 3 rounds after a warm-up, serial. First run: median 75.1 ms at 4096, 76.3 ms at 512, 79.3 ms at
   4096 again. The script's run: 75.2, 71.7 and 71.8 ms. There is no difference beyond the 4096 launch's own
   run-to-run spread, so the row's 0.31 s per recall and +0.08 s over no judge stand, said as measured at 4096.
+  (Superseded 2026-09-27: judge-bench Run 11 measured the whole recall at the declared 512 on Lyntai 3.5.1 — 0.34 s,
+  +0.10 s over its run's no judge — and the row quotes that, with no launch caveat.)
 
 ### 2026-09-24 — a CHAT child's context: capped at 16,384, and what the cap costs
 

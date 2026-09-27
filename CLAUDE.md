@@ -92,11 +92,13 @@ never annotates, so tagging stays on the Claude CLI and the live route `llm.rout
 CLI (`claude-cli:haiku`), never the reranker's id. Measured: it puts the answer on the 8-row page far more often than the Claude judge (203–208
 vs 131 of 240), but first far less often (86–90 vs 130), at ~0.5 s against ~8.7 s — the Claude figures from Run
 1's content-only arm, the judge input that ships (its topic — content arm, the 1.3.0 input, read 133 / 132 /
-~9.5 s and was measured equivalent). Those are Run 2's two rerankers; with mMiniLMv2 (Run 4) the picker's three span
-199–208 / 86–99 / 0.31–0.49 s — every one of those figures on facts of at most 101 characters; on long notes
+~9.5 s and was measured equivalent). Those are Run 2's two rerankers, on Lyntai 3.2 like the Claude figures; re-measured
+on 3.5.1 with mMiniLMv2 (Run 11) the picker's three span 203–208 / 89–100 / 0.34–0.46 s — every one of those figures on
+facts of at most 101 characters; on long notes
 (883–1,241 characters, Run 6c, read in windows) a recall runs 1.2–3.2 s. A llama.cpp CHAT judge does both halves locally: Qwen3 0.6B beats no judge on both
-metrics (Run 5b) — over its own tags too, not significantly different from over Claude's though its tags collapse
-unrelated facts (Run 7) — and Gemma 3 1B loses to it (Run 3). The rules for it — the
+metrics (Runs 5b and 11) — over its own tags too, not significantly different from over Claude's though its tags collapse
+unrelated facts (Run 7) — and Gemma 3 1B loses to it on top-1 (Runs 3 and 11; its Run 3 found@8 loss did not replicate
+on 3.5.1). The rules for it — the
 binding screen, the per-pair cap and the windows a long candidate is read in, the pace that sizes each call to the
 deadline and skips a recall this machine cannot judge in time, the device a reranker is measured fastest on and pinned to
 in its preset (launch item (6)), the router restart limits — are in `.claude/rules/dev-conventions.md`.
