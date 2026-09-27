@@ -19,6 +19,8 @@
 //                                            untouched (a SCRATCH repo, never the working one)
 //   G  …and a Claude Code session too     → no claude the app spawns (startup probe, agent turn, one-shot call) gets
 //                                            either, and the agent's own git finds the data repo; the rest still arrives
+//      …and an API key, another endpoint, a provider switch and the app's access token (G2) → none reaches a claude, while
+//                                            the subscription login (CLAUDE_CODE_OAUTH_TOKEN) does; no value is logged
 import { execFileSync } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -381,17 +383,30 @@ try {
     // ChildEnvironment.ForgetLauncherContext drops both from the whole process at startup. The stub records, per spawn,
     // the names it got and what a `git` run from its cwd finds — what the agent's Bash would work on. The control
     // variable proves the environment was narrowed, not wiped; every value here is the fixture's own, never a real one.
+    //
+    // G2, the same boot: what would take the CLI OFF the subscription login (owner decision 2026-09-28, "never an API
+    // key", enforced at spawn) and the app's own secrets. The CLI's docs rank an API key, a provider switch and a gateway
+    // bearer above /login, and in -p mode an ANTHROPIC_API_KEY "is always used when present"; ANTHROPIC_BASE_URL would
+    // send every prompt to another host. The positive control is CLAUDE_CODE_OAUTH_TOKEN — `claude setup-token`'s
+    // subscription token, which the rule allows and which must still arrive. Every value is an obvious fake, and only the
+    // stub runs: nothing here reaches a real CLI or a real endpoint.
     const dirG = freshDir('g');
     const envLog = path.join(repo, 'devtools', '_e2e-p49-g-stub-env.jsonl');
     fs.rmSync(envLog, { force: true });
     const TOKEN = 'zzp49-parent-session-token-never-logged';
+    const FAKE = {
+      ANTHROPIC_API_KEY: 'zzp49-fake-not-an-api-key', ANTHROPIC_BASE_URL: 'http://zzp49-fake-endpoint.invalid',
+      CLAUDE_CODE_USE_BEDROCK: '1', GATHERLIGHT_ACCESS_TOKEN: 'zzp49-fake-access-token',
+      CLAUDE_CODE_OAUTH_TOKEN: 'zzp49-fake-oauth-token', CLAUDE_EFFORT: 'zzp49-fake-effort',
+      TRACEPARENT: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+    };
     srv = startServer({
       dataDir: dirG, port: PORT_INHERITED_CLI,
       env: {
         GIT_DIR: worktreeGitDir, GIT_CONFIG_PARAMETERS: "'user.name'='zzp49-inherited-author'",
         CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_CODE_SESSION_ID: 'zzp49-parent-session',
         CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\zzp49-parent', CLAUDE_CODE_MESSAGING_TOKEN: TOKEN, CLAUDE_PID: '1',
-        ZZE2E_KEPT: 'kept', GATHERLIGHT_STUB_ENV_LOG: envLog,
+        ZZE2E_KEPT: 'kept', GATHERLIGHT_STUB_ENV_LOG: envLog, ...FAKE,
       },
     });
     snap = await settled(srv.base);
@@ -411,7 +426,7 @@ try {
     const kinds = [...new Set(spawns.map((s) => s.kind))];
     ok('(fixture G) the stub recorded the startup probe, an agent turn and a one-shot call',
       ['auth-status', 'plan', 'annotation'].every((k) => kinds.includes(k)), JSON.stringify(kinds));
-    const LAUNCHER_CONTEXT = /^(GIT_DIR|GIT_WORK_TREE|GIT_CONFIG_PARAMETERS|GIT_CONFIG_COUNT|GIT_EXEC_PATH|CLAUDECODE|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|MESSAGING_SOCKET|MESSAGING_TOKEN|EXECPATH|SSE_PORT)|CLAUDE_PID)$/i;
+    const LAUNCHER_CONTEXT = /^(GIT_DIR|GIT_WORK_TREE|GIT_CONFIG_PARAMETERS|GIT_CONFIG_COUNT|GIT_EXEC_PATH|CLAUDECODE|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|MESSAGING_SOCKET|MESSAGING_TOKEN|EXECPATH|SSE_PORT)|CLAUDE_PID|CLAUDE_EFFORT|TRACEPARENT|TRACESTATE)$/i;
     const leaked = spawns.filter((s) => s.watched.some((n) => LAUNCHER_CONTEXT.test(n)));
     ok('THE POINT (G): no claude the app spawned inherited the launcher\'s repository or its Claude Code session',
       spawns.length > 0 && leaked.length === 0,
@@ -431,6 +446,32 @@ try {
     ok('…the startup log names what it dropped', ['GIT_DIR', 'GIT_CONFIG_PARAMETERS', 'CLAUDECODE', 'CLAUDE_CODE_MESSAGING_TOKEN']
       .every((n) => new RegExp(`\\b${n}\\b`).test(droppedLine)), droppedLine || '(no line)');
     ok('…and never a value: the session token is in no log', !logsG.includes(TOKEN) && !srv.log().includes(TOKEN));
+
+    // ---- G2 · off the subscription, and the app's own secrets --------------------------------------------------------
+    const OFF_SUBSCRIPTION = ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK'];
+    const gotAny = (names) => spawns.filter((s) => s.watched.some((n) => names.some((m) => m.toLowerCase() === n.toLowerCase())));
+    const offLeaks = gotAny(OFF_SUBSCRIPTION);
+    ok('THE POINT (G2): no claude the app spawned got an API key, another endpoint or a provider switch — the startup probe included',
+      spawns.length > 0 && offLeaks.length === 0,
+      offLeaks.slice(0, 3).map((s) => `${s.kind}: ${s.watched.filter((n) => OFF_SUBSCRIPTION.includes(n)).join(',')}`).join(' | '));
+    const secretLeaks = gotAny(['GATHERLIGHT_ACCESS_TOKEN']);
+    ok("THE POINT (G2): …nor the app's own remote-access token", spawns.length > 0 && secretLeaks.length === 0,
+      secretLeaks.map((s) => s.kind).join(', '));
+    ok('(G2) …while the subscription login, CLAUDE_CODE_OAUTH_TOKEN, still reaches every one — the positive control',
+      spawns.length > 0 && spawns.every((s) => s.watched.includes('CLAUDE_CODE_OAUTH_TOKEN')),
+      JSON.stringify(spawns.map((s) => [s.kind, s.watched.includes('CLAUDE_CODE_OAUTH_TOKEN')])));
+    const ignoredLine = (logsG.match(/Claude CLI: ignored .*/) ?? [''])[0];
+    ok('(G2) …the startup log says once, by name, what the CLI will not see',
+      OFF_SUBSCRIPTION.every((n) => ignoredLine.split(/[\s,]+/).includes(n))
+        && (logsG.match(/Claude CLI: ignored /g) ?? []).length === 1,
+      ignoredLine || '(no line)');
+    const settingsG = (await cG.j('/api/manage/settings')).body ?? {};
+    ok('(G2) …and the app itself still knows its token came from the environment: the settings panel says it is overridden',
+      (settingsG.envOverrides ?? []).includes('accessToken'), JSON.stringify(settingsG.envOverrides));
+    const logText = logsG + srv.log() + (fs.existsSync(envLog) ? fs.readFileSync(envLog, 'utf8') : '');
+    const valuesSeen = Object.entries(FAKE).filter(([, v]) => v.length > 4 && logText.includes(v)).map(([k]) => k);
+    ok("(G2) …and not one of those values is in any log — the server's, its file log or the stub's",
+      valuesSeen.length === 0, valuesSeen.join(', '));
     srv.stop(); srv = undefined;
     await new Promise((r) => setTimeout(r, 1500));
     const changedG = (() => {

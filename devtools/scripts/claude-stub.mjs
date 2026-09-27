@@ -23,7 +23,7 @@ const args = process.argv.slice(2);
 // got (never their values — one is a session token), the value of the suite's own control variable, and what a `git`
 // run from this cwd finds — exactly what the agent's Bash would work on. The git runs with this process's own
 // environment, read-only (`rev-parse`), so it can report a leaked GIT_DIR without writing anywhere.
-const WATCHED_ENV = /^(GIT_|CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|NODE_OPTIONS$)/i;
+const WATCHED_ENV = /^(GIT_|CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CLAUDE_EFFORT$|TRACEPARENT$|TRACESTATE$|NODE_OPTIONS$|ANTHROPIC_|GATHERLIGHT_ACCESS_TOKEN$|GATHERLIGHT_TLS_CERT_PASSWORD$)/i;
 const recordEnv = (kind) => {
   const log = process.env.GATHERLIGHT_STUB_ENV_LOG;
   if (!log) return;
