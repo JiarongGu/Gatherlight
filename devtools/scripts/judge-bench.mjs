@@ -1402,7 +1402,9 @@ const analyse = (run, { baseline = null } = {}) => {
   const cjArms = arms.filter((a) => chatKey(a));
   const cjVsRr = [];
   for (const c of cjArms)
-    for (const r of arms.filter((a) => /^rr:/.test(a.key) && a.seed === c.seed)) cjVsRr.push({ key: `${c.key} vs ${r.key}`, label: `${c.key} vs ${r.key}`, arm: c, base: r });
+    // `rrk:` too since Run 11 (the shipped chunked reranker is the reference there); no run saved before it has a chat judge
+    // beside an `rrk:` arm, so every earlier run pairs exactly as it did.
+    for (const r of arms.filter((a) => /^rrk?:/.test(a.key) && a.seed === c.seed)) cjVsRr.push({ key: `${c.key} vs ${r.key}`, label: `${c.key} vs ${r.key}`, arm: c, base: r });
   if (cjVsRr.length > 0) out.paired.chatJudgesVsRerankers = printPaired('PAIRED — each local chat judge against each reranker under partition;'
     + ' b = reranker hit & chat-judge miss, c = the reverse', cjVsRr);
   const cjAcross = [];
