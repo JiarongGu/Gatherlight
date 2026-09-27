@@ -13,7 +13,9 @@
 //   A  the choice: three devices timed one at a time, each launched with the reranker's own launch keys and a port the
 //      OS picked, warmed and timed on DIFFERENT documents of one size; the fastest is named in the preset (`device =
 //      Vulkan1`), `n-gpu-layers` still beside it, and nothing else gets a device key; the measurement persisted, its
-//      device list stripped of the free-memory figures; the row says where it runs and that it was measured here
+//      device list stripped of the free-memory figures; the row says where it runs and that it was measured here; and
+//      no child inherited LLAMA_API_KEY, a launch argument by environment or the router's child switch from the server,
+//      while logging and device selection still reach it (ChildEnvironment.ForLlamaServer)
 //   A2 validity: a device that scores 3 of 4 documents is excluded however fast, one that never answers is cut at the cap
 //      and its process killed — and while those exclusions have retries left, NO device key: llama.cpp chooses until the
 //      measurement is complete, and the row says so and why
@@ -158,7 +160,13 @@ try {
     [BGE]: { none: 0.4, Vulkan0: 1.0, Vulkan1: 0.05 },
     [LAMAR]: { none: 0.05, Vulkan0: 'hang', Vulkan1: 'partial' },
   });
-  const srv = startServer({ dataDir: f.dir, port: PORT, env: env(f) });
+  // The server is started with llama.cpp variables a launcher's environment could carry (ChildEnvironment.ForLlamaServer):
+  // an API key — measured on the real binary, the router then answers the app's own clients 401 — and a launch argument
+  // by environment (a quantized KV cache nobody measured) and the router's internal child switch, all three of which
+  // must not reach a llama-server the app launches; and the two it must keep, logging and the machine's device choice.
+  const INHERITED_LLAMA = { LLAMA_API_KEY: 'zzp53-key', LLAMA_ARG_CACHE_TYPE_K: 'q4_0', LLAMA_SERVER_CHILD_MODE: '1',
+    LLAMA_ARG_LOG_VERBOSITY: '3', GGML_VK_VISIBLE_DEVICES: '0,1,2' };
+  const srv = startServer({ dataDir: f.dir, port: PORT, env: env(f, INHERITED_LLAMA) });
   servers.push(srv);
   await waitHealthy(srv.base);
   const { getJson, post } = makeClient(srv.base);
@@ -188,6 +196,13 @@ try {
     JSON.stringify(starts1.map((e) => `${e.model}@${e.device}`)));
   ok('…only rerankers: the embedder was never launched to be measured', !starts1.some((e) => e.model === EMBEDDER),
     JSON.stringify(starts1.map((e) => e.model)));
+  const envOf = (e) => e.env ?? [];
+  ok('THE POINT (environment): no measurement child inherited the API key, a launch argument or the child switch',
+    starts1.length > 0 && starts1.every((e) => !['LLAMA_API_KEY', 'LLAMA_ARG_CACHE_TYPE_K', 'LLAMA_SERVER_CHILD_MODE']
+      .some((n) => envOf(e).includes(n))), JSON.stringify(starts1.map(envOf)));
+  ok('…while the logging keys and the device selection still reach it (narrowed, not wiped)',
+    starts1.length > 0 && starts1.every((e) => envOf(e).includes('LLAMA_ARG_LOG_VERBOSITY') && envOf(e).includes('GGML_VK_VISIBLE_DEVICES')),
+    JSON.stringify(starts1.map(envOf)));
   const argvOf = (e) => e.argv.join(' ');
   ok('THE POINT: each child got the reranker section\'s OWN launch keys — n-gpu-layers, reranking, the 4096 window — plus --device',
     bgeStarts.every((e) => /--n-gpu-layers 99/.test(argvOf(e)) && /--reranking(?! \S*\d)/.test(argvOf(e))

@@ -5,7 +5,8 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { repo, dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, onDisk, skipUnlessNodeModule } from './_e2e-common.mjs';
+import { repo, dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, onDisk, skipUnlessNodeModule,
+  nodeInjection, nodeInjections, isStubNode } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p10');
 const { ok, fail, done } = makeReporter('p10');
@@ -57,7 +58,15 @@ function bmp(w, h) {
 }
 fs.writeFileSync(path.join(up, 'pic.bmp'), bmp(8, 8));
 
-const srv = startServer({ dataDir, port: 5390 });
+// BOTH servers run with an INHERITED NODE_OPTIONS=--require _node-inject.cjs, as a launcher's environment could carry
+// it: the leaf is code we ship, so it must run as built whatever the household preloads into their own node programs
+// (ChildEnvironment.ForPlatformNode). Everything the battery asserts is the positive control that the tools still work;
+// the injection log says which nodes the preload ran in — the claude stub (which keeps NODE_OPTIONS) proves it was
+// real, and no other node may appear: not the leaf, and not the npx/tsx tree of the source shape.
+const injectLog = path.join(repo, 'devtools', '_e2e-p10-node-inject.jsonl');
+fs.rmSync(injectLog, { force: true });
+const leafInjections = () => nodeInjections(injectLog).filter((e) => !isStubNode(e));
+const srv = startServer({ dataDir, port: 5390, env: nodeInjection(injectLog) });
 const { call } = makeClient(srv.base);
 
 try {
@@ -195,6 +204,11 @@ const { PDFDocument } = require('pdf-lib');
   // --- guard ---
   const bad = await call('pdf_inspect', { path: '../CLAUDE.md' });
   ok('traversal guarded', bad.status >= 400);
+
+  ok('(fixture) the inherited NODE_OPTIONS is real: the claude stub, which keeps it, ran the preload',
+    nodeInjections(injectLog).some(isStubNode), JSON.stringify(nodeInjections(injectLog).map((e) => e.argv[0])));
+  ok('THE POINT: …and no node of the leaf ran it — source shape, the whole npx/tsx tree',
+    leafInjections().length === 0, JSON.stringify(leafInjections().map((e) => e.argv.slice(0, 2))));
 } catch (err) {
   fail('e2e-p10 fatal: ' + err.message);
   console.error(srv.log().slice(-3000));
@@ -221,7 +235,7 @@ try {
   fs.mkdirSync(stagedLeaf, { recursive: true });
   for (const e of entries) fs.copyFileSync(path.join(dist, e), path.join(stagedLeaf, e));
 
-  srv2 = startServer({ dataDir, port: 5391 });
+  srv2 = startServer({ dataDir, port: 5391, env: nodeInjection(injectLog) });
   const c2 = makeClient(srv2.base);
   await waitHealthy(srv2.base);
   const bInspect = await c2.call('pdf_inspect', { path: 'uploads/form.pdf' });
@@ -231,6 +245,8 @@ try {
     templatePath: 'uploads/form.pdf', values: { applicant: 'Bundled' }, outPath: 'uploads/bundled.pdf',
   });
   ok('bundled leaf: pdf_fill writes output', bFill.status === 200 && onDisk(dataDir, 'uploads/bundled.pdf'), JSON.stringify(bFill.result));
+  ok('THE POINT: the bundled leaf — plain `node <entry>.cjs` — did not run the inherited preload either',
+    leafInjections().length === 0, JSON.stringify(leafInjections().map((e) => e.argv.slice(0, 2))));
 } catch (err) {
   fail('e2e-p10 bundled-leaf fatal: ' + err.message);
   console.error(srv2?.log().slice(-3000) ?? '');

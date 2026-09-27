@@ -163,6 +163,9 @@ public abstract class NodeLeafTool : IGatherlightTool
         }
         foreach (var a in argv) psi.ArgumentList.Add(a);
         foreach (var a in BuildArgv(args)) psi.ArgumentList.Add(a);
+        // Our code, on whichever node resolved: the household's NODE_OPTIONS is for their own node programs, and in
+        // this one it could only preload a file or make the node refuse to start. Covers the npx/tsx tree too.
+        Kernel.Services.ChildEnvironment.ForPlatformNode(psi);
 
         // A missing runtime surfaces as a Win32Exception from CreateProcess — an opaque "系统找不到指定的
         // 文件" that reads like a bug in the tool. Name the actual prerequisite instead: this is the only

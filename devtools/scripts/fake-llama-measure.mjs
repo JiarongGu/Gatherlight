@@ -44,7 +44,10 @@ if (registry) {
   overlap = still.length > 0;
   fs.writeFileSync(registry, [...still, process.pid].join('\n') + '\n');
 }
-log({ event: 'start', model, device, port, argv, overlap, behaviour, ppid: process.ppid });
+// The NAMES of the llama.cpp, ggml and git variables this child inherited — what reached a llama-server the app
+// launched, which a suite asserts against the server's own environment (ChildEnvironment.ForLlamaServer).
+const env = Object.keys(process.env).filter((k) => /^(LLAMA_|GGML_|GIT_)/i.test(k)).sort();
+log({ event: 'start', model, device, port, argv, overlap, behaviour, ppid: process.ppid, env });
 if (behaviour === 'exit') { log({ event: 'exit', code: 3 }); process.exit(3); }
 setTimeout(() => process.exit(0), 5 * 60 * 1000).unref();
 

@@ -230,6 +230,9 @@ public sealed class RerankDeviceMeter
             psi.ArgumentList.Add("127.0.0.1");
             psi.ArgumentList.Add("--port");
             psi.ArgumentList.Add(port.ToString());
+            // Launched and addressed exactly as the router's children are, so an inherited LLAMA_API_KEY or launch
+            // argument cannot make the measurement answer 401 or time something other than the section's launch.
+            Kernel.Services.ChildEnvironment.ForLlamaServer(psi);
 
             lock (_gate)
             {

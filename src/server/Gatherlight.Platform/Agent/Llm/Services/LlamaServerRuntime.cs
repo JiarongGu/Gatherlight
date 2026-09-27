@@ -989,6 +989,9 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 WorkingDirectory = Path.GetDirectoryName(state.Executable)!,
             };
             foreach (var a in args) psi.ArgumentList.Add(a);
+            // The launch is ours: an inherited LLAMA_API_KEY locks the app out of its own router, and any other
+            // LLAMA_ARG_* is a launch argument nobody measured. Logging and device variables stay (ChildEnvironment).
+            Kernel.Services.ChildEnvironment.ForLlamaServer(psi);
 
             proc = Process.Start(psi);
             if (proc is null) return false;
@@ -1345,6 +1348,7 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 WorkingDirectory = Path.GetDirectoryName(exe)!,
             };
             psi.ArgumentList.Add(arg);
+            Kernel.Services.ChildEnvironment.ForLlamaServer(psi);   // the same binary the router is, read the same way
             p = Process.Start(psi);
             if (p is null) return null;
             // Both streams: llama-server writes its banner to stderr on some builds and stdout on others.
