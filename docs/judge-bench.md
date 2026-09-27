@@ -7177,3 +7177,209 @@ The smokes' numbers inform nothing (16 questions at most, early in a run).
 **The e2e suites on this build**: `p52` passed. `p51` passed when run from a scratch copy on port 6810 — its own 5510
 sits inside a range Windows had reserved that day (5458–5557), and the fixture's log shows the bind refused (WSAEACCES),
 the case `dev-conventions.md` describes.
+
+## Run 10 — Lyntai's segmentation (D177) against ours (2026-09-27, llama.cpp b10549, Lyntai 3.5.1; claude never called — every server on the stub)
+
+**Commands**, exactly as registered in `603a5d5`, which is every run's app HEAD. The server was built from `085398c` and
+not rebuilt. The nine runs ran in order under the scratch driver `devtools/_run10/drive.sh`, each exiting 0 on its first
+attempt, 2026-09-26T23:05Z – 2026-09-27T00:21Z:
+
+| run | from – to (UTC) | results |
+|---|---|---|
+| long · BGE | 23:05:14 – 23:22:07 | `results-2026-09-26T230514.364Z.json` |
+| long · LAMAR | 23:22:08 – 23:41:03 | `results-2026-09-26T232209.080Z.json` |
+| long · mMiniLMv2 | 23:41:05 – 23:48:58 | `results-2026-09-26T234105.581Z.json` |
+| mixed · BGE | 23:49:00 – 23:59:00 | `results-2026-09-26T234900.730Z.json` |
+| mixed · LAMAR | 23:59:02 – 00:09:16 | `results-2026-09-26T235902.191Z.json` |
+| mixed · mMiniLMv2 | 00:09:18 – 00:14:14 | `results-2026-09-27T000918.850Z.json` |
+| short · BGE | 00:14:16 – 00:16:45 | `results-2026-09-27T001416.682Z.json` |
+| short · LAMAR | 00:16:48 – 00:19:23 | `results-2026-09-27T001648.379Z.json` |
+| short · mMiniLMv2 | 00:19:25 – 00:21:42 | `results-2026-09-27T001926.117Z.json` |
+
+**Every guard held, in every run.** They were checked by the scratch `devtools/_run10/guards10.mjs`; its output is kept
+as `devtools/_run10/guards.txt`.
+
+| guard | long | mixed | short |
+|---|---|---|---|
+| 1. instrument | fixture `1f48f1be…` accepted, seed re-verified; `formula` digest **`976af4663b6e`** in all three, = Runs 6–8 | fixture `e1c9b4d5…`, seed re-verified; digest `25d70cd4d6b0` in all three — **not** Run 9's `7b64a4488202` | fixture `9680443e…`; digest `2e323182c81a` in all three — **not** Runs 1–7's `f661eb6a056e` |
+| 2. engine A/A | `formula`/`formula2` byte-identical, p = 1.000, every run | the same | the same |
+| 3. startup | both reranker arms read back `llama-cpp · <m>`, no startup warning, `rrk` announcing `on` and `rrd` `d177`, 0 claude-cli calls over the run, every run | the same | the same |
+| 4. router log | spawned once each; `n_ctx_slot` 4,096 (BGE, LAMAR) and 512 (mMiniLMv2); largest task 857 / 858 / **429**; 0 truncated, 0 error lines | 848 / 849 / **428**; 0, 0 | 71 / 72 / 72; 0, 0 |
+| 5. coverage | `judged` = `graph`, 0 errors, in every set and position of both reranker arms, every run | the same | the same |
+| 6. every request reached the model | forwarded = proxied 505/505, 505/505, 506/506; no failed forward | 499/499, 501/501, 501/501 | 260/260 each |
+| 7. the pace did not act | 0 pace lines in every arm of every run | the same | the same |
+| 8. one build | fingerprint `715b91b3b197afd6` / `0c7d745c25c6070d` / `318ca094393afd75` before the first run and after the last | | |
+
+The bench printed **no WARNING and no NOTE line** in any run.
+
+**Guard 1's two new digests.** The mixed and short fixtures' `formula` rows moved under Lyntai 3.5.1 (the long fixture's did
+not). That is a different base from Runs 1–9 on those two fixtures: `formula` itself reads short 80 / 127 (top-1 / found@8)
+where Runs 1–7 read 79 / 125, and mixed 70 / 108 where Run 9 read 65 / 107. Every comparison below is within its own run,
+so the rule is unaffected. No number here is set beside an earlier run's except where marked descriptive.
+
+### The headline — ours (`rrk`) against D177 (`rrd`), each reranker within its own run
+
+b = ours hit & D177 miss, c = the reverse. Serial medians over 12 queries.
+
+| fixture | reranker | found@8 ours → D177 | b/c, p | net, 95% | top-1 ours → D177 | b/c, p | serial ms ours → D177 |
+|---|---|---|---|---|---|---|---|
+| long | **BGE** | **201 → 171** | **31/1, < 0.001** | **−12.5pp [−16.8, −8.0]** | 87 → 87 | 5/5, 1.000 | 3,073 → 2,141 |
+| long | LAMAR | 211 → 211 | 5/5, 1.000 | 0.0pp [−2.7, +2.7] | 76 → 75 | 2/1, 1.000 | 3,000 → 2,402 |
+| long | mMiniLMv2 | 182 → **196** | 10/24, **0.024** | +5.8pp [+1.0, +10.5] | 79 → 90 | 9/20, 0.061 | 1,166 → 1,054 |
+| mixed | BGE | 196 → **208** | 0/12, **< 0.001** | +5.0pp [+2.1, +7.8] | 76 → 81 | 0/5, 0.063 | 1,617 → 1,313 |
+| mixed | LAMAR | 204 → 207 | 3/6, 0.508 | +1.3pp [−1.3, +3.8] | 82 → 80 | 2/0, 0.500 | 1,658 → 1,324 |
+| mixed | mMiniLMv2 | 184 → **198** | 1/15, **< 0.001** | +5.8pp [+2.5, +9.0] | 79 → 85 | 4/10, 0.180 | 769 → 714 |
+| short | BGE | 208 → 208 | identical | — | 91 → 91 | identical | 423 → 391 |
+| short | LAMAR | 207 → 207 | identical | — | 89 → 89 | identical | 418 → 402 |
+| short | mMiniLMv2 | 203 → 203 | identical | — | 100 → 100 | identical | 303 → 297 |
+
+`formula` (no judge): long 68 / 104, mixed 70 / 108, short 80 / 127 (top-1 / found@8).
+
+### The decision rule, applied
+
+- **(A) fails — in the opposite direction.** For BGE on the long fixture, D177 is significantly WORSE on `all` found@8:
+  201 → 171, b/c 31/1, exact p < 0.001, −12.5pp [−16.8, −8.0]. It is not significantly better.
+- **(B) blocks, four times, all BGE's.** On the long fixture BGE under D177 is significantly worse on found@8 at every
+  position:
+
+  | position | ours → D177 | b/c | p |
+  |---|---|---|---|
+  | start | 47 → 41 | 6/0 | 0.031 |
+  | middle | 53 → 45 | 8/0 | 0.008 |
+  | end | 50 → 42 | 8/0 | 0.008 |
+  | beyond | 51 → 43 | 9/1 | 0.021 |
+
+  - LAMAR is significantly worse nowhere.
+  - mMiniLMv2 is significantly worse nowhere; at `beyond` it is significantly BETTER, 38 → 51, 2/15, p = 0.002.
+  - On the mixed fixture's short-target questions no reranker is worse: BGE 93 → 97 (0/4, p = 0.125), LAMAR 102 → 104
+    (0/2), mMiniLMv2 97 → 98 (0/1).
+- **(C) holds.** On the short fixture the identity check read YES for all three rerankers: 240/240 rows identical in
+  position, verdict flag, graph or FTS, rows returned and errors, with the whole page and every rerank body's hash
+  compared on 240/240. Both segmenters pass a short fact through untouched: the same bytes on the wire.
+
+**(A) fails and (B) blocks, so the rule says KEEP OURS.** Nothing in the product changes. `ChunkedScoreProvider`,
+`RerankPace` and `RerankAdmission` stay. The `d177` mode stays a measurement knob, never a default.
+
+**The CPU consequence, for the record.** D177 carries no pace and no skip. Run 8 measured what BGE does on a CPU without
+the skip: it waited out the minute on 230 of 240 recalls. So a switch would have needed a thin pace decorator on top, and
+that decorator would time bounded, not counted, calls (`devtools/_lyntai-3.5-delta.md` §3.4). The result makes that
+question moot for now.
+
+### By position and by target (cells: top-1 / found@8; paired, D177 against ours)
+
+**Long fixture**, 60 per position:
+
+| reranker | start | middle | end | beyond |
+|---|---|---|---|---|
+| `formula` | 16 / 21 | 13 / 24 | 19 / 29 | 20 / 30 |
+| BGE ours → D177 | 18/47 → 21/41 · f@8 6/0, 0.031 | 20/53 → 18/45 · 8/0, 0.008 | 21/50 → 22/42 · 8/0, 0.008 | 28/51 → 26/43 · 9/1, 0.021 |
+| LAMAR ours → D177 | 19/55 → 18/53 · 2/0, 0.500 | 15/54 → 15/53 · 1/0, 1.000 | 17/50 → 17/52 · 1/3, 0.625 | 25/52 → 25/53 · 1/2, 1.000 |
+| mMiniLMv2 ours → D177 | 19/50 → 20/51 · 0/1, 1.000 | 20/50 → 20/45 · 6/1, 0.125 | 22/44 → 25/49 · 2/7, 0.180 | 18/38 → **25/51 · 2/15, 0.002** |
+
+**Mixed fixture**, 120 short-target and 120 long-target questions; the long targets are 60 at `end` and 60 at `beyond`:
+
+| reranker | short | long | end | beyond |
+|---|---|---|---|---|
+| `formula` | 37 / 52 | 33 / 56 | 15 / 25 | 18 / 31 |
+| BGE ours → D177 | 37/93 → 39/97 · 0/4, 0.125 | 39/103 → 42/111 · 0/8, 0.008 | 16/51 → 16/56 · 0/5, 0.063 | 23/52 → 26/55 · 0/3, 0.250 |
+| LAMAR ours → D177 | 43/102 → 43/104 · 0/2, 0.500 | 39/102 → 37/103 · 3/4, 1.000 | 17/49 → 16/50 · 1/2, 1.000 | 22/53 → 21/53 · 2/2, 1.000 |
+| mMiniLMv2 ours → D177 | 43/97 → 44/98 · 0/1, 1.000 | 36/87 → 41/100 · 1/14, < 0.001 | 16/42 → 19/48 · 0/6, 0.031 | 20/45 → 22/52 · 1/8, 0.039 |
+
+**What each arm sent**, documents per call (mean / max), the longest in characters:
+
+| run | ours | D177 |
+|---|---|---|
+| long · BGE | 74.2 / 91, 1,000 | 60.8 / 91, 1,000 |
+| long · LAMAR | 77.8 / 91, 1,000 | 77.7 / 91, 1,000 |
+| long · mMiniLMv2 | 160.9 / 245, 490 | 154.4 / 236, 490 |
+
+Every pair fitted its window on both arms (guard 4). D177's recalls were faster everywhere long notes were read, by
+0.05–0.9 s serial median, and indistinguishable on short facts. The likely reason is that its last piece runs short where
+ours reads a full window, so it sends fewer pair tokens; that was not counted, since only a solo arm's proxy counts pair
+tokens. On BGE's long run part of the gap is also the four-fact pages below.
+
+### What drove BGE's loss — POST HOC, descriptive
+
+Not registered, computed from the saved rows after the rule was read.
+
+**The loss is almost all on one question set.** On the long fixture, BGE's 31/1 splits as:
+
+- **26/0 on the `third` set** — the Japanese-worded questions;
+- **5/1 on the other three sets together.**
+
+On the mixed fixture BGE's gain splits the same way: 0/10 on `third` and 0/2 elsewhere.
+
+**The mechanism is visible in the rows.** Many `third`-set recalls return a page of only FOUR facts: the long fixture's
+four Japanese notes (`rest-sushi`, `onsen`, `ramen`, `konbini`), with no other candidate gathered.
+
+- A Japanese question lexically reaches only the Japanese notes. It reaches others only through the co-recall links an
+  arm's own recalls have built.
+- Pages of fewer than 8 facts, long fixture:
+
+  | arm | short pages | by quarter of the run |
+  |---|---|---|
+  | `formula` | 6 | 6/0/0/0 |
+  | ours | 22 | 11/11/0/0 |
+  | D177 | 52 | 11/18/10/13 |
+
+- Ours built the links by mid-run and stopped returning short pages. D177's BGE arm never did: on 30 recalls from seq 101
+  to 232 it sent the reranker 6 documents (the four notes' pieces) where ours sent 68–91.
+- 26 of the 31 queries ours found and D177 missed were such four-fact pages. The target was never a candidate, so no
+  segmentation could have found it.
+- On the mixed fixture the same dynamic ran the OTHER way: ours returned 29 short pages, D177 16. Mostly the same
+  Japanese facts (3 or 4 of them: that fixture's `ramen` is a short fact). There 10 of D177's 12 wins were queries ours
+  answered with such a page.
+- LAMAR and mMiniLMv2 show no such split (short pages ours / D177: LAMAR 7 / 6, mMiniLMv2 17 / 18 on the long fixture).
+
+**What that means.** The rule was read as registered, and its result stands: within the run, D177 is worse for BGE on the
+long fixture. But the size and even the direction of BGE's difference depend on whether the arm's graph opens up the
+Japanese questions — a recall-reinforcement dynamic (measuring rule 2) — rather than on how either segmenter scores a
+note. Outside the Japanese set, BGE's two arms differ by 5/1 and 0/2. Nothing here would make D177 significantly better
+for BGE, and the owner's rule keeps ours whenever it is not.
+
+### mMiniLMv2 is better under D177 — descriptive, outside the rule
+
+The rule's clause (A) reads BGE only, and clause (B) only blocks. So this does not decide anything, but it is the run's
+clearest positive signal for D177. D177 is significantly better for mMiniLMv2 on BOTH fixtures:
+
+| fixture | found@8 | b/c, p | net | outside the `third` set |
+|---|---|---|---|---|
+| long | 182 → 196 | 10/24, 0.024 | +5.8pp | 8/19 |
+| mixed | 184 → 198 | 1/15, < 0.001 | +5.8pp | 1/11 |
+
+So for mMiniLMv2 it is not the Japanese-set dynamic. The gain concentrates where the answer is past the note's first
+window: long-fixture `beyond` 2/15; mixed `end` 0/6 and `beyond` 1/8.
+
+A likely reason, stated and not tested: mMiniLMv2 reads 250–500-character windows. D177 cuts each piece at a sentence
+boundary, so an answer sentence is less often split between two pieces than by our fixed-position windows.
+
+### What it says
+
+- **Keep ours**, by the registered rule. D177, configured as close to ours as Lyntai 3.5.1 allows, is not better for BGE
+  on long notes: it is significantly worse in this run, though mostly through the recall dynamic above.
+- **Both are byte-identical on short facts**, for all three rerankers.
+- **LAMAR cannot tell them apart** on either fixture.
+- **mMiniLMv2 does better with D177's boundary-cut pieces**, on both fixtures, most where the answer is late in a note.
+  That is a finding about the SEGMENTER, separable from the pace: if the owner wants it, the boundary-cut placement could
+  be measured inside ours rather than by switching to D177.
+- **D177 is faster** on long notes (its short last pieces), at no cost here to what fits the window.
+
+### What it does NOT say
+
+- **One GPU**, one llama.cpp build, one run per fixture and reranker, with no A/A twin for the reranker arms (the memo
+  shares identical bodies, which removes llama.cpp's drift between the arms but not between runs).
+- **Constructed fixtures**, 60 facts, a page of 8, no embedder, no subject tags on the long and mixed seeds.
+- **Why BGE's graph opened up in one arm and not the other** is not established. The short-page counts show that it
+  happened; nothing here shows what tipped it, and a re-run could tip either way.
+- **Nothing about a CPU**: D177 has no pace or skip, and no CPU arm ran.
+- **Nothing about D177 with a pace decorator on top**: option (B) of `devtools/_lyntai-3.5-delta.md` was not built.
+- **Two fixtures' `formula` moved on Lyntai 3.5.1** (guard 1), so this run's mixed and short numbers are not Run 9's or
+  Runs 1–7's base.
+
+**Evidence, local only** (gitignored):
+
+- every run's results, rows, bench output, router log, preset and each arm's logs, in `devtools/_run10/<fixture>-<model>/`
+  (`long-bge` … `short-minilm`);
+- the driver's log, `devtools/_run10/drive.log`;
+- the guard check, `devtools/_run10/guards.txt` (scratch `guards10.mjs`);
+- the smokes, `devtools/_run10/smoke-*.txt`.
