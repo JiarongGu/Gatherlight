@@ -1246,11 +1246,14 @@ try {
       ok('Gemma 3 1B is still on the shelf as a chat model — described, not removed',
         !!gemma && gemma.capability === 'completion', JSON.stringify(gemma ?? null));
       ok('THE POINT: its name carries no 推荐', !!gemma && !/推荐/.test(String(gemma.name)), String(gemma?.name));
-      // WITH its configuration: the base it is read against (no judge: 79 / 125 of 240) and the result.
+      // WITH its configuration: the base it is read against (no judge: 80 / 127 of 240, docs/judge-bench.md Run 11) and
+      // the result — worse on top-1 (80 → 36), and on found@8 NO significant difference (127 → 123), which Run 3 had read
+      // as worse (125 → 111) and Run 11 did not replicate. The note must not still say both got worse.
       const gemmaNote = String(gemma?.note ?? '');
-      ok('…and its note states the measurement — worse than no judge, 79 → 33 of 240 on top-1, 125 → 111 on found@8',
-        /比不开判断/.test(gemmaNote) && /240/.test(gemmaNote) && /79/.test(gemmaNote) && /33/.test(gemmaNote)
-          && /125/.test(gemmaNote) && /111/.test(gemmaNote) && !/没有单独实测/.test(gemmaNote), gemmaNote);
+      ok('…and its note states the measurement — worse than no judge on top-1, 80 → 36 of 240; found@8 123 against 127, no significant difference',
+        /比不开判断/.test(gemmaNote) && /240/.test(gemmaNote) && /80 题降到 36 题/.test(gemmaNote)
+          && /123 题对不开判断的 127 题/.test(gemmaNote) && /没有测出显著差别/.test(gemmaNote)
+          && !/两项都是显著变差/.test(gemmaNote) && !/没有单独实测/.test(gemmaNote), gemmaNote);
       // The 资源 row that downloads it is generated from the same catalogue row — asserted, not assumed.
       const resources = (await getJson('/api/manage/resources')).resources ?? [];
       const gemmaRes = resources.find((r) => r.id === `gguf-${GEMMA_1B}`);
@@ -1260,7 +1263,7 @@ try {
       ok('the 4B chat model says it was not measured here, rather than guessing from the 1B',
         /没有在这里实测过/.test(String(big?.note ?? '')), String(big?.note));
 
-      // THE SMALL RERANKER (docs/judge-bench.md Run 4): listed, typed a RERANKER by its row although its upstream
+      // THE SMALL RERANKER (docs/judge-bench.md Runs 4 and 11): listed, typed a RERANKER by its row although its upstream
       // name carries no "rerank" (an uncatalogued file of that name would be typed CHAT), pinned at its exact size,
       // and NOT recommended — BGE stays the recommended reranker, which the badge assertions below pin.
       const mini = rowOf(shelf, MMINILM);
@@ -1273,7 +1276,7 @@ try {
       ok('…carries no 推荐, and says why it is not the default: the 512-token window, the licence, and what reading a LONG fact costs, measured',
         !!mini && !/推荐/.test(String(mini.name)) && /512/.test(String(mini.note)) && /非商业/.test(String(mini.note))
           && /4\/60/.test(String(mini.note)) && /29\/60/.test(String(mini.note)) && /44\/60/.test(String(mini.note))
-          && !/截短对长事实的检索影响有多大还没有量过/.test(String(mini.note)) && /199\/240/.test(String(mini.note)),
+          && !/截短对长事实的检索影响有多大还没有量过/.test(String(mini.note)) && /203\/240/.test(String(mini.note)),
         JSON.stringify({ name: mini?.name, note: mini?.note }));
       // …where unread stretches BEGIN: past five window-lengths (5 × 253–506), not four — the sentence was one window early.
       ok('…and says a fact goes partly unread only past 5 windows — 1,265–2,530 characters — and how much',
@@ -1367,10 +1370,26 @@ try {
           && !/p = 0\.007/.test(String(mini?.note)) && /按位置拆开的数字只作描述/.test(String(mini?.note))
           && /测完后另算的比较/.test(String(mini?.note)),
         String(mini?.note));
+      // docs/judge-bench.md Run 11 (the current engine) changed one conclusion and three qualifiers these notes stated:
+      // mMiniLMv2 is no longer significantly behind LAMAR on found@8 (8/4, p = 0.388 — Run 4's 9/0 did not replicate),
+      // its top-1 is now significantly above BGE's and LAMAR's, it ran at its declared 512 (so the 4096-launch caveat
+      // went), and LAMAR and BGE are EQUIVALENT on found@8 (4/3) where Run 2 leaned LAMAR 5–0. Each old sentence is gone.
+      ok('…and Run 11\'s changes: no significant difference from LAMAR, top-1 above both, no 4096 caveat',
+        /和 LAMAR\(207\/240\)也没有测出显著差别/.test(miniNote) && !/显著少,9 题只有 LAMAR/.test(miniNote)
+          && /而且都显著\(p = 0\.049 与 0\.013,前者刚过线\)/.test(miniNote) && !/不足以下结论/.test(miniNote)
+          && !/4096/.test(miniNote),
+        miniNote);
+      for (const [label, n] of [['BGE', bgeNote], ['LAMAR', lamarNote]]) {
+        ok(`${label}'s note says LAMAR and BGE are as good as each other on found@8 (Run 11: 4/3), not that it leans LAMAR`,
+          /4 题只有 BGE 做到、3 题只有 LAMAR 做到,可以算一样好/.test(n) && !/偏向 LAMAR/.test(n) && !/并不对称/.test(n)
+            && /同一轮不开判断是 80\/240 与 127\/240/.test(n) && /当时不开判断是 79\/240 与 125\/240/.test(n),
+          n.slice(n.indexOf('LAMAR 和 BGE'), n.indexOf('LAMAR 和 BGE') + 160));
+      }
 
-      // QWEN3 0.6B (docs/judge-bench.md Run 5b): the first CHAT judge measured better than no judge on both metrics —
-      // catalogued, described by its measurement with its configuration, and NOT recommended (BGE stays the default).
-      // Its note must also say what was NOT measured: the tags it writes (the fixture's tags came from the Claude CLI).
+      // QWEN3 0.6B (docs/judge-bench.md Run 5b; Run 11 on the current engine, whose figures the note quotes): the first
+      // CHAT judge measured better than no judge on both metrics — catalogued, described by its measurement with its
+      // configuration, and NOT recommended (BGE stays the default). Its note must also say what its OWN tags measured
+      // (Run 7) — the fixture's tags came from the Claude CLI.
       const qwen = rowOf(shelf, QWEN3);
       const qwenRes = resources.find((r) => r.id === `gguf-${QWEN3}`);
       const qwenNote = String(qwen?.note ?? '');
@@ -1378,10 +1397,10 @@ try {
         !!qwen && qwen.capability === 'completion' && qwen.sizeBytes === 639446688 && qwenRes?.approxBytes === 639446688
           && !/推荐/.test(String(qwen.name)) && !/推荐/.test(String(qwenRes?.name)),
         JSON.stringify({ row: qwen ?? null, resource: qwenRes ?? null }));
-      ok('…its note carries Run 5b with its configuration — 79 → 110 and 125 → 148 of 240, 语义 off, thinking off, BGE\'s 203 beside it, ~0.38 s',
+      ok('…its note carries Run 11 with its configuration — 80 → 107 and 127 → 152 of 240, 语义 off, thinking off, BGE\'s 208 beside it, ~0.38 s',
         /240 道提问/.test(qwenNote) && /不开语义/.test(qwenNote) && /关闭思考/.test(qwenNote)
-          && /79 题增加到 110 题/.test(qwenNote) && /125 题增加到 148 题/.test(qwenNote) && /显著/.test(qwenNote)
-          && /203 对 148/.test(qwenNote) && /0\.38 秒/.test(qwenNote),
+          && /80 题增加到 107 题/.test(qwenNote) && /127 题增加到 152 题/.test(qwenNote) && /显著/.test(qwenNote)
+          && /208 对 152/.test(qwenNote) && /0\.38 秒/.test(qwenNote),
         qwenNote);
       // Its TAGGING was measured since (docs/judge-bench.md Run 7): over its OWN tags against Claude's, replayed through
       // the same path, no significant difference — −4.2pp top-1, +1.3pp found@8 — and not equivalent either, so the note
@@ -1409,11 +1428,17 @@ try {
       const judgeWhat = String(layerOf(await getJson('/api/manage/memory'), 'judge')?.what ?? '');
       ok('(fixture) every catalogued reranker note states its top-1 and found@8 of 240',
         rerankRows.length >= 3 && [...found8, ...top1].every(Number.isFinite), JSON.stringify({ found8, top1 }));
-      ok('THE POINT: 判断\'s sentence quotes a found@8 and top-1 range spanning EVERY catalogued reranker, from the no-judge 125 / 79',
-        judgeWhat.includes(`从 125 题增加到 ${Math.min(...found8)}–${Math.max(...found8)} 题`)
-          && judgeWhat.includes(`排第一的多 ${Math.min(...top1) - 79}–${Math.max(...top1) - 79} 题`)
+      // The rerankers' figures and their no-judge base (127 / 80) are docs/judge-bench.md Run 11, on the current engine;
+      // the Claude judge's 79 → 130 is Run 1, on an earlier one, and was not re-run — so the sentence says it was
+      // measured on an earlier version, rather than setting two bases side by side as if they were one.
+      ok('THE POINT: 判断\'s sentence quotes a found@8 and top-1 range spanning EVERY catalogued reranker, from the no-judge 127 / 80',
+        judgeWhat.includes(`从 127 题增加到 ${Math.min(...found8)}–${Math.max(...found8)} 题`)
+          && judgeWhat.includes(`排第一的多 ${Math.min(...top1) - 80}–${Math.max(...top1) - 80} 题`)
           && /不开语义/.test(judgeWhat),
         JSON.stringify({ found8, top1, what: judgeWhat }));
+      ok('…and labels the Claude judge\'s figure, on its own base, as measured on an earlier version',
+        /Claude CLI 判断是在本应用较早的版本上量的/.test(judgeWhat) && /79 题/.test(judgeWhat) && /130 题/.test(judgeWhat),
+        judgeWhat);
 
       // THE BADGE, before anything is installed: the GGUF embedder, with a reason that is true of it. It said
       // 「这几个里只有它…量过」, false of both embedders — each has a score in the same 检索质量 column.

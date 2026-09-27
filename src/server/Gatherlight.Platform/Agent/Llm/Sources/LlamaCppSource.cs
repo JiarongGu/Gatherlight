@@ -95,23 +95,24 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public string Description =>
         "适合:大多数情况 —— 应用自己装好、自己启动,不用填地址,模型在「资源 · Resources」面板下载。"
         + "判断与语义共用同一个进程、各用自己的模型,所以两层都开也只有一个常驻服务。"
-        + "实测语义检索 10 题首位命中 9 题、每次查询 0.025 秒;判断用对话模型时每次检索多约 0.16–0.18 秒"
+        + "实测语义检索 10 题首位命中 9 题、每次查询 0.025 秒;判断用对话模型时每次检索多约 0.08–0.14 秒"
         + "(Gemma 3 1B、Qwen3 0.6B),"
         // BOTH judge figures are the ADDED cost per RECALL — the judge arm's serial median minus the SAME run's formula
         // median on the 240-question fixture, model warm, one GPU — so the two halves of this sentence compare like with
-        // like, and neither is the whole recall the model notes quote (which includes the formula's own ~0.22 s). Chat:
-        // Gemma 3 1B +0.18 s (Run 3: 403 ms against 219), Qwen3 0.6B +0.16 s (Run 5b: 381 against 220), content-only
-        // input, thinking off. This said 「每次约 0.15–0.20 秒」 until 2026-09-24: a per-CALL figure for the 1B (seven warm
-        // calls of an 8-token reply, docs/self-managed-llm-runtime.md, 2026-08-22 — before any chat section launched with
-        // thinking off), beside a per-recall added one. Rerankers: the range spans the catalogued ones —
-        // mMiniLMv2 +0.08 s (Run 4: 313 ms against the formula's 237), BGE and LAMAR +0.21–0.26 s (Runs 2 and 4).
-        // mMiniLMv2's figure was taken under Run 4's 4096 launch, and the product launches it at its declared 512 — so the
-        // rerank CALL was re-measured under both (60 fixture facts per call: median 75–79 ms at 4096, 76 ms at 512; the
-        // mMiniLMv2 row's comment in GgufCatalog has the setup). No difference beyond noise, so +0.08 s stands.
+        // like, and neither is the whole recall the model notes quote (which includes the formula's own ~0.25 s). All are
+        // docs/judge-bench.md Run 11 (Lyntai 3.5.1, 2026-09-27). Chat: Gemma 3 1B +0.08 s (Run 11b: 338 ms against 257),
+        // Qwen3 0.6B +0.14 s (Run 11a: 382 against 245), content-only input, thinking off by the request, the 512-token
+        // cap and the 16,384 context; on Lyntai 3.2 they read +0.18 s (Run 3: 403 against 219) and +0.16 s (Run 5b: 381
+        // against 220), so this said 0.16–0.18 until Run 11. It said 「每次约 0.15–0.20 秒」 until 2026-09-24: a per-CALL
+        // figure for the 1B (seven warm calls of an 8-token reply, docs/self-managed-llm-runtime.md, 2026-08-22 — before
+        // any chat section launched with thinking off), beside a per-recall added one. Rerankers: the range spans the
+        // catalogued ones, all three in ONE run (11c) — mMiniLMv2 +0.10 s (342 ms against the formula's 245, launched at
+        // its declared 512), LAMAR +0.21 s (454), BGE +0.22 s (464; +0.22–0.23 s in 11a and 11b). On 3.2 they read +0.08 s
+        // (Run 4, under a 4096 launch) and +0.21–0.26 s (Runs 2 and 4).
         // The reranker figures are on facts of at most 101 characters. A long fact is scored in several windows since
         // 2026-09-24 (ChunkedScoreProvider), so a recall of long notes takes longer — measured, and quoted in each
         // reranker's note (GgufCatalog.RerankerLatencyCaveat); this sentence says only that it does.
-        + "用重排模型时多约 0.08–0.26 秒,看是哪个模型(都是模型已加载后、事实都很短时的实测;事实很长时会更慢,见各模型的说明)。";
+        + "用重排模型时多约 0.10–0.22 秒,看是哪个模型(都是模型已加载后、事实都很短时的实测;事实很长时会更慢,见各模型的说明)。";
 
     /// <summary>A chat model does both halves on our router. A RERANKER only scores, so it verifies and the
     /// default client (the Claude CLI) annotates — on <see cref="AnnotationModel"/>, which is where the
@@ -435,8 +436,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // stale literal here would render a button that fetches nothing.
             //
             // 判断's is the RERANKER. It was the Gemma 3 1B chat model until docs/judge-bench.md Run 3 measured that
-            // judge worse than no judge; the button beside this sentence fetches the local default the owner kept.
-            // (Qwen3 0.6B, a chat judge, also measured better than none in Run 5b; it is offered, not suggested.)
+            // judge worse than no judge (on Lyntai 3.5.1, Run 11: still worse on top-1); the button beside this sentence
+            // fetches the local default the owner kept. (Qwen3 0.6B, a chat judge, also measured better than none in Runs
+            // 5b and 11; it is offered, not suggested.)
             // WHICH reranker is the same one writer 资源's badge reads (GgufCatalog.RecommendedRerankerFor): mMiniLMv2
             // where the last full probe found no GPU (docs/judge-bench.md Run 8), BGE otherwise — read from the runtime's
             // memo of the binary's device list (ILlamaServerRuntime.Gpu), because a panel must not await a process and an

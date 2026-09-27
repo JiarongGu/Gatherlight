@@ -189,20 +189,26 @@ public sealed class MemoryRecallController : ControllerBase
                     // household's 16 facts to every household, measured while the judge still saw only topics.
                     // The mechanism is Lyntai's partition — an endorsed fact is promoted to the front, in the
                     // engine's own order — and the numbers now come from the committed bilingual fixture anyone
-                    // can re-run (docs/judge-bench.md, Runs 1, 2 and 4, `all` set): the two judges move different
+                    // can re-run (docs/judge-bench.md, Runs 1 and 11, `all` set): the two judges move different
                     // things, which is the one sentence a household choosing between them needs.
                     // The Claude figure is Run 1's CONTENT-ONLY arm (130), the judge input that ships since
                     // 2026-09-24 — not its `content` arm (topic — content, 132), the 1.3.0 input, measured
                     // equivalent to it. A number belongs to its configuration.
                     // The reranker range spans the THREE catalogued rerankers, each under partition with 语义 off
-                    // and 8 endorsed = the page: found@8 199 (mMiniLMv2, Run 4) to 208 (LAMAR, Runs 2 and 4), top-1
-                    // +7 (LAMAR, 86) to +20 (mMiniLMv2, 99). It read 203–208 / 7–11 until mMiniLMv2 was catalogued,
-                    // which made both ends false — a range quoted for "the local rerankers" has to cover every one
-                    // the picker offers.
+                    // and 8 endorsed = the page: found@8 203 (mMiniLMv2) to 208 (BGE), top-1 +9 (LAMAR, 89) to +20
+                    // (mMiniLMv2, 100), against the no-judge 127 / 80 — docs/judge-bench.md Run 11, on Lyntai 3.5.1. It
+                    // read 199–208 / 7–20 from 125 / 79 (Runs 2 and 4, on 3.2) until then, and 203–208 / 7–11 until
+                    // mMiniLMv2 was catalogued — a range quoted for "the local rerankers" has to cover every one the
+                    // picker offers.
+                    // TWO BASES, SAID AS TWO. The Claude judge was not re-run on 3.5.1 (no quota), so its 79 → 130 stays
+                    // Run 1's, on the earlier engine, where even the no-judge floor differs (79 against 80). The
+                    // sentence says each result against its own version's no-judge count, and says which one is the
+                    // earlier version, rather than letting a household read 79 and 127 as one baseline.
                     what = "写入事实时标注主题(让讲同一件事的记录彼此关联);检索时判断哪些结果真正回答了问题,"
                         + "被判断为「答到了」的事实会排到前面,也更容易被后续检索记住。"
-                        + "在本应用 240 题的双语测试集上实测(不开语义):Claude CLI 判断让排第一的答案从 79 题增加到 130 题;"
-                        + "本机重排模型(每次挑 8 条上页)让答案进入前八的次数从 125 题增加到 199–208 题,排第一的多 7–20 题。"
+                        + "在本应用 240 题的双语测试集上实测(不开语义),各自和同一版本里不开判断时比:"
+                        + "本机重排模型(每次挑 8 条上页)让答案进入前八的次数从 127 题增加到 203–208 题,排第一的多 9–20 题;"
+                        + "Claude CLI 判断是在本应用较早的版本上量的,让排第一的答案从那时不开判断的 79 题增加到 130 题。"
                         + "每次检索都要等它一次,这一点是当场就有的。",
                     // COST IS TWO THINGS, and only one of them was stated. The token cost was here from the
                     // start; the LATENCY was measured later, on this household's own facts.
@@ -220,12 +226,14 @@ public sealed class MemoryRecallController : ControllerBase
                     // attribution.
                     // The local arm avoids the spawn, and its latency IS quoted now that it has been measured —
                     // this comment said "deliberately NOT quoted, nobody has measured it" long after it had
-                    // been. Two figures, of two kinds: LlamaCppSource.Description quotes a warm chat judge's CALL,
-                    // 150–204 ms (docs/self-managed-llm-runtime.md, gemma-3-1b); the chat model's note quotes a whole
-                    // RECALL on the same fixture, ~0.40 s against ~0.22 s with no judge (docs/judge-bench.md Run 3,
-                    // serial medians, model warm on one GPU). A reranker recall takes ~0.31–0.49 s warm (Runs 2 and
-                    // 4), quoted with its conditions in the reranker notes. Every figure carries its source; a
-                    // plausible one without is still the thing this panel refuses.
+                    // been. Two figures, of two kinds, both docs/judge-bench.md Run 11 (Lyntai 3.5.1, the 240-question
+                    // fixture, serial medians, model warm on one GPU): LlamaCppSource.Description quotes the ADDED cost
+                    // per recall — +0.08–0.14 s for the chat judges, +0.10–0.22 s for the rerankers — and each model's
+                    // note quotes a whole RECALL beside its own run's no-judge one: ~0.34 s (Gemma 3 1B) and ~0.38 s
+                    // (Qwen3 0.6B) against ~0.25–0.26 s, a reranker ~0.34–0.46 s against ~0.25 s, the rerankers' with
+                    // their conditions. This said the Description quoted a chat judge's CALL, 150–204 ms, long after it
+                    // moved to the per-recall figure (2026-09-24). Every figure carries its source; a plausible one
+                    // without is still the thing this panel refuses.
                     // The texts live on each source's `Cost` (IMemoryJudgeSource) — the bound arm describes itself.
                     cost = boundJudge.Cost(boundJudgeModel),
                     source = boundJudge.Id, model = boundJudgeModel,

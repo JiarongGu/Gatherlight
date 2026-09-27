@@ -72,7 +72,8 @@ public sealed record GgufModel(
 /// 10-query fixture (9/10 top-1, 25 ms/query through the app, 2026-08-22 — the same instrument as every
 /// number in <see cref="EmbeddingCatalog"/>). The rerankers and two chat models have been scored AS 判断 on
 /// the 240-question bilingual fixture (<c>docs/judge-bench.md</c>: Run 2 for LAMAR and BGE, Run 3 for Gemma 3
-/// 1B, Run 4 for mMiniLMv2, Run 5b for Qwen3 0.6B) — top-1 and found@8, which is not the shape of
+/// 1B, Run 4 for mMiniLMv2, Run 5b for Qwen3 0.6B, all on Lyntai 3.2; all five re-measured on Lyntai 3.5.1 in Run 11,
+/// whose figures the notes quote) — top-1 and found@8, which is not the shape of
 /// <see cref="EmbeddingMeasurement"/> (top-3 of 10 queries), so those figures live in the note and
 /// <see cref="GgufModel.Measured"/> stays null rather than carrying a found@8 in a top-3 slot. The 4B chat model has
 /// no measurement at all, and its note says so; claiming otherwise is the failure this whole area keeps correcting.
@@ -82,10 +83,12 @@ public sealed record GgufModel(
 /// <para><b>There is no recommended CHAT judge, and that is a decision, not an omission.</b> Gemma 3 1B
 /// was <c>RecommendedJudge</c> — 推荐 in its name, 「判断质量没有单独实测过」 in its note, the model 资源's 推荐
 /// badge fell to and the download the 判断 row suggested — until Run 3 (2026-09-24) measured it significantly
-/// WORSE than no judge. It stays selectable and says so; the constant is gone, and 判断's local default is
-/// <see cref="RecommendedReranker"/>. Qwen3 0.6B (Run 5b) is the first chat judge measured BETTER than no judge on
-/// both metrics — and it is offered, not recommended: the reranker still puts the answer on the page far more often
-/// (found@8 203 against 148 in the same run), which is what the owner kept the default for (2026-09-24).</para>
+/// WORSE than no judge on both metrics (on Lyntai 3.5.1, Run 11: still worse on top-1, 80 → 36; its found@8 loss did
+/// not replicate, 127 → 123, p = 0.424). It stays selectable and says so; the constant is gone, and 判断's local default is
+/// <see cref="RecommendedReranker"/>. Qwen3 0.6B (Run 5b; Run 11 again) is the first chat judge measured BETTER than no
+/// judge on both metrics — and it is offered, not recommended: the reranker still puts the answer on the page far more
+/// often (found@8 208 against 152 in the same run, Run 11; 203 against 148 in Run 5b), which is what the owner kept the
+/// default for (2026-09-24).</para>
 /// </summary>
 public static class GgufCatalog
 {
@@ -98,18 +101,19 @@ public static class GgufCatalog
     /// neither significantly different nor equivalent on top-1 or on found@8, so the rule took the smaller
     /// file — and the two files differ by 1,408 bytes.
     ///
-    /// <para><b>The leans are not symmetric, and the notes say so.</b> found@8 — the metric a reranker is FOR —
-    /// leans LAMAR 5–0 (exact p = 0.063, just short; the bench's own interval [−4.0, −0.1] pp excludes zero),
-    /// while BGE's top-1 lead is 6–2 (p = 0.289, an interval spanning zero). The rule stands as registered:
-    /// re-picking after seeing which way the data leaned would be worse than a tie-break that runs against the
-    /// lean. It is a tie-break, and <see cref="RerankerPair"/> says that where the household reads it.</para>
+    /// <para><b>On Lyntai 3.5.1 the tie is an EQUIVALENCE on found@8</b> (Run 11, 2026-09-27, the same fixture): found@8
+    /// 4 BGE-only against 3 LAMAR-only (p = 1.000, 95% [−2.7, +1.9]pp, inside ±3pp), top-1 7 against 5 (p = 0.774). Run 2's
+    /// found@8 lean toward LAMAR, 5–0 (exact p = 0.063, an interval [−4.0, −0.1]pp excluding zero), did not replicate; BGE's
+    /// top-1 lead, 6–2 there (p = 0.289), is 7–5 here. The rule stands as registered — it rests now on a measured
+    /// equivalence rather than against a lean. It is a tie-break, and <see cref="RerankerPair"/> says that where the
+    /// household reads it.</para>
     ///
     /// <para><b>It is also 判断's local DEFAULT</b> (owner decision, 2026-09-24): the model 资源's 推荐 badge offers
     /// once the embedders are in, and the download the 判断 row suggests when llama.cpp holds no judge model. That
     /// job was the Gemma 3 1B chat model's until Run 3 measured it worse than no judge; a reranker is a local
-    /// judge that measured BETTER (Runs 2 and 4). So is Qwen3 0.6B (Run 5b), a chat judge — and it stays offered, not
-    /// the default: it ranks the answer first more often than BGE and gets it onto the page far less often (found@8
-    /// 148 against 203), and the owner kept the reranker (2026-09-24). Which reranker is still the tie-break above, and the note says
+    /// judge that measured BETTER (Runs 2 and 4, and Run 11 on Lyntai 3.5.1). So is Qwen3 0.6B (Runs 5b and 11), a chat
+    /// judge — and it stays offered, not the default: it ranks the answer first more often than BGE and gets it onto the
+    /// page far less often (found@8 152 against 208, Run 11), and the owner kept the reranker (2026-09-24). Which reranker is still the tie-break above, and the note says
     /// so where the badge points. Its display name carries no 推荐 — no row's does — because a name is read in
     /// every picker, long after the advice has been taken. Re-run <c>dev.mjs judge-bench</c> before treating the
     /// choice between rerankers as more than the tie-break.</para>
@@ -175,30 +179,36 @@ public static class GgufCatalog
         + Sources.MemorySources.CliTaggingCost + ")。";
 
     /// <summary>What a reranker row's measured figures are read AGAINST — the same 240 questions with 判断 off
-    /// and with the Claude CLI judge, the two other answers this layer offers (docs/judge-bench.md, Runs 1 and
-    /// 2: same seed, same questions, equal formula digests). Shared because the comparators are the same for
-    /// every reranker, and a figure with nothing beside it cannot be weighed. The trade is stated both ways:
+    /// and with the Claude CLI judge, the two other answers this layer offers. Shared because the comparators are the
+    /// same for every reranker, and a figure with nothing beside it cannot be weighed. The trade is stated both ways:
     /// a reranker puts the answer on the page far more often and first hardly more often, because it chooses
     /// which eight make the page and the engine still orders them.
+    /// <para><b>Two bases, each said with its own figures.</b> The no-judge floor is the SAME run as the row's figures
+    /// (docs/judge-bench.md Run 11, Lyntai 3.5.1: 80 / 127, serial median 245 ms). The Claude judge was not re-run (no
+    /// quota): its figures are Run 1's, on Lyntai 3.2, beside Run 1's own floor (79 / 125) — the engine moved between the
+    /// two, so even the floor differs, and a 3.5.1 reranker count set beside a 3.2 Claude count is not a comparison. It
+    /// read 「同一测试集上,不开判断是 79/240 与 125/240(每次约 0.23 秒),Claude CLI 判断…」 until Run 11, when both bases
+    /// were Runs 1–2's.</para>
     /// <para>The Claude figures are Run 1's CONTENT-ONLY arm (130 / 131, serial median 8.7 s, Haiku) — the judge input
     /// that ships since 2026-09-24 — not its <c>content</c> arm (topic — content: 132 / 133, 9.5 s), the 1.3.0
     /// input, which Run 1 measured equivalent. A number belongs to its configuration. The wait is
     /// <see cref="Sources.MemorySources.ClaudeJudgeWait"/>, the one writer the CLI row quotes too.</para></summary>
     private const string RerankerMeasuredAgainst =
-        "同一测试集上,不开判断是 79/240 与 125/240(每次约 0.23 秒),Claude CLI 判断(Haiku)是 130/240 与 131/240"
-        + "(每次" + Sources.MemorySources.ClaudeJudgeWait + "):重排把答案带进前八的次数多得多,排到第一的次数却只比不开判断略多 —— "
-        + "它挑哪八条上页,先后仍按原来的排序。";
+        "同一轮不开判断是 80/240 与 127/240(每次约 0.25 秒):重排把答案带进前八的次数多得多,排到第一的次数却只比不开判断略多 —— "
+        + "它挑哪八条上页,先后仍按原来的排序。Claude CLI 判断(Haiku)是在本应用较早的版本上量的:130/240 与 131/240"
+        + "(每次" + Sources.MemorySources.ClaudeJudgeWait + "),当时不开判断是 79/240 与 125/240。";
 
-    /// <summary>The configuration every reranker row's figures were measured in (docs/judge-bench.md Runs 2 and 4): the
+    /// <summary>The configuration every reranker row's figures were measured in (docs/judge-bench.md Run 11, as Runs 2
+    /// and 4 were): the
     /// 240-question fixture, 语义 off (no embedder), and each recall's page of 8 chosen by the reranker (EndorseCount =
     /// the page). A reranker's gain belongs to its configuration — with an embedder, or a different page, it was not
     /// measured — so the figures never appear without it.</summary>
     private const string RerankerBenchSetup = "本应用双语测试集 240 道提问、不开语义、每次检索由它挑 8 条上页:";
 
     /// <summary>What a reranker row's latency was measured UNDER: serial medians with the model already loaded,
-    /// on one machine's GPU, over recalls of at most 60 candidates (docs/judge-bench.md, Run 2). A reranker
-    /// scores every candidate it is shown, so a CPU-only machine — or a recall showing it more — may be much slower.
-    /// A bare 「0.47 秒」 would promise that figure on any machine.
+    /// on one machine's GPU, over recalls of at most 60 candidates (docs/judge-bench.md, Run 2; Run 11 on Lyntai 3.5.1,
+    /// the figures the rows quote). A reranker scores every candidate it is shown, so a CPU-only machine — or a recall
+    /// showing it more — may be much slower. A bare 「0.46 秒」 would promise that figure on any machine.
     ///
     /// <para><b>How many it is shown depends on the recall's LIMIT</b>, not only on its kind: Lyntai verifies 4× the
     /// candidates <c>FactIndex.RankAsync</c> asks for, which is min(3 × limit, 100) with no kind and 100 with one — so
@@ -325,24 +335,24 @@ public static class GgufCatalog
         + "(见 BGE 那一行),所以 llama.cpp 用不了任何显卡时,应用推荐 mMiniLMv2。";
 
     /// <summary>LAMAR against BGE, ONE sentence shared by both rows — the same comparison read from either side,
-    /// so the two notes cannot tell it differently. It used to say only that the fixture could not separate
-    /// them, which hid that the two leans are not symmetric: found@8, where a reranker earns its place, leans
-    /// LAMAR with nothing on the other side (5–0; exact p = 0.063, just short, while the 95% interval excludes
-    /// zero), and BGE's top-1 lead is 6–2 with an interval spanning zero. The Chinese count is the one the doc
-    /// states exactly: every Chinese-worded question, code-switched included (120 of 240) — see "By fact
-    /// language" in docs/judge-bench.md.
+    /// so the two notes cannot tell it differently. The figures are docs/judge-bench.md Run 11 (Lyntai 3.5.1, the
+    /// same fixture): found@8 EQUIVALENT (4 BGE-only against 3 LAMAR-only, p = 1.000, 95% [−2.7, +1.9]pp, inside
+    /// ±3pp), top-1 7 against 5 (p = 0.774). Until then it said the leans were not symmetric — Run 2's found@8 leaned
+    /// LAMAR 5–0 (exact p = 0.063, an interval excluding zero) and BGE's top-1 lead was 6–2 — which Run 11 made false:
+    /// that lean did not replicate. The Chinese count is the one the doc states exactly: every Chinese-worded
+    /// question, code-switched included (120 of 240) — see "By fact language" in docs/judge-bench.md.
     ///
-    /// <para><b>What "6" counts, recounted 2026-09-24 from <c>results-2026-09-23T113455.224Z.json</c></b>
-    /// (partition arms, limit 8): six DISTINCT questions on which the two differ on top-1 or on found@8, and
-    /// none differs on both — top-1 on four (anniversary and pharm-24h LAMAR's, onsen and flu-shot BGE's),
-    /// found@8 on two (train-express and movie, both LAMAR's). It once said 「4 题 LAMAR 对,2 题 BGE 对」,
-    /// which is true only as a tally across the two metrics; the sentence now names the metric each count is
-    /// on.</para></summary>
+    /// <para><b>What "9" counts, recounted 2026-09-27 from <c>results-2026-09-27T062707.803Z.json</c></b> (Run 11c,
+    /// partition arms, limit 8): nine DISTINCT questions on which the two differ on top-1 or on found@8, and none
+    /// differs on both — top-1 on seven (anniversary, pharm-24h, pool-south, ramen and summer-camp LAMAR's; onsen
+    /// and flu-shot BGE's), found@8 on two (movie and rest-noodle2, both BGE's). It said six in Run 2 (top-1 two
+    /// each, found@8 two LAMAR's). Each count names the metric it is on, because a tally across the two metrics
+    /// (「4 题 LAMAR 对,2 题 BGE 对」, once) is true of neither.</para></summary>
     private const string RerankerPair =
-        "LAMAR 和 BGE 这个测试集没有测出差别,但两边并不对称:把答案带进前八,偏向 LAMAR —— 5 题只有 LAMAR 做到,"
-        + "反过来一题也没有(精确检验 p = 0.063,差一点够不上显著,95% 区间不含零);排第一,BGE 多 4 题"
-        + "(6 对 2,看不出差别)。120 道中文或中英混写的提问里,两者只有 6 题结果不同,没有一题两项都不同:"
-        + "排第一的 4 题两边各占 2 题,带进前八的 2 题都是 LAMAR 做到。"
+        "LAMAR 和 BGE 在这个测试集上没有测出差别:把答案带进前八,4 题只有 BGE 做到、3 题只有 LAMAR 做到,"
+        + "可以算一样好(95% 区间在正负 3 个百分点以内);排第一,BGE 多 2 题(7 对 5,看不出差别)。"
+        + "120 道中文或中英混写的提问里,两者有 9 题结果不同,没有一题两项都不同:"
+        + "排第一的 7 题里 5 题是 LAMAR 做到、2 题是 BGE,带进前八的 2 题都是 BGE 做到。"
         + "推荐 BGE 只是按事先定好的规则 —— 分不出时取较小的文件,而两个文件只差 1.4 KB。";
 
     public static readonly IReadOnlyList<GgufModel> Models = new[]
@@ -363,14 +373,19 @@ public static class GgufCatalog
             // llama.cpp's default 512 refused past ~750 (docs/self-managed-llm-runtime.md, 2026-09-26).
             ContextTokens: 2048),
 
-        // DESCRIBED BY ITS MEASUREMENT, NOT RECOMMENDED (docs/judge-bench.md Run 3, 2026-09-24). Every figure carries
-        // the configuration it was measured in — the 240-question fixture, 语义 off (no embedder), the default
-        // content-only judge input, and the no-judge base (79 / 125) it is read against — because a number without
-        // them cannot be weighed. Content only is the arm quoted since it is what ships; `topic — content` read
-        // 44 / 121, also worse on top-1. Its speed and quota facts stay: they are true, and they are the trade-off a
-        // household is weighing against the result. The latencies are the SAME fixture's serial medians, model warm,
-        // on one GPU: this judge 403 ms and no judge 219 ms (Run 3), the Claude CLI judge 8,733 ms (Run 1's content-only
-        // arm, the shipped input). They read 「每次判断约 0.15–0.20 秒(Claude CLI 那条实测每次检索 9–17 秒)」 until
+        // DESCRIBED BY ITS MEASUREMENT, NOT RECOMMENDED (docs/judge-bench.md Run 3, 2026-09-24; re-measured on Lyntai 3.5.1
+        // in Run 11b, 2026-09-27, whose figures the note quotes). Every figure carries the configuration it was measured
+        // in — the 240-question fixture, 语义 off (no embedder), the default content-only judge input, and the no-judge
+        // base (80 / 127 in Run 11) it is read against — because a number without them cannot be weighed. ONE of Run 3's
+        // two conclusions changed in Run 11 (its C6): top-1 is still significantly worse, 80 → 36 (53/9, p < 0.001,
+        // −18.3pp), but found@8 is no longer, 127 → 123 (9/5, p = 0.424) — where Run 3 read 125 → 111 (p = 0.003). So the
+        // note says worse at ranking FIRST, and says the found@8 loss was measured once and did not replicate; why it
+        // moved (the engine, the context cap, sampling) that run cannot say. Content only is the arm quoted since it is
+        // what ships; Run 3's `topic — content` read 44 / 121, also worse on top-1. Its speed and quota facts stay: they
+        // are true, and they are the trade-off a household is weighing against the result. The latencies are the SAME
+        // fixture's serial medians, model warm, on one GPU: this judge 338 ms and no judge 257 ms (Run 11b; Run 3 read 403
+        // and 219), the Claude CLI judge 8,733 ms (Run 1's content-only arm, the shipped input, on Lyntai 3.2 — labelled
+        // as measured on an earlier version, since it was not re-run). They read 「每次判断约 0.15–0.20 秒(Claude CLI 那条实测每次检索 9–17 秒)」 until
         // 2026-09-24: a per-CALL figure beside a per-RECALL one, the second from five runs on one household's 16 facts,
         // while the reranker rows beside it quoted Run 1's 8.7 s — two configurations in adjacent rows. The GPU clause
         // then sat after all three figures, as if it covered the CLI's too; it is scoped to the one figure it
@@ -381,11 +396,13 @@ public static class GgufCatalog
             "gemma-3-1b-it-Q4_K_M.gguf",
             "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135", 806_058_240,
             "判断用的对话模型:写入时的主题标注和检索时的判断都在本机完成,不消耗账号额度。"
-            + "本应用双语测试集 240 道提问、不开语义、判断按默认只读事实内容:每次检索约 0.40 秒(模型已加载、在显卡上),"
-            + "不开判断约 0.22 秒,Claude CLI 判断(Haiku)" + Sources.MemorySources.ClaudeJudgeWait + ",都是串行中位数。"
-            + "但实测它让检索比不开判断更差:"
-            + "答案排第一从不开判断的 79 题降到 33 题,带进前八从 125 题降到 111 题,"
-            + "两项都是显著变差。量的是检索时的判断,它自己写的主题标注没有量过。"
+            + "本应用双语测试集 240 道提问、不开语义、判断按默认只读事实内容:每次检索约 0.34 秒(模型已加载、在显卡上),"
+            + "同一轮不开判断约 0.26 秒,都是串行中位数;Claude CLI 判断(Haiku)在本应用较早的版本上量的是"
+            + Sources.MemorySources.ClaudeJudgeWait + "。"
+            + "但实测它在排第一这一项上比不开判断更差:"
+            + "答案排第一从不开判断的 80 题降到 36 题,显著变差;带进前八是 123 题对不开判断的 127 题,"
+            + "没有测出显著差别(在本应用较早的版本上量的那一次,这一项也显著变差)。"
+            + "量的是检索时的判断,它自己写的主题标注没有量过。"
             + "要在本机做判断,重排模型和 Qwen3 0.6B 在同一测试集上都让检索变好(见它们的说明)。"),
 
         // UNMEASURED HERE, and not a candidate we mean to recommend — said plainly, and without borrowing the 1B's
@@ -400,23 +417,26 @@ public static class GgufCatalog
             "同样用于判断,参数量约是 1B 的四倍,文件约 2.5 GB,是 1B 的三倍多:更大、更慢,显存不够时会明显更慢。"
             + "判断质量没有在这里实测过 —— 1B 的实测结果说明不了它会怎样;我们也不打算推荐它。"),
 
-        // THE LOCAL CHAT JUDGE THAT MEASURED BETTER (docs/judge-bench.md Run 5b, committed 1e8e743), offered and NOT
-        // recommended: RecommendedReranker stays the local default by the owner's decision (2026-09-24). Every figure
-        // is Run 5b's and carries its configuration — the 240-question fixture, 语义 off, content-only judge input,
-        // thinking off with the 512-token cap (then the preset's `reasoning = off`; since 2026-09-26 the request's
-        // enable_thinking = false, which renders the same prompt — docs/self-managed-llm-runtime.md; the note's
-        // parenthesis said 「应用启动它时就这样设置」 until then, and says the app asks it on every call now),
-        // one chat model per run beside 公式 and BGE. top-1 79 → 110 (+12.9pp, p < 0.001) and found@8 125 → 148
-        // (+9.6pp, p < 0.001) against no judge; against BGE in the same run, top-1 +8.3pp (p = 0.002) and found@8
-        // 148 against 203 (−22.9pp). Serial median 381 ms against the run's 公式 220 ms. Coverage 226/234.
+        // THE LOCAL CHAT JUDGE THAT MEASURED BETTER (docs/judge-bench.md Run 5b, committed 1e8e743; re-measured on Lyntai
+        // 3.5.1 in Run 11a, 2026-09-27), offered and NOT recommended: RecommendedReranker stays the local default by the
+        // owner's decision (2026-09-24). The note's first half is Run 11a's and carries its configuration — the
+        // 240-question fixture, 语义 off, content-only judge input (Lyntai's ContentChars), thinking off by the request's
+        // enable_thinking = false (the preset's `reasoning = off` until 2026-09-26, which rendered the same prompt —
+        // docs/self-managed-llm-runtime.md; the note's parenthesis said 「应用启动它时就这样设置」 until then), the
+        // 512-token cap and the 16,384 context, one chat model per run beside 公式 and BGE. top-1 80 → 107 (6/33,
+        // +11.3pp, p < 0.001) and found@8 127 → 152 (4/29, +10.4pp, p < 0.001) against no judge; against BGE in the same
+        // run, top-1 +6.7pp (10/26, p = 0.011) and found@8 152 against 208 (−23.3pp). Serial median 382 ms against the
+        // run's 公式 245 ms. Coverage 218/234. Every conclusion keeps the category Run 5b gave it (Run 5b: 79 → 110,
+        // 125 → 148; +8.3pp p = 0.002 against BGE, 148 against 203; 381 against 220 ms; 226/234). Run 11 also ran it twice more, unread: top-1
+        // 109 / 116, found@8 151 / 151 — a sampling judge moves several top-1 points between identical runs.
         //
         // ITS FOOTPRINT IS NOT ITS DOWNLOAD, and the note says so (docs/self-managed-llm-runtime.md, 2026-09-24). Its
         // training window is 40,960 tokens with full attention on all 28 layers, and an uncapped llama.cpp child reserves
         // the KV cache for all of it: +5,175 MiB of GPU memory for the router plus this child (nvidia-smi, b10549, one RTX
         // 4080 Laptop GPU) — 「约 5.4 GB」 — against a 639 MB file. The app launches chat models at 16,384
         // (LlamaServerRuntime.ChatContextTokens): +2,472 MiB on the same machine, 「约 2.6 GB」, both decimal GB like
-        // every size in these notes. Run 5b launched it uncapped; the cap sits far above every fixture prompt (60
-        // candidates, ~1.7k tokens), so its figures stand.
+        // every size in these notes. Run 5b launched it uncapped; Run 11 at the cap, as the product does (its largest
+        // prompt 1,392 tokens).
         //
         // Its TAGGING was measured in docs/judge-bench.md Run 7 (2026-09-24, same fixture, 语义 off, content-only, the
         // chat preset as the product writes it): a seed written by Qwen3-0.6B's own annotation, paired within the run
@@ -427,8 +447,11 @@ public static class GgufCatalog
         // +10.8 / +14.6pp, both p < 0.001. The tags are worse in KIND — Lyntai's collapse: `parent` on 12 facts, 29 of 78
         // handle assignments reused only across unrelated groups against Claude's 7 of 65 — and the fixture barely
         // exercises the linking tags exist for, so the note says a household relying on it may pay a cost this run does
-        // not show. It said 「它自己写的主题标注好不好没有量过」 until Run 7. Why a household might pick it is the same
-        // fact's other half: tagging and checking both stay on the machine, no account quota.
+        // not show. It said 「它自己写的主题标注好不好没有量过」 until Run 7. Run 7 was on Lyntai 3.2 and was NOT re-run in
+        // Run 11, so its sentence says it was measured on an earlier version: it read 「同样的测试集和设置」 until then,
+        // which the first half's move to Run 11 made false (another engine; thinking off by another mechanism).
+        // Why a household might pick it is the same fact's other half: tagging and checking both stay on the machine, no
+        // account quota.
         // Pinned at Qwen's own repo, commit and sha256 as Run 5's pre-registration recorded them; HEAD-checked
         // 2026-09-24 (X-Repo-Commit and X-Linked-Size / X-Linked-ETag match). The repo itself declares Apache-2.0.
         // Id = the upstream stem, as every row.
@@ -439,13 +462,13 @@ public static class GgufCatalog
             "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031", 639_446_688,
             "判断用的对话模型:写入时的主题标注和检索时的判断都在本机完成,不消耗账号额度。"
             + "本应用双语测试集 240 道提问、不开语义、判断按默认只读事实内容、关闭思考(应用每次调用它时都这样要求),"
-            + "每轮只测这一个对话模型:答案排第一从不开判断的 79 题增加到 110 题,带进前八从 125 题增加到 148 题,"
-            + "两项都显著变好。和同一轮的 BGE 重排模型比:它把答案排在第一的次数更多(多 8.3 个百分点,显著),"
-            + "BGE 把答案带进前八的次数多得多(203 对 148)。每次检索约 0.38 秒,同一轮不开判断约 0.22 秒"
+            + "每轮只测这一个对话模型:答案排第一从不开判断的 80 题增加到 107 题,带进前八从 127 题增加到 152 题,"
+            + "两项都显著变好。和同一轮的 BGE 重排模型比:它把答案排在第一的次数更多(多 6.7 个百分点,显著),"
+            + "BGE 把答案带进前八的次数多得多(208 对 152)。每次检索约 0.38 秒,同一轮不开判断约 0.25 秒"
             + "(串行中位数,模型已加载、在显卡上)。"
             + "文件约 640 MB,运行时 llama.cpp 为它预留的显存却约 2.6 GB(应用按 16,384 个词元的上下文启动它,"
             + "在一块显卡上实测、含服务本身;不设上限时会按它训练时的 40,960 个词元预留,约 5.4 GB)。"
-            + "上面的数字是在 Claude 写的主题标注上量的。标注也换成它自己写的(同样的测试集和设置,写入和检索都在本机),"
+            + "上面的数字是在 Claude 写的主题标注上量的。标注也换成它自己写的(同样的测试集,在本应用较早的版本上量的,写入和检索都在本机),"
             + "同一轮对比没有显著差别:答案排第一少 4.2 个百分点、带进前八多 1.3 个百分点,"
             + "但排除不了排第一最多少约 9 个、带进前八最多少约 4 个百分点;和同一批标注下不开判断相比,两项仍显著变好"
             + "(多 10.8 与 14.6 个百分点)。它的标注更宽泛,常把一个主题套到不相干的事实上(一个 parent 标了 12 条),"
@@ -465,7 +488,8 @@ public static class GgufCatalog
             // evidence is this app's own bench; the Lyntai figures, with their bases, are in dev-conventions.
             // The configuration rides with the figures (RerankerBenchSetup), as it does on the mMiniLMv2 row — these two
             // quoted bare 「本应用双语测试集」 while the row below said 不开语义 and 8 on the page.
-            RerankerNote + RerankerBenchSetup + "首位命中 86/240,前八命中 208/240,每次检索约 0.47 秒"
+            // Run 11c's figures (Lyntai 3.5.1; Run 2 on 3.2 read 86 / 208, 0.47 s).
+            RerankerNote + RerankerBenchSetup + "首位命中 89/240,前八命中 207/240,每次检索约 0.45 秒"
             + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair + LamarCpuNote),
         new GgufModel(
             RecommendedReranker, "BGE Reranker v2 M3(Q5 · 判断 · 重排)", GgufCapability.Reranking,
@@ -474,16 +498,22 @@ public static class GgufCatalog
             "1a212007526c7083627eed92b39dd4472e90ff1374a03fb068733378220813ef", 468_392_352,
             // No claim about public Chinese benchmarks: this row once said it was stronger than its peers there,
             // naming no benchmark and no source — an attribution nobody could check is not one.
-            RerankerNote + RerankerBenchSetup + "首位命中 90/240,前八命中 203/240,每次检索约 0.49 秒"
+            // Run 11c's figures (Lyntai 3.5.1; Run 2 on 3.2 read 90 / 203, 0.49 s).
+            RerankerNote + RerankerBenchSetup + "首位命中 91/240,前八命中 208/240,每次检索约 0.46 秒"
             + RerankerLatencyCaveat + "。" + RerankerMeasuredAgainst + RerankerPair + BgeCpuNote),
 
-        // THE SMALL RERANKER (docs/judge-bench.md Run 4, 2026-09-24): offered, and recommended ONLY where llama.cpp lists
-        // no GPU (RerankerWithoutGpu, owner decision 2026-09-25 on Run 8) — elsewhere BGE stays RecommendedReranker by the
-        // owner's decision. Every GPU figure below is Run 4's and carries its configuration: the
-        // 240-question fixture, 语义 off, EndorseCount 8 = the page, candidates ≤ 60, base 79 / 125; BGE and LAMAR are
-        // quoted from the SAME run (204 / 208), not from their own rows' Run 2 figures, because only a within-run
-        // pairing says anything. Its found@8 against BGE is "no significant difference" and NOT "equivalent" (7/2,
-        // p = 0.180, 95% [−4.6, +0.5]pp), and against LAMAR a measured loss (9/0, p = 0.004) — both said.
+        // THE SMALL RERANKER (docs/judge-bench.md Run 4, 2026-09-24; re-measured on Lyntai 3.5.1 in Run 11c, 2026-09-27):
+        // offered, and recommended ONLY where llama.cpp lists no GPU (RerankerWithoutGpu, owner decision 2026-09-25 on
+        // Run 8) — elsewhere BGE stays RecommendedReranker by the owner's decision. Every short-fact GPU figure below is
+        // Run 11c's and carries its configuration: the 240-question fixture, 语义 off, EndorseCount 8 = the page,
+        // candidates ≤ 60, base 80 / 127, launched at its declared 512 as the product launches it; BGE and LAMAR are
+        // quoted from the SAME run (208 / 207 — which their own rows now quote too), because only a within-run pairing
+        // says anything. Its found@8 against BGE is "no significant difference" and NOT "equivalent" (8/3, p = 0.227, 95%
+        // [−4.9, +0.7]pp: up to ~12 questions fewer not ruled out), and against LAMAR no significant difference either
+        // (8/4, p = 0.388) — Run 4's measured loss against LAMAR (9/0, p = 0.004) did not replicate (Run 11's C14), so the
+        // note no longer says 「显著少」. Its top-1 is now significantly ABOVE both (BGE 4/13, p = 0.049; LAMAR 3/14,
+        // p = 0.013; two of three uncorrected reranker-pair tests, the first marginal), so 「和 BGE 的差距不足以下结论」 went
+        // and the note says 「前者刚过线」. Run 4 read 199 / 99 against BGE 204 / 90 and LAMAR 208 / 86.
         // THAT PARITY IS A SHORT-FACT RESULT, so the note says 「(事实都很短时)」 on it (review, 2026-09-25). On Run 6c's
         // 60 long notes, both read in windows, the same pairing is a loss: found@8 182 against BGE's 201 of 240 (33/14,
         // p = 0.008, 95% [−13.4, −2.3]pp), mostly past 1,000 characters (38 against 51 of 60, 17/4 — one of 16 position cells,
@@ -516,12 +546,9 @@ public static class GgufCatalog
         // a translation of MS MARCO, whose terms are non-commercial; the GGUF repo declares none — so the note says
         // what the CARD says rather than what the model "is".
         //
-        // ITS LATENCY WAS MEASURED UNDER THE 4096 LAUNCH (Run 4's router preset, before this row declared 512), and the
-        // product now launches it at 512 — so the rerank CALL was re-measured under both, 2026-09-24, on the same GPU:
-        // dedicated llama-server b10549, --n-gpu-layers 99, 12 fixture questions × all 60 fixture facts per call, 36 calls
-        // each after a warm-up — median 75.1 and 79.3 ms at 4096 (two runs), 76.3 ms at 512. No difference beyond the
-        // 4096 launch's own run-to-run spread, so the whole-recall 0.31 s / +0.08 s stand, said as measured at 4096.
-        // Reproducible: `dev.mjs rerank-window` (its part 3); docs/self-managed-llm-runtime.md records the run.
+        // ITS LATENCY IS RUN 11c's, AT ITS DECLARED 512: 342 ms serial median against the run's 公式 245 (+97), BGE 464.
+        // Run 4's 0.31 s was taken under a 4096 launch and the note carried that caveat; Run 11 launched it as the product
+        // does, so the caveat went (the rerank call under both launches, 2026-09-24, is in docs/self-managed-llm-runtime.md).
         new GgufModel(
             RerankerWithoutGpu, "mMiniLMv2(Q8 · 判断 · 重排 · 更小)", GgufCapability.Reranking,
             "keisuke-miyako/mmarco-mMiniLMv2-L12-H384-v1-gguf-q8_0", "2b37d162c88e0aeb8a1b4acb2d50f0e5ade16fd5",
@@ -532,11 +559,11 @@ public static class GgufCatalog
             // front, with the figures and their configuration — this row's alone; BGE's and LAMAR's point here.
             + SmallRerankerCpuNote
             + RerankerBenchSetup.TrimEnd(':')
-            + "(不开判断是 79/240 与 125/240):前八命中 199/240,同一轮 BGE 是 204/240 —— 没有测出显著差别(事实都很短时),"
-            + "但也不能算一样好,这一轮排除不了它最多少带进约 11 题;比 LAMAR(208/240)显著少,9 题只有 LAMAR 带进前八,"
-            + "反过来一题也没有。首位命中 99/240,比同一轮 BGE 的 90 和 LAMAR 的 86 多,但和 BGE 的差距不足以下结论。"
-            + "每次检索约 0.31 秒,同一轮 BGE 约 0.45 秒" + RerankerLatencyCaveat + ";这一轮是按 4096 个词元启动它的,"
-            + "应用现在按 512 启动 —— 单次重排调用(60 条候选)在两种启动下另测过,都约 0.08 秒,看不出差别。"
+            + "(不开判断是 80/240 与 127/240):前八命中 203/240,同一轮 BGE 是 208/240 —— 没有测出显著差别(事实都很短时),"
+            + "但也不能算一样好,这一轮排除不了它最多少带进约 12 题;和 LAMAR(207/240)也没有测出显著差别"
+            + "(8 题只有 LAMAR 带进前八,4 题只有它做到)。首位命中 100/240,比同一轮 BGE 的 91 和 LAMAR 的 89 都多,"
+            + "而且都显著(p = 0.049 与 0.013,前者刚过线)。"
+            + "每次检索约 0.34 秒,同一轮 BGE 约 0.46 秒" + RerankerLatencyCaveat + ";这一轮和应用一样,按 512 个词元启动它。"
             + "它一次最多只能读 512 个词元:应用把提问截短到放得下,较长的事实则分成几段来读 —— 每段约 250–500 个字符,"
             + "相邻两段有重叠,一条最多 5 段 —— 各段分别打分、取最高的一段。这是量过才改的:在 60 条约 900–1,200 字的长笔记上"
             + "(240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页),答案在笔记末尾时,只读开头的旧做法把答案带进前八"

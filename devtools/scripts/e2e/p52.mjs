@@ -759,9 +759,11 @@ try {
     /重排/.test(judgeManaged) && /发给 Claude/.test(judgeManaged), judgeManaged);
   // …and it claims measurement only where there is some. Gemma 3 1B's judging was measured (docs/judge-bench.md
   // Run 3) and came out worse than no judge; the sentence said none had been, which the measurement made false. It
-  // must now say both: what the measured one did, and that the others were not measured.
-  ok("…and does not claim every model on 判断 was measured — and says the chat model that was did worse than none",
-    !/都实测排过名/.test(judgeManaged) && /没有实测过/.test(judgeManaged) && /比不开判断更差/.test(judgeManaged),
+  // must now say both: what the measured one did, and that the others were not measured. On the current engine
+  // (Run 11) it is worse on top-1 only — its found@8 loss did not replicate — so the clause names the metric.
+  ok("…and does not claim every model on 判断 was measured — and says the chat model that was did worse than none, on top-1",
+    !/都实测排过名/.test(judgeManaged) && /没有实测过/.test(judgeManaged)
+      && /Gemma 3 1B 在排第一这一项上比不开判断更差/.test(judgeManaged),
     judgeManaged);
   // Run 5b then measured Qwen3 0.6B BETTER than no judge, and it is catalogued — so "only Gemma 1B was measured, and
   // was worse" went false. The sentence names the one that did better, and that the reranker still wins on the page.

@@ -232,16 +232,18 @@ public static class MemoryGroups
              + "代价是消耗账号额度,每次调用都要启动一次 CLI。",
         Managed when layer == MemoryLayers.Judge =>
             // NOT 「都实测排过名」: a group sentence is true of every member. docs/judge-bench.md measured the
-            // catalogued rerankers (Runs 2 and 4) and four chat models: Gemma 3 1B (Run 3) worse than no judge,
-            // Qwen3 0.6B (Run 5b) better on both metrics but far behind the reranker on found@8 (148 against BGE's
-            // 203 in the same run), and Qwen3.5 0.8B and Gemma 3 270M (Run 5b), which are not catalogued. It said
+            // catalogued rerankers (Runs 2 and 4, again in Run 11 on Lyntai 3.5.1) and four chat models: Gemma 3 1B
+            // (Run 3) worse than no judge — on Lyntai 3.5.1 (Run 11) on top-1 only, 80 → 36, its found@8 loss not
+            // replicating (127 → 123, p = 0.424), so the clause says 「在排第一这一项上」 since then —, Qwen3 0.6B
+            // (Runs 5b and 11) better on both metrics but far behind the reranker on found@8 (152 against BGE's 208 in
+            // the same run, Run 11), and Qwen3.5 0.8B and Gemma 3 270M (Run 5b), which are not catalogued. It said
             // "only Gemma 3 1B was measured, and was worse" until Qwen3 0.6B was catalogued; it still says the
             // others (the 4B, a household's own file) were not measured. 「Qwen3 0.6B 比不开判断好」 holds for the fully
             // local configuration too: over its OWN tags it beat no judge over the same tags on both metrics (Run 7) —
             // what its tags cost against Claude's is in its model note, not here.
             "由应用下载、启动和管理的模型(llama.cpp),占磁盘、不用填地址,模型在「资源 · Resources」面板下载。"
              + "对话模型:判断整个在本机完成,不消耗账号额度。在本应用的双语测试集上,Qwen3 0.6B 比不开判断好,"
-             + "但把答案带进前八的次数远不如重排模型;Gemma 3 1B 比不开判断更差;"
+             + "但把答案带进前八的次数远不如重排模型;Gemma 3 1B 在排第一这一项上比不开判断更差;"
              + "Qwen3.5 0.8B 和 Gemma 3 270M 也测过,没有收录;其他对话模型没有实测过。"
              + "重排模型:应用提供的都在同一测试集上实测过,只有检索时的核对在本机 —— "
              // The tagging clause is MemorySources.CliTaggingCost, like the toast, cost line and model note.
