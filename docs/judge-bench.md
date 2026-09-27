@@ -7645,3 +7645,42 @@ both have raised it. The two clauses contradict each other; the checker encoded 
   router 7093; none reserved, none listening, none used before). Order: the 11a re-run, then 11b, then 11c, as
   registered. Everything else in the design is unchanged.
 - The checker (`devtools/_run11/guards11.mjs`, scratch) excludes exactly that warning text and no other.
+
+## Run 11 — second amendment: every warning the bench can print, classified (design, after the second 11a attempt)
+
+Written and committed after the second 11a attempt and BEFORE any other run. As with the first, nothing of that attempt
+was read except its guard output; no top-1, found@8 or paired figure of either attempt has been looked at.
+
+**What happened.** The re-run (`results-2026-09-27T061606.804Z.json`, 06:16:06Z–06:18:59Z, exit 0) failed guard 3 as
+amended, again on coverage and nothing else. It printed two warnings: the accuracy pass's `judge failed open on 8/234
+graph recalls`, which the first amendment exempts, and the latency pass's `2/12 graph-ranked latency recalls carried no
+verdict (left out of its serial median)`, which it does not — the first amendment said "any other WARNING still fails
+the guard". That was the first amendment's defect: it named one of the bench's two coverage warnings. Every other guard
+held.
+
+**The fix is to classify every warning the bench can print** (`judge-bench.mjs`, the warnings block), once, before any
+further run:
+
+| warning | on | in Run 11 |
+|---|---|---|
+| `judge failed open on N/M graph recalls` | a chat judge (accuracy pass, below 98%) | **a result** — its coverage |
+| `N/M graph-ranked latency recalls carried no verdict (left out of its serial median)` | a **chat judge** | **a result** — its latency-pass coverage; the serial median is over the verdict-carrying recalls, and their count is quoted with it |
+| the same | a **reranker** | a fault: guard 3 fails (a reranker abstains only on a fault) |
+| `reranker gave no verdict on N/M graph recalls` | a reranker | a fault (and guard 8) |
+| `N/M queries errored`, `N/M latency recalls errored` | any arm | a fault (and guard 11) |
+| `A/A pair … the run is suspect` | the engine pair | a fault (and guard 2) |
+| any claude-cli call or failed claude-cli call | any arm | a fault |
+| `no llama.cpp chat call succeeded`, `N llama.cpp chat call(s) failed` | a chat judge | a fault: a failed call is the plumbing, not the judge declining |
+| `RerankPace sized, skipped or re-measured …` | any arm | a fault (and guard 9) |
+| proxy, cross-run and CPU-solo warnings | — | not reachable in these commands (no memo, no baseline, no CPU arm); a fault if printed |
+
+**Guard 3 now reads**: every judge arm reads back `llama-cpp · <m>`, raises no startup warning, announces no knob but
+`rrk`'s `on`, 0 claude-cli calls by any arm, and the bench prints no WARNING except the two marked **a result** above, on a
+chat-judge arm. Any other WARNING fails it.
+
+- **Neither earlier attempt is read under the rule**; both failed a guard as it was then written. Both are kept and
+  reported afterwards, beside the reading, as descriptive instrument checks only (three runs of one configuration).
+- **11a runs a third time, and this attempt is the reading, whatever it shows.** Ports: base 7040, router 7094 (none
+  reserved, none listening, none used before). Then 11b and 11c, on their registered ports. Everything else is unchanged.
+- **If this attempt fails a guard, the sequence stops and is reported.** There is no further amendment in this session.
+- The checker (`devtools/_run11/guards11.mjs`, scratch) exempts exactly the two result warnings, on `lc:` arms only.
