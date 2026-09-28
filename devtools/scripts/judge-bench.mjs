@@ -141,6 +141,14 @@
 // `rrd` (Run 10) is the same partition arm with the knob's `d177` MEASUREMENT mode: Lyntai's HTTP reranker segments each
 // long candidate itself (RerankChunking.LyntaiSegmentation), with no ChunkedScoreProvider, pace or admission — paired
 // against `rrk` in its own block (RUN 10).
+// IN-PROCESS RERANKER ARMS (Run 13). `--builtin-rerankers=mmarco-mMiniLMv2-L12-H384-v1-onnx` adds `rrbi:<model>`: 判断 bound to
+// `builtin` (内置), the in-process ONNX cross-encoder (InProcessReranker), through the same RerankInputCap →
+// ChunkedScoreProvider → RerankAdmission chain as `rrk`, with chunking pinned on. No router and no proxy: its files are
+// copied from `--resources`'s rerank-model folder (checked against the sha256 pins in ResourceProvisioner.cs before any
+// arm starts). Its pace starts from a CPU figure measured in process, so — like a CPU-only arm — it is EXEMPT from the pace
+// guard, its pace, skip and deadline lines are placed on its recalls, and an abstention is a fault only when no such line
+// explains it. Its server's private bytes are read before and after its passes. A RUN 13 block pairs it with the same
+// weights on llama.cpp: `rrk:<gguf>` (GPU) and `cpu-rrk:<gguf>` (CPU-only router), and times it against the CPU arm.
 // `--serial-arms` (Run 12's amendment) runs every arm's ACCURACY pass one at a time, in arm order, on the same shared
 // router, instead of all at once — still one run: one seed snapshot per arm, one query order, one router, one build. Two
 // PACED arms side by side (`rrk` and `rrb`) queue behind each other's calls on that router, and a small call that waited
@@ -232,7 +240,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import http from 'node:http';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { makeTestData, startServer, waitHealthy, makeClient, until, repo, git, claudeStubCmd } from './e2e/_e2e-common.mjs';
 import { resolveClaude, QUESTION_SETS } from './recall-questions.mjs';
@@ -241,7 +249,7 @@ import { expectedMixedBytes } from './judge-bench-mixed-fixture.mjs';
 
 // ---- flags: known ones only ------------------------------------------------------------------------------
 const VALUED = ['arms', 'rerankers', 'rerank-arms', 'chat-judges', 'chat-arms', 'n', 'port-base', 'llama-port', 'resources', 'seed',
-  'latency-sample', 'report-only', 'baseline', 'fixture', 'tag-seed', 'tag-seed-arms', 'cpu-rerankers', 'cpu-rerank-arms',
+  'latency-sample', 'report-only', 'baseline', 'fixture', 'tag-seed', 'tag-seed-arms', 'cpu-rerankers', 'cpu-rerank-arms', 'builtin-rerankers',
   'cpu-llama-port', 'igpu-rerankers', 'igpu-rerank-arms', 'igpu-visible'];
 const BOOLEAN = ['reuse-seed', 'reseed', 'seed-only', 'claude-stub', 'rerank-memo', 'build-tag-seed', 'serial-arms'];
 const die = (msg) => { console.error(`judge-bench: ${msg}`); process.exit(2); };
@@ -321,6 +329,10 @@ const CPU_LLAMA_PORT = int('cpu-llama-port', LLAMA_PORT + 1, 1);
 const IGPU_VISIBLE = opts['igpu-visible'] === undefined ? null : int('igpu-visible', 0, 0);
 /** A SOLO arm (Runs 8 and 8b) runs alone, after every other arm, on a fresh router of its own — CPU-only or iGPU-only. */
 const solo = (a) => Boolean(a.cpu || a.igpu);
+/** An arm whose pace starts from a CPU figure (Run 13's in-process reranker) or runs on a CPU/iGPU-only router: the pace
+ *  and skip are part of what it measures, so it is exempt from the pace guard and an abstention needs a line to explain it. */
+const paceIsMeasured = (a) => solo(a) || Boolean(a.inproc);
+const GGUF_OF_BUILTIN = { 'mmarco-mMiniLMv2-L12-H384-v1-onnx': 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0' };
 const soloName = (a) => (a.igpu ? 'iGPU' : 'CPU');
 const ORDER_SEED = int('seed', 12345, 0);
 const LATENCY_SAMPLE = int('latency-sample', 12, 0);
@@ -369,6 +381,25 @@ const formulaKeyFor = (seed) => (seed === 'default' ? 'formula' : `formula@${see
 // sets it and must announce it: chunking became the product default on 2026-09-24 (Run 6c), so `rr`/`rrf` pin it OFF —
 // the cut Runs 2–6 measured, so they re-launch as they ran — and `rrk` pins it ON, which is what ships.
 const PINNED = { GATHERLIGHT_VERDICT_COMBINATION: '', GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '', GATHERLIGHT_RERANK_CHUNKING: '' };
+/** Run 13: the in-process reranker's ids and its files, read from the C# (one writer each) — the id it binds by, the GGUF
+ *  with the same weights (the llama.cpp arms it is paired with), and the four pinned files. */
+const builtinMirror = () => {
+  const src = (f) => fs.readFileSync(path.join(repo, 'src', 'server', ...f.split('/')), 'utf8');
+  const judge = src('Gatherlight.Platform/Agent/Llm/Sources/BuiltInJudgeSource.cs');
+  const catalog = src('Gatherlight.Platform/Agent/Llm/Services/GgufCatalog.cs');
+  const prov = src('Gatherlight.Platform/Hosting/Resources/Services/ResourceProvisioner.cs');
+  const inproc = src('Gatherlight.Platform/Agent/Llm/Services/InProcessReranker.cs');
+  const modelId = /public const string ModelId = "([^"]+)";/.exec(judge)?.[1];
+  const resourceId = /public const string ResourceId = "([^"]+)";/.exec(judge)?.[1];
+  const sameAs = /public const string SameWeightsAs = GgufCatalog\.(\w+);/.exec(judge)?.[1];
+  const gguf = sameAs ? new RegExp(`public const string ${sameAs} = "([^"]+)";`).exec(catalog)?.[1] : null;
+  const modelFile = /public const string ModelFile = "([^"]+)";/.exec(inproc)?.[1];
+  const pins = [...prov.matchAll(/RerankModelUrl\("([^"]+)"\),\s*"([0-9a-f]{64})"/g)].map((m) => ({ file: m[1] === 'onnx/model_qint8_avx512_vnni.onnx' ? modelFile : m[1], sha: m[2] }));
+  if (!modelId || !resourceId || !gguf || !modelFile || pins.length !== 4)
+    die(`could not read the in-process reranker from the C# (model ${modelId}, resource ${resourceId}, same weights ${gguf}, file ${modelFile}, ${pins.length} pins)`);
+  return { modelId, resourceId, gguf, pins };
+};
+
 /** Which arms each `--rerankers=` model gets, and what each pins: `rr` partition over the CUT, `rrf` fuse over the cut,
  *  `rrk` partition over windows (the shipped default). ONE writer: the live run builds reranker arms from this and
  *  armConfigFor labels them from it. Runs 6b and 6c ran `rr` with the knob blank, which was the cut then too. */
@@ -781,6 +812,8 @@ const loadRun = (json, source) => {
       ...((a.cpu ?? known.cpu) ? { cpu: true, cpuRecord: a.cpuRecord ?? null } : {}),
       // Run 8b: an iGPU-only arm, the same record under the same name.
       ...((a.igpu ?? known.igpu) ? { igpu: true, cpuRecord: a.cpuRecord ?? null } : {}),
+      // Run 13: an in-process reranker arm.
+      ...((a.inproc ?? known.inproc) ? { inproc: a.inproc ?? known.inproc, inprocGguf: a.inprocGguf ?? null, inprocRecord: a.inprocRecord ?? null } : {}),
       rows: (json.rows[a.key] ?? []).filter((r) => (r.pass ?? 'accuracy') === 'accuracy'),
       latencyRows: json.latencyRows?.[a.key] ?? null,
     };
@@ -1204,6 +1237,86 @@ const printBoundary = (run) => {
   return out;
 };
 
+/** RUN 13 (docs/judge-bench.md, registered before the run): 内置 — the in-process ONNX mMiniLMv2 (`rrbi`) — against the same
+ *  weights on llama.cpp, on the GPU (`rrk:<gguf>`) and on a CPU-only router (`cpu-rrk:<gguf>`), paired per query within
+ *  the run. Per pair: `all` both metrics and each position group, McNemar exact, and whether in-process is significantly
+ *  WORSE on found@8 (the rule's half on this fixture). Then time: every recall of each arm's accuracy pass (each ran
+ *  alone), medians over every recall and over the ones that carried a verdict, and a sign test over the paired recalls
+ *  (in-process slower or faster than the CPU arm on the same question). Then the in-process arm's own record: memory,
+ *  load, pace seed, and the pace, skip and deadline lines. Printed only for a run with an in-process arm. */
+const printInproc = (run) => {
+  const bis = run.arms.filter((a) => a.inproc);
+  if (!bis.length) return null;
+  const { groups, at } = run.meta.positions ? positionGroups(run.meta.positions) : { groups: [], at: null };
+  const tx = (x) => `${x.b}/${x.c}, p ${pv(x.p)}${x.netPp === null ? '' : `, ${signed(x.netPp, 1)}pp`}`;
+  const iv = (x) => (x.interval95Pp ? ` [${x.interval95Pp.map((v) => signed(v, 1)).join(', ')}]${x.equivalent ? ' equivalent' : ''}` : '');
+  const med = (xs) => { const q = [...xs].sort((a, b) => a - b); return q.length ? (q.length % 2 ? q[(q.length - 1) / 2] : (q[q.length / 2 - 1] + q[q.length / 2]) / 2) : null; };
+  const ok = (a) => a.rows.filter((r) => r.error === null);
+  const out = { arms: {} };
+  console.log('\nRUN 13 — 内置 (in-process ONNX) against llama.cpp, the same weights; b = llama.cpp hit & in-process miss, c = the reverse');
+  for (const bi of bis) {
+    const gguf = bi.inprocGguf ?? GGUF_OF_BUILTIN[bi.inproc] ?? null;
+    const refs = [run.arms.find((a) => a.key === `rrk:${gguf}`), run.arms.find((a) => a.key === `cpu-rrk:${gguf}`)].filter(Boolean);
+    const x = { pairs: {}, latency: {}, record: bi.inprocRecord ?? null };
+    const sB = stat(bi.rows);
+    console.log(`  ${bi.key}: top-1 ${sB.top1}, found@8 ${sB.found}, judged ${sB.judged}/${sB.graph}`);
+    for (const ref of refs) {
+      const all = pairedTest(bi, ref, 'all');
+      const byGroup = Object.fromEntries(groups.map((g) => [g, pairedTest(bi, ref, null, at(g))]));
+      const identity = identityOf(bi, ref);
+      const sR = stat(ref.rows);
+      const worseAll = all.found.p < 0.05 && all.found.c - all.found.b < 0;
+      x.pairs[ref.key] = { all: { top1: all.top1, found: all.found, pairs: all.pairs }, byGroup, identity, worseAll,
+        counts: { ref: { top1: sR.top1, found: sR.found, judged: sR.judged, graph: sR.graph }, inproc: { top1: sB.top1, found: sB.found } } };
+      console.log(`    vs ${ref.key}: found@8 ${sR.found} → ${sB.found} (${tx(all.found)}${iv(all.found)}); top-1 ${sR.top1} → ${sB.top1} (${tx(all.top1)}${iv(all.top1)});`
+        + ` rows identical: ${identity.identical ? 'YES' : `no — ${identity.differingQueries} of ${identity.pairs} (pos/ans/rank/ret/err/page/body ${Object.values(identity.differ).join('/')})`};`
+        + ` in-process significantly WORSE on all found@8: ${worseAll ? 'YES' : 'no'}`);
+      for (const g of groups) console.log(`      ${pad(g, 8)} found@8 ${tx(byGroup[g].found)} · top-1 ${tx(byGroup[g].top1)} (${byGroup[g].pairs} pairs)`);
+    }
+    // The two llama.cpp arms against each other — the same GGUF on two devices: how far llama.cpp alone moves.
+    const gpuRef = refs.find((r) => !r.cpu), cpuOnly = refs.find((r) => r.cpu);
+    if (gpuRef && cpuOnly) {
+      const all = pairedTest(cpuOnly, gpuRef, 'all');
+      const identity = identityOf(cpuOnly, gpuRef);
+      x.cpuVsGpu = { all: { top1: all.top1, found: all.found, pairs: all.pairs }, identity };
+      console.log(`    llama.cpp CPU vs GPU (b = GPU hit & CPU miss): found@8 ${tx(all.found)}${iv(all.found)}; top-1 ${tx(all.top1)}${iv(all.top1)};`
+        + ` rows identical: ${identity.identical ? 'YES' : `no — ${identity.differingQueries} of ${identity.pairs} (pos/ans/rank/ret/err/page/body ${Object.values(identity.differ).join('/')})`}`);
+    }
+    // Time: every recall of each accuracy pass, and the ones with a verdict.
+    for (const a of [bi, ...refs]) {
+      const rows = ok(a);
+      x.latency[a.key] = { every: med(rows.map((r) => r.ms)), verdict: med(rows.filter((r) => r.answered !== null).map((r) => r.ms)),
+        p90: (() => { const q = rows.map((r) => r.ms).sort((m, n) => m - n); return q.length ? q[Math.min(q.length - 1, Math.floor(q.length * 0.9))] : null; })(),
+        n: rows.length, verdicts: rows.filter((r) => r.answered !== null).length,
+        cuts: a.rows.filter((r) => r.deadlineCut).length, skips: a.rows.filter((r) => r.skip).length, paced: a.rows.filter((r) => r.pace).length,
+        latencyPassMedian: a.latencyRows?.length ? med(a.latencyRows.filter((r) => r.error === null && r.answered !== null).map((r) => r.ms)) : null };
+      const l = x.latency[a.key];
+      console.log(`    time ${pad(a.key, 48)} every recall median ${l.every} ms (p90 ${l.p90}), with a verdict ${l.verdict} ms (${l.verdicts}/${l.n});`
+        + ` ${l.cuts} deadline cut(s), ${l.skips} pace skip(s), ${l.paced} sized call(s)${l.latencyPassMedian !== null ? `; latency pass median ${l.latencyPassMedian} ms` : ''}`);
+    }
+    const cpuRef = refs.find((r) => r.cpu);
+    if (cpuRef) {
+      const bySeq = new Map(ok(cpuRef).map((r) => [r.seq, r]));
+      let slower = 0, faster = 0, tied = 0;
+      for (const r of ok(bi)) { const q = bySeq.get(r.seq); if (!q) continue; if (r.ms > q.ms) slower++; else if (r.ms < q.ms) faster++; else tied++; }
+      const p = mcnemarP(slower, faster);
+      x.vsCpu = { slower, faster, tied, p, significantlySlower: p < 0.05 && slower > faster };
+      console.log(`    time vs ${cpuRef.key}: in-process slower on ${slower}, faster on ${faster}, tied ${tied} of the paired recalls (sign test p ${pv(p)});`
+        + ` in-process significantly SLOWER: ${x.vsCpu.significantlySlower ? 'YES' : 'no'}`);
+    }
+    const r = bi.inprocRecord;
+    if (r) {
+      const mb = (m) => (m && m.privateBytes ? `${(m.privateBytes / 1048576).toFixed(0)} MB private (${(m.workingSet / 1048576).toFixed(0)} MB working set)` : (m?.error ? `unread: ${m.error}` : '—'));
+      console.log(`    memory: before its accuracy pass ${mb(r.memory?.beforeAccuracy)}; after it ${mb(r.memory?.afterAccuracy)}; after its latency pass ${mb(r.memory?.afterLatency)}`);
+      console.log(`    load: ${(r.loadMs ?? []).join(', ') || '(no load line)'} ms; pace seed: ${(r.paceSeed ?? []).map((s) => `${s.msPer1k} ms per 1,000 (${s.how})`).join(' | ') || '(no seed line)'}`);
+      console.log(`    its accuracy pass's lines: ${r.events?.paceLines ?? '?'} pace, ${r.events?.deadlineLines ?? '?'} deadline; ${r.events?.outside ?? 0} in its latency pass;`
+        + ` ${r.events?.unplaced ?? 0} unplaced, ${r.events?.doubled ?? 0} doubled; ${r.scoringFailures ?? 0} in-process scoring failure(s)`);
+    }
+    out.arms[bi.key] = x;
+  }
+  return out;
+};
+
 /** RUN 9'S QUESTION AND RULE (docs/judge-bench.md, registered before the run): on the MIXED fixture, does scoring long
  *  notes in windows cost the SHORT facts they compete with? Per reranker, chunked (`rrk`) against cut (`rr`), paired per
  *  query, on questions whose target is SHORT, on those whose target is LONG, and on `all`, both metrics. The rule reads
@@ -1573,6 +1686,8 @@ const analyse = (run, { baseline = null } = {}) => {
   { const r10 = printD177(run); if (r10) out.run10 = r10; }
   // Run 12: boundary windows (`rrb`) against even ones (`rrk`), when both ran. Nothing for any earlier run.
   { const r12 = printBoundary(run); if (r12) out.run12 = r12; }
+  // Run 13: the in-process reranker against llama.cpp's, when it ran. Nothing for any earlier run.
+  { const r13 = printInproc(run); if (r13) out.run13 = r13; }
 
   // THE A/A SANITY CHECK. Each twin ran the identical configuration from the identical snapshot, so the paired
   // test must stay quiet on `all`. Per-set p is shown but not warned on (ten tests at 0.05 alarm by themselves).
@@ -1755,7 +1870,7 @@ const analyse = (run, { baseline = null } = {}) => {
     // Run 8: on a CPU-only arm a recall the verification DEADLINE cut is the thing measured, not a fault — so there the
     // guard is that every abstention IS a traced deadline cut (the product's own Warning logged during that recall), and
     // that no recall carrying a verdict was also cut.
-    if (solo(arm)) {
+    if (paceIsMeasured(arm)) {
       // A pace SKIP explains an abstention too (2026-09-25) — the product's own line, placed on the recall like a cut's.
       const unexplained = arm.rows.filter((r) => r.error === null && r.ranked === 'graph' && r.answered === null && r.deadlineCut !== true
         && !r.skip);
@@ -1780,7 +1895,7 @@ const analyse = (run, { baseline = null } = {}) => {
     // A LOCAL arm reaching the CLI at query time: a chat judge annotates and verifies on llama.cpp, a reranker
     // annotates on the CLI only when a fact is written, the formula arm judges nothing — and a reused seed writes
     // nothing. Any call here is unexplained, and it is account quota spent by an arm meant to spend none.
-    const local = arm.chatJudge || arm.reranker || arm.enrichment === false;
+    const local = arm.chatJudge || arm.reranker || arm.inproc || arm.enrichment === false;
     const cliCalls = arm.router?.total ?? arm.router?.accuracy;
     if (local && cliCalls && cliCalls.ok + cliCalls.failed > 0)
       out.warnings.push(`arm ${arm.key} — ${cliCalls.ok + cliCalls.failed} claude-cli call(s) from an arm whose judge is local or off: nothing it did should reach the CLI`);
@@ -1800,13 +1915,13 @@ const analyse = (run, { baseline = null } = {}) => {
   let paceVoid = null;
   if (meta.rerankPace) {
     // Run 8: a CPU-only arm is EXEMPT — the pace's activity is what it measures — and says so; every other arm is judged.
-    const cpuKeys = new Set(arms.filter(solo).map((a) => a.key));
+    const cpuKeys = new Set(arms.filter(paceIsMeasured).map((a) => a.key));
     const fired = Object.entries(meta.rerankPace).filter(([k, n]) => n > 0 && !cpuKeys.has(k));
     const exempt = Object.entries(meta.rerankPace).filter(([k]) => cpuKeys.has(k));
     // Its own name: the saved counts stay `rerankPace` in the file, and a re-analysis must read those, not this.
     out.paceGuard = { void: fired.length > 0, fired: Object.fromEntries(fired), ...(exempt.length ? { exempt: Object.fromEntries(exempt) } : {}) };
     if (exempt.length)
-      console.log(`\nPACE GUARD — exempt, as designated ${arms.some((a) => a.igpu) ? 'solo (CPU-only or iGPU-only)' : 'CPU-only'} arms (the pace is what they measure): ${exempt.map(([k, n]) => `${k} (${n} line${n === 1 ? '' : 's'})`).join(', ')};`
+      console.log(`\nPACE GUARD — exempt, as designated ${arms.some((a) => a.inproc) ? 'CPU-paced (CPU-only router or in-process)' : arms.some((a) => a.igpu) ? 'solo (CPU-only or iGPU-only)' : 'CPU-only'} arms (the pace is what they measure): ${exempt.map(([k, n]) => `${k} (${n} line${n === 1 ? '' : 's'})`).join(', ')};`
         + ` judged: ${Object.keys(meta.rerankPace).filter((k) => !cpuKeys.has(k)).join(', ') || 'none'}`);
     for (const [k, n] of fired)
       out.warnings.push(`arm ${k} — RerankPace sized, skipped or re-measured ${n} rerank call(s) (its log: "window(s) per long candidate instead of …" or "re-measured this machine"): what the arm sent depended on this machine's timing`);
@@ -1880,6 +1995,10 @@ const armConfigFor = (key, at = RUN_AT) => {
   if (ARMS[key]) return { label: ARMS[key].label, enrichment: ARMS[key].enrichment, judgeInput: ARMS[key].judgeInput ?? null, reranker: null, chatJudge: null };
   const m = /^(rr[fkdb]?):(.+)$/.exec(key);
   if (m) return { label: `reranker ${m[2]} · ${RERANK_ARM_KINDS[m[1]].suffix}`, enrichment: true, judgeInput: null, reranker: m[2], chatJudge: null };
+  // Run 13: 判断 on 内置 — the in-process ONNX reranker (`inproc` names its model; it has no router, so no `reranker`).
+  const bi = /^rrbi:(.+)$/.exec(key);
+  if (bi) return { label: `reranker ${bi[1]} · partition · chunked · in process (内置, CPU)`, enrichment: true, judgeInput: null,
+    reranker: null, chatJudge: null, inproc: bi[1] };
   // Run 8: the same reranker arm on a CPU-only router (`cpu: true` is what exempts it from the pace guard).
   const cpu = /^cpu-(rr[fkdb]?):(.+)$/.exec(key);
   if (cpu) return { label: `reranker ${cpu[2]} · ${RERANK_ARM_KINDS[cpu[1]].suffix} · CPU-only router`, enrichment: true, judgeInput: null,
@@ -2067,6 +2186,23 @@ const live = async () => {
       const kind = RERANK_ARM_KINDS[k];
       arms.push({ key: `cpu-${k}:${m}`, ...armConfigFor(`cpu-${k}:${m}`), env: { ...kind.env }, ...(kind.knob ? { knob: kind.knob } : {}) });
     }
+  // Run 13: the in-process reranker arm (header), its files checked against the pins before anything starts.
+  const builtinRerankers = list('builtin-rerankers', '');
+  if (builtinRerankers.length) {
+    const bm = builtinMirror();
+    for (const m of builtinRerankers) {
+      if (m !== bm.modelId) die(`--builtin-rerankers: '${m}' is not the in-process reranker — the one it offers is ${bm.modelId}`);
+      const dir = path.join(RESOURCES, bm.resourceId);
+      for (const f of bm.pins) {
+        const file = path.join(dir, ...f.file.split('/'));
+        if (!fs.existsSync(file)) die(`--builtin-rerankers: ${rel(file)} is missing — provision rerank-model through the app first`);
+        const sha = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+        if (sha !== f.sha) die(`--builtin-rerankers: ${rel(file)} is not the pinned file (sha256 ${sha.slice(0, 12)}… ≠ ${f.sha.slice(0, 12)}…)`);
+      }
+      arms.push({ key: `rrbi:${m}`, ...armConfigFor(`rrbi:${m}`), env: { GATHERLIGHT_RERANK_CHUNKING: 'on' },
+        knob: /rerank chunking = on \(/, inprocDir: dir, inprocGguf: bm.gguf });
+    }
+  }
   // Run 8b: the iGPU-only arms (header).
   const igpuRerankers = list('igpu-rerankers', '');
   const igpuKinds = list('igpu-rerank-arms', 'rr,rrk');
@@ -3017,6 +3153,14 @@ const live = async () => {
         else if (MEMO) arm.proxy = await startProxy();
         env.GATHERLIGHT_LLAMACPP_URL = `http://127.0.0.1:${arm.proxy ? arm.proxy.port : llamaPort}`;
       }
+      if (arm.inproc) {
+        // Run 13: the pinned files where the source looks for them, and 判断 bound to 内置 — no router, no proxy.
+        fs.cpSync(arm.inprocDir, path.join(arm.dir, 'state', 'resources', path.basename(arm.inprocDir)), { recursive: true });
+        const settingsPath = path.join(arm.dir, 'state', 'settings.json');
+        const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, 'utf8')) : {};
+        settings.memory = { ...(settings.memory ?? {}), judgeSource: 'builtin', judgeModel: arm.inproc };
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      }
       arm.port = PORT_BASE + 1 + i;
       arm.srv = startServer({ dataDir: arm.dir, port: arm.port, env });
       servers.push(arm.srv);
@@ -3051,6 +3195,12 @@ const live = async () => {
         if (judge?.activeSource !== 'llama-cpp' || judge?.activeModel !== arm.llamaModel)
           throw new Error(`arm ${arm.key}: judge is running ${judge?.activeSource} · ${judge?.activeModel}, not llama-cpp · ${arm.llamaModel}`);
         if (/warming 判断 model .* failed/.test(readLogs(arm.dir) + log)) throw new Error(`arm ${arm.key}: warming the 判断 model failed (see ${arm.dir}/state/logs)`);
+        if (arm.migrationWarnings.length > 0) throw new Error(`arm ${arm.key}: startup warnings: ${arm.migrationWarnings.join(' | ')}`);
+      }
+      if (arm.inproc) {
+        const judge = await judgeLayer(c);
+        if (judge?.activeSource !== 'builtin' || judge?.activeModel !== arm.inproc)
+          throw new Error(`arm ${arm.key}: judge is running ${judge?.activeSource} · ${judge?.activeModel}, not builtin · ${arm.inproc}`);
         if (arm.migrationWarnings.length > 0) throw new Error(`arm ${arm.key}: startup warnings: ${arm.migrationWarnings.join(' | ')}`);
       }
       const set = await c.post('/api/manage/memory/enrichment', { enabled: arm.enrichment });
@@ -3089,11 +3239,22 @@ const live = async () => {
         return { status: null, ranked: null, returned: null, answered: null, error: String(e?.message ?? e), pos: null, ms: Date.now() - t0 };
       }
     };
+    /** Run 13: a server's private bytes and working set, by the port it listens on (the process `dotnet run` started). */
+    const processMemoryOn = (port) => {
+      try {
+        const out = execFileSync('powershell', ['-NoProfile', '-Command',
+          `$p = (Get-NetTCPConnection -LocalPort ${port} -State Listen | Select-Object -First 1).OwningProcess; `
+          + '$x = Get-Process -Id $p; @{ pid = $x.Id; privateBytes = $x.PrivateMemorySize64; workingSet = $x.WorkingSet64 } | ConvertTo-Json -Compress'],
+          { encoding: 'utf8', timeout: 30000 });
+        return { at: new Date().toISOString(), ...JSON.parse(out.trim()) };
+      } catch (e) { return { at: new Date().toISOString(), error: String(e?.message ?? e).slice(0, 200) }; }
+    };
     /** One arm's accuracy pass: every query, in the run's order. `t0` (when the recall began) lets Run 8 place the
      *  product's own log lines on the recall they belong to. */
     const accuracyPass = async (arm) => {
       const c = makeClient(arm.srv.base);
       arm.rows = [];
+      if (arm.inproc) { arm.inprocRecord = { memory: { beforeAccuracy: processMemoryOn(arm.port) } }; arm.accuracyFrom = Date.now(); }
       for (const [seq, x] of queries.entries()) {
         if (arm.proxy) arm.proxy.state.seq = seq;
         const t0 = Date.now();
@@ -3105,6 +3266,7 @@ const live = async () => {
         arm.rows.push(row);
         emit(row);
       }
+      if (arm.inproc) { arm.accuracyTo = Date.now(); arm.inprocRecord.memory.afterAccuracy = processMemoryOn(arm.port); }
     };
 
     const parallel = arms.filter((a) => !solo(a));
@@ -3132,6 +3294,7 @@ const live = async () => {
       }
       arm.routerTotal = routerOutcomes(arm.dir);
       if (arm.chatJudge) arm.localTotal = routerOutcomes(arm.dir, LLAMA_CHAT_PROVIDER);
+      if (arm.inproc) arm.inprocRecord.memory.afterLatency = processMemoryOn(arm.port);
     }
 
     // RUN 8: each CPU-only arm ALONE — a fresh CPU-only router of its own, its own server, nothing else querying — so what
@@ -3151,12 +3314,15 @@ const live = async () => {
     /** The product's own log lines, placed on the recall during which each was written (by timestamp): the deadline cut
      *  (VerificationDeadlinePolicy's Warning) and the pace's lines (ChunkedScoreProvider's and RerankAdmission's
      *  Information, every form). */
-    const attachCpuEvents = (arm) => {
+    const attachCpuEvents = (arm, within = null) => {
       const events = [];
+      let outside = 0;
       for (const line of readLogs(arm.dir).split(/\r?\n/)) {
         const m = LOG_LINE.exec(line);
         if (!m) continue;
         const at = new Date(`${m[1]}T${m[2]}`).getTime();
+        // Run 13: only the accuracy pass's lines are placed; a line outside it (the latency pass) is counted apart.
+        if (within && (at < within[0] - 1000 || at > within[1] + 1000)) { if (new RegExp(PACE_LINE.source).test(m[5]) || DEADLINE.test(m[5])) outside++; continue; }
         let p;
         if ((p = PACE_SIZED.exec(m[5]))) events.push({ at, kind: 'sized', windows: +p[1], byCount: +p[2], budgetS: +p[3], msPer1k: +p[4] });
         else if ((p = PACE_AFTER_CUT.exec(m[5]))) events.push({ at, kind: 'afterCut', windows: +p[1], byCount: +p[2], msPer1k: +p[3] });
@@ -3189,7 +3355,7 @@ const live = async () => {
           ...(e.predictedS !== undefined ? { predictedS: e.predictedS } : {}) };
       }
       return { deadlineLines: events.filter((e) => e.kind === 'deadline').length, paceLines: events.filter((e) => e.kind !== 'deadline').length,
-        unplaced, doubled };
+        unplaced, doubled, ...(within ? { outside } : {}) };
     };
     /** A CPU-only router's own record, from its log: how its child was launched, how many threads, what it scored, and
      *  every abandoned request it noticed. */
@@ -3258,6 +3424,18 @@ const live = async () => {
         + `${arm.rows.filter((x) => x.deadlineCut).length} cut by the deadline, ${events.paceLines} pace line(s); router on ${port} stopped`);
     }
 
+    // Run 13: the in-process arm's pace, skip and deadline lines on its recalls; its load time and pace seed, from its log.
+    for (const arm of arms.filter((a) => a.inproc)) {
+      const events = attachCpuEvents(arm, [arm.accuracyFrom, arm.accuracyTo]);
+      const log = readLogs(arm.dir);
+      arm.inprocRecord = { ...arm.inprocRecord, events,
+        loadMs: [...log.matchAll(/loaded the in-process reranker in (\d+) ms/g)].map((m) => +m[1]),
+        paceSeed: [...log.matchAll(/the rerank pace starts from ([\d.]+) ms per 1,000 pair tokens — ([^\r\n]*)/g)].map((m) => ({ msPer1k: +m[1], how: m[2].slice(0, 200) })),
+        scoringFailures: (log.match(/scoring \d+ documents in process failed/g) ?? []).length };
+      console.log(`  ${arm.key}: ${arm.rows.filter((x) => x.answered !== null).length}/${arm.rows.length} with a verdict, `
+        + `${arm.rows.filter((x) => x.deadlineCut).length} cut by the deadline, ${events.paceLines} pace line(s) in its accuracy pass; `
+        + `load ${arm.inprocRecord.loadMs.join(', ') || '?'} ms; pace seed ${arm.inprocRecord.paceSeed.map((x) => x.msPer1k).join(', ') || '?'} ms per 1,000`);
+    }
     // THE PACE GUARD: how many rerank calls the pace sized below the count ceiling, per arm, over both passes.
     for (const arm of arms) arm.paceCuts = paceCutsIn(arm.dir);
 
@@ -3328,6 +3506,8 @@ const live = async () => {
         ...(a.llamaRouter ? { llamaRouter: a.llamaRouter } : {}),
         ...(a.cpu ? { cpu: true, cpuRecord: a.cpuRecord ?? null } : {}),
         ...(a.igpu ? { igpu: true, cpuRecord: a.cpuRecord ?? null } : {}),
+        // Run 13: the in-process reranker arm — its model, memory, load time, pace seed and events.
+        ...(a.inproc ? { inproc: a.inproc, inprocGguf: a.inprocGguf, inprocRecord: a.inprocRecord ?? null } : {}),
       })),
       ...(arms.some((a) => a.proxy) ? {
         rerankProxy: {
