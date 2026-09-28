@@ -21,7 +21,7 @@ commit to the data repo. Deterministic work (browsing, search, file ops, budget 
 is server code / registered tools, never LLM calls — token spend is reserved for actual planning.
 The agent's shell is guarded (`PowerShell`/`Monitor` are removed from every run, and Bash may not launch
 another shell); where there is no Git Bash the agent has NO shell **by design** — the scoped MCP file tools
-(`fs_move`/`fs_delete`/`file_info`) are the substitute, and 资源 OFFERS PortableGit as a Git Bash the app can
+(`fs_move`/`fs_delete`/`file_info`, one FILE at a time — never a folder, never a path holding a protected file) are the substitute, and 资源 OFFERS PortableGit as a Git Bash the app can
 guard (MinGit, the data repo's git, ships no bash). Plan (read-only) runs are read-confined to the data
 folder and have NO Bash at all; `state/` (token, TLS key, database) is outside the read jail; Bash's own writes
 are scoped like Edit's (best-effort token matching — the guard's integrity has three legs, below).
@@ -153,7 +153,7 @@ app state regenerated every boot beside the generated `--settings` (which carry 
 still inside the data folder, carved out of the guard's CHECKS: Edit/Write/Read cannot reach it (solid), a Bash token
 naming it is refused and nested shells are denied (both best effort). A constructed token or nested shell that slips
 past can still overwrite the guard until the next boot, or read `state/` in an execute run with Git Bash — the
-declared "needs an OS sandbox" residual (`.claude/rules/dev-conventions.md`, the three legs). **Two app-managed files in `{data}/.claude/`**
+declared "needs an OS sandbox" residual (`.claude/rules/dev-conventions.md`, the three legs). The CLI's own project config (`.claude/settings*.json`, `.mcp.json`), which it would load by itself, is moved out of the data folder around every run there, at boot and on a backup import (`ProjectConfigSweep`). **Two app-managed files in `{data}/.claude/`**
 are version-gated and re-issued (never editable knowledge-base content): `ui-spec.md` (the component vocabulary)
 and `tool-spec.md` (how to author its own capability — including what the sandbox refuses, parsed from the shipped
 `cap-guard.mjs` so it cannot drift). Anything that replaces a record subtree — notably backup import — must
