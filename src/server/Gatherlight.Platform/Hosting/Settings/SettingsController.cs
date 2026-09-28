@@ -32,7 +32,9 @@ public sealed class SettingsController : ControllerBase
     public IActionResult Get()
     {
         var c = _config.Current;
-        var envSet = Overrides.Where(o => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(o.Env)))
+        // As LAUNCHED: the access token is forgotten by the process at startup (ChildEnvironment), and this list is what the
+        // console's "overridden by an environment variable" warning shows — it must keep saying so.
+        var envSet = Overrides.Where(o => !string.IsNullOrWhiteSpace(ChildEnvironment.Launched(o.Env)))
             .Select(o => o.Field).ToArray();
         return Ok(new
         {

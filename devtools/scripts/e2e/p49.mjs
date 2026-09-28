@@ -19,6 +19,10 @@
 //                                            untouched (a SCRATCH repo, never the working one)
 //   G  …and a Claude Code session too     → no claude the app spawns (startup probe, agent turn, one-shot call) gets
 //                                            either, and the agent's own git finds the data repo; the rest still arrives
+//      …and an API key, another endpoint, a provider switch and the app's access token (G2) → none reaches a claude, while
+//                                            the subscription login (CLAUDE_CODE_OAUTH_TOKEN) does; no value is logged
+//      …and the switches that add a tool past the guard (G3) → none arrives, native file search does; and every agent
+//                                            run, plan and execute, removes PowerShell and Monitor (--disallowed-tools)
 import { execFileSync } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -381,17 +385,35 @@ try {
     // ChildEnvironment.ForgetLauncherContext drops both from the whole process at startup. The stub records, per spawn,
     // the names it got and what a `git` run from its cwd finds — what the agent's Bash would work on. The control
     // variable proves the environment was narrowed, not wiped; every value here is the fixture's own, never a real one.
+    //
+    // G2, the same boot: what would take the CLI OFF the subscription login (owner decision 2026-09-28, "never an API
+    // key", enforced at spawn) and the app's own secrets. The CLI's docs rank an API key, a provider switch and a gateway
+    // bearer above /login, and in -p mode an ANTHROPIC_API_KEY "is always used when present"; ANTHROPIC_BASE_URL would
+    // send every prompt to another host. The positive control is CLAUDE_CODE_OAUTH_TOKEN — `claude setup-token`'s
+    // subscription token, which the rule allows and which must still arrive. Every value is an obvious fake, and only the
+    // stub runs: nothing here reaches a real CLI or a real endpoint.
     const dirG = freshDir('g');
     const envLog = path.join(repo, 'devtools', '_e2e-p49-g-stub-env.jsonl');
     fs.rmSync(envLog, { force: true });
     const TOKEN = 'zzp49-parent-session-token-never-logged';
+    const FAKE = {
+      ANTHROPIC_API_KEY: 'zzp49-fake-not-an-api-key', ANTHROPIC_BASE_URL: 'http://zzp49-fake-endpoint.invalid',
+      CLAUDE_CODE_USE_BEDROCK: '1', GATHERLIGHT_ACCESS_TOKEN: 'zzp49-fake-access-token',
+      CLAUDE_CODE_OAUTH_TOKEN: 'zzp49-fake-oauth-token', CLAUDE_EFFORT: 'zzp49-fake-effort',
+      TRACEPARENT: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+      // G3: the CLI's switches that can add the agent a tool past the scope guard — and one that cannot, kept.
+      CLAUDE_CODE_USE_POWERSHELL_TOOL: '1', CLAUDE_CODE_USE_COWORK_PLUGINS: '1', CLAUDE_CODE_USE_CCR_V2: '1',
+      CLAUDE_CODE_USE_NATIVE_FILE_SEARCH: '1',
+    };
+    const argsLog = path.join(repo, 'devtools', '_e2e-p49-g-stub-args.jsonl');
+    fs.rmSync(argsLog, { force: true });
     srv = startServer({
       dataDir: dirG, port: PORT_INHERITED_CLI,
       env: {
         GIT_DIR: worktreeGitDir, GIT_CONFIG_PARAMETERS: "'user.name'='zzp49-inherited-author'",
         CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_CODE_SESSION_ID: 'zzp49-parent-session',
         CLAUDE_CODE_MESSAGING_SOCKET: '\\\\.\\pipe\\zzp49-parent', CLAUDE_CODE_MESSAGING_TOKEN: TOKEN, CLAUDE_PID: '1',
-        ZZE2E_KEPT: 'kept', GATHERLIGHT_STUB_ENV_LOG: envLog,
+        ZZE2E_KEPT: 'kept', GATHERLIGHT_STUB_ENV_LOG: envLog, GATHERLIGHT_STUB_ARGS_LOG: argsLog, ...FAKE,
       },
     });
     snap = await settled(srv.base);
@@ -411,7 +433,7 @@ try {
     const kinds = [...new Set(spawns.map((s) => s.kind))];
     ok('(fixture G) the stub recorded the startup probe, an agent turn and a one-shot call',
       ['auth-status', 'plan', 'annotation'].every((k) => kinds.includes(k)), JSON.stringify(kinds));
-    const LAUNCHER_CONTEXT = /^(GIT_DIR|GIT_WORK_TREE|GIT_CONFIG_PARAMETERS|GIT_CONFIG_COUNT|GIT_EXEC_PATH|CLAUDECODE|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|MESSAGING_SOCKET|MESSAGING_TOKEN|EXECPATH|SSE_PORT)|CLAUDE_PID)$/i;
+    const LAUNCHER_CONTEXT = /^(GIT_DIR|GIT_WORK_TREE|GIT_CONFIG_PARAMETERS|GIT_CONFIG_COUNT|GIT_EXEC_PATH|CLAUDECODE|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|MESSAGING_SOCKET|MESSAGING_TOKEN|EXECPATH|SSE_PORT)|CLAUDE_PID|CLAUDE_EFFORT|TRACEPARENT|TRACESTATE)$/i;
     const leaked = spawns.filter((s) => s.watched.some((n) => LAUNCHER_CONTEXT.test(n)));
     ok('THE POINT (G): no claude the app spawned inherited the launcher\'s repository or its Claude Code session',
       spawns.length > 0 && leaked.length === 0,
@@ -431,6 +453,69 @@ try {
     ok('…the startup log names what it dropped', ['GIT_DIR', 'GIT_CONFIG_PARAMETERS', 'CLAUDECODE', 'CLAUDE_CODE_MESSAGING_TOKEN']
       .every((n) => new RegExp(`\\b${n}\\b`).test(droppedLine)), droppedLine || '(no line)');
     ok('…and never a value: the session token is in no log', !logsG.includes(TOKEN) && !srv.log().includes(TOKEN));
+
+    // ---- G2 · off the subscription, and the app's own secrets --------------------------------------------------------
+    const OFF_SUBSCRIPTION = ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK'];
+    const gotAny = (names) => spawns.filter((s) => s.watched.some((n) => names.some((m) => m.toLowerCase() === n.toLowerCase())));
+    const offLeaks = gotAny(OFF_SUBSCRIPTION);
+    ok('THE POINT (G2): no claude the app spawned got an API key, another endpoint or a provider switch — the startup probe included',
+      spawns.length > 0 && offLeaks.length === 0,
+      offLeaks.slice(0, 3).map((s) => `${s.kind}: ${s.watched.filter((n) => OFF_SUBSCRIPTION.includes(n)).join(',')}`).join(' | '));
+    const secretLeaks = gotAny(['GATHERLIGHT_ACCESS_TOKEN']);
+    ok("THE POINT (G2): …nor the app's own remote-access token", spawns.length > 0 && secretLeaks.length === 0,
+      secretLeaks.map((s) => s.kind).join(', '));
+    ok('(G2) …while the subscription login, CLAUDE_CODE_OAUTH_TOKEN, still reaches every one — the positive control',
+      spawns.length > 0 && spawns.every((s) => s.watched.includes('CLAUDE_CODE_OAUTH_TOKEN')),
+      JSON.stringify(spawns.map((s) => [s.kind, s.watched.includes('CLAUDE_CODE_OAUTH_TOKEN')])));
+    const ignoredLines = logsG.split('\n').filter((l) => l.includes('Claude CLI: ignored ') && l.includes('never an API key'));
+    const ignoredLine = ignoredLines[0] ?? '';
+    ok('(G2) …the startup log says once, by name, what the CLI will not see',
+      OFF_SUBSCRIPTION.every((n) => ignoredLine.split(/[\s,]+/).includes(n)) && ignoredLines.length === 1,
+      ignoredLine || '(no line)');
+    const settingsG = (await cG.j('/api/manage/settings')).body ?? {};
+    ok('(G2) …and the app itself still knows its token came from the environment: the settings panel says it is overridden',
+      (settingsG.envOverrides ?? []).includes('accessToken'), JSON.stringify(settingsG.envOverrides));
+    const logText = logsG + srv.log() + (fs.existsSync(envLog) ? fs.readFileSync(envLog, 'utf8') : '');
+    const valuesSeen = Object.entries(FAKE).filter(([, v]) => v.length > 4 && logText.includes(v)).map(([k]) => k);
+    ok("(G2) …and not one of those values is in any log — the server's, its file log or the stub's",
+      valuesSeen.length === 0, valuesSeen.join(', '));
+
+    // ---- G3 · no tool the scope guard cannot see ----------------------------------------------------------------------
+    // The guard is a PreToolUse hook whose matcher names Edit|Write|MultiEdit|NotebookEdit|Bash|Read|Grep|Glob, and a
+    // built-in outside it never reaches the guard. Two such built-ins run shell commands: PowerShell, which the CLI turns on
+    // BY DEFAULT on Windows (so stripping CLAUDE_CODE_USE_POWERSHELL_TOOL alone cannot remove it) and whose Set-Content /
+    // Remove-Item acceptEdits auto-approves in the data folder; and Monitor, which "uses the same permission rules as Bash"
+    // and so ran under the execute settings' bare Bash allow. Every agent run now names both in --disallowed-tools
+    // (UnguardedTools, applied in AgentRunner — the one door every run site uses). And the switches that could add a tool
+    // are stripped from the environment, while one documented not to (native file search) still arrives.
+    const AGENT_TOOL_SWITCHES = ['CLAUDE_CODE_USE_POWERSHELL_TOOL', 'CLAUDE_CODE_USE_COWORK_PLUGINS', 'CLAUDE_CODE_USE_CCR_V2'];
+    const switchLeaks = gotAny(AGENT_TOOL_SWITCHES);
+    ok('THE POINT (G3): no claude the app spawned got a switch that could add it a tool past the guard',
+      spawns.length > 0 && switchLeaks.length === 0,
+      switchLeaks.slice(0, 3).map((s) => `${s.kind}: ${s.watched.filter((n) => AGENT_TOOL_SWITCHES.includes(n)).join(',')}`).join(' | '));
+    ok('(G3) …while the one documented to change no tool, CLAUDE_CODE_USE_NATIVE_FILE_SEARCH, still arrives — the control',
+      spawns.length > 0 && spawns.every((s) => s.watched.includes('CLAUDE_CODE_USE_NATIVE_FILE_SEARCH')),
+      JSON.stringify(spawns.map((s) => [s.kind, s.watched.includes('CLAUDE_CODE_USE_NATIVE_FILE_SEARCH')])));
+    const toolsLine = logsG.split('\n').find((l) => l.includes('Claude CLI: ignored ') && l.includes('past the scope guard')) ?? '';
+    ok('(G3) …and the startup log names those switches, once',
+      AGENT_TOOL_SWITCHES.every((n) => toolsLine.split(/[\s,]+/).includes(n)), toolsLine || '(no line)');
+    // The execute run is the one in acceptEdits, where PowerShell's writes were auto-approved: drive the plan through.
+    await cG.post(`/api/chat/${startedG.body?.id}/plan/approve`);
+    await cG.waitPhase(startedG.body?.id, 'awaiting-diff-approval');
+    const readArgsLog = () => (fs.existsSync(argsLog)
+      ? fs.readFileSync(argsLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+    const disallowedOf = (args) => {
+      const i = args.indexOf('--disallowed-tools');
+      return i >= 0 ? String(args[i + 1] ?? '').split(',') : [];
+    };
+    const agentSpawns = readArgsLog().filter((e) => e.kind === 'plan' || e.kind === 'execute');
+    const agentKinds = [...new Set(agentSpawns.map((e) => e.kind))];
+    ok('(fixture G3) the args log holds the agent turn\'s plan AND execute spawns', ['plan', 'execute'].every((k) => agentKinds.includes(k)),
+      JSON.stringify(agentKinds));
+    const unfenced = agentSpawns.filter((e) => !['PowerShell', 'Monitor'].every((t) => disallowedOf(e.args).includes(t)));
+    ok('THE POINT (G3): every agent run — plan and execute — removes PowerShell and Monitor from the CLI (--disallowed-tools)',
+      agentSpawns.length > 0 && unfenced.length === 0,
+      unfenced.slice(0, 2).map((e) => `${e.kind}: ${disallowedOf(e.args).join(',') || '(no --disallowed-tools)'}`).join(' | '));
     srv.stop(); srv = undefined;
     await new Promise((r) => setTimeout(r, 1500));
     const changedG = (() => {

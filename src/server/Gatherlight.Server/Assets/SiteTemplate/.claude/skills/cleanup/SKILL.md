@@ -42,7 +42,8 @@ Without cleanup, `cache/` grows unbounded and stale files masquerade as fresh da
 
 ### Step 1 — Inventory
 
-Glob `cache/*` and record per file: name, size, modification time.
+Glob `cache/*` and record per file: name, size, modification time. For size + mtime use
+`mcp__planner-tools__file_info` `{path}` — not `ls -l` / `stat` (there is no shell for that here).
 
 ### Step 2 — Reference check
 
@@ -85,7 +86,12 @@ Run cleanup? [yes / no / specific files only]
 
 ### Step 4 — Confirm + Execute
 
-Wait for confirmation where the thresholds require it, then delete the agreed files (deletions appear in the Gatherlight review diff like any other change to tracked paths; `cache/` itself is git-ignored so its deletions are immediate).
+Wait for confirmation where the thresholds require it, then delete the agreed files with
+`mcp__planner-tools__fs_delete` `{path}` — **never a shell `rm`** (there is no guarded shell here; `fs_delete`
+is the app-guarded replacement, scoped to the workspace). Tracked deletions appear in the Gatherlight review
+diff like any other change and commit when the user approves; `cache/` itself is git-ignored, so a `cache/`
+deletion just removes the file. To reorganise rather than remove, `mcp__planner-tools__fs_move` `{from, to}`
+renames in place (both are execute-phase tools).
 
 ### Step 5 — Report
 

@@ -18,8 +18,10 @@ public interface IToolRegistry
     /// <summary>MCP server name — the CLI sees tools as <c>mcp__{name}__{tool}</c>.</summary>
     string McpServerName { get; }
     List<ToolDefinition> List(string? surface = null);
-    /// <summary>Fully-qualified MCP tool names to pre-approve on chat runs (--allowedTools).</summary>
-    string[] McpAllowedToolNames();
+    /// <summary>Fully-qualified MCP tool names to pre-approve on chat runs (--allowedTools).
+    /// <paramref name="writable"/> false (a read-only plan run) drops the write-scoped file tools, so a real
+    /// CLI never offers them where they would be refused anyway (their own <c>IAgentRunScope</c> check).</summary>
+    string[] McpAllowedToolNames(bool writable = true);
     Task<string> RunAsync(string name, JsonElement args, string? surface, CancellationToken ct);
 }
 
@@ -86,9 +88,10 @@ public sealed class ToolRegistry : IToolRegistry
             .Select(t => new ToolDefinition(t.Name, t.Description, JsonDocument.Parse(t.InputSchema).RootElement))
             .ToList();
 
-    public string[] McpAllowedToolNames() =>
+    public string[] McpAllowedToolNames(bool writable = true) =>
         Resolve().Values
             .Where(t => SurfacesOf(t).Contains("mcp"))
+            .Where(t => writable || t is not IWriteScopedTool)
             .Select(t => $"mcp__{McpServerName}__{t.Name}")
             .ToArray();
 

@@ -268,7 +268,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 
 ## LLM / process spawning
 
-- **claude CLI only, never API keys.** Resolve the executable via `where.exe` once, preferring
+- **claude CLI only, never API keys** — enforced at spawn since round 6: the process forgets every variable that would
+  put the CLI on an API key, another provider or another endpoint (`ChildEnvironment.OffSubscriptionVariables`, under
+  *Data folder discipline*). Resolve the executable via `where.exe` once, preferring
   `.cmd`/`.exe` (the first `where` hit can be an extensionless bash shim Windows can't run).
   `ArgumentList` only — never a shell (newlines + metacharacters in prompts). Prompts over
   stdin. BOM-less UTF-8 both directions. `Kill(entireProcessTree: true)` on abort.
@@ -383,6 +385,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `DataWriteLock` is a **non-reentrant** `SemaphoreSlim(1,1)` and the seeder takes it, so the re-issue
   must sit OUTSIDE import's lock scope (holding it deadlocks the import outright); and the re-issue
   must run BEFORE the restore commit so its files land in the same commit. Proof lives in `e2e-p47`.
+  **Since the 2026-09-28 security review the scope guard is no longer one of these files**: it lives under
+  `state/agent/` (regenerated every boot, not in the archive), so no restore can roll it back at all — and the re-issue
+  DELETES a guard an older archive restores into `.claude/hooks/`, so a backup cannot leave a stale one in the jail
+  either (`p47` asserts both). The UI contract and the form maps still ride this seam.
 - **A zip cannot carry an empty directory, and a PACKED git repo has them.** `git gc` moves every ref
   into `packed-refs` and deletes the loose `refs/heads/<branch>`, leaving `refs/` empty. The export
   enumerates FILES, so `refs/` simply is not in the archive, and git then refuses to recognise the
@@ -2469,10 +2475,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
 - **Every child the app starts inherits the app's environment NARROWED, per class, in ONE helper —
   `ChildEnvironment` (`Platform/Kernel/Services`), never a copy per site.** Two mechanisms, because three spawns have no
   seam. **(1) The process forgets the launcher's context** at the top of `GatherlightApp.Build`, before anything spawns
-  (`ForgetLauncherContext`): the repository set above, and the Claude Code session it was started from
-  (`ParentSessionVariables` — `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`/`_SESSION_ID`/`_CHILD_SESSION`/`_SESSION_ATTENDED`/
-  `_MESSAGING_SOCKET`/`_MESSAGING_TOKEN`/`_EXECPATH`/`_SSE_PORT`, `CLAUDE_PID`), logging the NAMES dropped, never a value
-  (one is a token). The session markers were in the environment of every Bash command a Claude Code session ran here
+  (`ForgetLauncherContext`), four families, logging the NAMES dropped, never a value (several are credentials): the
+  repository set above; the Claude Code session it was started from (`ParentSessionVariables` — `CLAUDECODE`,
+  `CLAUDE_CODE_ENTRYPOINT`/`_SESSION_ID`/`_CHILD_SESSION`/`_SESSION_ATTENDED`/`_MESSAGING_SOCKET`/`_MESSAGING_TOKEN`/
+  `_EXECPATH`/`_SSE_PORT`, `CLAUDE_PID`, and — the security review, from the same per-session builder —
+  `CLAUDE_EFFORT`, `TRACEPARENT`/`TRACESTATE`; `AI_AGENT` stays, the CLI sets it for itself); what would take the claude
+  CLI OFF the subscription login (`OffSubscriptionVariables`, below the table); the CLI switches that could add the
+  agent a tool past the scope guard (`AgentToolVariables`, likewise); and the app's own secrets (`AppSecretVariables`,
+  likewise). The session markers were in the environment of every Bash command a Claude Code session ran here
   (2026-09-28), and the installed CLI names each: so every dev and fixture server started from one announced its agent
   to the CLI as a child of the developer's session, with that session's messaging pipe. Why the PROCESS and not the
   spawn: Lyntai's CLI runs (agent session and one-shot provider alike) go through its sealed `ProcessRunner`, whose
@@ -2486,7 +2496,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   | class | sites | narrowed to | why |
   |---|---|---|---|
   | git | `GitCliService.RunAsync` | − the repository set, + the ceiling (`ForGit`) | the bullet above |
-  | the claude CLI | Lyntai's `ProcessRunner` (chat, jobs, playground, validation; scorers, memory judge, rephrase), `ClaudeCliRuntime`'s `auth status`/`logout`, `StartLogin` | the floor only | the household's own CLI: keeps `NODE_OPTIONS`, proxies, CA files, `ANTHROPIC_*`, `CLAUDE_CODE_USE_*`, `CLAUDE_EFFORT`; `CLAUDE_CONFIG_DIR`/`CLAUDE_CMD` are the app's own |
+  | the claude CLI | Lyntai's `ProcessRunner` (chat, jobs, playground, validation; scorers, memory judge, rephrase), `ClaudeCliRuntime`'s `auth status`/`logout`, `StartLogin` | the floor only | the household's own CLI: keeps `NODE_OPTIONS`, proxies, CA files, the subscription login (`CLAUDE_CODE_OAUTH_TOKEN`) and the model settings; `CLAUDE_CONFIG_DIR`/`CLAUDE_CMD` are the app's own. Loses whatever picks another account or endpoint (below) |
   | external stdio MCP | `StdioMcpConnection.Start` | the floor only | the household's program, unsandboxed by design: its environment is theirs to configure, and the app has no policy over what it needs |
   | node leaf | `NodeLeafTool.RunAsync` (both shapes, the whole `npx tsx` tree) | − `NODE_OPTIONS`, `NODE_PATH` (`ForPlatformNode`) | code we ship: `--require` runs a file first, `--allow-*` makes a node without `--permission` refuse to start (measured, Node 24.15), and the leaf runs on one of three nodes |
   | capability sandbox | `NodeCapabilityLauncher.Build`, `CapabilityRuntime`'s probe | an ALLOW-LIST (`ForSandbox`) | the capability bullet under *Backend* |
@@ -2508,26 +2518,218 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   F and G both pass: the startup forget alone holds F. **Not driven, and why it does not need its own
   case:** the router spawn (a fake router is always ADOPTED, and the stand-in binary is `more.com`), the login window, an
   MCP server, the build gate and Playwright each inherit the one process environment case G proves clean, and none builds
-  its own. **An open question, not a decision:** `ANTHROPIC_API_KEY` is still inherited by the CLI, which in `-p` mode
-  uses a present key instead of the subscription login (the CLI's own documentation; not measured here, since measuring
-  it bills an account) — against the rule that the app never uses an API key — but
-  stripping it changes which account a household's app runs on, so it waits for the owner.
+  its own.
+  **"Never an API key" is enforced at spawn** (owner decision, 2026-09-28; the security review widened it to the family).
+  The CLI's authentication docs rank a provider switch, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` ABOVE the `/login`
+  subscription, and in `-p` mode — how the app runs it — a present key "is always used": an inherited key billed the
+  household's API account while 资源 said the CLI was signed in. `OffSubscriptionVariables`, each name checked in the
+  installed binary (2.1.283): CREDENTIALS (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, the providers' own keys
+  `ANTHROPIC_AWS_API_KEY`/`_FOUNDRY_API_KEY`/`_FOUNDRY_AUTH_TOKEN`, the federation `ANTHROPIC_IDENTITY_TOKEN`/`_FILE`,
+  `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`); SELECTORS (`CLAUDE_CODE_USE_BEDROCK`/`_VERTEX`/`_FOUNDRY` and the siblings the
+  binary names, `_ANTHROPIC_AWS`/`_ANTHROPIC_GOOGLE_CLOUD`/`_GATEWAY`/`_MANTLE`; `ANTHROPIC_PROFILE`,
+  `ANTHROPIC_FEDERATION_RULE_ID` and `ANTHROPIC_CONFIG_DIR`, which pick a Console profile or federation credential the
+  docs rank above `/login`); ENDPOINTS (`ANTHROPIC_BASE_URL`, `CLAUDE_CODE_API_BASE_URL`, every `ANTHROPIC_*_BASE_URL`
+  through `ChildEnvironment.IsOffSubscriptionVariable`, `ANTHROPIC_API_HOST`, `ANTHROPIC_UNIX_SOCKET`,
+  `ANTHROPIC_CUSTOM_HEADERS` — the review rated the base URL highest: it sends every prompt, and the household's data in
+  it, to another host). KEPT: `CLAUDE_CODE_OAUTH_TOKEN` and its refresh and descriptor siblings — `claude setup-token`'s
+  token, which the docs say "authenticates with your Claude subscription"; it outranks `/login`, so while set it picks
+  WHICH subscription, over the app's own login mode — `AWS_*`/`GOOGLE_*` (other programs read them, and without the
+  stripped switch they select nothing for the CLI), the providers' ids and the model settings. The probe (`auth
+  status`) runs in the same process environment as every CLI spawn, so it reports the account the app will use; a
+  Warning names what was ignored, once (「Claude CLI: ignored …」). What an environment strip CANNOT reach: an `env`
+  block or `apiKeyHelper` in the CLI's own settings files (the machine's `~/.claude/settings.json` in machine login
+  mode, managed settings) and an active federation profile in the default Anthropic configuration directory — the CLI's
+  configuration, read by the CLI. And since the strip is process-wide, an external MCP server that calls the Anthropic
+  API itself takes its key from its own configured `env`, applied after the inherited one.
+  **The app's own secrets are withheld from every child**: `GATHERLIGHT_ACCESS_TOKEN` and
+  `GATHERLIGHT_TLS_CERT_PASSWORD`, the two secret-bearing `GATHERLIGHT_*` the server reads (the rest are URLs, paths,
+  ports, flags and test knobs — kept; the stub and the measurement fake read their own). The agent's Bash could print
+  the access token and an external MCP server is someone else's code; no child needs it, since the agent reaches the
+  app through the loopback channel's own token. The app reads both through `ChildEnvironment.Launched`, which remembers
+  what the floor removed: the desktop host re-resolves them on every start of its in-process server (`BuildOptions` →
+  `ResolveAccessToken`), and the settings panel's `envOverrides` says which settings the environment overrides.
+  Proof: `e2e-p49` case G2, the same boot as G — a fake `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`,
+  `CLAUDE_CODE_USE_BEDROCK` and `GATHERLIGHT_ACCESS_TOKEN` reach no stub spawn, `CLAUDE_CODE_OAUTH_TOKEN` reaches every
+  one (the positive control), the Warning names the three once, the panel still lists `accessToken` as env-overridden,
+  and no value is in the server's stdout, its file log or the stub's. Confirmed to FAIL (2026-09-28, two builds, each
+  failing only its own checks): on one, the off-subscription strip removed (all three names in every spawn, no
+  Warning), the settings reader on the raw environment (`["port"]` only), `CLAUDE_EFFORT`/`TRACEPARENT` removed from
+  the session set (case G) and a secret's value logged; on the other, the secret strip removed and the OAuth token
+  over-stripped. Not driven: the host's restart path (`desktop-e2e` is out of the fleet); it reads `Launched` exactly as
+  the settings panel does, which is asserted.
+  **The CLI's feature switches, as a jail question** (the security review, 2026-09-28; `AgentToolVariables`). Each
+  non-account `CLAUDE_CODE_USE_*` the binary names was checked for whether it adds or replaces a tool, or changes how
+  file access is mediated: `_POWERSHELL_TOOL` STRIPPED (it turns on a shell tool the guard's matcher does not list —
+  but see the jail bullet below: on Windows that tool is on by DEFAULT, so the strip is not what closes it);
+  `_COWORK_PLUGINS` STRIPPED (undocumented — none of the CLI's 210 documentation pages names it — and by its name it
+  loads another product's plugins, which contribute MCP servers, hooks that run outside the permission checks, skills
+  and subagents); `_CCR_V2` STRIPPED, failing closed (undocumented; by its name the protocol of remote sessions another
+  client drives, which a local `-p` run never uses — stripped because nothing shows it leaves the tool set alone, not
+  because it was measured to add one); `_NATIVE_FILE_SEARCH` KEPT (documented: it discovers custom commands, subagents
+  and output styles with Node.js file APIs instead of ripgrep, and "does not affect the Grep or file search tools").
+  A Warning names what was ignored. Proof: `e2e-p49` case G3 — the three injected switches reach no stub spawn,
+  `_NATIVE_FILE_SEARCH` reaches every one (the control), the Warning names the three; confirmed to FAIL with the strip
+  removed.
 - The spawned agent is **jailed** by the PreToolUse scope-guard hook
   (`ChatEnvironmentService.ScopeGuardMjs` planner / `guard/system-scope-guard.mjs`
   系统模式 — identical logic, different write-scope; `e2e-p24` runs both): **reads**
-  (Read/Grep/Glob) confined to the jail, **writes** (Edit/Write/…) to `plans/ household/ .claude/`
-  (planner) or the **whole code repo except the PROTECTED set** — `guard/`, `src/server`,
-  `.claude/settings*.json`, `.git` — (系统模式). Each guard combines an allow-list (`WRITE_DIRS`)
-  with a `PROTECTED` deny-list that overrides it (the planner protects `.claude/hooks` + settings so
-  the agent can't neuter its own guard). **Bash** denied git-history / network-egress / inline-eval
-  (`node -e`, `python -c`) / fs-crawl / path-escape. Anything genuinely **out-of-boundary must
-  route through a server MCP tool** — mediated + auditable — never raw Bash. Enforcement, not
-  trust. The guard carries a `GUARD_VERSION`; the server re-issues it into existing data folders
-  when it bumps (it's a security boundary, not editable KB content). The `guard/` folder is
-  app-managed (shipped + overlaid by updates), read-only to the agent. Residuals the hook can't
+  (Read/Grep/Glob) confined to the jail and NEVER `state/` (token / TLS key / DB), **writes**
+  (Edit/Write/…) to `plans/ household/ .claude/ ui/` except the PROTECTED set — `.claude/hooks`,
+  `.claude/settings*.json`, `.mcp.json` (planner) — or the **whole code repo except the PROTECTED set**
+  — `guard/`, `src/server`, `.claude/settings*.json`, `.mcp.json`, `.git` — (系统模式). Each guard
+  combines an allow-list (`WRITE_DIRS`) with a `PROTECTED` deny-list that overrides it (so the agent
+  can't neuter its own guard, settings or MCP config). **Bash** denied git-history / network-egress /
+  inline-eval (`node -e`, `python -c`) / fs-crawl / path-escape / shell-launch / and any path-token
+  resolving into `state/` or a PROTECTED path (`BASH_PROTECTED`, best-effort — the three-legs bullet
+  below). Anything genuinely **out-of-boundary must route through a server MCP tool** — mediated +
+  auditable — never raw Bash. Enforcement, not trust. The guard carries a `GUARD_VERSION` (10 planner /
+  8 system); the PLANNER guard lives at `state/agent/scope-guard.mjs` (app state inside the data folder,
+  carved out of the guard's checks, regenerated every boot), so a bump reaches an old data folder on its
+  next boot without a version-gated re-issue and a backup cannot roll it back (`state/` is not carried). The `guard/` folder (system guard)
+  is app-managed (shipped + overlaid by updates), read-only to the agent. Residuals the hook can't
   close (code run *inside* an agent-authored script; exfil via a fetched URL) need an OS sandbox —
   **declined**, and the reasoning is on the record in `docs/ROADMAP.md`: the `claude` CLI authenticates
   per-user, so a low-privilege service account breaks the mechanism the whole product rests on.
+  **A built-in the matcher does not name never reaches the guard — and two such built-ins run shell commands, so every
+  agent run REMOVES them** (`UnguardedTools`, applied in `AgentRunner.RunAsync`, the one door every run site uses:
+  chat plan/execute/revise/repair, jobs, the playground, validation, `extract` and the migrator; it becomes
+  `--disallowed-tools`, which "removes the matching tools from Claude's context", and subagents inherit only what the
+  main conversation has). Found 2026-09-28 from the CLI's tools reference, permission-modes and headless docs, not
+  measured on a real CLI (that would need a signed-in model call): **`PowerShell` is on by DEFAULT on Windows** —
+  "enabled automatically" without Git Bash, "on by default for claude.ai and Console accounts" with it — and in the
+  execute runs' `acceptEdits` mode the CLI auto-approves its `Set-Content`/`Add-Content`/`Clear-Content`/
+  `Remove-Item` on every path in the data folder but its own protected `.git`/`.claude`, so `state/`, `site.json`
+  and `uploads/` were writable and deletable with no prompt and no guard; and **`Monitor`** "uses the same permission
+  rules as Bash", so the execute settings' bare `Bash` allow pre-approved any background command, which the guard's Bash
+  checks (egress, inline eval, git history, path escape) never saw. The planner needs neither. What the docs say of the
+  rest: a tool that needs a permission and is not allowed is REFUSED in a `-p` run with no permission host, so it cannot
+  run (`Artifact`, `Workflow`, `EnterWorktree`…); `Agent` is guarded, since hooks fire for a subagent's tool calls;
+  `LSP` is inactive until a code-intelligence plugin is installed; `SendUserFile`, `RemoteTrigger`, `CronCreate` and
+  `ReadMcpResourceTool` need no permission but reach the household's own account, session or MCP servers, not a path
+  past the jail. **Plan (read-only) runs are CONFINED, not merely write-disallowed** (since 2026-09-28): they now pass a
+  generated read-only settings file (`ChatEnvironmentService.ReadOnlySettingsPath` / `SystemReadOnlySettingsPath`) that
+  sets `permissions.blockReadsOutsideWorkingDirectories` — the CLI v2.1.257+ fence that makes the file tools AND
+  recognized read-only Bash file-commands (cat, head) refuse a path outside the working directory in every mode — and
+  registers the SAME guard hook, so a plan-phase Bash is checked for egress / inline-eval / shell-launch too.
+  **And Bash is REMOVED OUTRIGHT from every read-only run** (`UnguardedTools`, keyed on `ToolPolicy.ReadOnly` in
+  `AgentRunner`): a plan writes nothing, so Bash's only use was reads (which the fence confines), while a read-only Bash
+  could still run inline eval or launch a shell — so plan, revise, read-only jobs, the playground, `extract`, `validate`
+  and the migrator all lose it, AND the read-only `--settings` allow-list drops it (belt-and-suspenders, and the reason a
+  no-settings site like `extract` is still covered — the removal is central). The plan run previously PRE-APPROVED Bash,
+  the security review's regression. `defaultMode` is `default`, not acceptEdits (a plan writes nothing). Read-only JOBS
+  now also pass `ReadOnlySettingsPath` (fence + guard) since they run in the data folder; the playground/extract/validate
+  keep "no Bash" only (a neutral cwd / dev tool — an unfenced read is a stated residual there). `e2e-p54` asserts the
+  plan spawn carries the read-only settings AND disallows Bash AND the allow-list omits it, confirmed to FAIL with the
+  plan run's SettingsPath removed. **Still: Lyntai's one-shot calls**
+  (scorers, the memory judge, rephrasing) run with the CLI's default tool set minus `AskUserQuestion` from a neutral cwd
+  (`ClaudeArgs`), with no seam for the app to narrow them — read-only commands and permission-free tools are available
+  there, nothing that needs approval is; closing that is Lyntai's `TASKS.md` Part 330 (the reciprocal of the D190
+  per-consumer tool host), and when it ships the adopter drops its own `PowerShell`/`Monitor` removal for the library
+  seam. Proof: `e2e-p49` case G3 reads the stub's argv: the plan and the execute run each name `PowerShell` and `Monitor`
+  in `--disallowed-tools`; confirmed to FAIL with the `AgentRunner` line removed.
+- **Bash cannot launch ANOTHER shell or interpreter** (`GUARD_VERSION` 10 planner / 8 system, hardened by the
+  2026-09-28 security review and its re-review). A built-in the matcher does not see is one door past the guard; launching `powershell` / `pwsh` /
+  `cmd` / `wscript` / `cscript` / `mshta` / a nested `bash`|`sh` / `source` / `.` / `wsl` / `rundll32` / `regsvr32` — or
+  `Start-Process`, or `git -c` of a command-running key (`alias.*=!…`, `core.pager`/`editor`/`sshCommand`, a
+  `credential`/`filter` helper) — from inside Bash is another, because whatever runs in the child never reaches the
+  guard's Bash checks. Both guards deny the launch itself, whatever its arguments, matched against each pipeline
+  segment's COMMAND WORD: the leading token PAST any wrapper (`env`/`command`/`exec`/`sudo`/`nice`/`nohup`/`time`/
+  `xargs`/`timeout`/`stdbuf`/`ionice`/`chrt`/`setarch`/…) and any `VAR=value` prefix, path and `.exe` stripped — so a
+  shell NAME used as an argument (`command -v sh`) is not caught, but `env powershell`, `FOO=1 bash x`, `xargs sh`,
+  `{ sh x; }`, `` `sh x` ``, `sh<x` and `git -c core.pager=powershell log` are. Segments split on
+  `; | & \n ( ) { } \` < >`. **A wrapper's OWN arguments precede the command it runs** (the re-review's finding:
+  `timeout 5 bash x`, `nice -n 10 bash x`, `stdbuf -oL bash x`, `ionice -c2 …`, `chrt 10 …` and `setarch x86_64 …` were
+  all ALLOWED, because the word after the wrapper was its argument, not the command), so past a wrapper the guard skips
+  its options, the value of each option that takes one (`WRAPPER_VALUE_OPTS`: `-n 10`, `-u root`, `-s KILL`), numeric
+  durations and priorities, and `setarch`'s one positional; `env -S` is deliberately not a value option, since its value
+  IS a command line, and `command -v`/`-V` only describe a command, so they yield no command word. **This is
+  BEST-EFFORT defence in depth** — leg (3) of the guard's integrity (the next bullet): a token scan is fooled by a
+  variable, a `$(…)` or a constructed string, and a VARIABLE command word (`x=sh; $x plans/y.sh`) is ALLOWED — `e2e-p24`
+  pins that as a known allow with a comment, so a change to it is deliberate. The closure that does not depend on
+  parsing is PowerShell/Monitor removed from every run; "code inside an agent-authored script" stays the residual.
+  `e2e-p24` runs the full battery on both guards with positive controls (`ls`/`mv`/`node x.mjs`/`command -v sh`/
+  `timeout 5 node x` stay allowed); every deny case confirmed non-vacuous against the guard before it (the wrapper
+  forms: 14 of them, against `81d082b`'s guards).
+- **The guard's integrity rests on THREE LEGS, and only one of them is solid** (2026-09-28 security review; corrected
+  by its re-review, which caught an earlier version of this bullet calling the placement "structural"). `state/` is
+  still INSIDE the data folder: it is carved out of the guard's CHECKS, not out of the filesystem. The legs:
+  **Edit/Write/Read/Grep/Glob cannot reach `state/`** — solid, because every such call passes through the guard;
+  **the Bash path-token scan** refuses a token naming it — best effort; **no nested shell** — best effort. A
+  constructed token (`$PWD/state/agent/scope-guard.mjs`, a variable, a `$(…)`) or a nested shell that slips past the
+  last two can OVERWRITE the guard file and neuter it for the rest of the session (the next boot regenerates it), and
+  can READ `state/` — the database, the TLS key — in an EXECUTE run where a Bash exists (Git Bash present; a plan run
+  has no Bash at all, and a household with no Git Bash has none in any run). Both fall inside the declared residual
+  "code inside an agent-authored script needs an OS sandbox", which was declined (`docs/ROADMAP.md`). What changed:
+  **(1) The planner guard moved out of the data repo.** It moved from `.claude/hooks/scope-guard.mjs` (tracked, in a
+  directory Edit was PROTECTED from and Bash was not checked for at all) to `state/agent/scope-guard.mjs`: app state,
+  gitignored, backup-excluded, regenerated every boot like the settings files, referenced by ABSOLUTE path from the
+  generated `--settings`. So a backup cannot roll it back, a direct Bash token naming it is refused, and a guard neutered
+  mid-session is restored at the next boot. `ChatEnvironmentService.EnsureFiles` writes it and DELETES the old in-repo
+  copy (`RemoveLegacyGuard`, returning its path so the deletion commits out of the audit trail). The generated
+  `--settings` files already lived in `state/`. The system guard stays in `guard/` (app-managed, shipped + overlaid by
+  updates) — Edit-protected, and now Bash-protected on the same best-effort terms. A truly-external dir (`%LOCALAPPDATA%`)
+  was DECLINED: a per-site guard needs a writable per-data-folder home, and moving it further would not change which
+  legs its integrity stands on — only an OS sandbox would.
+  **(2) `state/` is out of the READ jail and the Bash token scan** (planner `READ_DENY`). Read/Grep/Glob naming `state/`
+  — and a Glob `pattern` / Grep `glob` whose literal head is `state/` — are denied (a recursive `**` head is a stated
+  residual). `state/` holds the access token, the TLS pfx and the database. A constructed Bash token still reads it
+  (the residual above).
+  **(3) Bash writes are WRITE-scoped, not just jail-scoped** (`BASH_PROTECTED`). A `cp`/`echo >`/`rm`/`tee`/`cat` naming
+  the guard, `.claude/settings*.json`, `.mcp.json`, `site.json`, `.git`, `src/server`/`guard` (system) — or `state/` — is
+  denied by resolving EVERY path-like token against the root (a bare `site.json`/`.mcp.json` has no slash but is a
+  data-root path). Best-effort — leg (2) — stated as such in the guard and here.
+  **(4) The `--settings` carry `disableAllHooks: false`, the hot-reload finding.** Measured at 0 tokens against the real
+  CLI 2.1.283: a `-p` run DOES execute the project's `.claude/settings.json` hooks, and a project `{"disableAllHooks":
+  true}` disables our flag-level hooks — but a command-line `--settings` `disableAllHooks:false` wins over it (settings
+  precedence: managed > command-line > local > project > user). So a settings FILE cannot disable our hook, and
+  `.claude/settings*.json`/`.mcp.json` are protected from Edit/Write (solid) and from a direct Bash token (best effort).
+  What `disableAllHooks:false` does NOT cover is the hook's own script: overwrite `state/agent/scope-guard.mjs` through
+  the residual above and the hook still fires — running the neutered file. A `ConfigChange` hook to block
+  project-settings changes was considered and NOT shipped: the mechanism was inconclusive at 0 tokens, and it adds
+  nothing over the two protections above.
+  **(5) C2/C3 normalization** — both guards' `norm()` strips trailing dots/spaces per segment (Windows folds them, so
+  `.claude/settings.json.` and `.claude/hooks./guard` name the protected file) and the JS already lowercases (case);
+  and `oddSegment` REFUSES outright a path segment carrying an 8.3 short name (`~` + digit — `STATE~1`, `SETTIN~1.JSO`
+  name state/ and the settings), an alternate data stream (a colon past the drive letter) or a device name, for
+  Read/Grep/Glob and Edit/Write, and — short names and streams only — for a PATH-LIKE Bash token (one with a slash, so
+  `git log HEAD~1`, `git show HEAD~2:plans/x.md` (a `rev:path` is split at its colon) and `echo a:b` stay allowed).
+  `SiteWriteScope.Resolve` (the fs tools' write scope) normalizes each segment the same way, folds case
+  (`OrdinalIgnoreCase`, was `Ordinal`), REJECTS a colon (ADS / drive-relative), an 8.3 short name (`~`) and a device
+  name (`CON`/`NUL`/`COM1`…) — so `plans/x.md:evil` is a clean refusal, not a 500 out of `ResolveSitePath` — and then
+  re-checks PROTECTED against the GetFullPath-RESOLVED relative path, so anything Windows folds that the segment rules
+  miss still names the protected file. `.mcp.json` is PROTECTED because a `-p` run CONNECTS a project `.mcp.json`'s
+  servers even untrusted (measured, 0 tokens) — a stdio server there is a command the CLI starts. Proof: `e2e-p24`
+  (both guards: C1 Bash-protected/state, C2 trailing-dot, C4, with positive controls, every deny non-vacuous), `e2e-p54`
+  (`fs_move` to a trailing-dot / case-folded / ADS-colon target refused), `e2e-p42`/`e2e-p37` (the guard at
+  `state/agent/`, `GUARD_VERSION 10`), `e2e-p47` (a backup can no longer plant a weakened guard nor leave one in the jail).
+- **The agent MOVES, RENAMES and DELETES files through scoped MCP tools, never a shell** (`fs_move` · `fs_delete` ·
+  `file_info`, `Platform/Capabilities/Tools/Services/Tools/FileOpsTools`). A tool beats a shell for this: its scope is
+  the guard's own write scope (`ISiteWriteScope`, rendered from the site manifest — one source of truth with the guard),
+  every call is audited (`AgentRunner.ToolDetail`), and the change lands at the diff gate (`AgentRunner` records the
+  touched paths into the run's `EditTracker`; the tools do NOT commit). The mutating two run in EXECUTE runs only —
+  `IAgentRunScope` (entered by `AgentRunner` per run, the server-side gate a fake CLI cannot bypass) refuses them in a
+  read-only plan run, and `ToolRegistry.McpAllowedToolNames(writable:false)` drops them from a plan run's allow-list.
+  `file_info` (size + mtime) is read-only, any path in the read jail — so `/cleanup` needs no `ls -l`. `e2e-p54` drives
+  both phases, the path guard and the overwrite refusal; confirmed to FAIL (7 assertions) with the run-scope forced
+  writable.
+- **A guarded Bash is GUARANTEED where the household wants one — offered, never forced.** With PowerShell and Monitor
+  removed, a household with no Git Bash has no shell; the file tools are the substitute, and 资源 OFFERS PortableGit as a
+  Git Bash the app can guard. MinGit — what the data repo runs on — ships NO `bash.exe` and cannot back the CLI's Bash
+  tool (measured, `docs/self-managed-llm-runtime.md`: MinGit's `sh.exe` as `CLAUDE_CODE_GIT_BASH_PATH` ran no command;
+  PortableGit's `bin\bash.exe` ran and beat WSL's on PATH), so it is a SEPARATE, sha256-pinned, opt-in resource
+  (`ResourceProvisioner` id `git-bash`, a 7-Zip self-extractor). `ClaudeCliRuntime.Apply` sets the variable only when the
+  CLI would find no Git Bash on its own (no household variable, nothing at `C:\Program Files\Git` / `(x86)`, no `git` on
+  PATH → `..\..\bin\bash.exe`) and our PortableGit is installed — re-applied per probe (a mid-life install is adopted
+  with no restart), never overruling the household's own or a discovered Git for Windows. **The discovery does NOT spawn
+  a process**: `GitBashDiscoverable` ran `where.exe git` (up to 3 s) on every `Apply` probe and every 资源 render — the
+  "a panel must not await a process" trap — so it now SCANS the PATH directories itself (skipping a git shim inside
+  `node_modules`/a virtualenv) and CACHES the deterministic filesystem result; the `GATHERLIGHT_ASSUME_NO_GIT_BASH` test
+  seam is read UNCACHED, before the cache. **Household text names no `PowerShell` removal and no `判断`** (both dev-facing
+  facts a household never saw): the not-installed `AgentShellDetail` reads 「规划助手默认没有可用的命令行…」 and the git-bash
+  row's `NeededFor` drops both. The data repo stays on MinGit (owner decision). `e2e-p55` (the
+  `GATHERLIGHT_ASSUME_NO_GIT_BASH` seam) asserts the offer shows only when no Git Bash is discoverable, the mid-life
+  adopt, the household's variable winning, and that the row names no `PowerShell`/`判断`; confirmed to FAIL (the adopt)
+  without the `ApplyGitBash` call.
 - **Egress is audited, not closed — and both planes are audited the same.** The agent reaches the
   network two ways: the CLI's built-in `WebFetch` and the registry's `scrape`. Neither can be shut for
   a planner whose job is reading arbitrary travel sites, and denying `WebFetch` alone only moves the
@@ -2558,6 +2760,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   condition and the new band can be reserved next reboot; the fix is that `dev.mjs e2e` now prints the
   fixture's last `[ERROR]` line beside a failure, because that log is CLOBBERED by the next run of the
   suite and this is the only moment it is still true. If it recurs: check the excluded ranges first.
+  **And when moving ports out of a reserved range, avoid the WHATWG fetch "bad ports"** (6000, 6566, 6665–6669, 6697,
+  10080 among them): Node's `fetch` refuses them client-side (`fetch failed` / `bad port`), so `waitHealthy` polls a
+  server that IS up until its 180 s ceiling and reports `fatal: timeout`. It cost a wrong "environmental" verdict on
+  `p16` (2026-09-28): a +600 shift mapped its 5400 to 6000; +700/+900 pass.
 - **A UI HARNESS MUST RETRY THE ACTION, not only poll the result.** `desktop-e2e` polled for the view
   after clicking a tab ONCE — and a click dispatched before React has wired the handler is swallowed
   silently, so no amount of waiting produces the view. That flapped run to run and reads as "the Cortex

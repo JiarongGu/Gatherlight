@@ -31,9 +31,11 @@ public static class GatherlightApp
         options ??= new GatherlightServerOptions();
 
         // FIRST, before anything can spawn: this process forgets the repository and the Claude Code session it was
-        // LAUNCHED in (a `git bisect run`'s GIT_DIR, a developer session's CLAUDECODE and messaging pipe), so no child
-        // inherits them — including the three spawns with no seam of their own (Lyntai's CLI runs, the ShellExecute
-        // login, Playwright's driver). Each class of child is narrowed further at its own spawn. See ChildEnvironment.
+        // LAUNCHED in (a `git bisect run`'s GIT_DIR, a developer session's CLAUDECODE and messaging pipe), whatever would
+        // take the claude CLI off the subscription login (an API key, a provider switch, another endpoint), and the app's
+        // own secrets (read from here on through ChildEnvironment.Launched) — so no child inherits them, including the
+        // three spawns with no seam of their own (Lyntai's CLI runs, the ShellExecute login, Playwright's driver). Each
+        // class of child is narrowed further at its own spawn. See ChildEnvironment.
         var forgotten = Platform.Kernel.Services.ChildEnvironment.ForgetLauncherContext();
 
         // Bridge the CLI stub override to Lyntai's ClaudeCli provider: the native runner reads
@@ -431,6 +433,7 @@ public static class GatherlightApp
             // AddSingleton after AddLyntai wins over its TryAdd SqliteKeyValueStore.
             .AddSingleton<Lyntai.Storage.IKeyValueStore, Platform.Ops.Cortex.Services.AppConfigKeyValueStore>()
             // App-side adapter over Lyntai's IAgentSession — the two-gate / jobs / playground run through this.
+            .AddSingleton<IAgentRunScope, AgentRunScope>()
             .AddSingleton<IAgentRunner, AgentRunner>()
             // Resolves + inspects the claude CLI itself (present? runnable? signed in?). The CLI used to be
             // an ASSUMED machine dependency: absent on a fresh install, it died at spawn and surfaced as a
@@ -475,6 +478,12 @@ public static class GatherlightApp
             .AddSingleton<IGatherlightTool, ExtractTool>()
             .AddSingleton<IGatherlightTool, WebFetchTool>()   // registers as "scrape" (Playwright-native)
             .AddSingleton<IGatherlightTool, WikiInfoTool>()
+            // Scoped file tools: move/rename + delete within the guard's write scope (execute runs only),
+            // and a read-only size/mtime probe. The write scope is the site manifest's, shared with the guard.
+            .AddSingleton<Platform.Site.Services.ISiteWriteScope, Platform.Site.Services.SiteWriteScope>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Tools.Services.Tools.FsMoveTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Tools.Services.Tools.FsDeleteTool>()
+            .AddSingleton<IGatherlightTool, Platform.Capabilities.Tools.Services.Tools.FsInfoTool>()
             // Native C#/Playwright scraper ports (the Node puppeteer leaves are all gone)
             .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.FlightScheduleScraperTool>()
             .AddSingleton<IGatherlightTool, Product.Planner.Scrapers.Tools.PolicyCheckScraperTool>()
@@ -740,11 +749,28 @@ public static class GatherlightApp
             logLevel, options.DataPath, options.BindAddress, options.Port, logsDir);
 
         // Names only: one of these is a session's messaging TOKEN, and none of their values belongs in a log.
-        if (forgotten.Count > 0)
+        if (forgotten.LauncherContext.Count > 0)
             app.Logger.LogInformation(
                 "Child environment: dropped {Names} — inherited from whatever launched the app, and no child of it may use them "
                 + "(a repository named by the launcher's git, or the Claude Code session it was started from)",
-                string.Join(", ", forgotten));
+                string.Join(", ", forgotten.LauncherContext));
+        // A Warning, once: the household set these for a reason, and the app now ignores them — which can change the
+        // account their CLI runs on, and is the one line that says why the CLI reads as signed out when it did not before.
+        if (forgotten.OffSubscription.Count > 0)
+            app.Logger.LogWarning(
+                "Claude CLI: ignored {Names} from the environment the app was started with — the app uses the CLI's subscription "
+                + "login only, never an API key, another provider or another endpoint; no claude it starts sees them, and its "
+                + "sign-in state is probed without them",
+                string.Join(", ", forgotten.OffSubscription));
+        if (forgotten.AgentTools.Count > 0)
+            app.Logger.LogWarning(
+                "Claude CLI: ignored {Names} from the environment the app was started with — each can add the agent a tool, or "
+                + "change how one is mediated, past the scope guard; the agent's tools are the ones the app configures",
+                string.Join(", ", forgotten.AgentTools));
+        if (forgotten.AppSecrets.Count > 0)
+            app.Logger.LogInformation(
+                "Child environment: {Names} kept for the app's own use and withheld from every process it starts",
+                string.Join(", ", forgotten.AppSecrets));
 
         // Loud, once-at-startup warning when the LAN opt-in is exposing the app unauthenticated.
         if (openBind && options.AllowLanWithoutToken)

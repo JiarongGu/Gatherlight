@@ -41,14 +41,30 @@ const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =
 });
 const sources = fs.existsSync(serverDir) ? walk(serverDir) : [];
 
+// Resolve a `const string MEMBER = "value"` (e.g. AgentFileTools.Move) anywhere in the tree — so a tool
+// whose Name is a shared constant (one source of truth, also read by AgentRunner) is not forced to
+// duplicate the literal just to satisfy this check.
+const constValue = (member) => {
+  const re = new RegExp(`\\bconst\\s+string\\s+${member}\\s*=\\s*"([^"]+)"`);
+  for (const f of sources) {
+    const m = re.exec(fs.readFileSync(f, 'utf8'));
+    if (m) return m[1];
+  }
+  return null;
+};
+
 const nameOf = (cls) => {
   for (const f of sources) {
     const body = fs.readFileSync(f, 'utf8');
     const at = body.indexOf(`class ${cls}`);
     if (at === -1) continue;
     // `override`/`virtual` because the document tools declare Name on a shared base.
-    const m = /public\s+(?:override\s+|virtual\s+)?string\s+Name\s*=>\s*"([^"]+)"/.exec(body.slice(at));
-    if (m) return m[1];
+    const slice = body.slice(at);
+    const lit = /public\s+(?:override\s+|virtual\s+)?string\s+Name\s*=>\s*"([^"]+)"/.exec(slice);
+    if (lit) return lit[1];
+    // Name may be a shared constant: `Name => AgentFileTools.Move;`
+    const cref = /public\s+(?:override\s+|virtual\s+)?string\s+Name\s*=>\s*[A-Za-z_][A-Za-z0-9_.]*\.([A-Za-z_][A-Za-z0-9_]*)\s*;/.exec(slice);
+    if (cref) { const v = constValue(cref[1]); if (v) return v; }
   }
   return null;
 };

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Security.Cryptography;
@@ -25,6 +26,11 @@ public enum ResourceKind
     /// external weights only loads when the <c>.onnx_data</c> sits exactly beside its <c>.onnx</c>, and
     /// "download these three URLs somewhere" cannot promise that.</para></summary>
     Files,
+    /// <summary>A 7-Zip self-extracting <c>.exe</c> (PortableGit): downloaded + sha256-verified, run with
+    /// <c>-o&lt;dir&gt; -y</c> to extract, then its own <c>post-install.bat</c> (required — Git will not run
+    /// otherwise), then moved into the install dir. Running a downloaded exe is the same trust model as the
+    /// claude CLI: the sha256 guarantees the bytes.</summary>
+    SelfExtractExe,
 }
 
 /// <summary>One file of a <see cref="ResourceKind.Files"/> resource.</summary>
@@ -159,6 +165,16 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     private static string GitUrl =>
         Override("GATHERLIGHT_GIT_URL")   // the pin still applies: a mirror serves the same file
         ?? $"https://github.com/git-for-windows/git/releases/download/{GitTag}/MinGit-{GitVersion}-64-bit.zip";
+
+    // PortableGit — the FULL Git for Windows, OFFERED (never auto-downloaded) so the agent has a Git Bash the
+    // app can guard. MinGit (above), which the data repo runs on, ships NO bash.exe and cannot back the CLI's
+    // Bash tool (measured, docs/self-managed-llm-runtime.md), so a Git Bash is a SEPARATE, opt-in resource.
+    // Same tag/version as MinGit (one Git for Windows release), its own sha256 over the .7z self-extractor.
+    // Bump version, tag and checksum together. build-production.mjs can read these for an --offline bundle.
+    private const string PortableGitSha256 = "b20d42da3afa228e9fa6174480de820282667e799440d655e308f700dfa0d0df";
+    private static string PortableGitUrl =>
+        Override("GATHERLIGHT_GIT_BASH_URL")
+        ?? $"https://github.com/git-for-windows/git/releases/download/{GitTag}/PortableGit-{GitVersion}-64-bit.7z.exe";
 
     // What the bundle contains (content/<Archive> inside the .nupkg) and where each part unpacks under
     // the resources root — the exact dirs the runtime resolvers look in (PlaywrightHost → .playwright +
@@ -377,6 +393,16 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             ApproxBytes: 38_839_825,
             Url: GitUrl,
             Sha256: GitSha256),
+        new ResourceSpec(
+            Id: "git-bash", Name: $"命令行(Git Bash · {GitVersion})",
+            // Says WHY, the size, and what the agent can do without it — the row is the whole offer.
+            NeededFor: "让规划助手有一个应用能把关的命令行(移动/整理文件、跑技能脚本)。"
+                + "系统未装 Git for Windows 时才需要;约 59MB 下载、约 385MB 安装。"
+                + "没有它,助手仍可用文件工具(移动/重命名/删除、看大小)和读取/搜索。",
+            Kind: ResourceKind.SelfExtractExe, InstallDir: "git-bash", ReadyMarker: "bin/bash.exe",
+            ApproxBytes: 59_005_448,
+            Url: PortableGitUrl,
+            Sha256: PortableGitSha256),
         new ResourceSpec(
             Id: "node", Name: $"Node 运行时({NodeVersion})",
             NeededFor: "自定义能力的沙箱 —— 没有它,脚本能力会拒绝运行",
@@ -694,6 +720,7 @@ public sealed class ResourceProvisioner : IResourceProvisioner
                 case ResourceKind.Bundle: await ProvisionBundleAsync(spec, p); break;
                 case ResourceKind.ClaudeCli: await ProvisionClaudeAsync(spec, p); break;
                 case ResourceKind.Files: await ProvisionFilesAsync(spec, p); break;
+                case ResourceKind.SelfExtractExe: await ProvisionSelfExtractAsync(spec, p); break;
                 default: await ProvisionZipAsync(spec, p); break;
             }
             Set(p, "ready", 100, "已就绪");
@@ -799,6 +826,74 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             try { if (File.Exists(zip)) File.Delete(zip); } catch { /* best-effort */ }
             try { if (Directory.Exists(extract)) Directory.Delete(extract, true); } catch { /* best-effort */ }
         }
+    }
+
+    // ---- A 7-Zip self-extracting .exe (PortableGit): download → verify → extract → post-install → move ----
+    private async Task ProvisionSelfExtractAsync(ResourceSpec spec, Prog p)
+    {
+        if (string.IsNullOrEmpty(spec.Url)) throw new InvalidOperationException("no download url");
+        var staging = Path.Combine(_data.ResourcesPath, ".staging");
+        Directory.CreateDirectory(staging);
+        var sfx = Path.Combine(staging, spec.Id + ".7z.exe");
+        var extract = Path.Combine(staging, spec.Id);
+        try
+        {
+            Set(p, "running", 0, "下载中…(约 59MB)");
+            await DownloadAsync(spec.Url, sfx, pct => Set(p, "running", (int)(pct * 0.70), "下载中…"), CapFor(spec));
+
+            if (!string.IsNullOrEmpty(spec.Sha256))
+            {
+                Set(p, "running", 74, "校验中…");
+                var actual = await Sha256Async(sfx);
+                if (!string.Equals(actual, spec.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"sha256 不匹配(期望 {spec.Sha256[..8]}…)");
+            }
+
+            Set(p, "running", 78, "解压中…");
+            if (Directory.Exists(extract)) Directory.Delete(extract, true);
+            Directory.CreateDirectory(extract);
+            // The 7-Zip SFX extracts silently with -o<dir> -y. The sha256 above is why running a downloaded
+            // exe is acceptable — the same trust model as the claude CLI.
+            var ex = await RunAsync(sfx, [$"-o{extract}", "-y"], staging, TimeSpan.FromMinutes(5));
+            if (ex != 0) throw new InvalidOperationException($"自解压失败(exit {ex})");
+
+            // post-install.bat is REQUIRED (README.portable: "Git will not run correctly otherwise"): it
+            // creates /etc/{mtab,hosts,…} and self-deletes. exit 1 is normal (rebaseall returns nonzero),
+            // so the ready-marker check below — not the exit code — is the gate.
+            var postInstall = Path.Combine(extract, "post-install.bat");
+            if (File.Exists(postInstall))
+            {
+                Set(p, "running", 90, "初始化中…");
+                var cmd = Path.Combine(Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows", "System32", "cmd.exe");
+                await RunAsync(cmd, ["/d", "/c", postInstall], extract, TimeSpan.FromMinutes(5));
+            }
+
+            var readyAbs = Path.Combine(extract, spec.ReadyMarker.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(readyAbs)) throw new InvalidOperationException($"解压后未找到 {spec.ReadyMarker}");
+
+            Set(p, "running", 97, "安装中…");
+            var dest = InstallPath(spec);
+            if (Directory.Exists(dest)) Directory.Delete(dest, true);
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            Directory.Move(extract, dest);
+        }
+        finally
+        {
+            try { if (File.Exists(sfx)) File.Delete(sfx); } catch { /* best-effort */ }
+            try { if (Directory.Exists(extract)) Directory.Delete(extract, true); } catch { /* best-effort */ }
+        }
+    }
+
+    /// <summary>Run a provisioning helper process to completion; returns its exit code (or throws on timeout).</summary>
+    private static async Task<int> RunAsync(string exe, string[] args, string workingDir, TimeSpan timeout)
+    {
+        var psi = new ProcessStartInfo(exe) { WorkingDirectory = workingDir, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException($"无法启动 {Path.GetFileName(exe)}");
+        using var cts = new CancellationTokenSource(timeout);
+        try { await proc.WaitForExitAsync(cts.Token); }
+        catch (OperationCanceledException) { try { proc.Kill(entireProcessTree: true); } catch { } throw new InvalidOperationException($"{Path.GetFileName(exe)} 超时"); }
+        return proc.ExitCode;
     }
 
     // ---- Loose files: N urls, each verified, all staged, then moved in as one directory ----

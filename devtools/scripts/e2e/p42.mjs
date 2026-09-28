@@ -22,7 +22,8 @@ const { j, post } = makeClient(base);
 
 // Ask the generated scope guard whether a write would be allowed. Mirrors p24's invocation: run the
 // hook with a PreToolUse payload on stdin and read its decision.
-const guardPath = path.join(dataDir, '.claude', 'hooks', 'scope-guard.mjs');
+// The planner guard lives under state/agent/ (app state, outside the jail) since the 2026-09-28 security review.
+const guardPath = path.join(dataDir, 'state', 'agent', 'scope-guard.mjs');
 const wouldAllow = (relPath) => {
   const payload = JSON.stringify({
     hook_event_name: 'PreToolUse', tool_name: 'Write',
@@ -36,9 +37,9 @@ const wouldAllow = (relPath) => {
 try {
   await waitHealthy(base);
 
-  ok('the guard was issued into the data folder', fs.existsSync(guardPath));
+  ok('the guard was issued under state/agent/ (outside the jail)', fs.existsSync(guardPath));
   const guardBody = fs.existsSync(guardPath) ? fs.readFileSync(guardPath, 'utf8') : '';
-  ok('the guard carries the bumped version', /GUARD_VERSION:\s*7/.test(guardBody),
+  ok('the guard carries the bumped version', /GUARD_VERSION:\s*10/.test(guardBody),
     guardBody.match(/GUARD_VERSION:.*/)?.[0] ?? '(no guard)');
   ok('ui/ is in the write dirs', /WRITE_DIRS = \[[^\]]*'ui'/.test(guardBody),
     guardBody.match(/WRITE_DIRS = .*/)?.[0] ?? '(no guard)');

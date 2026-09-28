@@ -99,9 +99,11 @@ public sealed class GatherlightServerOptions
         : string.IsNullOrWhiteSpace(settingAddress) ? "127.0.0.1" : settingAddress.Trim();
 
     /// <summary>Effective access token: <c>GATHERLIGHT_ACCESS_TOKEN</c> wins, else the persisted
-    /// setting, else null (no token → loopback-only enforced by the binding check).</summary>
+    /// setting, else null (no token → loopback-only enforced by the binding check). Read as LAUNCHED
+    /// (<see cref="Platform.Kernel.Services.ChildEnvironment.Launched"/>): the process forgets it at startup so no
+    /// child inherits it, and the desktop host resolves this again on every start of its in-process server.</summary>
     public static string? ResolveAccessToken(string? settingToken) =>
-        Environment.GetEnvironmentVariable("GATHERLIGHT_ACCESS_TOKEN") is { Length: > 0 } e ? e
+        Platform.Kernel.Services.ChildEnvironment.Launched("GATHERLIGHT_ACCESS_TOKEN") is { Length: > 0 } e ? e
         : string.IsNullOrWhiteSpace(settingToken) ? null : settingToken;
 
     /// <summary>Effective loopback-trust: <c>GATHERLIGHT_TRUST_LOOPBACK=0/false</c> forces the token
@@ -129,9 +131,10 @@ public sealed class GatherlightServerOptions
         Environment.GetEnvironmentVariable("GATHERLIGHT_TLS_CERT") is { Length: > 0 } e ? e
         : string.IsNullOrWhiteSpace(settingValue) ? null : settingValue;
 
-    /// <summary>Effective TLS cert password: <c>GATHERLIGHT_TLS_CERT_PASSWORD</c> wins, else the setting.</summary>
+    /// <summary>Effective TLS cert password: <c>GATHERLIGHT_TLS_CERT_PASSWORD</c> wins, else the setting. Read as
+    /// LAUNCHED, for the same reason as <see cref="ResolveAccessToken"/>.</summary>
     public static string? ResolveTlsCertPassword(string? settingValue) =>
-        Environment.GetEnvironmentVariable("GATHERLIGHT_TLS_CERT_PASSWORD") is { Length: > 0 } e ? e
+        Platform.Kernel.Services.ChildEnvironment.Launched("GATHERLIGHT_TLS_CERT_PASSWORD") is { Length: > 0 } e ? e
         : string.IsNullOrWhiteSpace(settingValue) ? null : settingValue;
 
     /// <summary>True when the address only ever accepts local connections (no token needed).</summary>

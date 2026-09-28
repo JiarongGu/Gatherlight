@@ -953,3 +953,37 @@ real provider and tokenizer.
 
 Scratch runs, not committed: a data folder provisioned through the app, and a bench console referencing
 `Gatherlight.Platform`; every server was ended by PID as a process tree.
+
+### 2026-09-28 — the agent's Git Bash: MinGit cannot serve it, PortableGit can, and the variable wins over PATH
+
+The scope guard runs behind the CLI's `Bash` tool, which on Windows needs a POSIX shell — Git Bash. With PowerShell
+and Monitor removed from every agent run (`UnguardedTools`), a household with no Git Bash has no shell at all. The app
+provisions MinGit for the DATA REPO, so the obvious idea was to point the CLI at MinGit's shell. It does not work.
+
+**Measured** against the real CLI (2.1.283) on this machine, driving the `Bash` tool through a skill's injected `` !`…` ``
+command with the API pointed at a dead loopback port (0 tokens, no model call), `--disallowed-tools PowerShell,Monitor`,
+and — to isolate which shell ran — a clean PATH holding only node + the CLI (no `bash`/`sh` anywhere on it):
+
+- **MinGit `usr/bin/sh.exe` as `CLAUDE_CODE_GIT_BASH_PATH`:** the Bash tool ran NO command at all (the injected `mv`
+  never executed, the file was untouched). `find` over the whole MinGit 2.55.0.2 tree returns no `bash.exe` and no
+  `bash` — it ships only `sh.exe` (a cygwin bash that runs standalone via `sh.exe -c`) and `dash.exe`. The CLI, handed
+  a `sh.exe`, derives/needs a working `bash.exe` from the install; MinGit has none, so the tool does not run. With
+  System32 on PATH instead, the CLI ran WSL's `bash.exe` (5.2.21 linux-gnu) — the wrong shell entirely, with no access
+  to the Windows data folder the way the app expects.
+- **PortableGit's `bin\bash.exe` as the variable, clean PATH:** the Bash tool ran — `$BASH_VERSION` 5.3.15, a root
+  marker file proving it was PortableGit's `/`, `mv` moved the file, `node x.mjs` ran Windows node.
+- **The same, with System32 (WSL's `bash.exe`) FIRST on PATH:** still PortableGit's 5.3.15, never WSL's — so the
+  explicit variable the app sets wins over PATH discovery. The app therefore SETS the variable rather than relying on
+  PATH order.
+- **A real Git-for-Windows `bash.exe` as the variable, clean PATH (control):** ran, 5.2.37. So the variable mechanism
+  itself is sound when it names a real `bash.exe`.
+
+PortableGit provisions as a 7-Zip self-extractor: `PortableGit-2.55.0.2-64-bit.7z.exe` (59 MB,
+sha256 `b20d42da…`), run with `-o<dir> -y` (~19 s extract), then its `post-install.bat` via `cmd /c` (creates
+`/etc/{mtab,hosts,…}`, self-deletes; exits 1 from `rebaseall`, harmless — the `bin/bash.exe` ready-marker is the gate),
+then moved into `state/resources/git-bash`. Extracted size ~385 MB.
+
+So `ResourceProvisioner` OFFERS `git-bash` (never auto-downloaded), `ClaudeCliRuntime.Apply` sets
+`CLAUDE_CODE_GIT_BASH_PATH` to the provisioned `bin\bash.exe` only when the CLI would find no Git Bash and never over a
+household's own, and the data repo keeps MinGit (owner decision — the two gits serve different roles). The stub-based
+proof is `e2e-p55`; the real SFX provisioning (a 59 MB download) is verified by hand here, not driven in e2e.

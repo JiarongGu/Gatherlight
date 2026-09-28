@@ -558,8 +558,10 @@ public sealed class ChatSessionService : IChatGateHost
         // generated file, nothing on disk to go stale. Naming a server does not pre-approve its
         // tools, so AllowedTools below still does that job.
         McpServers = AgentMcpWiring.ServersFor(_internalMcp, _tools),
-        // Pre-approve registry tools so the headless run never stalls on a permission prompt.
-        AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : Array.Empty<string>(),
+        // Pre-approve registry tools so the headless run never stalls on a permission prompt. A read-only
+        // plan run drops the write-scoped file tools (move/delete) from the allow-list — a real CLI then
+        // never offers them where the tools' own run-scope check would refuse them anyway.
+        AllowedTools = _tools.McpAllowedToolNames(writable: !readOnly) is { Length: > 0 } names ? names : Array.Empty<string>(),
     };
 
     private async Task RunPlanningAsync(ChatSession s)
@@ -590,7 +592,13 @@ public sealed class ChatSessionService : IChatGateHost
         {
             var scanner = new UiBlockScanner(_uiValidator);
             var res = await _agent.RunAsync(
-                BaseRunOptions(s, prompt, readOnly: true),
+                BaseRunOptions(s, prompt, readOnly: true) with
+                {
+                    // A plan run is read-only, but "read-only" is not "confined": without a settings file a
+                    // read-only Bash could read outside the data folder. This settings file fences reads to
+                    // the working directory (blockReadsOutsideWorkingDirectories) and registers the guard.
+                    SettingsPath = IsSystem(s) ? _env.SystemReadOnlySettingsPath : _env.ReadOnlySettingsPath,
+                },
                 label: $"chat:{s.Mode}:plan", onEvent: ev => EmitScanned(s, scanner, ev), ct: s.Abort.Token);
             FlushScanned(s, scanner);
             if (s.Cancelled) return; // cancel() owns the terminal state
@@ -708,7 +716,11 @@ public sealed class ChatSessionService : IChatGateHost
                 : _harness.RevisePlanPrompt(s.PlanText, feedback));
             var scanner = new UiBlockScanner(_uiValidator);
             var res = await _agent.RunAsync(
-                BaseRunOptions(s, revisePrompt, readOnly: true) with { ResumeToken = s.ClaudeSessionId },
+                BaseRunOptions(s, revisePrompt, readOnly: true) with
+                {
+                    ResumeToken = s.ClaudeSessionId,
+                    SettingsPath = IsSystem(s) ? _env.SystemReadOnlySettingsPath : _env.ReadOnlySettingsPath,
+                },
                 label: $"chat:{s.Mode}:revise-plan", onEvent: ev => EmitScanned(s, scanner, ev), ct: s.Abort.Token);
             FlushScanned(s, scanner);
             if (s.Cancelled) return;

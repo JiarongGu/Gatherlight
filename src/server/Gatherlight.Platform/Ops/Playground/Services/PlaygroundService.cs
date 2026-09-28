@@ -108,7 +108,8 @@ public sealed class PlaygroundService : IPlaygroundService
                 Model = model,
                 TimeoutSeconds = 3600,
                 McpServers = AgentMcpWiring.ServersFor(_internalMcp, _tools),
-                AllowedTools = _tools.McpAllowedToolNames() is { Length: > 0 } names ? names : Array.Empty<string>(),
+                // The playground mirrors the read-only plan phase, so the write-scoped file tools are excluded.
+                AllowedTools = _tools.McpAllowedToolNames(writable: false) is { Length: > 0 } names ? names : Array.Empty<string>(),
             }, label: "playground", onEvent: ev =>
             {
                 if (ev.Kind == "usage" && ev.Data is not null) AccumulateUsage(result, ev.Data);

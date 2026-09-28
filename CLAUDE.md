@@ -19,6 +19,13 @@ cwd = data folder, through a **two-gate flow** — agent drafts a plan (read-onl
 agent executes edits (scope-guarded to `plans/ household/ .claude/`) → user reviews the diff →
 commit to the data repo. Deterministic work (browsing, search, file ops, budget math, scraping)
 is server code / registered tools, never LLM calls — token spend is reserved for actual planning.
+The agent's shell is guarded (`PowerShell`/`Monitor` are removed from every run, and Bash may not launch
+another shell); where there is no Git Bash the agent has NO shell **by design** — the scoped MCP file tools
+(`fs_move`/`fs_delete`/`file_info`) are the substitute, and 资源 OFFERS PortableGit as a Git Bash the app can
+guard (MinGit, the data repo's git, ships no bash). Plan (read-only) runs are read-confined to the data
+folder and have NO Bash at all; `state/` (token, TLS key, database) is outside the read jail; Bash's own writes
+are scoped like Edit's (best-effort token matching — the guard's integrity has three legs, below).
+Details: `.claude/rules/dev-conventions.md` (Data folder discipline → the jail).
 
 ## Current state
 
@@ -141,11 +148,16 @@ The agent's own UI is declarative: `Platform/Agent/Ui` validates a component tre
 inline in chat and as site pages from `{data}/ui/` — no raw HTML anywhere in the agent's reach. A
 `Table`/`Chart` can `bind` to a named server-side query, so a page reads live data instead of a copy.
 
-**The agent works against three app-managed files in `{data}/.claude/`**, all version-gated and
-re-issued by the app (never editable knowledge-base content): `hooks/scope-guard.mjs` (its jail),
-`ui-spec.md` (the component vocabulary) and `tool-spec.md` (how to author its own capability —
-including what the sandbox refuses, parsed from the shipped `cap-guard.mjs` so it cannot drift).
-Anything that replaces a record subtree — notably backup import — must re-issue them.
+**The agent's jail is guarded by checks, not by distance**: the scope guard is `{data}/state/agent/scope-guard.mjs`,
+app state regenerated every boot beside the generated `--settings` (which carry `disableAllHooks:false`). `state/` is
+still inside the data folder, carved out of the guard's CHECKS: Edit/Write/Read cannot reach it (solid), a Bash token
+naming it is refused and nested shells are denied (both best effort). A constructed token or nested shell that slips
+past can still overwrite the guard until the next boot, or read `state/` in an execute run with Git Bash — the
+declared "needs an OS sandbox" residual (`.claude/rules/dev-conventions.md`, the three legs). **Two app-managed files in `{data}/.claude/`**
+are version-gated and re-issued (never editable knowledge-base content): `ui-spec.md` (the component vocabulary)
+and `tool-spec.md` (how to author its own capability — including what the sandbox refuses, parsed from the shipped
+`cap-guard.mjs` so it cannot drift). Anything that replaces a record subtree — notably backup import — must
+re-issue them (and it deletes any old guard an archive restores into `.claude/hooks/`).
 
 - `tools/pdf-form/` — a Node utility (pdf-lib + fontkit) for PDF AcroForm inspect/fill/merge,
   invoked by the C# document tools via `NodeLeafTool` (reliable on real + CJK PDFs where PDFsharp
@@ -162,7 +174,8 @@ Anything that replaces a record subtree — notably backup import — must re-is
   `devtools/scripts/check-sensitive.mjs` (private tokens in gitignored
   `local/sensitive-patterns.txt`). History was reset on 2026-07-13 to remove exactly such leaks.
 - **User data lives ONLY in `local/`** (own private git repo). Never move it back into this repo.
-- **LLM via the authenticated `claude` CLI only — never an API key.** The CLI is a *provisioned resource*
+- **LLM via the authenticated `claude` CLI only — never an API key**, and the app enforces it at spawn: no claude it
+  starts inherits an API key, a provider switch or another endpoint (`ChildEnvironment.OffSubscriptionVariables`). The CLI is a *provisioned resource*
   (资源 panel → `{data}/state/resources/claude`), not a machine dependency we assume; `ClaudeCliRuntime`
   resolves + probes it. **The app STARTS the browser login** (资源 → the CLI's row → 登录, spawning the
   RESOLVED binary — the old advice "run `claude auth login` in a terminal" was unactionable for a copy we

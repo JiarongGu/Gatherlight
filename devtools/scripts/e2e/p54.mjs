@@ -1,0 +1,135 @@
+#!/usr/bin/env node
+// e2e-p54 — the scoped agent file tools (fs_move / fs_delete / file_info).
+//
+// They exist because a household with no Git Bash has no shell (PowerShell + Monitor are removed from
+// every run), so moving/renaming/deleting a plan file needs a TOOL — one whose scope is the guard's own
+// write scope, whose changes land at the diff gate, and which works ONLY in the execute phase.
+//
+// The stub drives the loopback MCP endpoint directly (a fake CLI does not honour --allowedTools), so what
+// this asserts is the ENFORCEMENT: the tool's own run-scope check bounces a mutation in the read-only plan
+// phase and permits it in the execute phase; the write scope refuses an out-of-scope target; an existing
+// target is not overwritten; and the successful move/delete reach the diff gate and commit.
+import fs from 'node:fs';
+import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, gitLog, tracked, onDisk } from './_e2e-common.mjs';
+
+const dataDir = dataDirFor('p54');
+const { ok, fail, done } = makeReporter('p54');
+makeTestData(dataDir);
+
+const fsopsLog = `${dataDir}-fsops.jsonl`;
+const argsLog = `${dataDir}-args.jsonl`;
+for (const f of [fsopsLog, argsLog]) { try { fs.rmSync(f); } catch {} }
+
+const srv = startServer({
+  dataDir, port: 6194,
+  env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_FSOPS_LOG: fsopsLog, GATHERLIGHT_STUB_ARGS_LOG: argsLog },
+});
+const { post, waitPhase } = makeClient(srv.base);
+
+const readLog = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
+
+try {
+  await waitHealthy(srv.base);
+  console.log('server up');
+
+  ok('fixture trip file is tracked at boot', tracked(dataDir, 'plans/trips/2026-08-kyoto.md'));
+
+  // --- plan -> execute -----------------------------------------------------------------------
+  const start = await post('/api/chat', { message: 'FSOPSTEST 整理一下计划文件' });
+  ok('chat start 200', start.status === 200 && !!start.body.id);
+  const id = start.body.id;
+
+  await waitPhase(id, 'awaiting-plan-approval');
+
+  // The plan-phase call to fs_move must be REFUSED — read-only run, the run scope forbids writes.
+  const planRows = readLog(fsopsLog).find((e) => e.phase === 'plan')?.rows ?? [];
+  const planMove = planRows.find((r) => r.op === 'move-in-plan');
+  ok('plan-phase fs_move refused (run-scope)',
+    !!planMove && (planMove.isError === true || planMove.status === 403),
+    JSON.stringify(planMove));
+  ok('plan-phase refusal names the execute phase',
+    !!planMove && /执行/.test(planMove.text ?? ''), planMove?.text);
+  ok('plan-phase left the file in place', tracked(dataDir, 'plans/trips/2026-08-kyoto.md') && onDisk(dataDir, 'plans/trips/2026-08-kyoto.md'));
+
+  // AllowedTools per policy: the plan spawn must NOT pre-approve the write-scoped tools (defence in depth).
+  const spawns = readLog(argsLog);
+  const planSpawn = spawns.find((s) => s.kind === 'plan');
+  const planArgs = (planSpawn?.args ?? []).join(' ');
+  ok('plan spawn excludes fs_move from --allowedTools', !planArgs.includes('mcp__planner-tools__fs_move'), planArgs.slice(0, 200));
+  ok('plan spawn still lists a read tool', planArgs.includes('mcp__planner-tools__file_info') || planArgs.includes('mcp__planner-tools__scrape'), planArgs.slice(0, 200));
+
+  // Item 5 — a plan (read-only) run is CONFINED to the data folder: it passes the read-only settings
+  // file, which sets permissions.blockReadsOutsideWorkingDirectories and registers the guard hook.
+  ok('plan spawn passes the read-only settings', planArgs.includes('settings.chat.readonly.json'), planArgs.slice(0, 260));
+  const roSettingsRaw = (() => { try { return fs.readFileSync(`${dataDir}/state/settings.chat.readonly.json`, 'utf8'); } catch { return ''; } })();
+  const roSettings = (() => { try { return JSON.parse(roSettingsRaw); } catch { return {}; } })();
+  ok('read-only settings block reads outside the working dir',
+    roSettings.permissions?.blockReadsOutsideWorkingDirectories === true, roSettingsRaw.slice(0, 200));
+  ok('read-only settings register the guard hook and do not acceptEdits',
+    roSettings.permissions?.defaultMode === 'default' && JSON.stringify(roSettings.hooks ?? {}).includes('scope-guard'),
+    roSettingsRaw.slice(0, 300));
+
+  // Security review (2026-09-28) — the plan (read-only) regression: a read-only run pre-approved Bash, so
+  // a plan-phase Bash could read outside the folder / run inline eval / launch a shell. Bash is now removed
+  // OUTRIGHT from a read-only run (UnguardedTools, --disallowed-tools) AND dropped from the allow-list.
+  const planDisallowed = (planArgs.match(/--disallowed-tools\s+(\S+)/)?.[1] ?? '').split(',');
+  ok('plan spawn disallows Bash outright', planDisallowed.includes('Bash'), planDisallowed.join(','));
+  ok('read-only settings allow-list omits Bash',
+    !(roSettings.permissions?.allow ?? []).includes('Bash'), JSON.stringify(roSettings.permissions?.allow));
+  ok('read-only settings top-level disableAllHooks:false (a project settings cannot disable our hook)',
+    roSettings.disableAllHooks === false, roSettingsRaw.slice(0, 120));
+
+  await post(`/api/chat/${id}/plan/approve`);
+  const diff = await waitPhase(id, 'awaiting-diff-approval');
+
+  // Execute-phase file-op results.
+  const execRows = readLog(fsopsLog).find((e) => e.phase === 'execute')?.rows ?? [];
+  const row = (op) => execRows.find((r) => r.op === op);
+  ok('execute fs_move succeeded', row('move-ok') && !row('move-ok').isError && row('move-ok').status === 200, JSON.stringify(row('move-ok')));
+  ok('execute fs_delete succeeded', row('delete-ok') && !row('delete-ok').isError, JSON.stringify(row('delete-ok')));
+  ok('execute file_info read size/mtime', row('info-ok') && /bytes/.test(row('info-ok').text ?? ''), row('info-ok')?.text);
+  ok('out-of-scope target refused', row('move-out-of-scope') && (row('move-out-of-scope').isError === true || row('move-out-of-scope').status >= 400), JSON.stringify(row('move-out-of-scope')));
+  ok('existing target not overwritten', row('move-overwrite-refused') && (row('move-overwrite-refused').isError === true || row('move-overwrite-refused').status === 409), JSON.stringify(row('move-overwrite-refused')));
+
+  // Security review (2026-09-28) — SiteWriteScope C2/C3 normalization: a trailing-dot / case-fold target
+  // still reaches the PROTECTED file, and an alternate-data-stream colon is a CLEAN refusal (not a 500).
+  ok('C2: fs_move to trailing-dot settings refused as protected', row('move-c2-trailing-dot')
+    && row('move-c2-trailing-dot').isError && /受保护/.test(row('move-c2-trailing-dot').text ?? ''),
+    JSON.stringify(row('move-c2-trailing-dot')));
+  ok('C3: fs_move to case-folded .claude/Settings.json refused as protected', row('move-c3-case-fold')
+    && row('move-c3-case-fold').isError && /受保护/.test(row('move-c3-case-fold').text ?? ''),
+    JSON.stringify(row('move-c3-case-fold')));
+  ok('C2: fs_move to an ADS colon path is a clean refusal (not a 500)', row('move-ads-colon')
+    && row('move-ads-colon').isError && /非法字符|越界|短名|设备/.test(row('move-ads-colon').text ?? ''),
+    JSON.stringify(row('move-ads-colon')));
+  ok('the refused C2/C3/ADS moves left their sources in place (and wrote no protected file)',
+    onDisk(dataDir, 'household/README.md') && onDisk(dataDir, 'household/people.md')
+      && onDisk(dataDir, 'plans/visa/2026-08-kyoto/applicant-data.json') && !onDisk(dataDir, '.claude/settings.json'));
+
+  // The execute spawn DID pre-approve the write tools. Re-read the args log — the execute spawn was
+  // written after the plan-phase read above.
+  const execArgs = (readLog(argsLog).find((s) => s.kind === 'execute')?.args ?? []).join(' ');
+  ok('execute spawn includes fs_move in --allowedTools', execArgs.includes('mcp__planner-tools__fs_move'), execArgs.slice(0, 200));
+
+  // The move + delete reach the diff gate as working-tree changes.
+  const paths = (diff.review?.files ?? []).map((f) => f.path);
+  ok('diff gate shows the moved-in path (added)', paths.includes('plans/trips/2026-08-kyoto-moved.md'), JSON.stringify(paths));
+  ok('diff gate shows the moved-out path (deleted)', paths.includes('plans/trips/2026-08-kyoto.md'), JSON.stringify(paths));
+  ok('diff gate shows the deleted budget (deleted)', paths.includes('plans/budgets/2026-08-kyoto.md'), JSON.stringify(paths));
+
+  // --- approve -> commit ---------------------------------------------------------------------
+  const before = gitLog(dataDir).length;
+  await post(`/api/chat/${id}/diff/approve`);
+  const committed = await waitPhase(id, 'committed');
+  ok('committed with sha', !!committed.commitSha);
+  ok('one commit added', gitLog(dataDir).length === before + 1);
+  ok('moved file tracked at new path', tracked(dataDir, 'plans/trips/2026-08-kyoto-moved.md'));
+  ok('old path gone from disk + index', !onDisk(dataDir, 'plans/trips/2026-08-kyoto.md') && !tracked(dataDir, 'plans/trips/2026-08-kyoto.md'));
+  ok('deleted budget gone from disk + index', !onDisk(dataDir, 'plans/budgets/2026-08-kyoto.md') && !tracked(dataDir, 'plans/budgets/2026-08-kyoto.md'));
+} catch (err) {
+  fail('e2e-p54 fatal: ' + err.message);
+  console.error(srv.log().slice(-3000));
+} finally {
+  srv.stop();
+}
+done();

@@ -4,14 +4,22 @@ using Gatherlight.Server.Platform.Site.Services;
 namespace Gatherlight.Server.Platform.Agent.Chat.Services;
 
 /// <summary>
-/// Generates the runtime files the spawned claude needs inside the data folder:
-/// <c>state/settings.chat.json</c> (acceptEdits + the PreToolUse scope-guard hook, passed via
-/// --settings on the execute phase — regenerated every boot, it's app state) and
-/// <c>.claude/hooks/scope-guard.mjs</c> — the agent's SECURITY jail (reads confined to the data
-/// folder, writes to plans/ household/ .claude/, Bash denied git-history/network/inline-eval/crawl/
-/// path-escape). Because it's a security boundary (not editable knowledge-base content), it's
-/// re-issued whenever its <c>GUARD_VERSION</c> is missing or older than the shipped one, so hardening
-/// reaches folders seeded by an earlier build. Out-of-boundary work must route through an MCP tool.
+/// Generates the runtime files the spawned claude needs. Two live under <c>state/</c> — APP STATE,
+/// gitignored, regenerated every boot: <c>state/settings.chat.json</c> (acceptEdits + the PreToolUse
+/// scope-guard hook, passed via --settings on the execute phase) and <c>state/agent/scope-guard.mjs</c> —
+/// the agent's SECURITY jail (reads confined to the data folder minus <c>state/</c>, writes to plans/
+/// household/ .claude/ ui/ except the PROTECTED set, Bash denied git-history/network/inline-eval/shell-
+/// launch/crawl/path-escape and state+protected paths). The guard used to live in the data repo at
+/// <c>.claude/hooks/scope-guard.mjs</c>; it is deleted from there on boot (<c>RemoveLegacyGuard</c>).
+/// <para><b><c>state/</c> is still INSIDE the data folder</b> — carved out of the guard's CHECKS, not out of
+/// the filesystem. The guard's integrity rests on three legs: Edit/Write/Read cannot reach <c>state/</c>
+/// (solid — every such call passes through the guard); the Bash path-token scan refuses a token naming it
+/// (best effort); and no nested shell (best effort). A constructed token (<c>$PWD/state/agent/…</c>) or a
+/// nested shell slipping past the last two can overwrite the guard and neuter it until the next boot, and
+/// can READ <c>state/</c> (the database, the TLS key) in an execute run where a Bash exists — the declared
+/// residual "code inside an agent-authored script needs an OS sandbox", which was declined.</para>
+/// Regenerated every boot, hardening reaches an old data folder the moment a newer build boots it.
+/// Out-of-boundary work must route through an MCP tool.
 /// <para>Two CONTRACTS ride the same version gate for the same reason — they are protocol, not
 /// knowledge-base content, and the seeder deliberately never overwrites a file the household edited:
 /// <c>.claude/ui-spec.md</c> (the block vocabulary, <c>UI_CONTRACT_VERSION</c>) and
@@ -42,7 +50,21 @@ public sealed class ChatEnvironmentService
 
     public string SettingsPath => Path.Combine(_platform.StatePath, "settings.chat.json");
     public string SystemSettingsPath => Path.Combine(_platform.StatePath, "settings.system.json");
-    public string ScopeGuardPath => Path.Combine(_site.ZhikuPath, "hooks", "scope-guard.mjs");
+    /// <summary>The read-only (plan / revise) settings — <c>blockReadsOutsideWorkingDirectories</c> + the
+    /// guard hook, no acceptEdits. A plan run passed no settings at all before, so a read-only Bash could
+    /// read outside the data folder and a plan-phase Bash was unguarded.</summary>
+    public string ReadOnlySettingsPath => Path.Combine(_platform.StatePath, "settings.chat.readonly.json");
+    public string SystemReadOnlySettingsPath => Path.Combine(_platform.StatePath, "settings.system.readonly.json");
+    /// <summary>The planner scope guard lives under <c>state/agent/</c> — APP STATE (gitignored, not in the
+    /// data repo's audit trail, not carried by the backup), regenerated every boot like the settings files.
+    /// <c>state/</c> is carved out of the guard's CHECKS (no Edit/Write/Read, no Bash token naming it), not out
+    /// of the filesystem: the guard's integrity rests on those checks — the tool path solidly, the Bash token
+    /// scan and the nested-shell denial only best-effort (see the class summary for the residual). The old copy
+    /// at <c>.claude/hooks/scope-guard.mjs</c> sat in a directory Edit was protected from and Bash was not
+    /// checked for at all.</summary>
+    public string ScopeGuardPath => Path.Combine(_platform.StatePath, "agent", "scope-guard.mjs");
+    /// <summary>Where an earlier build generated the guard, inside the data repo. Deleted on boot.</summary>
+    private string LegacyScopeGuardPath => Path.Combine(_site.ZhikuPath, "hooks", "scope-guard.mjs");
     public string UiSpecPath => Path.Combine(_site.ZhikuPath, "ui-spec.md");
     /// <summary>The tool-authoring contract. Same app-managed, version-gated treatment as the UI one,
     /// and for the same reason: the agent is TOLD it may draft a capability, but until this existed
@@ -56,7 +78,18 @@ public sealed class ChatEnvironmentService
     public IReadOnlyList<string> EnsureFiles()
     {
         var deny = _manifest.Current.Capabilities.Deny;
-        File.WriteAllText(SettingsPath, BuildChatSettings(PlannerGuardCommand, deny));
+
+        // The planner scope guard is APP STATE, not knowledge-base content: it lives under state/agent/
+        // (gitignored, backup-excluded; state/ is carved out of the guard's own checks) and is regenerated
+        // every boot like the settings files — never version-gated or committed. So hardening reaches an old
+        // data folder the moment a newer build boots it, and a guard neutered mid-session by the declared
+        // residual (a constructed Bash token, a nested shell) is restored at the next boot. Referenced by
+        // ABSOLUTE path.
+        Directory.CreateDirectory(Path.GetDirectoryName(ScopeGuardPath)!);
+        File.WriteAllText(ScopeGuardPath, RenderScopeGuard());
+        var plannerGuardCmd = $"node \\\"{ScopeGuardPath.Replace('\\', '/')}\\\"";
+
+        File.WriteAllText(SettingsPath, BuildChatSettings(plannerGuardCmd, deny));
         // 系统模式 settings: same acceptEdits shape, but the PreToolUse hook is the code repo's tracked
         // system scope guard (deny-list: whole repo except guard/, src/server, settings, .git), referenced
         // absolutely since the run's $CLAUDE_PROJECT_DIR is the code repo. Built from the SAME template with
@@ -64,16 +97,20 @@ public sealed class ChatEnvironmentService
         // running the PLANNER scope) if the settings JSON is ever reformatted.
         var systemGuard = Path.Combine(_options.CodeRootPath, "guard", "system-scope-guard.mjs")
             .Replace('\\', '/');
-        File.WriteAllText(SystemSettingsPath, BuildChatSettings($"node \\\"{systemGuard}\\\"", deny));
+        var systemGuardCmd = $"node \\\"{systemGuard}\\\"";
+        File.WriteAllText(SystemSettingsPath, BuildChatSettings(systemGuardCmd, deny));
+        // Read-only (plan / revise) settings: the read fence + the guard hook, no acceptEdits, and NO Bash
+        // in the allow-list (a read-only run has Bash disallowed entirely — see UnguardedTools).
+        File.WriteAllText(ReadOnlySettingsPath, BuildChatSettings(plannerGuardCmd, deny, readOnly: true));
+        File.WriteAllText(SystemReadOnlySettingsPath, BuildChatSettings(systemGuardCmd, deny, readOnly: true));
         RemoveStaleMcpConfig();
 
         var created = new List<string>();
-        if (ShouldReissue(ScopeGuardPath, ShippedGuardVersion, GuardVersionRe))
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(ScopeGuardPath)!);
-            File.WriteAllText(ScopeGuardPath, RenderScopeGuard());
-            created.Add(".claude/hooks/scope-guard.mjs");
-        }
+        // An earlier build generated the guard into the data repo at .claude/hooks/scope-guard.mjs, where
+        // the agent could reach it (Edit was PROTECTED, Bash was not). Delete that copy and return its path
+        // so the deletion is committed out of the audit trail — a guard the agent can touch, or a stale file
+        // that configures nothing, is worse than none.
+        if (RemoveLegacyGuard()) created.Add(".claude/hooks/scope-guard.mjs");
         if (ShouldReissue(UiSpecPath, ShippedUiContractVersion, UiVersionRe))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(UiSpecPath)!);
@@ -101,6 +138,22 @@ public sealed class ChatEnvironmentService
         try { if (File.Exists(stale)) File.Delete(stale); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+    }
+
+    /// <summary>Deletes the legacy in-repo guard at <c>.claude/hooks/scope-guard.mjs</c> (now under
+    /// <c>state/agent/</c>). Returns true only if a file was there — the caller returns the path so the
+    /// deletion is committed (it is tracked in HEAD on an upgraded install). Best-effort: a locked file is
+    /// not a reason to fail startup, and the guard the agent actually runs is the state/ one either way.</summary>
+    private bool RemoveLegacyGuard()
+    {
+        try
+        {
+            if (!File.Exists(LegacyScopeGuardPath)) return false;
+            File.Delete(LegacyScopeGuardPath);
+            return true;
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
     }
 
     /// <summary>The guard is generated, not shipped verbatim: its WRITE_DIRS come from the site
@@ -132,10 +185,6 @@ public sealed class ChatEnvironmentService
     // seeded by an earlier build (and a weakened or tampered copy is replaced). Same-version files
     // are left alone — no spurious data-repo commit — and so is a NEWER on-disk version (a dev ahead
     // of the server). An unreadable file re-issues: a guard we cannot read is not one we can trust.
-    private const string GuardVersionRe = @"GUARD_VERSION:\s*(\d+)";
-    private static readonly int ShippedGuardVersion = ReadVersion(ScopeGuardMjs, GuardVersionRe);
-
-
     // The UI contract is app-managed, not knowledge-base content: an agent working from a stale
     // vocabulary emits trees that fail validation and the household sees fallback cards. Same
     // version-gated re-issue as the scope guard — a newer on-disk version is left alone.
@@ -222,8 +271,9 @@ public sealed class ChatEnvironmentService
 
     // The chat (planner) and 系统模式 settings share ONE template; only the PreToolUse guard command
     // differs. Building both from BuildChatSettings — rather than deriving one from the other via
-    // string.Replace — means a reformat can't silently drop the substitution and mis-scope a run.
-    private const string PlannerGuardCommand = "node \\\"$CLAUDE_PROJECT_DIR/.claude/hooks/scope-guard.mjs\\\"";
+    // string.Replace — means a reformat can't silently drop the substitution and mis-scope a run. Both
+    // guard commands are built at EnsureFiles time from an ABSOLUTE path (the planner's under state/agent/,
+    // the system's under guard/), so neither depends on the run's $CLAUDE_PROJECT_DIR.
 
     /// <summary>The CLI built-ins granted to the agent by default — WebFetch among them, which the
     /// scope guard's PreToolUse matcher never intercepted (see RenderScopeGuard's DENIED plane for
@@ -242,9 +292,21 @@ public sealed class ChatEnvironmentService
     /// <summary>Emits the fixed allow-list minus anything the site's capabilities.deny withholds
     /// (case-insensitive) — a deny entry must remove a built-in from BOTH this generated allow-list
     /// AND the guard's DENIED check, or it isn't actually denied.</summary>
-    private static string BuildChatSettings(string guardCommand, IReadOnlyList<string> deny)
+    private static string BuildChatSettings(string guardCommand, IReadOnlyList<string> deny, bool readOnly = false)
     {
-        var allow = BuiltinTools.Where(t => !deny.Any(d => string.Equals(d, t, StringComparison.OrdinalIgnoreCase)));
+        // A read-only (plan / revise) run writes nothing (ToolPolicy.ReadOnly disallows Edit/Write), so it
+        // never needs acceptEdits; what it DOES need is the read fence — the same "only inside the data
+        // folder" the guard applies to Read/Grep/Glob, but also covering a read-only Bash command (cat,
+        // head) that names a path outside the working directory, which the CLI otherwise runs without a
+        // prompt. permissions.blockReadsOutsideWorkingDirectories (CLI v2.1.257+) makes the file tools AND
+        // recognized read-only Bash file-commands refuse such a path in every mode. The guard hook rides
+        // along so a plan-phase Bash is checked for egress / inline-eval / shell-launch too, which an
+        // unsettinged plan run never was. A read-only run also drops Bash from the allow-list — plan / revise
+        // / read-only-job runs have Bash disallowed OUTRIGHT (UnguardedTools, keyed on ToolPolicy), so a
+        // read-only Bash cannot read outside the folder, run inline eval, or launch a shell at all.
+        var allow = BuiltinTools
+            .Where(t => !readOnly || (t is not "Edit" and not "Write" and not "MultiEdit" and not "Bash"))
+            .Where(t => !deny.Any(d => string.Equals(d, t, StringComparison.OrdinalIgnoreCase)));
         var allowJson = string.Join(", ", allow.Select(t => $"\"{t}\""));
         // A denied tool must also be in the SET OF TOOLS THE HOOK FIRES FOR, or the DENIED check
         // added to the guard body is unreachable — the exact gap that left WebFetch's guard-side
@@ -252,11 +314,15 @@ public sealed class ChatEnvironmentService
         // is user-controlled (site.json) and Regex.Escape can itself introduce backslashes that need
         // JSON-escaping in turn.
         var matcherJson = System.Text.Json.JsonSerializer.Serialize(BuildGuardMatcher(deny));
+        var permsExtra = readOnly ? "\n            \"blockReadsOutsideWorkingDirectories\": true," : "";
+        var mode = readOnly ? "default" : "acceptEdits";
+        var phase = readOnly ? "PLAN (read-only) phase" : "EXECUTE phase";
         return $$"""
         {
-          "$comment": "Generated by Gatherlight at startup — do not edit (changes are overwritten). Isolated Claude Code settings for the chat EXECUTE phase, passed via `claude --settings`. Pre-grants permissions so the headless run never stalls on a prompt; the real safety is (1) the PreToolUse scope-guard hook below and (2) the human plan+diff gates in the server.",
-          "permissions": {
-            "defaultMode": "acceptEdits",
+          "$comment": "Generated by Gatherlight at startup — do not edit (changes are overwritten). Isolated Claude Code settings for the chat {{phase}}, passed via `claude --settings`. Pre-grants permissions so the headless run never stalls on a prompt; the real safety is (1) the PreToolUse scope-guard hook below and (2) the human plan+diff gates in the server.",
+          "disableAllHooks": false,
+          "permissions": {{{permsExtra}}
+            "defaultMode": "{{mode}}",
             "allow": [{{allowJson}}]
           },
           "hooks": {
@@ -292,42 +358,47 @@ public sealed class ChatEnvironmentService
     private const string ScopeGuardMjs = """
         #!/usr/bin/env node
         /**
-         * PreToolUse scope guard (v2) for Gatherlight headless PLANNER runs — cwd = the data folder.
-         * Registered in state/settings.chat.json.
+         * PreToolUse scope guard (v3) for Gatherlight headless PLANNER runs — cwd = the data folder.
+         * The FILE lives at {data}/state/agent/scope-guard.mjs (app state, gitignored, regenerated every
+         * boot), referenced by ABSOLUTE path from the generated --settings. state/ is still INSIDE the data
+         * folder: it is carved out of this guard's CHECKS, not out of the filesystem. So the guard's integrity
+         * rests on three legs — (1) Edit/Write/Read/Grep/Glob cannot reach state/ (solid: every such call
+         * passes through this check); (2) the Bash path-token scan refuses a token naming state/ (best
+         * effort); (3) no nested shell (best effort). A constructed token (`$PWD/state/agent/…`) or a nested
+         * shell that slips past (2)/(3) can overwrite this file and neuter it until the next boot, and can
+         * READ state/ (the database, the TLS key) in an execute run where a Bash exists (Git Bash present) —
+         * the declared residual "code inside an agent-authored script needs an OS sandbox", which was declined.
          *
-         * The spawned agent is JAILED to the data folder. Enforced boundaries:
-         *   WRITE (Edit/Write/MultiEdit/NotebookEdit)  -> under plans/ household/ .claude/ ui/ EXCEPT
-         *                                                the PROTECTED set (.claude/hooks/, .claude/settings*.json),
-         *                                                and under ui/ only a flat .json page (WRITE_EXTS)
-         *   READ  (Read/Grep/Glob)                     -> only inside the data folder
+         * Enforced boundaries (best-effort where noted; also load-bearing: PowerShell/Monitor removed from
+         * every run, and read-only runs have no Bash at all):
+         *   WRITE (Edit/Write/MultiEdit/NotebookEdit)  -> under WRITE_DIRS EXCEPT the PROTECTED set, and
+         *                                                under ui/ only a flat .json page (WRITE_EXTS)
+         *   READ  (Read/Grep/Glob)                     -> inside the data folder, never state/ (token,
+         *                                                TLS key, database)
          *   BASH                                       -> not: git-history / delete, network egress,
-         *                                                inline code-eval, filesystem crawl, or any
-         *                                                path outside the folder (args or redirects)
+         *                                                inline code-eval, launching another shell, fs crawl,
+         *                                                or any path outside the folder / into state/ / at a
+         *                                                PROTECTED app-managed path (best-effort token scan)
          *
-         * Anything genuinely out-of-boundary (fetch a URL, run a scraper, read a shared resource) MUST
-         * go through a server MCP tool -- mediated + auditable -- never raw Bash. Else: silent exit 0.
-         *
-         * Kept identical to guard/system-scope-guard.mjs except WRITE_DIRS + WRITE_EXTS + PROTECTED;
-         * e2e suite p24 runs both. GUARD_VERSION is the upgrade key: the server re-issues newer logic
-         * into an existing data folder (ChatEnvironmentService.EnsureFiles), so hardening reaches old
-         * installs.
-         *
-         * DENIED (v6) closes the exfiltration residual this file used to admit to: WebFetch is granted
-         * in state/settings.chat.json but this guard's matcher never intercepted it. A site.json
-         * capabilities.deny entry now removes the tool from BOTH the generated allow-list
-         * (ChatEnvironmentService.BuildChatSettings) AND here — denying a CLI built-in, not just an
-         * MCP tool the guard never saw in the first place.
+         * Kept identical to guard/system-scope-guard.mjs except WRITE_DIRS + WRITE_EXTS + PROTECTED +
+         * BASH_PROTECTED + READ_DENY; e2e-p24 runs both. GUARD_VERSION lets the server re-issue newer logic.
          */
-        // GUARD_VERSION: 7
+        // GUARD_VERSION: 10
         import path from 'node:path';
 
         const WRITE_DIRS = __WRITE_DIRS__;
-        // Dirs whose file TYPE is restricted. ui/ holds the site's pages: a path the agent may write
-        // there must be exactly a page, so nothing else can end up in the directory the app renders.
-        // Flat by rule too -- SitePageStore lists the top level only and a page name is a bare stem,
-        // so a file in a subdirectory would be writable and permanently invisible.
         const WRITE_EXTS = __WRITE_EXTS__;
-        const PROTECTED = ['.claude/hooks', '.claude/settings.json', '.claude/settings.local.json'];
+        // PROTECTED overrides WRITE_DIRS: the agent may not neuter its own guard / settings, nor the MCP config.
+        const PROTECTED = ['.claude/hooks', '.claude/settings.json', '.claude/settings.local.json', '.mcp.json'];
+        // Bash writes were jail-scoped, not write-scoped: a `cp`/`echo >`/`rm`/`tee` could reach state/ (the
+        // access token, the TLS pfx, the database), site.json (the manifest the guard renders its scope FROM),
+        // .git, or the PROTECTED app-managed files — none of which Edit/Write may touch. Deny any path-like
+        // Bash token that resolves under this set OR under state/. Best-effort: a token scan is fooled by a
+        // variable, a $(...) or a constructed string — DEFENCE IN DEPTH, one of the three legs in the header,
+        // never the guarantee.
+        const BASH_PROTECTED = ['.claude/hooks', '.claude/settings.json', '.claude/settings.local.json', '.mcp.json', 'site.json', '.git'];
+        // Reads never see state/ (app state — token / TLS key / DB) though it sits inside the jail.
+        const READ_DENY = ['state'];
         const DENIED = __DENIED_TOOLS__;
 
         const HISTORY = [
@@ -346,12 +417,86 @@ public sealed class ChatEnvironmentService
           /\b(powershell|pwsh)\b[\s\S]*\s-(e|enc|encodedcommand|command)\b/i, /(^|[\s;&|(])eval(\s|$)/,
           /\b(?:ba|z|k|da)?sh\s+-c\b/, /[|]\s*(?:ba|z|k|da)?sh\b/,   // inline shell eval / pipe-to-shell
         ];
+        // Launching ANOTHER shell or interpreter is inline-eval by a second door: whatever runs inside
+        // powershell / cmd / a nested bash never reaches this guard's Bash checks (egress, eval, crawl,
+        // path-escape). On Windows the PowerShell tool is default-on, and acceptEdits auto-approves its
+        // writes. Deny the launch ITSELF, whatever its arguments (so `bash x.sh`, not only `bash -c`).
+        // BEST-EFFORT defence in depth — leg (3) in the header; the closure that does not depend on parsing
+        // is PowerShell/Monitor removed from every run. Matched against each pipeline segment's COMMAND WORD (the
+        // leading token, past `env`/`command`/`sudo`/`VAR=val` wrappers, path and .exe stripped) so a shell
+        // NAME used as an argument (`command -v sh`) is not caught.
+        const SHELLS = new Set([
+          'pwsh', 'powershell', 'powershell_ise', 'cmd', 'wscript', 'cscript', 'mshta',
+          'bash', 'sh', 'zsh', 'ksh', 'dash', 'ash', 'csh', 'tcsh', 'fish',
+          'source', '.', 'wsl', 'rundll32', 'regsvr32',   // run a file in / as another interpreter
+        ]);
+        // Wrappers that run their REMAINING words as a command — look PAST them for the real leading word.
+        const PREFIX_WORDS = new Set([
+          'env', 'command', 'exec', 'builtin', 'nice', 'nohup', 'time', 'xargs', 'sudo', 'doas',
+          'stdbuf', 'timeout', 'setsid', 'ionice', 'chrt', 'setarch',
+        ]);
+        // A wrapper's own arguments come BEFORE the command it runs (`timeout 5 bash`, `nice -n 10 bash`,
+        // `stdbuf -oL bash`, `setarch x86_64 bash`), so after a wrapper skip its options, the values of the
+        // options that take one, numeric durations/priorities, and — for `setarch` — its one leading
+        // positional. `env -S` / `--split-string` is deliberately NOT a value option: its value IS a command
+        // line, so it is read as the next command word. `command -v` / `-V` only DESCRIBE a command.
+        const WRAPPER_VALUE_OPTS = {
+          timeout: ['-s', '--signal', '-k', '--kill-after'],
+          nice: ['-n', '--adjustment'],
+          ionice: ['-c', '--class', '-n', '--classdata', '-p', '--pid', '-P', '--pgid', '-u', '--uid'],
+          sudo: ['-u', '--user', '-g', '--group', '-C', '--close-from', '-D', '--chdir', '-h', '--host',
+            '-p', '--prompt', '-r', '--role', '-t', '--type', '-U', '--other-user', '-T', '--command-timeout'],
+          doas: ['-u', '-C'],
+          env: ['-u', '--unset', '-C', '--chdir'],
+          exec: ['-a'],
+          time: ['-f', '--format', '-o', '--output'],
+          xargs: ['-a', '--arg-file', '-d', '--delimiter', '-E', '-e', '--eof', '-I', '-i', '--replace',
+            '-L', '-l', '--max-lines', '-n', '--max-args', '-P', '--max-procs', '-s', '--max-chars'],
+          stdbuf: ['-i', '--input', '-o', '--output', '-e', '--error'],
+        };
+        const WRAPPER_POSITIONALS = { setarch: 1 };
+        const NUMERIC_ARG = /^[+-]?\d+(\.\d+)?[smhd]?$/i;   // a duration (`5`, `5s`, `0.5m`) or a priority
+        function firstRealWord(seg) {
+          const toks = seg.trim().split(/\s+/).filter(Boolean).map((t) => t.replace(/^["']+|["']+$/g, ''));
+          let wrapper = null, positionals = 0, takeValue = false;
+          for (const w of toks) {
+            if (!w) continue;
+            if (takeValue) { takeValue = false; continue; }                  // the value of `-n 10`, `-u root`…
+            if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;                // VAR=value prefix
+            if (wrapper !== null) {
+              if (wrapper === 'command' && /^-[vV]$/.test(w)) return '';     // `command -v sh` describes, runs nothing
+              if (w.startsWith('-')) {
+                const flag = w.replace(/=.*/, '');
+                if (!w.includes('=') && (WRAPPER_VALUE_OPTS[wrapper] ?? []).includes(flag)) takeValue = true;
+                continue;                                                    // an option of the wrapper
+              }
+              if (NUMERIC_ARG.test(w)) continue;                            // `timeout 5`, `chrt 10`
+              if (positionals > 0) { positionals--; continue; }             // `setarch x86_64`
+            }
+            const base = w.replace(/.*[\/\\]/, '').replace(/\.exe$/i, '').toLowerCase();
+            if (PREFIX_WORDS.has(base)) { wrapper = base; positionals = WRAPPER_POSITIONALS[base] ?? 0; continue; }
+            return base;                                                     // the real command word
+          }
+          return '';
+        }
+        function launchesShell(command) {
+          if (/\bStart-Process\b/i.test(command)) return true;               // a PowerShell cmdlet, not a leading word
+          // A git subcommand that runs an arbitrary program via config: -c alias.x=!cmd, or an executed key.
+          if (/\bgit\b[\s\S]*?\s-c\s+(alias\.[^=\s]+\s*=\s*!|core\.(pager|editor|sshcommand|fsmonitor|hookspath)\s*=|sequence\.editor\s*=|(?:credential|filter|diff|merge)\.[^=]*\.(?:helper|process|command|textconv|driver)\s*=)/i.test(command))
+            return true;
+          // Split on every pipeline / grouping / substitution / redirect boundary so a shell hidden in
+          // `{ … }`, a backtick, or after `<` is still the leading word of its segment.
+          for (const seg of String(command).split(/[;|&\n(){}`<>]+/)) {
+            const base = firstRealWord(seg);
+            if (base && SHELLS.has(base)) return true;
+          }
+          return false;
+        }
         const CRAWL = [
           /(^|[\s;&|(])find\s/, /(^|[\s;&|(])ls\s+-[a-zA-Z]*[Rr]/, /(^|[\s;&|(])dir\b[\s\S]*\/s/i,
           /(^|[\s;&|(])grep\b[^;&|\n]*\s-[a-zA-Z]*[rR]/, /(^|[\s;&|(])(rg|tree)(\s|$)/,
           /\bGet-ChildItem\b[^;&|\n]*-[Rr]ecurse/i, /(^|[\s;&|(])gci\b[^;&|\n]*-[a-zA-Z]*[Rr]\b/i,
         ];
-        // Sensitive home/profile vars, braced (${HOME}) or bare ($HOME). `~` is caught in bashEscapes.
         const HOME = /(\$\{?(HOME|USERPROFILE|LOCALAPPDATA|APPDATA|HOMEPATH)\b|\$env:|%(USERPROFILE|LOCALAPPDATA|APPDATA|HOMEPATH|HOME)%)/i;
 
         function deny(reason) {
@@ -362,20 +507,24 @@ public sealed class ChatEnvironmentService
         }
         const allow = () => process.exit(0);
 
-        // Normalize a path (relative -> resolved against `root`) to a lowercased, drive-aware slash form
-        // so containment is a string-prefix test. Git-bash `/c/x` and Windows `C:\x` both fold to `c:/x`.
+        // Normalize a path (relative -> resolved against `root`) to a lowercased, drive-aware slash form so
+        // containment is a string-prefix test. Git-bash `/c/x` and Windows `C:\x` both fold to `c:/x`.
         function norm(p, root) {
           let s = String(p).replace(/\\/g, '/').replace(/^\/([A-Za-z])(?=\/|$)/, (_, d) => `${d}:`);
           const abs = /^[A-Za-z]:/.test(s) || s.startsWith('/');
           if (!abs) s = `${String(root).replace(/\\/g, '/')}/${s}`;
           const out = [];
-          for (const seg of s.split('/')) {
+          for (let seg of s.split('/')) {
             if (seg === '' || seg === '.') continue;
-            if (seg === '..') out.pop(); else out.push(seg);
+            if (seg === '..') { out.pop(); continue; }
+            // Windows strips trailing dots and spaces from each path SEGMENT, so `settings.json.`,
+            // `settings.json ` and `hooks.` name the same entry as `settings.json` / `hooks`. Fold them
+            // before any compare, or a PROTECTED prefix test is bypassed by a trailing dot/space.
+            seg = seg.replace(/[. ]+$/, '');
+            if (seg.length) out.push(seg);
           }
           return out.join('/').toLowerCase();
         }
-        // Relative path of `p` inside `root`, or null when `p` escapes it.
         function relTo(p, root) {
           const r = norm('.', root);
           const n = norm(p, root);
@@ -384,26 +533,57 @@ public sealed class ChatEnvironmentService
           return null;
         }
         const inside = (p, root) => relTo(p, root) !== null;
-        // rel is under any entry of `dirs`. A '' entry means the whole jail; other entries match the
-        // dir/file itself or anything beneath it. Shared by the WRITE_DIRS allow-list + PROTECTED deny-list.
         const underAny = (rel, dirs) => dirs.some((d) => d === '' || rel === d || rel.startsWith(d + '/'));
+        // A path segment Windows would resolve to something a string compare cannot see: an 8.3 short name
+        // (`STATE~1`, `SETTIN~1.JSO` — the long name it abbreviates may be PROTECTED or state/), an alternate
+        // data stream (`x.md:evil`, a colon past the drive letter), or a device name (CON, NUL, COM1…). Refused
+        // outright rather than resolved, since resolving needs the file to exist.
+        const DEVICES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+        function oddSegment(p, devices = true) {
+          const s = String(p).replace(/\\/g, '/').replace(/^[A-Za-z]:/, '').replace(/^\/[A-Za-z](?=\/|$)/, '');
+          for (const seg of s.split('/')) {
+            if (!seg || seg === '.' || seg === '..') continue;
+            if (/~\d/.test(seg)) return 'an 8.3 short name';
+            if (seg.includes(':')) return 'an alternate data stream';
+            if (devices && DEVICES.test(seg.replace(/[. ]+$/, ''))) return 'a device name';
+          }
+          return null;
+        }
 
-        // Best-effort: does any path-like token in a Bash command point outside the jail? The robust
-        // controls are the network/eval denials above + the read/write jail at the tool layer; this
-        // catches the common cat/cp/mv/redirect-to-outside cases. An OS-level sandbox is the belt-and-
-        // suspenders upgrade, and also what would contain code executed inside an agent-authored script.
-        function bashEscapes(command, root) {
-          if (HOME.test(command)) return true;
-          for (let t of command.split(/[\s;|&()<>]+/)) {
+        // Best-effort: a refusal reason when a path-like Bash token points outside the jail, into state/, or
+        // at a PROTECTED app-managed path — else null. DEFENCE IN DEPTH, leg (2) in the header: a token scan is
+        // fooled by a variable, a $(...) or a constructed string, and such a token can write this guard's file.
+        // The `` ` `` splitter also catches a token inside a backtick substitution.
+        function bashDenyReason(command, root) {
+          if (HOME.test(command)) return 'a home / profile path';
+          // Resolve EVERY non-flag, non-URL token against the root — a bare `site.json` / `.mcp.json` / `state`
+          // (no slash) is a path at the data root and must be checked too. A command word (`cp`, `cat`) resolves
+          // to a harmless in-root name; only a token that escapes the root or lands on state/ / a PROTECTED path
+          // is refused.
+          for (let t of command.split(/[\s;|&()<>`{}]+/)) {
             t = t.replace(/^["']+|["']+$/g, '');
             if (!t || t.startsWith('-')) continue;                    // a flag, not a path
-            if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) continue;         // URL -- network already denied
-            if (t.startsWith('~')) return true;                       // home dir
-            if (t === '..') return true;                              // bare `cd ..` climbing out
-            if (!/[\/\\]/.test(t) && !/^[A-Za-z]:$/.test(t)) continue; // not path-like
-            if (!inside(t, root)) return true;
+            if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) continue;         // URL — network already denied
+            if (t.startsWith('~')) return 'a home / profile path';
+            // Only a PATH-LIKE token (a slash) is checked for short names / streams — a bare `HEAD~1` or
+            // `a:b` is a git revision or plain text, not a file. Devices are harmless as a Bash target (`> NUL`).
+            if (/[\/\\]/.test(t)) {
+              // `HEAD~2:plans/x.md` is a git revision:path — check only the path after the revision. A colon
+              // BEFORE any slash that is not a drive letter marks it; an ADS colon comes after the last slash.
+              const rev = /^([^\/\\:]+):(?![\/\\])(.*)$/.exec(t);
+              const odd = oddSegment(rev && !/^[A-Za-z]$/.test(rev[1]) ? rev[2] : t, false);
+              if (odd) return `a path with ${odd}`;
+            } else if (t.includes(':')) {
+              // No slash but a colon: text (`a:b`, `key:value`), not a path — unless it is a bare drive (`C:`).
+              if (/^[A-Za-z]:$/.test(t)) return 'a path outside the data folder';
+              continue;
+            }
+            const rel = relTo(t, root);
+            if (rel === null) return 'a path outside the data folder';   // absolute-outside or `..`-escape
+            if (underAny(rel, READ_DENY)) return 'state/ (app state — the access token, the TLS key, the database)';
+            if (underAny(rel, BASH_PROTECTED)) return 'a protected, app-managed path (the guard / settings / .mcp.json / site.json / .git)';
           }
-          return false;
+          return null;
         }
 
         const chunks = [];
@@ -425,23 +605,47 @@ public sealed class ChatEnvironmentService
             deny('Blocked: no direct network access from the shell. Use WebFetch / WebSearch, or a server MCP tool for out-of-boundary fetches.');
           if (EVALS.some((re) => re.test(command)))
             deny('Blocked: no inline code-eval (node -e / python -c / sh -c / pipe-to-shell / powershell -Command). Run a committed skill file or use an MCP tool.');
+          if (launchesShell(command))
+            deny('Blocked: do not launch another shell or interpreter (powershell / pwsh / cmd / wscript / cscript / mshta / bash / sh / source / wsl / rundll32 / regsvr32 / Start-Process, or git -c of a command-running key) — it runs commands this guard cannot see. To move, rename or delete a file use the MCP file tools; to inspect one use file_info; otherwise run a committed skill file.');
           if (CRAWL.some((re) => re.test(command)))
             deny('Blocked: use Read / Glob / Grep to explore — not Bash crawling (find / ls -R / dir /s).');
-          if (bashEscapes(command, projectDir))
-            deny('Blocked: this command references a path outside the data folder. The agent is jailed here; use an MCP tool for anything out-of-boundary.');
+          const bashReason = bashDenyReason(command, projectDir);
+          if (bashReason)
+            deny(`Blocked: this command references ${bashReason}. The agent is jailed to the data folder; use an MCP tool for anything out-of-boundary. (Path-token matching is best-effort.)`);
           allow();
         }
 
         if (toolName === 'Read' || toolName === 'Grep' || toolName === 'Glob') {
-          const p = toolInput.file_path ?? toolInput.path ?? '';     // Grep/Glob path optional (absent = cwd, in jail)
-          if (p && !inside(String(p), projectDir))
-            deny(`Blocked: reads are limited to the data folder — "${p}" is outside it. Use an MCP tool for out-of-boundary data.`);
+          // The named path — and the LITERAL HEAD of a Glob `pattern` / Grep `glob` (the part before the
+          // first glob metacharacter, so `state/**` heads at `state/`) — must be inside the jail and never
+          // inside state/. A recursive `**` with no leading dir is a residual the guard cannot fully evaluate.
+          const head = (s) => String(s).split(/[*?\[{]/)[0];
+          const cands = [];
+          if (toolInput.file_path) cands.push([String(toolInput.file_path), true]);
+          if (toolInput.path) cands.push([String(toolInput.path), true]);
+          if (toolInput.pattern) cands.push([head(toolInput.pattern), false]);
+          if (toolInput.glob) cands.push([head(toolInput.glob), false]);
+          for (const [p, jailCheck] of cands) {
+            if (!p) continue;
+            const odd = oddSegment(p);
+            if (odd) deny(`Blocked: "${p}" names ${odd} — use the file's plain name.`);
+            const rel = relTo(p, projectDir);
+            if (rel === null) {
+              if (jailCheck)
+                deny(`Blocked: reads are limited to the data folder — "${p}" is outside it. Use an MCP tool for out-of-boundary data.`);
+              continue;
+            }
+            if (underAny(rel, READ_DENY))
+              deny(`Blocked: state/ holds app state (the access token, the TLS key, the database) — off-limits. Use an MCP tool for anything the app exposes.`);
+          }
           allow();
         }
 
         if (['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(toolName)) {
           const filePath = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path ?? '';
           if (!filePath) allow();
+          const odd = oddSegment(filePath);
+          if (odd) deny(`Blocked: "${filePath}" names ${odd} — use the file's plain name.`);
           const rel = relTo(filePath, projectDir);
           if (rel === null) deny(`Blocked: ${filePath} is outside the data folder.`);
           if (!underAny(rel, WRITE_DIRS))

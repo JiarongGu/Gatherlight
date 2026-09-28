@@ -23,7 +23,7 @@ const args = process.argv.slice(2);
 // got (never their values — one is a session token), the value of the suite's own control variable, and what a `git`
 // run from this cwd finds — exactly what the agent's Bash would work on. The git runs with this process's own
 // environment, read-only (`rev-parse`), so it can report a leaked GIT_DIR without writing anywhere.
-const WATCHED_ENV = /^(GIT_|CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|NODE_OPTIONS$)/i;
+const WATCHED_ENV = /^(GIT_|CLAUDECODE$|CLAUDE_CODE_|CLAUDE_PID$|CLAUDE_EFFORT$|TRACEPARENT$|TRACESTATE$|NODE_OPTIONS$|ANTHROPIC_|GATHERLIGHT_ACCESS_TOKEN$|GATHERLIGHT_TLS_CERT_PASSWORD$)/i;
 const recordEnv = (kind) => {
   const log = process.env.GATHERLIGHT_STUB_ENV_LOG;
   if (!log) return;
@@ -37,6 +37,8 @@ const recordEnv = (kind) => {
       kind, pid: process.pid, cwd: process.cwd(),
       watched: Object.keys(process.env).filter((k) => WATCHED_ENV.test(k)).sort(),
       kept: process.env.ZZE2E_KEPT ?? null,
+      // The Git Bash path the app handed this spawn (e2e-p50 git-bash offer). A file path, not a secret.
+      gitBash: process.env.CLAUDE_CODE_GIT_BASH_PATH ?? null,
       gitDir,
     }) + '\n', 'utf8');
   } catch { /* a log that cannot be written must not change what the stub answers */ }
@@ -219,6 +221,38 @@ const probeJudgeTools = async (server) => {
   // the bearer gate: the endpoint EXECUTES tools, so an unauthenticated local caller must bounce
   out.unauth = (await rpc({ jsonrpc: '2.0', id: 8, method: 'tools/list' }, { auth: false })).status;
   return out;
+};
+
+// Drive the loopback MCP endpoint the way the real CLI does — used by the FSOPSTEST branch (e2e-p54) to
+// call the scoped file tools (fs_move / fs_delete / file_info) for real, so the run-scope gate, the write
+// scope and the overwrite refusal are exercised end to end. Returns [{op, status, isError, text}].
+const driveFsOps = async (server, calls) => {
+  let session = null;
+  const rpc = async (body) => {
+    const res = await httpPost(server.url, {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      ...(server.auth ? { authorization: server.auth } : {}),
+      ...(session ? { 'mcp-session-id': session } : {}),
+    }, JSON.stringify(body));
+    const sid = res.headers['mcp-session-id'];
+    if (sid) session = sid;
+    return { status: res.status, msg: parseRpc(res) };
+  };
+  await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'e2e-stub', version: '1' } } });
+  await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  const out = [];
+  for (const c of calls) {
+    const r = await rpc({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: c.name, arguments: c.args } });
+    out.push({ op: c.op, status: r.status, isError: r.msg?.result?.isError ?? null,
+      text: (r.msg?.result?.content?.[0]?.text ?? r.msg?.error?.message ?? '').slice(0, 200) });
+  }
+  return out;
+};
+const logFsOps = (phase, rows) => {
+  const f = process.env.GATHERLIGHT_STUB_FSOPS_LOG;
+  if (!f) return;
+  try { fs.appendFileSync(f, JSON.stringify({ phase, rows }) + '\n', 'utf8'); } catch {}
 };
 
 // LLM scorer judge (Platform/Ops/Scoring): return a canned {score, reason} verdict JSON so the automated
@@ -517,7 +551,18 @@ if (readOnly) {
     // e2e-p16 (validate model): the execute turn writes under .claude/, the one kind of diff that runs
     // the 智库 validation pass — so its spawn, and the --model it receives, can be observed at all.
     : userReq.includes('KBEDITTEST') ? ' [TRIG:KBEDIT]'
+    : userReq.includes('FSOPSTEST') ? ' [TRIG:FSOPS]'
     : userReq.includes('NOOPTEST') ? ' [TRIG:NOOP]' : '';
+  // e2e-p54: prove a scoped file tool is REFUSED in the read-only plan phase. The stub drives the loopback
+  // endpoint directly (a fake CLI does not honour --allowedTools), so the tool's own run-scope check is
+  // what must bounce it — the enforcement, not the allow-list.
+  if (userReq.includes('FSOPSTEST') && !systemMode) {
+    const server = mcpServerFromArgs();
+    if (server) {
+      try { logFsOps('plan', await driveFsOps(server, [{ op: 'move-in-plan', name: 'fs_move', args: { from: 'plans/trips/2026-08-kyoto.md', to: 'plans/trips/2026-08-kyoto-plan.md' } }])); }
+      catch (err) { logFsOps('plan', [{ op: 'move-in-plan', error: String(err?.message ?? err) }]); }
+    }
+  }
   const planText = systemMode ? text : text + trig;
   emit({ type: 'assistant', message: { content: [{ type: 'text', text: planText }] } });
   done(planText);
@@ -602,6 +647,39 @@ if (readOnly) {
   // ignored rather than parking the gate.
   if (prompt.includes('[TRIG:CAPUNKNOWN]') && !prompt.includes("HUMAN'S FEEDBACK")) {
     done('这一步不需要改动文件(stub)。\n\nCAPABILITY_BLOCKED: totally_unknown_cap_xyz');
+    process.exit(0);
+  }
+  // Scoped file tools (e2e-p54): on the execute run, drive the loopback endpoint to MOVE and DELETE real
+  // seeded files (write phase → the run-scope permits it), plus two negatives (an out-of-scope target and an
+  // overwrite without the flag). Emit a tool_use event for each SUCCESSFUL mutation so AgentRunner records
+  // its path into the tracker — that is what carries a move/delete to the diff gate, since no Edit/Write fired.
+  if (prompt.includes('[TRIG:FSOPS]')) {
+    const server = mcpServerFromArgs();
+    const moveTo = 'plans/trips/2026-08-kyoto-moved.md';
+    const delPath = 'plans/budgets/2026-08-kyoto.md';
+    try {
+      const rows = server ? await driveFsOps(server, [
+        { op: 'move-ok', name: 'fs_move', args: { from: 'plans/trips/2026-08-kyoto.md', to: moveTo } },
+        { op: 'delete-ok', name: 'fs_delete', args: { path: delPath } },
+        { op: 'info-ok', name: 'file_info', args: { path: moveTo } },
+        { op: 'move-out-of-scope', name: 'fs_move', args: { from: moveTo, to: 'state/evil.md' } },
+        { op: 'move-overwrite-refused', name: 'fs_move', args: { from: moveTo, to: 'plans/visa/2026-08-kyoto/applicant-data.json' } },
+        // Security review (2026-09-28) — SiteWriteScope C2/C3 normalization: a trailing dot, a case-fold
+        // and an alternate-data-stream colon must all reach a CLEAN refusal (the last a 400, not a 500).
+        // Each has its OWN existing source: on the pre-fix code the trailing-dot move SUCCEEDED, and a shared
+        // source would then make the later cases fail for "source missing" — a vacuous confirm-to-fail.
+        { op: 'move-c2-trailing-dot', name: 'fs_move', args: { from: 'household/README.md', to: '.claude/settings.json.' } },
+        { op: 'move-c3-case-fold', name: 'fs_move', args: { from: 'household/people.md', to: '.claude/Settings.json' } },
+        { op: 'move-ads-colon', name: 'fs_move', args: { from: 'plans/visa/2026-08-kyoto/applicant-data.json', to: 'plans/x.md:evil' } },
+      ]) : [{ op: 'no-server' }];
+      logFsOps('execute', rows);
+    } catch (err) { logFsOps('execute', [{ op: 'execute', error: String(err?.message ?? err) }]); }
+    // The two successful mutations, as tool_use events, so the tracker records their paths for the diff gate.
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__planner-tools__fs_move', input: { from: 'plans/trips/2026-08-kyoto.md', to: moveTo } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__planner-tools__fs_delete', input: { path: delPath } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    done('已整理计划文件:移动了行程、删除了旧预算(stub,经 fs_move/fs_delete)。');
     process.exit(0);
   }
   // NOOP (e2e-p28): make NO change and ask nothing → empty diff → the flow ends 'rejected'. A pure

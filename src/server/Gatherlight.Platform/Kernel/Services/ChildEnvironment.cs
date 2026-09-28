@@ -12,8 +12,11 @@ namespace Gatherlight.Server.Platform.Kernel.Services;
 /// <para><b>Two mechanisms, because not every spawn has a seam.</b></para>
 /// <list type="number">
 /// <item><b>The whole process forgets the launcher's context at startup</b> (<see cref="ForgetLauncherContext"/>): the
-/// repository it named (<see cref="RepositoryVariables"/>) and the Claude Code session it belonged to
-/// (<see cref="ParentSessionVariables"/>). No child the app starts has any use for either, and three spawns cannot be
+/// repository it named (<see cref="RepositoryVariables"/>), the Claude Code session it belonged to
+/// (<see cref="ParentSessionVariables"/>), whatever would take the claude CLI off the subscription login
+/// (<see cref="OffSubscriptionVariables"/>), whatever could add the agent a tool past the scope guard
+/// (<see cref="AgentToolVariables"/>) and the app's own secrets (<see cref="AppSecretVariables"/>, which the app
+/// itself reads through <see cref="Launched"/>). No child the app starts has any use for them, and three spawns cannot be
 /// reached per call: Lyntai's CLI runs go through its sealed <c>ProcessRunner</c>, whose <c>environment</c> argument can
 /// only SET variables (a BYO <c>IProcessRunner</c> would be the seam, but Lyntai then reports every CLI as available without looking —
 /// <c>CliProviderEngine.IsAvailable</c> is optimistic for any runner that is not its own — so a missing CLI would stop
@@ -29,9 +32,9 @@ namespace Gatherlight.Server.Platform.Kernel.Services;
 /// <para><b>What every child keeps.</b> Everything else the app was started with: <c>PATH</c>, <c>SystemRoot</c>/
 /// <c>windir</c>, <c>TEMP</c>/<c>TMP</c>, <c>USERPROFILE</c>/<c>HOME</c>, the proxy variables and CA settings a network
 /// client needs, <c>CLAUDE_CONFIG_DIR</c> and <c>CLAUDE_CMD</c> (the app's own, set by <c>ClaudeCliRuntime.Apply</c>), the
-/// app's own <c>GATHERLIGHT_*</c>, and the household's own CLI configuration (<c>ANTHROPIC_*</c>,
-/// <c>CLAUDE_CODE_USE_*</c> and the like). The capability sandbox is the exception: it keeps an allow-list and nothing
-/// else (<see cref="ForSandbox"/>).</para>
+/// app's own <c>GATHERLIGHT_*</c> but its secrets, the subscription login (<c>CLAUDE_CODE_OAUTH_TOKEN</c>) and the
+/// household's CLI settings that pick no other account (the model, <c>AWS_*</c>/<c>GOOGLE_*</c> without their switch).
+/// The capability sandbox is the exception: it keeps an allow-list and nothing else (<see cref="ForSandbox"/>).</para>
 ///
 /// <para><b>Children left as they are, and why.</b> An external stdio MCP server (<c>StdioMcpConnection.Start</c>) is the
 /// household's own program, unsandboxed by design; it loses only what the whole process forgot, because its environment
@@ -100,32 +103,172 @@ public static class ChildEnvironment
     /// loop, every e2e fixture — handed them to every claude it spawned: the app's agent was announced to the CLI as a
     /// child of the developer's session, with the address of that session's channel. A CLI the app starts belongs to no
     /// session but its own, and it sets these afresh for its own agent's Bash.
-    /// <para><b>Kept</b>: settings rather than identities — <c>CLAUDE_EFFORT</c>, <c>CLAUDE_CONFIG_DIR</c> (which the app
-    /// manages itself), <c>ANTHROPIC_*</c>, <c>CLAUDE_CODE_USE_*</c> and the like are the household's own CLI
-    /// configuration, the same the CLI gets in their terminal.</para></summary>
+    /// <para><c>CLAUDE_EFFORT</c> and <c>TRACEPARENT</c> (with its W3C companion <c>TRACESTATE</c>, which the binary names
+    /// too) come from the same per-session builder as the rest (security review, 2026-09-28): the parent session's effort
+    /// level, and the trace its commands belong to. Inherited, the app's agent ran at the developer's effort and its spans
+    /// joined the developer's trace. <c>AI_AGENT</c> stays: the CLI sets it for itself whatever it inherits.</para>
+    /// <para><b>Kept</b>: <c>CLAUDE_CONFIG_DIR</c>, which the app manages itself, and the household's own CLI settings —
+    /// the model (<c>ANTHROPIC_MODEL</c>, <c>ANTHROPIC_DEFAULT_*_MODEL</c>) and the like. What moves the CLI off the
+    /// subscription login, or sends its requests elsewhere, is <see cref="OffSubscriptionVariables"/>.</para></summary>
     public static readonly IReadOnlyList<string> ParentSessionVariables =
     [
         "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
         "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
         "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SSE_PORT", "CLAUDE_PID",
+        "CLAUDE_EFFORT", "TRACEPARENT", "TRACESTATE",
     ];
 
-    /// <summary>Remove the launcher's repository (<see cref="RepositoryVariables"/>) and Claude Code session
-    /// (<see cref="ParentSessionVariables"/>) from THIS process's environment, so no child inherits them. Called once at
-    /// the top of <c>GatherlightApp.Build</c>, before anything is spawned; idempotent. Returns the NAMES removed — never
-    /// their values, one of which is a token — for the startup log.</summary>
-    public static IReadOnlyList<string> ForgetLauncherContext()
+    /// <summary>The variables that would move the claude CLI OFF the household's subscription login, or send its requests
+    /// — prompts and family data included — somewhere other than Anthropic's API. The rule is "LLM via the authenticated
+    /// claude CLI only, never an API key", and until round 6 it held only while nobody set one of these: the CLI's own
+    /// documentation ranks every credential below ABOVE the <c>/login</c> subscription, and says an
+    /// <c>ANTHROPIC_API_KEY</c> "is always used when present" in <c>-p</c> mode, which is how the app runs it. So an
+    /// inherited key billed the household's API account while 资源 said the CLI was signed in. The owner decided
+    /// (2026-09-28): strip it, enforce the rule. Every name was checked in the installed CLI's binary (2.1.283), and its
+    /// meaning in the CLI's authentication and environment-variable docs where documented. Three kinds:
+    /// <list type="bullet">
+    /// <item><b>A credential</b> other than the subscription login: <c>ANTHROPIC_API_KEY</c>, <c>ANTHROPIC_AUTH_TOKEN</c>
+    /// (a bearer for a gateway), the providers' own keys <c>ANTHROPIC_AWS_API_KEY</c>, <c>ANTHROPIC_FOUNDRY_API_KEY</c>,
+    /// <c>ANTHROPIC_FOUNDRY_AUTH_TOKEN</c>, the Workload Identity Federation tokens <c>ANTHROPIC_IDENTITY_TOKEN</c> /
+    /// <c>_FILE</c>, and <c>CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR</c> (an API key through an inherited descriptor).</item>
+    /// <item><b>A selector</b> that picks another account: the provider switches <c>CLAUDE_CODE_USE_BEDROCK</c>,
+    /// <c>_VERTEX</c>, <c>_FOUNDRY</c> (rank 1 in the docs' order) and the siblings the binary names beside them —
+    /// <c>_ANTHROPIC_AWS</c>, <c>_ANTHROPIC_GOOGLE_CLOUD</c>, <c>_GATEWAY</c>, <c>_MANTLE</c>; <c>ANTHROPIC_PROFILE</c> and
+    /// <c>ANTHROPIC_FEDERATION_RULE_ID</c>, which select a Console profile or federation credential ranked above
+    /// <c>/login</c> (the federation needs <c>ANTHROPIC_ORGANIZATION_ID</c> beside it, so the rule id alone is enough to
+    /// strip); and <c>ANTHROPIC_CONFIG_DIR</c>, the directory whose ACTIVE profile ranks above <c>/login</c> when it is a
+    /// federation one. The other <c>CLAUDE_CODE_USE_*</c> the binary names are features, not accounts: those that can
+    /// change the agent's tools are <see cref="AgentToolVariables"/>, and <c>_NATIVE_FILE_SEARCH</c> stays.</item>
+    /// <item><b>An endpoint</b>: <c>ANTHROPIC_BASE_URL</c> and <c>CLAUDE_CODE_API_BASE_URL</c>, every provider's
+    /// <c>ANTHROPIC_*_BASE_URL</c> (<see cref="IsOffSubscriptionVariable"/> matches the family, so one the next CLI adds is
+    /// covered), <c>ANTHROPIC_API_HOST</c> (undocumented; named in the binary, stripped by what its name says),
+    /// <c>ANTHROPIC_UNIX_SOCKET</c> (requests over a local socket instead of to the API) and
+    /// <c>ANTHROPIC_CUSTOM_HEADERS</c>, which can carry a credential or a routing header. The security review rated the
+    /// base URL highest: with the subscription token still attached, it sends every prompt, and the household's data in
+    /// it, to another host.</item>
+    /// </list>
+    /// <para><b>Kept, and why.</b> <c>CLAUDE_CODE_OAUTH_TOKEN</c> — the docs: "a long-lived OAuth token generated by
+    /// <c>claude setup-token</c> … authenticates with your Claude subscription"; it IS the subscription login, which the
+    /// rule allows — with <c>CLAUDE_CODE_OAUTH_REFRESH_TOKEN</c>, <c>CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR</c> and the
+    /// OAuth client settings. It ranks above <c>/login</c>, so while it is set it decides WHICH subscription the app uses,
+    /// over the app's own login mode. <c>AWS_*</c> and <c>GOOGLE_*</c> (<c>AWS_BEARER_TOKEN_BEDROCK</c> included), and the
+    /// providers' project, region, resource and workspace ids: other programs read them, and without the switch above
+    /// they select nothing for the CLI — the switch is what the docs rank first. The model settings, and the proxy and CA
+    /// variables a network client needs (<c>HTTPS_PROXY</c> is the household's network, not an endpoint of the API).</para>
+    /// <para><b>What an environment strip cannot reach</b>: an <c>env</c> block or an <c>apiKeyHelper</c> in the CLI's
+    /// OWN settings files (the machine's <c>~/.claude/settings.json</c> in machine login mode, managed settings), and an
+    /// active federation profile in the default Anthropic configuration directory. Those are the CLI's configuration,
+    /// read by the CLI itself.</para>
+    /// <para>Stripped from the whole PROCESS, because Lyntai's CLI runs have no per-spawn seam (the class comment). So an
+    /// external MCP server loses them too: one that calls the Anthropic API itself takes its key from the server's own
+    /// configured environment, which is applied after the inherited one.</para></summary>
+    public static readonly IReadOnlyList<string> OffSubscriptionVariables =
+    [
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AWS_API_KEY", "ANTHROPIC_FOUNDRY_API_KEY",
+        "ANTHROPIC_FOUNDRY_AUTH_TOKEN", "ANTHROPIC_IDENTITY_TOKEN", "ANTHROPIC_IDENTITY_TOKEN_FILE",
+        "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_GATEWAY",
+        "CLAUDE_CODE_USE_MANTLE", "ANTHROPIC_PROFILE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_CONFIG_DIR",
+        "ANTHROPIC_BASE_URL", "CLAUDE_CODE_API_BASE_URL", "ANTHROPIC_API_HOST", "ANTHROPIC_UNIX_SOCKET",
+        "ANTHROPIC_CUSTOM_HEADERS",
+    ];
+
+    /// <summary>Whether <paramref name="key"/> is one of <see cref="OffSubscriptionVariables"/>, or any
+    /// <c>ANTHROPIC_…_BASE_URL</c>.</summary>
+    public static bool IsOffSubscriptionVariable(string key) =>
+        Matches(key, OffSubscriptionVariables, [])
+        || (key.StartsWith("ANTHROPIC_", Cmp) && key.EndsWith("_BASE_URL", Cmp));
+
+    /// <summary>The app's OWN secrets that an environment can carry: the remote-access bearer token and the TLS
+    /// certificate's password (every <c>GATHERLIGHT_*</c> the server reads was checked; these are the two that hold a
+    /// secret — the rest are URLs, paths, ports, flags and test knobs). No child of the app needs either: the agent
+    /// reaches the app's tools through the loopback channel's own per-start token, never this one. And a child that could
+    /// read the access token could hand it on — the agent's Bash can print it, and an external MCP server is someone
+    /// else's code. So the whole process forgets them at startup, and the app reads them through <see cref="Launched"/>,
+    /// which remembers what was forgotten: the desktop host rebuilds its options on every start of the in-process server,
+    /// and the settings panel says which settings the environment overrides.
+    /// <para><b>Kept</b>, every other <c>GATHERLIGHT_*</c>: none is a secret, and some children read their own (the
+    /// claude stub's <c>GATHERLIGHT_STUB_*</c> knobs, the measurement fake's configuration). The capability sandbox gets
+    /// none of them, by its allow-list.</para></summary>
+    public static readonly IReadOnlyList<string> AppSecretVariables = ["GATHERLIGHT_ACCESS_TOKEN", "GATHERLIGHT_TLS_CERT_PASSWORD"];
+
+    /// <summary>The CLI's feature switches that can ADD a tool, or change how one is mediated, past what the app configures
+    /// and the scope guard sees (a jail question, security review 2026-09-28). Each <c>CLAUDE_CODE_USE_*</c> the installed
+    /// binary (2.1.283) names that is not an account selector (<see cref="OffSubscriptionVariables"/>) was checked:
+    /// <list type="bullet">
+    /// <item><c>CLAUDE_CODE_USE_POWERSHELL_TOOL</c> — STRIPPED. It turns on the PowerShell tool, which the guard's matcher
+    /// does not list. But on Windows the tool is on by DEFAULT without it (the CLI's tools reference), so stripping the
+    /// switch is not what closes the gap: every agent run disallows the tool (<c>UnguardedTools</c>).</item>
+    /// <item><c>CLAUDE_CODE_USE_COWORK_PLUGINS</c> — STRIPPED. Undocumented (none of the CLI's 210 documentation pages names
+    /// it); by its name it loads the plugins of another product's store, and plugins contribute exactly what the app
+    /// configures itself — MCP servers, hooks (which run outside the permission checks, and a PreToolUse hook can approve
+    /// a call), skills and subagents.</item>
+    /// <item><c>CLAUDE_CODE_USE_CCR_V2</c> — STRIPPED, failing closed. Undocumented too; by its name the protocol of
+    /// Claude Code Remote sessions, a channel by which another client drives a session — which a local <c>-p</c> run the
+    /// app starts never uses. It is stripped because nothing shows it leaves the tool set alone and the app has no use for
+    /// it, not because it was measured to add a tool.</item>
+    /// <item><c>CLAUDE_CODE_USE_NATIVE_FILE_SEARCH</c> — KEPT. Documented: it makes the CLI discover custom commands,
+    /// subagents and output styles with Node.js file APIs instead of ripgrep, and "does not affect the Grep or file search
+    /// tools" — no tool is added or replaced, and file access is mediated as before.</item>
+    /// </list>
+    /// The rest (<c>_BEDROCK</c> and its siblings) pick another account and are <see cref="OffSubscriptionVariables"/>.</summary>
+    public static readonly IReadOnlyList<string> AgentToolVariables =
+        ["CLAUDE_CODE_USE_POWERSHELL_TOOL", "CLAUDE_CODE_USE_COWORK_PLUGINS", "CLAUDE_CODE_USE_CCR_V2"];
+
+    /// <summary>What <see cref="ForgetLauncherContext"/> removed, by kind — names only, for the startup log.</summary>
+    public sealed record Forgotten(
+        IReadOnlyList<string> LauncherContext, IReadOnlyList<string> OffSubscription, IReadOnlyList<string> AgentTools,
+        IReadOnlyList<string> AppSecrets)
     {
-        var removed = new List<string>();
+        /// <summary>Whether anything was removed.</summary>
+        public bool Any => LauncherContext.Count + OffSubscription.Count + AgentTools.Count + AppSecrets.Count > 0;
+    }
+
+    private static readonly object RememberedGate = new();
+    private static readonly Dictionary<string, string> Remembered = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Remove from THIS process's environment, so no child inherits them: the launcher's repository
+    /// (<see cref="RepositoryVariables"/>) and Claude Code session (<see cref="ParentSessionVariables"/>), what would take
+    /// the claude CLI off the subscription login (<see cref="OffSubscriptionVariables"/>), what could add a tool past the
+    /// guard (<see cref="AgentToolVariables"/>), and the app's own secrets
+    /// (<see cref="AppSecretVariables"/>, whose values it remembers for <see cref="Launched"/>). Called once at the top of
+    /// <c>GatherlightApp.Build</c>, before anything is spawned; idempotent. Returns the NAMES removed — never their values,
+    /// several of which are credentials — for the startup log.</summary>
+    public static Forgotten ForgetLauncherContext()
+    {
+        var context = new List<string>();
+        var offSubscription = new List<string>();
+        var agentTools = new List<string>();
+        var secrets = new List<string>();
         foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
         {
             var key = (string)e.Key;
-            if (!Matches(key, RepositoryVariables, RepositoryPrefixes) && !Matches(key, ParentSessionVariables, [])) continue;
+            List<string>? into =
+                Matches(key, RepositoryVariables, RepositoryPrefixes) || Matches(key, ParentSessionVariables, []) ? context
+                : IsOffSubscriptionVariable(key) ? offSubscription
+                : Matches(key, AgentToolVariables, []) ? agentTools
+                : Matches(key, AppSecretVariables, []) ? secrets
+                : null;
+            if (into is null) continue;
+            if (into == secrets && e.Value is string value)
+                lock (RememberedGate) Remembered[key] = value;
             Environment.SetEnvironmentVariable(key, null);
-            removed.Add(key);
+            into.Add(key);
         }
-        removed.Sort(StringComparer.Ordinal);
-        return removed;
+        foreach (var list in new[] { context, offSubscription, agentTools, secrets }) list.Sort(StringComparer.Ordinal);
+        return new Forgotten(context, offSubscription, agentTools, secrets);
+    }
+
+    /// <summary>The value of <paramref name="name"/> as the app was LAUNCHED with it: the process environment while the
+    /// variable is there, else what <see cref="ForgetLauncherContext"/> remembered when it removed one of
+    /// <see cref="AppSecretVariables"/>. For the app's own readers of its own settings (the access token, the TLS
+    /// password, the settings panel's env-override list) — never for a child, which is why the value is not put back.</summary>
+    public static string? Launched(string name)
+    {
+        var live = Environment.GetEnvironmentVariable(name);
+        if (live is not null) return live;
+        lock (RememberedGate) return Remembered.TryGetValue(name, out var v) ? v : null;
     }
 
     // ---- 2 · git ---------------------------------------------------------------------------------------------------
