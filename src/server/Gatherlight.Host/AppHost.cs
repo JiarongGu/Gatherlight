@@ -377,10 +377,14 @@ internal sealed class AppHost : Form
 
     // Full process relaunch — the fallback for RestartServerInProcessAsync, and the path
     // RestartForUpdate uses (via the launcher).
+    //
+    // Both relaunch sites go through ChildEnvironment.ForRelaunch: this process's environment was cleaned at startup
+    // (the access token and TLS password are no longer in it — the app reads them through ChildEnvironment.Launched),
+    // so a plain ShellExecute handed the new process an install without the token it was started with.
     private void Restart()
     {
         var exe = Environment.ProcessPath ?? Application.ExecutablePath;
-        try { Process.Start(new ProcessStartInfo(exe, "--restarted") { UseShellExecute = true }); } catch { return; }
+        try { Process.Start(ChildEnvironment.ForRelaunch(exe, "--restarted")); } catch { return; }
         ExitApp();
     }
 
@@ -394,7 +398,7 @@ internal sealed class AppHost : Form
         if (!File.Exists(launcher)) { Restart(); return; }
         try
         {
-            Process.Start(new ProcessStartInfo(launcher) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(launcher)! });
+            Process.Start(ChildEnvironment.ForRelaunch(launcher, workingDirectory: Path.GetDirectoryName(launcher)!));
         }
         catch { Restart(); return; }
         ExitApp();

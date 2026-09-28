@@ -259,8 +259,24 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         Environment.SetEnvironmentVariable("CLAUDE_CMD", provisioned);
     }
 
-    // The last git-bash path THIS class set, so a later probe can tell its own value from the household's.
-    private string? _appliedGitBash;
+    // The last git-bash path the app set, so a later probe can tell its own value from the household's. STATIC, because
+    // the variable it describes is process-wide and the desktop host builds a new runtime on every in-process server
+    // restart: per instance, the next runtime read the value the previous one set as the HOUSEHOLD'S and never updated
+    // or cleared it again (round-6 review). A value naming our own provisioned bash.exe is ours besides, whoever set it
+    // — a relaunched app inherits it from the process before (IsOurGitBash).
+    private static string? _appliedGitBash;
+
+    private bool IsOurGitBash(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        if (string.Equals(value, _appliedGitBash, StringComparison.OrdinalIgnoreCase)) return true;
+        try
+        {
+            return string.Equals(System.IO.Path.GetFullPath(value),
+                System.IO.Path.GetFullPath(ProvisionedGitBashPath(_platform.ResourcesPath)), StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
 
     /// <summary>Point the CLI at a Git Bash the app can guard, on Windows, when it would otherwise find NONE.
     ///
@@ -282,14 +298,13 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
 
         var current = Environment.GetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH");
         // Set by the household (or anything other than us) → leave it entirely.
-        if (!string.IsNullOrWhiteSpace(current)
-            && !string.Equals(current, _appliedGitBash, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(current) && !IsOurGitBash(current))
             return;
 
         // The CLI can already find one → do not compete; drop ours if we had set it.
         if (GitBashDiscoverable())
         {
-            if (_appliedGitBash is not null)
+            if (_appliedGitBash is not null || IsOurGitBash(current))
             {
                 Environment.SetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH", null);
                 _appliedGitBash = null;
@@ -302,7 +317,7 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         if (provisioned is null)
         {
             // Nothing to offer yet. If we had set one and it has since vanished, stop naming it.
-            if (_appliedGitBash is not null)
+            if (_appliedGitBash is not null || IsOurGitBash(current))
             {
                 Environment.SetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH", null);
                 _appliedGitBash = null;
@@ -322,8 +337,7 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
     {
         if (!OperatingSystem.IsWindows()) return null;
         var household = Environment.GetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH");
-        if (!string.IsNullOrWhiteSpace(household)
-            && !string.Equals(household, _appliedGitBash, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(household) && !IsOurGitBash(household))
             return "系统已设置了 Git Bash,规划助手用它作为命令行(应用不改这个设置)。";
         if (GitBashDiscoverable())
             return "系统已装 Git for Windows,规划助手用它作为命令行 —— 无需下载。";
@@ -337,9 +351,12 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
     /// unlike MinGit's — or null when it is not installed.</summary>
     public static string? ProvisionedGitBash(string resourcesPath)
     {
-        var bash = System.IO.Path.Combine(resourcesPath, "git-bash", "bin", "bash.exe");
+        var bash = ProvisionedGitBashPath(resourcesPath);
         return File.Exists(bash) ? bash : null;
     }
+
+    private static string ProvisionedGitBashPath(string resourcesPath) =>
+        System.IO.Path.Combine(resourcesPath, "git-bash", "bin", "bash.exe");
 
     private static bool? _gitBashDiscoverableCache;
 
