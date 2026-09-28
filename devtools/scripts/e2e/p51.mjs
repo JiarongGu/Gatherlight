@@ -133,9 +133,9 @@ try {
     ok('llama.cpp holds BOTH ways we supply a model, from one heading',
       g(semantic, 'managed').includes('llama-cpp') && g(semantic, 'managed').includes('builtin'),
       JSON.stringify(g(semantic, 'managed')));
-    // The declined member sits inside a group whose OTHER member works, so 判断 still has that whole
-    // heading available — what used to be a dead fifth of the picker is not a choice at all any more.
-    ok('判断 can use the managed heading THROUGH llama.cpp even though ONNX cannot judge',
+    // On 判断 too: llama.cpp's chat models and rerankers, and — since round 6 — ONNX's in-process reranker. That member
+    // was DECLINED there until then, sitting inside a heading whose other member worked; it is a real choice now.
+    ok('判断 has both ways under the managed heading too — llama.cpp, and the in-process ONNX reranker',
       g(judge, 'managed').includes('llama-cpp') && g(judge, 'managed').includes('builtin'),
       JSON.stringify(g(judge, 'managed')));
     // And the no-model group is the empty one, on both layers: no backend, because choosing it is
@@ -355,12 +355,12 @@ try {
   // it was the plan: docs/builtin-model-runner.md predicted this exact line would have to change, so that
   // nobody could add the source without noticing the suite's claim about it had changed.
   //
-  // It stays DECLINED for 判断 — as an option nobody BUILT, not an impossibility: an in-process reranker
-  // could verify (Lyntai 3.2 ships one, and since 3.5 — its D191 — it runs the multilingual mMiniLMv2), but it is
-  // not built and not measured against llama.cpp's, so the multilingual rerankers run on llama.cpp for now
-  // (MemorySources.BuiltInCannotJudge says so to the household).
-  ok('the built-in runtime is bindable on 语义 now, and still declined on 判断',
-    bindable(semantic, 'builtin') === true && bindable(judge, 'builtin') === false,
+  // …and on 判断 since round 6. It was DECLINED there — as an option nobody BUILT, never an impossibility (an
+  // in-process reranker verifies, and since Lyntai 3.5's D191 runs the multilingual mMiniLMv2) — until it was built:
+  // BuiltInJudgeSource, the in-process reranker, offered and described as unmeasured (e2e-p56 drives it). This is the
+  // line that had to flip, deliberately, for the same reason the 语义 half did.
+  ok('the built-in runtime is bindable on 语义, and on 判断 now too — the in-process reranker',
+    bindable(semantic, 'builtin') === true && bindable(judge, 'builtin') === true,
     JSON.stringify({ judge: bindable(judge, 'builtin'), semantic: bindable(semantic, 'builtin') }));
   // …and BINDABLE is not AVAILABLE. The fixture has not downloaded 222 MB of weights, so it must report
   // itself unusable AND name the download — the distinction between "no implementation" and "not set up
@@ -404,13 +404,13 @@ try {
   }
 
   // A backend that cannot be used must SAY so. This is the assertion that would fail if someone "tidied
-  // up" by dropping the declined entries instead of explaining them.
+  // up" by dropping the declined entries instead of explaining them. Since round 6 NO backend is declined on either
+  // layer (内置 on 判断, the last one, was built), so the rule is asserted on what this fixture cannot use RIGHT NOW —
+  // declined or unavailable — and the list must not be empty, or the check says nothing.
+  const cannot = [...srcs(judge), ...srcs(semantic)].filter((x) => !x.bindable || !x.available);
   ok('every backend a layer cannot use carries a reason, not just a disabled button',
-    [...srcs(judge), ...srcs(semantic)]
-      .filter((x) => !x.bindable)
-      .every((x) => typeof x.reason === 'string' && x.reason.length > 10),
-    JSON.stringify([...srcs(judge), ...srcs(semantic)]
-      .filter((x) => !x.bindable).map((x) => [x.id, x.reason?.slice(0, 40)])));
+    cannot.length > 0 && cannot.every((x) => typeof x.reason === 'string' && x.reason.length > 10),
+    JSON.stringify(cannot.map((x) => [x.id, x.bindable, x.available, x.reason?.slice(0, 40)])));
   // Claude no longer HAS a refusal under 语义 — it has an arm. What must still hold is that the arm does
   // not pretend to embed: the probe reports what it actually proved, and a fabricated vector width is the
   // fail-open lie this whole area exists to prevent (a bogus width matches nothing, silently, for ever).
@@ -420,14 +420,15 @@ try {
   ok('and each carries what choosing it costs, rather than just a name',
     [...srcs(judge), ...srcs(semantic)].every((x) => String(x.description ?? '').length > 10));
 
-  // Unbindable is still enforced at the ENDPOINT and not merely greyed out — the button is one writer of
-  // that decision and the API is another, and only one of them is a boundary. Demonstrated on a backend
-  // that is declined (内置 on 判断 — unbuilt rather than impossible since a reranker can judge, but still
-  // unbindable), since Claude on 语义 is now a real arm and no longer serves as the example.
-  const bindDeclined = await post('/api/manage/memory/layer/judge',
-    { source: 'builtin', model: 'haiku' });
-  ok('binding a DECLINED backend is refused by the API, not merely disabled in the UI',
-    bindDeclined.status === 400, String(bindDeclined.status));
+  // Unusable is still enforced at the ENDPOINT and not merely greyed out — the button is one writer of that
+  // decision and the API is another, and only one of them is a boundary. It was demonstrated on a DECLINED backend
+  // (内置 on 判断) until round 6 built that one and left none declined; it is demonstrated now on one that is
+  // UNAVAILABLE here — 内置 on 判断 with its model not downloaded — whose binding the API refuses with its reason.
+  const bindUnavailable = await post('/api/manage/memory/layer/judge',
+    { source: 'builtin', model: 'mmarco-mMiniLMv2-L12-H384-v1-onnx' });
+  ok('binding a backend that is unavailable here is refused by the API, not merely disabled in the UI',
+    bindUnavailable.status === 409 && /还没有下载/.test(String(bindUnavailable.body?.error)),
+    `${bindUnavailable.status} ${JSON.stringify(bindUnavailable.body?.error ?? '').slice(0, 60)}`);
 
   // THE APP-PROVISIONED BACKEND, on BOTH layers. It is the second class to implement both layer
   // interfaces (after openai-compat), and the first where the app owns the runtime — so it must appear
@@ -522,12 +523,13 @@ try {
   // A declined backend has no runtime, so it gets NULL rather than a plausible label. Inventing
   // "the app can download this" for something that can never run is the exact class of unenforced
   // promise this panel exists to refuse.
-  // Still asserted, on the backend that is still declined: 内置 cannot judge. The 语义/Claude half moved
-  // out of this check because that entry is no longer declined — it is a real arm with a real runtime, and
-  // a real runtime must report its origin.
-  ok('a DECLINED backend reports no origin at all, rather than a made-up one',
-    originOf(judge, 'builtin') === null,
-    JSON.stringify({ sem: originOf(semantic, 'claude-cli'), judge: originOf(judge, 'builtin') }));
+  // It was asserted on 内置 on 判断 while that was the last DECLINED backend — a declined one has no runtime, so it
+  // reports no origin rather than a made-up one. Round 6 built it (the in-process reranker), so 内置 now reports a real
+  // origin on 判断 as well: the same bundled runtime as on 语义. No backend is declined any more to assert the null on;
+  // the rule stays in the code (BackendGroups), for the next real impossibility.
+  ok('内置 on 判断 reports itself as BUNDLED too — the in-process reranker, no program and no port',
+    originOf(judge, 'builtin')?.kind === 'bundled',
+    JSON.stringify({ sem: originOf(semantic, 'builtin'), judge: originOf(judge, 'builtin') }));
   // Machine-dependent rows: assert the SHAPE, since a CI box and a developer's box legitimately differ.
   for (const [layer, id] of [[judge, 'claude-cli']]) {
     const o = originOf(layer, id);
@@ -1427,7 +1429,9 @@ try {
       // stayed green. Derived from the rows' own notes rather than restated, so adding a reranker whose figures fall
       // outside the range fails here instead of in a household's reading.
       const figuresOf = (note, label) => Number((String(note).match(new RegExp(`${label} (\\d+)/240`)) ?? [])[1]);
-      const rerankRows = (shelf.models ?? []).filter((m) => m.capability === 'reranking' && m.note);
+      // llama.cpp's rerankers only: the in-process 内置 reranker (round 6) is a reranking row too, and UNMEASURED — the
+      // sentence must not quote a figure for it, and says so (the assertion after the next).
+      const rerankRows = (shelf.models ?? []).filter((m) => m.capability === 'reranking' && m.note && m.runtime === 'llama-cpp');
       const found8 = rerankRows.map((m) => figuresOf(m.note, '前八命中'));
       const top1 = rerankRows.map((m) => figuresOf(m.note, '首位命中'));
       const judgeWhat = String(layerOf(await getJson('/api/manage/memory'), 'judge')?.what ?? '');
@@ -1441,6 +1445,11 @@ try {
           && judgeWhat.includes(`排第一的多 ${Math.min(...top1) - 80}–${Math.max(...top1) - 80} 题`)
           && /不开语义/.test(judgeWhat),
         JSON.stringify({ found8, top1, what: judgeWhat }));
+      const builtinRerank = (shelf.models ?? []).find((m) => m.capability === 'reranking' && m.runtime === 'builtin');
+      ok('…and it quotes that range for llama.cpp\'s rerankers, saying the in-process 内置 one is not measured — whose row quotes no figure',
+        /llama\.cpp 上的重排模型/.test(judgeWhat) && /「内置」重排模型还没有实测过/.test(judgeWhat)
+          && !!builtinRerank && !/\d+\/240/.test(String(builtinRerank.note)) && /还没有在本应用的测试集上实测过/.test(String(builtinRerank.note)),
+        JSON.stringify({ what: judgeWhat, builtin: builtinRerank?.note ?? null }));
       ok('…and labels the Claude judge\'s figure, on its own base, as measured on an earlier version',
         /Claude CLI 判断是在本应用较早的版本上量的/.test(judgeWhat) && /79 题/.test(judgeWhat) && /130 题/.test(judgeWhat),
         judgeWhat);
