@@ -42,7 +42,12 @@
     <PackageReference Include="Cronos" Version="0.8.4" />
     <PackageReference Include="FluentMigrator.Runner.SQLite" Version="8.0.1" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
+    <!-- The NATIVE CPU backend of ONNX Runtime, for BOTH in-process models: the built-in embedder (OnnxEmbedder) and the
+         built-in reranker, which runs through Lyntai.Providers.Onnx below. That package references the MANAGED half only
+         (Microsoft.ML.OnnxRuntime.Managed >= 1.30.0 at 3.5.1) and leaves the native backend to the app, so this pin has to
+         MATCH it: 1.29.0 here would have resolved the managed half to 1.30.0 beside a 1.29.0 native library — no NuGet
+         warning (a higher transitive version is no downgrade), a mismatch found only at load. Bumped with it. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
     <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <!-- Headless-browser tooling (web-fetch/scrape + future scraper ports). Browser binaries are
          fetched once via `node devtools/dev.mjs fetch-tools`, never at server startup. -->
@@ -70,6 +75,10 @@
          metapackage is deliberately NOT used: it would pull backends this app never spawns. -->
     <PackageReference Include="Lyntai.Core" Version="3.5.1" />
     <PackageReference Include="Lyntai.Providers.Basic" Version="3.5.1" />
+    <!-- The in-process transformer backend (D124/D157/D191): the built-in reranker judge — mmarco-mMiniLMv2 as ONNX, its
+         SentencePiece tokenizer read from tokenizer.json by Lyntai's own tokenizer (D191). Managed half only; the native CPU
+         backend is Microsoft.ML.OnnxRuntime above. -->
+    <PackageReference Include="Lyntai.Providers.Onnx" Version="3.5.1" />
     <!-- Lyntai's SQLite storage backs the scoring store (lyntai_score_result: upsert + aggregate + export),
          landed in the same gatherlight.db (lyntai_-prefixed, coexists with the app's own tables). -->
     <PackageReference Include="Lyntai.Storage.Sqlite" Version="3.5.1" />
