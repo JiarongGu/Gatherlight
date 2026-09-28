@@ -24,7 +24,7 @@ another shell); where there is no Git Bash the agent has NO shell **by design** 
 (`fs_move`/`fs_delete`/`file_info`) are the substitute, and 资源 OFFERS PortableGit as a Git Bash the app can
 guard (MinGit, the data repo's git, ships no bash). Plan (read-only) runs are read-confined to the data
 folder and have NO Bash at all; `state/` (token, TLS key, database) is outside the read jail; Bash's own writes
-are scoped like Edit's (best-effort token matching — the guard's integrity rests on its placement, below).
+are scoped like Edit's (best-effort token matching — the guard's integrity has three legs, below).
 Details: `.claude/rules/dev-conventions.md` (Data folder discipline → the jail).
 
 ## Current state
@@ -141,10 +141,12 @@ The agent's own UI is declarative: `Platform/Agent/Ui` validates a component tre
 inline in chat and as site pages from `{data}/ui/` — no raw HTML anywhere in the agent's reach. A
 `Table`/`Chart` can `bind` to a named server-side query, so a page reads live data instead of a copy.
 
-**The agent's jail lives OUTSIDE its reach**: the scope guard is `{data}/state/agent/scope-guard.mjs`,
-app state regenerated every boot beside the generated `--settings` (which carry `disableAllHooks:false`), and
-`state/` is carved out of the jail — the agent can neither read nor overwrite the guard, whatever a Bash token
-says (it used to sit in `.claude/hooks/`, which Bash could reach). **Two app-managed files in `{data}/.claude/`**
+**The agent's jail is guarded by checks, not by distance**: the scope guard is `{data}/state/agent/scope-guard.mjs`,
+app state regenerated every boot beside the generated `--settings` (which carry `disableAllHooks:false`). `state/` is
+still inside the data folder, carved out of the guard's CHECKS: Edit/Write/Read cannot reach it (solid), a Bash token
+naming it is refused and nested shells are denied (both best effort). A constructed token or nested shell that slips
+past can still overwrite the guard until the next boot, or read `state/` in an execute run with Git Bash — the
+declared "needs an OS sandbox" residual (`.claude/rules/dev-conventions.md`, the three legs). **Two app-managed files in `{data}/.claude/`**
 are version-gated and re-issued (never editable knowledge-base content): `ui-spec.md` (the component vocabulary)
 and `tool-spec.md` (how to author its own capability — including what the sandbox refuses, parsed from the shipped
 `cap-guard.mjs` so it cannot drift). Anything that replaces a record subtree — notably backup import — must

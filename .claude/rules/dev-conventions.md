@@ -2521,12 +2521,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   combines an allow-list (`WRITE_DIRS`) with a `PROTECTED` deny-list that overrides it (so the agent
   can't neuter its own guard, settings or MCP config). **Bash** denied git-history / network-egress /
   inline-eval (`node -e`, `python -c`) / fs-crawl / path-escape / shell-launch / and any path-token
-  resolving into `state/` or a PROTECTED path (`BASH_PROTECTED`, best-effort — the structural-integrity
-  bullet above). Anything genuinely **out-of-boundary must route through a server MCP tool** — mediated +
-  auditable — never raw Bash. Enforcement, not trust. The guard carries a `GUARD_VERSION` (9 planner /
-  7 system); the PLANNER guard lives at `state/agent/scope-guard.mjs` (app state, outside the jail,
-  regenerated every boot), so a bump reaches an old data folder on its next boot without a version-gated
-  re-issue and a backup cannot roll it back (`state/` is not carried). The `guard/` folder (system guard)
+  resolving into `state/` or a PROTECTED path (`BASH_PROTECTED`, best-effort — the three-legs bullet
+  below). Anything genuinely **out-of-boundary must route through a server MCP tool** — mediated +
+  auditable — never raw Bash. Enforcement, not trust. The guard carries a `GUARD_VERSION` (10 planner /
+  8 system); the PLANNER guard lives at `state/agent/scope-guard.mjs` (app state inside the data folder,
+  carved out of the guard's checks, regenerated every boot), so a bump reaches an old data folder on its
+  next boot without a version-gated re-issue and a backup cannot roll it back (`state/` is not carried). The `guard/` folder (system guard)
   is app-managed (shipped + overlaid by updates), read-only to the agent. Residuals the hook can't
   close (code run *inside* an agent-authored script; exfil via a fetched URL) need an OS sandbox —
   **declined**, and the reasoning is on the record in `docs/ROADMAP.md`: the `claude` CLI authenticates
@@ -2568,46 +2568,66 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   per-consumer tool host), and when it ships the adopter drops its own `PowerShell`/`Monitor` removal for the library
   seam. Proof: `e2e-p49` case G3 reads the stub's argv: the plan and the execute run each name `PowerShell` and `Monitor`
   in `--disallowed-tools`; confirmed to FAIL with the `AgentRunner` line removed.
-- **Bash cannot launch ANOTHER shell or interpreter** (`GUARD_VERSION` 9 planner / 7 system, hardened 2026-09-28
-  security review). A built-in the matcher does not see is one door past the guard; launching `powershell` / `pwsh` /
+- **Bash cannot launch ANOTHER shell or interpreter** (`GUARD_VERSION` 10 planner / 8 system, hardened by the
+  2026-09-28 security review and its re-review). A built-in the matcher does not see is one door past the guard; launching `powershell` / `pwsh` /
   `cmd` / `wscript` / `cscript` / `mshta` / a nested `bash`|`sh` / `source` / `.` / `wsl` / `rundll32` / `regsvr32` — or
   `Start-Process`, or `git -c` of a command-running key (`alias.*=!…`, `core.pager`/`editor`/`sshCommand`, a
   `credential`/`filter` helper) — from inside Bash is another, because whatever runs in the child never reaches the
   guard's Bash checks. Both guards deny the launch itself, whatever its arguments, matched against each pipeline
   segment's COMMAND WORD: the leading token PAST any wrapper (`env`/`command`/`exec`/`sudo`/`nice`/`nohup`/`time`/
-  `xargs`/`timeout`/…) and any `VAR=value` prefix, path and `.exe` stripped — so a shell NAME used as an argument
-  (`command -v sh`) is not caught, but `env powershell`, `FOO=1 bash x`, `xargs sh`, `{ sh x; }`, `` `sh x` ``, `sh<x`
-  and `git -c core.pager=powershell log` are. Segments split on `; | & \n ( ) { } \` < >`. **This is BEST-EFFORT
-  defence in depth** — a token scan is fooled by a variable, a `$(…)` or a constructed string; the load-bearing
-  closures are PowerShell/Monitor removed from every run and the guard living outside the jail. `e2e-p24` runs the full
-  battery on both guards with positive controls (`ls`/`mv`/`node x.mjs`/`command -v sh` stay allowed); every deny case
-  confirmed non-vacuous against the pre-review guard.
-- **The guard's integrity is STRUCTURAL, not a Bash token scan** (2026-09-28 security review). Three holes were closed
-  together, because the Bash path-token scan that would close them is best-effort (obfuscation residual) and cannot be
-  the guarantee:
-  **(1) The planner guard lives OUTSIDE the jail.** It moved from `.claude/hooks/scope-guard.mjs` (inside the writable
-  data repo — Edit was PROTECTED, Bash was not) to `state/agent/scope-guard.mjs`: app state, gitignored, backup-excluded,
-  regenerated every boot like the settings files, referenced by ABSOLUTE path from the generated `--settings`. Since
-  `state/` is carved out of the jail (below), the agent can neither read nor overwrite its own guard however a Bash token
-  is spelled. `ChatEnvironmentService.EnsureFiles` writes it and DELETES the old in-repo copy (`RemoveLegacyGuard`,
-  returning its path so the deletion commits out of the audit trail). The generated `--settings` files already lived in
-  `state/`. The system guard stays in `guard/` (app-managed, shipped + overlaid by updates) — already outside its jail's
-  writable set, and now Bash-protected too. A truly-external dir (`%LOCALAPPDATA%`) was DECLINED: a per-site guard needs
-  a writable per-data-folder home, and `state/`-carved is unreachable to the agent with no cleanup/lifecycle cost.
+  `xargs`/`timeout`/`stdbuf`/`ionice`/`chrt`/`setarch`/…) and any `VAR=value` prefix, path and `.exe` stripped — so a
+  shell NAME used as an argument (`command -v sh`) is not caught, but `env powershell`, `FOO=1 bash x`, `xargs sh`,
+  `{ sh x; }`, `` `sh x` ``, `sh<x` and `git -c core.pager=powershell log` are. Segments split on
+  `; | & \n ( ) { } \` < >`. **A wrapper's OWN arguments precede the command it runs** (the re-review's finding:
+  `timeout 5 bash x`, `nice -n 10 bash x`, `stdbuf -oL bash x`, `ionice -c2 …`, `chrt 10 …` and `setarch x86_64 …` were
+  all ALLOWED, because the word after the wrapper was its argument, not the command), so past a wrapper the guard skips
+  its options, the value of each option that takes one (`WRAPPER_VALUE_OPTS`: `-n 10`, `-u root`, `-s KILL`), numeric
+  durations and priorities, and `setarch`'s one positional; `env -S` is deliberately not a value option, since its value
+  IS a command line, and `command -v`/`-V` only describe a command, so they yield no command word. **This is
+  BEST-EFFORT defence in depth** — leg (3) of the guard's integrity (the next bullet): a token scan is fooled by a
+  variable, a `$(…)` or a constructed string, and a VARIABLE command word (`x=sh; $x plans/y.sh`) is ALLOWED — `e2e-p24`
+  pins that as a known allow with a comment, so a change to it is deliberate. The closure that does not depend on
+  parsing is PowerShell/Monitor removed from every run; "code inside an agent-authored script" stays the residual.
+  `e2e-p24` runs the full battery on both guards with positive controls (`ls`/`mv`/`node x.mjs`/`command -v sh`/
+  `timeout 5 node x` stay allowed); every deny case confirmed non-vacuous against the guard before it (the wrapper
+  forms: 14 of them, against `81d082b`'s guards).
+- **The guard's integrity rests on THREE LEGS, and only one of them is solid** (2026-09-28 security review; corrected
+  by its re-review, which caught an earlier version of this bullet calling the placement "structural"). `state/` is
+  still INSIDE the data folder: it is carved out of the guard's CHECKS, not out of the filesystem. The legs:
+  **Edit/Write/Read/Grep/Glob cannot reach `state/`** — solid, because every such call passes through the guard;
+  **the Bash path-token scan** refuses a token naming it — best effort; **no nested shell** — best effort. A
+  constructed token (`$PWD/state/agent/scope-guard.mjs`, a variable, a `$(…)`) or a nested shell that slips past the
+  last two can OVERWRITE the guard file and neuter it for the rest of the session (the next boot regenerates it), and
+  can READ `state/` — the database, the TLS key — in an EXECUTE run where a Bash exists (Git Bash present; a plan run
+  has no Bash at all, and a household with no Git Bash has none in any run). Both fall inside the declared residual
+  "code inside an agent-authored script needs an OS sandbox", which was declined (`docs/ROADMAP.md`). What changed:
+  **(1) The planner guard moved out of the data repo.** It moved from `.claude/hooks/scope-guard.mjs` (tracked, in a
+  directory Edit was PROTECTED from and Bash was not checked for at all) to `state/agent/scope-guard.mjs`: app state,
+  gitignored, backup-excluded, regenerated every boot like the settings files, referenced by ABSOLUTE path from the
+  generated `--settings`. So a backup cannot roll it back, a direct Bash token naming it is refused, and a guard neutered
+  mid-session is restored at the next boot. `ChatEnvironmentService.EnsureFiles` writes it and DELETES the old in-repo
+  copy (`RemoveLegacyGuard`, returning its path so the deletion commits out of the audit trail). The generated
+  `--settings` files already lived in `state/`. The system guard stays in `guard/` (app-managed, shipped + overlaid by
+  updates) — Edit-protected, and now Bash-protected on the same best-effort terms. A truly-external dir (`%LOCALAPPDATA%`)
+  was DECLINED: a per-site guard needs a writable per-data-folder home, and moving it further would not change which
+  legs its integrity stands on — only an OS sandbox would.
   **(2) `state/` is out of the READ jail and the Bash token scan** (planner `READ_DENY`). Read/Grep/Glob naming `state/`
   — and a Glob `pattern` / Grep `glob` whose literal head is `state/` — are denied (a recursive `**` head is a stated
-  residual). `state/` holds the access token, the TLS pfx and the database.
+  residual). `state/` holds the access token, the TLS pfx and the database. A constructed Bash token still reads it
+  (the residual above).
   **(3) Bash writes are WRITE-scoped, not just jail-scoped** (`BASH_PROTECTED`). A `cp`/`echo >`/`rm`/`tee`/`cat` naming
   the guard, `.claude/settings*.json`, `.mcp.json`, `site.json`, `.git`, `src/server`/`guard` (system) — or `state/` — is
   denied by resolving EVERY path-like token against the root (a bare `site.json`/`.mcp.json` has no slash but is a
-  data-root path). Best-effort, stated as such in the guard and here.
+  data-root path). Best-effort — leg (2) — stated as such in the guard and here.
   **(4) The `--settings` carry `disableAllHooks: false`, the hot-reload finding.** Measured at 0 tokens against the real
   CLI 2.1.283: a `-p` run DOES execute the project's `.claude/settings.json` hooks, and a project `{"disableAllHooks":
   true}` disables our flag-level hooks — but a command-line `--settings` `disableAllHooks:false` wins over it (settings
-  precedence: managed > command-line > local > project > user). So our hook cannot be disabled by a settings file, and
-  `.claude/settings*.json`/`.mcp.json` are unwritable both planes anyway (PROTECTED + `BASH_PROTECTED`). A `ConfigChange`
-  hook to block project-settings changes was considered and NOT shipped: the mechanism was inconclusive at 0 tokens, and
-  it adds nothing over "settings unwritable + `disableAllHooks:false`".
+  precedence: managed > command-line > local > project > user). So a settings FILE cannot disable our hook, and
+  `.claude/settings*.json`/`.mcp.json` are protected from Edit/Write (solid) and from a direct Bash token (best effort).
+  What `disableAllHooks:false` does NOT cover is the hook's own script: overwrite `state/agent/scope-guard.mjs` through
+  the residual above and the hook still fires — running the neutered file. A `ConfigChange` hook to block
+  project-settings changes was considered and NOT shipped: the mechanism was inconclusive at 0 tokens, and it adds
+  nothing over the two protections above.
   **(5) C2/C3 normalization** — both guards' `norm()` strips trailing dots/spaces per segment (Windows folds them, so
   `.claude/settings.json.` and `.claude/hooks./guard` name the protected file) and the JS already lowercases (case);
   and `oddSegment` REFUSES outright a path segment carrying an 8.3 short name (`~` + digit — `STATE~1`, `SETTIN~1.JSO`
@@ -2622,7 +2642,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   servers even untrusted (measured, 0 tokens) — a stdio server there is a command the CLI starts. Proof: `e2e-p24`
   (both guards: C1 Bash-protected/state, C2 trailing-dot, C4, with positive controls, every deny non-vacuous), `e2e-p54`
   (`fs_move` to a trailing-dot / case-folded / ADS-colon target refused), `e2e-p42`/`e2e-p37` (the guard at
-  `state/agent/`, `GUARD_VERSION 9`), `e2e-p47` (a backup can no longer plant a weakened guard nor leave one in the jail).
+  `state/agent/`, `GUARD_VERSION 10`), `e2e-p47` (a backup can no longer plant a weakened guard nor leave one in the jail).
 - **The agent MOVES, RENAMES and DELETES files through scoped MCP tools, never a shell** (`fs_move` · `fs_delete` ·
   `file_info`, `Platform/Capabilities/Tools/Services/Tools/FileOpsTools`). A tool beats a shell for this: its scope is
   the guard's own write scope (`ISiteWriteScope`, rendered from the site manifest — one source of truth with the guard),
