@@ -8573,3 +8573,167 @@ Short fixture, `--n=4` (16 questions), the five arms above, `--serial-arms`:
 - All 72 saved runs re-analyse byte-identically under `9ef4a5e`.
 
 The smoke's numbers inform nothing (16 questions).
+
+## Run 13 — 内置 (in-process mMiniLMv2) against llama.cpp's mMiniLMv2 (2026-09-28, Lyntai 3.5.1, llama.cpp b10549, ONNX Runtime 1.30.0; claude never called — every server on the stub)
+
+**Commands**, exactly as registered in `65ef6b0`, which is both runs' app HEAD. The server was built at `de51313` and not
+rebuilt. The scratch driver `devtools/_run13/drive.sh` ran both, each exiting 0 on its first attempt:
+
+| run | from – to (UTC) | results |
+|---|---|---|
+| short | 02:41:08 – 02:49:54 | `results-2026-09-28T024109.030Z.json` |
+| long | 02:49:57 – 04:49:46 | `results-2026-09-28T024957.823Z.json` |
+
+Evidence (results, rows, both routers' logs and presets, every arm's logs) is under `devtools/_run13/<short|long>/`, the
+load record in `devtools/_run13/load.log`, and the checker's output in `devtools/_run13/guards.txt`.
+
+**Every guard held in both runs** (scratch `devtools/_run13/guards13.mjs`):
+
+| guard | short | long |
+|---|---|---|
+| 1. instrument | fixture `9680443e…`, seed re-verified, `formula` digest `2e323182c81a` | `1f48f1be…`, `976af4663b6e` |
+| 2. engine A/A | byte-identical, p = 1.000 | the same |
+| 3. startup and warnings | `rrk`, `cpu-rrk` read back `llama-cpp · mmarco-mMiniLMv2-L12-H384-v1-Q8_0`, `rrbi` `builtin · mmarco-mMiniLMv2-L12-H384-v1-onnx`; all three announced `rerank chunking = on`; no startup warning; 0 claude-cli calls; no bench WARNING | the same |
+| 4. routers | GPU: spawned once, `n_ctx_slot` 512, largest task 72, 0 truncated, 0 error lines; CPU: `--device none --n-gpu-layers 0`, 16 threads, 0 truncated, 0 error lines | GPU largest task 429; CPU the same zeros |
+| 5. coverage | `rrk` `judged` = `graph` in every set; `cpu-rrk` and `rrbi` 234/234 | `rrk` every set; `cpu-rrk` and `rrbi` 240/240 |
+| 6. every request reached a model | forwarded = proxied 247/247 and 235/235 (GPU), 235/235 (CPU); 0 failed | 253/253, 241/241; 241/241; 0 |
+| 7. the pace on the GPU arm | 0 lines; not VOID | 0 lines; not VOID (`cpu-rrk` 3 and `rrbi` 2, exempt, below) |
+| 8. one build | `95ee3552c569b4ae` / `b0debb09370274a7` / `cdbc071362aaaf5b` before the first run and after the last | |
+| 9. the 内置 model ran | files match the pins; load line 1,371 ms; pace seed 258.465; 0 scoring failures | 1,250 ms; 273.878; 0 |
+
+The **load clause** was clean on both fixtures. The median CPU share of processes this run did not start, over each
+arm's accuracy pass:
+
+| fixture | during `rrbi` | during `cpu-rrk` | apart |
+|---|---|---|---|
+| short | 17.8% (6 samples) | 16.3% (9 samples) | 1.5 points |
+| long | 21.7% (105 samples) | 18.3% (210 samples) | 3.4 points |
+
+The limit was 5 points. The background was constant: an `ssh-agent` holding ~4.3% throughout, plus the other worktree's
+and sessions' processes.
+
+### The headline
+
+Lyntai 3.5.1; each arm's accuracy pass ran alone. Times are over every recall of that pass (240), with each arm's latency
+pass (12 queries, verdict-carrying) in brackets.
+
+| fixture | arm | top-1 / found@8 | coverage | median per recall (p90) · [latency pass] |
+|---|---|---|---|---|
+| short | `formula` | 80 / 127 | — | — |
+| short | llama.cpp, GPU (`rrk`) | 100 / 203 | 234/234 | 300 ms (347) · [336] |
+| short | llama.cpp, CPU (`cpu-rrk`) | 99 / 204 | 234/234 | 817.5 ms (1,059) |
+| short | **内置 (`rrbi`)** | **99 / 203** | 234/234 | **467 ms (627)** · [618] |
+| long | `formula` | 68 / 104 | — | — |
+| long | llama.cpp, GPU (`rrk`) | 79 / 182 | 240/240 | 1,229.5 ms (1,413) · [1,125] |
+| long | llama.cpp, CPU (`cpu-rrk`) | 78 / 180 | 240/240 | 19,958.5 ms (24,720) |
+| long | **内置 (`rrbi`)** | **81 / 180** | 240/240 | **8,061.5 ms (15,552)** · [7,028] |
+
+**Paired** (b = the llama.cpp arm's hit & 内置's miss, c = the reverse):
+
+| fixture | pair | found@8 | top-1 |
+|---|---|---|---|
+| short | 内置 vs GPU | 1/1, p = 1.000, 0.0pp [−1.4, +1.4], **equivalent** | 3/2, p = 1.000, −0.4pp [−2.4, +1.6], **equivalent** |
+| short | 内置 vs CPU | 1/0, p = 1.000, −0.4pp [−1.6, +0.7], equivalent | 3/3, p = 1.000, 0.0pp [−2.1, +2.1], equivalent |
+| short | llama.cpp CPU vs GPU | 0/1, p = 1.000, +0.4pp [−0.7, +1.6], equivalent | 1/0, p = 1.000, −0.4pp [−1.6, +0.7], equivalent |
+| long | 内置 vs GPU | 9/7, p = 0.804, −0.8pp [−4.2, +2.5], not equivalent | 6/8, p = 0.791, +0.8pp [−2.3, +4.0], not equivalent |
+| long | 内置 vs CPU | 6/6, p = 1.000, 0.0pp [−2.9, +2.9], equivalent | 5/8, p = 0.581, +1.3pp [−1.8, +4.3], not equivalent |
+| long | llama.cpp CPU vs GPU | 3/1, p = 0.625, −0.8pp [−2.6, +1.0], equivalent | 4/3, p = 1.000, −0.4pp [−2.7, +1.9], equivalent |
+
+- Long, by position, 内置 against the GPU arm (found@8 b/c): start 1/0, middle 2/1, end 3/3, beyond 3/3. None is
+  significant, and none is on top-1 either.
+- **Time, 内置 against llama.cpp on the CPU, per paired recall:**
+  - short: 内置 faster on 223, slower on 15, tied 2 (sign test p < 0.001);
+  - long: faster on 225, slower on 15.
+
+### The decision rule, applied
+
+- **OFFERED: YES.** 内置 is not significantly worse than llama.cpp's mMiniLMv2 on the GPU on found@8, on either fixture:
+  - short: 1/1, p = 1.000;
+  - long: 9/7, p = 0.804.
+  - Nor is it significantly worse than the CPU arm: 1/0 and 6/6. Nothing is flagged.
+- **RECOMMENDED on a machine with no usable GPU: YES.** It is offered, and it is NOT SLOWER than llama.cpp's mMiniLMv2 on
+  the CPU on either fixture. It is faster:
+  - short: median 467 against 817.5 ms, 223 of 240 recalls faster;
+  - long: 8.1 against 20.0 s, 225 of 240 faster, 2.5×.
+  - The load clause held on both, so the latency clause is read.
+- **Nothing in the product changes here.** The verdicts go to the owner. By the rule, `GgufCatalog.RecommendedRerankerFor`'s
+  no-GPU branch would name 内置 instead of the llama.cpp GGUF; an implementer makes that change and the text.
+
+### How the difference reads — two implementations
+
+- **Short facts: equivalent, as expected.** 内置 and llama.cpp's GPU arm are equivalent within ±3pp on both metrics. Only
+  2 found@8 and 5 top-1 queries differ, about as many as between llama.cpp's own CPU and GPU arms (1 and 1).
+  - The rows are not byte-identical, and nothing required them to be. The page differs on 144 of 240 queries, and the
+    answer's position on 30, mostly within the page (found@8 differs on 2).
+  - llama.cpp against itself differs less: pages on 67, positions on 13. Its request bodies differ on 160, because its
+    scores drift in the third decimal between devices and the arms' histories part.
+- **Long notes: no net difference, but a larger spread than llama.cpp's own.**
+  - 内置 and the GPU arm disagree on 16 found@8 queries (9 one way, 7 the other). llama.cpp's CPU and GPU arms disagree
+    on 4.
+  - Of the three reranker arms, 内置 was the odd one out on 12 queries, llama.cpp's GPU arm on 4, its CPU arm on 0.
+  - By the registered reading, this is the implementation (tokenizer, qint8 against Q8_0, kernels), not device noise. It
+    has no direction: `all` found@8 −0.8pp [−4.2, +2.5], and not equivalent, since the interval passes −3.
+- **Per set, descriptive only.** On the long fixture's `cross` set, 内置 found 41 where the GPU arm found 47 (6/0,
+  p = 0.031). This is one of 16 uncorrected per-set tests; against the CPU arm it is 4/0, p = 0.125. On `same` it runs the
+  other way: 50 against 46 (1/5, p = 0.219). Neither decides anything.
+- **Not Run 10's dynamic.** Short pages are equal across the three arms (long: 17 / 17 / 16, all in the first half of the
+  run), and the `third` set is level (38 / 38 / 38).
+- **The pace touched two of 内置's long recalls** (below). One of them is among its losses: seq 143, `ski` on `third`. The
+  GPU arm ranked the answer first there and 内置 missed it on two windows per candidate.
+
+### Memory, load, pace
+
+- **Memory** (the 内置 arm's server; Windows private bytes, working set in brackets):
+  - **48–50 MB** (113–120) before its accuracy pass (判断 bound, model not yet loaded);
+  - **760 MB** (671) after 240 short-fact recalls;
+  - **1,035 MB** (846) after 240 long-note recalls, and 1,041 MB (851) after the latency pass.
+  - This matches B1's 0.7–1.0 GB, just past its upper end on long notes.
+- **Load:** 1,371 ms (short) and 1,250 ms (long), at the first judged recall. That first recall took 3.6 s and 3.8 s in
+  all, with the pace seed.
+- **The pace seed:** 258.465 and 273.878 ms per 1,000 pair tokens. B1 measured 92–106 in isolated processes and 149.7 at a
+  quiet app start; here ~17–22% of the machine was busy with other work.
+- **The pace acted on both CPU-paced arms of the long run, never on the GPU arm.**
+  - 内置: 2 calls sized to 2 windows per long candidate (seq 143 and 167), each right after a recall of 32–34 s. Rates
+    525–560 ms per 1,000.
+  - llama.cpp CPU: 3 calls sized to 2 windows (seq 34, 42, 44). Rates 553–665.
+  - No recall of either was skipped or cut by the deadline.
+  - Four 内置 recalls took over 30 s (the longest 47.5 s); one of llama.cpp CPU's did (36.5 s).
+  - The short run had no pace line anywhere.
+
+### What it says
+
+- **内置 judges as well as llama.cpp's mMiniLMv2 here.**
+  - On short facts it is equivalent.
+  - On long notes it is not significantly different, with a spread larger than llama.cpp's own between devices and no
+    net direction.
+- **On this laptop's CPU it is much faster than llama.cpp on the CPU**: 1.7× on short facts, 2.5× on long notes. It needs
+  no llama.cpp at all.
+- **By the owner's rule it is offered, and recommended where there is no usable GPU.**
+
+### What it does NOT say
+
+- **Anything about another CPU.** One laptop (Core Ultra 9 185H), with ~17–22% of it busy with other work in both timed
+  passes alike.
+- **Anything about an integrated GPU.** On a machine whose only GPU is integrated, llama.cpp may run on it (Run 8b), and
+  that comparison was not made.
+- **Mixed long and short notes** (the mixed fixture), real household notes, or notes past five windows.
+- **That 内置 matches llama.cpp query by query on long notes.** It does not: 16 disagreements against llama.cpp's 4.
+- **The memory's upper bound.** 1.04 GB after 240 long recalls. ONNX Runtime's arena depends on the largest pass it has
+  seen (B1), and larger recalls (a kind-filtered ≥ 400-candidate recall) were not run.
+
+### For the implementer (routed; nothing changed here)
+
+The numbers the 内置 row and the rules can now quote, all Lyntai 3.5.1, one laptop's CPU:
+
+- short: found@8 203/240 and top-1 99/240, equivalent to llama.cpp's 203/100;
+- long: 180/240 and 81/240, against llama.cpp's 182/79, no significant difference;
+- per recall: 0.47 s short and 8.1 s long, against llama.cpp on the CPU's 0.82 s and 20.0 s;
+- memory: ~0.76 GB after short facts and ~1.04 GB after long notes;
+- load: ~1.3 s at the first judged recall.
+
+Sentences that are no longer true (`BuiltInJudgeSource`'s row note, `Description` and `BindCaveat`, and the 资源 row's
+`NeededFor`):
+
+- 「判断质量还没有在本应用的测试集上实测过,也还没有和 llama.cpp 那条对比过,所以不推荐」
+- 「还没有对比实测过,所以不推荐」
+- 「还没有和 llama.cpp 上的同一个模型对比实测过,所以不推荐」
