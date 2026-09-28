@@ -128,45 +128,77 @@ public static class GgufCatalog
     /// offered, measured (Runs 4, 6c, 8, 11), and the one to pick where llama.cpp has a GPU it runs well on.</summary>
     public const string SmallReranker = "mmarco-mMiniLMv2-L12-H384-v1-Q8_0";
 
+    /// <summary>What llama.cpp's device probe says about THIS machine, for a recommendation — four answers, because two of
+    /// them used to share <c>null</c>: "nobody has asked yet" (llama.cpp not installed, not probed, or it did not answer)
+    /// and "it listed devices of a build this app does not provision" (CUDA0, Metal, SYCL0…). The first is a fresh install;
+    /// the second has a device plainly there.</summary>
+    public enum GpuAnswer
+    {
+        /// <summary>No answer: llama.cpp is not installed, or its device probe has not answered.</summary>
+        NotAsked,
+        /// <summary>It answered and listed no device at all.</summary>
+        NoGpu,
+        /// <summary>It listed a Vulkan device — a GPU, an integrated one included (the build this app provisions).</summary>
+        Gpu,
+        /// <summary>It listed only devices of another backend: a device is there, of a kind nobody here has run.</summary>
+        OtherDevices,
+    }
+
+    /// <summary><see cref="GpuAnswer"/> from the runtime's memo: <see cref="ILlamaServerRuntime.Gpu"/> and whether a device
+    /// list was answered at all (<see cref="ILlamaServerRuntime.DeviceListKnown"/>). A caller for which llama.cpp is not
+    /// installed passes <c>(null, false)</c>.</summary>
+    public static GpuAnswer GpuAnswerOf(bool? gpu, bool deviceListKnown) => gpu switch
+    {
+        true => GpuAnswer.Gpu,
+        false => GpuAnswer.NoGpu,
+        null => deviceListKnown ? GpuAnswer.OtherDevices : GpuAnswer.NotAsked,
+    };
+
     /// <summary>The reranker recommended where there is no usable GPU: <b>内置</b>, mmarco-mMiniLMv2 as ONNX in this process
     /// (<see cref="Sources.BuiltInJudgeSource"/>) — owner decision on <c>docs/judge-bench.md</c> Run 13 (2026-09-28, Lyntai
-    /// 3.5.1, one laptop's CPU, the 240-question fixture and the long fixture): it judged as well as llama.cpp's mMiniLMv2
-    /// (short: found@8 203 against 203, equivalent; long: 180 against 182, no significant difference) and was faster than
-    /// llama.cpp on the CPU (median per recall 0.47 against 0.82 s short, 8.1 against 20.0 s long) — and on such a machine
-    /// llama.cpp is not needed for 判断 at all. Until then it was the llama.cpp GGUF (<see cref="SmallReranker"/>), chosen on
-    /// Run 8, whose CPU figures stay on that row.
+    /// 3.5.1, one laptop's CPU, the 240-question fixture and the long fixture): on short facts it judged as well as
+    /// llama.cpp's mMiniLMv2 (found@8 203 against 203, equivalent), on long notes with no significant difference (180
+    /// against 182, not equivalent), and it was faster than llama.cpp on the CPU (median per recall 0.47 against 0.82 s
+    /// short, 8.1 against 20.0 s long) — and it needs no llama.cpp. Until then it was the llama.cpp GGUF
+    /// (<see cref="SmallReranker"/>), chosen on Run 8, whose CPU figures stay on that row.
     ///
     /// <para><b>The cases, each stated</b> (<see cref="RecommendedRerankerFor"/>, one writer for 资源's badge, the 判断 row's
     /// suggestions and the llama.cpp row's):
     /// <list type="bullet">
-    /// <item><b>No GPU</b> — llama.cpp's device probe answered and listed none (<see cref="LlamaServerState.Gpu"/> false):
-    /// the comparison Run 13 made, CPU against CPU.</item>
+    /// <item><b>A fresh install</b> — llama.cpp not installed, or its probe not answered (<see cref="GpuAnswer.NotAsked"/>):
+    /// 内置 FIRST (owner decision, the round-6 review). It used to be BGE, which sent a CPU-only household to download
+    /// llama.cpp and BGE before it was told 内置. The reason says what a discrete GPU would change: BGE on llama.cpp puts a
+    /// long note's answer in the top 8 more often (201 against llama.cpp's mMiniLMv2 at 182, docs/judge-bench.md Runs 6c and
+    /// 12; 内置's own long figure is Run 13's 180), so a GPU household can move to it.</item>
+    /// <item><b>No GPU</b> — the probe answered and listed none (<see cref="GpuAnswer.NoGpu"/>): the comparison Run 13
+    /// made, CPU against CPU.</item>
     /// <item><b>BGE measured too slow here</b> (<see cref="RerankDeviceVerdict.ReferenceAdmission"/>) — the integrated-GPU
     /// case: the Vulkan build lists an integrated GPU as a device, so the probe reads "GPU" on nearly every laptop, and on the
     /// one measured both rerankers ran slower on its Arc than on its CPU. Where BGE's fastest device was the CPU, Run 13's
     /// comparison applies as it stands; where it was an integrated GPU, 内置 on the CPU against llama.cpp's mMiniLMv2 on that
     /// GPU was NOT measured, and the badge's reason says so.</item>
     /// <item><b>Recent recalls SKIPPED</b> by a judge that is not 内置 — the machine is too slow for what runs, and 内置 is
-    /// the fastest reranker measured on a CPU. A skip BY 内置 is no reason to offer it again: see <see cref="SkipNotice"/>.</item>
-    /// <item><b>Otherwise</b> — a GPU, or no answer yet — <see cref="RecommendedReranker"/> on llama.cpp: on the GPU it is
-    /// faster than 内置 (Run 13's GPU arm, the same model: 0.30 against 0.47 s short, 1.2 against 8.1 s long).</item>
+    /// the fastest reranker measured on a CPU. Where the probe lists a device the reason adds what a discrete GPU would
+    /// change (<see cref="Sources.BuiltInJudgeSource.OnADiscreteGpu"/>). A skip BY 内置 is no reason to offer it again: see <see cref="SkipNotice"/>.</item>
+    /// <item><b>A GPU</b> (<see cref="GpuAnswer.Gpu"/>), or devices of another build (<see cref="GpuAnswer.OtherDevices"/>):
+    /// <see cref="RecommendedReranker"/> on llama.cpp, for how often it brings a long note's answer onto the page (201
+    /// against 182) — not for speed: the same mMiniLMv2 on a discrete GPU is the fast one (Run 13's GPU arm: 0.30 s short,
+    /// 1.2 s long, against BGE's ~0.46 s and ~3.2 s in Runs 11 and 6c/12).</item>
     /// </list></para></summary>
     public const string RerankerWithoutGpu = Sources.BuiltInJudgeSource.ModelId;
 
-    /// <summary>Which reranker to suggest for 判断, given what the runtime's device probe found, whether the judge has
-    /// been SKIPPED here for being too slow, and whether BGE was MEASURED too slow here — the ONE writer both 资源's 推荐
-    /// badge and the 判断 row's suggestions read. <see cref="RerankerWithoutGpu"/> (内置) when recent recalls were skipped
-    /// (<paramref name="skippedHere"/>), when BGE's fastest device on this machine would not be sent the default page's
-    /// one-window call (<paramref name="bgeMeasuredTooSlow"/>, <see cref="RerankDeviceVerdict.ReferenceAdmission"/> — owner
-    /// decision 2026-09-26: the device list cannot tell an integrated GPU from a discrete one, so the app measures — BGE's
-    /// measurement only; another reranker measured too slow moves nothing), or when
-    /// the probe ANSWERED and listed no GPU (<paramref name="gpu"/> false) — that precedence is the order the badge's
-    /// reason names them in. Otherwise — a GPU, no skips and no measurement saying otherwise, or no answer yet (null: the
-    /// probe has not run, or the runtime is not installed) — <see cref="RecommendedReranker"/>, claiming nothing about the
-    /// machine. A measurement exists only once BGE is on disk, so on a machine whose only GPU is integrated this still says
-    /// BGE until BGE has been downloaded and measured. The cases are <see cref="RerankerWithoutGpu"/>'s.</summary>
-    public static string RecommendedRerankerFor(bool? gpu, bool skippedHere = false, bool bgeMeasuredTooSlow = false) =>
-        skippedHere || bgeMeasuredTooSlow || gpu == false ? RerankerWithoutGpu : RecommendedReranker;
+    /// <summary>Which reranker to suggest for 判断, given what llama.cpp's device probe answered (<paramref name="gpu"/>),
+    /// whether the judge has been SKIPPED here for being too slow, and whether BGE was MEASURED too slow here — the ONE writer
+    /// 资源's 推荐 badge, the 判断 row's suggestions and the llama.cpp row's read. <see cref="RerankerWithoutGpu"/> (内置) when
+    /// recent recalls were skipped (<paramref name="skippedHere"/>), when BGE's fastest device on this machine would not be
+    /// sent the default page's one-window call (<paramref name="bgeMeasuredTooSlow"/>,
+    /// <see cref="RerankDeviceVerdict.ReferenceAdmission"/> — owner decision 2026-09-26: the device list cannot tell an
+    /// integrated GPU from a discrete one, so the app measures — BGE's measurement only; another reranker measured too slow
+    /// moves nothing), when the probe listed no GPU, or when nothing has answered yet (a fresh install) — that precedence is
+    /// the order the badge's reason names them in. Otherwise — a GPU, or devices of a build we did not provision —
+    /// <see cref="RecommendedReranker"/>. The cases are <see cref="RerankerWithoutGpu"/>'s.</summary>
+    public static string RecommendedRerankerFor(GpuAnswer gpu, bool skippedHere = false, bool bgeMeasuredTooSlow = false) =>
+        skippedHere || bgeMeasuredTooSlow || gpu is GpuAnswer.NoGpu or GpuAnswer.NotAsked ? RerankerWithoutGpu : RecommendedReranker;
 
     /// <summary>The 资源 resource that downloads the reranker <paramref name="modelId"/> — 内置's own (it is no GGUF), or the
     /// GGUF's. What a suggestion names, so a button beside it fetches the model the sentence recommends.</summary>
@@ -188,26 +220,38 @@ public static class GgufCatalog
     /// <summary>What the 判断 row says when the pace SKIPPED recent recalls (<see cref="RerankPace.RecentSkips"/>) — a skip
     /// is otherwise an Information line in state/logs, which is where a household never looks — and what it advises
     /// (<paramref name="advice"/>): download 内置, switch to it, or — when 内置 is the judge skipping — nothing to fetch, the
-    /// truth said instead: the machine is too slow even for the fastest reranker measured on a CPU, and the ways left are
-    /// the Claude CLI or switching 判断 off. Where llama.cpp sees a GPU (<paramref name="gpu"/> true) that sentence adds that
-    /// llama.cpp on a DISCRETE one is much faster (Run 13's GPU arm, the same model), and that an integrated one may not be
-    /// (one laptop's Arc was slower than its CPU).</summary>
-    public static string SkipNotice(int skipped, int recalls, SkipAdvice advice, bool? gpu = null) =>
+    /// truth said instead. Each claim is made only where it is true of what llama.cpp's probe answered
+    /// (<paramref name="gpu"/>): "nothing faster to recommend" only where it listed NO GPU; where it listed a GPU, or has not
+    /// answered, what a DISCRETE GPU would change (<see cref="Sources.BuiltInJudgeSource.OnADiscreteGpu"/>) — it said "nothing
+    /// faster" whenever the probe had not answered, which a machine with a discrete GPU made false (review, round 6).</summary>
+    public static string SkipNotice(int skipped, int recalls, SkipAdvice advice, GpuAnswer gpu) =>
         $"最近 {recalls} 次检索里有 {skipped} 次因为这台机器太慢,跳过了判断、按没有判断时的顺序返回"
         + "(应用最多每十分钟重新测一次速度,赶得上就恢复)。"
         + advice switch
         {
             SkipAdvice.Download => "可以在「资源 · Resources」下载「内置重排模型(mMiniLMv2)」改用它:"
-                + Sources.BuiltInJudgeSource.CpuComparison + "。",
+                + Sources.BuiltInJudgeSource.CpuComparison + "。" + GpuSeen(gpu),
             SkipAdvice.Switch => "「内置重排模型(mMiniLMv2)」已经下载了,可以在这一行的「本机模型」里改用它:"
-                + Sources.BuiltInJudgeSource.CpuComparison + "。",
+                + Sources.BuiltInJudgeSource.CpuComparison + "。" + GpuSeen(gpu),
             _ => "现在用的就是在应用进程里运行的「内置」mMiniLMv2,这台机器连它都来不及"
-                + (gpu == true
-                    ? ";llama.cpp 看得到这台机器的显卡 —— 在一块独立显卡上,llama.cpp 的重排模型比它快得多"
-                      + "(实测同一个模型,长笔记每次约 1.2 秒对 8.1 秒),在集成显卡上不一定"
-                    : ",应用没有更快的重排模型可以推荐")
-                + "。也可以改用 Claude CLI 判断(每次检索调用一次,消耗账号额度),或关掉「判断」—— 跳过的检索并不多等。",
+                + gpu switch
+                {
+                    GpuAnswer.NoGpu => ",应用没有更快的重排模型可以推荐。",
+                    GpuAnswer.NotAsked => "。这台机器有没有 llama.cpp 能用的显卡还不知道(llama.cpp 还没装,或还没回答):"
+                        + Sources.BuiltInJudgeSource.OnADiscreteGpu + "。",
+                    _ => "。" + GpuSeen(gpu),
+                }
+                + "也可以改用 Claude CLI 判断(每次检索调用一次,消耗账号额度),或关掉「判断」—— 跳过的检索并不多等。",
         };
+
+    /// <summary>The clause for a machine where llama.cpp listed a device: what a discrete GPU would change — "a GPU" only
+    /// for a Vulkan device, the build this app provisions; another build's devices are said as devices. Empty otherwise.</summary>
+    internal static string GpuSeen(GpuAnswer gpu) => gpu switch
+    {
+        GpuAnswer.Gpu => "llama.cpp 看得到这台机器的显卡:" + Sources.BuiltInJudgeSource.OnADiscreteGpu + "。",
+        GpuAnswer.OtherDevices => "llama.cpp 列出了这台机器上的计算设备:" + Sources.BuiltInJudgeSource.OnADiscreteGpu + "。",
+        _ => "",
+    };
 
     /// <summary>What every reranker row says, because it is the one thing that differs from a chat judge:
     /// only HALF of 判断 moves. The tagging clause is <see cref="Sources.MemorySources.CliTaggingCost"/>, shared
@@ -338,16 +382,18 @@ public static class GgufCatalog
     /// third reason it is recommended — BGE MEASURED too slow on this machine (<see cref="RerankDeviceVerdict"/>) — needs BGE
     /// on disk first, which the note says, and it makes 「有显卡时推荐的仍是 BGE」 conditional on that measurement.</summary>
     private const string SmallRerankerCpuNote =
-        "llama.cpp 用不了任何显卡时(集成显卡也算显卡)、检索因为机器太慢跳过了判断时、或 BGE 在这台机器上实测太慢时,"
-        + "应用推荐的是在应用进程里运行的「内置」mMiniLMv2 —— 同一个模型,不需要 llama.cpp;在一台笔记本的 CPU 上实测,"
-        + "它判断得和这一版一样好、每次检索快得多(见「内置」那一行)。"
+        "还不知道这台机器有没有能用的显卡时(llama.cpp 还没装,或还没回答)、llama.cpp 用不了任何显卡时(集成显卡也算显卡)、"
+        + "检索因为机器太慢跳过了判断时、或 BGE 在这台机器上实测太慢时,应用推荐的是在应用进程里运行的「内置」mMiniLMv2 —— "
+        + "同一个模型,不需要 llama.cpp;在一台笔记本的 CPU 上实测,事实都很短时它判断得和这一版一样好,长笔记上没有测出显著差别,"
+        + "每次检索快得多(见「资源」里 mMiniLMv2(内置)那一行)。"
         + "这一版也在一台只用 CPU 的笔记本上实测过(Intel Core Ultra 9 185H,不用显卡,llama.cpp b10549;"
         + "60 条约 900–1,200 字的长笔记、240 道提问、不开语义、没有主题标注、每次由它挑 8 条上页):"
         + "它分段读每次检索约 17.5 秒、最慢约 22 秒,每次都在一分钟内判断完,答案带进前八 180/240"
         + "(不开判断 104/240;在显卡上另一轮是 182/240)。"
         + "同一台机器上 BGE 每 1,000 个词元要约 3 秒,40–60 条长笔记每条只读开头一段也要一分多钟到两分钟,"
         + "240 次里 230 次等满一分钟(那时应用还不会跳过),带进前八和不开判断一样(104/240)。"
-        + "LAMAR 没有在只用 CPU 的机器上量过。有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE。"
+        + "LAMAR 没有在只用 CPU 的机器上量过。llama.cpp 看得到显卡、BGE 在这台机器上也没有测出太慢时,推荐的是 BGE"
+        + "(长笔记上它把答案带进前八的次数更多,见下)。"
         + "只有集成显卡时:在同一台笔记本的 Arc 集成显卡上,两个重排模型都比它的 CPU 慢(mMiniLMv2 约 6–7 倍,BGE 约 3 倍;"
         + "只是这一台机器上的数)。所以应用在下载后第一次自己启动 llama.cpp 时,会在 CPU 和每块显卡上各测一次,"
         + "让它在最快的那个上运行 —— 那台笔记本只露出集成显卡时,两者都选了 CPU;"
@@ -358,19 +404,20 @@ public static class GgufCatalog
     /// so the sentence says both. And what the app does about it on the household's own machine — measured only once BGE
     /// is on disk (<see cref="RerankDeviceMeter"/>) — so the recommendation can move to mMiniLMv2 only after a download.</summary>
     private const string BgeCpuNote =
-        "只用 CPU 时它几乎总是来不及判断:在一台只用 CPU 的笔记本上(实测和设置见 mMiniLMv2 那一行),"
+        "只用 CPU 时它几乎总是来不及判断:在一台只用 CPU 的笔记本上(实测和设置见 llama.cpp 的 mMiniLMv2(Q8)那一行),"
         + "它每 1,000 个词元要约 3 秒,40–60 条长笔记每条只读开头一段也要一分多钟到两分钟,"
         + "240 次检索里 230 次等满一分钟、没能判断(那时应用还不会跳过;现在会当即跳过,同样没有判断),"
-        + "带进前八和不开判断一样(104/240)。所以 llama.cpp 用不了任何显卡时,应用推荐「内置」mMiniLMv2;"
+        + "带进前八和不开判断一样(104/240)。所以还不知道这台机器有没有能用的显卡、或 llama.cpp 用不了任何显卡时,"
+        + "应用推荐「内置」mMiniLMv2;"
         + "它在这台机器上多快,应用要等下载之后才测得出(在 CPU 和每块显卡上各测一次,之后让它在最快的那个上运行),"
         + "连最快的设备都赶不上时,也改为推荐「内置」mMiniLMv2。"
-        + "在同一台笔记本的集成显卡上,它比它的 CPU 还慢约 3 倍(实测和设置见 mMiniLMv2 那一行)。";
+        + "在同一台笔记本的集成显卡上,它比它的 CPU 还慢约 3 倍(实测和设置见 llama.cpp 的 mMiniLMv2(Q8)那一行)。";
 
     /// <summary>LAMAR was not run on the CPU. Its size is BGE's, so BGE's outcome is the likely one — said as likely,
     /// pointing at the row that has the measurement.</summary>
     private const string LamarCpuNote =
         "LAMAR 没有在只用 CPU 的机器上量过;和它一样大的 BGE 在一台只用 CPU 的笔记本上几乎每次都来不及判断"
-        + "(见 BGE 那一行),所以 llama.cpp 用不了任何显卡时,应用推荐「内置」mMiniLMv2。";
+        + "(见 BGE 那一行),所以还不知道这台机器有没有能用的显卡、或 llama.cpp 用不了任何显卡时,应用推荐「内置」mMiniLMv2。";
 
     /// <summary>LAMAR against BGE, ONE sentence shared by both rows — the same comparison read from either side,
     /// so the two notes cannot tell it differently. The figures are docs/judge-bench.md Run 11 (Lyntai 3.5.1, the

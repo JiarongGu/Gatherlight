@@ -249,7 +249,7 @@ public static class MemoryGroups
              + "但把答案带进前八的次数远不如重排模型;Gemma 3 1B 在排第一这一项上比不开判断更差;"
              + "Qwen3.5 0.8B 和 Gemma 3 270M 也测过,没有收录;其他对话模型没有实测过。"
              + "重排模型:应用提供的都在同一测试集上实测过(「内置」的 mMiniLMv2 在应用进程里用 CPU 运行,"
-             + "判断得和 llama.cpp 上的同一个模型一样好),只有检索时的核对在本机 —— "
+             + "事实都很短时判断得和 llama.cpp 上的同一个模型一样好,长笔记上没有测出显著差别),只有检索时的核对在本机 —— "
              // The tagging clause is MemorySources.CliTaggingCost, like the toast, cost line and model note.
              + $"写入事实时的主题标注由 Claude CLI 完成 —— {MemorySources.CliTaggingCost}。",
         Managed => "由应用下载、启动和管理的模型,两种跑法:llama.cpp 起一个常驻服务,或者「内置」—— "

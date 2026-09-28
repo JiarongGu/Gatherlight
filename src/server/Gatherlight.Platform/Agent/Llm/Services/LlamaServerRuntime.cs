@@ -86,6 +86,12 @@ public interface ILlamaServerRuntime
     /// known" — until a background probe finished.</para></summary>
     bool? Gpu { get; }
 
+    /// <summary>Whether the memo of the provisioned binary's device list holds an ANSWER — <c>--list-devices</c> answered
+    /// for the file on disk now. False when llama.cpp is not installed, has not been probed, or did not answer. What tells
+    /// "nobody has asked yet" from a list naming only devices of a build we did not provision, where <see cref="Gpu"/> is
+    /// null for both (<see cref="GgufCatalog.GpuAnswerOf"/>). Never spawns anything.</summary>
+    bool DeviceListKnown { get; }
+
     /// <summary>Where a RERANKER's device measurement stands on this machine (<see cref="RerankDeviceMeter"/>): its key
     /// now, and the measurement when one is current. Null when there is no key to ask with — the model file is not on
     /// disk, or this process holds no memo of the binary's build tag and device list (nothing probed yet, or the binary
@@ -643,6 +649,16 @@ public sealed class LlamaServerRuntime : ILlamaServerRuntime, IDisposable
                 return _binaryFacts is { } f && f.Key == key && f.Devices is { } devices
                     ? LlamaServerState.GpuFrom(devices)
                     : null;
+        }
+    }
+
+    public bool DeviceListKnown
+    {
+        get
+        {
+            if (Locate() is not { } exe || BinaryKey(exe) is not { } key) return false;
+            lock (_gate)
+                return _binaryFacts is { } f && f.Key == key && f.Devices is not null;
         }
     }
 

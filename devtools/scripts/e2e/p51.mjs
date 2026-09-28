@@ -357,8 +357,9 @@ try {
   //
   // …and on 判断 since round 6. It was DECLINED there — as an option nobody BUILT, never an impossibility (an
   // in-process reranker verifies, and since Lyntai 3.5's D191 runs the multilingual mMiniLMv2) — until it was built:
-  // BuiltInJudgeSource, the in-process reranker, offered and described as unmeasured (e2e-p56 drives it). This is the
-  // line that had to flip, deliberately, for the same reason the 语义 half did.
+  // BuiltInJudgeSource, the in-process reranker — offered, measured by docs/judge-bench.md Run 13 and recommended where
+  // there is no usable GPU or no answer yet (e2e-p56 drives it). This is the line that had to flip, deliberately, for
+  // the same reason the 语义 half did.
   ok('the built-in runtime is bindable on 语义, and on 判断 now too — the in-process reranker',
     bindable(semantic, 'builtin') === true && bindable(judge, 'builtin') === true,
     JSON.stringify({ judge: bindable(judge, 'builtin'), semantic: bindable(semantic, 'builtin') }));
@@ -451,9 +452,11 @@ try {
     // WHICH id depends on how far along the install is, and both are right: with no runtime it must offer
     // the runtime, and with a runtime but no model it must offer a model. A fixture has neither, so this
     // asserts the SET rather than one literal — pinning `gguf-` here failed against the correct answer,
-    // which is the assertion being wrong rather than the code.
+    // which is the assertion being wrong rather than the code. On 判断 with no runtime the answer is a MODEL
+    // resource that needs no runtime at all — 内置's (a fresh install is recommended it first, round-6 review) —
+    // so the set is every model resource, not only the GGUFs.
     const suggestable = ['llama-cpp', ...(await getJson('/api/manage/resources')).resources
-      .map((r) => r.id).filter((i) => i.startsWith('gguf-'))];
+      .filter((r) => r.id.startsWith('gguf-') || r.category === 'model').map((r) => r.id)];
     ok(`and suggests a resource that actually EXISTS on ${name}`,
       typeof llama?.suggest === 'string' && suggestable.includes(llama.suggest),
       `${llama?.suggest} not in ${suggestable.join(',')}`);
@@ -1251,7 +1254,16 @@ try {
       for (const x of ['onnx/model_qint8_avx512_vnni.onnx', 'tokenizer.json', 'config.json', 'tokenizer_config.json'])
         fs.writeFileSync(path.join(rerankDir, x), '');
     };
-    const CPU_COMPARISON = '它判断得和 llama.cpp 上的同一个模型一样好,每次检索却快得多(短事实约 0.47 秒对 0.82 秒,长笔记约 8.1 秒对 20 秒';
+    const CPU_COMPARISON = '事实都很短时它判断得和 llama.cpp 上的同一个模型一样好,长笔记上没有测出显著差别,每次检索却快得多(短事实约 0.47 秒对 0.82 秒,长笔记约 8.1 秒对 20 秒;实测和设置见「资源」里 mMiniLMv2(内置)那一行的说明)';
+    // BuiltInJudgeSource.OnADiscreteGpu — what a discrete GPU would change, pinned whole: the same model's speed there, and
+    // what BGE is recommended there FOR (found@8 on long notes), each with what it compares.
+    const ON_A_DISCRETE_GPU = '在一块独立显卡上,llama.cpp 上的同一个 mMiniLMv2 快得多(长笔记每次约 1.2 秒,「内置」约 8.1 秒),'
+      + 'llama.cpp 上的 BGE 把长笔记的答案带进前八的次数更多(同一块显卡上 201/240 对 mMiniLMv2 的 182/240;'
+      + '「内置」自己在另一轮是 180/240);集成显卡上 llama.cpp 不一定比 CPU 快';
+    // Why BGE where llama.cpp sees a GPU — what for, and not speed (review, round 6: I4).
+    const BGE_FOR = '所以推荐它,而不是在应用进程里运行的「内置」mMiniLMv2:长笔记上它把答案带进前八的次数更多'
+      + '(同一块显卡上 201/240 对 mMiniLMv2 的 182/240;「内置」自己在另一轮是 180/240)。推荐它是为这个,不是为速度'
+      + ' —— 在独立显卡上更快的是 llama.cpp 上的 mMiniLMv2。';
     const QWEN3 = 'Qwen3-0.6B-Q8_0';
     // MemorySources.CliTaggingCost, pinned as the exact clause for the reason p52 case 5 gives.
     const TAGGING_COST = '每条事实一次调用,消耗账号额度,事实内容会发给 Claude';
@@ -1353,9 +1365,10 @@ try {
           && /230 次等满一分钟\(那时应用还不会跳过\)/.test(miniNote) && /LAMAR 没有在只用 CPU 的机器上量过/.test(miniNote),
         miniNote.slice(miniNote.indexOf('在一台只用 CPU'), miniNote.indexOf('在一台只用 CPU') + 240));
       ok('mMiniLMv2\'s row says the app recommends 内置 — the same model in process — where llama.cpp can use no GPU (an integrated one counts), the judge was skipped or BGE measured too slow, that its long-note loss to BGE was on a GPU, and what one laptop\'s integrated GPU did',
-        /llama\.cpp 用不了任何显卡时\(集成显卡也算显卡\)、检索因为机器太慢跳过了判断时、或 BGE 在这台机器上实测太慢时,应用推荐的是在应用进程里运行的「内置」mMiniLMv2/.test(miniNote)
-          && /见「内置」那一行/.test(miniNote) && !/应用推荐它而不是 BGE/.test(miniNote)
-          && /有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE。只有集成显卡时:在同一台笔记本的 Arc 集成显卡上,两个重排模型都比它的 CPU 慢\(mMiniLMv2 约 6–7 倍,BGE 约 3 倍;只是这一台机器上的数\)/.test(miniNote)
+        /还不知道这台机器有没有能用的显卡时\(llama\.cpp 还没装,或还没回答\)、llama\.cpp 用不了任何显卡时\(集成显卡也算显卡\)、检索因为机器太慢跳过了判断时、或 BGE 在这台机器上实测太慢时,应用推荐的是在应用进程里运行的「内置」mMiniLMv2/.test(miniNote)
+          && /事实都很短时它判断得和这一版一样好,长笔记上没有测出显著差别/.test(miniNote)
+          && /见「资源」里 mMiniLMv2\(内置\)那一行/.test(miniNote) && !/见「内置」那一行/.test(miniNote) && !/应用推荐它而不是 BGE/.test(miniNote)
+          && /llama\.cpp 看得到显卡、BGE 在这台机器上也没有测出太慢时,推荐的是 BGE\(长笔记上它把答案带进前八的次数更多,见下\)。只有集成显卡时:在同一台笔记本的 Arc 集成显卡上,两个重排模型都比它的 CPU 慢\(mMiniLMv2 约 6–7 倍,BGE 约 3 倍;只是这一台机器上的数\)/.test(miniNote)
           && /那台笔记本只露出集成显卡时,两者都选了 CPU;BGE 在那里连 CPU 上也赶不上默认检索里的长事实,应用测完就改为推荐「内置」mMiniLMv2/.test(miniNote)
           && !/还没有量过。/.test(miniNote.slice(miniNote.indexOf('只有集成显卡'))) && !/两者都还没有量过/.test(miniNote)
           && /\(在显卡上;测完后另算的比较\)/.test(miniNote),
@@ -1364,10 +1377,11 @@ try {
       const bgeNote = String(rowOf(shelf, RERANKER)?.note ?? '');
       const lamarNote = String(rowOf(shelf, 'LAMAR-600m.Q5_K_M')?.note ?? '');
       ok('BGE\'s row says what Run 8 found for it on a CPU — almost never in time, 230 of 240 minute-waits before the skip, no verdict either way, 104/240 — pointing at mMiniLMv2\'s row for the configuration',
-        /只用 CPU 时它几乎总是来不及判断/.test(bgeNote) && /实测和设置见 mMiniLMv2 那一行/.test(bgeNote)
+        /只用 CPU 时它几乎总是来不及判断/.test(bgeNote) && /实测和设置见 llama\.cpp 的 mMiniLMv2\(Q8\)那一行/.test(bgeNote)
+          && !/见 mMiniLMv2 那一行/.test(bgeNote)
           && /230 次等满一分钟、没能判断/.test(bgeNote) && /现在会当即跳过,同样没有判断/.test(bgeNote) && /104\/240/.test(bgeNote)
-          && /llama\.cpp 用不了任何显卡时,应用推荐「内置」mMiniLMv2/.test(bgeNote)
-          && /在同一台笔记本的集成显卡上,它比它的 CPU 还慢约 3 倍\(实测和设置见 mMiniLMv2 那一行\)/.test(bgeNote)
+          && /所以还不知道这台机器有没有能用的显卡、或 llama\.cpp 用不了任何显卡时,应用推荐「内置」mMiniLMv2/.test(bgeNote)
+          && /在同一台笔记本的集成显卡上,它比它的 CPU 还慢约 3 倍\(实测和设置见 llama\.cpp 的 mMiniLMv2\(Q8\)那一行\)/.test(bgeNote)
           && !/两者都还没有量过/.test(bgeNote)
           && /它在这台机器上多快,应用要等下载之后才测得出\(在 CPU 和每块显卡上各测一次,之后让它在最快的那个上运行\)/.test(bgeNote)
           && /连最快的设备都赶不上时,也改为推荐「内置」mMiniLMv2/.test(bgeNote)
@@ -1375,7 +1389,8 @@ try {
         bgeNote.slice(bgeNote.indexOf('只用 CPU 时'), bgeNote.indexOf('只用 CPU 时') + 200));
       ok('LAMAR\'s row says it was not run on a CPU, and points at BGE\'s — the same size — without repeating the configuration',
         /LAMAR 没有在只用 CPU 的机器上量过;和它一样大的 BGE/.test(lamarNote) && /见 BGE 那一行/.test(lamarNote)
-          && /llama\.cpp 用不了任何显卡时,应用推荐「内置」mMiniLMv2/.test(lamarNote) && !/Intel Core Ultra 9 185H/.test(lamarNote),
+          && /所以还不知道这台机器有没有能用的显卡、或 llama\.cpp 用不了任何显卡时,应用推荐「内置」mMiniLMv2/.test(lamarNote)
+          && !/Intel Core Ultra 9 185H/.test(lamarNote),
         lamarNote.slice(lamarNote.indexOf('LAMAR 没有'), lamarNote.indexOf('LAMAR 没有') + 120));
       // mMiniLMv2's parity with BGE is a SHORT-fact result: on Run 6c's long notes, both read in windows, it brought the
       // answer onto the page significantly less often (182 against 201 of 240, 33/14, p = 0.008) — post hoc, and said so.
@@ -1462,7 +1477,10 @@ try {
           && /ONNX 8 位版本,那边是 Q8_0 的 GGUF/.test(String(builtinRerank?.note)) && /可以算一样好/.test(String(builtinRerank?.note))
           && /81\/240 与 180\/240,对 79\/240 与 182\/240,没有测出显著差别/.test(String(builtinRerank?.note))
           && /0\.82 秒与 20 秒/.test(String(builtinRerank?.note)) && /0\.30 秒与 1\.2 秒/.test(String(builtinRerank?.note))
-          && /约 0\.7–1\.0 GB 内存/.test(String(builtinRerank?.note)) && /载入约 1\.3 秒/.test(String(builtinRerank?.note))
+          && /载入后一直占用内存\(实测约 0\.76–1\.04 GB,直到重启服务;更大的检索没有量过\)/.test(String(builtinRerank?.note))
+          && !/打分时/.test(String(builtinRerank?.note)) && /载入约 1\.3 秒/.test(String(builtinRerank?.note))
+          && /长笔记上它把答案带进前八的次数更多\(同一块显卡上 201\/240 对 mMiniLMv2 的 182\/240\)/.test(String(builtinRerank?.note))
+          && /比同一个模型在 llama\.cpp、一块独立显卡上慢\(0\.30 秒与 1\.2 秒\)/.test(String(builtinRerank?.note))
           && /只作描述/.test(String(builtinRerank?.note))
           && !/还没有在本应用的测试集上实测过|不推荐/.test(String(builtinRerank?.note)),
         String(builtinRerank?.note));
@@ -1491,8 +1509,31 @@ try {
       ok('(fixture) the built-in embedder reads as installed, the GGUF one does not',
         (withBuiltIn.models ?? []).filter((m) => m.capability === 'embedding' && m.installed).length === 1,
         embedderState(withBuiltIn));
-      ok('THE POINT: with the built-in embedder in, the badge skips the GGUF copy of the same model and recommends the RERANKER',
-        withBuiltIn.recommendation?.id === RERANKER, JSON.stringify(withBuiltIn.recommendation ?? null));
+      // …and WHICH reranker, on a FRESH install — no llama.cpp, so nothing has said whether this machine has a GPU: 内置,
+      // which needs nothing else (owner decision, the round-6 review). It was BGE, which sent a CPU-only household to
+      // download llama.cpp and BGE before 内置 was named anywhere. The reason says what a discrete GPU would change.
+      ok('THE POINT: with the built-in embedder in and NO llama.cpp — a fresh install — the badge skips the GGUF copy of the same model and recommends 内置, not BGE',
+        withBuiltIn.recommendation?.id === BUILTIN_RERANK && withBuiltIn.runtime?.installed === false,
+        JSON.stringify({ rec: withBuiltIn.recommendation ?? null, runtime: withBuiltIn.runtime?.installed }));
+      const freshReason = String(withBuiltIn.recommendation?.reason ?? '');
+      ok('…saying why: it is not known whether there is a GPU (llama.cpp is not installed), Run 13\'s CPU comparison, and what a discrete GPU would change — BGE for long notes, the same model faster — with the tagging clause',
+        /还不知道这台机器有没有 llama\.cpp 能用的显卡\(llama\.cpp 还没装\),所以先推荐它:/.test(freshReason)
+          && freshReason.includes(CPU_COMPARISON) && freshReason.includes(`有独立显卡的话,可以再装 llama.cpp 和 BGE:${ON_A_DISCRETE_GPU}。`)
+          && /这台机器不需要为「判断」装 llama\.cpp/.test(freshReason) && freshReason.includes(TAGGING_COST)
+          && !/用不了任何显卡/.test(freshReason),
+        freshReason);
+      // …and the 判断 row agrees: llama.cpp's row, first in the 本机模型 group and so the sentence the picker shows,
+      // says 判断 need not wait for llama.cpp and points its download at 内置.
+      const freshJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
+      ok('THE POINT: …and with no runtime, the llama.cpp 判断 row says 判断 needs no llama.cpp and suggests downloading 内置, not the runtime',
+        freshJudge?.available === false && freshJudge?.suggest === 'rerank-model'
+          && /还没有下载运行时/.test(String(freshJudge?.reason)) && /「判断」不一定要 llama\.cpp/.test(String(freshJudge?.reason))
+          && /推荐先在「资源 · Resources」下载在应用进程里运行的「内置重排模型\(mMiniLMv2\)」\(约 136 MB\),再在这里选它/.test(String(freshJudge?.reason)),
+        JSON.stringify({ suggest: freshJudge?.suggest, reason: freshJudge?.reason }));
+      const freshSemantic = srcs(layerOf(await getJson('/api/manage/memory'), 'semantic')).find((x) => x.id === 'llama-cpp');
+      ok('(control) …while the 语义 row, with no runtime, still suggests the runtime and says nothing of 内置\'s reranker',
+        freshSemantic?.suggest === 'llama-cpp' && !/重排/.test(String(freshSemantic?.reason)),
+        JSON.stringify({ suggest: freshSemantic?.suggest, reason: freshSemantic?.reason }));
       fs.rmSync(builtinDir, { recursive: true, force: true });
       fs.mkdirSync(ggufDir, { recursive: true });
       fs.writeFileSync(path.join(ggufDir, 'embeddinggemma-300M-Q8_0.gguf'), '');
@@ -1520,23 +1561,22 @@ try {
           && withEmbedders.runtime?.installed === true,
         `${embedderState(withEmbedders)} runtime.installed=${withEmbedders.runtime?.installed}`);
       const rec = withEmbedders.recommendation;
-      ok('THE POINT: …and the other way round: 资源 recommends the RERANKER for 判断 — not the built-in copy, never the 1B chat model, never the small reranker',
-        rec?.id === RERANKER, JSON.stringify(rec ?? null));
-      ok('…and its reason says what binding it moves: the checking is local, the tagging goes to the Claude CLI on the account',
-        /Claude CLI/.test(String(rec?.reason)) && String(rec?.reason ?? '').includes(TAGGING_COST), String(rec?.reason));
-      // THE LIMITATION, said where the badge is (owner decision 2026-09-26, after Run 8b): the app MEASURES a reranker's
-      // devices on this machine (RerankDeviceMeter; e2e-p53) — but only once it is on disk, so the badge offers BGE first
-      // everywhere and moves to mMiniLMv2 only after BGE has been downloaded and measured too slow here.
-      ok('…and it says the machine is unknown until BGE is downloaded and measured — and what happens if it is too slow here',
-        /要等下载后、应用下一次自己启动 llama\.cpp 时才测得出/.test(String(rec?.reason))
-          && /连最快的设备都太慢的话,这里会改为推荐在应用进程里运行的「内置」mMiniLMv2/.test(String(rec?.reason)),
-        String(rec?.reason));
+      // The runtime is in, but its stand-in cannot answer --list-devices: still nothing has said whether there is a GPU,
+      // so still the fresh case — 内置 — and the reason says llama.cpp has not answered.
+      ok('THE POINT: …and the other way round: 资源 recommends a RERANKER for 判断 — not the built-in embedder\'s copy, never the 1B chat model — and, the runtime in but its device list unanswered, it is 内置',
+        rec?.id === BUILTIN_RERANK, JSON.stringify(rec ?? null));
+      ok('…and its reason says llama.cpp has not answered, what a discrete GPU would change, and what binding it moves: the checking is local, the tagging goes to the Claude CLI on the account',
+        /llama\.cpp 还没有回答这台机器有没有它能用的显卡,所以先推荐它:/.test(String(rec?.reason))
+          && String(rec?.reason ?? '').includes(ON_A_DISCRETE_GPU)
+          && /Claude CLI/.test(String(rec?.reason)) && String(rec?.reason ?? '').includes(TAGGING_COST), String(rec?.reason));
 
       // THE 判断 ROW'S SUGGESTION: runtime present, no model 判断 can use (the embedder is the wrong kind), so its
-      // sentence names a download — and that download is the reranker's.
+      // sentence names a download — and that download is the one writer's pick: 内置 here, nothing having answered.
       const llamaJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
-      ok('THE POINT: the 判断 row, runtime in and no judge model, suggests downloading the reranker',
-        llamaJudge?.suggest === `gguf-${RERANKER}`,
+      ok('THE POINT: the 判断 row, runtime in and no judge model, suggests downloading 内置 — saying why, and that it is downloaded first',
+        llamaJudge?.suggest === 'rerank-model'
+          && /llama\.cpp 还没有回答这台机器有没有它能用的显卡,「判断」推荐的是在应用进程里运行的「内置」重排模型\(先在「资源 · Resources」下载「内置重排模型\(mMiniLMv2\)」,再在「本机模型」里选它;不需要 llama\.cpp\)/.test(String(llamaJudge?.reason))
+          && !/在「本机模型」里选它,不需要/.test(String(llamaJudge?.reason)),
         JSON.stringify({ suggest: llamaJudge?.suggest, reason: llamaJudge?.reason }));
 
       // WHERE llama.cpp SEES NO GPU, THE SUGGESTION IS mMiniLMv2 (docs/judge-bench.md Run 8: on a CPU it judged every
@@ -1546,9 +1586,7 @@ try {
       // runtime runs the binary with its own folder as the working directory. So a file named `--list-devices` there is
       // the answer: first no device (b10549's own words with its Vulkan devices hidden), then a GPU. The stand-in's
       // identity (path, time, size) keys the runtime's memo of those facts, so each new answer comes with a new time.
-      // "Unknown" — the unreadable stub above — kept BGE, and the reason claimed nothing about the machine.
-      ok('(control) with the device list unknown — the stub cannot answer it — the badge is BGE and its reason names no machine',
-        rec?.id === RERANKER && !/显卡/.test(String(rec?.reason)), JSON.stringify(rec ?? null));
+      // "Unknown" — the unreadable stub above — is the fresh case: 内置 (it kept BGE until the round-6 review).
       const devicesFile = path.join(path.dirname(stubExe), '--list-devices');
       let stamp = Date.now() / 1000;
       const answerDevices = async (text) => {
@@ -1572,26 +1610,34 @@ try {
           cpuRec?.id === BUILTIN_RERANK && cpuShelf.runtime?.gpu === false
             && rowOf(cpuShelf, BUILTIN_RERANK)?.runtime === 'builtin' && rowOf(cpuShelf, BUILTIN_RERANK)?.installed === false,
           JSON.stringify({ rec: cpuRec ?? null, gpu: cpuShelf.runtime?.gpu }));
-        ok('…and its reason says why, plainly: llama.cpp can use no GPU here, 判断 needs no llama.cpp for it, Run 13\'s CPU comparison, BGE too slow on a CPU, BGE where there is a GPU — and the tagging clause',
+        ok('…and its reason says why, plainly: llama.cpp can use no GPU here, 判断 needs no llama.cpp for it, Run 13\'s CPU comparison, BGE too slow on a CPU, BGE where there is a GPU and what for — and the tagging clause',
           /llama\.cpp 在这台机器上用不了任何显卡,所以推荐它,而不是 BGE/.test(String(cpuRec?.reason))
             && /这台机器不需要为「判断」装 llama\.cpp/.test(String(cpuRec?.reason))
             && String(cpuRec?.reason ?? '').includes(CPU_COMPARISON)
             && /BGE 在只用 CPU 的笔记本上几乎每次都来不及判断\(实测和设置见 BGE 那一行\)/.test(String(cpuRec?.reason))
-            && /llama\.cpp 能用显卡、BGE 下载后在这台机器上也没有测出太慢时,推荐的是 BGE/.test(String(cpuRec?.reason))
+            && /llama\.cpp 能用显卡、BGE 下载后在这台机器上也没有测出太慢时,推荐的是 BGE —— 长笔记上它把答案带进前八的次数更多/.test(String(cpuRec?.reason))
+            && !/还不知道|还没有回答/.test(String(cpuRec?.reason))
             && !/更小的重排模型/.test(String(cpuRec?.reason)) && String(cpuRec?.reason ?? '').includes(TAGGING_COST),
           String(cpuRec?.reason));
         const cpuJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
         ok('THE POINT: …and the llama.cpp 判断 row\'s download suggestion is 内置 too, saying it needs no llama.cpp — one writer for the badge and the row',
           cpuJudge?.suggest === 'rerank-model'
-            && /这台机器上 llama\.cpp 用不了任何显卡,「判断」推荐的是在应用进程里运行的「内置」重排模型/.test(String(cpuJudge?.reason)),
+            && /这台机器上 llama\.cpp 用不了任何显卡,「判断」推荐的是在应用进程里运行的「内置」重排模型\(先在「资源 · Resources」下载/.test(String(cpuJudge?.reason)),
           JSON.stringify({ suggest: cpuJudge?.suggest, reason: cpuJudge?.reason }));
         // …and an INSTALLED 内置 ends the suggestion, as any installed recommendation does.
         plantBuiltinReranker();
         const cpuWithBuiltin = await getJson('/api/manage/models');
+        const cpuJudgeInHand = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
         fs.rmSync(rerankDir, { recursive: true, force: true });
         ok('…and with 内置 on disk and no GPU, nothing is recommended — an installed copy ends the suggestion',
           cpuWithBuiltin.recommendation == null && rowOf(cpuWithBuiltin, BUILTIN_RERANK)?.installed === true,
           JSON.stringify({ rec: cpuWithBuiltin.recommendation ?? null, builtin: rowOf(cpuWithBuiltin, BUILTIN_RERANK)?.installed }));
+        // …and the llama.cpp 判断 row stops offering a download of what is on disk: it says 内置 is there to choose, and
+        // suggests nothing (a button fetching a model already downloaded would be a dead control).
+        ok('…and the llama.cpp 判断 row, 内置 on disk, says it is there to choose and suggests no download',
+          cpuJudgeInHand?.suggest == null && /「内置」重排模型\(已经下载了,在「本机模型」里选它就能用;不需要 llama\.cpp\)/.test(String(cpuJudgeInHand?.reason))
+            && !/先在「资源 · Resources」下载/.test(String(cpuJudgeInHand?.reason)),
+          JSON.stringify({ suggest: cpuJudgeInHand?.suggest, reason: cpuJudgeInHand?.reason }));
         // …and an INVALIDATION does not flip it. Every start, restart and model removal drops the runtime's cached state;
         // the badge used to read the GPU answer from there, so for as long as the background re-probe took, "no GPU" read
         // as "not known" and the badge went back to BGE. It reads the memo of the binary's device list now, which an
@@ -1614,19 +1660,33 @@ try {
         // and claims nothing (LlamaServerState.GpuFrom). It read "no GPU" at first, and recommended the CPU model beside one.
         const cuda = await answerDevices('Available devices:\r\n  CUDA0: zzfake GPU (8192 MiB, 8000 MiB free)\r\n');
         const cudaShelf = await getJson('/api/manage/models');
-        ok('THE POINT: a device list naming only a non-Vulkan device reads as NOT KNOWN, not "no GPU" — the badge stays BGE and claims nothing about the machine',
+        // …and not "not asked" either: a device list WAS answered (ILlamaServerRuntime.DeviceListKnown), so it is not the
+        // fresh case — the one place "unknown GPU" still means BGE (GgufCatalog.GpuAnswer.OtherDevices).
+        ok('THE POINT: a device list naming only a non-Vulkan device reads as NOT KNOWN, not "no GPU" and not "not asked" — the badge is BGE, its reason saying llama.cpp listed devices, not a GPU',
           cuda.devicesListed === true && cuda.gpu === null && cudaShelf.runtime?.gpu === null
-            && cudaShelf.recommendation?.id === RERANKER && !/显卡/.test(String(cudaShelf.recommendation?.reason)),
+            && cudaShelf.recommendation?.id === RERANKER
+            && String(cudaShelf.recommendation?.reason ?? '').includes(`llama.cpp 列出了这台机器上的计算设备,${BGE_FOR}`)
+            && !/看得到这台机器的显卡|用不了任何显卡|还不知道|还没有回答/.test(String(cudaShelf.recommendation?.reason)),
           JSON.stringify({ gpu: cuda.gpu, devices: cuda.devices, shelfGpu: cudaShelf.runtime?.gpu, rec: cudaShelf.recommendation?.id ?? null }));
 
         const withGpu = await answerDevices('Available devices:\r\n  Vulkan0: zzfake GPU (8192 MiB, 8000 MiB free)\r\n');
         ok('(non-vacuity) the same stand-in answered again, now listing a Vulkan GPU',
           withGpu.devicesListed === true && withGpu.gpu === true, JSON.stringify({ gpu: withGpu.gpu, devices: withGpu.devices }));
         const gpuShelf = await getJson('/api/manage/models');
-        ok('(control) with a GPU, the badge is BGE again, with the reason that claims nothing about the machine — never 内置',
-          gpuShelf.recommendation?.id === RERANKER && !/显卡/.test(String(gpuShelf.recommendation?.reason))
-            && rowOf(gpuShelf, BUILTIN_RERANK)?.installed === false,
-          JSON.stringify(gpuShelf.recommendation ?? null));
+        // What BGE is recommended FOR where there is a GPU (review, round 6: I4 — the text credited it with the same
+        // mMiniLMv2's GPU speed), and THE LIMITATION (owner decision 2026-09-26, after Run 8b): the app MEASURES a
+        // reranker's devices on this machine (RerankDeviceMeter; e2e-p53) — but only once it is on disk.
+        const gpuReason = String(gpuShelf.recommendation?.reason ?? '');
+        ok('THE POINT: with a GPU, the badge is BGE — saying llama.cpp sees a GPU and what BGE is recommended there FOR (a long note\'s answer on the page more often), not speed',
+          gpuShelf.recommendation?.id === RERANKER && rowOf(gpuShelf, BUILTIN_RERANK)?.installed === false
+            && gpuReason.includes(`llama.cpp 看得到这台机器的显卡,${BGE_FOR}`)
+            && !/用不了任何显卡|还不知道|还没有回答/.test(gpuReason),
+          gpuReason);
+        ok('…and it says the machine is unknown until BGE is downloaded and measured — and what happens if it is too slow here — with the tagging clause',
+          /要等下载后、应用下一次自己启动 llama\.cpp 时才测得出/.test(gpuReason)
+            && /连最快的设备都太慢的话,这里会改为推荐在应用进程里运行的「内置」mMiniLMv2/.test(gpuReason)
+            && /Claude CLI/.test(gpuReason) && gpuReason.includes(TAGGING_COST),
+          gpuReason);
         const gpuJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
         ok('(control) …and the 判断 row suggests BGE, saying nothing of 内置', gpuJudge?.suggest === `gguf-${RERANKER}`
           && !/内置/.test(String(gpuJudge?.reason)),
@@ -1645,8 +1705,8 @@ try {
       ok('(fixture) Qwen3 0.6B reads as an installed chat model',
         rowOf(withChatJudge, QWEN3)?.installed === true && rowOf(withChatJudge, QWEN3)?.capability === 'completion',
         JSON.stringify(rowOf(withChatJudge, QWEN3) ?? null));
-      ok('THE POINT: with Qwen3 0.6B installed the badge still names the reranker — never the chat judge',
-        withChatJudge.recommendation?.id === RERANKER, JSON.stringify(withChatJudge.recommendation ?? null));
+      ok('THE POINT: with Qwen3 0.6B installed the badge still names a reranker — 内置 here, nothing having answered — never the chat judge',
+        withChatJudge.recommendation?.id === BUILTIN_RERANK, JSON.stringify(withChatJudge.recommendation ?? null));
       fs.rmSync(path.join(ggufDir, `${QWEN3}.gguf`), { force: true });
 
       // ONE RERANKER IS ENOUGH, as one embedder is: any installed reranker is a local judge that measured better than

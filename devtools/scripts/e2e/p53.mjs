@@ -100,7 +100,7 @@ const MMINILM = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
 // What BGE measured too slow now recommends: 内置, the same model in process (docs/judge-bench.md Run 13) — it was the
 // llama.cpp GGUF above until that run. Its one-clause comparison (BuiltInJudgeSource.CpuComparison), as the reason quotes it.
 const BUILTIN_RERANK = 'mmarco-mMiniLMv2-L12-H384-v1-onnx';
-const CPU_COMPARISON = '它判断得和 llama.cpp 上的同一个模型一样好,每次检索却快得多(短事实约 0.47 秒对 0.82 秒,长笔记约 8.1 秒对 20 秒';
+const CPU_COMPARISON = '事实都很短时它判断得和 llama.cpp 上的同一个模型一样好,长笔记上没有测出显著差别,每次检索却快得多(短事实约 0.47 秒对 0.82 秒,长笔记约 8.1 秒对 20 秒;实测和设置见「资源」里 mMiniLMv2(内置)那一行的说明)';
 const EMBEDDER = 'embeddinggemma-300M-Q8_0';
 const FAKE = `node ${path.join(repo, 'devtools', 'scripts', 'fake-llama-measure.mjs')}`;
 // Every cap at 8 s, so the device that never answers costs 8 s rather than 30.

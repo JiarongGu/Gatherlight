@@ -1510,7 +1510,7 @@ try {
   // The CPU-friendly reranker a skip asks for: 内置, the in-process mMiniLMv2 (docs/judge-bench.md Run 13) — it was
   // llama.cpp's mMiniLMv2 GGUF until that run.
   const BUILTIN_RERANK = 'mmarco-mMiniLMv2-L12-H384-v1-onnx';
-  const CPU_COMPARISON = '它判断得和 llama.cpp 上的同一个模型一样好,每次检索却快得多(短事实约 0.47 秒对 0.82 秒,长笔记约 8.1 秒对 20 秒';
+  const CPU_COMPARISON = '事实都很短时它判断得和 llama.cpp 上的同一个模型一样好,长笔记上没有测出显著差别,每次检索却快得多(短事实约 0.47 秒对 0.82 秒,长笔记约 8.1 秒对 20 秒;实测和设置见「资源」里 mMiniLMv2(内置)那一行的说明)';
   const skipLog = () => logOf(skipDir);
   const skipLines = () => skipLog().split('\n').filter((l) => SKIP_LINE.test(l));
   const queueLeft = (line) => Number((QUEUE_CLAUSE.exec(line) ?? [])[1]);

@@ -339,9 +339,30 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     {
         var s = ctx.Settings;
         if (!File.Exists(ResourceProvisioner.ProvisionedLlamaServer(s.ResourcesPath)))
+        {
+            // 判断 NEED NOT WAIT FOR llama.cpp. This row comes first in the 本机模型 group, so its sentence is the one the
+            // picker shows; with no runtime nothing has answered whether this machine has a GPU (GpuAnswer.NotAsked), and
+            // the one writer then recommends 内置 — so the sentence says so, and its download is 内置's while it is not on
+            // disk (round-6 review: the fresh install used to be sent to llama.cpp first).
+            var fresh = _layer == MemoryLayers.Judge
+                ? GgufCatalog.RecommendedRerankerFor(GgufCatalog.GpuAnswer.NotAsked)
+                : null;
+            if (fresh == GgufCatalog.RerankerWithoutGpu)
+            {
+                var inHand = ResourceProvisioner.RerankerInstalled(s.ResourcesPath, fresh);
+                return new SourceStatus(false,
+                    "还没有下载运行时 —— 在「资源 · Resources」面板下载「本机模型运行时 · llama.cpp」(约 35 MB)。"
+                    + "「判断」不一定要 llama.cpp:"
+                    + (inHand
+                        ? "在应用进程里运行的「内置」重排模型已经下载了,在这里选它就能用。"
+                        : "推荐先在「资源 · Resources」下载在应用进程里运行的「内置重排模型(mMiniLMv2)」(约 136 MB),再在这里选它。")
+                    + "有独立显卡的话,再装 llama.cpp 和 BGE 更好 —— 长笔记上 BGE 把答案带进前八的次数更多。",
+                    inHand ? "llama-cpp" : GgufCatalog.ResourceIdForReranker(fresh));
+            }
             return new SourceStatus(false,
                 "还没有下载运行时 —— 在「资源 · Resources」面板下载「本机模型运行时 · llama.cpp」(约 35 MB)。",
                 "llama-cpp");
+        }
 
         if (ModelsOnDisk(s).Count == 0)
         {
@@ -354,26 +375,35 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // fetches the local default the owner kept. (Qwen3 0.6B, a chat judge, also measured better than none in Runs
             // 5b and 11; it is offered, not suggested.)
             // WHICH reranker is the same one writer 资源's badge reads (GgufCatalog.RecommendedRerankerFor): 内置 — the
-            // in-process mMiniLMv2, docs/judge-bench.md Run 13 — where the last full probe found no GPU, BGE otherwise —
-            // read from the runtime's memo of the binary's device list (ILlamaServerRuntime.Gpu), because a panel must not
-            // await a process and an invalidation must not flip it; unknown keeps BGE. No skip signal here: with no judge
-            // model there is no pace. On a machine with no GPU the one recommendation for 判断 is NOT a llama.cpp model, so
-            // this row says so and its button fetches 内置 — the badge, this row and 资源 agree, and the household is not
-            // sent to download a GGUF llama.cpp would run slower than the app itself does.
-            var reranker = GgufCatalog.RecommendedRerankerFor(ctx.Llama.Gpu);
+            // in-process mMiniLMv2, docs/judge-bench.md Run 13 — where the last full probe found no GPU or nothing has
+            // answered yet (a fresh install, round-6 review), BGE where it listed a GPU or another build's devices — read
+            // from the runtime's memo of the binary's device list (ILlamaServerRuntime.Gpu, DeviceListKnown), because a
+            // panel must not await a process and an invalidation must not flip it. No skip signal here: with no judge model
+            // there is no pace. Where the recommendation for 判断 is NOT a llama.cpp model, this row says so, WHY, and that
+            // it is downloaded first; its button fetches 内置 — the badge, this row and 资源 agree.
+            var gpu = GgufCatalog.GpuAnswerOf(ctx.Llama.Gpu, ctx.Llama.DeviceListKnown);
+            var reranker = GgufCatalog.RecommendedRerankerFor(gpu);
             var inProcess = reranker == GgufCatalog.RerankerWithoutGpu;
+            // Already downloaded: nothing to fetch, so no download is suggested — a button fetching what is on disk
+            // would be a dead control — and the sentence says it is there to choose.
+            var inHand = inProcess && ResourceProvisioner.RerankerInstalled(s.ResourcesPath, reranker);
             return new SourceStatus(false,
                 _layer == MemoryLayers.Semantic
                     ? "运行时已就绪,但还没有嵌入模型 —— 在「资源 · Resources」面板下载一个。"
                     // Either kind can judge: a chat model does both halves, a reranker the checking.
                     : "运行时已就绪,但还没有对话模型或重排模型 —— 在「资源 · Resources」面板下载一个。"
                       + (inProcess
-                          ? "这台机器上 llama.cpp 用不了任何显卡,「判断」推荐的是在应用进程里运行的「内置」重排模型"
-                            + "(在「本机模型」里选它,不需要 llama.cpp)。"
+                          ? (gpu == GgufCatalog.GpuAnswer.NoGpu
+                              ? "这台机器上 llama.cpp 用不了任何显卡,"
+                              : "llama.cpp 还没有回答这台机器有没有它能用的显卡,")
+                            + "「判断」推荐的是在应用进程里运行的「内置」重排模型"
+                            + (inHand
+                                ? "(已经下载了,在「本机模型」里选它就能用;不需要 llama.cpp)。"
+                                : "(先在「资源 · Resources」下载「内置重排模型(mMiniLMv2)」,再在「本机模型」里选它;不需要 llama.cpp)。")
                           : ""),
                 _layer == MemoryLayers.Semantic
                     ? GgufCatalog.ResourceIdFor(GgufCatalog.RecommendedEmbedder)
-                    : GgufCatalog.ResourceIdForReranker(reranker));
+                    : inHand ? null : GgufCatalog.ResourceIdForReranker(reranker));
         }
 
         // Present and has a model: ready to BIND. Whether the process happens to be up right now is not the

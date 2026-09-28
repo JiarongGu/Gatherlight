@@ -137,7 +137,8 @@ public sealed class MemoryRecallController : ControllerBase
         if (MemoryEnrichment.IsOn(_appConfig) && _pace?.RecentSkips is { Skipped: > 0 } skips)
         {
             // The one writer 资源's badge reads too; with skips it names the small reranker whatever the device probe says.
-            var small = GgufCatalog.RecommendedRerankerFor(_llama.Gpu, skippedHere: true);
+            var gpu = GgufCatalog.GpuAnswerOf(_llama.Gpu, _llama.DeviceListKnown);
+            var small = GgufCatalog.RecommendedRerankerFor(gpu, skippedHere: true);
             // Three answers, each true (GgufCatalog.SkipNotice): 内置 IS what skips — nothing faster to offer, and the row
             // says so and what is left; it is downloaded and not what runs — choose it; or download it. A GGUF mMiniLMv2
             // skipping is offered 内置 too: the same model, measured faster on a CPU (docs/judge-bench.md Run 13).
@@ -147,7 +148,7 @@ public sealed class MemoryRecallController : ControllerBase
             paceView = new
             {
                 skipped = skips.Skipped, recalls = skips.Recalls,
-                text = GgufCatalog.SkipNotice(skips.Skipped, skips.Recalls, advice, _llama.Gpu),
+                text = GgufCatalog.SkipNotice(skips.Skipped, skips.Recalls, advice, gpu),
                 // A RESOURCE id, as a source's own suggestion is — the 资源 row that downloads it.
                 suggest = advice == GgufCatalog.SkipAdvice.Download ? GgufCatalog.ResourceIdForReranker(small) : null,
             };
@@ -674,7 +675,9 @@ public sealed class MemoryRecallController : ControllerBase
                 // The tagging clause is MemorySources.CliTaggingCost — the same one the cost line and the model
                 // note carry, so the three cannot disagree about whether the account is spent.
                 // …and, last, what the SOURCE says a household must know on choosing it (BindCaveat): 内置's reranker says
-                // it is unmeasured, which is why nothing recommends it.
+                // what it costs — memory held until a restart, seconds to tens of seconds per recall of long notes — and
+                // that a discrete GPU does better with BGE on llama.cpp (docs/judge-bench.md Run 13; it said "unmeasured"
+                // until that run).
                 note = (source.ChecksOnly(model!)
                     ? $"设置已保存。重启服务后,检索时的核对将由这个模型完成;写入事实时的主题标注由 Claude CLI"
                       + $"({source.AnnotationModel(model!)})完成 —— {MemorySources.CliTaggingCost}。{taggingOff}"

@@ -17,8 +17,10 @@
 //      the route written is claude-cli:haiku, never the model's id. The cost line says both halves. Its texts quote
 //      docs/judge-bench.md Run 13, which measured it (they said "unmeasured, not recommended" until then).
 //   A2. 资源. The model is a row — builtin runtime, reranking, its pinned size, a resource that exists — deletable, and
-//      refused while bound; installed, it counts as the one reranker (measured), so nothing further is recommended.
-//      Which machine it is RECOMMENDED on (no GPU, skips, BGE measured too slow) is e2e-p51's, p52's and p53's.
+//      refused while bound; installed, it counts as the one reranker (measured), so nothing further is recommended — and
+//      (control) once it is removed, the badge names it again: no llama.cpp here, so nothing has said whether there is a
+//      GPU, and a fresh install is recommended 内置 first (the round-6 review). Which machine it is RECOMMENDED on
+//      otherwise (no GPU, skips, BGE measured too slow, a GPU) is e2e-p51's, p52's and p53's.
 //   B. AT WORK, on a server that booted bound to it. A fact write is tagged by the CLI stub on haiku; a recall is
 //      VERIFIED IN PROCESS: with 判断 switched off (the live switch) a target fact the scorer rewards is off the page,
 //      switched on it is on it and the recall came back judged — while nothing reaches a fake llama.cpp router and the
@@ -111,7 +113,10 @@ try {
     JSON.stringify({ available: builtin?.available, reason: builtin?.reason, suggest: builtin?.suggest }));
   ok('its description says what it moves, what Run 13 measured against llama.cpp, and where llama.cpp is faster',
     /Claude CLI/.test(String(builtin?.description)) && /不需要 llama\.cpp/.test(String(builtin?.description))
-      && /实测它判断得和 llama\.cpp 那条的 mMiniLMv2 一样好,只用 CPU 时快得多;有独立显卡时,llama\.cpp 在显卡上更快/.test(String(builtin?.description))
+      && /实测它在事实都很短时判断得和 llama\.cpp 那条的 mMiniLMv2 一样好,长笔记上没有测出显著差别,只用 CPU 时快得多;/.test(String(builtin?.description))
+      // I4: BGE is recommended on a GPU for found@8 on long notes; the speed there is the same mMiniLMv2's.
+      && /有独立显卡时,推荐的是 llama\.cpp 上的 BGE —— 长笔记上它把答案带进前八的次数更多;同一个 mMiniLMv2 在独立显卡上也快得多\(长笔记每次约 1\.2 秒对 8\.1 秒\)/.test(String(builtin?.description))
+      && !/llama\.cpp 在显卡上更快/.test(String(builtin?.description))
       && !/不推荐|还没有对比实测过/.test(String(builtin?.description)),
     String(builtin?.description));
 
@@ -142,9 +147,13 @@ try {
     bound.status === 200 && bound.body?.restartRequired === true, `${bound.status} ${JSON.stringify(bound.body)}`);
   ok('…the toast says the CHECKING moves here and the tagging goes to the Claude CLI, on the account\'s quota',
     /检索时的核对将由这个模型完成/.test(note) && /Claude CLI\(haiku\)/.test(note) && note.includes(TAGGING_COST), note);
-  ok('THE POINT: …and what it COSTS — its memory, and that llama.cpp on a discrete GPU is faster — never the old "unmeasured, not recommended"',
-    /打分时应用会多占约 0\.7–1\.0 GB 内存/.test(note) && /有独立显卡的机器上,llama\.cpp 的重排模型在显卡上快得多/.test(note)
-      && !/还没有实测过|不推荐/.test(note), note);
+  ok('THE POINT: …and what it COSTS — its memory, HELD until a restart, and how long a recall of long notes takes, measured — never the old "unmeasured, not recommended", 「打分时多占」 or 「每次要几秒」',
+    /载入后一直占用内存\(实测约 0\.76–1\.04 GB,直到重启服务;更大的检索没有量过\)/.test(note)
+      && /长笔记多的检索每次要几秒到几十秒\(实测中位数约 8\.1 秒,九成在 15\.6 秒以内,最慢约 47\.5 秒\)/.test(note)
+      && !/还没有实测过|不推荐|打分时|每次要几秒;/.test(note), note);
+  ok('…and where something else does better, crediting each with what it measured: BGE on a discrete GPU for long notes, the same mMiniLMv2 there for speed',
+    /有独立显卡的机器上,推荐的是 llama\.cpp 上的 BGE —— 长笔记上它把答案带进前八的次数更多;同一个 mMiniLMv2 在独立显卡上长笔记每次约 1\.2 秒/.test(note)
+      && !/llama\.cpp 的重排模型在显卡上快得多/.test(note), note);
   ok('the settings name the source and its one model together',
     settingsOf(bindDir).memory?.judgeSource === 'builtin' && settingsOf(bindDir).memory?.judgeModel === MODEL,
     JSON.stringify(settingsOf(bindDir).memory ?? null));
@@ -178,10 +187,18 @@ try {
     `${refuse.status} ${JSON.stringify(refuse.body)}`);
   const back = await a.post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'haiku' });
   const removed = await a.post('/api/manage/models/remove', { model: MODEL, runtime: 'builtin' });
+  const invAfter = await a.getJson('/api/manage/models');
   ok('(control) bound elsewhere, it deletes — its directory gone, the row back to downloadable',
     back.status === 200 && removed.status === 200 && !fs.existsSync(modelDir(bindDir))
-      && (await a.getJson('/api/manage/models')).models.find((m) => m.id === MODEL)?.installed === false,
+      && invAfter.models.find((m) => m.id === MODEL)?.installed === false,
     `${back.status} ${removed.status} ${JSON.stringify(removed.body)}`);
+  // The control for "installed, nothing further is recommended": that null is the installed copy's doing, not a badge
+  // that never names it. And the fresh case: no llama.cpp in this data folder, so nothing has said whether there is a
+  // GPU — 内置 first, with the reason saying so (it recommended BGE there until the round-6 review).
+  ok('(control) THE POINT: removed, it is recommended again — no llama.cpp installed, so a fresh install gets 内置, not BGE',
+    invAfter.recommendation?.id === MODEL && invAfter.runtime?.installed === false
+      && /还不知道这台机器有没有 llama\.cpp 能用的显卡\(llama\.cpp 还没装\),所以先推荐它/.test(String(invAfter.recommendation?.reason)),
+    JSON.stringify({ rec: invAfter.recommendation ?? null, runtime: invAfter.runtime?.installed }));
 
   // ---- B. AT WORK -----------------------------------------------------------------------------------------------------
   const workDir = dataDirFor('p56-work');

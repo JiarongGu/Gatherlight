@@ -170,7 +170,8 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     // app can guard. MinGit (above), which the data repo runs on, ships NO bash.exe and cannot back the CLI's
     // Bash tool (measured, docs/self-managed-llm-runtime.md), so a Git Bash is a SEPARATE, opt-in resource.
     // Same tag/version as MinGit (one Git for Windows release), its own sha256 over the .7z self-extractor.
-    // Bump version, tag and checksum together. build-production.mjs can read these for an --offline bundle.
+    // Bump version, tag and checksum together. NOT in the --offline bundle: build-production.mjs reads MinGit's
+    // constants only, and this one is opt-in, so an air-gapped install has no Git Bash unless it is added there.
     private const string PortableGitSha256 = "b20d42da3afa228e9fa6174480de820282667e799440d655e308f700dfa0d0df";
     private static string PortableGitUrl =>
         Override("GATHERLIGHT_GIT_BASH_URL")
@@ -416,9 +417,11 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         new ResourceSpec(
             Id: "llama-cpp", Name: $"本机模型运行时 · llama.cpp({LlamaCppVersion})",
             // Names all three kinds it serves: a reranker for 判断 runs here too, and a row listing only the
-            // chat model would leave a household who chose one wondering why this is needed.
-            NeededFor: "「记忆检索」里本机模型的运行时:语义的嵌入模型、判断的对话模型或重排模型都跑在它上面"
-                + " —— 自带 Vulkan,NVIDIA / AMD / Intel 通用;仅在启用本机模型时需要",
+            // chat model would leave a household who chose one wondering why this is needed. And says what does NOT
+            // need it: 「仅在启用本机模型时需要」 was false once the 内置 models ran in this process — a household choosing
+            // 内置 for either layer was told it needed this download (round-6 review).
+            NeededFor: "「记忆检索」里 llama.cpp 模型的运行时:语义的嵌入模型、判断的对话模型或重排模型都可以跑在它上面"
+                + " —— 自带 Vulkan,NVIDIA / AMD / Intel 通用;标着「内置」的模型在应用进程里运行,不需要它",
             Kind: ResourceKind.Zip, InstallDir: "llama-cpp", ReadyMarker: "llama-server.exe",
             ApproxBytes: LlamaCppArm64 ? 12_339_627 : 34_936_498,
             Url: LlamaCppUrl,
@@ -476,9 +479,10 @@ public sealed class ResourceProvisioner : IResourceProvisioner
             // before downloading it; the figures, with their configuration, are the model row's note
             // (BuiltInJudgeSource.Catalog, docs/judge-bench.md Run 13). It said 「还没有…对比实测过,所以不推荐」 until then.
             NeededFor: "「记忆检索 · 判断」的内置重排模型 —— 在应用进程里用 CPU 运行:不需要 llama.cpp,没有常驻服务,"
-                + "约 136 MB 磁盘,打分时多占约 0.7–1.0 GB 内存;它只做检索时的核对,写入事实时的主题标注仍由 Claude CLI 完成"
-                + "(消耗账号额度)。实测它判断得和 llama.cpp 上的同一个模型一样好,只用 CPU 时快得多,"
-                + "所以 llama.cpp 用不了任何显卡的机器上推荐它;仅在判断选用这个「内置」模型时需要",
+                + "约 136 MB 磁盘;载入后一直占用内存(实测约 0.76–1.04 GB,直到重启服务;更大的检索没有量过)。"
+                + "它只做检索时的核对,写入事实时的主题标注仍由 Claude CLI 完成(消耗账号额度)。"
+                + "实测它在事实都很短时判断得和 llama.cpp 上的同一个模型一样好,长笔记上没有测出显著差别,只用 CPU 时快得多,"
+                + "所以还不知道有没有能用的显卡、或 llama.cpp 用不了任何显卡的机器上推荐它;仅在判断选用这个「内置」模型时需要",
             Kind: ResourceKind.Files, InstallDir: Agent.Llm.Sources.BuiltInJudgeSource.ResourceId,
             // The graph is the marker, as the embedder's is: ProvisionFilesAsync moves the directory in only once every
             // checksum passed, so the marker existing means the set is complete.
