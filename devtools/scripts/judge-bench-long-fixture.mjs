@@ -89,7 +89,7 @@ const MENTION_TEMPLATES = {
 };
 
 // ---- (2) neutral household filler: invented, names no fixture subject ----------------------------------------------
-const FILLER = {
+export const FILLER = {
   zh: [
     '客厅的窗帘下个月要拿去清洗,顺便把挂钩换成金属的。', '冰箱冷冻室结了一层厚霜,周末找时间断电除霜。',
     '书架最上面一层的旧杂志整理出来了,准备送给楼上的邻居。', '电梯下周二上午停运检修,搬重东西要避开那天。',
@@ -280,15 +280,15 @@ const mulberry32 = (a) => () => {
   t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
-const seedOf = (s) => { let h = 0x811c9dc5; for (const ch of s) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193); } return h >>> 0; };
-const shuffled = (xs, seed) => {
+export const seedOf = (s) => { let h = 0x811c9dc5; for (const ch of s) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193); } return h >>> 0; };
+export const shuffled = (xs, seed) => {
   const a = [...xs], rand = mulberry32(seed);
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   return a;
 };
 // The same language test recall-questions.mjs uses: kana marks Japanese, hanzi without kana Chinese, else English.
 export const languageOf = (f) => (/[぀-ヿ]/.test(`${f.topic} ${f.content}`) ? 'ja' : /[一-鿿]/.test(`${f.topic} ${f.content}`) ? 'zh' : 'en');
-const JOIN = { zh: '', ja: '', en: ' ' };
+export const JOIN = { zh: '', ja: '', en: ' ' };
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** The subject terms a text contains, in its language's matching rule. */
 export const subjectHits = (text, lang) => SUBJECT_TERMS[lang].filter((t) => (lang === 'en'
