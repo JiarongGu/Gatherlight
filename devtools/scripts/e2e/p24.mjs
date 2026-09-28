@@ -172,6 +172,13 @@ battery('system', systemGuard, [
   ['bash mv in-repo ok', 'Bash', { command: 'mv src/client/a.txt src/client/b.txt' }, false],
   ['bash node script ok (not a shell)', 'Bash', { command: 'node src/client/scripts/build.mjs' }, false],
   ['bash command -v sh ok (name is an arg)', 'Bash', { command: 'command -v sh' }, false],
+  // v9 (round-6 review, C1): a token naming a directory that CONTAINS a protected entry is refused as well — `src`
+  // holds src/server, `.claude` the settings. The repo root itself stays usable, and a sibling (src/client) is no
+  // container of them.
+  ['bash mv src aside (contains src/server)', 'Bash', { command: 'mv src src-old' }, true],
+  ['bash mv .claude out (contains settings)', 'Bash', { command: 'mv .claude x' }, true],
+  ['bash ls src/client ok (not a container)', 'Bash', { command: 'ls src/client' }, false],
+  ['bash ls . ok (the repo root is exempt)', 'Bash', { command: 'ls .' }, false],
 ]);
 
 // ── Planner guard (jail = data folder, writes = plans/household/.claude) ──────────────────────────
@@ -219,6 +226,16 @@ if (plannerGuard) {
     ['bash rm guard', 'Bash', { command: 'rm .claude/hooks/scope-guard.mjs' }, true],
     ['bash cp in plans ok', 'Bash', { command: 'cp plans/a.md plans/b.md' }, false],
     ['bash echo>plans ok', 'Bash', { command: 'echo x > plans/note.md' }, false],
+    // v11 (round-6 review, C1): a token naming a directory that CONTAINS a protected entry — `.claude` holds the
+    // settings, `.claude/hooks` — is refused too: moving it out, rewriting settings.json and moving it back was the
+    // escape the file tools had. The data root itself stays usable (`ls .`), and a subfolder beside the protected
+    // entries (`.claude/skills`) is not a container of them.
+    ['bash mv .claude out (contains protected)', 'Bash', { command: 'mv .claude plans/kb' }, true],
+    ['bash mv .claude/ trailing slash', 'Bash', { command: 'mv .claude/ plans/kb' }, true],
+    ['bash cp -r into .claude (contains protected)', 'Bash', { command: 'cp -r plans/kb .claude' }, true],
+    ['bash mv Claude case-folded', 'Bash', { command: 'mv .Claude plans/kb' }, true],
+    ['bash ls .claude/skills ok (not a container)', 'Bash', { command: 'ls .claude/skills' }, false],
+    ['bash ls . ok (the data root is exempt)', 'Bash', { command: 'ls .' }, false],
     // Fix3 — reads of state/ (Read / Glob pattern / Grep glob) are denied
     ['read state db', 'Read', { file_path: 'state/gatherlight.db' }, true],
     ['glob state pfx', 'Glob', { pattern: 'state/**/*.pfx' }, true],

@@ -14,7 +14,7 @@
  * READ_DENY; e2e-p24 runs both. GUARD_VERSION lets the server re-issue newer logic. state/ lives in the
  * data folder, OUTSIDE this jail, so a token naming it is already refused as "outside".
  */
-// GUARD_VERSION: 8
+// GUARD_VERSION: 9
 import path from 'node:path';
 
 const WRITE_DIRS = [''];  // '' = the whole jail (repo); writes gated by PROTECTED
@@ -164,6 +164,11 @@ function relTo(p, root) {
 }
 const inside = (p, root) => relTo(p, root) !== null;
 const underAny = (rel, dirs) => dirs.some((d) => d === '' || rel === d || rel.startsWith(d + '/'));
+// A path that CONTAINS a protected entry (the entry lies under it): moving `.claude` out, rewriting settings.json
+// and moving it back was an escape one level up from every "under" test. The root ('') is exempt — it contains
+// everything, `ls .` must keep working, and the destructive root operations are refused elsewhere (`rm -r` by
+// HISTORY, `..` as outside the folder).
+const containsAny = (rel, dirs) => rel !== '' && dirs.some((d) => d !== '' && d.startsWith(rel + '/'));
 // A path segment Windows would resolve to something a string compare cannot see: an 8.3 short name
 // (`STATE~1`, `SETTIN~1.JSO` — the long name it abbreviates may be PROTECTED or state/), an alternate
 // data stream (`x.md:evil`, a colon past the drive letter), or a device name (CON, NUL, COM1…). Refused
@@ -181,7 +186,7 @@ function oddSegment(p, devices = true) {
 }
 
 // Best-effort: a refusal reason when a path-like Bash token points outside the jail, into state/, or
-// at a PROTECTED app-managed path — else null. DEFENCE IN DEPTH, leg (2) in the header: a token scan is
+// at a PROTECTED app-managed path or a folder holding one — else null. DEFENCE IN DEPTH, leg (2) in the header: a token scan is
 // fooled by a variable, a $(...) or a constructed string, and such a token can write this guard's file.
 // The `` ` `` splitter also catches a token inside a backtick substitution.
 function bashDenyReason(command, root) {
@@ -212,6 +217,7 @@ function bashDenyReason(command, root) {
     if (rel === null) return 'a path outside the data folder';   // absolute-outside or `..`-escape
     if (underAny(rel, READ_DENY)) return 'state/ (app state — the access token, the TLS key, the database)';
     if (underAny(rel, BASH_PROTECTED)) return 'a protected, app-managed path (the guard / settings / .mcp.json / site.json / .git)';
+    if (containsAny(rel, BASH_PROTECTED)) return 'a folder holding protected, app-managed files (the guard / settings) — move or change the files inside it one by one';
   }
   return null;
 }

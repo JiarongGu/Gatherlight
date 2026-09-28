@@ -23,9 +23,9 @@ public interface ISiteWriteScope
     IReadOnlyList<string> WriteDirs { get; }
 
     /// <summary>Resolve a data-root-relative path to an absolute path IFF the agent may write it there,
-    /// applying the SAME rules the scope guard applies to an Edit/Write: inside a write dir, not under the
-    /// PROTECTED set, and — under the UI dir — a flat <c>.json</c> page only. <paramref name="reason"/> is a
-    /// household-readable refusal when it returns null.</summary>
+    /// applying the SAME rules the scope guard applies to an Edit/Write: inside a write dir, neither under the
+    /// PROTECTED set nor CONTAINING an entry of it, and — under the UI dir — a flat <c>.json</c> page only.
+    /// <paramref name="reason"/> is a household-readable refusal when it returns null.</summary>
     string? Resolve(string relPath, out string? reason);
 }
 
@@ -70,10 +70,12 @@ public sealed class SiteWriteScope : ISiteWriteScope
 
         // NORMALIZE each segment the way Windows would BEFORE any compare — the compares are prefix tests,
         // and a trailing dot/space, an alternate data stream (`name:stream`), a device name (CON/NUL/COM1…)
-        // or an 8.3 short name (`~1`) all name a file a raw string compare treats as different from its
-        // PROTECTED form. Rejecting a colon/short-name here also turns `plans/x.md:evil` into a clean refusal
-        // instead of a 500 out of ResolveSitePath. Windows strips trailing dots and spaces per segment, so
-        // `.claude/settings.json.` and `.claude/hooks./guard` resolve to the protected file — fold them.
+        // or an 8.3 short name (`~` + a digit, `SETTIN~1.JSO`) all name a file a raw string compare treats as
+        // different from its PROTECTED form. Rejecting a colon/short-name here also turns `plans/x.md:evil` into a
+        // clean refusal instead of a 500 out of ResolveSitePath. A tilde WITHOUT a digit after it is an ordinary
+        // name (`plans/a~b.md`) — the guard's own rule (`oddSegment`: `~\d`), which this used to over-match. Windows
+        // strips trailing dots and spaces per segment, so `.claude/settings.json.` and `.claude/hooks./guard`
+        // resolve to the protected file — fold them.
         var segs = new List<string>();
         foreach (var rawSeg in raw.Split('/'))
         {
@@ -83,7 +85,7 @@ public sealed class SiteWriteScope : ISiteWriteScope
             if (seg == ".") continue;
             if (seg == "..") { reason = $"路径越界:{relPath}"; return null; }
             if (seg.Contains(':')) { reason = $"路径含非法字符(:):{relPath}"; return null; }   // ADS / drive-rel
-            if (seg.Contains('~')) { reason = $"路径含 8.3 短名(~):{relPath}"; return null; }
+            if (ShortName.IsMatch(seg)) { reason = $"路径含 8.3 短名(~):{relPath}"; return null; }
             if (ReservedDeviceNames.Contains(seg.Split('.')[0])) { reason = $"路径含保留设备名:{relPath}"; return null; }
             segs.Add(seg);
         }
@@ -101,11 +103,7 @@ public sealed class SiteWriteScope : ISiteWriteScope
             reason = $"只能改写 {string.Join(" / ", dirs)} 里的文件 —— 不允许:\"{rel}\"";
             return null;
         }
-        if (Protected.Any(Under))
-        {
-            reason = $"\"{rel}\" 是应用管理的受保护路径(scope guard / settings),不可改动。";
-            return null;
-        }
+        if (ProtectedReason(rel) is { } protectedWhy) { reason = protectedWhy; return null; }
         // The UI dir holds pages and nothing else: flat, and a .json page. Mirrors WRITE_EXTS.
         var uiDir = UiDir;
         if (uiDir.Length > 0 && Under(uiDir))
@@ -130,12 +128,27 @@ public sealed class SiteWriteScope : ISiteWriteScope
         // Belt and braces: re-check PROTECTED against the path GetFullPath RESOLVED, not only the normalized
         // input — whatever Windows folds that the segment rules above miss still names the protected file.
         var resolved = Path.GetRelativePath(_site.RootPath, abs).Replace('\\', '/');
-        if (Protected.Any(p => resolved.Equals(p, StringComparison.OrdinalIgnoreCase)
-                            || resolved.StartsWith(p + "/", StringComparison.OrdinalIgnoreCase)))
-        {
-            reason = $"\"{rel}\" 是应用管理的受保护路径(scope guard / settings),不可改动。";
-            return null;
-        }
+        if (ProtectedReason(resolved) is { } resolvedWhy) { reason = resolvedWhy; return null; }
         return abs;
+    }
+
+    // `~` followed by a digit — how Windows spells an 8.3 short name (`STATE~1`, `SETTIN~1.JSO`). Mirrors the guard.
+    private static readonly System.Text.RegularExpressions.Regex ShortName = new(@"~\d", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>Why <paramref name="rel"/> (data-root-relative, slash-separated) may not be written, or null. Two
+    /// ways to reach a protected entry, and both are refused: a path UNDER it (<c>.claude/hooks/x</c>), and a path that
+    /// CONTAINS it (<c>.claude</c>, which holds the hooks and the settings). The second was missing until the round-6
+    /// review: <c>.claude</c> itself resolved as writable, so the file tools could move it out, rewrite
+    /// <c>settings.json</c> inside the copy and move it back — an escape one level above every prefix test.</summary>
+    private static string? ProtectedReason(string rel)
+    {
+        foreach (var p in Protected)
+        {
+            if (rel.Equals(p, StringComparison.OrdinalIgnoreCase) || rel.StartsWith(p + "/", StringComparison.OrdinalIgnoreCase))
+                return $"\"{rel}\" 是应用管理的受保护路径(scope guard / settings),不可改动。";
+            if (p.StartsWith(rel + "/", StringComparison.OrdinalIgnoreCase))
+                return $"\"{rel}\" 里有应用管理的受保护文件(scope guard / settings),不能整体改动 —— 请逐个改动其中的文件。";
+        }
+        return null;
     }
 }
