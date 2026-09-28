@@ -24,6 +24,7 @@
 //       read-only run overlapping an execute run could refuse its writes, or leave writes allowed at rest.
 //   minors: a plain tilde is a name (only `~` + digit is an 8.3 short name), and a target is checked for a symlinked
 //       parent even when it does not exist yet.
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, gitLog, tracked, onDisk, until } from './_e2e-common.mjs';
@@ -84,6 +85,9 @@ const readText = (rel) => { try { return fs.readFileSync(path.join(dataDir, rel)
 const untouched = () => Object.entries(householdConfig).filter(([rel, text]) => readText(rel) !== text).map(([rel]) => rel);
 // Every claude run Lyntai starts carries the isolation flags (ClaudeCliRuntime.IsolationArgs), wherever they sit.
 const isolated = (args = []) => args.includes('--strict-mcp-config') && args[args.indexOf('--setting-sources') + 1] === 'project';
+// The PowerShell process holding settings.local.json in the held-file case, killed in `finally` so a throwing wait
+// cannot leave it holding the file into the next run.
+let holder;
 
 try {
   await waitHealthy(srv.base);
@@ -144,6 +148,26 @@ try {
     !(roSettings.permissions?.allow ?? []).includes('Bash'), JSON.stringify(roSettings.permissions?.allow));
   ok('read-only settings top-level disableAllHooks:false (a project settings cannot disable our hook)',
     roSettings.disableAllHooks === false, roSettingsRaw.slice(0, 120));
+
+  // Round-6 re-review — EVERY generated settings file (planner + 系统模式, execute + read-only) carries both:
+  //  · disableSkillShellExecution: a skill's !`cmd` runs while the CLI EXPANDS it — no Bash tool call, so the guard is
+  //    never asked; measured at 0 tokens, it ran in an execute run and did not with this on, a project `false` beside it;
+  //  · the off-subscription names blanked, and apiKeyHelper blanked: the runs read the data folder's PROJECT
+  //    .claude/settings.json, whose apiKeyHelper RAN and supplied a key, and whose env key was used; these settings
+  //    outrank it per key, and an empty value is an absent one to the CLI (measured, docs/self-managed-llm-runtime.md).
+  const SETTINGS_FILES = ['settings.chat.json', 'settings.chat.readonly.json', 'settings.system.json', 'settings.system.readonly.json'];
+  const settingsOf = (f) => { try { return JSON.parse(fs.readFileSync(`${dataDir}/state/${f}`, 'utf8')); } catch { return null; } };
+  const BLANKED = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'ANTHROPIC_BASE_URL'];
+  for (const f of SETTINGS_FILES) {
+    const s = settingsOf(f);
+    ok(`${f}: disableSkillShellExecution true (a skill's !\`cmd\` never runs unguarded)`, s?.disableSkillShellExecution === true,
+      JSON.stringify(s && { disableSkillShellExecution: s.disableSkillShellExecution }));
+    ok(`${f}: apiKeyHelper blanked and every off-subscription name blanked in env`,
+      s?.apiKeyHelper === '' && BLANKED.every((n) => s?.env?.[n] === '') && Object.values(s?.env ?? {}).every((v) => v === ''),
+      JSON.stringify(s && { apiKeyHelper: s.apiKeyHelper, env: s.env }).slice(0, 300));
+    // Positive control: the subscription's own token is NOT blanked — a household on `claude setup-token` would be signed out.
+    ok(`${f}: …and CLAUDE_CODE_OAUTH_TOKEN is left alone`, !!s && !('CLAUDE_CODE_OAUTH_TOKEN' in (s.env ?? {})), JSON.stringify(s?.env ?? {}).slice(0, 200));
+  }
 
   await post(`/api/chat/${id}/plan/approve`);
   const diff = await waitPhase(id, 'awaiting-diff-approval');
@@ -296,10 +320,43 @@ try {
   ok('C1: after Reject the created settings file is still gone, the household\'s two files still theirs, and the plan edit is undone',
     !onDisk(dataDir, '.claude/settings.json') && untouched().length === 0 && !onDisk(dataDir, 'plans/trips/plant-review.md'),
     ['.claude/settings.json', 'plans/trips/plant-review.md'].filter((rel) => onDisk(dataDir, rel)).concat(untouched()).join(', '));
+
+  // --- Re-review: a file HELD OPEN at the snapshot is left alone — never taken for one the run created -----------
+  // The household's own interactive claude can hold settings.local.json while an app run starts. The snapshot read it as
+  // ABSENT, so once the holder let go the file looked CREATED by the run and was moved out of the folder. PowerShell holds
+  // it with no sharing (Node opens files with delete-sharing and cannot stand in); SLOW keeps the plan run in flight 8 s
+  // past its spawn, and the stub's own args line proves the spawn — and so the snapshot before it — happened while held.
+  const stampsBeforeHold = stamps();
+  const heldFile = path.join(dataDir, '.claude', 'settings.local.json');
+  const heldMark = `${dataDir}-hold-held`;
+  const release = `${dataDir}-hold-release`;
+  for (const f of [heldMark, release]) fs.rmSync(f, { force: true });
+  holder = spawn('powershell', ['-NoProfile', '-Command',
+    `$f=[IO.File]::Open('${heldFile}','Open','Read','None'); Set-Content -LiteralPath '${heldMark}' 'held'; `
+    + `$n=0; while (-not (Test-Path -LiteralPath '${release}') -and $n -lt 600) { Start-Sleep -Milliseconds 100; $n++ }; $f.Close()`],
+  { stdio: 'ignore' });
+  const holderExit = new Promise((r) => holder.on('exit', r));
+  await until(() => fs.existsSync(heldMark), 15000);
+  const plansBeforeHold = readLog(argsLog).filter((s) => s.kind === 'plan').length;
+  const logBeforeHold = srv.log().length;
+  const heldChat = await post('/api/chat', { message: 'FSHELDTEST SLOW 看一眼计划' });
+  ok('held: chat start 200', heldChat.status === 200 && !!heldChat.body.id);
+  await until(() => readLog(argsLog).filter((s) => s.kind === 'plan').length > plansBeforeHold, 30000);
+  fs.writeFileSync(release, 'go');
+  await holderExit;
+  await waitPhase(heldChat.body.id, 'awaiting-plan-approval');
+  const heldLog = srv.log().slice(logBeforeHold);
+  ok('held (setup): the snapshot found settings.local.json there but unreadable — the hold was real',
+    /could not read \.claude\/settings\.local\.json before this run/.test(heldLog), heldLog.slice(-600));
+  ok('held: once readable again, the household\'s settings.local.json is still in place with its content',
+    untouched().length === 0, untouched().join(', '));
+  ok('held: …and nothing of it was moved into state/quarantine', !quarantined('.claude/settings.local.json', stampsBeforeHold),
+    stamps().filter((s) => !stampsBeforeHold.includes(s)).join(', '));
 } catch (err) {
   fail('e2e-p54 fatal: ' + err.message);
   console.error(srv.log().slice(-3000));
 } finally {
+  try { holder?.kill(); } catch { /* best effort */ }
   srv.stop();
   // The junction itself, never its target (make-test-data's recursive rm would also unlink it next run).
   try { fs.rmdirSync(path.join(dataDir, 'plans', 'linkout')); } catch { try { fs.unlinkSync(path.join(dataDir, 'plans', 'linkout')); } catch {} }

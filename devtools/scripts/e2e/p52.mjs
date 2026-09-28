@@ -261,7 +261,7 @@ const signedInDir = plantTaggingFixture('signedin');
 // A CLI that is installed and SIGNED OUT: `auth status` answers loggedIn:false (exit 1), the shape p50 uses.
 const signedOutStub = path.join(signedOutDir, 'signed-out-claude.mjs');
 fs.writeFileSync(signedOutStub, `const args = process.argv.slice(2);
-if (args[0] === 'auth' && args[1] === 'status') {
+if (args.includes('auth') && args[args.indexOf('auth') + 1] === 'status') {
   process.stdout.write(JSON.stringify({ loggedIn: false, authMethod: 'none', apiProvider: 'firstParty' }));
   process.exit(1);
 }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Gatherlight.Server.Platform.Agent.Chat.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Models;
 using Gatherlight.Server.Platform.Agent.Llm.Services;
@@ -58,13 +59,15 @@ public sealed class PlaygroundService : IPlaygroundService
     private readonly IAppConfigService _appConfig;
     private readonly IToolRegistry _tools;
     private readonly Platform.Hosting.Security.Services.IInternalMcpEndpoint _internalMcp;
+    private readonly ChatEnvironmentService _env;
 
     public PlaygroundService(
         IAgentRunner agent, IPromptHarness harness, IScoringService scoring, ISiteContext data,
         IAppConfigService appConfig, IToolRegistry tools,
-        Platform.Hosting.Security.Services.IInternalMcpEndpoint internalMcp)
+        Platform.Hosting.Security.Services.IInternalMcpEndpoint internalMcp, ChatEnvironmentService env)
     {
         _internalMcp = internalMcp;
+        _env = env;
         _agent = agent;
         _harness = harness;
         _scoring = scoring;
@@ -110,6 +113,10 @@ public sealed class PlaygroundService : IPlaygroundService
                 McpServers = AgentMcpWiring.ServersFor(_internalMcp, _tools),
                 // The playground mirrors the read-only plan phase, so the write-scoped file tools are excluded.
                 AllowedTools = _tools.McpAllowedToolNames(writable: false) is { Length: > 0 } names ? names : Array.Empty<string>(),
+                // …and the plan phase's settings too: the read fence, the guard hook, and the blanked off-subscription
+                // names — this run reads the data folder's project .claude/settings.json, whose apiKeyHelper or env key
+                // would otherwise put it on an API key (ChatEnvironmentService.BuildChatSettings).
+                SettingsPath = File.Exists(_env.ReadOnlySettingsPath) ? _env.ReadOnlySettingsPath : null,
             }, label: "playground", onEvent: ev =>
             {
                 if (ev.Kind == "usage" && ev.Data is not null) AccumulateUsage(result, ev.Data);

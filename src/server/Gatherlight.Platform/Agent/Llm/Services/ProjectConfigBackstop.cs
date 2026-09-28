@@ -22,9 +22,17 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// pre-run content back; one it DELETED is put back — each with a Warning, and the run's version kept in
 /// <c>state/quarantine/&lt;UTC stamp&gt;/</c>. A file the run left alone is never touched.</para>
 ///
-/// <para><b>The residual, stated.</b> The snapshot cannot tell the agent from the household: an edit the household
+/// <para><b>What it leaves alone, with a Warning.</b> A file it could not READ, at the snapshot or after the run (held open
+/// by another program — the household's own interactive <c>claude</c>, above all): there is nothing to compare, and read
+/// as absent a busy file was taken for one the run created and moved out. And a file that is, or sits under, a symbolic
+/// link or junction: nothing is written or moved through a link (<c>ReparseGuard</c>).</para>
+/// <para><b>The residuals, stated.</b> The snapshot cannot tell the agent from the household: an edit the household
 /// makes through its own interactive <c>claude</c> WHILE an app run is in flight is undone at the run's end (and kept in
-/// the quarantine, so nothing is lost).</para>
+/// the quarantine, so nothing is lost). The undo runs in a <c>finally</c>, so a hard kill of the app between an agent's
+/// write and that <c>finally</c> leaves the change, and the next run snapshots it as "before". And whether the CLI
+/// re-reads a changed project settings file in the middle of a <c>-p</c> run is unmeasured — for a skill's shell
+/// injection it no longer matters (<c>disableSkillShellExecution</c> is on in the app's own settings, which a project
+/// file cannot turn off).</para>
 /// </summary>
 public interface IProjectConfigBackstop
 {
@@ -53,12 +61,17 @@ public sealed class ProjectConfigBackstop : IProjectConfigBackstop
     // (its content was never read), which is logged.
     private const long MaxBytes = 4 * 1024 * 1024;
 
-    /// <summary>One file's state: absent, or present with its length, time and — when small enough — its bytes.</summary>
-    internal sealed record FileState(bool Exists, long Length, DateTime Written, byte[]? Bytes)
+    /// <summary>One file's state: absent, present with its length, time and — when small enough — its bytes, or present
+    /// and UNREADABLE (held open by another program, above all the household's own interactive claude). Unreadable is not
+    /// absent: read as absent, a file locked at the snapshot and readable after the run was taken for one the run CREATED
+    /// and moved out of the folder — the household's own file, for being busy.</summary>
+    internal sealed record FileState(bool Exists, long Length, DateTime Written, byte[]? Bytes, bool Unreadable = false)
     {
         public static readonly FileState Absent = new(false, 0, default, null);
+        public static readonly FileState Held = new(true, 0, default, null, Unreadable: true);
         public bool SameAs(FileState other) =>
-            Exists == other.Exists && (!Exists || (Length == other.Length
+            !Unreadable && !other.Unreadable
+            && Exists == other.Exists && (!Exists || (Length == other.Length
                 && (Bytes is not null && other.Bytes is not null ? Bytes.AsSpan().SequenceEqual(other.Bytes) : Written == other.Written)));
     }
 
@@ -77,7 +90,13 @@ public sealed class ProjectConfigBackstop : IProjectConfigBackstop
     {
         if (!Covers(workingDirectory)) return null;
         var before = new Dictionary<string, FileState>(StringComparer.Ordinal);
-        foreach (var rel in Files) before[rel] = Read(Abs(rel));
+        foreach (var rel in Files)
+        {
+            before[rel] = Read(Abs(rel));
+            if (before[rel].Unreadable)
+                _log.LogWarning("Project config: could not read {Rel} before this run (another program may hold it open) — "
+                    + "it is left alone after the run, whatever the run does to it.", rel);
+        }
         return new ProjectConfigSnapshot(before);
     }
 
@@ -91,9 +110,24 @@ public sealed class ProjectConfigBackstop : IProjectConfigBackstop
             {
                 var abs = Abs(rel);
                 var before = snapshot.Before.GetValueOrDefault(rel) ?? FileState.Absent;
+                if (before.Unreadable) continue;                              // said at the snapshot: nothing to compare with
                 var now = Read(abs);
                 if (before.SameAs(now)) continue;
+                if (now.Unreadable)
+                {
+                    _log.LogWarning("Project config: could not read {Rel} after this run (another program may hold it open) — "
+                        + "left as it is; check it.", rel);
+                    continue;
+                }
                 if (!now.Exists && Directory.Exists(abs)) continue;          // not a settings file the CLI can load
+                // Nothing is written or moved THROUGH a link: the file itself, or a folder between it and the data root, being
+                // a symbolic link or junction would carry the put-back or the move-out somewhere outside the data folder.
+                if (!ReparseGuard.NoSymlinkEscape(abs, _site.RootPath))
+                {
+                    _log.LogWarning("Project config: an agent run changed {Rel}, which is a symbolic link or junction or sits "
+                        + "under one — nothing is written or moved through a link, so it is left as it is; check it.", rel);
+                    continue;
+                }
                 if (before.Exists && before.Bytes is null)
                 {
                     _log.LogWarning("Project config: an agent run changed {Rel}, which is too large to have been snapshotted — "
@@ -143,6 +177,8 @@ public sealed class ProjectConfigBackstop : IProjectConfigBackstop
         return to;
     }
 
+    // A read that fails is UNREADABLE, never absent (FileState): FileInfo answers from the file's attributes, which a
+    // program holding it open with no sharing still lets through, so "exists" is known while its bytes are not.
     private static FileState Read(string abs)
     {
         try
@@ -151,7 +187,7 @@ public sealed class ProjectConfigBackstop : IProjectConfigBackstop
             if (!fi.Exists) return FileState.Absent;
             return new FileState(true, fi.Length, fi.LastWriteTimeUtc, fi.Length > MaxBytes ? null : File.ReadAllBytes(abs));
         }
-        catch { return FileState.Absent; }
+        catch { return FileState.Held; }
     }
 
     private string Abs(string rel) => Path.Combine(_site.RootPath, rel.Replace('/', Path.DirectorySeparatorChar));

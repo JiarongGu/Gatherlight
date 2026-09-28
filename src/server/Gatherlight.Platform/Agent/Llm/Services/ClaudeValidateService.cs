@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Gatherlight.Server.Platform.Agent.Chat.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
 using Gatherlight.Server.Platform.Storage.DataRepo.Services;
 using Gatherlight.Server.Platform.Agent.Llm.Models;
@@ -26,10 +27,13 @@ public sealed partial class ClaudeValidateService : IClaudeValidateService
     private readonly IPromptHarness _harness;
     private readonly ISiteContext _data;
     private readonly IAppConfigService _appConfig;
+    private readonly ChatEnvironmentService _env;
 
     public ClaudeValidateService(
-        IAgentRunner agent, IPromptHarness harness, ISiteContext data, IAppConfigService appConfig)
+        IAgentRunner agent, IPromptHarness harness, ISiteContext data, IAppConfigService appConfig,
+        ChatEnvironmentService env)
     {
+        _env = env;
         _agent = agent;
         _harness = harness;
         _data = data;
@@ -55,6 +59,10 @@ public sealed partial class ClaudeValidateService : IClaudeValidateService
                 // "validate"); blank (today's default) runs the claude CLI's own default model.
                 Model = _appConfig.Get("llm.model.validate"),
                 TimeoutSeconds = 600,
+                // A read-only run in the data folder, so the plan phase's settings: the read fence, the guard hook, and
+                // the blanked off-subscription names — it reads the data folder's project .claude/settings.json, whose
+                // apiKeyHelper or env key would otherwise put it on an API key (ChatEnvironmentService.BuildChatSettings).
+                SettingsPath = File.Exists(_env.ReadOnlySettingsPath) ? _env.ReadOnlySettingsPath : null,
             }, label: "validate", onEvent: null, ct: ct); // swallow chatter — only its verdict matters
         }
         catch (OperationCanceledException) { throw; }

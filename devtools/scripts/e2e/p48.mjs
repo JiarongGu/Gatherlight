@@ -890,7 +890,7 @@ try {
     // The same folder on a CLI that is installed and SIGNED OUT: every rephrasing fails, and that is an error.
     const signedOut = path.join(phraseDir, '..', '_p48-signed-out-claude.mjs');
     fs.writeFileSync(signedOut, `const args = process.argv.slice(2);
-if (args[0] === 'auth' && args[1] === 'status') {
+if (args.includes('auth') && args[args.indexOf('auth') + 1] === 'status') {
   process.stdout.write(JSON.stringify({ loggedIn: false, authMethod: 'none', apiProvider: 'firstParty' }));
   process.exit(1);
 }

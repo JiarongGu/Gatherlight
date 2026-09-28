@@ -75,7 +75,7 @@ const writeAuthStub = (dir, { loggedIn }) => {
   const file = path.join(dir, 'auth-stub.mjs');
   fs.writeFileSync(file, `
 const args = process.argv.slice(2);
-if (args[0] === 'auth' && args[1] === 'status') {
+if (args.includes('auth') && args[args.indexOf('auth') + 1] === 'status') {
   process.stdout.write(JSON.stringify(${JSON.stringify(
     loggedIn
       ? { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', email: 'household@example.com', subscriptionType: 'max' }
@@ -636,10 +636,12 @@ try {
   // A .cmd rather than the usual `node <file>` stub: StartLogin uses ShellExecute so the login window is
   // the child's own, and ShellExecute takes a FILE, not a command line. That difference is the point — it
   // is why this path needs its own stub instead of reusing writeAuthStub.
+  // `auth status` is found anywhere on the line, not as %1 %2: the probe puts the isolation flags ahead of it.
   fs.writeFileSync(loginStub, [
     '@echo off',
     `echo %* >> "${marker}"`,
-    'if "%1"=="auth" if "%2"=="status" (',
+    'echo %* | findstr /C:"auth status" >nul',
+    'if not errorlevel 1 (',
     '  echo {"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty",'
       + '"email":"household@example.com","subscriptionType":"max"}',
     '  exit /b 0',
@@ -674,6 +676,19 @@ try {
   // `auth status` call landed in the same file. Both lines present means the file is this stub's argv log.
   ok('the marker really is this stub\u2019s argv log, not an artefact',
     /auth status/.test(spawned), JSON.stringify(spawned.trim().split(/\r?\n/).slice(0, 2)));
+
+  // The probe asks what a RUN would use, so it carries the runs' isolation flags ahead of the subcommand \u2014 without
+  // them a USER-scope apiKeyHelper made it answer `api_key_helper` while every run, which drops that scope, used the
+  // subscription (measured at 0 tokens, docs/self-managed-llm-runtime.md 2026-09-29). The login window takes none: it
+  // acts on the session, not on what a run reads.
+  const lines = spawned.trim().split(/\r?\n/);
+  const statusLines = lines.filter((l) => /auth status/.test(l));
+  ok('the auth status probe carries --setting-sources project --strict-mcp-config, ahead of the subcommand',
+    statusLines.length > 0 && statusLines.every((l) => /--setting-sources project --strict-mcp-config auth status --json/.test(l)),
+    JSON.stringify(statusLines.slice(0, 2)));
+  const loginLines = lines.filter((l) => /auth login/.test(l));
+  ok('\u2026and the login window carries neither', loginLines.length > 0
+    && loginLines.every((l) => !/--setting-sources|--strict-mcp-config/.test(l)), JSON.stringify(loginLines));
 
   // REMOTE IS REFUSED. The window opens on the machine running the server, so a remote click would open a
   // window nobody can see and report success — the endpoint checks the peer is loopback. Asserted through

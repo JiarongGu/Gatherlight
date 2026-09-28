@@ -153,14 +153,18 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
     /// <para><b>The PROJECT scope stays, and it has to</b>: it is what loads the site's knowledge base — the data
     /// folder's <c>CLAUDE.md</c>, <c>.claude/rules</c>, skills, agents and commands. So a project
     /// <c>.claude/settings.json</c> is still READ by the app's runs; the agent cannot write it (PROTECTED), and
-    /// <c>ProjectConfigBackstop</c> undoes a run that changed it anyway. All of it measured on CLI 2.1.283 at 0 tokens
-    /// (<c>docs/self-managed-llm-runtime.md</c>, 2026-09-28).</para>
+    /// <c>ProjectConfigBackstop</c> undoes a run that changed it anyway. What the household put in it themselves that
+    /// would take a run off the subscription — an <c>apiKeyHelper</c>, an API key, a provider or an endpoint in its
+    /// <c>env</c> — is blanked by the app's own <c>--settings</c>, which outrank it per key
+    /// (<c>ChatEnvironmentService.BuildChatSettings</c>). All of it measured on CLI 2.1.283 at 0 tokens
+    /// (<c>docs/self-managed-llm-runtime.md</c>, 2026-09-28 and 2026-09-29).</para>
     /// <para><b>Why through the command.</b> Lyntai's <c>ClaudeAgentOptions</c> has no seam for an extra flag (Lyntai
     /// <c>TASKS.md</c> Part 332). Its command variables are tokenised into an executable plus PREFIX arguments, which
     /// both the agent session and the one-shot provider put ahead of their own — so the app writes
     /// <c>LYNTAI_PROVIDER_CMD</c>, the variable Lyntai reads first, as the resolved command plus these flags. The app's
-    /// own spawns (<c>auth status</c>, <c>logout</c>, the login window) use <see cref="Locate"/>, which never carries
-    /// them. When Part 332 lands, the flags move onto the options and this composition goes.</para></summary>
+    /// own spawns use <see cref="Locate"/>, which never carries them: the <c>auth status</c> probe adds them itself, so it
+    /// reports the account a run will use; <c>logout</c> and the login window do not, since they act on the session.
+    /// When Part 332 lands, the flags move onto the options and this composition goes.</para></summary>
     public static readonly IReadOnlyList<string> IsolationArgs = ["--setting-sources", "project", "--strict-mcp-config"];
 
     private static readonly string IsolationSuffix = " " + string.Join(' ', IsolationArgs);
@@ -568,7 +572,13 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         // a blocked exe, a half-extracted download and a wrong architecture all look fine on disk) and it
         // reports the login state as data rather than as prose. Exit code is 1 when signed out, and the
         // JSON is still on stdout, so parse first and treat the exit code as a hint.
-        var (ok, stdout, err) = await RunAsync(exe, new[] { "auth", "status", "--json" }, ct);
+        //
+        // It carries IsolationArgs, ahead of the subcommand, so it reports the account the RUNS will use: a USER-scope
+        // apiKeyHelper or Bedrock selector made it answer `api_key_helper` / `bedrock` while every run, which drops that
+        // scope, used the subscription (measured at 0 tokens: `auth status` honours --setting-sources, and --settings;
+        // docs/self-managed-llm-runtime.md 2026-09-29). Logout and the login window take no flags: they act on the
+        // session itself, not on what a run reads.
+        var (ok, stdout, err) = await RunAsync(exe, [.. IsolationArgs, "auth", "status", "--json"], ct);
         if (!ok)
         {
             return new ClaudeCliState(

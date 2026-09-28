@@ -3,12 +3,15 @@
 // server runs a DRY plan per scenario (read-only, no commit) and auto-scores the output on the
 // quality dimensions WITHOUT persisting. Asserts per-scenario scores + aggregate, and that nothing
 // was written to the scores table.
+import fs from 'node:fs';
+import path from 'node:path';
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p23');
 const { ok, fail, done } = makeReporter('p23');
 makeTestData(dataDir);
-const srv = startServer({ dataDir, port: 5472, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const argsLog = path.join(dataDir, 'state', 'stub-args.jsonl');
+const srv = startServer({ dataDir, port: 5472, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ARGS_LOG: argsLog } });
 const { j } = makeClient(srv.base);
 
 try {
@@ -32,6 +35,16 @@ try {
   ok('answer-relevancy = 0.8 (LLM judge stub)', r0.scores['answer-relevancy'] === 0.8);
   ok('faithfulness = 0.8 (LLM judge stub)', r0.scores['faithfulness'] === 0.8);
   ok('dry run did NOT score committed-only dims (no scope/outcome)', !('scope-adherence' in r0.scores) && !('outcome' in r0.scores));
+
+  // The dry plan runs in the data folder, so it reads the household's project .claude/settings.json: it gets the plan
+  // phase's read-only settings — the read fence, the guard hook, and the blanked off-subscription names (round-6
+  // re-review: it passed none, so an apiKeyHelper there would have put it on an API key).
+  const planSpawns = (fs.existsSync(argsLog) ? fs.readFileSync(argsLog, 'utf8') : '').split('\n').filter(Boolean)
+    .map((l) => JSON.parse(l)).filter((c) => c.kind === 'plan');
+  const settingsArg = (c) => { const i = c.args.indexOf('--settings'); return i >= 0 ? c.args[i + 1] : ''; };
+  ok('each dry plan spawn passes the read-only settings',
+    planSpawns.length === 2 && planSpawns.every((c) => /settings\.chat\.readonly\.json$/.test(settingsArg(c))),
+    JSON.stringify(planSpawns.map(settingsArg)));
 
   ok('aggregate has per-scorer means', run.aggregate['answer-relevancy'] === 0.8 && run.aggregate['plan-structure'] > 0, JSON.stringify(run.aggregate));
 

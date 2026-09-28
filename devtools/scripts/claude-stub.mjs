@@ -52,8 +52,9 @@ const readOnly = !(args.includes('--permission-mode') && args.includes('acceptEd
 // problems with three different fixes, and only the CLI can tell them apart. Answer as a signed-in CLI
 // and return immediately — this must come BEFORE the stdin drain below, because `auth status` is not an
 // agent run and nothing is piped to it. Without this every suite boots with a spurious "not logged in"
-// warning and the diagnosis rewrites every failed-turn message the suites assert on.
-if (args[0] === 'auth' && args[1] === 'status') {
+// warning and the diagnosis rewrites every failed-turn message the suites assert on. Found wherever it sits: the probe
+// puts the isolation flags (--setting-sources project --strict-mcp-config) AHEAD of the subcommand.
+if (args.includes('auth') && args[args.indexOf('auth') + 1] === 'status') {
   recordEnv('auth-status');
   process.stdout.write(JSON.stringify({
     loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty',

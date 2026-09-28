@@ -184,6 +184,13 @@ try {
     v1Validate.length === 1 && v1Validate[0].tail.includes(KB_FILE), summary(v1.spawns));
   ok('V1 THE POINT: the validation spawn receives --model haiku (the validate row)',
     v1Validate.length === 1 && modelOf(v1Validate[0]) === 'haiku', summary(v1.spawns));
+  // The pass runs in the data folder, so it reads the household's project .claude/settings.json: it gets the plan
+  // phase's read-only settings — the read fence, the guard hook, and the blanked off-subscription names (round-6
+  // re-review: it passed none, so an apiKeyHelper there would have put it on an API key).
+  const settingsArg = (call) => { const i = call.args.indexOf('--settings'); return i >= 0 ? call.args[i + 1] : null; };
+  ok('V1 the validation spawn passes the read-only settings',
+    v1Validate.length === 1 && /settings\.chat\.readonly\.json$/.test(settingsArg(v1Validate[0]) ?? ''),
+    String(v1Validate[0] && settingsArg(v1Validate[0])));
   const v1Chat = v1.spawns.filter((x) => x.kind === 'plan' || x.kind === 'execute');
   ok('V1 positive control: the plan and execute spawns carry the CHAT row (opus), not validate\'s',
     v1Chat.some((x) => x.kind === 'plan') && v1Chat.some((x) => x.kind === 'execute')
