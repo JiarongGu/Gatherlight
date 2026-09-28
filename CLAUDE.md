@@ -23,7 +23,9 @@ The agent's shell is guarded (`PowerShell`/`Monitor` are removed from every run,
 another shell); where there is no Git Bash the agent has NO shell **by design** — the scoped MCP file tools
 (`fs_move`/`fs_delete`/`file_info`) are the substitute, and 资源 OFFERS PortableGit as a Git Bash the app can
 guard (MinGit, the data repo's git, ships no bash). Plan (read-only) runs are read-confined to the data
-folder. Details: `.claude/rules/dev-conventions.md` (Data folder discipline → the jail).
+folder and have NO Bash at all; `state/` (token, TLS key, database) is outside the read jail; Bash's own writes
+are scoped like Edit's (best-effort token matching — the guard's integrity rests on its placement, below).
+Details: `.claude/rules/dev-conventions.md` (Data folder discipline → the jail).
 
 ## Current state
 
@@ -139,11 +141,14 @@ The agent's own UI is declarative: `Platform/Agent/Ui` validates a component tre
 inline in chat and as site pages from `{data}/ui/` — no raw HTML anywhere in the agent's reach. A
 `Table`/`Chart` can `bind` to a named server-side query, so a page reads live data instead of a copy.
 
-**The agent works against three app-managed files in `{data}/.claude/`**, all version-gated and
-re-issued by the app (never editable knowledge-base content): `hooks/scope-guard.mjs` (its jail),
-`ui-spec.md` (the component vocabulary) and `tool-spec.md` (how to author its own capability —
-including what the sandbox refuses, parsed from the shipped `cap-guard.mjs` so it cannot drift).
-Anything that replaces a record subtree — notably backup import — must re-issue them.
+**The agent's jail lives OUTSIDE its reach**: the scope guard is `{data}/state/agent/scope-guard.mjs`,
+app state regenerated every boot beside the generated `--settings` (which carry `disableAllHooks:false`), and
+`state/` is carved out of the jail — the agent can neither read nor overwrite the guard, whatever a Bash token
+says (it used to sit in `.claude/hooks/`, which Bash could reach). **Two app-managed files in `{data}/.claude/`**
+are version-gated and re-issued (never editable knowledge-base content): `ui-spec.md` (the component vocabulary)
+and `tool-spec.md` (how to author its own capability — including what the sandbox refuses, parsed from the shipped
+`cap-guard.mjs` so it cannot drift). Anything that replaces a record subtree — notably backup import — must
+re-issue them (and it deletes any old guard an archive restores into `.claude/hooks/`).
 
 - `tools/pdf-form/` — a Node utility (pdf-lib + fontkit) for PDF AcroForm inspect/fill/merge,
   invoked by the C# document tools via `NodeLeafTool` (reliable on real + CJK PDFs where PDFsharp

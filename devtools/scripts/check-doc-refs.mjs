@@ -69,6 +69,8 @@ const ALLOWED = new Map([
     + 'only through stale comments in e2e-p36 and the claude stub, fixed in the 3.4 bump'],
   ['docs/STORAGE_NOTES.md::AssistantMemoryService',
     'belongs to VIDORA, a sibling project this note compares against — not a symbol in this tree'],
+  ['.claude/rules/dev-conventions.md::ConfigChange',
+    'a claude CLI hook EVENT name (settings.json hooks), considered and not shipped — not a symbol in this tree'],
 ]);
 
 // Paths a live doc may name that are not repo files. Same `doc::path` keying and the same requirement of
@@ -79,7 +81,10 @@ const ALLOWED_PATHS = new Map([
   ['.claude/rules/dev-conventions.md::.claude/ui-spec.md', 'app-managed file in the DATA folder'],
   ['.claude/rules/dev-conventions.md::state/mcp.chat.json',
     'a file startup DELETES — named to say it must not come back'],
-  ['CLAUDE.md::hooks/scope-guard.mjs', 'app-managed file in the DATA folder'],
+  ['.claude/rules/dev-conventions.md::state/agent/scope-guard.mjs',
+    'the planner scope guard — app state in the DATA folder, generated every boot'],
+  ['.claude/rules/dev-conventions.md::.claude/hooks/scope-guard.mjs',
+    'where the guard USED to live in the DATA folder — named to say startup now deletes it'],
   ['docs/DEPLOYMENT.md::state/settings.json', 'lives in the DATA folder'],
   ['docs/STORAGE_NOTES.md::Modules/Embedding/Services/SqliteVecLoader.cs',
     "VIDORA's file — this doc is a sibling-project review"],
