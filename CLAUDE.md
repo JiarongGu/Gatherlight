@@ -153,7 +153,7 @@ app state regenerated every boot beside the generated `--settings` (which carry 
 still inside the data folder, carved out of the guard's CHECKS: Edit/Write/Read cannot reach it (solid), a Bash token
 naming it is refused and nested shells are denied (both best effort). A constructed token or nested shell that slips
 past can still overwrite the guard until the next boot, or read `state/` in an execute run with Git Bash — the
-declared "needs an OS sandbox" residual (`.claude/rules/dev-conventions.md`, the three legs). The CLI's own project config (`.claude/settings*.json`, `.mcp.json`), which it would load by itself, is moved out of the data folder around every run there, at boot and on a backup import (`ProjectConfigSweep`). **Two app-managed files in `{data}/.claude/`**
+declared "needs an OS sandbox" residual (`.claude/rules/dev-conventions.md`, the three legs). The app's runs read none of the household's own CLI config — their interactive claude saves approvals in the local settings file — because every run gets `--setting-sources project --strict-mcp-config` (`ClaudeCliRuntime.IsolationArgs`); the project scope stays, since it loads the knowledge base, so a project `.claude/settings.json` still applies (the stated leak), and a run that creates or changes one of the three is undone (`ProjectConfigBackstop`). **Two app-managed files in `{data}/.claude/`**
 are version-gated and re-issued (never editable knowledge-base content): `ui-spec.md` (the component vocabulary)
 and `tool-spec.md` (how to author its own capability — including what the sandbox refuses, parsed from the shipped
 `cap-guard.mjs` so it cannot drift). Anything that replaces a record subtree — notably backup import — must

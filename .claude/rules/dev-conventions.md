@@ -282,10 +282,21 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   → a bundled `libs/claude` → PATH, and **re-resolves per call** until it finds a real file: DI builds
   the singleton long before the panel install that changes the answer, and resolving once in a
   constructor is the exact trap that left a freshly downloaded git invisible to a retry. The seam into
-  Lyntai is the **`CLAUDE_CMD` env var**, deliberately not `AddClaudeCliAgentSession(command)` — that
+  Lyntai is an **env var**, deliberately not `AddClaudeCliAgentSession(command)` — that
   argument is captured once at DI registration, while `ClaudeAgentSession` calls
   `CliCommand.Resolve` *inside the run* (`ClaudeCommand.Resolve` through 3.2, with the same precedence), so
-  only the env var can carry a CLI installed after startup.
+  only the env var can carry a CLI installed after startup. Since round 6 the variable is `LYNTAI_PROVIDER_CMD`, the
+  one Lyntai reads first: the command `Locate()` resolved (quoted when a path holds a space) PLUS
+  `ClaudeCliRuntime.IsolationArgs` — `--setting-sources project --strict-mcp-config` — which Lyntai tokenises into
+  prefix arguments that both the agent session and the one-shot provider put ahead of their own, so every claude run it
+  starts reads none of the household's own CLI config (*Data folder discipline*, the jail's item (7)). It is pinned at
+  the top of `GatherlightApp.Build` (`PinProviderCommand`), before anything can spawn one, and rewritten by every
+  `Apply()`; a value the process was LAUNCHED with is an operator's override and is kept, with the flags appended once —
+  unless it names the app's OWN provisioned or bundled copy, which a relaunched app inherits. `CLAUDE_CMD` likewise: the app
+  writes it for the provisioned copy, and read back as a choice it froze the command after the first probe, unquoted, so
+  a data folder whose path holds a space split the executable in two (not driven by a suite).
+  `CLAUDE_CMD` is still set for the provisioned copy, and read by nothing while the first variable answers. The app's own
+  spawns — `auth status`, `logout`, the login window — run `Locate()`'s command without the flags.
   `Apply()` therefore runs on every probe, not just at boot, and never overrules an existing override.
 - **Installed is not usable: probe, don't pattern-match.** A downloaded CLI is not a signed-in one, so
   `claude auth status --json` is the probe (`{loggedIn,email,subscriptionType}`, exit 1 when signed
@@ -388,10 +399,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   **Since the 2026-09-28 security review the scope guard is no longer one of these files**: it lives under
   `state/agent/` (regenerated every boot, not in the archive), so no restore can roll it back at all — and the re-issue
   DELETES a guard an older archive restores into `.claude/hooks/`, so a backup cannot leave a stale one in the jail
-  either (`p47` asserts both). The UI contract and the form maps still ride this seam. **The re-issue also REMOVES**: it
-  moves any untracked `.claude/settings*.json` / `.mcp.json` out of the data folder (`ProjectConfigSweep`, the jail
-  bullets under *Data folder discipline*), and a backup import strips them from the restored tree even when the archive's
-  own history tracks them — the claude CLI would load them on the next agent run by itself. `p47`'s old row "the scope
+  either (`p47` asserts both). The UI contract and the form maps still ride this seam. **The CLI's own project config
+  is NOT app-managed** — `.claude/settings*.json` and `.mcp.json` are the household's (their interactive claude writes
+  the local file), so neither the re-issue nor a backup import touches them, and they travel in the backup with the
+  rest of `.claude/`. A round-6 version moved them out at every re-issue and stripped them from every import; the
+  app's runs now read the local file and `.mcp.json` not at all, and the project `settings.json` is the household's
+  own either way (the jail's item (7) under *Data folder discipline*). `p47`'s old row "the scope
   guard was NOT rolled back" could no longer fail once the guard moved to `state/agent/` (no archive reaches it); it is a
   sanity row now, and the point it asserts instead is that the restored install's generated settings still run the
   `state/agent` guard, never the archive's `.claude/hooks` copy — confirmed to FAIL with the hook pointed there.
@@ -2553,9 +2566,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   stripped switch they select nothing for the CLI), the providers' ids and the model settings. The probe (`auth
   status`) runs in the same process environment as every CLI spawn, so it reports the account the app will use; a
   Warning names what was ignored, once (「Claude CLI: ignored …」). What an environment strip CANNOT reach: an `env`
-  block or `apiKeyHelper` in the CLI's own settings files (the machine's `~/.claude/settings.json` in machine login
-  mode, managed settings) and an active federation profile in the default Anthropic configuration directory — the CLI's
-  configuration, read by the CLI. And since the strip is process-wide, an external MCP server that calls the Anthropic
+  block or `apiKeyHelper` in a settings file the CLI still reads — managed settings, and the data folder's project
+  `.claude/settings.json` (the household's own, PROTECTED from the agent) — and an active federation profile in the
+  default Anthropic configuration directory: the CLI's configuration, read by the CLI. The machine's
+  `~/.claude/settings.json` (machine login mode) used to be on that list; since round 6 no app run reads the USER scope
+  at all (`ClaudeCliRuntime.IsolationArgs`, the jail's item (7)). And since the strip is process-wide, an external MCP server that calls the Anthropic
   API itself takes its key from its own configured `env`, applied after the inherited one.
   **The app's own secrets are withheld from every child**: `GATHERLIGHT_ACCESS_TOKEN` and
   `GATHERLIGHT_TLS_CERT_PASSWORD`, the two secret-bearing `GATHERLIGHT_*` the server reads (the rest are URLs, paths,
@@ -2725,7 +2740,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   name (`CON`/`NUL`/`COM1`…) — so `plans/x.md:evil` is a clean refusal, not a 500 out of `ResolveSitePath` — and then
   re-checks PROTECTED against the GetFullPath-RESOLVED relative path, so anything Windows folds that the segment rules
   miss still names the protected file. `.mcp.json` is PROTECTED because a `-p` run CONNECTS a project `.mcp.json`'s
-  servers even untrusted (measured, 0 tokens) — a stdio server there is a command the CLI starts. Proof: `e2e-p24`
+  servers even untrusted (measured, 0 tokens) — a stdio server there is a command the CLI starts; since round 6 the
+  app's own runs pass `--strict-mcp-config` and start none, so the one it would reach is the household's interactive
+  session. Proof: `e2e-p24`
   (both guards: C1 Bash-protected/state, C2 trailing-dot, C4, with positive controls, every deny non-vacuous), `e2e-p54`
   (`fs_move` to a trailing-dot / case-folded / ADS-colon target refused), `e2e-p42`/`e2e-p37` (the guard at
   `state/agent/`, `GUARD_VERSION 11`), `e2e-p47` (a backup can no longer plant a weakened guard nor leave one in the jail).
@@ -2741,25 +2758,54 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   both guards' `BASH_PROTECTED` refuse a token naming a folder that contains an entry (`containsAny`, the data/repo
   root exempt — it contains everything and `ls .` must keep working; `rm -r` and `..` are refused elsewhere) — best
   effort, leg (2), like the rest of the token scan.
-  **(7) The CLI's own project config is kept OUT of the data folder** (`ProjectConfigSweep`). Whatever PROTECTED
-  refuses, the CLI reads `.claude/settings.json`, `.claude/settings.local.json` and `.mcp.json` from its working
-  directory by itself, so one that arrives by any route the guard cannot see — a slipped Bash token, a backup, the
-  household's own interactive `claude` (Claude Code writes `settings.local.json` when a permission is approved) — is
-  loaded by the next run. `AgentRunner` moves any UNTRACKED one into `state/quarantine/<UTC stamp>/` before AND after
-  every run whose working directory is the data folder (the after is what empties it before the diff gate, a Reject or
-  the next run), saying so in the run's own stream; the startup re-issue does the same (`AppManagedFiles`); and a backup
-  import strips them even when the archive's history TRACKS them (`ProjectConfigSweep.SweepAll`), its restore commit
-  recording the deletion. Moved, not deleted, so a household's own file is recoverable, with a Warning naming both paths.
-  A TRACKED one is left alone — committed on purpose, since the app never commits one — and the data repo now IGNORES all
-  three (`GitCliService`'s required ignores), because a stray one present at a fresh repo's initial `add -A` had been
-  committed, i.e. "tracked" without anybody choosing it (found by `e2e-p54` itself). **A workaround for a Lyntai gap**,
-  recorded on both sides: `ClaudeAgentOptions` cannot pass the CLI's `--setting-sources` / `--strict-mcp-config`
-  (Lyntai `TASKS.md` Part 332); when it can, the data-folder runs load only the user scope and the sweep becomes defence
-  in depth or goes. Proof: `e2e-p54` (next bullet) and `e2e-p47` (a committed `.claude/settings.json` and an untracked
-  `settings.local.json` in the source backup: neither is in the restored folder, the committed one is no longer tracked,
-  both are quarantined) — each confirmed to FAIL on the code before the review's fixes, and again on a build of its own
-  (2026-09-28) with ONE half removed: no sweep after a run (every planted file still there at the gate and after Reject),
-  and no strip on import (the committed one restored, still tracked).
+  **(7) The app's runs read none of the HOUSEHOLD's own CLI config, and what a run does to the project config is
+  undone** (round-6 design change). The CLI reads `.claude/settings.json`, `.claude/settings.local.json` and
+  `.mcp.json` from its working directory by itself, and the data folder is also where the household runs `claude`
+  interactively — Claude Code saves a permission they approve into `settings.local.json` — so the app's runs READ the
+  household's config: a `Bash(rm:*)` they approved for themselves applied to the app's agent too, and their `.mcp.json`
+  servers were started for it. **Every claude run Lyntai starts** — agent and one-shot alike — is therefore handed
+  `--setting-sources project --strict-mcp-config` (`ClaudeCliRuntime.IsolationArgs`, carried in `LYNTAI_PROVIDER_CMD`,
+  *LLM / process spawning*). Measured on CLI 2.1.283 at 0 tokens (`docs/self-managed-llm-runtime.md`, 2026-09-28): the
+  LOCAL scope (`settings.local.json`'s hooks and permissions, `CLAUDE.local.md`), the USER scope (the account's own
+  settings, hooks, skills, `CLAUDE.md`) and a project `.mcp.json` server are not loaded, while the app's own
+  `--settings` (hooks and deny rules — the scope guard's file) and `--mcp-config` still are. **The PROJECT scope has to
+  stay**: it is the same source that loads the knowledge base (the data folder's `CLAUDE.md`, `.claude/rules`, skills,
+  agents, commands — `--setting-sources user` dropped every one of them), so **the project `.claude/settings.json` is
+  still read, and a hook or permission rule the household puts THERE applies to the agent** — the leak that remains,
+  stated rather than closed; the agent cannot write that file (PROTECTED, solid for Edit/Write and the file tools, best
+  effort for Bash). Behind the best-effort leg is a RUN-SCOPED backstop, never a sweep (`ProjectConfigBackstop`,
+  entered by `AgentRunner` for every run whose working directory is the data folder): a snapshot of the three files
+  before the run, compared after it however it ended — a file the run CREATED is moved into `state/quarantine/<UTC
+  stamp>/`, one it CHANGED or DELETED gets its pre-run bytes back (the run's version kept there too), each with a Warning
+  and a notice in the run's own stream; a file the run left alone is never touched. The undo lands before the diff
+  gate's validation pass (an agent run in the data folder), a Reject or the next run. **Its residual, stated**: the
+  snapshot cannot tell the agent from the household, so an edit the household makes through its own interactive
+  `claude` WHILE an app run is in flight is undone at the run's end (kept in the quarantine, so nothing is lost). **What
+  went**: a round-6 sweep that moved every untracked one of the three out of the folder before and after every run, at
+  startup and on a backup import — the household's own interactive config, taken away again after every session. The
+  backup import no longer strips them: the archive is the household's own tree, the local file and `.mcp.json` are
+  read by no app run, and the project `settings.json` applies whether it was restored or written in place, so an
+  import-only strip removed the household's file without closing anything. The data repo still IGNORES all three
+  (`GitCliService`'s required ignores): per-machine CLI config that can carry secrets (an `env` block, an MCP server's
+  tokens), which a bulk `add -A` — a fresh repo's initial import, a restore commit — would otherwise put in the audit
+  trail; a backup still carries them, since it copies folders. **A workaround for a Lyntai gap**, recorded on both
+  sides: `ClaudeAgentOptions` has no seam for a CLI flag (Lyntai `TASKS.md` Part 332), so the flags ride the command
+  variable's prefix arguments; when a per-run seam ships, they move onto the options and `ProviderCommand` goes.
+  Proof: `e2e-p54` — the household's `settings.local.json` (a `Bash(rm:*)` allow and a `SessionStart` hook) and
+  `.mcp.json` exactly as they were after boot and after a plan and an execute run, nothing quarantined; every spawn's
+  argv carries both flags; and the stub, recording what the measured CLI would LOAD under that argv (`recordLoads`),
+  shows the knowledge base loaded (the control) and neither the local file nor the `.mcp.json` server; then a run that
+  CREATES `.claude/settings.json` and REWRITES the other two: at the diff gate the created one gone, the two rewritten
+  ones holding the household's bytes, each run version in the quarantine, the notice in the stream, and the same after
+  Reject. `e2e-p47`: a committed `settings.json` and an untracked `settings.local.json` come back from the backup byte
+  for byte, the committed one still tracked, nothing quarantined. **Confirmed to FAIL** (2026-09-28): on the sweep version,
+  p54 7 rows (both files gone at boot and after the runs, the flags absent, the rewritten ones not restored, no notice)
+  and p47 3; with `IsolationArgs` emptied, p54's flag row and both "not loaded" rows, the loads naming
+  `.claude/settings.local.json` and `.mcp.json:e2e-household-srv`; with the backstop's undo removed, p54's 5 undo rows.
+  **Not drivable, stated**: that the real CLI honours the flags is the 0-token probe's, not a suite's (the stub runs no
+  hook and starts no server); and the scope guard's own `PreToolUse` hook firing under the flags needs a model-issued
+  tool call — measured is that the app's `--settings` source loads whole (its SessionStart and UserPromptSubmit
+  hooks ran, its deny rule held).
 - **The agent MOVES, RENAMES and DELETES files through scoped MCP tools, never a shell** (`fs_move` · `fs_delete` ·
   `file_info`, `Platform/Capabilities/Tools/Services/Tools/FileOpsTools`). A tool beats a shell for this: its scope is
   the guard's own write scope (`ISiteWriteScope`, rendered from the site manifest — one source of truth with the guard),
@@ -2794,12 +2840,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `overwrite`) and for delete, the knowledge base intact; a plain tilde movable into a new folder, `x~1` refused; a move
   through a junction to outside the data folder refused and nothing written there; an execute run's `fs_move` allowed
   while a read-only `extract` it started is in flight, then — that run ending last — an `fs_move` over HTTP refused at
-  rest; `fs_move`/`fs_delete` absent from `/api/tools`; project config planted before boot gone after it, and planted by
-  an execute run gone at its diff gate and after Reject, all quarantined. **Confirmed to FAIL** on the code before the
+  rest; `fs_move`/`fs_delete` absent from `/api/tools`; and the project-config rows of item (7) above. **Confirmed to FAIL** on the code before the
   fixes, 23 assertions, each for its own reason: the folder moves and the `.claude` moves SUCCEEDED (the escape
   reproduced — `.claude` replaced by a folder holding `settings.json`), the tilde refused, the junction move written
   outside, the overlapping `fs_move` refused with the plan-phase sentence, the at-rest HTTP `fs_move` moved the file, and
-  every planted config file still there after Reject. And each fix confirmed to FAIL alone, on one mutation build
+  every planted config file still there after Reject (the project-config rows are item (7)'s own, rewritten with the
+  design change). And each fix confirmed to FAIL alone, on one mutation build
   (2026-09-28): the CONTAINS check removed — the three `.claude` rows fail, refused by the root rule instead (the
   defence in depth held, and the assertion names which rule refused); the missing-tail skip removed — the move into a
   new folder is refused as a symlink escape; the one-policy run scope restored — the overlapping `fs_move` is refused

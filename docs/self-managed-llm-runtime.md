@@ -987,3 +987,82 @@ So `ResourceProvisioner` OFFERS `git-bash` (never auto-downloaded), `ClaudeCliRu
 `CLAUDE_CODE_GIT_BASH_PATH` to the provisioned `bin\bash.exe` only when the CLI would find no Git Bash and never over a
 household's own, and the data repo keeps MinGit (owner decision — the two gits serve different roles). The stub-based
 proof is `e2e-p55`; the real SFX provisioning (a 59 MB download) is verified by hand here, not driven in e2e.
+
+### 2026-09-28 — the app's runs read none of the household's own CLI config: `--setting-sources project --strict-mcp-config`
+
+The data folder is also where the household runs `claude` INTERACTIVELY, and Claude Code saves what they approve there:
+a permission they allow "for this project" lands in `.claude/settings.local.json`, and a project `.mcp.json` may name
+servers of theirs. The app's runs have the same working directory, so they READ those files: a `Bash(rm:*)` the
+household approved for themselves applied to the app's agent too, and their `.mcp.json` servers were started for it.
+The first fix (`ProjectConfigSweep`) moved the three files out of the folder around every run — the household's own
+configuration, taken away again after every interactive session. The question for the real CLI was whether it can be
+told not to read them.
+
+**Method, 0 tokens.** A scratch project (under devtools/, gitignored) with a fixture in every scope, and a
+scratch `CLAUDE_CONFIG_DIR` standing in for the user scope, so the developer's own `~/.claude` took no part. Each scope
+carried a `SessionStart` hook writing a marker file, a `permissions.deny` on a tool of its own (project `WebFetch`, local
+`WebSearch`, app `NotebookEdit`), and — where the scope has them — a skill, an agent, a `CLAUDE.md` / rule file /
+`CLAUDE.local.md`; the project also had a `.mcp.json` whose stdio server writes a marker the moment it is started. The
+APP's side was a `--settings` file (its own `SessionStart` marker hook, an `InstructionsLoaded` hook logging every
+instruction file loaded, a deny rule, and a `UserPromptSubmit` hook that exits 2) and a `--mcp-config` with a second
+marker-writing stdio server. The `UserPromptSubmit` hook blocks the prompt before any model call: every run below
+answered 「UserPromptSubmit operation blocked by hook」 with 0 input and 0 output tokens, cost 0. What was read: the marker
+files, the `system/init` event's `tools` / `mcp_servers` / `skills` / `agents` / `slash_commands`, and the
+`InstructionsLoaded` log. Command, cwd = the scratch project, `hello` on stdin, CLI 2.1.283, the flags in front as the
+app composes them:
+
+```
+claude [--setting-sources <sources>] [--strict-mcp-config] -p --output-format stream-json --verbose \
+  --settings <app-settings.json> --mcp-config <app-mcp.json>
+```
+
+| flags | hooks that ran | deny rules applied | MCP servers started | skills · agents | instruction files |
+|---|---|---|---|---|---|
+| none | app · user · project · local | app · project · local | app · project `.mcp.json` | project + user · project | user `CLAUDE.md`; project `CLAUDE.md` + rules; `CLAUDE.local.md` |
+| `--setting-sources user` (no user fixtures) | app | app | app only | none · none | — (not logged in this run) |
+| `--strict-mcp-config` | app · project · local | app · project · local | app only | project · project | — |
+| `--setting-sources project --strict-mcp-config` | **app · project** | **app · project** | **app only** | **project · project** | project `CLAUDE.md` + rules — no user `CLAUDE.md`, no `CLAUDE.local.md` |
+| `--setting-sources user,project --strict-mcp-config` | app · user · project | app · project | app only | project + user · project | user + project |
+
+(With `--setting-sources user` the project's slash command was gone from `slash_commands` as well, and its
+`.mcp.json` was not read even without `--strict-mcp-config`. The user scope's own deny rule, on `TodoWrite`, was
+uninformative: that tool was absent from every run's list, flags or not.)
+
+**What it settles.**
+- `--strict-mcp-config` does exactly what it says: a project `.mcp.json` server is NOT started (its marker absent, the
+  server absent from `mcp_servers`), the app's own `--mcp-config` server still is.
+- `--setting-sources` scopes whole SOURCES, and the PROJECT source is more than `.claude/settings.json`: it is also
+  what loads the knowledge base — the project `CLAUDE.md`, `.claude/rules`, skills, agents and commands. Excluding it
+  (`user`) dropped every skill, agent and slash command of the project, i.e. the planner's whole knowledge base. So
+  the project scope has to stay, and a project `.claude/settings.json` IS still read (its hook ran, its deny applied).
+- Excluding LOCAL drops `.claude/settings.local.json` (hook and permissions) and `CLAUDE.local.md` — the files the
+  household's interactive approvals are written to.
+- Excluding USER drops the account's own settings, hooks, skills, `CLAUDE.md` (and with them its `env` block and
+  `apiKeyHelper`, which the environment strip could not reach — not separately measured).
+- The app's own `--settings` file applies under every combination: its `SessionStart` and `UserPromptSubmit` hooks ran
+  and its deny rule held. The scope guard is a `PreToolUse` hook in that same file; `PreToolUse` itself is not
+  exercisable at 0 tokens (it needs a tool call the model makes), so what was measured is that the command-line
+  source loads whole under the flags, not the guard firing.
+- The login does not depend on the setting sources: `claude --setting-sources project --strict-mcp-config auth status
+  --json` reported the same signed-in account as `claude auth status --json` (the machine's own login, read only, 0
+  tokens).
+- The project source walks UP: the scratch project sat inside this repository, and every run that loaded the project
+  source also loaded the repository's own `CLAUDE.md` and `.claude/rules/*.md` from the parent directories. So a data
+  folder inside a code checkout — the dev default, local/ in the repository — has its agent read the checkout's instructions too.
+  Not a change: it holds with or without the flags.
+
+**What the app does with it** (round-6 design change): every claude run Lyntai starts — the agent session and the
+one-shot provider — is handed `--setting-sources project --strict-mcp-config` (`ClaudeCliRuntime.IsolationArgs`, carried
+as prefix arguments of `LYNTAI_PROVIDER_CMD`: Lyntai's `ClaudeAgentOptions` has no seam for a flag, its Part 332). The
+household's own `settings.local.json`, `CLAUDE.local.md` and `.mcp.json` are left where they are and read by nothing
+the app starts; the account's user scope likewise. The quarantine sweep is gone. What stays is a RUN-SCOPED backstop
+(`ProjectConfigBackstop`): a snapshot of the three files before a run in the data folder, and after it, whatever the
+outcome, a file the run CREATED is moved to `state/quarantine/`, one it CHANGED or DELETED gets its pre-run content
+back (the run's version kept there too), each with a Warning; a file the run did not touch is never touched. **The leak
+that remains** is the project `.claude/settings.json`: the knowledge base cannot be loaded without it, so a hook or
+permission rule the household puts THERE applies to the app's agent. The agent cannot write it (PROTECTED: solid for
+Edit/Write and the file tools, best effort for Bash, the backstop behind that). Found on the way, not part of this
+change: a skill's `` !`…` `` injection ran its command under both flag sets with the app's `PreToolUse` hook never
+invoked (a third probe: the user typing the skill's slash command, no login, a dead API port) — it is prompt preprocessing, not a
+Bash tool call. Whether a skill the MODEL invokes runs its injection the same way was not measured (it needs a model
+call); the agent can write `.claude/skills/`.
