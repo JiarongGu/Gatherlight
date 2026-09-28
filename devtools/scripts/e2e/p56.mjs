@@ -13,10 +13,12 @@
 //      a model it does not offer is refused by name; a BACKWARDS scorer is refused by the screen (the answer ranked
 //      below the distractor, both scores quoted) and saves nothing; the real screen's pair then passes on a scorer that
 //      puts the answer first, and the toast says the checking moves here, the tagging goes to the Claude CLI on the
-//      account's quota (MemorySources.CliTaggingCost), and that the model is UNMEASURED and not recommended; the route
-//      written is claude-cli:haiku, never the model's id. The cost line says both halves.
+//      account's quota (MemorySources.CliTaggingCost), and what it costs (memory; llama.cpp on a discrete GPU is faster);
+//      the route written is claude-cli:haiku, never the model's id. The cost line says both halves. Its texts quote
+//      docs/judge-bench.md Run 13, which measured it (they said "unmeasured, not recommended" until then).
 //   A2. 资源. The model is a row — builtin runtime, reranking, its pinned size, a resource that exists — deletable, and
-//      refused while bound; not recommended, and an installed copy does not end the suggestion of a MEASURED reranker.
+//      refused while bound; installed, it counts as the one reranker (measured), so nothing further is recommended.
+//      Which machine it is RECOMMENDED on (no GPU, skips, BGE measured too slow) is e2e-p51's, p52's and p53's.
 //   B. AT WORK, on a server that booted bound to it. A fact write is tagged by the CLI stub on haiku; a recall is
 //      VERIFIED IN PROCESS: with 判断 switched off (the live switch) a target fact the scorer rewards is off the page,
 //      switched on it is on it and the recall came back judged — while nothing reaches a fake llama.cpp router and the
@@ -107,9 +109,10 @@ try {
     builtin?.available === false && /内置重排模型还没有下载/.test(String(builtin?.reason)) && builtin?.suggest === RESOURCE
       && (builtin?.models ?? []).length === 0,
     JSON.stringify({ available: builtin?.available, reason: builtin?.reason, suggest: builtin?.suggest }));
-  ok('its description says what it moves and that it is unmeasured, not recommended',
-    /Claude CLI/.test(String(builtin?.description)) && /不推荐/.test(String(builtin?.description))
-      && /不需要 llama\.cpp/.test(String(builtin?.description)),
+  ok('its description says what it moves, what Run 13 measured against llama.cpp, and where llama.cpp is faster',
+    /Claude CLI/.test(String(builtin?.description)) && /不需要 llama\.cpp/.test(String(builtin?.description))
+      && /实测它判断得和 llama\.cpp 那条的 mMiniLMv2 一样好,只用 CPU 时快得多;有独立显卡时,llama\.cpp 在显卡上更快/.test(String(builtin?.description))
+      && !/不推荐|还没有对比实测过/.test(String(builtin?.description)),
     String(builtin?.description));
 
   const missing = await a.post('/api/manage/memory/layer/judge', { source: 'builtin', model: MODEL });
@@ -139,7 +142,9 @@ try {
     bound.status === 200 && bound.body?.restartRequired === true, `${bound.status} ${JSON.stringify(bound.body)}`);
   ok('…the toast says the CHECKING moves here and the tagging goes to the Claude CLI, on the account\'s quota',
     /检索时的核对将由这个模型完成/.test(note) && /Claude CLI\(haiku\)/.test(note) && note.includes(TAGGING_COST), note);
-  ok('THE POINT: …and that it is UNMEASURED and not recommended', /还没有实测过/.test(note) && /不推荐/.test(note), note);
+  ok('THE POINT: …and what it COSTS — its memory, and that llama.cpp on a discrete GPU is faster — never the old "unmeasured, not recommended"',
+    /打分时应用会多占约 0\.7–1\.0 GB 内存/.test(note) && /有独立显卡的机器上,llama\.cpp 的重排模型在显卡上快得多/.test(note)
+      && !/还没有实测过|不推荐/.test(note), note);
   ok('the settings name the source and its one model together',
     settingsOf(bindDir).memory?.judgeSource === 'builtin' && settingsOf(bindDir).memory?.judgeModel === MODEL,
     JSON.stringify(settingsOf(bindDir).memory ?? null));
@@ -157,15 +162,16 @@ try {
     row?.runtime === 'builtin' && row?.capability === 'reranking' && row?.sizeBytes === 135704003
       && row?.installed === true && row?.inUse === 'judge' && row?.resourceId === RESOURCE,
     JSON.stringify(row ?? null));
-  ok('…its note says it runs in process on the CPU without llama.cpp, the tagging spends the quota, and it is unmeasured',
+  ok('…its note says it runs in process on the CPU without llama.cpp, the tagging spends the quota, and what Run 13 measured, with its configuration',
     /CPU/.test(String(row?.note)) && /不需要 llama\.cpp/.test(String(row?.note)) && String(row?.note).includes(TAGGING_COST)
-      && /还没有在本应用的测试集上实测过/.test(String(row?.note)) && /不推荐/.test(String(row?.note)),
+      && /Lyntai 3\.5\.1/.test(String(row?.note)) && /首位命中 99\/240,前八命中 203\/240/.test(String(row?.note))
+      && /应用推荐它/.test(String(row?.note)) && !/还没有在本应用的测试集上实测过|不推荐/.test(String(row?.note)),
     String(row?.note));
   const res = ((await a.getJson('/api/manage/resources')).resources ?? []).find((r) => r.id === RESOURCE);
   ok('…and its resource exists, sized, as a model', res?.approxBytes === 135704003 && res?.category === 'model',
     JSON.stringify(res ?? null));
-  ok('THE POINT: nothing recommends it — the badge names a MEASURED reranker, whose suggestion an installed 内置 does not end',
-    inv.recommendation?.id === 'bge-reranker-v2-m3-Q5_K_M', JSON.stringify(inv.recommendation ?? null));
+  ok('THE POINT: installed, it is the one reranker — measured since Run 13 — so no second one is suggested (the badge names nothing)',
+    inv.recommendation == null, JSON.stringify(inv.recommendation ?? null));
   const refuse = await a.post('/api/manage/models/remove', { model: MODEL, runtime: 'builtin' });
   ok('deleting it while 判断 is bound to it is REFUSED, naming the layer',
     refuse.status === 409 && /正在用于记忆判断/.test(String(refuse.body?.error)) && fs.existsSync(modelDir(bindDir)),

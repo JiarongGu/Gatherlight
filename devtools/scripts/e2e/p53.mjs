@@ -97,6 +97,10 @@ const BOUND2_PORT = 5450;
 const BGE = 'bge-reranker-v2-m3-Q5_K_M';
 const LAMAR = 'LAMAR-600m.Q5_K_M';
 const MMINILM = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
+// What BGE measured too slow now recommends: 内置, the same model in process (docs/judge-bench.md Run 13) — it was the
+// llama.cpp GGUF above until that run. Its one-clause comparison (BuiltInJudgeSource.CpuComparison), as the reason quotes it.
+const BUILTIN_RERANK = 'mmarco-mMiniLMv2-L12-H384-v1-onnx';
+const CPU_COMPARISON = '它判断得和 llama.cpp 上的同一个模型一样好,每次检索却快得多(短事实约 0.47 秒对 0.82 秒,长笔记约 8.1 秒对 20 秒';
 const EMBEDDER = 'embeddinggemma-300M-Q8_0';
 const FAKE = `node ${path.join(repo, 'devtools', 'scripts', 'fake-llama-measure.mjs')}`;
 // Every cap at 8 s, so the device that never answers costs 8 s rather than 30.
@@ -373,26 +377,38 @@ try {
   await post('/api/manage/models/llama/start');
   const shelf2 = await getJson('/api/manage/models');
   const rec2 = shelf2.recommendation;
-  ok('THE POINT: attempts spent, no retry pending, BGE too slow for the default page on every device that gave a result → 资源 recommends mMiniLMv2, beside the installed BGE',
-    rec2?.id === MMINILM && rowOf(shelf2, BGE)?.installed === true && resultsOf(f, BGE).Vulkan0?.attempts === 3, JSON.stringify(rec2 ?? null));
+  ok('THE POINT: attempts spent, no retry pending, BGE too slow for the default page on every device that gave a result → 资源 recommends 内置 (the in-process mMiniLMv2), beside the installed BGE',
+    rec2?.id === BUILTIN_RERANK && rowOf(shelf2, BGE)?.installed === true && resultsOf(f, BGE).Vulkan0?.attempts === 3, JSON.stringify(rec2 ?? null));
   ok('…and its reason says why, from the measurement: the fastest device that gave a result, the excluded one with ITS clause, its time, 96 LONG candidates, the 48 s limit, the skip — and that short facts take far less',
     /BGE 在这台机器上实测过:测出结果的设备里最快的是 CPU\(没有测出结果的:zzfake iGPU 3 次都没有测出结果\(最近一次:进程在载入模型时退出了\(退出码 3\)\),除非模型文件、llama\.cpp 版本、设备列表或应用的测法变了\(更新显卡驱动不算\),不会再测\)/.test(rec2?.reason ?? '')
       && /96 条候选、每条都是长事实只读一段\(约 1,000 字\)/.test(rec2?.reason ?? '') && /48\.0 秒上限/.test(rec2?.reason ?? '')
       && /跳过判断\(事实短时花的时间少得多\)/.test(rec2?.reason ?? '') && !/时会再测/.test(rec2?.reason ?? '')
-      && /下载后应用下一次自己启动 llama\.cpp 时同样会测/.test(rec2?.reason ?? '') && /Claude CLI/.test(rec2?.reason ?? ''),
+      && /所以推荐在应用进程里运行的「内置」mMiniLMv2:/.test(rec2?.reason ?? '') && (rec2?.reason ?? '').includes(CPU_COMPARISON)
+      // BGE's fastest device here is the CPU, so Run 13's comparison applies as it stands: no integrated-GPU caveat.
+      && !/没有量过/.test(rec2?.reason ?? '') && !/更小的重排模型/.test(rec2?.reason ?? '') && /Claude CLI/.test(rec2?.reason ?? ''),
     String(rec2?.reason));
+  // An installed copy of the recommended model ends the suggestion — 内置's four files, planted (presence is what counts).
+  const builtinDir = path.join(path.dirname(f.gguf), 'rerank-model');
+  fs.mkdirSync(path.join(builtinDir, 'onnx'), { recursive: true });
+  for (const x of ['onnx/model_qint8_avx512_vnni.onnx', 'tokenizer.json', 'config.json', 'tokenizer_config.json'])
+    fs.writeFileSync(path.join(builtinDir, x), '');
+  const shelfWithBuiltin = await getJson('/api/manage/models');
+  fs.rmSync(builtinDir, { recursive: true, force: true });
+  ok('…and with 内置 already on disk, BGE measured too slow recommends nothing — the repair never names what is installed',
+    shelfWithBuiltin.recommendation == null && rowOf(shelfWithBuiltin, BUILTIN_RERANK)?.installed === true,
+    JSON.stringify({ rec: shelfWithBuiltin.recommendation ?? null, builtin: rowOf(shelfWithBuiltin, BUILTIN_RERANK)?.installed }));
   ok('…and BGE\'s own row says a default recall of long facts would be skipped at this speed — and, the measurement complete, the preset pins the CPU',
     /让它在 CPU 上运行/.test(rowOf(shelf2, BGE)?.deviceNote ?? '') && /约要 \d+\.\d+ 秒/.test(rowOf(shelf2, BGE)?.deviceNote ?? '')
       && /跳过判断/.test(rowOf(shelf2, BGE)?.deviceNote ?? '') && /^device\s*=\s*none\s*$/m.test(sectionOf(readPreset(f), BGE)),
     String(rowOf(shelf2, BGE)?.deviceNote));
   // No embedder installed: the embedder suggestion used to come FIRST, so the household whose BGE measured too slow was
-  // offered an embedder instead — while mMiniLMv2's own note promised 资源 would recommend it.
+  // offered an embedder instead — while the reranker notes promised 资源 would recommend the smaller one.
   const embedderFile = path.join(f.gguf, `${EMBEDDER}.gguf`);
   fs.rmSync(embedderFile);
   const shelfNoEmbedder = await getJson('/api/manage/models');
   fs.writeFileSync(embedderFile, 'x');
-  ok('THE POINT (final review): with NO embedder installed, BGE measured too slow still recommends mMiniLMv2 — the repair outranks the embedder suggestion',
-    rowOf(shelfNoEmbedder, EMBEDDER)?.installed === false && shelfNoEmbedder.recommendation?.id === MMINILM
+  ok('THE POINT (final review): with NO embedder installed, BGE measured too slow still recommends 内置 — the repair outranks the embedder suggestion',
+    rowOf(shelfNoEmbedder, EMBEDDER)?.installed === false && shelfNoEmbedder.recommendation?.id === BUILTIN_RERANK
       && /BGE 在这台机器上实测过/.test(shelfNoEmbedder.recommendation?.reason ?? ''),
     JSON.stringify({ embedder: rowOf(shelfNoEmbedder, EMBEDDER)?.installed, rec: shelfNoEmbedder.recommendation ?? null }));
 
@@ -453,7 +469,7 @@ try {
       && resultsOf(f, MMINILM).Vulkan0?.attempts === 2 && resultsOf(f, MMINILM).none?.elapsedMs > 0
       && /^device\s*=\s*none\s*$/m.test(sectionOf(readPreset(f), MMINILM)),
     JSON.stringify({ starts: starts6.map((e) => `${e.model}@${e.device}`), stored: entryOf(f, MMINILM)?.results }));
-  ok('(control) with mMiniLMv2 installed there is nothing to recommend', (await getJson('/api/manage/models')).recommendation == null,
+  ok('(control) with rerankers installed and BGE fast here, there is nothing to recommend', (await getJson('/api/manage/models')).recommendation == null,
     JSON.stringify((await getJson('/api/manage/models')).recommendation ?? null));
 
   // The SHAPE is in the key: the measurement version, the launch keys (hashed), the batch's documents and pair tokens.
@@ -706,10 +722,10 @@ try {
     JSON.stringify(bind4.body));
   const shelfG = await cg.getJson('/api/manage/models');
   const recG = shelfG.recommendation;
-  ok('THE POINT (final review): attempts spent, every device timed out — the best LOWER BOUND fails the default page, so BGE is too slow here: mMiniLMv2 is recommended, AHEAD of the missing embedder',
-    recG?.id === MMINILM, JSON.stringify(recG ?? null));
+  ok('THE POINT (final review): attempts spent, every device timed out — the best LOWER BOUND fails the default page, so BGE is too slow here: 内置 is recommended, AHEAD of the missing embedder',
+    recG?.id === BUILTIN_RERANK, JSON.stringify(recG ?? null));
   ok('…and the reason says it is a lower bound — 「至少要」, never 「约要」 — naming every device that did not finish',
-    /^「判断」那一层在本机用它核对检索结果。BGE 在这台机器上实测过:同一批 4 段、共 [\d,]+ 字的打分,没有一个设备在限定时间内打完\(CPU 3 次都没有测出结果\(最近一次:预热:3 秒内没有打完分\)[^;]*;zzfake iGPU 3 次都没有测出结果\(最近一次:预热:3 秒内没有打完分\),除非[^;]*不会再测\);照这个下限推算,默认一次检索最多给判断看的 96 条候选、每条都是长事实只读一段\(约 1,000 字\)时至少要 \d+\.\d+ 秒,超过应用送出这样一次判断的 48\.0 秒上限/.test(recG?.reason ?? '')
+    /^「判断」那一层在本机用它核对检索结果 —— 它在应用进程里运行,这台机器不需要为「判断」装 llama\.cpp。BGE 在这台机器上实测过:同一批 4 段、共 [\d,]+ 字的打分,没有一个设备在限定时间内打完\(CPU 3 次都没有测出结果\(最近一次:预热:3 秒内没有打完分\)[^;]*;zzfake iGPU 3 次都没有测出结果\(最近一次:预热:3 秒内没有打完分\),除非[^;]*不会再测\);照这个下限推算,默认一次检索最多给判断看的 96 条候选、每条都是长事实只读一段\(约 1,000 字\)时至少要 \d+\.\d+ 秒,超过应用送出这样一次判断的 48\.0 秒上限/.test(recG?.reason ?? '')
       && !/约要/.test(recG?.reason ?? ''),
     String(recG?.reason));
   const gRow = String(rowOf(shelfG, BGE)?.deviceNote ?? '');

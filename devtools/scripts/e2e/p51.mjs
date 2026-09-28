@@ -1243,6 +1243,15 @@ try {
     const RERANKER = 'bge-reranker-v2-m3-Q5_K_M';
     const GEMMA_1B = 'gemma-3-1b-it-Q4_K_M';
     const MMINILM = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
+    // The no-GPU recommendation since docs/judge-bench.md Run 13: 内置, the same mMiniLMv2 in process, and its resource.
+    const BUILTIN_RERANK = 'mmarco-mMiniLMv2-L12-H384-v1-onnx';
+    const rerankDir = path.join(res, 'rerank-model');
+    const plantBuiltinReranker = () => {
+      fs.mkdirSync(path.join(rerankDir, 'onnx'), { recursive: true });
+      for (const x of ['onnx/model_qint8_avx512_vnni.onnx', 'tokenizer.json', 'config.json', 'tokenizer_config.json'])
+        fs.writeFileSync(path.join(rerankDir, x), '');
+    };
+    const CPU_COMPARISON = '它判断得和 llama.cpp 上的同一个模型一样好,每次检索却快得多(短事实约 0.47 秒对 0.82 秒,长笔记约 8.1 秒对 20 秒';
     const QWEN3 = 'Qwen3-0.6B-Q8_0';
     // MemorySources.CliTaggingCost, pinned as the exact clause for the reason p52 case 5 gives.
     const TAGGING_COST = '每条事实一次调用,消耗账号额度,事实内容会发给 Claude';
@@ -1343,12 +1352,12 @@ try {
           && /104\/240/.test(miniNote) && /每 1,000 个词元要约 3 秒/.test(miniNote) && /一分多钟到两分钟/.test(miniNote)
           && /230 次等满一分钟\(那时应用还不会跳过\)/.test(miniNote) && /LAMAR 没有在只用 CPU 的机器上量过/.test(miniNote),
         miniNote.slice(miniNote.indexOf('在一台只用 CPU'), miniNote.indexOf('在一台只用 CPU') + 240));
-      ok('mMiniLMv2\'s row says it is what the app recommends where llama.cpp can use no GPU (an integrated one counts), or where the judge was skipped — that its long-note loss to BGE was on a GPU — and what one laptop\'s integrated GPU did',
-        /llama\.cpp 用不了任何显卡时\(集成显卡也算显卡\),应用推荐它而不是 BGE/.test(miniNote) && /「判断」那一行也会建议改用它/.test(miniNote)
+      ok('mMiniLMv2\'s row says the app recommends 内置 — the same model in process — where llama.cpp can use no GPU (an integrated one counts), the judge was skipped or BGE measured too slow, that its long-note loss to BGE was on a GPU, and what one laptop\'s integrated GPU did',
+        /llama\.cpp 用不了任何显卡时\(集成显卡也算显卡\)、检索因为机器太慢跳过了判断时、或 BGE 在这台机器上实测太慢时,应用推荐的是在应用进程里运行的「内置」mMiniLMv2/.test(miniNote)
+          && /见「内置」那一行/.test(miniNote) && !/应用推荐它而不是 BGE/.test(miniNote)
           && /有显卡、BGE 在这台机器上也没有测出太慢时,推荐的仍是 BGE。只有集成显卡时:在同一台笔记本的 Arc 集成显卡上,两个重排模型都比它的 CPU 慢\(mMiniLMv2 约 6–7 倍,BGE 约 3 倍;只是这一台机器上的数\)/.test(miniNote)
-          && /那台笔记本只露出集成显卡时,两者都选了 CPU;BGE 在那里连 CPU 上也赶不上默认检索里的长事实,应用测完就改为推荐 mMiniLMv2/.test(miniNote)
+          && /那台笔记本只露出集成显卡时,两者都选了 CPU;BGE 在那里连 CPU 上也赶不上默认检索里的长事实,应用测完就改为推荐「内置」mMiniLMv2/.test(miniNote)
           && !/还没有量过。/.test(miniNote.slice(miniNote.indexOf('只有集成显卡'))) && !/两者都还没有量过/.test(miniNote)
-          && /BGE 下载后,应用会在这台机器的 CPU 和每块显卡上测它的速度,连最快的设备都赶不上时,「资源」也会改为推荐它/.test(miniNote)
           && /\(在显卡上;测完后另算的比较\)/.test(miniNote),
         miniNote);
       // BGE's and LAMAR's rows POINT at it, with a line of their own, and do not repeat the configuration.
@@ -1357,16 +1366,16 @@ try {
       ok('BGE\'s row says what Run 8 found for it on a CPU — almost never in time, 230 of 240 minute-waits before the skip, no verdict either way, 104/240 — pointing at mMiniLMv2\'s row for the configuration',
         /只用 CPU 时它几乎总是来不及判断/.test(bgeNote) && /实测和设置见 mMiniLMv2 那一行/.test(bgeNote)
           && /230 次等满一分钟、没能判断/.test(bgeNote) && /现在会当即跳过,同样没有判断/.test(bgeNote) && /104\/240/.test(bgeNote)
-          && /llama\.cpp 用不了任何显卡时,应用推荐 mMiniLMv2/.test(bgeNote)
+          && /llama\.cpp 用不了任何显卡时,应用推荐「内置」mMiniLMv2/.test(bgeNote)
           && /在同一台笔记本的集成显卡上,它比它的 CPU 还慢约 3 倍\(实测和设置见 mMiniLMv2 那一行\)/.test(bgeNote)
           && !/两者都还没有量过/.test(bgeNote)
           && /它在这台机器上多快,应用要等下载之后才测得出\(在 CPU 和每块显卡上各测一次,之后让它在最快的那个上运行\)/.test(bgeNote)
-          && /连最快的设备都赶不上时,也改为推荐 mMiniLMv2/.test(bgeNote)
+          && /连最快的设备都赶不上时,也改为推荐「内置」mMiniLMv2/.test(bgeNote)
           && !/Intel Core Ultra 9 185H/.test(bgeNote),
         bgeNote.slice(bgeNote.indexOf('只用 CPU 时'), bgeNote.indexOf('只用 CPU 时') + 200));
       ok('LAMAR\'s row says it was not run on a CPU, and points at BGE\'s — the same size — without repeating the configuration',
         /LAMAR 没有在只用 CPU 的机器上量过;和它一样大的 BGE/.test(lamarNote) && /见 BGE 那一行/.test(lamarNote)
-          && /llama\.cpp 用不了任何显卡时,应用推荐 mMiniLMv2/.test(lamarNote) && !/Intel Core Ultra 9 185H/.test(lamarNote),
+          && /llama\.cpp 用不了任何显卡时,应用推荐「内置」mMiniLMv2/.test(lamarNote) && !/Intel Core Ultra 9 185H/.test(lamarNote),
         lamarNote.slice(lamarNote.indexOf('LAMAR 没有'), lamarNote.indexOf('LAMAR 没有') + 120));
       // mMiniLMv2's parity with BGE is a SHORT-fact result: on Run 6c's long notes, both read in windows, it brought the
       // answer onto the page significantly less often (182 against 201 of 240, 33/14, p = 0.008) — post hoc, and said so.
@@ -1429,14 +1438,16 @@ try {
       // stayed green. Derived from the rows' own notes rather than restated, so adding a reranker whose figures fall
       // outside the range fails here instead of in a household's reading.
       const figuresOf = (note, label) => Number((String(note).match(new RegExp(`${label} (\\d+)/240`)) ?? [])[1]);
-      // llama.cpp's rerankers only: the in-process 内置 reranker (round 6) is a reranking row too, and UNMEASURED — the
-      // sentence must not quote a figure for it, and says so (the assertion after the next).
-      const rerankRows = (shelf.models ?? []).filter((m) => m.capability === 'reranking' && m.note && m.runtime === 'llama-cpp');
+      // EVERY reranker row, the in-process 内置 one included — measured since docs/judge-bench.md Run 13 (99 / 203 of 240),
+      // inside the others' range. Between its arrival and that run the filter took llama.cpp's rows only, and the sentence
+      // said 内置 was unmeasured.
+      const rerankRows = (shelf.models ?? []).filter((m) => m.capability === 'reranking' && m.note);
       const found8 = rerankRows.map((m) => figuresOf(m.note, '前八命中'));
       const top1 = rerankRows.map((m) => figuresOf(m.note, '首位命中'));
       const judgeWhat = String(layerOf(await getJson('/api/manage/memory'), 'judge')?.what ?? '');
       ok('(fixture) every catalogued reranker note states its top-1 and found@8 of 240',
-        rerankRows.length >= 3 && [...found8, ...top1].every(Number.isFinite), JSON.stringify({ found8, top1 }));
+        rerankRows.length >= 4 && rerankRows.some((m) => m.runtime === 'builtin') && [...found8, ...top1].every(Number.isFinite),
+        JSON.stringify({ found8, top1 }));
       // The rerankers' figures and their no-judge base (127 / 80) are docs/judge-bench.md Run 11, on the current engine;
       // the Claude judge's 79 → 130 is Run 1, on an earlier one, and was not re-run — so the sentence says it was
       // measured on an earlier version, rather than setting two bases side by side as if they were one.
@@ -1446,10 +1457,15 @@ try {
           && /不开语义/.test(judgeWhat),
         JSON.stringify({ found8, top1, what: judgeWhat }));
       const builtinRerank = (shelf.models ?? []).find((m) => m.capability === 'reranking' && m.runtime === 'builtin');
-      ok('…and it quotes that range for llama.cpp\'s rerankers, saying the in-process 内置 one is not measured — whose row quotes no figure',
-        /llama\.cpp 上的重排模型/.test(judgeWhat) && /「内置」重排模型还没有实测过/.test(judgeWhat)
-          && !!builtinRerank && !/\d+\/240/.test(String(builtinRerank.note)) && /还没有在本应用的测试集上实测过/.test(String(builtinRerank.note)),
-        JSON.stringify({ what: judgeWhat, builtin: builtinRerank?.note ?? null }));
+      ok('…and 内置\'s row states Run 13 with its configuration — Lyntai 3.5.1, one laptop\'s CPU, both fixtures, the qint8 export against Q8_0 — equivalent on short facts, no significant difference on long notes, faster than llama.cpp on the CPU, slower than on a GPU, the memory and the load — and no longer says it is unmeasured',
+        /Intel Core Ultra 9 185H/.test(String(builtinRerank?.note)) && /Lyntai 3\.5\.1/.test(String(builtinRerank?.note))
+          && /ONNX 8 位版本,那边是 Q8_0 的 GGUF/.test(String(builtinRerank?.note)) && /可以算一样好/.test(String(builtinRerank?.note))
+          && /81\/240 与 180\/240,对 79\/240 与 182\/240,没有测出显著差别/.test(String(builtinRerank?.note))
+          && /0\.82 秒与 20 秒/.test(String(builtinRerank?.note)) && /0\.30 秒与 1\.2 秒/.test(String(builtinRerank?.note))
+          && /约 0\.7–1\.0 GB 内存/.test(String(builtinRerank?.note)) && /载入约 1\.3 秒/.test(String(builtinRerank?.note))
+          && /只作描述/.test(String(builtinRerank?.note))
+          && !/还没有在本应用的测试集上实测过|不推荐/.test(String(builtinRerank?.note)),
+        String(builtinRerank?.note));
       ok('…and labels the Claude judge\'s figure, on its own base, as measured on an earlier version',
         /Claude CLI 判断是在本应用较早的版本上量的/.test(judgeWhat) && /79 题/.test(judgeWhat) && /130 题/.test(judgeWhat),
         judgeWhat);
@@ -1513,7 +1529,7 @@ try {
       // everywhere and moves to mMiniLMv2 only after BGE has been downloaded and measured too slow here.
       ok('…and it says the machine is unknown until BGE is downloaded and measured — and what happens if it is too slow here',
         /要等下载后、应用下一次自己启动 llama\.cpp 时才测得出/.test(String(rec?.reason))
-          && /连最快的设备都太慢的话,这里会改为推荐更小的 mMiniLMv2/.test(String(rec?.reason)),
+          && /连最快的设备都太慢的话,这里会改为推荐在应用进程里运行的「内置」mMiniLMv2/.test(String(rec?.reason)),
         String(rec?.reason));
 
       // THE 判断 ROW'S SUGGESTION: runtime present, no model 判断 can use (the embedder is the wrong kind), so its
@@ -1549,22 +1565,33 @@ try {
           JSON.stringify({ devicesListed: noGpu.devicesListed, gpu: noGpu.gpu, devices: noGpu.devices }));
         const cpuShelf = await getJson('/api/manage/models');
         const cpuRec = cpuShelf.recommendation;
-        ok('THE POINT: with no GPU, 资源 recommends mMiniLMv2 for 判断 — not BGE',
-          cpuRec?.id === MMINILM && cpuShelf.runtime?.gpu === false,
+        // docs/judge-bench.md Run 13 (2026-09-28): 内置 judged as well as llama.cpp's mMiniLMv2 and was faster on the CPU,
+        // so where llama.cpp sees no GPU the recommendation is 内置 — and 判断 then needs no llama.cpp at all. It was the
+        // llama.cpp GGUF (Run 8) until then.
+        ok('THE POINT: with no GPU, 资源 recommends 内置 for 判断 — the in-process mMiniLMv2, not BGE, not the llama.cpp GGUF',
+          cpuRec?.id === BUILTIN_RERANK && cpuShelf.runtime?.gpu === false
+            && rowOf(cpuShelf, BUILTIN_RERANK)?.runtime === 'builtin' && rowOf(cpuShelf, BUILTIN_RERANK)?.installed === false,
           JSON.stringify({ rec: cpuRec ?? null, gpu: cpuShelf.runtime?.gpu }));
-        ok('…and its reason says why, plainly: llama.cpp can use no GPU here, Run 8\'s CPU result with its configuration, BGE too slow there, what one laptop\'s integrated GPU did — and the tagging clause',
-          /llama\.cpp 在这台机器上用不了任何显卡/.test(String(cpuRec?.reason)) && /Intel Core Ultra 9 185H/.test(String(cpuRec?.reason))
-            && /17\.5 秒/.test(String(cpuRec?.reason)) && /180\/240/.test(String(cpuRec?.reason))
-            && /104\/240/.test(String(cpuRec?.reason)) && /240 道提问/.test(String(cpuRec?.reason))
-            && /不开语义/.test(String(cpuRec?.reason)) && /一分多钟到两分钟/.test(String(cpuRec?.reason))
+        ok('…and its reason says why, plainly: llama.cpp can use no GPU here, 判断 needs no llama.cpp for it, Run 13\'s CPU comparison, BGE too slow on a CPU, BGE where there is a GPU — and the tagging clause',
+          /llama\.cpp 在这台机器上用不了任何显卡,所以推荐它,而不是 BGE/.test(String(cpuRec?.reason))
+            && /这台机器不需要为「判断」装 llama\.cpp/.test(String(cpuRec?.reason))
+            && String(cpuRec?.reason ?? '').includes(CPU_COMPARISON)
+            && /BGE 在只用 CPU 的笔记本上几乎每次都来不及判断\(实测和设置见 BGE 那一行\)/.test(String(cpuRec?.reason))
             && /llama\.cpp 能用显卡、BGE 下载后在这台机器上也没有测出太慢时,推荐的是 BGE/.test(String(cpuRec?.reason))
-            && /在同一台笔记本的集成显卡上,两者都比它的 CPU 慢\(实测和设置见 mMiniLMv2 那一行的说明\)/.test(String(cpuRec?.reason))
-            && !/两者都还没有量过/.test(String(cpuRec?.reason))
-            && !/没有检测到显卡|约两分钟/.test(String(cpuRec?.reason)) && String(cpuRec?.reason ?? '').includes(TAGGING_COST),
+            && !/更小的重排模型/.test(String(cpuRec?.reason)) && String(cpuRec?.reason ?? '').includes(TAGGING_COST),
           String(cpuRec?.reason));
         const cpuJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
-        ok('THE POINT: …and the 判断 row\'s download suggestion is mMiniLMv2 too — one writer for both',
-          cpuJudge?.suggest === `gguf-${MMINILM}`, JSON.stringify({ suggest: cpuJudge?.suggest }));
+        ok('THE POINT: …and the llama.cpp 判断 row\'s download suggestion is 内置 too, saying it needs no llama.cpp — one writer for the badge and the row',
+          cpuJudge?.suggest === 'rerank-model'
+            && /这台机器上 llama\.cpp 用不了任何显卡,「判断」推荐的是在应用进程里运行的「内置」重排模型/.test(String(cpuJudge?.reason)),
+          JSON.stringify({ suggest: cpuJudge?.suggest, reason: cpuJudge?.reason }));
+        // …and an INSTALLED 内置 ends the suggestion, as any installed recommendation does.
+        plantBuiltinReranker();
+        const cpuWithBuiltin = await getJson('/api/manage/models');
+        fs.rmSync(rerankDir, { recursive: true, force: true });
+        ok('…and with 内置 on disk and no GPU, nothing is recommended — an installed copy ends the suggestion',
+          cpuWithBuiltin.recommendation == null && rowOf(cpuWithBuiltin, BUILTIN_RERANK)?.installed === true,
+          JSON.stringify({ rec: cpuWithBuiltin.recommendation ?? null, builtin: rowOf(cpuWithBuiltin, BUILTIN_RERANK)?.installed }));
         // …and an INVALIDATION does not flip it. Every start, restart and model removal drops the runtime's cached state;
         // the badge used to read the GPU answer from there, so for as long as the background re-probe took, "no GPU" read
         // as "not known" and the badge went back to BGE. It reads the memo of the binary's device list now, which an
@@ -1572,8 +1599,8 @@ try {
         fs.writeFileSync(path.join(ggufDir, 'zzthrowaway-Q4_K_M.gguf'), '');
         const removed = await post('/api/manage/models/remove', { model: 'zzthrowaway-Q4_K_M', runtime: 'llama-cpp' });
         const afterRemove = await getJson('/api/manage/models');
-        ok('THE POINT: removing a model — which drops the runtime\'s cached state — leaves the badge on mMiniLMv2 and the runtime reading "no GPU", not "unknown"',
-          removed.status === 200 && afterRemove.recommendation?.id === MMINILM && afterRemove.runtime?.gpu === false,
+        ok('THE POINT: removing a model — which drops the runtime\'s cached state — leaves the badge on 内置 and the runtime reading "no GPU", not "unknown"',
+          removed.status === 200 && afterRemove.recommendation?.id === BUILTIN_RERANK && afterRemove.runtime?.gpu === false,
           JSON.stringify({ removed: removed.status, rec: afterRemove.recommendation?.id ?? null, gpu: afterRemove.runtime?.gpu }));
         // The one-reranker rule holds on a CPU too: BGE already in means nothing more is suggested — not a second reranker.
         fs.writeFileSync(path.join(ggufDir, `${RERANKER}.gguf`), '');
@@ -1596,12 +1623,14 @@ try {
         ok('(non-vacuity) the same stand-in answered again, now listing a Vulkan GPU',
           withGpu.devicesListed === true && withGpu.gpu === true, JSON.stringify({ gpu: withGpu.gpu, devices: withGpu.devices }));
         const gpuShelf = await getJson('/api/manage/models');
-        ok('(control) with a GPU, the badge is BGE again, with the reason that claims nothing about the machine',
-          gpuShelf.recommendation?.id === RERANKER && !/显卡/.test(String(gpuShelf.recommendation?.reason)),
+        ok('(control) with a GPU, the badge is BGE again, with the reason that claims nothing about the machine — never 内置',
+          gpuShelf.recommendation?.id === RERANKER && !/显卡/.test(String(gpuShelf.recommendation?.reason))
+            && rowOf(gpuShelf, BUILTIN_RERANK)?.installed === false,
           JSON.stringify(gpuShelf.recommendation ?? null));
         const gpuJudge = srcs(layerOf(await getJson('/api/manage/memory'), 'judge')).find((x) => x.id === 'llama-cpp');
-        ok('(control) …and the 判断 row suggests BGE', gpuJudge?.suggest === `gguf-${RERANKER}`,
-          JSON.stringify({ suggest: gpuJudge?.suggest }));
+        ok('(control) …and the 判断 row suggests BGE, saying nothing of 内置', gpuJudge?.suggest === `gguf-${RERANKER}`
+          && !/内置/.test(String(gpuJudge?.reason)),
+          JSON.stringify({ suggest: gpuJudge?.suggest, reason: gpuJudge?.reason }));
       } finally {
         // Back to the unreadable stub the rest of this block expects — and a device list nobody can read again.
         fs.rmSync(devicesFile, { force: true });
@@ -1630,6 +1659,13 @@ try {
       ok('THE POINT: with ANOTHER reranker in, BGE is not suggested as a second one — nothing is',
         otherReranker.recommendation == null, JSON.stringify(otherReranker.recommendation ?? null));
       fs.rmSync(path.join(ggufDir, `${MMINILM}.gguf`), { force: true });
+      // …and 内置 counts as one since docs/judge-bench.md Run 13 measured it (it did not while it was unmeasured).
+      plantBuiltinReranker();
+      const withBuiltinReranker = await getJson('/api/manage/models');
+      fs.rmSync(rerankDir, { recursive: true, force: true });
+      ok('THE POINT: with 内置 in — a measured reranker now — BGE is not suggested as a second one either',
+        withBuiltinReranker.recommendation == null && rowOf(withBuiltinReranker, BUILTIN_RERANK)?.installed === true,
+        JSON.stringify(withBuiltinReranker.recommendation ?? null));
 
       // …AND NOTHING AFTER IT. The badge used to fall through to "any embedder", then "whatever is smallest" —
       // which, with these in, is a model nobody chose to recommend.
@@ -1640,6 +1676,7 @@ try {
     } finally {
       // As the next block expects: it plants its own binary and models, and asserts on the preset they produce.
       fs.rmSync(builtinDir, { recursive: true, force: true });
+      fs.rmSync(rerankDir, { recursive: true, force: true });
       fs.rmSync(path.join(res, 'llama-cpp'), { recursive: true, force: true });
       fs.rmSync(ggufDir, { recursive: true, force: true });
     }

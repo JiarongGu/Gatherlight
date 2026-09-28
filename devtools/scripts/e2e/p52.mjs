@@ -1507,7 +1507,10 @@ try {
   const skipQuery = 'zzskipquery 园艺社每月第二个周六在社区花园劳动';
   const skipShortQuery = 'zzskipshortquery swimming lesson Tuesday leisure pool';
   const fitQuery = 'zzfitquery 书法班逢周三晚上去文化馆上课';
-  const MMINILM = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
+  // The CPU-friendly reranker a skip asks for: 内置, the in-process mMiniLMv2 (docs/judge-bench.md Run 13) — it was
+  // llama.cpp's mMiniLMv2 GGUF until that run.
+  const BUILTIN_RERANK = 'mmarco-mMiniLMv2-L12-H384-v1-onnx';
+  const CPU_COMPARISON = '它判断得和 llama.cpp 上的同一个模型一样好,每次检索却快得多(短事实约 0.47 秒对 0.82 秒,长笔记约 8.1 秒对 20 秒';
   const skipLog = () => logOf(skipDir);
   const skipLines = () => skipLog().split('\n').filter((l) => SKIP_LINE.test(l));
   const queueLeft = (line) => Number((QUEUE_CLAUSE.exec(line) ?? [])[1]);
@@ -1526,7 +1529,8 @@ try {
   const judgeAfterSkip = layerOf(await cSkip.getJson('/api/manage/memory'), 'judge');
   const shelfAfterSkip = await cSkip.getJson('/api/manage/models');
   // The same, with NO embedder installed (final review): the skip is a repair, and it outranks the embedder suggestion —
-  // which used to come first, so the 判断 row's promise that 资源 recommends mMiniLMv2 was false until one was installed.
+  // which used to come first, so the 判断 row's promise that 资源 recommends the smaller reranker was false until one was
+  // installed.
   const skipEmbedder = path.join(skipDir, 'state', 'resources', 'gguf', 'embeddinggemma-300M-Q8_0.gguf');
   fs.rmSync(skipEmbedder);
   const shelfSkipNoEmbedder = await cSkip.getJson('/api/manage/models');
@@ -1565,24 +1569,23 @@ try {
     judgeBefore.pace == null && shelfBefore.recommendation == null,
     JSON.stringify({ pace: judgeBefore.pace ?? null, recommendation: shelfBefore.recommendation ?? null }));
   const paceText = String(judgeAfterSkip.pace?.text ?? '');
-  ok('THE POINT: after a skip, the 判断 row SAYS so — how many of the recent recalls were skipped — and offers mMiniLMv2 to download, whatever the device probe says, and what one laptop\'s integrated GPU did (Run 8b) — never the old "not measured"',
+  ok('THE POINT: after a skip, the 判断 row SAYS so — how many of the recent recalls were skipped — and offers 内置 (the in-process mMiniLMv2) to download, whatever the device probe says, with what Run 13 measured on a CPU',
     judgeAfterSkip.pace?.skipped >= 1 && judgeAfterSkip.pace?.recalls >= judgeAfterSkip.pace?.skipped
       && paceText.includes(`最近 ${judgeAfterSkip.pace?.recalls} 次检索里有 ${judgeAfterSkip.pace?.skipped} 次因为这台机器太慢`)
-      && /下载 mMiniLMv2 改用它/.test(paceText) && judgeAfterSkip.pace?.suggest === `gguf-${MMINILM}`
-      && paceText.includes('在同一台笔记本的集成显卡上,它和 BGE 都比它的 CPU 慢(实测和设置见它那一行的说明)')
-      && !paceText.includes('还没有量过'),
+      && /可以在「资源 · Resources」下载「内置重排模型\(mMiniLMv2\)」改用它/.test(paceText)
+      && judgeAfterSkip.pace?.suggest === 'rerank-model' && paceText.includes(CPU_COMPARISON)
+      && !/下载 mMiniLMv2 改用它|28%/.test(paceText),
     JSON.stringify(judgeAfterSkip.pace ?? null));
   const skipRec = shelfAfterSkip.recommendation;
-  ok('THE POINT: …and 资源 recommends mMiniLMv2 BESIDE the installed reranker — the one exception to the one-reranker rule — saying why, with Run 8\'s configuration',
-    skipRec?.id === MMINILM && /次因为这台机器太慢跳过了判断/.test(String(skipRec?.reason))
-      && /Intel Core Ultra 9 185H/.test(String(skipRec?.reason))
-      && String(skipRec?.reason ?? '').includes('在同一台笔记本的集成显卡上,两者都比它的 CPU 慢(实测和设置见 mMiniLMv2 那一行的说明)')
-      && !String(skipRec?.reason ?? '').includes('还没有量过')
-      && /一分多钟到两分钟/.test(String(skipRec?.reason)),
+  ok('THE POINT: …and 资源 recommends 内置 BESIDE the installed reranker — the one exception to the one-reranker rule — saying why, with Run 13\'s CPU comparison and that 判断 needs no llama.cpp for it',
+    skipRec?.id === BUILTIN_RERANK && /次因为这台机器太慢跳过了判断,所以推荐它/.test(String(skipRec?.reason))
+      && String(skipRec?.reason ?? '').includes(CPU_COMPARISON)
+      && /这台机器不需要为「判断」装 llama\.cpp/.test(String(skipRec?.reason))
+      && !/更小的重排模型|28%/.test(String(skipRec?.reason)),
     JSON.stringify(skipRec ?? null));
-  ok('THE POINT (final review): …and with NO embedder installed it is STILL mMiniLMv2 — the repair outranks the embedder suggestion',
+  ok('THE POINT (final review): …and with NO embedder installed it is STILL 内置 — the repair outranks the embedder suggestion',
     shelfSkipNoEmbedder.models?.find((m) => m.id === 'embeddinggemma-300M-Q8_0')?.installed === false
-      && shelfSkipNoEmbedder.recommendation?.id === MMINILM
+      && shelfSkipNoEmbedder.recommendation?.id === BUILTIN_RERANK
       && /次因为这台机器太慢跳过了判断/.test(String(shelfSkipNoEmbedder.recommendation?.reason)),
     JSON.stringify({ embedder: shelfSkipNoEmbedder.models?.find((m) => m.id === 'embeddinggemma-300M-Q8_0')?.installed,
       rec: shelfSkipNoEmbedder.recommendation ?? null }));
