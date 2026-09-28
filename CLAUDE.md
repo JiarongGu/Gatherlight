@@ -47,7 +47,7 @@ household), which is what the picker shows — and the third one is *no model*:
 | group | backends | what it costs |
 |---|---|---|
 | **Claude CLI** | `claude-cli` | an account, nothing local. 判断 annotates + verifies; 语义 REPHRASES — Claude has no embeddings endpoint, so it stores other wordings of each fact (`knowledge.aka`, in the trigram index), **at least one in another language**, and a differently-worded or differently-*languaged* question matches one. Quota + a CLI spawn per call |
-| **本机模型** | `llama-cpp` · `builtin` | disk, no address; no quota EXCEPT a reranker on 判断, whose tagging still runs on the Claude CLI (see below). `llama-cpp` is the runtime we download and start (both layers); `builtin` is ONNX in our own process, both layers: EmbeddingGemma-300M on 语义 (222 MB, measured first — `docs/builtin-model-runner.md`) and, since round 6, the mMiniLMv2 reranker on 判断 (136 MB, on the CPU, **unmeasured** — offered and described, never recommended, until `docs/judge-bench.md` Run 13). Models come from 资源, sha256-pinned and ranked |
+| **本机模型** | `llama-cpp` · `builtin` | disk, no address; no quota EXCEPT a reranker on 判断, whose tagging still runs on the Claude CLI (see below). `llama-cpp` is the runtime we download and start (both layers); `builtin` is ONNX in our own process, both layers: EmbeddingGemma-300M on 语义 (222 MB, measured first — `docs/builtin-model-runner.md`) and, since round 6, the mMiniLMv2 reranker on 判断 (136 MB, on the CPU; `docs/judge-bench.md` Run 13 measured it as good as llama.cpp's mMiniLMv2 and faster than llama.cpp on a CPU, so it is RECOMMENDED where there is no usable GPU). Models come from 资源, sha256-pinned and ranked |
 | **不用模型** | *none* | nothing. Choosing it turns the layer off and leaves 公式 doing the work |
 
 **不用模型 holds no backends, and that is its meaning.** "Off" used to be a separate 停用 button, which made
@@ -86,8 +86,13 @@ read WordPiece only (English-only rerankers, the design spec's §Constraints), t
 SentencePiece and ran the multilingual `mmarco-mMiniLMv2` end to end — because nobody had built or measured it. **It is
 built (round 6): `BuiltInJudgeSource`**, the in-process mMiniLMv2 (the model repository's own qint8 ONNX, sha256-pinned in
 资源), screened like every reranker and sharing llama.cpp's reranker chain (`RerankVerification`: the fit, the windows, the
-pace, the admission). It is offered and described as UNMEASURED and never recommended until Run 13 compares it with
-llama.cpp's mMiniLMv2 within one run; nothing is declined on either layer now.
+pace, the admission). **Measured by `docs/judge-bench.md` Run 13** (2026-09-28, Lyntai 3.5.1, one laptop's CPU, the
+240-question and the long fixture, qint8 ONNX against llama.cpp's Q8_0): found@8 203 against 203 on short facts
+(equivalent), 180 against 182 on long notes (no significant difference); per recall 0.47 s and 8.1 s against llama.cpp
+on the CPU's 0.82 s and 20.0 s — but llama.cpp on a discrete GPU is faster still (0.30 s, 1.2 s); ~0.7–1.0 GB of memory
+while it scores, ~1.3 s to load. So **`GgufCatalog.RerankerWithoutGpu` is 内置**: no usable GPU, recent skips, or BGE
+measured too slow here recommend it (and 判断 then needs no llama.cpp); a usable GPU keeps BGE on llama.cpp. Nothing is
+declined on either layer now.
 
 **判断 can run on a llama.cpp RERANKER** (2026-09-23, `docs/judge-bench.md` Run 2). It VERIFIES locally and
 never annotates, so tagging stays on the Claude CLI and the live route `llm.route.memory` is the CLI's model on the

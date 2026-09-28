@@ -878,7 +878,8 @@ A scratch run, not committed: the router was ended by PID as a process tree.
 
 Round 6 builds `builtin` as a 判断 backend: mmarco-mMiniLMv2 scored IN PROCESS by Lyntai's ONNX provider with its owned
 SentencePiece tokenizer (Lyntai D191), tagging on the Claude CLI (`BuiltInJudgeSource` over `InProcessReranker`). This
-records what only the real export can show; its judging quality is `judge-bench.md` Run 13's, still to come.
+records what only the real export can show; its judging quality is `judge-bench.md` Run 13's (recorded there the same
+day: as good as llama.cpp's mMiniLMv2, faster than llama.cpp on the CPU — so recommended where there is no usable GPU).
 
 **What is pinned** (资源's `rerank-model`, `ResourceProvisioner`): `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` at commit
 `1427fd652930e4ba29e8149678df786c240d8825` (the card says Apache-2.0), four files, 135,704,003 bytes in all:
@@ -943,7 +944,7 @@ sizing more careful, and the pace learns from the calls after it. The device mea
 first choice and is the wrong shape here: 738 pair tokens took 69–85 ms, of which the pace's 50 ms call allowance is most,
 so it read 26–47 ms per 1,000 and would have floored to the GPU figure — a third of what long windows cost on this CPU.
 
-**Not measured**: its judging (Run 13); any other CPU; a GPU (the in-process path is ONNX Runtime's CPU provider);
+**Not measured here**: its judging (Run 13's, in `judge-bench.md`); any other CPU; a GPU (the in-process path is ONNX Runtime's CPU provider);
 concurrency with the built-in embedder in the same process. `e2e-p56` drives everything else — the binding and its
 refusals, the screen refusing a backwards scorer, routing (tagging on the CLI stub, verification in process, nothing at a
 llama.cpp router) and the startup fallback — over a tiny but REAL export (`devtools/scripts/e2e/_tiny-cross-encoder.mjs`:

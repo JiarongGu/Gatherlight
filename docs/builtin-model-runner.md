@@ -12,8 +12,9 @@ both), **内置** was reassigned to the option that needs nothing installed at a
 declines.** A cross-encoder only verifies (tagging stays on the Claude CLI), and Lyntai 3.5's ONNX provider reads a
 SentencePiece `tokenizer.json` (its D191), so the multilingual mMiniLMv2 runs in process: `BuiltInJudgeSource` over
 `InProcessReranker`, the model repository's own qint8 export, sha256-pinned in 资源. What was measured by hand on the
-real export — load, the bind screen, memory, CPU speed — is in `self-managed-llm-runtime.md` §2026-09-28; its judging
-is unmeasured until `judge-bench.md` Run 13. The table's 判断 column is about a GENERATIVE judge and still holds.
+real export — load, the bind screen, memory, CPU speed — is in `self-managed-llm-runtime.md` §2026-09-28, and its judging
+in `judge-bench.md` Run 13: as good as llama.cpp's mMiniLMv2 and faster than llama.cpp on a CPU, so it is the reranker
+recommended where there is no usable GPU. The table's 判断 column is about a GENERATIVE judge and still holds.
 
 **Terms** (see `.claude/rules/dev-conventions.md`): a **backend** is *where a model comes from* —
 `claude-cli`, `ollama`, `builtin`. `builtin` means a runtime inside the install (`res/`), with no daemon to
