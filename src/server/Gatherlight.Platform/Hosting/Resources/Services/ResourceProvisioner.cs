@@ -380,9 +380,9 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         new ResourceSpec(
             Id: "git-bash", Name: $"命令行(Git Bash · {GitVersion})",
             // Says WHY, the size, and what the agent can do without it — the row is the whole offer.
-            NeededFor: "让「判断」之外的规划助手有一个应用能把关的命令行(移动/整理文件、跑技能脚本)。"
-                + "没有它,助手就没有命令行(PowerShell 已被移除),但仍可用文件工具(移动/重命名/删除、看大小)和读取/搜索。"
-                + "系统未装 Git for Windows 时才需要;约 59MB 下载、约 385MB 安装",
+            NeededFor: "让规划助手有一个应用能把关的命令行(移动/整理文件、跑技能脚本)。"
+                + "系统未装 Git for Windows 时才需要;约 59MB 下载、约 385MB 安装。"
+                + "没有它,助手仍可用文件工具(移动/重命名/删除、看大小)和读取/搜索。",
             Kind: ResourceKind.SelfExtractExe, InstallDir: "git-bash", ReadyMarker: "bin/bash.exe",
             ApproxBytes: 59_005_448,
             Url: PortableGitUrl,

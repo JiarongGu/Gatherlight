@@ -58,6 +58,10 @@ try {
   ok('资源 lists a git-bash row', !!row, JSON.stringify((res1.body.resources ?? []).map((r) => r.id)));
   ok('git-bash not installed on a fresh folder', row && row.installed === false, JSON.stringify(row));
   ok('the offer says download + the file-tool fallback', row && /下载/.test(row.detail ?? '') && /文件工具/.test(row.detail ?? ''), row?.detail);
+  // Security review (2026-09-28) — the household never saw 「PowerShell 已移除」 (a dev-facing fact) nor a
+  // 「判断」 caveat, so the git-bash row's text carries neither.
+  ok('the git-bash row names no PowerShell removal and no 判断', row
+    && !/PowerShell/i.test(JSON.stringify(row)) && !/判断/.test(JSON.stringify(row)), JSON.stringify(row));
 
   // Nothing to set yet: the agent spawn gets no git-bash path.
   const e1 = await spawnEnv(A.post, A.waitPhase, envLogA);

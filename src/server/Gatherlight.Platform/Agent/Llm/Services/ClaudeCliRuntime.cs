@@ -329,7 +329,7 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
             return "系统已装 Git for Windows,规划助手用它作为命令行 —— 无需下载。";
         if (ProvisionedGitBash(_platform.ResourcesPath) is not null)
             return "规划助手用这个 Git Bash 作为命令行(应用能对它把关)。";
-        return "未安装 —— 规划助手现在没有命令行(PowerShell 已移除)。下载后它就有一个应用能把关的命令行;"
+        return "规划助手默认没有可用的命令行。下载后它就有一个应用能把关的命令行(移动/整理文件、跑技能脚本);"
             + "不下载也行,助手仍可用文件工具(移动/重命名/删除、看大小)和读取/搜索。";
     }
 
@@ -341,36 +341,49 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         return File.Exists(bash) ? bash : null;
     }
 
+    private static bool? _gitBashDiscoverableCache;
+
     /// <summary>Would the CLI find a Git Bash on its own? Mirrors its discovery order (its docs): the
-    /// default installs, then <c>git</c> on PATH's sibling <c>..\..\bin\bash.exe</c>. Used to NOT set our
-    /// variable when the household already has one.</summary>
+    /// default installs, then <c>git</c> on PATH's sibling <c>..\bin\bash.exe</c>. Used to NOT set our
+    /// variable when the household already has one.
+    /// <para><b>No spawn, cached.</b> This ran on every <see cref="ApplyGitBash"/> probe AND every 资源
+    /// render (<see cref="AgentShellDetail"/>), and it used to <c>Process.Start("where.exe git")</c> —
+    /// up to 3 s on the request path, the exact "a panel must not await a process" trap. It now SCANS the
+    /// PATH directories itself (no child process) and caches the deterministic filesystem result; a Git
+    /// Bash installed mid-session is picked up on the next restart, an acceptable rare case. The
+    /// <c>GATHERLIGHT_ASSUME_NO_GIT_BASH</c> test seam is read UNCACHED, before the cache, so a fixture can
+    /// still force "none" per boot.</para></summary>
     private static bool GitBashDiscoverable()
     {
-        // Test seam: a dev machine has Git for Windows installed at the default path, so a fixture cannot
-        // otherwise exercise the "no Git Bash" branch. GATHERLIGHT_ASSUME_NO_GIT_BASH=1 forces "none".
         if (Environment.GetEnvironmentVariable("GATHERLIGHT_ASSUME_NO_GIT_BASH") == "1") return false;
+        return _gitBashDiscoverableCache ??= ScanForGitBash();
+    }
+
+    private static bool ScanForGitBash()
+    {
         foreach (var root in new[] { @"C:\Program Files\Git", @"C:\Program Files (x86)\Git" })
             if (File.Exists(System.IO.Path.Combine(root, "bin", "bash.exe"))) return true;
-        try
+        // git on PATH → its sibling ..\bin\bash.exe (a PATH dir is <git>\cmd or <git>\bin). Scan PATH
+        // WITHOUT spawning where.exe. Skip a git shim shipped inside a node_modules / virtualenv — not a
+        // Git-for-Windows install with a bash beside it.
+        var pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var raw in pathVar.Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            var where = System.Diagnostics.Process.Start(new ProcessStartInfo("where.exe", "git")
+            try
             {
-                RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true,
-            });
-            if (where is not null)
-            {
-                var outText = where.StandardOutput.ReadToEnd();
-                where.WaitForExit(3000);
-                foreach (var line in outText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                {
-                    // <git>\cmd\git.exe or <git>\bin\git.exe → <git>\bin\bash.exe is ..\..\bin\bash.exe.
-                    var dir = System.IO.Path.GetDirectoryName(line);
-                    var gitRoot = dir is null ? null : System.IO.Path.GetDirectoryName(dir);
-                    if (gitRoot is not null && File.Exists(System.IO.Path.Combine(gitRoot, "bin", "bash.exe"))) return true;
-                }
+                if (raw.Contains("node_modules", StringComparison.OrdinalIgnoreCase)
+                    || raw.Contains(@"\venv", StringComparison.OrdinalIgnoreCase)
+                    || raw.Contains(@"\.venv", StringComparison.OrdinalIgnoreCase)) continue;
+                var dir = System.IO.Path.TrimEndingDirectorySeparator(raw);
+                var hasGit = File.Exists(System.IO.Path.Combine(dir, "git.exe"))
+                    || File.Exists(System.IO.Path.Combine(dir, "git.cmd"))
+                    || File.Exists(System.IO.Path.Combine(dir, "git"));
+                if (!hasGit) continue;
+                var gitRoot = System.IO.Path.GetDirectoryName(dir);
+                if (gitRoot is not null && File.Exists(System.IO.Path.Combine(gitRoot, "bin", "bash.exe"))) return true;
             }
+            catch { /* a malformed PATH entry proves nothing — skip it */ }
         }
-        catch { /* a probe that cannot run means no discoverable Git Bash we can prove */ }
         return false;
     }
 
