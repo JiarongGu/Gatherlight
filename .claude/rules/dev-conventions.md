@@ -2592,14 +2592,35 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   token, which the docs say "authenticates with your Claude subscription"; it outranks `/login`, so while set it picks
   WHICH subscription, over the app's own login mode — `AWS_*`/`GOOGLE_*` (other programs read them, and without the
   stripped switch they select nothing for the CLI), the providers' ids and the model settings. The probe (`auth
-  status`) runs in the same process environment as every CLI spawn, so it reports the account the app will use; a
-  Warning names what was ignored, once (「Claude CLI: ignored …」). What an environment strip CANNOT reach: an `env`
-  block or `apiKeyHelper` in a settings file the CLI still reads — managed settings, and the data folder's project
-  `.claude/settings.json` (the household's own, PROTECTED from the agent) — and an active federation profile in the
-  default Anthropic configuration directory: the CLI's configuration, read by the CLI. The machine's
-  `~/.claude/settings.json` (machine login mode) used to be on that list; since round 6 no app run reads the USER scope
-  at all (`ClaudeCliRuntime.IsolationArgs`, the jail's item (7)). And since the strip is process-wide, an external MCP server that calls the Anthropic
-  API itself takes its key from its own configured `env`, applied after the inherited one.
+  status`) runs in the same process environment as every CLI spawn — and, since the round-6 re-review, with the runs'
+  `IsolationArgs` ahead of its subcommand — so it reports the account the app will use: `auth status` honours
+  `--setting-sources` and `--settings`, and without the flags a USER-scope `apiKeyHelper` made it answer
+  `api_key_helper` while every run, which drops that scope, used the subscription (0 tokens,
+  `docs/self-managed-llm-runtime.md` 2026-09-29). Logout and the login window take no flags: they act on the session.
+  A Warning names what was ignored, once (「Claude CLI: ignored …」). **What an environment strip CANNOT reach is the
+  CLI's own configuration**: an `env` block or `apiKeyHelper` in a settings file the CLI reads. The USER scope's —
+  the machine's `~/.claude/settings.json` in machine login mode — are not read at all since round 6
+  (`ClaudeCliRuntime.IsolationArgs`, the jail's item (7); measured: the helper did not run, `apiKeySource` read `none`,
+  its `env` reached no child). The PROJECT `.claude/settings.json` still is (it loads the knowledge base), and there
+  **the app's own `--settings` blank both** (the re-review, 2026-09-29): `"apiKeyHelper": ""` and every
+  `OffSubscriptionVariables` name as `""` in `env`, rendered from the same list (`ChatEnvironmentService.BuildChatSettings`).
+  The command-line scope outranks the project's per key and the binary reads each name by truthiness, so empty is
+  absent. Measured at 0 tokens on the machine's login: a project helper RAN and supplied the key (`apiKeySource`
+  `apiKeyHelper`), a project `env` key was used (`ANTHROPIC_API_KEY`), a project Bedrock switch made `auth status`
+  read `bedrock`, and a project base URL got the CLI's requests (8 at a local fake); with the blanks `apiKeySource`
+  stayed `none`, the helper did not run, the fake got no request, and `auth status` still read claude.ai, firstParty,
+  signed in — while an unrelated project `env` name still arrived. `forceLoginMethod: "claudeai"` does not do it (the
+  helper still ran). The household's file is never touched. Every run in the data folder carries these settings — chat,
+  jobs, and since the re-review the validation pass and the playground, which passed none. **Still out of reach**: the
+  MANAGED scope (it outranks the command line — an administrator's); names matched only by the `ANTHROPIC_*_BASE_URL`
+  pattern beyond the listed ones (read only under a provider selector, every one of which is blanked); a
+  `%TEMP%\.claude\settings.json` under the one-shot calls' neutral working directory (no household file lives there);
+  and an active federation profile in the default Anthropic configuration directory. Proof: `e2e-p54` — each of the
+  four generated settings files blanks the helper and every name, and leaves `CLAUDE_CODE_OAUTH_TOKEN` alone (the
+  positive control); `e2e-p16` V1 and `e2e-p23` — the validation and playground spawns pass the read-only file; `e2e-p50`
+  case G — the probe's argv carries both flags ahead of `auth status`, the login window's neither. Each confirmed to
+  FAIL with its own half removed (2026-09-29): 4 rows, 1, 1, 1. And since the strip is process-wide, an external MCP
+  server that calls the Anthropic API itself takes its key from its own configured `env`, applied after the inherited one.
   **The app's own secrets are withheld from every child**: `GATHERLIGHT_ACCESS_TOKEN` and
   `GATHERLIGHT_TLS_CERT_PASSWORD`, the two secret-bearing `GATHERLIGHT_*` the server reads (the rest are URLs, paths,
   ports, flags and test knobs — kept; the stub and the measurement fake read their own). The agent's Bash could print
@@ -2685,8 +2706,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   and the migrator all lose it, AND the read-only `--settings` allow-list drops it (belt-and-suspenders, and the reason a
   no-settings site like `extract` is still covered — the removal is central). The plan run previously PRE-APPROVED Bash,
   the security review's regression. `defaultMode` is `default`, not acceptEdits (a plan writes nothing). Read-only JOBS
-  now also pass `ReadOnlySettingsPath` (fence + guard) since they run in the data folder; the playground/extract/validate
-  keep "no Bash" only (a neutral cwd / dev tool — an unfenced read is a stated residual there). `e2e-p54` asserts the
+  now also pass `ReadOnlySettingsPath` (fence + guard) since they run in the data folder, and so — since the round-6
+  re-review — do the validation pass and the playground, which run there too and passed no settings at all (so they
+  also missed the key-path blanks and `disableSkillShellExecution`, item (8)); `extract` and the migrator keep "no Bash"
+  only (a neutral cwd — an unfenced read is a stated residual there). `e2e-p54` asserts the
   plan spawn carries the read-only settings AND disallows Bash AND the allow-list omits it, confirmed to FAIL with the
   plan run's SettingsPath removed. **Still: Lyntai's one-shot calls**
   (scorers, the memory judge, rephrasing) run with the CLI's default tool set minus `AskUserQuestion` from a neutral cwd
@@ -2801,14 +2824,29 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   agents, commands — `--setting-sources user` dropped every one of them), so **the project `.claude/settings.json` is
   still read, and a hook or permission rule the household puts THERE applies to the agent** — the leak that remains,
   stated rather than closed; the agent cannot write that file (PROTECTED, solid for Edit/Write and the file tools, best
-  effort for Bash). Behind the best-effort leg is a RUN-SCOPED backstop, never a sweep (`ProjectConfigBackstop`,
+  effort for Bash). What in it would take a run off the subscription — an `apiKeyHelper`, an API key, a provider or an
+  endpoint in its `env` — is blanked by the app's own `--settings` since the re-review (the API-key rule under *Data
+  folder discipline*), and a skill's inline shell is off whatever it says (item (8)). Behind the best-effort leg is a RUN-SCOPED backstop, never a sweep (`ProjectConfigBackstop`,
   entered by `AgentRunner` for every run whose working directory is the data folder): a snapshot of the three files
   before the run, compared after it however it ended — a file the run CREATED is moved into `state/quarantine/<UTC
   stamp>/`, one it CHANGED or DELETED gets its pre-run bytes back (the run's version kept there too), each with a Warning
   and a notice in the run's own stream; a file the run left alone is never touched. The undo lands before the diff
   gate's validation pass (an agent run in the data folder), a Reject or the next run. **Its residual, stated**: the
   snapshot cannot tell the agent from the household, so an edit the household makes through its own interactive
-  `claude` WHILE an app run is in flight is undone at the run's end (kept in the quarantine, so nothing is lost). **What
+  `claude` WHILE an app run is in flight is undone at the run's end (kept in the quarantine, so nothing is lost). **It
+  leaves two kinds of file alone, with a Warning** (the re-review, 2026-09-29): one it could not READ, at the snapshot or
+  after the run — held open by another program, the household's interactive `claude` above all; read as ABSENT, a file
+  busy at the snapshot and readable after the run was taken for one the run CREATED and moved out of the folder — and
+  one that is, or sits under, a symbolic link or junction (`ReparseGuard`), since the put-back or the move-out would go
+  through it. **Further residuals, stated**: the undo runs in a `finally`, so a hard kill of the app between an agent's
+  write and that `finally` leaves the change, and the next run snapshots it as "before"; and whether the CLI re-reads a
+  changed project settings file in the middle of a `-p` run is unmeasured (moot for a skill's shell injection, which a
+  project file cannot re-enable). Proof of the read case: `e2e-p54`'s held case — PowerShell holds `settings.local.json`
+  with no sharing across the snapshot of a SLOW plan run (the stub's own spawn line proves the snapshot came first) and
+  lets go before the run ends: the file in place with its bytes, nothing quarantined, the snapshot's Warning logged;
+  confirmed to FAIL with a failed read mapped back to absent (the household's file moved into the quarantine). The link
+  check is not driven: a file symlink needs a privilege, and a junctioned `.claude` would change what every other case in
+  the suite runs on. **What
   went**: a round-6 sweep that moved every untracked one of the three out of the folder before and after every run, at
   startup and on a backup import — the household's own interactive config, taken away again after every session. The
   backup import no longer strips them: the archive is the household's own tree, the local file and `.mcp.json` are
@@ -2834,6 +2872,22 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   hook and starts no server); and the scope guard's own `PreToolUse` hook firing under the flags needs a model-issued
   tool call — measured is that the app's `--settings` source loads whole (its SessionStart and UserPromptSubmit
   hooks ran, its deny rule held).
+  **(8) A skill's or custom command's inline shell never runs: `disableSkillShellExecution: true`** in every generated
+  `--settings` (planner and 系统模式, execute and read-only), beside `disableAllHooks: false` (the round-6 re-review,
+  2026-09-29). A skill or command whose body holds `` !`cmd` `` runs that command while the CLI EXPANDS it — prompt
+  preprocessing, not a Bash tool call — so the `PreToolUse` guard is never asked. Measured at 0 tokens (the re-review
+  first, then against the REAL generated execute file, `docs/self-managed-llm-runtime.md` 2026-09-29): with acceptEdits
+  and Bash allowed, a typed `/zztest` whose `SKILL.md` held `` !`node inject.mjs` `` ran it, and so did a custom
+  command, the guard hook never called; with the generated file verbatim, neither ran — though both were loaded — while
+  the project's own `.claude/settings.json` said `"disableSkillShellExecution": false`: it is one of the binary's
+  RESTRICTIVE settings (true in any scope wins), whose schema says the commands "are replaced with a placeholder instead
+  of being run". Read-only runs were already safe (Bash disallowed, so the injection is refused), and the app never
+  composes a leading `/skill`; the reason is that the agent can WRITE `.claude/skills/` and a model-invoked `Skill` tool
+  is unmeasured (it needs a model call — the setting covers skills by their source, not by who invoked them). **A guard
+  check of a skill's CONTENT was rejected**: a scan before a run misses a skill written during it, and a check on
+  Edit/Write misses one a Bash command writes (the best-effort leg), while the setting holds whoever wrote the skill and
+  whenever. No shipped skill or command uses `` !`…` ``. There is no settings version to bump: the files are regenerated
+  every boot. Proof: `e2e-p54` asserts it in each of the four files; confirmed to FAIL with the line removed (4 rows).
 - **The agent MOVES, RENAMES and DELETES files through scoped MCP tools, never a shell** (`fs_move` · `fs_delete` ·
   `file_info`, `Platform/Capabilities/Tools/Services/Tools/FileOpsTools`). A tool beats a shell for this: its scope is
   the guard's own write scope (`ISiteWriteScope`, rendered from the site manifest — one source of truth with the guard),

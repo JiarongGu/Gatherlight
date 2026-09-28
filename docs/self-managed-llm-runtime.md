@@ -1038,7 +1038,8 @@ uninformative: that tool was absent from every run's list, flags or not.)
 - Excluding LOCAL drops `.claude/settings.local.json` (hook and permissions) and `CLAUDE.local.md` — the files the
   household's interactive approvals are written to.
 - Excluding USER drops the account's own settings, hooks, skills, `CLAUDE.md` (and with them its `env` block and
-  `apiKeyHelper`, which the environment strip could not reach — not separately measured).
+  `apiKeyHelper`, which the environment strip could not reach — measured by the round-6 re-review, 2026-09-29: a
+  user-scope helper did not run, `apiKeySource` read `none`, and a user-scope `env` name reached no hook).
 - The app's own `--settings` file applies under every combination: its `SessionStart` and `UserPromptSubmit` hooks ran
   and its deny rule held. The scope guard is a `PreToolUse` hook in that same file; `PreToolUse` itself is not
   exercisable at 0 tokens (it needs a tool call the model makes), so what was measured is that the command-line
@@ -1065,4 +1066,102 @@ Edit/Write and the file tools, best effort for Bash, the backstop behind that). 
 change: a skill's `` !`…` `` injection ran its command under both flag sets with the app's `PreToolUse` hook never
 invoked (a third probe: the user typing the skill's slash command, no login, a dead API port) — it is prompt preprocessing, not a
 Bash tool call. Whether a skill the MODEL invokes runs its injection the same way was not measured (it needs a model
-call); the agent can write `.claude/skills/`.
+call); the agent can write `.claude/skills/`. Closed on 2026-09-29 by `disableSkillShellExecution` in the app's own
+settings, and the project file's `apiKeyHelper` and `env` key paths blanked there too (next section).
+
+### 2026-09-29 — what the app's own `--settings` can switch off in the PROJECT scope: a skill's shell, an API key
+
+The round-6 re-review found two things the isolation flags leave standing, because the PROJECT scope has to stay (it
+loads the knowledge base): a skill's or custom command's `` !`cmd` `` injection runs its command UNGUARDED in an execute
+run, and a project `.claude/settings.json` can still carry an `apiKeyHelper` or an `env` block. The question for the
+real CLI was whether the app's own settings — the command-line scope, which outranks the project's — can switch each off
+without touching the household's file.
+
+**Method, 0 tokens**, as on 2026-09-28: CLI 2.1.283, cwd = a scratch project under devtools/ (gitignored), the flags as
+the app composes them, `hello` (or the slash command) on stdin, a `UserPromptSubmit` hook that exits 2. Every run below
+answered 「UserPromptSubmit operation blocked by hook」 with 0 input and 0 output tokens, cost 0 — the one exception, the
+endpoint run, says why it is still 0. A scratch `CLAUDE_CONFIG_DIR` that is NOT signed in, except where the machine's own
+login is named (read only). The project's helper and the injected command each write a marker file; the
+`UserPromptSubmit` hook records which of the watched variables it was handed, set or empty (names only, never a value).
+"Blanks" is what the app now writes into every generated `--settings`: `"apiKeyHelper": ""` and every
+`ChildEnvironment.OffSubscriptionVariables` name as `""` in `env`.
+
+```
+claude --setting-sources project --strict-mcp-config -p --output-format stream-json --verbose \
+  --settings <settings.json> --mcp-config <empty-mcp.json>
+```
+
+**A project settings file's key paths**, on the machine's own login; `auth status` run with the same flags and
+`--settings`:
+
+| the project's `.claude/settings.json` carries | app `--settings` | init `apiKeySource` | project helper ran | hook saw | `auth status` |
+|---|---|---|---|---|---|
+| nothing | block hook only | `none` | — | names unset | claude.ai · firstParty · signed in |
+| nothing | + blanks | `none` | — | names empty | claude.ai · firstParty · signed in |
+| an `apiKeyHelper` | block hook only | **`apiKeyHelper`** | **yes** | — | `api_key_helper` |
+| an `apiKeyHelper` | + blanks | `none` | no | — | claude.ai · firstParty · signed in |
+| helper + `env`: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_PROFILE`, one unrelated name | block hook only | **`ANTHROPIC_API_KEY`** | **yes** | each set | `third_party` · **bedrock** |
+| the same | + blanks | `none` | no | the five empty, the unrelated one still set | claude.ai · firstParty · signed in |
+
+The same on the not-signed-in scratch config, one path at a time: a project env API key read `ANTHROPIC_API_KEY`, and
+`none` with the blanks; a project `ANTHROPIC_AUTH_TOKEN` (a bearer, which `apiKeySource` does not report) reached the
+hook set, and empty with the blanks.
+
+**A project endpoint, end to end.** The block hook is left out here, so the CLI does try a model call — on the scratch
+config, whose only credential is the project's fake key, against a LOCAL fake that records every request and answers
+401: nothing can reach Anthropic, and nothing is billed. Project `env` = that fake key plus `ANTHROPIC_BASE_URL` = the
+fake. Without the blanks the fake received 8 × `POST /v1/messages?beta=true`, each carrying an `x-api-key` (the CLI's
+retries), `apiKeySource` `ANTHROPIC_API_KEY`. With them: `apiKeySource` `none`, **no request at the fake**, result
+「Not logged in · Please run /login」, 0/0 tokens, cost 0.
+
+**Why an empty value is an absent one.** The command-line scope outranks the project per key (`env` is a per-key union,
+`apiKeyHelper` a scalar), and the binary reads each of these names by truthiness — `if(a.ANTHROPIC_API_KEY)`,
+`process.env.ANTHROPIC_BASE_URL||…`, `ANTHROPIC_PROFILE?.trim()||…`, `if(Sy())` for the helper — so `""` reads as unset,
+and an `apiKeyHelper` of `""` is valid to the settings schema (a string) where `null` would not be. `forceLoginMethod:
+"claudeai"` does NOT do it: with it in `--settings` the project helper still ran and `apiKeySource` read `apiKeyHelper`
+(it steers the `/login` flow; its startup check reads only the managed scope). **Out of reach, by design**: the MANAGED
+scope, which outranks the command line (an administrator's); and names matched only by the `ANTHROPIC_*_BASE_URL`
+pattern beyond the listed ones, read only under a provider selector, every one of which is blanked.
+
+**`auth status` honours the flags.** Without them it reported a USER-scope helper as the login, which no run uses:
+
+| the config dir's USER scope | flags | `auth status` |
+|---|---|---|
+| an `apiKeyHelper` | none | `api_key_helper` · signed in |
+| the same | `--setting-sources project` | `none` · not signed in (the scratch dir is not) |
+| `env` `CLAUDE_CODE_USE_BEDROCK=1` | none | `third_party` · bedrock |
+| the same | `--setting-sources project` | `none` · firstParty |
+| (a PROJECT helper + Bedrock instead) | `--setting-sources project` | `third_party` · bedrock |
+| the same | + `--settings` with the blanks | `none` · firstParty |
+
+`auth status` never ran the helper itself (it reports the configuration). On the machine's own login,
+`claude --setting-sources project --strict-mcp-config auth status --json` reported the same signed-in account, claude.ai,
+firstParty. So the app's probe now carries the flags ahead of the subcommand; logout and the login window do not.
+
+**A skill's shell injection, against the REAL generated execute settings.** The file is `state/settings.chat.json` as a
+p54 fixture boot wrote it, passed verbatim (acceptEdits; the scope guard's `PreToolUse` hook). The project's
+`.claude/settings.json` carries the block hook, `"disableSkillShellExecution": false`, a helper and an env key; a skill
+`zztest` and a command `zzcmd` each hold `` Context: !`node inject.mjs …` `` with `allowed-tools: Bash(node:*)`:
+
+| `--settings` | typed | injection | `apiKeySource` | helper |
+|---|---|---|---|---|
+| the generated file, verbatim | `/zztest` | **nothing ran** | `none` | not run |
+| the generated file, verbatim | `/zzcmd` | **nothing ran** | `none` | not run |
+| the same file with `disableSkillShellExecution`, `apiKeyHelper` and `env` removed | `/zztest` | ran | `ANTHROPIC_API_KEY` | ran |
+| the same | `/zzcmd` | ran | `ANTHROPIC_API_KEY` | ran |
+
+Both were loaded in every run (`init`'s `skills` and `slash_commands` list them), so "nothing ran" is the setting, not a
+missing skill. `disableSkillShellExecution` is one of the binary's RESTRICTIVE settings (true in any scope wins), which
+is why the project's `false` did not re-enable it; its schema describes it as "Disable inline shell execution in skills
+and custom slash commands from user, project, or plugin sources. Commands are replaced with a placeholder instead of
+being run." **Not measured**: a skill the MODEL invokes through the `Skill` tool (it needs a model call) — the
+setting's description covers skills by their source, not by who invoked them; and whether the CLI re-reads a changed
+project settings file in the middle of a `-p` run (moot for the injection, which a project file cannot re-enable).
+
+**What the app does with it**: every generated `--settings` (planner and 系统模式, execute and read-only) carries
+`"disableSkillShellExecution": true` beside `"disableAllHooks": false`, and the blanks, rendered from
+`ChildEnvironment.OffSubscriptionVariables` (`ChatEnvironmentService.BuildChatSettings`); the validation pass and the
+playground, which run in the data folder and passed no settings at all, now pass the read-only file. A guard check of a
+skill's CONTENT was rejected: the agent can write `.claude/skills/` and invoke what it wrote in the same run — a scan
+before the run misses a skill written during it, and a check on Edit/Write misses one a Bash command writes (the
+best-effort leg) — while the setting holds whoever wrote the skill and whenever.

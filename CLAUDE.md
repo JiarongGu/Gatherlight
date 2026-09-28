@@ -152,11 +152,12 @@ inline in chat and as site pages from `{data}/ui/` — no raw HTML anywhere in t
 `Table`/`Chart` can `bind` to a named server-side query, so a page reads live data instead of a copy.
 
 **The agent's jail is guarded by checks, not by distance**: the scope guard is `{data}/state/agent/scope-guard.mjs`,
-app state regenerated every boot beside the generated `--settings` (which carry `disableAllHooks:false`). `state/` is
+app state regenerated every boot beside the generated `--settings` (which carry `disableAllHooks:false`, and
+`disableSkillShellExecution:true` — a skill's `` !`cmd` `` runs while the CLI expands it, never through the guard). `state/` is
 still inside the data folder, carved out of the guard's CHECKS: Edit/Write/Read cannot reach it (solid), a Bash token
 naming it is refused and nested shells are denied (both best effort). A constructed token or nested shell that slips
 past can still overwrite the guard until the next boot, or read `state/` in an execute run with Git Bash — the
-declared "needs an OS sandbox" residual (`.claude/rules/dev-conventions.md`, the three legs). The app's runs read none of the household's own CLI config — their interactive claude saves approvals in the local settings file — because every run gets `--setting-sources project --strict-mcp-config` (`ClaudeCliRuntime.IsolationArgs`); the project scope stays, since it loads the knowledge base, so a project `.claude/settings.json` still applies (the stated leak), and a run that creates or changes one of the three is undone (`ProjectConfigBackstop`). **Two app-managed files in `{data}/.claude/`**
+declared "needs an OS sandbox" residual (`.claude/rules/dev-conventions.md`, the three legs). The app's runs read none of the household's own CLI config — their interactive claude saves approvals in the local settings file — because every run gets `--setting-sources project --strict-mcp-config` (`ClaudeCliRuntime.IsolationArgs`); the project scope stays, since it loads the knowledge base, so a project `.claude/settings.json` still applies — its hooks and permission rules (the stated leak); its `apiKeyHelper` and off-subscription `env` names are blanked by the app's own `--settings`, which outrank it — and a run that creates or changes one of the three is undone (`ProjectConfigBackstop`). **Two app-managed files in `{data}/.claude/`**
 are version-gated and re-issued (never editable knowledge-base content): `ui-spec.md` (the component vocabulary)
 and `tool-spec.md` (how to author its own capability — including what the sandbox refuses, parsed from the shipped
 `cap-guard.mjs` so it cannot drift). Anything that replaces a record subtree — notably backup import — must
@@ -178,7 +179,9 @@ re-issue them (and it deletes any old guard an archive restores into `.claude/ho
   `local/sensitive-patterns.txt`). History was reset on 2026-07-13 to remove exactly such leaks.
 - **User data lives ONLY in `local/`** (own private git repo). Never move it back into this repo.
 - **LLM via the authenticated `claude` CLI only — never an API key**, and the app enforces it at spawn: no claude it
-  starts inherits an API key, a provider switch or another endpoint (`ChildEnvironment.OffSubscriptionVariables`). The CLI is a *provisioned resource*
+  starts inherits an API key, a provider switch or another endpoint (`ChildEnvironment.OffSubscriptionVariables`); the
+  user scope's settings are not read, and in the data folder the project file's `apiKeyHelper`/`env` are blanked by the
+  app's `--settings` (the managed scope, an administrator's, outranks them — a stated residual). The CLI is a *provisioned resource*
   (资源 panel → `{data}/state/resources/claude`), not a machine dependency we assume; `ClaudeCliRuntime`
   resolves + probes it. **The app STARTS the browser login** (资源 → the CLI's row → 登录, spawning the
   RESOLVED binary — the old advice "run `claude auth login` in a terminal" was unactionable for a copy we
