@@ -9331,3 +9331,222 @@ node devtools/scripts/semantic-bench.mjs --fixture=long --arms=formula,sem,sem2,
   ONNX Runtime 1.30.0; Lyntai 3.5.1. Before this design, processes other than this run's held ~16% of the machine (an
   `ssh-agent` ~4.5% of it).
 - **Estimated time**: about 15 minutes short and 30 long.
+
+## Run 15 — 语义's embedder on a CPU: 内置 (in-process ONNX EmbeddingGemma) against llama.cpp's GGUF (2026-09-28, Lyntai 3.5.1, llama.cpp b10549, ONNX Runtime 1.30.0; claude never called — every server on the stub)
+
+**Commands**, exactly as registered in `25fdd0f`; the bench is `d436877`, which is both runs' app HEAD. The server was
+built before the design and not rebuilt. The design names its parent as `7c60892`; its parent is `204ad36`, a
+release-notes commit that landed between, and `src/` is identical in the two. The scratch driver
+`devtools/_run15/drive.sh` ran both, each exiting 0 on its first attempt:
+
+| run | from – to (UTC) | results |
+|---|---|---|
+| short | 19:09:49 – 19:20:50 | `results-2026-09-28T190949.552Z.json` |
+| long | 19:20:53 – 19:35:56 | `results-2026-09-28T192053.974Z.json` |
+
+- **The plumbing smoke** ran first, as registered (`--n=4` on both fixtures, 19:00–19:09). It ran as written, so no
+  amendment was needed. Its numbers inform nothing.
+- **Evidence** is under `devtools/_run15/<short|long>/`: results, rows, each llama.cpp arm's router log and preset, and
+  every arm's logs. The load record is `devtools/_run15/load.log`, the checker's output `devtools/_run15/guards.txt`.
+- **Run 14's saved results** re-analyse byte-identically under `d436877` (all six saved semantic-bench results).
+
+**Every guard held in both runs** (scratch `devtools/_run15/guards15.mjs`):
+
+| guard | short | long |
+|---|---|---|
+| 1. instrument | fixture `9680443e…` | `1f48f1be…`, the generator's bytes |
+| (1, reported) | `formula`'s rows identical to Run 14's short `formula` rows: 0 of 240 differ in position or page | — |
+| 2. A/A | `sem2` vs `sem` identical, 0 of 240 rows differ | the same |
+| 3. startup | `sem`, `sem2`, `cpu-sem` read back `llama-cpp · embeddinggemma-300M-Q8_0`; `semb` `builtin · embeddinggemma-300m-onnx`; `formula` off. No knob and no `[measurement]` line in any arm; no migration warning; 0 claude-cli calls; every arm's log INFO only (0 WARN, 0 ERROR). `semb` logged its load (2,102 ms) and has no `LlamaServerRuntime` line at all, nor has `formula` | the same; `semb`'s load 1,878 ms |
+| 4. writes and recalls | 60 writes ok and 240 recalls, 0 error rows, every arm | the same |
+| 5. vectors | every 语义 arm 60/60, 0 refused lines | the same |
+| 6. routers | each llama.cpp arm's router spawned the embedder once, 0 error lines, and proxied 2 requests at startup, then exactly 60 during the writes and 240 during the recalls; `cpu-sem`'s child ran `--device none --n-gpu-layers 0`, `sem`'s and `sem2`'s `--n-gpu-layers 99` and no `--device`; `--embeddings`, batch and ubatch 2,048; 16 threads; largest task 40 tokens, 0 truncated | the same; largest task 883 tokens, 0 truncated |
+| 7. one build | `ff5a2dd214a97c7d` / `c34fa2dd2f047ead` / `44becbca176d7eb7` in both results files and after the last run | |
+| 8. the 内置 files | match `ResourceProvisioner`'s pins | |
+
+**The load clause** was read on each fixture. The median CPU share of processes this run did not start, over each arm's
+recall pass:
+
+| fixture | during `semb` | during `cpu-sem` | apart | the latency clause |
+|---|---|---|---|---|
+| short | 25.0% (3 samples) | 29.1% (3 samples) | 4.1 points | read |
+| long | 20.0% (4 samples) | 30.9% (5 samples) | **10.9 points** | **not read** (limit 5) |
+
+- The background was busier than before the design: 17–40% of the machine across the run, median 24%. An `ssh-agent`
+  held ~3–4.5% throughout.
+- Nothing in it identifies what added ~10 points during `cpu-sem`'s long recall pass.
+
+### The headline
+
+Each arm wrote the fixture from an empty data folder, then asked the 240 questions, alone on the machine. 判断 was off, and
+`recall_facts` asked for a page of 8. Times are the bench's per call: the MCP call, which embeds the query once.
+
+| fixture | arm | top-1 / found@8 | recall median (p90), ms | write median (p90), ms |
+|---|---|---|---|---|
+| short | `formula` (语义 off) | 79 / 124 | 246 (274) | 17 (23) |
+| short | llama.cpp, GPU (`sem`) | 120 / 220 | 280 (313) | 48.5 (68) |
+| short | its A/A twin (`sem2`) | 120 / 220 | 294 (781) | 43 (67) |
+| short | llama.cpp, CPU (`cpu-sem`) | 121 / 218 | 344 (492) | 88.5 (133) |
+| short | **内置 (`semb`)** | **119 / 223** | **347.5 (427)** | **122.5 (199)** |
+| long | `formula` | 68 / 104 | 258 (286) | 19.5 (25) |
+| long | llama.cpp, GPU (`sem`) | 83 / 154 | 291.5 (341) | 115 (137) |
+| long | `sem2` | 83 / 154 | 296 (324) | 117.5 (148) |
+| long | llama.cpp, CPU (`cpu-sem`) | 84 / 155 | 390 (627) | 1,641 (2,336) |
+| long | **内置 (`semb`)** | **59 / 125** | **390 (485)** | **2,304.5 (2,920)** |
+
+**Paired, on `all`** (b = the right-hand arm's hit & the left-hand arm's miss, c = the reverse; 240 pairs each):
+
+| fixture | pair | found@8 | top-1 |
+|---|---|---|---|
+| short | **内置 vs llama.cpp CPU** | **2/7, p = 0.180, +2.1pp [−0.5, +4.6]** | 4/2, p = 0.688, −0.8pp [−3.0, +1.3], equivalent |
+| short | 内置 vs llama.cpp GPU | 2/5, p = 0.453, +1.3pp [−1.0, +3.5] | 4/3, p = 1.000, −0.4pp [−2.7, +1.9], equivalent |
+| short | llama.cpp CPU vs GPU | 2/0, p = 0.500, −0.8pp [−2.2, +0.6], equivalent | 0/1, p = 1.000, +0.4pp [−0.7, +1.6], equivalent |
+| long | **内置 vs llama.cpp CPU** | **33/3, p < 0.001, −12.5pp [−17.1, −7.7]** | 31/6, p < 0.001, −10.4pp [−15.2, −5.5] |
+| long | 内置 vs llama.cpp GPU | 32/3, p < 0.001, −12.1pp [−16.6, −7.4] | 31/7, p < 0.001, −10.0pp [−14.8, −5.0] |
+| long | llama.cpp CPU vs GPU | 0/1, p = 1.000, +0.4pp [−0.7, +1.6], equivalent | 0/1, p = 1.000, +0.4pp, equivalent |
+
+- **Against `formula`** (语义 off), found@8: every 语义 arm is significantly better on short facts (+39.2 to +41.3pp). On
+  long notes 内置 gains +8.8pp (11/32, p = 0.002), llama.cpp +20.8pp (GPU) and +21.3pp (CPU). Top-1 on long notes:
+  llama.cpp +6.3pp and +6.7pp (p = 0.017, 0.011); 内置 −3.8pp (23/14, p = 0.188).
+- **Rows whose target position or whole page differ:**
+
+  | pair | short | long |
+  |---|---|---|
+  | `sem2` vs `sem` | 0 of 240 | 0 |
+  | `cpu-sem` vs `sem` | 84 (the position on 6) | 121 (10) |
+  | `semb` vs `cpu-sem` | 238 (44) | 240 (90) |
+
+  llama.cpp on two devices moves the page far less than the change of implementation does.
+- **Time, 内置 against llama.cpp on the CPU, per paired recall:**
+  - short: 内置 slower on 126, faster on 112, tied 2 (sign test p = 0.399);
+  - long: slower on 118, faster on 122 (p = 0.847);
+  - 内置 against the GPU: slower on 227 and 222 of 240.
+
+**Per question set, found@8** (`formula` / `sem` / `cpu-sem` / `semb`; top-1 in brackets), descriptive:
+
+| set | short | long |
+|---|---|---|
+| same | 55 / 60 / 60 / 60 (41 / 51 / 51 / 51) | 49 / 56 / 56 / 52 (35 / 40 / 40 / 31) |
+| cross | 4 / 40 / 38 / 43 (1 / 1 / 1 / 1) | 3 / 7 / 7 / 5 (1 / 3 / 3 / 0) |
+| third | 17 / 60 / 60 / 60 (1 / 21 / 21 / 19) | 10 / 44 / 45 / 28 (0 / 9 / 9 / 6) |
+| mixed | 48 / 60 / 60 / 60 (36 / 47 / 48 / 48) | 42 / 47 / 47 / 40 (32 / 31 / 32 / 22) |
+
+- **Long, 内置 against llama.cpp CPU, per set** (found@8 b/c): same 5/1 (p = 0.219), cross 3/1 (0.625), **third 18/1**
+  (p < 0.001), mixed 7/0 (0.016). Short: cross 2/7 (0.180); every other set 0/0.
+- **Long, by where the answer sits** (found@8, the same four arms; 内置 vs CPU b/c):
+
+  | position | found@8 | b/c |
+  |---|---|---|
+  | start | 21 / 41 / 41 / 35 | 7/1 (p = 0.070) |
+  | middle | 24 / 27 / 27 / 28 | 1/2 |
+  | end | 29 / 44 / 44 / 30 | **14/0** (p < 0.001) |
+  | beyond 1,000 characters | 30 / 42 / 43 / 32 | **11/0** (p < 0.001) |
+
+- These are 16 uncorrected tests per fixture, reported and deciding nothing.
+
+### The decision rule, applied
+
+- **The accuracy clause does NOT hold.**
+  - short: 内置 is not significantly worse than llama.cpp on the CPU (2/7, p = 0.180; the lean is its way, not
+    significantly);
+  - **long: it IS significantly worse** — found@8 125 against 155 of 240 (33/3, p < 0.001, −12.5pp [−17.1, −7.7]).
+- **The latency clause.**
+  - short: NOT HIGHER by the registered reading. The medians are 347.5 against 344 ms, but the sign test finds no
+    significant difference (126 slower, 112 faster, p = 0.399).
+    - **The two readings differ here**, as the design anticipated: the plain medians alone read 3.5 ms higher. The
+      registered reading decides.
+  - long: **not read** — the load clause failed (10.9 points apart). For the record: both medians are 390 ms, and the
+    sign test finds 118 slower against 122 faster (p = 0.847).
+- **The rule does NOT hold: the order stays.** 语义's suggestion keeps the llama.cpp GGUF first for every GPU answer,
+  `NotAsked` and `NoGpu` included. It fails on the long fixture's accuracy clause alone, whatever the latency would have
+  read there.
+- **Against the GPU arm (the reference):**
+  - short: 内置 is not significantly different (found@8 2/5, p = 0.453; top-1 equivalent, found@8 not, [−1.0, +3.5]);
+  - long: it is significantly worse (32/3, p < 0.001).
+  - **Flagged**, as registered. It changes nothing: a GPU machine keeps the GGUF first by the rule.
+- **Nothing in the product changes from the verdict.** The embedder rows' notes gain these figures, since they are new
+  information for a household (the next commits).
+
+### Where 内置 loses — descriptive, outside the rule, read after the verdict
+
+- **The loss is on the Chinese long notes.** By the language of the question's target note, found@8, 内置 against
+  llama.cpp on the CPU:
+
+  | notes | tokens (llama.cpp's count) | questions | 内置 | CPU | b/c |
+  |---|---|---|---|---|---|
+  | zh | 696–883 | 160 | 68 | 96 | **29/1** |
+  | en | 186–261 | 64 | 52 | 55 | 4/1 |
+  | ja | 567–699 | 16 | 5 | 4 | 0/1 |
+
+  - On the short fixture's Chinese facts it runs the other way: 145 against 140 (2/7).
+  - The `third` set's 18/1 is Japanese questions about Chinese notes, 17 of the 18.
+- **Not Run 10's dynamic.**
+  - Every one of the 33 losses has a full page of 8.
+  - They split 17/16 between the first and second half of the run.
+  - Their pages hold 1.94 Japanese notes on average in 内置 and 1.82 in llama.cpp.
+- **The two implementations' vectors of the same text differ about as much at every length.** The cosine between the
+  vector 内置 stored for a fact and the one llama.cpp on the CPU stored for the same text:
+  - short facts: median 0.818 (0.733–0.874);
+  - long notes: 0.847 (0.820–0.865), with no trend by length or language (en 0.857, ja 0.832, zh 0.847);
+  - llama.cpp's own CPU against GPU: 0.9995–0.9997.
+  - So nothing here breaks with length: this is the q4 export read against the Q8_0 GGUF, the gap
+    `OnnxEmbedder`'s own record already describes (0.67–0.84 against another quantisation).
+- **内置's vectors of the long Chinese notes sit closer together.** Their mean pairwise cosine is 0.931 in 内置 against 0.887
+  in llama.cpp. For the English notes it is 0.727 against 0.679, and for the Japanese 0.945 against 0.922. On short facts
+  it is 0.364 against 0.311 (zh).
+  - The long notes share the fixture's household filler, so each note's own fact is a small part of its vector. A space
+    in which the notes lie closer together leaves a query less room to tell them apart.
+  - That is consistent with the loss concentrating where the notes are longest and most alike (zh). It is not a
+    demonstrated cause: no query vector was compared.
+- **What this says about real notes is not measured.** The fixture's filler makes its long notes unusually alike (Run 14
+  found the same of its over-window notes).
+
+### Time, memory, load
+
+- **Per recall, on this laptop's CPU, 内置 and llama.cpp are about the same**:
+  - short: 347.5 against 344 ms, the paired difference not significant;
+  - long: 390 against 390 ms, not read;
+  - on the GPU, llama.cpp is faster: 280 and 291.5 ms.
+  - With 60 facts a recall without 语义 (`formula`) takes ~250 ms. A 语义 recall takes ~35 ms more on the GPU, and ~100 ms
+    (short) to ~130 ms (long) more on the CPU, in either implementation.
+- **Writes are slower in 内置:**
+  - short facts: 122.5 against 88.5 ms (GPU 48.5);
+  - long notes: 2.3 s against 1.6 s (GPU 115 ms).
+  - The write embeds the whole note, and on long notes that is most of its cost.
+- **内置 uses more of the CPU while it works.** The share of the machine this run's own processes held during the recall
+  passes:
+  - short: 38.4% for 内置 against 27.9% for llama.cpp;
+  - long: 44.1% against 25.4%.
+- **Memory** (Windows private bytes, working set in brackets):
+  - 内置, the app's server process:
+
+    | fixture | after startup (the model loads there, 2.1 s and 1.9 s) | after the writes | after the recalls |
+    |---|---|---|---|
+    | short | 231 MB (294) | 279 MB (372) | 252 MB (356) |
+    | long | 249 MB (306) | 367 MB (455) | 343 MB (438) |
+
+  - llama.cpp's arms: the server holds 102–119 MB after the recalls, and llama.cpp's child holds the model beside it:
+    - on the CPU, 357 MB (short) and 1,204 MB (long);
+    - on the GPU, 758 MB and 1,631 MB.
+- **The machine**: Intel Core Ultra 9 185H (16 cores, 22 logical processors), RTX 4080 Laptop GPU; llama.cpp's child ran 16
+  threads, and ONNX Runtime its default for the session the app creates.
+
+### What it says
+
+- **On short facts 内置 is as good an embedder as llama.cpp's GGUF.** It is not significantly different on found@8, and
+  leans its way; top-1 is equivalent.
+- **On long notes it is significantly worse**: 125 against 155 of 240 on found@8, 59 against 84 on top-1, the loss on the
+  Chinese notes.
+- **Per recall it is as fast as llama.cpp on this laptop's CPU**, needs no llama.cpp, and holds less memory than llama.cpp's
+  child on the CPU (0.25–0.37 GB in the app's process, against 0.36–1.2 GB beside a ~0.1 GB server).
+- **By the owner's rule, 语义 keeps the GGUF first** where there is no GPU as well: the long notes decide it.
+
+### What it does NOT say
+
+- **Anything about another CPU.** One laptop, with 17–40% of it busy with other work.
+- **Latency on long notes.** The load clause left it unread.
+- **Anything about real household notes.** The fixture's long notes share one pool of filler; how much of 内置's loss
+  survives varied real notes is not measured.
+- **Why.** The quantisation (q4 against Q8_0), the tokenizer and the kernels were not separated. A q8 or fp32 ONNX export
+  was not run.
+- **Anything about notes past the window** (Run 14's embed fixture), mixed long and short notes, or 判断 on.
