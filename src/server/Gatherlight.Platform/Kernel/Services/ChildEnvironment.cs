@@ -263,12 +263,34 @@ public static class ChildEnvironment
     /// <summary>The value of <paramref name="name"/> as the app was LAUNCHED with it: the process environment while the
     /// variable is there, else what <see cref="ForgetLauncherContext"/> remembered when it removed one of
     /// <see cref="AppSecretVariables"/>. For the app's own readers of its own settings (the access token, the TLS
-    /// password, the settings panel's env-override list) — never for a child, which is why the value is not put back.</summary>
+    /// password, the settings panel's env-override list) — never for a child, which is why the value is not put back.
+    /// The one child that gets it back is the app itself, relaunched (<see cref="ForRelaunch"/>).</summary>
     public static string? Launched(string name)
     {
         var live = Environment.GetEnvironmentVariable(name);
         if (live is not null) return live;
         lock (RememberedGate) return Remembered.TryGetValue(name, out var v) ? v : null;
+    }
+
+    /// <summary>A start of the APP ITSELF, relaunched — the desktop host restarting, or handing over to the native
+    /// launcher to apply an update. The new process inherits THIS one's environment, which
+    /// <see cref="ForgetLauncherContext"/> has already cleaned, so a relaunch silently lost what was given only by
+    /// environment: the remote-access token (a LAN or WAN household locked out of its own install until someone set it
+    /// again) and the TLS certificate's password. This puts back what the floor remembered — the
+    /// <see cref="AppSecretVariables"/>, and only those: the launcher's repository and Claude Code session, and what would
+    /// take the CLI off its subscription, stay forgotten, and the new process forgets its own at startup exactly as this
+    /// one did. The one exception to "never for a child", because this child is the app.
+    /// <para>A CREATED process, not a shell-executed one: only CreateProcess takes an environment block (with
+    /// <c>UseShellExecute = true</c>, <see cref="ProcessStartInfo.Environment"/> is ignored). Both relaunch sites start an
+    /// .exe by path, so nothing a shell adds is lost.</para></summary>
+    public static ProcessStartInfo ForRelaunch(string fileName, string arguments = "", string? workingDirectory = null)
+    {
+        var psi = new ProcessStartInfo(fileName, arguments) { UseShellExecute = false };
+        if (workingDirectory is not null) psi.WorkingDirectory = workingDirectory;
+        lock (RememberedGate)
+            foreach (var (key, value) in Remembered)
+                if (!psi.Environment.ContainsKey(key)) psi.Environment[key] = value;
+        return psi;
     }
 
     // ---- 2 · git ---------------------------------------------------------------------------------------------------

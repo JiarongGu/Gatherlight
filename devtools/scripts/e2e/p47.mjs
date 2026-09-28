@@ -54,6 +54,11 @@ try {
 
   // --- 1. EVERY registered capability reaches the agent ---------------------------------------
   const registry = ((await j('/api/tools')).body?.tools ?? []).map((t) => t.name);
+  // fs_move / fs_delete are MCP-ONLY (round-6 review, I2): they mutate files only inside an execute run, which the
+  // HTTP surface never is — so they are absent from /api/tools by design and must be the ONLY such tools. Declared
+  // here by name, so a tool that silently drops off the HTTP list still fails the rows below.
+  const MCP_ONLY = ['fs_move', 'fs_delete'];
+  const known = (n) => registry.includes(n) || MCP_ONLY.includes(n);
   ok('the registry exposes tools', registry.length > 0, String(registry.length));
 
   const listed = await rpc(ch, 'tools/list');
@@ -63,7 +68,9 @@ try {
   // The comparison that matters: set equality, not "both non-empty". A tool the console offers but
   // the agent cannot see is the failure this suite exists for.
   const missingFromAgent = registry.filter((n) => !channelNames.includes(n));
-  const extraOnAgent = channelNames.filter((n) => !registry.includes(n));
+  const extraOnAgent = channelNames.filter((n) => !known(n));
+  ok('the MCP-only file tools reach the agent', MCP_ONLY.every((n) => channelNames.includes(n)),
+    `channel lacks: ${MCP_ONLY.filter((n) => !channelNames.includes(n)).join(', ')}`);
   ok(`all ${registry.length} registered capabilities are visible to the agent`,
     missingFromAgent.length === 0, `missing: ${missingFromAgent.join(', ')}`);
   ok('and the agent sees nothing the registry does not expose',
@@ -125,7 +132,7 @@ try {
 
   const proxied = await until(async () => {
     const names = (await rpc(ch, 'tools/list')).body?.result?.tools?.map((t) => t.name) ?? [];
-    return names.some((n) => !registry.includes(n)) ? names : null;
+    return names.some((n) => !known(n)) ? names : null;
   }, 30000).catch(() => null);
   ok('the external server\'s tools reach the agent channel too', !!proxied,
     JSON.stringify(proxied ?? []).slice(0, 160));
@@ -134,7 +141,7 @@ try {
   // tells it to raise MCP_ADD and a human approves at the gate), so what matters is that the tools
   // it gained can actually be CALLED — a proxied tool that lists but refuses at invocation would
   // look identical in the console and leave the agent reporting a tool it cannot use.
-  const proxiedNames = (proxied ?? []).filter((n) => !registry.includes(n));
+  const proxiedNames = (proxied ?? []).filter((n) => !known(n));
   ok('the added server contributed named tools', proxiedNames.length > 0, JSON.stringify(proxiedNames));
   const proxiedUnreachable = [];
   for (const name of proxiedNames) {
@@ -173,6 +180,21 @@ try {
   // sonnet) — the other half of the reconcile case below, which binds the TARGET to a different model.
   const sourceBind = await post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'sonnet' });
   ok('(fixture) the source\'s judge is bound before export', sourceBind.status === 200, JSON.stringify(sourceBind.body));
+
+  // C1 (round-6 design change): the claude CLI's own project config in the data folder is the HOUSEHOLD's — their
+  // interactive claude saves approved permissions in settings.local.json — so it TRAVELS in their backup like the rest of
+  // .claude/. The app's runs do not read the local scope at all (--setting-sources project --strict-mcp-config), and the
+  // project settings.json is the household's own either way, restored or written in place; only the agent may not write
+  // it. One is COMMITTED in the source (a household may commit one on purpose; the data repo ignores all three, so only a
+  // forced add tracks one) and one is untracked. Obviously fake content.
+  const sourceProjectSettings = '{"_e2e":"household-project-settings-in-source-backup","hooks":{}}\n';
+  const sourceLocalSettings = '{"_e2e":"household-local-settings-in-source-backup","permissions":{"allow":["Bash(ls:*)"]}}\n';
+  fs.writeFileSync(path.join(dataDir, '.claude', 'settings.json'), sourceProjectSettings);
+  git(dataDir, '-c', 'user.name=p47-fixture', '-c', 'user.email=p47@example.invalid',
+    'add', '-f', '--', '.claude/settings.json');
+  git(dataDir, '-c', 'user.name=p47-fixture', '-c', 'user.email=p47@example.invalid',
+    'commit', '-q', '-m', 'fixture: a committed project settings file', '--', '.claude/settings.json');
+  fs.writeFileSync(path.join(dataDir, '.claude', 'settings.local.json'), sourceLocalSettings);
 
   // PACK the source repo before exporting. Without this the fixture's refs stay loose files, they ride
   // into the zip, and the restored repo works whether or not anything repairs it — the assertion below
@@ -236,6 +258,18 @@ try {
     readMemKey() === undefined, `llm.route.memory=${JSON.stringify(readMemKey())}`);
   ok('…and a leftover pre-route llm.model.memory with it', readKey('llm.model.memory') === undefined,
     `llm.model.memory=${JSON.stringify(readKey('llm.model.memory'))}`);
+
+  // C1: the household's own CLI config travels — both files, byte for byte, the committed one still tracked.
+  const restoredText = (rel) => { try { return fs.readFileSync(path.join(restoreDir, rel), 'utf8'); } catch { return null; } };
+  ok('THE POINT (C1): the household\'s .claude/settings.json and settings.local.json come back from their backup as they were',
+    restoredText('.claude/settings.json') === sourceProjectSettings && restoredText('.claude/settings.local.json') === sourceLocalSettings,
+    JSON.stringify({ settings: restoredText('.claude/settings.json'), local: restoredText('.claude/settings.local.json') }));
+  const trackedInRestore = (() => { try { git(restoreDir, 'ls-files', '--error-unmatch', '--', '.claude/settings.json'); return true; } catch { return false; } })();
+  ok('C1: …and the one the archive\'s history tracked is still tracked after the restore commit', trackedInRestore);
+  const quarantineDir = path.join(restoreDir, 'state', 'quarantine');
+  ok('C1: nothing of theirs was moved into state/quarantine by the import',
+    !fs.existsSync(quarantineDir) || fs.readdirSync(quarantineDir).length === 0,
+    (() => { try { return fs.readdirSync(quarantineDir).join(', '); } catch { return ''; } })());
 
   // Named for the page the AGENT wrote, never the template's welcome.json — the seeder re-creates
   // that one, so asserting on it would pass with `ui/` left out of the backup entirely.
@@ -326,9 +360,22 @@ try {
   ok('an older backup imports', oldImport.ok, String(oldImport.status));
 
   ok('the household content in it was restored', fs.existsSync(path.join(restoreDir, '.claude', 'keep.md')));
+  // The guard file lives under state/agent/, which no archive carries, so "was the guard FILE rolled back" can no
+  // longer fail (the round-6 review found this row asserting exactly that). What a restore could still roll back is
+  // WHICH guard the agent runs: the generated settings name the hook's script by absolute path, and pointing them at
+  // .claude/hooks/ again — the old location, which the archive DOES restore — would run the ancient guard below.
   const guardAfter = guardVersion();
-  ok('THE POINT: the scope guard was NOT rolled back by the restore', guardAfter >= currentGuard,
+  ok('(sanity) the state/agent guard is still the version the app ships', guardAfter >= currentGuard,
     `guard is v${guardAfter}, app ships v${currentGuard}`);
+  const hookCommands = ['settings.chat.json', 'settings.chat.readonly.json'].map((f) => {
+    try {
+      const settings = JSON.parse(fs.readFileSync(path.join(restoreDir, 'state', f), 'utf8'));
+      return (settings.hooks?.PreToolUse ?? []).flatMap((h) => (h.hooks ?? []).map((x) => String(x.command ?? '')));
+    } catch { return []; }
+  }).flat();
+  ok('THE POINT: after the restore the agent still runs the state/agent guard, never the archive\'s .claude/hooks copy',
+    hookCommands.length >= 2 && hookCommands.every((c) => /state\/agent\/scope-guard\.mjs/.test(c.replace(/\\/g, '/')) && !/\.claude\/hooks/.test(c.replace(/\\/g, '/'))),
+    JSON.stringify(hookCommands).slice(0, 240));
   ok('THE POINT: the ancient guard the archive restored to .claude/hooks/ was DELETED (not left in the jail)',
     !fs.existsSync(legacyGuardPath), `legacy guard still present at ${legacyGuardPath}`);
   ok('the UI contract survives the restore', fs.existsSync(specPath));

@@ -378,12 +378,13 @@ public sealed class ChatEnvironmentService
          *   BASH                                       -> not: git-history / delete, network egress,
          *                                                inline code-eval, launching another shell, fs crawl,
          *                                                or any path outside the folder / into state/ / at a
-         *                                                PROTECTED app-managed path (best-effort token scan)
+         *                                                PROTECTED app-managed path or a folder holding one
+         *                                                (best-effort token scan)
          *
          * Kept identical to guard/system-scope-guard.mjs except WRITE_DIRS + WRITE_EXTS + PROTECTED +
          * BASH_PROTECTED + READ_DENY; e2e-p24 runs both. GUARD_VERSION lets the server re-issue newer logic.
          */
-        // GUARD_VERSION: 10
+        // GUARD_VERSION: 11
         import path from 'node:path';
 
         const WRITE_DIRS = __WRITE_DIRS__;
@@ -534,6 +535,11 @@ public sealed class ChatEnvironmentService
         }
         const inside = (p, root) => relTo(p, root) !== null;
         const underAny = (rel, dirs) => dirs.some((d) => d === '' || rel === d || rel.startsWith(d + '/'));
+        // A path that CONTAINS a protected entry (the entry lies under it): moving `.claude` out, rewriting settings.json
+        // and moving it back was an escape one level up from every "under" test. The root ('') is exempt — it contains
+        // everything, `ls .` must keep working, and the destructive root operations are refused elsewhere (`rm -r` by
+        // HISTORY, `..` as outside the folder).
+        const containsAny = (rel, dirs) => rel !== '' && dirs.some((d) => d !== '' && d.startsWith(rel + '/'));
         // A path segment Windows would resolve to something a string compare cannot see: an 8.3 short name
         // (`STATE~1`, `SETTIN~1.JSO` — the long name it abbreviates may be PROTECTED or state/), an alternate
         // data stream (`x.md:evil`, a colon past the drive letter), or a device name (CON, NUL, COM1…). Refused
@@ -551,7 +557,7 @@ public sealed class ChatEnvironmentService
         }
 
         // Best-effort: a refusal reason when a path-like Bash token points outside the jail, into state/, or
-        // at a PROTECTED app-managed path — else null. DEFENCE IN DEPTH, leg (2) in the header: a token scan is
+        // at a PROTECTED app-managed path or a folder holding one — else null. DEFENCE IN DEPTH, leg (2) in the header: a token scan is
         // fooled by a variable, a $(...) or a constructed string, and such a token can write this guard's file.
         // The `` ` `` splitter also catches a token inside a backtick substitution.
         function bashDenyReason(command, root) {
@@ -582,6 +588,7 @@ public sealed class ChatEnvironmentService
             if (rel === null) return 'a path outside the data folder';   // absolute-outside or `..`-escape
             if (underAny(rel, READ_DENY)) return 'state/ (app state — the access token, the TLS key, the database)';
             if (underAny(rel, BASH_PROTECTED)) return 'a protected, app-managed path (the guard / settings / .mcp.json / site.json / .git)';
+            if (containsAny(rel, BASH_PROTECTED)) return 'a folder holding protected, app-managed files (the guard / settings) — move or change the files inside it one by one';
           }
           return null;
         }

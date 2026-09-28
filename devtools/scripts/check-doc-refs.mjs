@@ -85,6 +85,8 @@ const ALLOWED_PATHS = new Map([
     'the planner scope guard — app state in the DATA folder, generated every boot'],
   ['.claude/rules/dev-conventions.md::.claude/hooks/scope-guard.mjs',
     'where the guard USED to live in the DATA folder — named to say startup now deletes it'],
+  ['.claude/rules/dev-conventions.md::.claude/settings.local.json',
+    'a claude CLI project file in the DATA folder — the household\'s own; named to say the app\'s runs do not read it (ClaudeCliRuntime.IsolationArgs)'],
   ['docs/DEPLOYMENT.md::state/settings.json', 'lives in the DATA folder'],
   ['docs/STORAGE_NOTES.md::Modules/Embedding/Services/SqliteVecLoader.cs',
     "VIDORA's file — this doc is a sibling-project review"],

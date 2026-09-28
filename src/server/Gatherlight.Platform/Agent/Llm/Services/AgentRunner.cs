@@ -27,12 +27,14 @@ public sealed class AgentRunner : IAgentRunner
     private readonly IAgentSession _session;
     private readonly ILogger<AgentRunner> _log;
     private readonly IAgentRunScope _runScope;
+    private readonly IProjectConfigBackstop _configBackstop;
 
-    public AgentRunner(IAgentSession session, ILogger<AgentRunner> log, IAgentRunScope runScope)
+    public AgentRunner(IAgentSession session, ILogger<AgentRunner> log, IAgentRunScope runScope, IProjectConfigBackstop configBackstop)
     {
         _session = session;
         _log = log;
         _runScope = runScope;
+        _configBackstop = configBackstop;
     }
 
     public async Task<AgentSessionResult> RunAsync(ClaudeAgentOptions options, string label,
@@ -56,6 +58,14 @@ public sealed class AgentRunner : IAgentRunner
             !string.IsNullOrEmpty(options.SettingsPath),
             !string.IsNullOrEmpty(options.ResumeToken), options.AllowedTools.Count, options.Prompt.Length);
 
+        // The run reads none of the household's own CLI config (ClaudeCliRuntime.IsolationArgs), but the CLI's project
+        // files in the data folder are still the household's — their interactive claude reads all three — and a hook
+        // planted in .claude/settings.json would run in the app's next run too. So a run in the data folder is
+        // snapshotted, and whatever it CREATED or CHANGED among them is undone when it ends, however it ends; a file it
+        // left alone is never touched (ProjectConfigBackstop). The undo runs before the diff gate's validation pass (an
+        // agent run in the data folder too), a Reject or the next run can meet what this one left.
+        var configSnapshot = _configBackstop.Take(options.WorkingDirectory);
+
         AgentSessionResult result;
         try
         {
@@ -68,7 +78,8 @@ public sealed class AgentRunner : IAgentRunner
             //
             // The run scope is entered for the WHOLE run keyed on its tool policy, so the scoped MCP file tools
             // (fs_move/fs_delete) — called over the loopback endpoint on another request — read one honest answer
-            // to "may this run write". Safe as a shared flag because the agent lease admits one run at a time.
+            // to "may this run write". It COUNTS write runs rather than holding one policy: runs that take no agent
+            // lease (extract over HTTP, the playground, the migrator) overlap an execute run (AgentRunScope).
             using var _scope = _runScope.Enter(options.ToolPolicy);
             result = await _session.RunAsync(options, onEvent: e => Map(e, emit, tracker, options), ct);
         }
@@ -83,6 +94,10 @@ public sealed class AgentRunner : IAgentRunner
             _log.LogError(ex, "[{Label}] agent FAILED after {Ms}ms: {Msg}", label, sw.ElapsedMilliseconds, ex.Message);
             throw;
         }
+        finally
+        {
+            if (configSnapshot is not null) RestoreConfig(configSnapshot, label, emit);
+        }
 
         if (result.IsError || string.IsNullOrEmpty(result.FinalText))
             _log.LogWarning("[{Label}] agent produced no usable output: isError={Err} subtype={Sub} in {Ms}ms · diag={Diag}",
@@ -92,6 +107,26 @@ public sealed class AgentRunner : IAgentRunner
                 label, result.FinalText.Length, result.SessionId ?? "(none)", result.Subtype ?? "(none)", sw.ElapsedMilliseconds);
 
         return result;
+    }
+
+    // Takes no token on purpose: the undo after a stopped run is exactly the one that must happen. It never throws
+    // (ProjectConfigBackstop logs its own failures and a Warning per file), and says in the run's own stream what it undid.
+    private void RestoreConfig(ProjectConfigSnapshot snapshot, string label, Action<AgentEvent> emit)
+    {
+        IReadOnlyList<string> undone;
+        try { undone = _configBackstop.Restore(snapshot); }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "[{Label}] project-config backstop failed", label);
+            return;
+        }
+        if (undone.Count == 0) return;
+        emit(new AgentEvent
+        {
+            Kind = "notice",
+            Text = $"这次运行改动了 {string.Join("、", undone)},已恢复成运行前的样子(运行写下的内容另存在 state/quarantine/ 下):"
+                + "这些是 claude 自己会加载的配置文件,助手不允许写。",
+        });
     }
 
     // Bridge one Lyntai stream event to app-owned concerns: SSE wire + edit-tracking + pricing. Fires in

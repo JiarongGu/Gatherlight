@@ -91,7 +91,7 @@ Wait for confirmation where the thresholds require it, then delete the agreed fi
 is the app-guarded replacement, scoped to the workspace). Tracked deletions appear in the Gatherlight review
 diff like any other change and commit when the user approves; `cache/` itself is git-ignored, so a `cache/`
 deletion just removes the file. To reorganise rather than remove, `mcp__planner-tools__fs_move` `{from, to}`
-renames in place (both are execute-phase tools).
+renames in place (both are execute-phase tools, and both take ONE FILE — a folder is refused, so empty one file by file).
 
 ### Step 5 — Report
 

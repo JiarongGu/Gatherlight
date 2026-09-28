@@ -136,10 +136,65 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
     /// wherever a real install exists; where it does not, the probe says so rather than the chat turn.</summary>
     private const string PathFallback = "claude";
 
-    /// <summary>The env seams Lyntai reads, in ITS precedence order. An operator or a test that set any of
-    /// these has chosen the CLI deliberately, and <see cref="Apply"/> must not overrule that choice —
-    /// the e2e stub is exactly this case, and clobbering it would silently test a real claude.</summary>
-    private static readonly string[] Overrides = { "LYNTAI_PROVIDER_CMD", "CLAUDE_CMD", "GATHERLIGHT_CLAUDE_CMD" };
+    /// <summary>The env seams an operator or a test may set, in Lyntai's precedence order. One that set any of
+    /// these has chosen the CLI deliberately, and <see cref="Apply"/> must not overrule that choice — the e2e stub
+    /// is exactly this case, and clobbering it would silently test a real claude. <c>LYNTAI_PROVIDER_CMD</c> is read
+    /// as it was at LAUNCH (<see cref="LaunchedProviderCommand"/>): since round 6 the app itself writes it, to carry
+    /// <see cref="IsolationArgs"/>, so its live value is ours.</summary>
+    private static readonly string[] Overrides = { "CLAUDE_CMD", "GATHERLIGHT_CLAUDE_CMD" };
+
+    /// <summary>Every claude CLI run Lyntai starts — the agent session and the one-shot provider alike — is told to
+    /// read NO configuration of the household's: <c>--setting-sources project</c> drops the USER scope (the machine
+    /// account's own settings, hooks, permissions, skills, plugins, env and apiKeyHelper in "machine" login mode) and
+    /// the LOCAL scope (<c>.claude/settings.local.json</c>, where Claude Code saves a permission the household
+    /// approves interactively, and <c>CLAUDE.local.md</c>); <c>--strict-mcp-config</c> drops a project
+    /// <c>.mcp.json</c> (and claude.ai connectors), leaving only the servers the app passes with <c>--mcp-config</c>.
+    /// The app's own <c>--settings</c> file — the scope guard's hook included — still applies.
+    /// <para><b>The PROJECT scope stays, and it has to</b>: it is what loads the site's knowledge base — the data
+    /// folder's <c>CLAUDE.md</c>, <c>.claude/rules</c>, skills, agents and commands. So a project
+    /// <c>.claude/settings.json</c> is still READ by the app's runs; the agent cannot write it (PROTECTED), and
+    /// <c>ProjectConfigBackstop</c> undoes a run that changed it anyway. All of it measured on CLI 2.1.283 at 0 tokens
+    /// (<c>docs/self-managed-llm-runtime.md</c>, 2026-09-28).</para>
+    /// <para><b>Why through the command.</b> Lyntai's <c>ClaudeAgentOptions</c> has no seam for an extra flag (Lyntai
+    /// <c>TASKS.md</c> Part 332). Its command variables are tokenised into an executable plus PREFIX arguments, which
+    /// both the agent session and the one-shot provider put ahead of their own — so the app writes
+    /// <c>LYNTAI_PROVIDER_CMD</c>, the variable Lyntai reads first, as the resolved command plus these flags. The app's
+    /// own spawns (<c>auth status</c>, <c>logout</c>, the login window) use <see cref="Locate"/>, which never carries
+    /// them. When Part 332 lands, the flags move onto the options and this composition goes.</para></summary>
+    public static readonly IReadOnlyList<string> IsolationArgs = ["--setting-sources", "project", "--strict-mcp-config"];
+
+    private static readonly string IsolationSuffix = " " + string.Join(' ', IsolationArgs);
+
+    /// <summary><c>LYNTAI_PROVIDER_CMD</c> as the process was launched with it (our own suffix stripped, so a relaunch
+    /// that inherited the composed value does not compose it twice). Captured on first touch of this type, which
+    /// <c>GatherlightApp.Build</c> makes before anything writes the variable (<see cref="PinProviderCommand"/>).</summary>
+    private static readonly string? LaunchedProviderCommand = StripIsolation(Environment.GetEnvironmentVariable("LYNTAI_PROVIDER_CMD"));
+
+    private static string? StripIsolation(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return null;
+        var c = command.Trim();
+        while (c.EndsWith(IsolationSuffix, StringComparison.Ordinal)) c = c[..^IsolationSuffix.Length].TrimEnd();
+        return c.Length == 0 ? null : c;
+    }
+
+    /// <summary>The command line Lyntai runs: <paramref name="command"/> (quoted when it is a bare path holding a
+    /// space) plus <see cref="IsolationArgs"/>, exactly once.</summary>
+    public static string ProviderCommand(string command, bool isPath)
+    {
+        var c = StripIsolation(command) ?? PathFallback;
+        if (isPath && c.Contains(' ') && !c.StartsWith('"')) c = $"\"{c}\"";
+        return c + IsolationSuffix;
+    }
+
+    /// <summary>Called once at startup, before anything can spawn a CLI: the variable Lyntai reads first is set from
+    /// what is known without the container — an override, or PATH's claude. <see cref="Apply"/> refines it once the
+    /// provisioned copy is known.</summary>
+    public static void PinProviderCommand()
+    {
+        var over = ExplicitOverride();
+        Environment.SetEnvironmentVariable("LYNTAI_PROVIDER_CMD", ProviderCommand(over ?? PathFallback, isPath: false));
+    }
 
     private readonly IPlatformContext _platform;
     private readonly ILogger<ClaudeCliRuntime> _log;
@@ -199,21 +254,36 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         _appConfig = appConfig;
     }
 
-    private static string? ExplicitOverride()
+    /// <summary>The operator's (or a test's) chosen command, or null. Given <paramref name="resourcesPath"/>, a value that
+    /// names the app's OWN copy of the CLI is not an override: the app writes <c>CLAUDE_CMD</c> itself for the
+    /// provisioned copy (and a relaunched app inherits it, and the composed <c>LYNTAI_PROVIDER_CMD</c> with it), so read
+    /// as a choice it froze the command after the first probe — unquoted, which splits a path holding a space.</summary>
+    private static string? ExplicitOverride(string? resourcesPath = null)
     {
+        if (LaunchedProviderCommand is { } launched && !NamesOurCopy(launched, resourcesPath)) return launched;
         foreach (var name in Overrides)
         {
             var v = Environment.GetEnvironmentVariable(name);
-            if (!string.IsNullOrWhiteSpace(v)) return v;
+            if (!string.IsNullOrWhiteSpace(v) && !NamesOurCopy(v, resourcesPath)) return v;
         }
         return null;
+    }
+
+    // Whether a command line is exactly the app's provisioned or bundled claude (one token, quoted or not).
+    private static bool NamesOurCopy(string command, string? resourcesPath)
+    {
+        if (resourcesPath is null) return false;
+        var c = command.Trim();
+        if (c.Length >= 2 && c[0] == '"' && c[^1] == '"' && c.IndexOf('"', 1) == c.Length - 1) c = c[1..^1];
+        return string.Equals(c, ResourceProvisioner.ProvisionedClaude(resourcesPath), StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c, System.IO.Path.Combine(AppContext.BaseDirectory, "claude", "claude.exe"), StringComparison.OrdinalIgnoreCase);
     }
 
     public string? Locate()
     {
         // An override may be a whole command line ("node stub.mjs"), not a path — hand it back verbatim and
         // let Lyntai's tokenizer deal with it. Probing still works: we spawn it the same way Lyntai does.
-        var over = ExplicitOverride();
+        var over = ExplicitOverride(_platform.ResourcesPath);
         if (over is not null) return over;
 
         var provisioned = ResourceProvisioner.ProvisionedClaude(_platform.ResourcesPath);
@@ -245,7 +315,19 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         // household running their own claude still needs a Git Bash the CLI will use.
         ApplyGitBash();
 
-        if (ExplicitOverride() is not null) return;          // a deliberate choice outranks ours
+        // What Lyntai runs is what Locate() resolves, plus the isolation flags — set on EVERY Apply, before the
+        // override return, so an override (the e2e stub) carries them too.
+        var located = Locate() ?? PathFallback;
+        var isPath = ExplicitOverride(_platform.ResourcesPath) is null && !string.Equals(located, PathFallback, StringComparison.Ordinal);
+        var providerCommand = ProviderCommand(located, isPath);
+        if (!string.Equals(_appliedProvider, providerCommand, StringComparison.Ordinal))
+        {
+            _appliedProvider = providerCommand;
+            _log.LogInformation("Agent CLI: Lyntai runs {Command}", providerCommand);
+        }
+        Environment.SetEnvironmentVariable("LYNTAI_PROVIDER_CMD", providerCommand);
+
+        if (ExplicitOverride(_platform.ResourcesPath) is not null) return;   // a deliberate choice outranks ours
         var provisioned = ResourceProvisioner.ProvisionedClaude(_platform.ResourcesPath);
         if (!File.Exists(provisioned)) return;               // nothing of ours to point at; PATH stands
         // Log the SWITCH, not the state. This runs on every probe (see ProbeAsync) and the panel polls
@@ -259,8 +341,27 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         Environment.SetEnvironmentVariable("CLAUDE_CMD", provisioned);
     }
 
-    // The last git-bash path THIS class set, so a later probe can tell its own value from the household's.
-    private string? _appliedGitBash;
+    // The provider command last written, so the switch is logged once rather than on every probe.
+    private static string? _appliedProvider;
+
+    // The last git-bash path the app set, so a later probe can tell its own value from the household's. STATIC, because
+    // the variable it describes is process-wide and the desktop host builds a new runtime on every in-process server
+    // restart: per instance, the next runtime read the value the previous one set as the HOUSEHOLD'S and never updated
+    // or cleared it again (round-6 review). A value naming our own provisioned bash.exe is ours besides, whoever set it
+    // — a relaunched app inherits it from the process before (IsOurGitBash).
+    private static string? _appliedGitBash;
+
+    private bool IsOurGitBash(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        if (string.Equals(value, _appliedGitBash, StringComparison.OrdinalIgnoreCase)) return true;
+        try
+        {
+            return string.Equals(System.IO.Path.GetFullPath(value),
+                System.IO.Path.GetFullPath(ProvisionedGitBashPath(_platform.ResourcesPath)), StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
 
     /// <summary>Point the CLI at a Git Bash the app can guard, on Windows, when it would otherwise find NONE.
     ///
@@ -282,14 +383,13 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
 
         var current = Environment.GetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH");
         // Set by the household (or anything other than us) → leave it entirely.
-        if (!string.IsNullOrWhiteSpace(current)
-            && !string.Equals(current, _appliedGitBash, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(current) && !IsOurGitBash(current))
             return;
 
         // The CLI can already find one → do not compete; drop ours if we had set it.
         if (GitBashDiscoverable())
         {
-            if (_appliedGitBash is not null)
+            if (_appliedGitBash is not null || IsOurGitBash(current))
             {
                 Environment.SetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH", null);
                 _appliedGitBash = null;
@@ -302,7 +402,7 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         if (provisioned is null)
         {
             // Nothing to offer yet. If we had set one and it has since vanished, stop naming it.
-            if (_appliedGitBash is not null)
+            if (_appliedGitBash is not null || IsOurGitBash(current))
             {
                 Environment.SetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH", null);
                 _appliedGitBash = null;
@@ -322,8 +422,7 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
     {
         if (!OperatingSystem.IsWindows()) return null;
         var household = Environment.GetEnvironmentVariable("CLAUDE_CODE_GIT_BASH_PATH");
-        if (!string.IsNullOrWhiteSpace(household)
-            && !string.Equals(household, _appliedGitBash, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(household) && !IsOurGitBash(household))
             return "系统已设置了 Git Bash,规划助手用它作为命令行(应用不改这个设置)。";
         if (GitBashDiscoverable())
             return "系统已装 Git for Windows,规划助手用它作为命令行 —— 无需下载。";
@@ -337,9 +436,12 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
     /// unlike MinGit's — or null when it is not installed.</summary>
     public static string? ProvisionedGitBash(string resourcesPath)
     {
-        var bash = System.IO.Path.Combine(resourcesPath, "git-bash", "bin", "bash.exe");
+        var bash = ProvisionedGitBashPath(resourcesPath);
         return File.Exists(bash) ? bash : null;
     }
+
+    private static string ProvisionedGitBashPath(string resourcesPath) =>
+        System.IO.Path.Combine(resourcesPath, "git-bash", "bin", "bash.exe");
 
     private static bool? _gitBashDiscoverableCache;
 

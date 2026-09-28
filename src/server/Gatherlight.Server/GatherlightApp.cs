@@ -44,6 +44,9 @@ public static class GatherlightApp
         var stubCmd = Environment.GetEnvironmentVariable("GATHERLIGHT_CLAUDE_CMD");
         if (!string.IsNullOrEmpty(stubCmd) && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CLAUDE_CMD")))
             Environment.SetEnvironmentVariable("CLAUDE_CMD", stubCmd);
+        // Every claude run Lyntai starts reads none of the household's own CLI config (ClaudeCliRuntime.IsolationArgs):
+        // pinned here, before anything can spawn one; ClaudeCliRuntime.Apply refines it once the provisioned copy is known.
+        Platform.Agent.Llm.Services.ClaudeCliRuntime.PinProviderCommand();
 
         var builder = WebApplication.CreateBuilder(args ?? Array.Empty<string>());
         // Fail closed: exposing beyond loopback without a token = unauthenticated control of the
@@ -439,6 +442,9 @@ public static class GatherlightApp
             .AddSingleton<Lyntai.Storage.IKeyValueStore, Platform.Ops.Cortex.Services.AppConfigKeyValueStore>()
             // App-side adapter over Lyntai's IAgentSession — the two-gate / jobs / playground run through this.
             .AddSingleton<IAgentRunScope, AgentRunScope>()
+            // Undoes a run in the data folder that CREATED or CHANGED the CLI's own project config (.claude/settings*.json,
+            // .mcp.json) — the household's files, which the agent may not write; a file a run left alone is never touched.
+            .AddSingleton<IProjectConfigBackstop, ProjectConfigBackstop>()
             .AddSingleton<IAgentRunner, AgentRunner>()
             // Resolves + inspects the claude CLI itself (present? runnable? signed in?). The CLI used to be
             // an ASSUMED machine dependency: absent on a fresh install, it died at spawn and surfaced as a
