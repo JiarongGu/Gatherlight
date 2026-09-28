@@ -1494,6 +1494,19 @@ try {
         shelf.recommendation?.id === 'embeddinggemma-300M-Q8_0' && /实测过/.test(String(shelf.recommendation?.reason))
           && !/只有它/.test(String(shelf.recommendation?.reason)),
         JSON.stringify(shelf.recommendation ?? null));
+      // docs/judge-bench.md Run 15 (2026-09-28): the two embedder rows' notes carry the paired measurement on the app's
+      // bilingual fixtures — 内置 as good on short facts, significantly worse on long notes — each figure with what it is
+      // compared with and the configuration, and the GGUF's says why it is recommended first with no GPU too. They said
+      // only the 10-query figures (8 against 9) until then.
+      const ggufEmbedRow = rowOf(shelf, 'embeddinggemma-300M-Q8_0'), builtinEmbedRow = rowOf(shelf, 'embeddinggemma-300m-onnx');
+      ok('both embedder rows state Run 15 with its configuration — short facts no significant difference (223/240 against llama.cpp on the CPU\'s 218/240), long notes 内置 significantly worse (125/240 against 155/240) — and the GGUF\'s says it is recommended first even with no GPU',
+        /短事实没有测出显著差别\(前八命中 223\/240,llama\.cpp 在 CPU 上 218\/240\)/.test(String(builtinEmbedRow?.note))
+          && /约 900–1,200 字的长笔记明显更差\(125\/240 对 155\/240/.test(String(builtinEmbedRow?.note))
+          && /判断关、每页 8 条,Lyntai 3\.5\.1/.test(String(builtinEmbedRow?.note)) && /Intel Core Ultra 9 185H/.test(String(builtinEmbedRow?.note))
+          && /在 CPU 上 155\/240、显卡上 154\/240,对内置的 125\/240/.test(String(ggufEmbedRow?.note))
+          && /即使这台机器没有显卡,「语义」也先推荐这一版/.test(String(ggufEmbedRow?.note))
+          && /判断关、每页 8 条,Lyntai 3\.5\.1/.test(String(ggufEmbedRow?.note)),
+        JSON.stringify({ gguf: ggufEmbedRow?.note ?? null, builtin: builtinEmbedRow?.note ?? null }));
 
       // THE BADGE. It recommends only what is not installed — and ONE embedder is enough: the two embedder rows are
       // the same EmbeddingGemma 300M, as a GGUF and as ONNX, and 语义 binds one of them. With EITHER in, the other is
@@ -1610,6 +1623,18 @@ try {
           cpuRec?.id === BUILTIN_RERANK && cpuShelf.runtime?.gpu === false
             && rowOf(cpuShelf, BUILTIN_RERANK)?.runtime === 'builtin' && rowOf(cpuShelf, BUILTIN_RERANK)?.installed === false,
           JSON.stringify({ rec: cpuRec ?? null, gpu: cpuShelf.runtime?.gpu }));
+        // …but NOT for 语义 (docs/judge-bench.md Run 15, 2026-09-28): with no GPU the embedder suggestion is STILL the GGUF.
+        // On the same laptop's CPU 内置 measured significantly worse on long notes (125 against 155 of 240), so the owner's
+        // rule for putting it first where 判断 does (NotAsked, NoGpu) did not hold. The badge suggests an embedder only while
+        // none is in, so the GGUF one is taken out for this one read and put back.
+        const ggufEmbedFile = path.join(ggufDir, 'embeddinggemma-300M-Q8_0.gguf');
+        fs.renameSync(ggufEmbedFile, `${ggufEmbedFile}.away`);
+        const cpuNoEmbedder = await getJson('/api/manage/models');
+        fs.renameSync(`${ggufEmbedFile}.away`, ggufEmbedFile);
+        ok('THE POINT: with no GPU and no embedder in, 资源 still recommends the GGUF embedder for 语义, not 内置 — Run 15 found 内置 worse on long notes',
+          cpuNoEmbedder.recommendation?.id === 'embeddinggemma-300M-Q8_0' && cpuNoEmbedder.runtime?.gpu === false
+            && (cpuNoEmbedder.models ?? []).filter((m) => m.capability === 'embedding' && m.installed).length === 0,
+          JSON.stringify({ rec: cpuNoEmbedder.recommendation ?? null, gpu: cpuNoEmbedder.runtime?.gpu, embedders: embedderState(cpuNoEmbedder) }));
         ok('…and its reason says why, plainly: llama.cpp can use no GPU here, 判断 needs no llama.cpp for it, Run 13\'s CPU comparison, BGE too slow on a CPU, BGE where there is a GPU and what for — and the tagging clause',
           /llama\.cpp 在这台机器上用不了任何显卡,所以推荐它,而不是 BGE/.test(String(cpuRec?.reason))
             && /这台机器不需要为「判断」装 llama\.cpp/.test(String(cpuRec?.reason))

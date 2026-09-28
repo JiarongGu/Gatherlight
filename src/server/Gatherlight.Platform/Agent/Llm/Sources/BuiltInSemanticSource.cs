@@ -23,6 +23,16 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Sources;
 /// a process and the smallest total payload. That is a real advantage and a narrower one than the sentence
 /// this replaced.</para>
 ///
+/// <para><b>On the app's own bilingual fixtures it is as good on short facts and WORSE on long notes</b>
+/// (<c>docs/judge-bench.md</c> Run 15, 2026-09-28, Lyntai 3.5.1, one laptop's CPU, 判断 off, a page of 8, each arm
+/// writing the fixture itself): against the GGUF on llama.cpp's CPU, found@8 223 against 218 of 240 on facts of at
+/// most 101 characters (2/7, p = 0.180, not significant), and 125 against 155 on notes of 883–1,241 characters (33/3,
+/// p &lt; 0.001, −12.5pp), the loss on the Chinese notes; per recall as fast there (347.5 against 344 ms on short facts),
+/// a long note's write slower (2.3 s against 1.6 s). The owner's rule — recommend this one FIRST where 判断 recommends
+/// 内置 for the GPU answer (NotAsked, NoGpu), iff it is not significantly worse on found@8 on either fixture and its median recall
+/// time is no higher — therefore did not hold, and 语义's suggestion keeps the GGUF first on every machine
+/// (<c>ModelsController.Recommend</c>). Its row note and <see cref="Description"/> carry the figures.</para>
+///
 /// <para><b>And it is the SMALLER path, which is the opposite of how "bundle a model runtime" sounds.</b>
 /// 222 MB of model against Ollama's 622 MB model plus its own runtime download. The variant, tokenizer and
 /// prompting were all chosen by measurement rather than preference — see <c>docs/builtin-model-runner.md</c>
@@ -70,9 +80,17 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
         // carries 9/10 top-1 at 25 ms (GgufCatalog). It used to compare with an Ollama option that no longer
         // exists, and its "每次查询更快" was only ever true against Ollama's 69 ms. The trade-off is stated,
         // not steered: what it saves, and what it costs.
+        // …and on the app's own bilingual fixtures since docs/judge-bench.md Run 15, each figure with what it is compared
+        // with and the configuration: as good on short facts, significantly worse on long notes, about as fast per recall
+        // on one laptop's CPU. The 10-query figures stay beside them — they are the 检索质量 column's.
         Note: "EmbeddingGemma 在应用进程里直接运行:不用另外下载或启动运行时,没有常驻服务,总共约 222 MB。"
-            + "与同组 llama.cpp 上的同一个模型相比,首位命中略低(10 题中 8 对 9),前三名同为 10 题,"
-            + "每次查询相近(28 对 25 毫秒)。",
+            + "和同组 llama.cpp 上的同一个模型比(这一版是 4 位量化的 ONNX,那一版是 Q8_0 的 GGUF):"
+            + "本应用 240 题的双语测试集上,短事实没有测出显著差别(前八命中 223/240,llama.cpp 在 CPU 上 218/240);"
+            + "约 900–1,200 字的长笔记明显更差(125/240 对 155/240,差在中文长笔记)。"
+            + "同一台笔记本的 CPU 上(Intel Core Ultra 9 185H,不用显卡),短事实每次检索和 llama.cpp 差不多(约 0.35 秒),"
+            + "写入一条长笔记更慢(约 2.3 秒对 1.6 秒);应用进程共占约 0.25–0.37 GB 内存,"
+            + "而 llama.cpp 在 CPU 上跑时它自己的进程另占约 0.36–1.2 GB。"
+            + "(判断关、每页 8 条,Lyntai 3.5.1;10 题的检索基准上首位命中 8 对 9,前三名同为 10 题。)",
         Measured: new EmbeddingMeasurement(8, 10, 28, 10, "2026-08-22"));
 
     public string Id => MemoryBackends.BuiltIn;
@@ -80,8 +98,9 @@ public sealed class BuiltInSemanticSource : IMemorySemanticSource
 
     public string Description =>
         "适合:想占地方最少、且完全不想多一个进程 —— 它在应用内直接运行,没有常驻服务,也没有端口。"
-        + "总共约 222 MB(llama.cpp 那条是运行时 35 MB + 模型 334 MB),代价是 10 题里首位命中少一次"
-        + "(8 题对 9 题,前三名命中同为 10 题)。";
+        + "总共约 222 MB(llama.cpp 那条是运行时 35 MB + 模型 334 MB)。代价是长笔记找得明显更差:"
+        + "本应用双语测试集上约 900–1,200 字的笔记,前八命中 125/240 对 llama.cpp 的 155/240;"
+        + "短事实没有测出显著差别(223/240 对 218/240)。";
 
     /// <summary>Where the provisioned model lives. Derived from the settings rather than injected, because
     /// this class is a stateless entry in a STATIC catalog — see <see cref="MemorySources"/> for why that

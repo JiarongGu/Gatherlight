@@ -344,8 +344,11 @@ public sealed class ModelsController : ControllerBase
     /// same weights, so that is what the line then recommends, naming the in-process 内置 row as the no-runtime
     /// alternative. The id is the runtime's RESOURCE id: no model row matches it, so no table row carries the badge —
     /// the runtime's own row above the table is where it is downloaded. (With nothing installed at all the GGUF
-    /// embedder is still the first suggestion, runtime or not: it measured 9/10 against 8/10, and the runtime row says
-    /// it is needed.)</para>
+    /// embedder is still the first suggestion, WHATEVER the GPU answer — docs/judge-bench.md Run 15, 2026-09-28: against
+    /// 内置 on the same laptop's CPU it found a long note's answer significantly more often (155 against 125 of 240) with
+    /// no significant difference on short facts, so the owner's rule for recommending 内置 first where 判断 does (NotAsked,
+    /// NoGpu) did not hold; <c>e2e-p51</c> pins the no-GPU case. It is the first suggestion runtime or not, too: the
+    /// runtime row says it is needed. The 10-query fixture, the only measurement before Run 15, read 9/10 against 8/10.)</para>
     ///
     /// <para><b>ONE reranker is enough too.</b> Any installed reranker is a local judge that measured better than
     /// none (docs/judge-bench.md Runs 2 and 4); suggesting BGE beside LAMAR or mMiniLMv2 was the same second-copy

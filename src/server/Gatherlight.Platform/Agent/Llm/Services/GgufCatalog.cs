@@ -449,9 +449,18 @@ public static class GgufCatalog
             "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63", 333_590_944,
             // Compared with the SIBLING in the same group, which is the choice a household is actually making —
             // it used to compare with an Ollama option the panel no longer has. Numbers are the two rows' own
-            // measurements, so the note cannot disagree with the table it sits in.
-            "语义检索用,由 llama.cpp 运行。和内置的 ONNX 版本是同一个 EmbeddingGemma 模型:这一版首位命中多一题"
-            + "(10 题中 9 对 8),代价是多一个运行时(约 35 MB)和一个常驻服务。",
+            // measurements, so the note cannot disagree with the table it sits in — and, since docs/judge-bench.md
+            // Run 15 (2026-09-28), the paired measurement on the app's bilingual fixtures: significantly better than 内置
+            // on long notes on the same CPU, no significant difference on short facts. That is why 语义's suggestion
+            // keeps this row first with no GPU too (the owner's rule for putting 内置 first there did not hold), and the
+            // note says so.
+            "语义检索用,由 llama.cpp 运行。和内置的 ONNX 版本是同一个 EmbeddingGemma 模型"
+            + "(这一版是 Q8_0 的 GGUF,内置那一版是 4 位量化的 ONNX):"
+            + "本应用 240 题的双语测试集上,约 900–1,200 字的长笔记前八命中明显更多"
+            + "(在 CPU 上 155/240、显卡上 154/240,对内置的 125/240),短事实没有测出显著差别(218/240 对 223/240);"
+            + "没有显卡时每次检索和内置差不多(短事实约 0.34 秒)"
+            + "(判断关、每页 8 条,Lyntai 3.5.1,一台笔记本:Intel Core Ultra 9 185H)。10 题的检索基准上首位命中多一题(9 对 8)。"
+            + "所以即使这台机器没有显卡,「语义」也先推荐这一版。代价是多一个运行时(约 35 MB)和一个常驻服务。",
             new EmbeddingMeasurement(9, 10, 25, 10, "2026-08-22"),
             // Its GGUF header's gemma-embedding.context_length, and the n_ctx its child reports: the preset launches it
             // with this physical batch, so a fact up to 2,048 tokens (~3,000 Chinese characters) embeds, where
