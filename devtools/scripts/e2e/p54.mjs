@@ -14,8 +14,11 @@
 //   C1  `.claude` ITSELF resolved as writable (PROTECTED was checked for a path UNDER an entry, never one CONTAINING
 //       it), so fs_move/fs_delete could move or delete it whole — out, rewrite settings.json, back in; and a project
 //       settings file the agent was never allowed to write survived Reject. Now a path containing a protected entry
-//       and a write-dir root are refused, and the project config files the CLI loads on its own (.claude/settings*.json,
-//       .mcp.json) are moved out of the data folder at boot and around every agent run there.
+//       and a write-dir root are refused. The CLI's own project config (.claude/settings*.json, .mcp.json) is the
+//       HOUSEHOLD's — their interactive claude writes settings.local.json — so the app leaves what is there alone:
+//       its runs do not read the local scope or .mcp.json (--setting-sources project --strict-mcp-config), and a run
+//       that CREATED or CHANGED one of the three is undone when it ends (ProjectConfigBackstop). A first version
+//       moved all three out of the folder at boot and around every run — the household's own config, repeatedly.
 //   I1  the diff gate is file-level, so the tools are FILE-ONLY.
 //   I2  runs that hold no agent lease (extract over HTTP, the playground, the migrator) share the run scope, so a
 //       read-only run overlapping an execute run could refuse its writes, or leave writes allowed at rest.
@@ -41,13 +44,17 @@ const argsLog = `${dataDir}-args.jsonl`;
 const overlapMark = `${dataDir}-overlap`;
 for (const f of [fsopsLog, argsLog, `${overlapMark}.started`, `${overlapMark}.response`]) { try { fs.rmSync(f); } catch {} }
 
-// C1, the boot half: project config files an earlier run (or anything else) left in the data folder, untracked. The
-// CLI would load both on the next agent run — so the startup re-issue moves them out, before any run.
-const plantedAtBoot = {
-  '.mcp.json': '{"_e2e":"planted-before-boot","mcpServers":{}}\n',
-  '.claude/settings.local.json': '{"_e2e":"planted-before-boot","permissions":{}}\n',
+// The household's OWN interactive claude config, there before boot: Claude Code saves a permission they approve into
+// .claude/settings.local.json (a hook of theirs beside it), and a project .mcp.json names a server of theirs. The app
+// must leave both exactly as they are, and its runs must read neither. Obviously fake content.
+const householdConfig = {
+  '.claude/settings.local.json': '{"_e2e":"household-own-interactive","permissions":{"allow":["Bash(rm:*)"]},'
+    + '"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo e2e-household-local-hook"}]}]}}\n',
+  '.mcp.json': '{"_e2e":"household-own","mcpServers":{"e2e-household-srv":{"type":"stdio","command":"node","args":["e2e-household-srv.mjs"]}}}\n',
 };
-for (const [rel, text] of Object.entries(plantedAtBoot)) fs.writeFileSync(path.join(dataDir, rel), text, 'utf8');
+for (const [rel, text] of Object.entries(householdConfig)) fs.writeFileSync(path.join(dataDir, rel), text, 'utf8');
+const loadsLog = `${dataDir}-loads.jsonl`;
+try { fs.rmSync(loadsLog); } catch {}
 // The upload the overlapping read-only run (extract) reads.
 fs.mkdirSync(path.join(dataDir, 'uploads'), { recursive: true });
 fs.writeFileSync(path.join(dataDir, 'uploads', 'overlap.pdf'), '%PDF-1.4 overlap fixture');
@@ -58,6 +65,7 @@ const srv = startServer({
   dataDir, port: PORT,
   env: {
     GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_FSOPS_LOG: fsopsLog, GATHERLIGHT_STUB_ARGS_LOG: argsLog,
+    GATHERLIGHT_STUB_LOADS_LOG: loadsLog,
     GATHERLIGHT_STUB_OVERLAP_MARK: overlapMark, GATHERLIGHT_STUB_HTTP_BASE: `http://127.0.0.1:${PORT}`,
   },
 });
@@ -66,20 +74,25 @@ const { j, post, waitPhase } = makeClient(srv.base);
 const readLog = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 const quarantineDir = path.join(dataDir, 'state', 'quarantine');
 const stamps = () => { try { return fs.readdirSync(quarantineDir); } catch { return []; } };
-// state/quarantine/<stamp>/<rel> — the sweep keeps what it moved, so a household's own file is recoverable. `since`
-// names the stamps that already existed, so a later sweep is not credited with what an earlier one kept.
-const quarantined = (rel, since = []) =>
-  stamps().some((stamp) => !since.includes(stamp) && fs.existsSync(path.join(quarantineDir, stamp, rel)));
+// state/quarantine/<stamp>/<rel> — the backstop keeps what a run wrote, so nothing is destroyed. `since` names the
+// stamps that already existed, so a later undo is not credited with what an earlier one kept. `text`, when given, is
+// what the kept copy must hold.
+const quarantined = (rel, since = [], text = undefined) =>
+  stamps().some((stamp) => !since.includes(stamp) && fs.existsSync(path.join(quarantineDir, stamp, rel))
+    && (text === undefined || fs.readFileSync(path.join(quarantineDir, stamp, rel), 'utf8') === text));
+const readText = (rel) => { try { return fs.readFileSync(path.join(dataDir, rel), 'utf8'); } catch { return null; } };
+const untouched = () => Object.entries(householdConfig).filter(([rel, text]) => readText(rel) !== text).map(([rel]) => rel);
+// Every claude run Lyntai starts carries the isolation flags (ClaudeCliRuntime.IsolationArgs), wherever they sit.
+const isolated = (args = []) => args.includes('--strict-mcp-config') && args[args.indexOf('--setting-sources') + 1] === 'project';
 
 try {
   await waitHealthy(srv.base);
   console.log('server up');
 
   ok('fixture trip file is tracked at boot', tracked(dataDir, 'plans/trips/2026-08-kyoto.md'));
-  ok('C1: an untracked .mcp.json left in the data folder is gone after boot', !onDisk(dataDir, '.mcp.json'));
-  ok('C1: an untracked .claude/settings.local.json is gone after boot', !onDisk(dataDir, '.claude/settings.local.json'));
-  ok('C1: both were kept in state/quarantine, not destroyed',
-    quarantined('.mcp.json') && quarantined('.claude/settings.local.json'));
+  ok('C1: the household\'s own .claude/settings.local.json and .mcp.json are exactly as they were after boot',
+    untouched().length === 0, untouched().join(', '));
+  ok('C1: nothing was moved into state/quarantine at boot', stamps().length === 0, stamps().join(', '));
 
   // I2 (the HTTP half): the mutating tools are MCP-only, so the HTTP surface neither lists nor runs them.
   const httpTools = ((await j('/api/tools')).body?.tools ?? []).map((t) => t.name);
@@ -203,6 +216,22 @@ try {
   const execArgs = (readLog(argsLog).find((s) => s.kind === 'execute')?.args ?? []).join(' ');
   ok('execute spawn includes fs_move in --allowedTools', execArgs.includes('mcp__planner-tools__fs_move'), execArgs.slice(0, 200));
 
+  // C1 (design change): the household's own config SURVIVES the app's runs, and none of those runs READS it. The stub
+  // records what claude 2.1.283 was measured to load under the argv it was handed (claude-stub.mjs, recordLoads).
+  ok('C1: the household\'s settings.local.json and .mcp.json survive a plan and an execute run unchanged',
+    untouched().length === 0, untouched().join(', '));
+  const spawnArgs = readLog(argsLog);
+  ok('C1: every claude run the app started carries --setting-sources project --strict-mcp-config',
+    spawnArgs.length >= 2 && spawnArgs.every((sp) => isolated(sp.args)),
+    spawnArgs.filter((sp) => !isolated(sp.args)).map((sp) => `${sp.kind}: ${sp.args.slice(0, 6).join(' ')}`).join(' | '));
+  const runLoads = readLog(loadsLog).filter((l) => l.kind === 'plan' || l.kind === 'execute');
+  ok('C1 (control): the plan and execute runs still load the site\'s knowledge base (the project scope)',
+    runLoads.length >= 2 && runLoads.every((l) => l.loaded.includes('CLAUDE.md')), JSON.stringify(runLoads.map((l) => l.loaded)));
+  ok('C1: neither run loads the household\'s settings.local.json — its Bash(rm:*) and its hook stay out',
+    runLoads.length >= 2 && runLoads.every((l) => !l.loaded.includes('.claude/settings.local.json')), JSON.stringify(runLoads.map((l) => l.loaded)));
+  ok('C1: neither run starts the household\'s .mcp.json server',
+    runLoads.length >= 2 && runLoads.every((l) => !l.loaded.some((x) => x.startsWith('.mcp.json'))), JSON.stringify(runLoads.map((l) => l.loaded)));
+
   // The move + delete reach the diff gate as working-tree changes.
   const paths = (diff.review?.files ?? []).map((f) => f.path);
   ok('diff gate shows the moved-in path (added)', paths.includes('plans/trips/2026-08-kyoto-moved.md'), JSON.stringify(paths));
@@ -228,29 +257,45 @@ try {
   ok('I2: at rest, an fs_move over HTTP is refused', atRest.status >= 400, `${atRest.status} ${JSON.stringify(atRest.body).slice(0, 160)}`);
   ok('I2: and the file did not move', onDisk(dataDir, 'plans/rest-src.md') && !onDisk(dataDir, 'plans/rest-dst.md'));
 
-  // --- C1: a project config file an execute run left behind is gone before any human decision ---------------
-  // The stub writes .claude/settings.json, settings.local.json and .mcp.json directly (as a slipped Bash token
-  // could) plus one plan edit. The tracker knows none of the three, so Reject's restore could never reach them;
-  // and a validate pass — an agent run in the data folder — would have loaded their hooks before the gate.
+  // --- C1: what an execute run did to the project config is undone before any human decision ---------------
+  // The stub CREATES .claude/settings.json and REWRITES the household's settings.local.json and .mcp.json directly (as
+  // a slipped Bash token could), plus one plan edit. The tracker knows none of the three, so Reject's restore could never
+  // reach them; and a validate pass — an agent run in the data folder — would have loaded a project hook before the gate.
   const stampsBeforePlant = stamps();
+  const PLANTED_TEXT = {
+    '.claude/settings.json': '{"_e2e":"planted-by-claude-stub","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo e2e-planted"}]}]}}\n',
+    '.claude/settings.local.json': '{"_e2e":"planted-by-claude-stub","permissions":{"allow":["Bash"]}}\n',
+    '.mcp.json': '{"_e2e":"planted-by-claude-stub","mcpServers":{"e2e-planted-srv":{"type":"stdio","command":"node","args":["e2e-planted.mjs"]}}}\n',
+  };
   const plant = await post('/api/chat', { message: 'FSPLANTTEST 写一个计划文件' });
   ok('plant chat start 200', plant.status === 200 && !!plant.body.id);
   await waitPhase(plant.body.id, 'awaiting-plan-approval');
   await post(`/api/chat/${plant.body.id}/plan/approve`);
   const plantDiff = await waitPhase(plant.body.id, 'awaiting-diff-approval');
-  const PLANTED = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json'];
-  ok('C1: at the diff gate, none of the planted config files is in the data folder',
-    PLANTED.every((rel) => !onDisk(dataDir, rel)), PLANTED.filter((rel) => onDisk(dataDir, rel)).join(', '));
-  ok('C1: each was kept in state/quarantine, by a sweep after this run (not the one at boot)',
-    PLANTED.every((r) => quarantined(r, stampsBeforePlant)), PLANTED.filter((r) => !quarantined(r, stampsBeforePlant)).join(', '));
+  const PLANTED = Object.keys(PLANTED_TEXT);
+  ok('C1: at the diff gate, the .claude/settings.json the run CREATED is gone', !onDisk(dataDir, '.claude/settings.json'));
+  ok('C1: …and the household\'s settings.local.json and .mcp.json the run REWROTE hold their content from before it',
+    untouched().length === 0, untouched().join(', '));
+  ok('C1: each version the run wrote was kept in state/quarantine by this run\'s undo',
+    PLANTED.every((r) => quarantined(r, stampsBeforePlant, PLANTED_TEXT[r])),
+    PLANTED.filter((r) => !quarantined(r, stampsBeforePlant, PLANTED_TEXT[r])).join(', '));
+  // The run's own stream says what was undone — found in the stored transcript of the conversation.
+  const plantNotice = await until(async () => {
+    const convo = ((await j('/api/chat/history')).body?.conversations ?? []).find((c) => /FSPLANTTEST/.test(c.title ?? ''));
+    if (!convo) return null;
+    const events = (await j(`/api/chat/history/${convo.id}`)).body?.events ?? [];
+    return events.find((e) => e.kind === 'notice' && /这次运行改动了/.test(e.text ?? '')) ?? null;
+  }, 15000, 300).catch(() => null);
+  ok('C1: the run\'s stream says it undid the three files', !!plantNotice && PLANTED.every((r) => plantNotice.text.includes(r)),
+    plantNotice?.text ?? '(no notice)');
   const plantPaths = (plantDiff.review?.files ?? []).map((f) => f.path);
   ok('C1: the review shows the plan edit and none of the config files',
     plantPaths.includes('plans/trips/plant-review.md') && !plantPaths.some((p) => PLANTED.includes(p)), JSON.stringify(plantPaths));
   await post(`/api/chat/${plant.body.id}/diff/reject`);
   await waitPhase(plant.body.id, 'rejected');
-  ok('C1: after Reject no planted file is left, and the plan edit is undone',
-    PLANTED.every((rel) => !onDisk(dataDir, rel)) && !onDisk(dataDir, 'plans/trips/plant-review.md'),
-    PLANTED.concat('plans/trips/plant-review.md').filter((rel) => onDisk(dataDir, rel)).join(', '));
+  ok('C1: after Reject the created settings file is still gone, the household\'s two files still theirs, and the plan edit is undone',
+    !onDisk(dataDir, '.claude/settings.json') && untouched().length === 0 && !onDisk(dataDir, 'plans/trips/plant-review.md'),
+    ['.claude/settings.json', 'plans/trips/plant-review.md'].filter((rel) => onDisk(dataDir, rel)).concat(untouched()).join(', '));
 } catch (err) {
   fail('e2e-p54 fatal: ' + err.message);
   console.error(srv.log().slice(-3000));

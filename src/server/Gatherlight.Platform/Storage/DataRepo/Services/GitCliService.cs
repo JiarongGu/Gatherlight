@@ -212,9 +212,12 @@ public class GitCliService : IGitCliService
     // App state must NEVER enter the data repo's audit trail (state/settings.json holds the access token,
     // uploads/cache/ hold user files). These lines are load-bearing for the `git add -A` seeder/import path.
     // The claude CLI's own project config (.claude/settings.json, settings.local.json, .mcp.json) is ignored too
-    // (round-6 review): the CLI loads it by itself, so none may be in the folder at all (ProjectConfigSweep moves an
-    // UNTRACKED one out, and leaves a tracked one — committed on purpose — alone). Without these lines a stray one
-    // present at a fresh repo's `add -A` initial import was committed, and so became "tracked" without anybody choosing it.
+    // (round-6 review): it is the household's per-machine CLI configuration — their interactive claude writes the local
+    // file when they approve a permission — not planner content, and it can carry secrets (an `env` block, an MCP
+    // server's tokens). The app never commits one on purpose (the diff gate commits reviewed paths only, and no agent
+    // may write these files — ProjectConfigBackstop undoes a run that did), but a bulk `add -A` — a fresh repo's
+    // initial import, a restore commit — would put whatever is there into the audit trail. It still travels in a backup,
+    // which copies folders rather than commits.
     private static readonly string[] RequiredIgnores =
     {
         "state/", "uploads/", "cache/", "archive/", "sensitive-patterns.txt",

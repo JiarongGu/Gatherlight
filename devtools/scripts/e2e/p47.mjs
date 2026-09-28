@@ -181,16 +181,20 @@ try {
   const sourceBind = await post('/api/manage/memory/layer/judge', { source: 'claude-cli', model: 'sonnet' });
   ok('(fixture) the source\'s judge is bound before export', sourceBind.status === 200, JSON.stringify(sourceBind.body));
 
-  // C1 (round-6 review): project config files the CLI loads on its own — .claude/settings.json and
-  // settings.local.json carry hooks that run before any human decision — must not ride a backup INTO an install.
-  // One is COMMITTED in the source, so the restored repo tracks it: the startup sweep leaves a tracked file alone,
-  // which is why the import itself has to strip it. The other is untracked. Obviously fake content.
-  fs.writeFileSync(path.join(dataDir, '.claude', 'settings.json'), '{"_e2e":"planted-in-source-backup","hooks":{}}\n');
+  // C1 (round-6 design change): the claude CLI's own project config in the data folder is the HOUSEHOLD's — their
+  // interactive claude saves approved permissions in settings.local.json — so it TRAVELS in their backup like the rest of
+  // .claude/. The app's runs do not read the local scope at all (--setting-sources project --strict-mcp-config), and the
+  // project settings.json is the household's own either way, restored or written in place; only the agent may not write
+  // it. One is COMMITTED in the source (a household may commit one on purpose; the data repo ignores all three, so only a
+  // forced add tracks one) and one is untracked. Obviously fake content.
+  const sourceProjectSettings = '{"_e2e":"household-project-settings-in-source-backup","hooks":{}}\n';
+  const sourceLocalSettings = '{"_e2e":"household-local-settings-in-source-backup","permissions":{"allow":["Bash(ls:*)"]}}\n';
+  fs.writeFileSync(path.join(dataDir, '.claude', 'settings.json'), sourceProjectSettings);
   git(dataDir, '-c', 'user.name=p47-fixture', '-c', 'user.email=p47@example.invalid',
     'add', '-f', '--', '.claude/settings.json');
   git(dataDir, '-c', 'user.name=p47-fixture', '-c', 'user.email=p47@example.invalid',
     'commit', '-q', '-m', 'fixture: a committed project settings file', '--', '.claude/settings.json');
-  fs.writeFileSync(path.join(dataDir, '.claude', 'settings.local.json'), '{"_e2e":"planted-in-source-backup","permissions":{}}\n');
+  fs.writeFileSync(path.join(dataDir, '.claude', 'settings.local.json'), sourceLocalSettings);
 
   // PACK the source repo before exporting. Without this the fixture's refs stay loose files, they ride
   // into the zip, and the restored repo works whether or not anything repairs it — the assertion below
@@ -255,17 +259,17 @@ try {
   ok('…and a leftover pre-route llm.model.memory with it', readKey('llm.model.memory') === undefined,
     `llm.model.memory=${JSON.stringify(readKey('llm.model.memory'))}`);
 
-  // C1: the import strips the project config files — the committed one too, whose deletion the restore commit carries.
-  ok('THE POINT (C1): a restored archive leaves no .claude/settings.json or settings.local.json in the data folder',
-    !fs.existsSync(path.join(restoreDir, '.claude', 'settings.json'))
-      && !fs.existsSync(path.join(restoreDir, '.claude', 'settings.local.json')),
-    ['settings.json', 'settings.local.json'].filter((f) => fs.existsSync(path.join(restoreDir, '.claude', f))).join(', '));
+  // C1: the household's own CLI config travels — both files, byte for byte, the committed one still tracked.
+  const restoredText = (rel) => { try { return fs.readFileSync(path.join(restoreDir, rel), 'utf8'); } catch { return null; } };
+  ok('THE POINT (C1): the household\'s .claude/settings.json and settings.local.json come back from their backup as they were',
+    restoredText('.claude/settings.json') === sourceProjectSettings && restoredText('.claude/settings.local.json') === sourceLocalSettings,
+    JSON.stringify({ settings: restoredText('.claude/settings.json'), local: restoredText('.claude/settings.local.json') }));
   const trackedInRestore = (() => { try { git(restoreDir, 'ls-files', '--error-unmatch', '--', '.claude/settings.json'); return true; } catch { return false; } })();
-  ok('C1: …and the one the archive\'s history tracked is no longer tracked after the restore commit', !trackedInRestore);
+  ok('C1: …and the one the archive\'s history tracked is still tracked after the restore commit', trackedInRestore);
   const quarantineDir = path.join(restoreDir, 'state', 'quarantine');
-  const inQuarantine = (rel) => { try { return fs.readdirSync(quarantineDir).some((d) => fs.existsSync(path.join(quarantineDir, d, rel))); } catch { return false; } };
-  ok('C1: both were kept in state/quarantine rather than destroyed',
-    inQuarantine('.claude/settings.json') && inQuarantine('.claude/settings.local.json'));
+  ok('C1: nothing of theirs was moved into state/quarantine by the import',
+    !fs.existsSync(quarantineDir) || fs.readdirSync(quarantineDir).length === 0,
+    (() => { try { return fs.readdirSync(quarantineDir).join(', '); } catch { return ''; } })());
 
   // Named for the page the AGENT wrote, never the template's welcome.json — the seeder re-creates
   // that one, so asserting on it would pass with `ui/` left out of the backup entirely.

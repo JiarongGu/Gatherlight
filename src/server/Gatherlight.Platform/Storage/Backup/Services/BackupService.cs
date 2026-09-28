@@ -84,18 +84,16 @@ public sealed class BackupService : IBackupService
     private readonly IGitCliService _git;
     private readonly DataWriteLock _writeLock;
     private readonly IAppConfigService _config;
-    private readonly Agent.Llm.Services.IProjectConfigSweep _configSweep;
     private readonly ILogger<BackupService> _log;
 
     public BackupService(ISiteContext data, IPlatformContext platform, IMemoryService memory, IMcpServerStore mcp,
         IEnumerable<IRecordIndex> indexes, IGitCliService git, DataWriteLock writeLock,
         Site.Seed.Services.IAppManagedFiles appManaged, Knowledge.Services.IFactIndex factIndex,
-        DataRepo.Services.IDataRepoMaintenance maintenance, IAppConfigService config,
-        Agent.Llm.Services.IProjectConfigSweep configSweep, ILogger<BackupService> log)
+        DataRepo.Services.IDataRepoMaintenance maintenance, IAppConfigService config, ILogger<BackupService> log)
     {
         _data = data; _platform = platform; _memory = memory; _mcp = mcp;
         _indexes = indexes; _git = git; _writeLock = writeLock; _appManaged = appManaged;
-        _factIndex = factIndex; _maintenance = maintenance; _config = config; _configSweep = configSweep; _log = log;
+        _factIndex = factIndex; _maintenance = maintenance; _config = config; _log = log;
     }
 
     public async Task ExportAsync(Stream output, CancellationToken ct = default)
@@ -221,14 +219,6 @@ public sealed class BackupService : IBackupService
                 File.Copy(src, dest, overwrite: true);
                 restored++;
             }
-            // The claude CLI's own project config — .claude/settings*.json (hooks run before any human decision) and
-            // .mcp.json (servers it starts) — must not ride an archive INTO an install: the CLI loads it by itself on the
-            // next agent run. Stripped whether or not the archive's history TRACKS it (the startup sweep leaves a tracked
-            // file alone, and here the restored .git is what tracks it), so the restore commit below records its
-            // deletion. Moved into state/quarantine, not destroyed (IProjectConfigSweep).
-            var stripped = _configSweep.SweepAll("it came in a restored backup, and the claude CLI would load it on its own");
-            if (stripped.Count > 0)
-                _log.LogWarning("restore: stripped {Files} from the imported archive", string.Join(", ", stripped));
             {
                 var src = Path.Combine(dataDir, "state", SettingsFile);
                 if (File.Exists(src))

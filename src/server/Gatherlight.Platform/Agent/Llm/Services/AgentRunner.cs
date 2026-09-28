@@ -27,14 +27,14 @@ public sealed class AgentRunner : IAgentRunner
     private readonly IAgentSession _session;
     private readonly ILogger<AgentRunner> _log;
     private readonly IAgentRunScope _runScope;
-    private readonly IProjectConfigSweep _configSweep;
+    private readonly IProjectConfigBackstop _configBackstop;
 
-    public AgentRunner(IAgentSession session, ILogger<AgentRunner> log, IAgentRunScope runScope, IProjectConfigSweep configSweep)
+    public AgentRunner(IAgentSession session, ILogger<AgentRunner> log, IAgentRunScope runScope, IProjectConfigBackstop configBackstop)
     {
         _session = session;
         _log = log;
         _runScope = runScope;
-        _configSweep = configSweep;
+        _configBackstop = configBackstop;
     }
 
     public async Task<AgentSessionResult> RunAsync(ClaudeAgentOptions options, string label,
@@ -58,12 +58,13 @@ public sealed class AgentRunner : IAgentRunner
             !string.IsNullOrEmpty(options.SettingsPath),
             !string.IsNullOrEmpty(options.ResumeToken), options.AllowedTools.Count, options.Prompt.Length);
 
-        // The claude CLI loads a project's .claude/settings*.json and .mcp.json from its working directory ON ITS OWN,
-        // so in the data folder none may be there when a run starts, nor survive one that planted it (ProjectConfigSweep).
-        // Before AND after — the after catches what an execute run left behind before its diff gate's validation pass
-        // (an agent run in the data folder too), a Reject or the next run can meet it.
-        var sweepConfig = _configSweep.Covers(options.WorkingDirectory);
-        if (sweepConfig) await SweepConfigAsync(label, emit);
+        // The run reads none of the household's own CLI config (ClaudeCliRuntime.IsolationArgs), but the CLI's project
+        // files in the data folder are still the household's — their interactive claude reads all three — and a hook
+        // planted in .claude/settings.json would run in the app's next run too. So a run in the data folder is
+        // snapshotted, and whatever it CREATED or CHANGED among them is undone when it ends, however it ends; a file it
+        // left alone is never touched (ProjectConfigBackstop). The undo runs before the diff gate's validation pass (an
+        // agent run in the data folder too), a Reject or the next run can meet what this one left.
+        var configSnapshot = _configBackstop.Take(options.WorkingDirectory);
 
         AgentSessionResult result;
         try
@@ -95,7 +96,7 @@ public sealed class AgentRunner : IAgentRunner
         }
         finally
         {
-            if (sweepConfig) await SweepConfigAsync(label, emit);
+            if (configSnapshot is not null) RestoreConfig(configSnapshot, label, emit);
         }
 
         if (result.IsError || string.IsNullOrEmpty(result.FinalText))
@@ -108,23 +109,23 @@ public sealed class AgentRunner : IAgentRunner
         return result;
     }
 
-    // Uncancellable on purpose: the sweep after a stopped run is exactly the one that must happen. It never throws
-    // (ProjectConfigSweep logs its own failures), and says in the run's own stream what it moved and where to.
-    private async Task SweepConfigAsync(string label, Action<AgentEvent> emit)
+    // Takes no token on purpose: the undo after a stopped run is exactly the one that must happen. It never throws
+    // (ProjectConfigBackstop logs its own failures and a Warning per file), and says in the run's own stream what it undid.
+    private void RestoreConfig(ProjectConfigSnapshot snapshot, string label, Action<AgentEvent> emit)
     {
-        IReadOnlyList<string> moved;
-        try { moved = await _configSweep.SweepUntrackedAsync(CancellationToken.None); }
+        IReadOnlyList<string> undone;
+        try { undone = _configBackstop.Restore(snapshot); }
         catch (Exception ex)
         {
-            _log.LogError(ex, "[{Label}] project-config sweep failed", label);
+            _log.LogError(ex, "[{Label}] project-config backstop failed", label);
             return;
         }
-        if (moved.Count == 0) return;
+        if (undone.Count == 0) return;
         emit(new AgentEvent
         {
             Kind = "notice",
-            Text = $"已把 {string.Join("、", moved)} 移出数据目录(原文件保存在 state/quarantine/ 下):"
-                + "claude 会自己加载这类配置文件,应用从不写它,助手也不允许写。",
+            Text = $"这次运行改动了 {string.Join("、", undone)},已恢复成运行前的样子(运行写下的内容另存在 state/quarantine/ 下):"
+                + "这些是 claude 自己会加载的配置文件,助手不允许写。",
         });
     }
 

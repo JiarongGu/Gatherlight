@@ -88,6 +88,32 @@ const spawnKind = prompt.includes('CURRENT PHASE: VALIDATION') ? 'validate'
   : prompt.includes('CURRENT PHASE: PLANNING') ? 'plan'
   : prompt.includes('CURRENT PHASE: EXECUTING') ? 'execute' : 'other';
 recordEnv(spawnKind);
+// WHICH OF ITS WORKING DIRECTORY'S OWN CLI CONFIG FILES THIS SPAWN WOULD LOAD, recorded on request
+// (GATHERLIGHT_STUB_LOADS_LOG, e2e-p54). The stub runs no hook and starts no MCP server, so it cannot SHOW that the
+// household's .claude/settings.local.json or .mcp.json stayed out of an app run. It records instead what claude 2.1.283
+// was MEASURED to load under this argv (docs/self-managed-llm-runtime.md, 2026-09-28): the PROJECT scope (CLAUDE.md,
+// .claude/settings.json) when --setting-sources names `project` or is absent, the LOCAL scope
+// (.claude/settings.local.json, CLAUDE.local.md) when it names `local` or is absent, and each server of a project
+// .mcp.json unless --strict-mcp-config. A model of the CLI, kept to what was measured; the real behaviour is the probe's.
+const recordLoads = (kind) => {
+  const log = process.env.GATHERLIGHT_STUB_LOADS_LOG;
+  if (!log) return;
+  const at = args.indexOf('--setting-sources');
+  const sources = at >= 0 ? String(args[at + 1] ?? '').split(',').map((x) => x.trim()).filter(Boolean) : ['user', 'project', 'local'];
+  const strictMcp = args.includes('--strict-mcp-config');
+  const here = (rel) => path.join(process.cwd(), rel);
+  const loaded = [];
+  if (sources.includes('project')) for (const rel of ['CLAUDE.md', '.claude/settings.json']) if (fs.existsSync(here(rel))) loaded.push(rel);
+  if (sources.includes('local')) for (const rel of ['.claude/settings.local.json', 'CLAUDE.local.md']) if (fs.existsSync(here(rel))) loaded.push(rel);
+  if (!strictMcp && fs.existsSync(here('.mcp.json'))) {
+    try {
+      for (const name of Object.keys(JSON.parse(fs.readFileSync(here('.mcp.json'), 'utf8')).mcpServers ?? {})) loaded.push(`.mcp.json:${name}`);
+    } catch { loaded.push('.mcp.json'); }
+  }
+  try { fs.appendFileSync(log, JSON.stringify({ kind, cwd: process.cwd(), sources, strictMcp, loaded }) + '\n', 'utf8'); }
+  catch { /* a log that cannot be written must not change what the stub answers */ }
+};
+recordLoads(spawnKind);
 if (process.env.GATHERLIGHT_STUB_ARGS_LOG) {
   try {
     fs.appendFileSync(process.env.GATHERLIGHT_STUB_ARGS_LOG,
@@ -749,10 +775,12 @@ if (readOnly) {
   // it starts) — written the way a slipped Bash token could, plus one ordinary plan edit so a diff gate is reached.
   // Obviously fake content; nothing reads it but the app's sweep.
   if (prompt.includes('[TRIG:FSPLANT]')) {
+    // What a slipped Bash token could do (e2e-p54): CREATE the project settings file, and REWRITE the household's own
+    // local settings and .mcp.json (which that suite puts there before boot) — hooks and servers of the stub's choosing.
     const planted = {
-      '.claude/settings.json': '{"_e2e":"planted-by-claude-stub","hooks":{}}\n',
-      '.claude/settings.local.json': '{"_e2e":"planted-by-claude-stub","permissions":{}}\n',
-      '.mcp.json': '{"_e2e":"planted-by-claude-stub","mcpServers":{}}\n',
+      '.claude/settings.json': '{"_e2e":"planted-by-claude-stub","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo e2e-planted"}]}]}}\n',
+      '.claude/settings.local.json': '{"_e2e":"planted-by-claude-stub","permissions":{"allow":["Bash"]}}\n',
+      '.mcp.json': '{"_e2e":"planted-by-claude-stub","mcpServers":{"e2e-planted-srv":{"type":"stdio","command":"node","args":["e2e-planted.mjs"]}}}\n',
     };
     for (const [rel, text] of Object.entries(planted)) {
       const abs = path.resolve(process.cwd(), rel);
