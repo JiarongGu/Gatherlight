@@ -13,22 +13,16 @@ import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeC
 
 const { ok, fail, done } = makeReporter('p55');
 
-const lastSpawn = (envLog) => {
-  try {
-    const rows = fs.readFileSync(envLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
-      .filter((r) => r.kind === 'plan' || r.kind === 'execute' || r.kind === 'other');
-    return rows[rows.length - 1] ?? null;
-  } catch { return null; }
-};
-
 // Drive one agent turn (a plan spawn) so the stub records the env it was handed, and return that record.
 const spawnEnv = async (post, waitPhase, envLog) => {
   const before = (() => { try { return fs.readFileSync(envLog, 'utf8').split('\n').filter(Boolean).length; } catch { return 0; } })();
   const s = await post('/api/chat', { message: '给明天建一个日计划' });
   await waitPhase(s.body.id, 'awaiting-plan-approval');
-  // the newest spawn line after `before`
+  // The PLAN spawn this turn drove — found by its kind among the lines written after `before`. (This used to filter
+  // on `gitBash !== undefined`, which every line satisfies — the stub always records the variable, null or not — so
+  // it took whatever spawn came last, a memory call or a scorer as readily as the plan.)
   const rows = fs.readFileSync(envLog, 'utf8').split('\n').filter(Boolean).slice(before).map((l) => JSON.parse(l));
-  const env = rows.filter((r) => r.gitBash !== undefined).pop() ?? lastSpawn(envLog);
+  const env = rows.filter((r) => r.kind === 'plan').pop() ?? null;
   // Release the agent lease so the next turn is not 409 BUSY (a parked plan gate holds it).
   await post(`/api/chat/${s.body.id}/plan/reject`);
   await waitPhase(s.body.id, 'rejected');
@@ -42,8 +36,10 @@ const envLogA = `${dirA}-env.jsonl`;
 try { fs.rmSync(envLogA); } catch {}
 const provisionedBash = path.join(dirA, 'state', 'resources', 'git-bash', 'bin', 'bash.exe');
 
+// 5xxx literals: the runner keeps suites port-disjoint, and checks Windows' reserved ranges, by scanning each file for
+// 5xxx literals — the 6195/6196 this suite first used were invisible to both.
 const srvA = startServer({
-  dataDir: dirA, port: 6195,
+  dataDir: dirA, port: 5624,
   env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ENV_LOG: envLogA, GATHERLIGHT_ASSUME_NO_GIT_BASH: '1' },
 });
 const A = makeClient(srvA.base);
@@ -101,7 +97,7 @@ fs.mkdirSync(path.dirname(householdBash), { recursive: true });
 fs.writeFileSync(householdBash, '@household bash\n');
 
 const srvB = startServer({
-  dataDir: dirB, port: 6196,
+  dataDir: dirB, port: 5625,
   env: {
     GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ENV_LOG: envLogB,
     GATHERLIGHT_ASSUME_NO_GIT_BASH: '1', CLAUDE_CODE_GIT_BASH_PATH: householdBash,
@@ -122,6 +118,53 @@ try {
   console.error(srvB.log().slice(-2500));
 } finally {
   srvB.stop();
+}
+
+// ---------- C: a Git for Windows the CLI would discover on its own wins over ours ----------
+// ApplyGitBash's other branch, reached with NO test seam: a `git` on PATH with `..\bin\bash.exe` beside it is what
+// the CLI finds by itself, so the app sets nothing — even with its own PortableGit installed. The layout is a fake
+// appended to the END of the server's PATH, so the case holds on a machine without Git for Windows too (where it has
+// one, the default install is discovered first and the outcome is the same), and the data repo's own git — resolved
+// from the front of PATH — is untouched by it. The fake is extensionless: nothing ever runs it.
+const dirC = dataDirFor('p55-discovered');
+makeTestData(dirC);
+const envLogC = `${dirC}-env.jsonl`;
+try { fs.rmSync(envLogC); } catch {}
+const ourBashC = path.join(dirC, 'state', 'resources', 'git-bash', 'bin', 'bash.exe');
+fs.mkdirSync(path.dirname(ourBashC), { recursive: true });
+fs.writeFileSync(ourBashC, '@stub bash\n');
+const fakeGit = `${dirC}-fakegit`;
+fs.rmSync(fakeGit, { recursive: true, force: true });
+fs.mkdirSync(path.join(fakeGit, 'cmd'), { recursive: true });
+fs.mkdirSync(path.join(fakeGit, 'bin'), { recursive: true });
+fs.writeFileSync(path.join(fakeGit, 'cmd', 'git'), '@fake git — never run\n');
+fs.writeFileSync(path.join(fakeGit, 'bin', 'bash.exe'), '@fake bash — never run\n');
+const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+
+const srvC = startServer({
+  dataDir: dirC, port: 5626,
+  env: {
+    GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ENV_LOG: envLogC,
+    [pathKey]: `${process.env[pathKey] ?? ''};${path.join(fakeGit, 'cmd')}`,
+  },
+});
+const C = makeClient(srvC.base);
+try {
+  await waitHealthy(srvC.base);
+  console.log('server C up');
+  const res = await C.j('/api/manage/resources');
+  const row = (res.body.resources ?? []).find((r) => r.id === 'git-bash');
+  ok('(setup) our PortableGit is installed in case C', row && row.installed === true, JSON.stringify(row));
+  ok('the row says a Git for Windows is already there, nothing to download',
+    row && /系统已装 Git for Windows/.test(row.detail ?? ''), row?.detail);
+  const e = await spawnEnv(C.post, C.waitPhase, envLogC);
+  ok('THE POINT: with a Git Bash the CLI discovers itself, the app hands it NO git-bash path (not ours)',
+    e && e.gitBash === null, JSON.stringify(e?.gitBash));
+} catch (err) {
+  fail('e2e-p55 C fatal: ' + err.message);
+  console.error(srvC.log().slice(-2500));
+} finally {
+  srvC.stop();
 }
 
 done();

@@ -10,7 +10,7 @@
 //     else                              -> plan text
 //   execute (--permission-mode acceptEdits):
 //     physically writes plans/daily/2026-07-14.md + emits the Edit tool_use for it
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -107,6 +107,13 @@ emit({ type: 'system', subtype: 'init', session_id: sessionId });
 // them itself, so p43's count of stored `system` rows is the regression test for that upstream fix.
 emit({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 12, estimated_tokens_delta: 12, session_id: sessionId });
 emit({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 30, estimated_tokens_delta: 18, session_id: sessionId });
+
+// e2e-p54 (overlapping runs): the READ-ONLY run the execute stub starts through `extract` says it has begun —
+// by then AgentRunner has entered its run scope — so the execute run can call a file tool INSIDE it. Written
+// before the SLOW sleep, which keeps this run in flight past the execute run's end.
+if (prompt.includes('OVERLAPPROBE') && process.env.GATHERLIGHT_STUB_OVERLAP_MARK) {
+  try { fs.writeFileSync(`${process.env.GATHERLIGHT_STUB_OVERLAP_MARK}.started`, String(process.pid), 'utf8'); } catch {}
+}
 
 if (prompt.includes('SLOW')) {
   await new Promise((r) => setTimeout(r, 8000));
@@ -552,6 +559,7 @@ if (readOnly) {
     // the 智库 validation pass — so its spawn, and the --model it receives, can be observed at all.
     : userReq.includes('KBEDITTEST') ? ' [TRIG:KBEDIT]'
     : userReq.includes('FSOPSTEST') ? ' [TRIG:FSOPS]'
+    : userReq.includes('FSPLANTTEST') ? ' [TRIG:FSPLANT]'
     : userReq.includes('NOOPTEST') ? ' [TRIG:NOOP]' : '';
   // e2e-p54: prove a scoped file tool is REFUSED in the read-only plan phase. The stub drives the loopback
   // endpoint directly (a fake CLI does not honour --allowedTools), so the tool's own run-scope check is
@@ -657,6 +665,21 @@ if (readOnly) {
     const server = mcpServerFromArgs();
     const moveTo = 'plans/trips/2026-08-kyoto-moved.md';
     const delPath = 'plans/budgets/2026-08-kyoto.md';
+    // Untracked fixtures for the round-6 review's rows, planted here (the stub stands in for what an agent could have
+    // written) so each refused row has a source of its own: a folder, a folder holding a settings.json, a file for
+    // the 8.3-name rule, one for the symlinked-parent rule, one for the overlapping-run probe and one for the at-rest
+    // check the suite makes over HTTP.
+    const plant = (rel, text) => {
+      const abs = path.resolve(process.cwd(), rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, text, 'utf8');
+    };
+    plant('plans/dirtest/a.md', '# a folder the file tools must not move whole\n');
+    plant('plans/kbdir/settings.json', '{"_e2e":"planted-by-claude-stub","hooks":{}}\n');
+    plant('plans/tilde-src.md', '# a plain file bound for a name with a tilde\n');
+    plant('plans/symlink-src.md', '# a file bound for a path through a symlinked parent\n');
+    plant('plans/overlap-src.md', '# moved while a read-only run is in flight\n');
+    plant('plans/rest-src.md', '# must not move once no write run is in flight\n');
     try {
       const rows = server ? await driveFsOps(server, [
         { op: 'move-ok', name: 'fs_move', args: { from: 'plans/trips/2026-08-kyoto.md', to: moveTo } },
@@ -671,15 +694,77 @@ if (readOnly) {
         { op: 'move-c2-trailing-dot', name: 'fs_move', args: { from: 'household/README.md', to: '.claude/settings.json.' } },
         { op: 'move-c3-case-fold', name: 'fs_move', args: { from: 'household/people.md', to: '.claude/Settings.json' } },
         { op: 'move-ads-colon', name: 'fs_move', args: { from: 'plans/visa/2026-08-kyoto/applicant-data.json', to: 'plans/x.md:evil' } },
+        // Round-6 review, I1 — the diff gate is file-level, so the tools are FILE-ONLY: a folder operand is refused.
+        { op: 'move-dir-refused', name: 'fs_move', args: { from: 'plans/dirtest', to: 'plans/dirtest-moved' } },
+        { op: 'delete-dir-refused', name: 'fs_delete', args: { path: 'plans/dirtest' } },
+        // C1 — PROTECTED was checked only for a path UNDER an entry, never one CONTAINING it, so `.claude` itself
+        // resolved as writable and could be moved or deleted whole. A write-dir root is no operand either. Destructive
+        // on the pre-fix code, so these come LAST and each asserts its own refusal reason.
+        { op: 'delete-c1-root', name: 'fs_delete', args: { path: 'household' } },
+        { op: 'move-c1-into-claude', name: 'fs_move', args: { from: 'plans/kbdir', to: '.claude', overwrite: true } },
+        { op: 'move-c1-claude-from', name: 'fs_move', args: { from: '.claude', to: 'plans/kb' } },
+        { op: 'delete-c1-claude', name: 'fs_delete', args: { path: '.claude' } },
+        // Minors: only `~` + digit is an 8.3 short name (a plain tilde is a name), and a target is checked for a
+        // symlinked parent even when it does not exist yet — the case the old check skipped.
+        { op: 'move-tilde-ok', name: 'fs_move', args: { from: 'plans/tilde-src.md', to: 'plans/newsub/a~b.md' } },
+        { op: 'move-shortname-refused', name: 'fs_move', args: { from: 'plans/symlink-src.md', to: 'plans/x~1.md' } },
+        { op: 'move-via-symlinked-parent', name: 'fs_move', args: { from: 'plans/symlink-src.md', to: 'plans/linkout/escaped.md' } },
       ]) : [{ op: 'no-server' }];
       logFsOps('execute', rows);
     } catch (err) { logFsOps('execute', [{ op: 'execute', error: String(err?.message ?? err) }]); }
+    // I2 — OVERLAPPING runs. A read-only run (an `extract` over HTTP, which holds no agent lease) is started from
+    // INSIDE this execute run and kept in flight past its end. The old shared flag gave the read-only run's policy
+    // to both: this run's fs_move was refused while it overlapped, and once this run ended FIRST the read-only run's
+    // exit restored "writes allowed" at rest. The HTTP call is made by a DETACHED helper so it outlives this stub:
+    // a request dropped with the stub would cancel the extract early and reorder the exits.
+    const mark = process.env.GATHERLIGHT_STUB_OVERLAP_MARK;
+    const httpBase = process.env.GATHERLIGHT_STUB_HTTP_BASE;
+    if (server && mark && httpBase) {
+      const helper = `
+        const [base, mark] = process.argv.slice(1);
+        const fs = require('node:fs');
+        fetch(base + '/api/tools/call', { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'extract', arguments: { relPath: 'uploads/overlap.pdf', instruction: 'OVERLAPPROBE SLOW' } }) })
+          .then((r) => fs.writeFileSync(mark + '.response', String(r.status)))
+          .catch((e) => fs.writeFileSync(mark + '.response', 'error ' + e.message));`;
+      spawn(process.execPath, ['-e', helper, httpBase, mark], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      const t0 = Date.now();
+      while (!fs.existsSync(`${mark}.started`) && Date.now() - t0 < 30000) await new Promise((r) => setTimeout(r, 100));
+      const started = fs.existsSync(`${mark}.started`);
+      try {
+        const rows = await driveFsOps(server, [{ op: 'overlap-move', name: 'fs_move', args: { from: 'plans/overlap-src.md', to: 'plans/overlap-dst.md' } }]);
+        logFsOps('overlap', rows.map((r) => ({ ...r, readOnlyRunStarted: started })));
+      } catch (err) { logFsOps('overlap', [{ op: 'overlap-move', error: String(err?.message ?? err), readOnlyRunStarted: started }]); }
+    }
     // The two successful mutations, as tool_use events, so the tracker records their paths for the diff gate.
     emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__planner-tools__fs_move', input: { from: 'plans/trips/2026-08-kyoto.md', to: moveTo } }] } });
     emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
     emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__planner-tools__fs_delete', input: { path: delPath } }] } });
     emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
     done('已整理计划文件:移动了行程、删除了旧预算(stub,经 fs_move/fs_delete)。');
+    process.exit(0);
+  }
+  // e2e-p54 (C1, the planted config): an execute run leaves the three project config files the CLI loads on its own
+  // — .claude/settings.json and settings.local.json (hooks that run before any human decision) and .mcp.json (servers
+  // it starts) — written the way a slipped Bash token could, plus one ordinary plan edit so a diff gate is reached.
+  // Obviously fake content; nothing reads it but the app's sweep.
+  if (prompt.includes('[TRIG:FSPLANT]')) {
+    const planted = {
+      '.claude/settings.json': '{"_e2e":"planted-by-claude-stub","hooks":{}}\n',
+      '.claude/settings.local.json': '{"_e2e":"planted-by-claude-stub","permissions":{}}\n',
+      '.mcp.json': '{"_e2e":"planted-by-claude-stub","mcpServers":{}}\n',
+    };
+    for (const [rel, text] of Object.entries(planted)) {
+      const abs = path.resolve(process.cwd(), rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, text, 'utf8');
+    }
+    const planAbs = path.resolve(process.cwd(), 'plans/trips/plant-review.md');
+    fs.mkdirSync(path.dirname(planAbs), { recursive: true });
+    fs.writeFileSync(planAbs, `# plant-review (fixture)\n\n- written-by-stub ${process.pid}\n`, 'utf8');
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: planAbs } }] } });
+    emit({ type: 'user', message: { content: [{ type: 'tool_result' }] } });
+    done('已写入 plans/trips/plant-review.md(stub)。');
     process.exit(0);
   }
   // NOOP (e2e-p28): make NO change and ask nothing → empty diff → the flow ends 'rejected'. A pure
