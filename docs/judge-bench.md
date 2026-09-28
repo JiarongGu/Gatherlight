@@ -9117,3 +9117,217 @@ a vector there, of its first 2,048 tokens.
   offer on this path) — or about 判断 on. It was off throughout, so no annotation and no reranker reordered anything.
 - **Whether the vector-less-fact penalty (the section above) holds on the household's own data.** It is measured here on
   a fixture whose over-window facts are half of the corpus.
+
+## Run 15 — 语义's embedder on a CPU: 内置 (in-process ONNX EmbeddingGemma) against llama.cpp's GGUF (design)
+
+Written and committed BEFORE the bench code and before any run, smoke included; the results section that follows names
+this commit.
+
+**Why it is asked.** Since Run 13, 判断 recommends 内置 (the in-process reranker) first where llama.cpp has not answered
+whether this machine has a GPU it can use (`GgufCatalog.GpuAnswer.NotAsked`: a fresh install) and where it answered with
+none (`NoGpu`). Such a household needs no llama.cpp for 判断. 资源's badge still recommends 语义's llama.cpp GGUF embedder
+first (`ModelsController.Recommend`: a repair, then `GgufCatalog.RecommendedEmbedder`, then `BuiltInSemanticSource.ModelId`),
+and that one needs llama.cpp. So the same household is sent to download llama.cpp for 语义 alone.
+
+The two embedder rows are the same EmbeddingGemma-300M:
+
+- **the GGUF**, `embeddinggemma-300M-Q8_0` (334 MB), served by llama-server with the product's embedder section;
+- **内置**, `embeddinggemma-300m-onnx`: the q4 ONNX export (`onnx/model_q4.onnx` with its external weights) and the
+  SentencePiece `tokenizer.model`, 222 MB, run in the app's process by ONNX Runtime (`OnnxEmbedder`). It reads the export's
+  own pooling head, normalises, sends raw text with no task prompt, and truncates past 2,048 tokens.
+
+What stands behind today's order:
+
+- the 10-question `EmbeddingCatalog` fixture (`dev.mjs embed-bench`, 2026-08-22): GGUF 9/10 top-1, 内置 8/10, both 10/10
+  top-3 — one question apart, on 20 facts;
+- re-embed throughput, 100 short facts (dev-conventions): ~26 ms per entry on the GPU, ~56 on llama.cpp's CPU, ~46 for
+  内置.
+
+Neither is a within-run paired measurement on the app's bilingual fixtures. **On a machine with no usable GPU, is 内置 as
+good an embedder for 语义 as llama.cpp's GGUF on the CPU, and no slower, so that 语义 recommends 内置 first there, as 判断
+does?** The owner: most installs have a GPU and llama.cpp, but the CPU case is worth testing.
+
+### The instrument: semantic-bench, not judge-bench
+
+- **judge-bench cannot measure an embedder.** Its arms copy ONE seed written with 语义 off, so no arm has vectors, and it
+  has no embedder arm (Run 14 says why a reindex after the copy would not be a household's path either).
+- **`devtools/scripts/semantic-bench.mjs` can** (Run 14's bench):
+  - every arm WRITES the fixture itself through `remember_fact`, from one settled empty data folder, in fixture order,
+    timing each write. That is the write path a household's facts take, and it embeds;
+  - then it asks every question in judge-bench's own shuffled order (order seed 12345, the same neighbour repair),
+    `recall_facts` with limit 8, and records where the target lands and how long the call took;
+  - its pairing and statistics are judge-bench's: McNemar exact, the Agresti–Min 95% interval of the paired net
+    difference, and the ±3pp equivalence margin;
+  - it runs one arm at a time, each its own data folder and server, by construction (what `--serial-arms` asks of
+    judge-bench), and takes `--resources=devtools/_rr-res`.
+- **What the bench gains for this run** (the commit after this one): the long fixture; the `cpu-sem` and `semb` arms; a
+  fresh router per llama.cpp arm, stopped before the next arm starts; per-pass timestamps; server and router-child memory;
+  per-recall and per-write p90; a paired sign test on recall times; and a RUN 15 block. The existing arms do not change,
+  and Run 14's three saved results must re-analyse identically under it (checked before the runs).
+
+### What is compared
+
+判断 is OFF in every arm: no annotation, no verification, so no reranker or LLM reorders anything and claude is never
+called (every server runs on the claude stub; no quota). `recall_facts`, limit 8, as shipped.
+
+| arm | 语义 | where it embeds |
+|---|---|---|
+| `formula` | off | — (the base every run carries) |
+| `sem` | llama.cpp · `embeddinggemma-300M-Q8_0` | the GPU: its own fresh router with the product's section — `n-gpu-layers = 99`, `embeddings = true`, `batch-size` and `ubatch-size` 2,048 (guarded against `LlamaServerRuntime`) |
+| `sem2` | the same — the A/A twin | the GPU, its own fresh router |
+| `cpu-sem` | the same GGUF | the CPU only: its own fresh router, `n-gpu-layers = 0` AND `device = none` in place of the product's 99 (Run 8's and Run 13's CPU mechanism: `n-gpu-layers = 0` alone still offloads a big batch's work to a visible GPU on b10549), the rest of the section as the product writes it |
+| `semb` | 内置 · `embeddinggemma-300m-onnx` | the CPU, in the app's process. No llama.cpp is planted in its data folder, no address is set, and no router runs during it |
+
+- **One router per llama.cpp arm**, started before the arm and stopped after it. So `cpu-sem` has no GPU router it could
+  reach, `semb` runs on a machine with no llama.cpp process at all, and each router's log is one arm's: every request it
+  proxied belongs to that arm.
+- **The 内置 files** are `devtools/_rr-res/embed-model/`, the three files `ResourceProvisioner` pins for `embed-model`.
+  Their sha256 were checked against the pins before this design (all three match); the bench re-checks them before any
+  arm and copies them into the arm's `state/resources/embed-model`, where `BuiltInSemanticSource` looks.
+- **What differs between the two implementations** is everything below 语义's seam:
+  - the quantisation: ONNX q4 against GGUF Q8_0;
+  - the tokenizer: Microsoft.ML.Tokenizers' SentencePiece over `tokenizer.model`, against llama.cpp's vocabulary in the
+    GGUF;
+  - the kernels: ONNX Runtime's CPU kernels against llama.cpp's CPU kernels (and its Vulkan ones, GPU arms);
+  - the transport: an in-process call against an HTTP round trip to the router and its child.
+
+### The fixtures
+
+- **short** — `recall-bilingual.json` (`9680443e…f555`): 60 facts of at most 101 characters, 240 questions.
+- **long** — `recall-bilingual-long.json` (`1f48f1be…4f17`), refused unless it is `judge-bench-long-fixture.mjs`'s bytes: 60
+  notes of 883–1,241 characters (40 zh, 16 en, 4 ja), 240 questions, the answer at the note's start, middle, end or beyond
+  1,000 characters (15 notes each).
+  - **Every note fits EmbeddingGemma's 2,048-token window**: at the slowest rates Run 14's sweep read on these notes (0.80
+    tokens per unit in Chinese, 0.64 in Japanese, 0.22 in English), the longest is under 900 tokens. So neither
+    implementation refuses or truncates one: the long fixture compares longer inputs, embedded whole by both. The router
+    logs each task's `n_tokens` and `truncated`, and guard 6 holds the claim to them.
+- **Not run: the embed fixture** (over-window notes). There llama.cpp refuses and 内置 truncates, which is a different
+  question (Run 14, "What applies to the built-in embedder — not measured").
+- **The four question sets** (same, cross, third, mixed) are reported per arm, and the long fixture's four positions,
+  descriptively.
+
+### The order
+
+- short: `formula, sem, sem2, cpu-sem, semb`;
+- long: `formula, sem, sem2, semb, cpu-sem`.
+- The two CPU arms run back to back, and swap places between the fixtures, so neither always runs first. Each arm is
+  alone on the machine for its whole pass.
+
+### Measured
+
+- **Accuracy**, per arm: top-1 and found@8 on `all`, per question set, and (long) per position.
+- **Paired** (McNemar exact, Agresti–Min 95%, equivalence within ±3pp): `semb` vs `cpu-sem` (the rule); `semb` vs `sem`
+  (the GPU reference); `cpu-sem` vs `sem` (llama.cpp's own spread between two devices); `sem2` vs `sem` (the A/A); each
+  语义 arm vs `formula` (context).
+- **Recall time**: each arm's median and p90 per `recall_facts` call over its whole recall pass (240 calls, the arm alone),
+  as the bench times it (the MCP call, which embeds the query once). A sign test over the paired recalls (the same
+  question in each arm; exact binomial, two-sided): `semb` against `cpu-sem`, and against `sem`.
+- **Indexing time**: each arm's median and p90 per `remember_fact` (判断 off, so the embed is the write's main cost),
+  and which facts got a vector (the database) and the classifier's refused lines.
+- **Memory**: each arm's server private bytes and working set after startup (before the writes), after the writes, and
+  after the recalls. `semb`'s is the one reported against the question: its model lives in that process. For the
+  llama.cpp arms, the router child serving the model (the llama-server holding the weights) after the recalls — what
+  llama.cpp holds instead, descriptive.
+- **The machine**: the CPU model and core count; llama.cpp's thread count (the child's log); ONNX Runtime's is its default
+  for the session the app creates (not logged). The load, sampled every 20 s by the scratch
+  `devtools/_run15/load-sampler.ps1` (Run 13's): the CPU share of this run's processes and of everything else, matched to
+  each arm's pass by the timestamps the bench records.
+
+### Decision rule
+
+As written by the owner, **verbatim**: **"recommend 内置 FIRST for 语义 where 判断 already recommends 内置 for the
+machine's GPU answer (NotAsked and NoGpu — `GgufCatalog.RecommendedRerankerFor`'s cases, not the skip/slow-BGE repairs,
+which are 判断's own) if and only if, against llama.cpp on the CPU, 内置 is not significantly worse on found@8 on EITHER
+fixture (α 0.05) AND its median per-recall latency is not higher on either fixture. Otherwise the order stays. Machines
+where llama.cpp sees a GPU keep the GGUF first regardless (the GPU arm is a reference; say where 内置 stands against it).
+Top-1, the per-set figures and memory are reported and never decide."**
+
+It is read as follows, fixed before the runs. b = `cpu-sem` hit & `semb` miss, c = the reverse; paired within one run.
+
+- **The accuracy clause.** On the short run AND on the long run, `semb` is NOT significantly worse than `cpu-sem` on
+  `all` (240 pairs) found@8. Significantly worse means exact McNemar p < 0.05 AND c − b < 0. Two tests, no correction.
+- **The latency clause.** On each fixture, `semb`'s median per-recall time is NOT HIGHER than `cpu-sem`'s.
+  - The measure is each arm's median over its whole recall pass: 240 calls, each arm alone, every call counted.
+  - HIGHER is read as Run 13 read "slower": `semb`'s median is higher AND a sign test over the paired recalls finds it
+    significantly slower (p < 0.05, more recalls slower than faster). Anything else is NOT HIGHER.
+  - The plain comparison of the two medians is printed beside it; where the two readings would differ, the results say
+    so.
+- **The load clause (Run 13's).** The load sampler reports the median CPU share of processes NOT started by this run, over
+  `semb`'s recall pass and over `cpu-sem`'s. If the two medians differ by more than 5 points of the machine, the latency
+  clause is not read for that fixture, and neither is the recommendation. A constant background load affects both passes
+  alike and is only reported.
+- **The verdict.** The rule HOLDS iff the accuracy clause holds on both fixtures AND the latency clause holds on both
+  fixtures (the load clause allowing it to be read). Then 语义's suggestion names 内置 first where the GPU answer is
+  `NotAsked` or `NoGpu`. Otherwise the order stays.
+  - **A GPU keeps the GGUF first either way.** `Gpu`, and `OtherDevices` (devices of a build we did not provision), which
+    `RecommendedRerankerFor` reads as it reads `Gpu`.
+  - **The repairs stay 判断's own.** A pace skip or BGE measured too slow moves 判断's pick, never the embedder's.
+- **Reported beside it, never deciding:** top-1 against both llama.cpp arms; `semb` against `sem` on both metrics, with
+  the equivalence reading; each question set; each long position; indexing time; memory; the p90s.
+  - A significant found@8 loss against the GPU arm is reported and flagged. It cannot move a GPU machine's order, which
+    the rule fixes.
+
+### How a difference is read — two implementations, two quantisations
+
+- **Rows are not expected to be identical.** Two quantisations of the same weights (q4 against Q8_0) through two
+  tokenizers do not give the same vectors: `OnnxEmbedder`'s own record reads a cosine of 0.67–0.84 between the q4 export
+  and another quantisation of the model, on the same texts. So a difference is expected, and nothing requires identity.
+- **A difference is set against llama.cpp's own spread.** `cpu-sem` against `sem` is the same GGUF on two devices; `sem2`
+  against `sem` is the same arm twice (Run 14: 0 of 240 rows differed). If `semb`'s difference from `cpu-sem` is of their
+  size, it is read as numeric noise; if larger, as the implementation.
+- **Equivalence decides nothing.** "Not significantly worse" is the rule, and it is not "equivalent"; the results say which
+  one each comparison is.
+- **Recall histories diverge.** Every recall reinforces what it returned, so once two arms' pages differ, later recalls
+  gather from different graphs (Runs 10 and 12). A difference that concentrates late in the run, or on one question set,
+  is described as that.
+
+### Guards, checked per run before the rule is read
+
+A failed guard leaves that run's clauses unread; the run is re-run, never read.
+
+1. **The instrument.** Each fixture's sha256 as above; the long fixture is its generator's bytes (the bench refuses
+   otherwise). `formula`'s short-fixture rows are compared with Run 14's `formula` short rows (position and page), and the
+   result is reported: a later commit may legitimately have moved the engine, so it is not a guard.
+2. **The A/A.** `sem2` vs `sem` is quiet on `all` (p ≥ 0.05, both metrics), in both runs.
+3. **Startup.**
+   - `sem`, `sem2` and `cpu-sem` read back `llama-cpp · embeddinggemma-300M-Q8_0`; `semb` reads back
+     `builtin · embeddinggemma-300m-onnx`; `formula` has 语义 off.
+   - `semb`'s log carries 内置's load line (「内置 embedder loaded in N ms」), and nothing in it names a llama.cpp
+     address.
+   - No arm sets a knob, and none prints a `[measurement]` line. No migration warning. 0 claude-cli calls.
+   - Every arm's own log holds INFO lines only: no WARN, no ERROR. An embedder that throws is logged at Warning by Lyntai's
+     router (「router: builtin-onnx threw」), so this also holds that 内置 answered every call.
+4. **Writes and recalls.** Every write returned ok, and every question was answered (no error row).
+5. **Vectors.** Every 语义 arm has a vector for 60 of 60 facts and 0 refused lines, in both runs.
+6. **The routers.** Each llama.cpp arm's router:
+   - spawned the embedder once, with 0 error lines;
+   - proxied EXACTLY one request per write and per recall while the arm's passes ran (60 + 240 = 300, its startup probes
+     counted apart), so every write and every recall embedded through it;
+   - for `cpu-sem`: the child ran `--device none --n-gpu-layers 0`; for `sem` and `sem2`: `--n-gpu-layers 99` and no
+     `--device`;
+   - every task's `truncated = 0`, and the largest task's `n_tokens` is under 2,048 (so no long note was cut by either
+     implementation, whose vocabularies are the same model's).
+7. **One build.** The server's fingerprint is the same in both results files and after the last run.
+8. **The 内置 files.** They match `ResourceProvisioner`'s pins (the bench refuses otherwise).
+
+### Commands
+
+```
+node devtools/scripts/semantic-bench.mjs --fixture=short --arms=formula,sem,sem2,cpu-sem,semb \
+  --resources=devtools/_rr-res --port-base=7930 --llama-port=7980
+node devtools/scripts/semantic-bench.mjs --fixture=long --arms=formula,sem,sem2,semb,cpu-sem \
+  --resources=devtools/_rr-res --port-base=7950 --llama-port=7985
+```
+
+- **Ports.** Arm i listens on the port base + i and the settled template on the base + 9; arm i's router on the llama port
+  + i. So 7930–7939, 7950–7959, 7980–7984 and 7985–7989. None is in a range Windows had reserved on the day of writing, and
+  none was listening. The owner's own llama-server (port 8090) and every process this run did not start are left alone.
+- **A plumbing smoke first**, after the bench commit: `--n=4` (16 questions) on both fixtures, ports 7910–7919 and
+  7970–7979. Its numbers inform nothing. If it shows the design cannot be run as written, an amendment is committed before
+  the runs, as in Runs 11 and 12.
+- **The build.** The server is built from the sources of this design's parent (`7c60892`), and not rebuilt between the
+  runs.
+- **The machine.** Intel Core Ultra 9 185H (16 cores, 22 logical processors), RTX 4080 Laptop GPU; llama.cpp `b10549`;
+  ONNX Runtime 1.30.0; Lyntai 3.5.1. Before this design, processes other than this run's held ~16% of the machine (an
+  `ssh-agent` ~4.5% of it).
+- **Estimated time**: about 15 minutes short and 30 long.
