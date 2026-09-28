@@ -49,40 +49,6 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     /// one host serving several routes is several registrations), named so a trace says which one answered.</summary>
     private const string RerankProviderId = "llamacpp-rerank";
 
-    /// <summary><c>recall_facts</c>' default page, read from the tool that owns it. Lyntai: endorsing more
-    /// than a page REPLACES the ranking instead of refining it, and the verifier is never told the caller's
-    /// limit — so it has to be a constant, and the one constant that means "a page" is the tool's.</summary>
-    private const int RerankEndorseCount = Storage.Knowledge.Tools.RecallFactsTool.DefaultRecallLimit;
-
-    /// <summary>The screen a reranker must pass before it may bind. Chinese query, Chinese documents — the
-    /// household's own case.
-    ///
-    /// <para><b>The DISTRACTOR shares more of the query than the answer does, on purpose.</b> One answer
-    /// plus unrelated noise is passed by a model that only counts overlap — a lexical scorer, or a
-    /// cross-encoder a bad conversion reduced to mean-pooled cosine — which is what Lyntai's
-    /// <c>devtools/scripts/rerank-screen.mjs</c> records about its own first fixture (it passed a GGUF that
-    /// ranks the discriminating pair BACKWARDS). Here the distractor repeats the question's words and never
-    /// answers it; the answer states the price. By distinct query characters a lexical scorer rates them
-    /// 1.000 against 0.667, and by character bigrams the distractor wins too — so overlap ranks it FIRST and
-    /// fails. The answer is also SECOND in input order, so a model returning input order fails as well.
-    /// The pair it replaced was worse than weak: overlap ranked its ANSWER first (0.750 against 0.125), so a
-    /// lexical model passed it outright; the pair first proposed instead only tied.</para>
-    ///
-    /// <para><b>Measured 2026-09-23</b> on both catalogued rerankers through llama-server's router, pinned
-    /// GGUFs sha-verified, three runs each with identical scores: LAMAR-600m.Q5_K_M puts the answer ahead by
-    /// 4.131, bge-reranker-v2-m3-Q5_K_M by 3.400; reversing those real scores — a backwards GGUF — fails.
-    /// Cold ~4.8 s (the model load), warm 25–33 ms. The screen still asserts only the ORDERING: a spread is
-    /// one model's scale, and a household-dropped reranker may score on another
-    /// (<c>docs/self-managed-llm-runtime.md</c>).</para></summary>
-    private const string ScreenQuery = "游泳馆成人票多少钱?";
-    private static readonly string[] ScreenDocuments =
-    [
-        "游泳馆成人票到底多少钱,很多人在门口问价格,工作人员说这个问题他们也不太清楚多少钱一张最准。",
-        "游泳馆成人票每张四十元,儿童半价。",
-    ];
-    /// <summary>Which of <see cref="ScreenDocuments"/> answers <see cref="ScreenQuery"/>.</summary>
-    private const int ScreenAnswer = 1;
-
     private readonly string _layer;
 
     /// <summary>One instance per layer. Which one this is decides what it offers and how it registers —
@@ -116,7 +82,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
 
     /// <summary>A chat model does both halves on our router. A RERANKER only scores, so it verifies and the
     /// default client (the Claude CLI) annotates — on <see cref="AnnotationModel"/>, which is where the
-    /// reranker→CLI-model rule is written once.
+    /// reranker→CLI-model rule is written once. The reranker's verifier is the chain both reranker judges share
+    /// (<see cref="RerankVerification.Build"/>): the fit to the window the catalogue row DECLARES (the same read the
+    /// preset makes), the windows, the pace and the admission — the in-process 内置 reranker is built from the same
+    /// call, over its own provider id.
     ///
     /// <para><b>This and <see cref="Register"/> must agree on the kind, and they do by construction</b>: both
     /// branch on the same <see cref="IsReranker"/>(<c>ctx.Model</c>) over the same context. That matters
@@ -126,70 +95,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
     public JudgeWiring Wiring(MemoryWiringContext ctx) =>
         !IsReranker(ctx.Model)
             ? JudgeWiring.Llm(ClientId, AnnotationModel(ctx.Model))
-            // Verification by the reranker; annotation by the default client on the CLI's default model.
-            // CAPPED: one pair past the model's window fails the whole rerank call — see RerankInputCap. The window
-            // is the one the catalogue row DECLARES (the same read the preset makes), never a branch on the id; a
-            // model with none keeps the 1,000-character cap. CHUNKED when RerankChunking is on: the reranker's own
-            // provider is wrapped so a long candidate is scored in windows of that same budget (ChunkedScoreProvider),
-            // and the cap then prepares candidates without cutting them — which is why RerankProviders throws when it
-            // finds nothing to wrap. And ADMITTED: whether a recall is sent at all is decided between the cap and the
-            // scoring policy (RerankAdmission), so a recall this machine cannot judge in time makes no call and hands
-            // Lyntai no verdict. Both read the one RerankPace Register adds — the one the 判断 row reads too.
-            : new JudgeWiring(null, AnnotationModel(ctx.Model), sp =>
-            {
-                var window = GgufCatalog.DeclaredWindow(ctx.Model);
-                var chunked = RerankChunking.On;
-                var pace = sp.GetRequiredService<RerankPace>();
-                var (providers, wrapped) = RerankProviders(sp, window, chunked, pace);
-                Lyntai.Memory.Verification.IMemoryVerificationPolicy verifier =
-                    new Lyntai.Memory.Verification.ScoringVerificationPolicy(
-                        providers,
-                        new Lyntai.Memory.Verification.ScoringVerificationOptions
-                            { ProviderId = RerankProviderId, EndorseCount = RerankEndorseCount },
-                        sp.GetService<ILogger<Lyntai.Memory.Verification.ScoringVerificationPolicy>>(),
-                        sp.GetService<Lyntai.Inference.IProviderRouterFactory>());
-                if (wrapped is not null)
-                    verifier = new RerankAdmission(verifier, wrapped, pace, sp.GetService<ILogger<RerankAdmission>>());
-                // Uncut in every segmenting mode: ours windows downstream (evenly, or at boundaries in the boundary
-                // measurement mode, Run 12), and in the d177 measurement mode Lyntai's
-                // provider segments (Register) — with no wrapper, no pace and no admission (Run 10).
-                return new RerankInputCap(verifier, window, RerankChunking.Uncut);
-            });
-
-    /// <summary>The providers the reranker's verifier chooses from — every registered one, with the reranker's own
-    /// (<see cref="RerankProviderId"/>) wrapped in a <see cref="ChunkedScoreProvider"/> when chunking is on — and that
-    /// wrapper, for <see cref="RerankAdmission"/>. Wrapped HERE, where the verifier is built, and registered nowhere: the
-    /// wrapper is part of how this judge scores, not a backend anything else may route to. Its time budget is half the
-    /// verification deadline (<see cref="RerankPace"/>). The FIRST provider with that id is wrapped and returned, the one
-    /// <c>ScoringVerificationPolicy</c> selects by the same id.
-    ///
-    /// <para><b>Chunking on and nothing wrapped THROWS</b>, as <c>ScoringVerificationPolicy</c> throws for a
-    /// <c>ProviderId</c> it cannot resolve. The two halves are coupled: with chunking on, <see cref="RerankInputCap"/> stops
-    /// cutting candidates because the wrapper windows them, so a registration the wrapper does not recognise — the id
-    /// renamed, or a provider that no longer implements <c>IScoreProvider</c> after a Lyntai upgrade — would send every
-    /// long candidate WHOLE, and one past the model's window fails every call it is in, fail-open and silent.</para></summary>
-    private static (IReadOnlyList<Lyntai.Inference.IModelProvider> Providers, ChunkedScoreProvider? Wrapped) RerankProviders(
-        IServiceProvider sp, int? window, bool chunked, RerankPace pace)
-    {
-        var all = sp.GetServices<Lyntai.Inference.IModelProvider>().ToList();
-        if (!chunked) return (all, null);
-        var log = sp.GetService<ILogger<ChunkedScoreProvider>>();
-        ChunkedScoreProvider? wrapped = null;
-        var providers = all.Select(p =>
-        {
-            if (wrapped is not null || p is not Lyntai.Inference.IScoreProvider score
-                || !string.Equals(p.Id, RerankProviderId, StringComparison.OrdinalIgnoreCase)) return p;
-            wrapped = new ChunkedScoreProvider(score, window, pace, log);
-            return (Lyntai.Inference.IModelProvider)wrapped;
-        }).ToList();
-        if (wrapped is null)
-            throw new InvalidOperationException(
-                $"{RerankChunking.KnobName} is on, but no registered backend is a score provider with the id '{RerankProviderId}' "
-                + $"({(all.Count == 0 ? "(none)" : string.Join(", ", all.Select(p => $"{p.Id}{(p is Lyntai.Inference.IScoreProvider ? "" : " (not a score provider)")}")))}) "
-                + "— so nothing would window a long candidate, and the input cap no longer cuts one: one past the model's "
-                + "window would fail every rerank call it is in.");
-        return (providers, wrapped);
-    }
+            : JudgeWiring.Reranker(AnnotationModel(ctx.Model), RerankProviderId, GgufCatalog.DeclaredWindow(ctx.Model));
 
     /// <summary>A reranker's id must never reach the CLI, which would be asked for a model it has never heard
     /// of — so a reranker binding annotates on the CLI's default judge model.</summary>
@@ -347,14 +253,13 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                 if (RerankChunking.Mode == RerankChunking.Modes.Lyntai)
                     (o.MaxInputChars, o.Segmentation) = RerankChunking.LyntaiSegmentation(GgufCatalog.DeclaredWindow(ctx.Model));
             });
-            // How fast this machine scores — ONE per process, shared by the verifier Wiring builds (its admission and its
-            // chunked provider) and the 判断 row, which reads its skip count (MemoryRecallController). Its budget is half
-            // the verification deadline. It STARTS from this machine's measurement of the bound reranker when there is a
-            // current one (RerankDeviceVerdict.PaceSeed) — read at the pace's first use, through the runtime's spawn-free
-            // lookup, because the device measurement runs in the startup step after this singleton is built.
+            // How fast this machine scores — the pace both reranker judges register the same way
+            // (RerankVerification.AddPace). It STARTS from this machine's measurement of the bound reranker when there
+            // is a current one (RerankDeviceVerdict.PaceSeed) — read at the pace's first use, through the runtime's
+            // spawn-free lookup, because the device measurement runs in the startup step after this singleton is
+            // built. llama-server goes on scoring a call its caller abandoned, so a cut presumes the router busy.
             var model = ctx.Model;
-            b.Services.AddSingleton(sp => new RerankPace(VerificationDeadlinePolicy.Configured / 2,
-                measuredSeed: () => MeasuredPaceSeed(sp, model)));
+            RerankVerification.AddPace(b, sp => MeasuredPaceSeed(sp, model), abandonedCallsRunOn: true);
             return;
         }
 
@@ -507,9 +412,10 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             : $"{model} 没能在 llama.cpp 上回答 —— 换一个模型,或看「日志」。";
     }
 
-    /// <summary>A reranker must put the ANSWER first before it may bind. "It returned scores" is not enough:
-    /// Lyntai found a converted model that ranked backwards while passing a looser check, and a fail-open
-    /// verifier would turn that into recall that quietly gets worse.
+    /// <summary>A reranker must put the ANSWER first before it may bind — <see cref="RerankScreen"/>, the pair and the
+    /// rule both reranker judges are screened with. "It returned scores" is not enough: Lyntai found a converted model
+    /// that ranked backwards while passing a looser check, and a fail-open verifier would turn that into recall that
+    /// quietly gets worse.
     ///
     /// <para>Every document must be scored exactly once. llama.cpp's <c>relevance_score</c> is a raw logit and
     /// can be NEGATIVE, so an unfilled slot's default zero could outrank a real score and pass the screen —
@@ -530,7 +436,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
         {
             using var http = new HttpClient { Timeout = ScreenTimeout };
             using var content = new StringContent(
-                JsonSerializer.Serialize(new { model, query = ScreenQuery, documents = ScreenDocuments, top_n = ScreenDocuments.Length }),
+                JsonSerializer.Serialize(new { model, query = RerankScreen.Query, documents = RerankScreen.Documents, top_n = RerankScreen.Documents.Count }),
                 new UTF8Encoding(false), "application/json");
             using var resp = await http.PostAsync($"{url}/v1/rerank", content, ct);
             (succeeded, status) = (resp.IsSuccessStatusCode, (int)resp.StatusCode);
@@ -545,11 +451,9 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
 
         if (!succeeded) return $"{model} 没能在 llama.cpp 上完成重排(HTTP {status}):{Detail(body)}";
         // The one reader of a rerank reply (RerankReply): every document scored exactly once, or unusable.
-        if (RerankReply.Scores(body, ScreenDocuments.Length) is not { } scores) return $"{model} 返回的重排结果无法使用:{Detail(body)}";
+        if (RerankReply.Scores(body, RerankScreen.Documents.Count) is not { } scores) return $"{model} 返回的重排结果无法使用:{Detail(body)}";
 
-        // ORDERING, never a margin: a household-dropped reranker may score on another scale, so the answer
-        // strictly first is every model's assertion while a threshold would be one model's.
-        return scores.Where((_, i) => i != ScreenAnswer).All(s => s < scores[ScreenAnswer])
+        return RerankScreen.AnswerFirst(scores)
             ? null
             : $"{model} 没有通过重排自检:答案没有排在前面 —— 这个模型文件可能转换有问题,换一个。";
     }

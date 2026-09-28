@@ -70,4 +70,12 @@ public sealed record JudgeWiring(
             sp.GetRequiredService<ITextClientFactory>(),
             new LlmVerificationOptions { ClientName = client, ContentChars = ContentChars },
             sp.GetService<ILogger<LlmMemoryVerificationPolicy>>()));
+
+    /// <summary>A RERANKER judge: verification by the score provider registered under <paramref name="providerId"/>, whose
+    /// model declares <paramref name="window"/> tokens, through the one chain both reranker sources share
+    /// (<see cref="RerankVerification.Build"/>); annotation by the DEFAULT client (the Claude CLI) on
+    /// <paramref name="annotationModel"/> — the source's own <c>AnnotationModel</c>, because a cross-encoder scores and
+    /// never generates.</summary>
+    public static JudgeWiring Reranker(string annotationModel, string providerId, int? window) =>
+        new(null, annotationModel, sp => RerankVerification.Build(sp, providerId, window));
 }

@@ -461,9 +461,15 @@ public static class RerankDeviceVerdict
 
     /// <summary><see cref="PaceSeed"/>, and whether it is a lower bound — the one condition the pace and the verdict share.</summary>
     public static (double Rate, bool LowerBound)? Seed(RerankDeviceMeasurement? m) =>
-        m?.Pinned is { MsPerToken: { } rate } ? (Math.Max(RerankPace.SeedMsPerToken, rate), false)
-        : m?.LowerBoundOnly is { } bound ? (Math.Max(RerankPace.SeedMsPerToken, bound), true)
+        m?.Pinned is { MsPerToken: { } rate } ? (NeverFasterThanTheGpuFigure(rate), false)
+        : m?.LowerBoundOnly is { } bound ? (NeverFasterThanTheGpuFigure(bound), true)
         : null;
+
+    /// <summary><see cref="PaceSeed"/>'s floor on its own: a measured rate, never FASTER than
+    /// <see cref="RerankPace.SeedMsPerToken"/> — the one writer of that rule for every pace seed, this measurement's and the
+    /// in-process reranker's (<see cref="InProcessReranker.MeasurePaceSeed"/>), which times its own model at first use
+    /// because the device measurement is llama.cpp's and has nothing to measure there.</summary>
+    public static double NeverFasterThanTheGpuFigure(double rate) => Math.Max(RerankPace.SeedMsPerToken, rate);
 }
 
 /// <summary>What 资源 says about a reranker's device — its row, and the lead of the 推荐 line when BGE measured too slow.

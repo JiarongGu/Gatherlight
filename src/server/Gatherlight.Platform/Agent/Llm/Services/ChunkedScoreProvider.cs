@@ -639,6 +639,14 @@ public sealed class RerankAdmission : IMemoryVerificationPolicy
 /// it. Either way never longer than <see cref="QueueFactor"/> verification deadlines: a clock that jumped (above) would
 /// otherwise presume the router busy for hours and hold every probe off. A first call sized at the GPU seed on a far
 /// slower machine can run longer than the presumption — a stated limit.</item>
+/// <item><b>…unless the scorer STOPS an abandoned call</b> (<c>abandonedCallsRunOn: false</c>): the in-process reranker
+/// (<see cref="InProcessReranker"/>) scores a call in passes of a few documents and checks the caller's token between them,
+/// so an abandoned call runs on for at most the pass it is in — well under a second on the laptop CPU it was measured on,
+/// docs/self-managed-llm-runtime.md, 2026-09-28 — and presuming it busy for twice the time it ran would skip every recall
+/// of the next two minutes for nothing. Its pace presumes nothing busy after a cut; the call queued behind that last pass
+/// (it runs one call at a time) waits for it, and its time includes that wait — a pass's worth, stated rather than
+/// modelled. Everything else below holds for it unchanged, the in-flight rule included: two recalls at once queue there
+/// exactly as they do on the router.</item>
 /// <item><b>A call SENT while the router is presumed busy, or while another call is in flight, is possibly queued</b>
 /// (<see cref="Sending"/>): its time includes the wait, so if it is cut it teaches NOTHING (it proves only that the queue
 /// was long), and if it answers it is an UPPER bound — it never raises the estimate, lowers it only as an unqueued answer
@@ -834,6 +842,9 @@ public sealed class RerankPace
     private TimeSpan? _lastMeasuring;
     // The measured seed, read once at first use and then dropped (SeedLocked); null once read, or when none was given.
     private Func<double?>? _measuredSeed;
+    // Whether the scorer goes on scoring a call its caller abandoned — llama-server does; the in-process one stops at its
+    // next pass. See the class comment.
+    private readonly bool _abandonedCallsRunOn;
     // The last RecentRecalls recalls, true where the judge was skipped: a ring, _recentNext the next slot to write.
     private readonly bool[] _recent = new bool[RecentRecalls];
     private int _recentCount;
@@ -844,13 +855,17 @@ public sealed class RerankPace
     /// <param name="clock">A monotonic clock; the process's uptime when null.</param>
     /// <param name="measuredSeed">Read ONCE, at the pace's first use: a positive value replaces
     /// <paramref name="seedMsPerToken"/> — this machine's measurement of the bound reranker (the class comment).</param>
+    /// <param name="abandonedCallsRunOn">Whether the scorer goes on scoring a call whose caller gave up — true for
+    /// llama-server, which scores an abandoned batch to its end; false for a scorer that stops at its next pass
+    /// (<see cref="InProcessReranker"/>), whose cut leaves nothing presumed busy (the class comment).</param>
     public RerankPace(TimeSpan budget, double seedMsPerToken = SeedMsPerToken, Func<TimeSpan>? clock = null,
-        Func<double?>? measuredSeed = null)
+        Func<double?>? measuredSeed = null, bool abandonedCallsRunOn = true)
     {
         Budget = budget;
         _msPerToken = Math.Max(MinMsPerToken, seedMsPerToken > 0 ? seedMsPerToken : SeedMsPerToken);
         _clock = clock ?? (() => TimeSpan.FromMilliseconds(Environment.TickCount64));
         _measuredSeed = measuredSeed;
+        _abandonedCallsRunOn = abandonedCallsRunOn;
     }
 
     // Under the lock, before anything reads or moves the estimate: the measured seed, once. A reader that throws or answers
@@ -1043,13 +1058,13 @@ public sealed class RerankPace
             SeedLocked();
             // Whatever it proves, the router keeps it: busy for QueueFactor × the time it ran when it ran past what the
             // estimate predicted, for the rest of that prediction when it was stopped sooner — and never longer than
-            // QueueFactor verification deadlines.
+            // QueueFactor verification deadlines. Not a scorer that stops an abandoned call: nothing is left running.
             var ran = elapsed.TotalMilliseconds;
             var predicted = CallOverheadMs + Math.Max(0, pairTokens) * _msPerToken;
             var remaining = ran > predicted ? QueueFactor * ran : predicted - ran;
             remaining = Math.Min(remaining, QueueFactor * Deadline.TotalMilliseconds);
             var until = _clock() + TimeSpan.FromMilliseconds(Math.Max(0, remaining));
-            if (until > _busyUntil)
+            if (_abandonedCallsRunOn && until > _busyUntil)
             {
                 _busyUntil = until;
                 _busyFrom = ticket.SentAt;
