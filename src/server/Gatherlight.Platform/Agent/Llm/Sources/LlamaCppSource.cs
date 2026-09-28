@@ -229,6 +229,13 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                  o.BaseUrl = ctx.Endpoint;
                  o.Model = ctx.Model;
                  o.Produces = Lyntai.Inference.ProviderKinds.Vector;
+                 // The d177 MEASUREMENT mode only (docs/judge-bench.md Run 14): an input past the window is embedded in
+                 // pieces and pooled, where by default llama.cpp refuses it whole (EmbedSegmentation).
+                 if (EmbedSegmentation.On)
+                 {
+                     o.MaxInputChars = EmbedSegmentation.MaxInputChars(GgufCatalog.DeclaredWindow(ctx.Model));
+                     o.Segmentation = EmbedSegmentation.Segmentation();
+                 }
              })
              .AddVectorRecall();
             return;

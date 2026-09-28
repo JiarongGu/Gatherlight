@@ -134,6 +134,11 @@ public static class GatherlightApp
         if (!string.IsNullOrWhiteSpace(chunkingRaw))
             Console.WriteLine($"[measurement] rerank chunking = {Platform.Agent.Llm.Services.RerankChunking.Name} "
                 + $"({Platform.Agent.Llm.Services.RerankChunking.KnobName}={chunkingRaw})");
+        // Run 14's measurement knob: the llama.cpp embedder segments an input past its window (EmbedSegmentation).
+        var embedSegRaw = Platform.Agent.Llm.Services.EmbedSegmentation.Raw;
+        if (!string.IsNullOrWhiteSpace(embedSegRaw))
+            Console.WriteLine($"[measurement] embed segmentation = {Platform.Agent.Llm.Services.EmbedSegmentation.Name} "
+                + $"({Platform.Agent.Llm.Services.EmbedSegmentation.KnobName}={embedSegRaw})");
 
         builder.Services
             .AddSingleton(options)
@@ -792,6 +797,11 @@ public static class GatherlightApp
                 "Measurement knob set: rerank chunking = {Mode} ({Knob}={Raw}) — a benchmark setting, not a household one",
                 Platform.Agent.Llm.Services.RerankChunking.Name,
                 Platform.Agent.Llm.Services.RerankChunking.KnobName, chunkingRaw);
+        if (!string.IsNullOrWhiteSpace(embedSegRaw))
+            app.Logger.LogWarning(
+                "Measurement knob set: embed segmentation = {Mode} ({Knob}={Raw}) — a benchmark setting, not a household one",
+                Platform.Agent.Llm.Services.EmbedSegmentation.Name,
+                Platform.Agent.Llm.Services.EmbedSegmentation.KnobName, embedSegRaw);
         // Same reason, for the test knob that SHORTENS the verification deadline (it cannot lengthen it).
         var deadlineRaw = Environment.GetEnvironmentVariable(Platform.Agent.Llm.Services.VerificationDeadlinePolicy.KnobName);
         if (!string.IsNullOrWhiteSpace(deadlineRaw))
