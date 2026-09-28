@@ -2614,7 +2614,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   jobs, and since the re-review the validation pass and the playground, which passed none. **Still out of reach**: the
   MANAGED scope (it outranks the command line — an administrator's); names matched only by the `ANTHROPIC_*_BASE_URL`
   pattern beyond the listed ones (read only under a provider selector, every one of which is blanked); a
-  `%TEMP%\.claude\settings.json` under the one-shot calls' neutral working directory (no household file lives there);
+  `.claude/settings.json` or `CLAUDE.md` in the one-shot calls' neutral working directory — Lyntai's own choice,
+  its engine's neutral cwd: the account's SHARED temp folder, which any program the user runs can
+  write, and whose project scope those calls load carrying none of this app's settings (the completion path takes no
+  settings file); Lyntai `TASKS.md` Part 333 files both halves — a settings file for that path, and a working directory
+  the library owns — and when it ships the adopter passes these same settings to its one-shot calls;
   and an active federation profile in the default Anthropic configuration directory. Proof: `e2e-p54` — each of the
   four generated settings files blanks the helper and every name, and leaves `CLAUDE_CODE_OAUTH_TOKEN` alone (the
   positive control); `e2e-p16` V1 and `e2e-p23` — the validation and playground spawns pass the read-only file; `e2e-p50`
