@@ -39,7 +39,7 @@ try {
 
   ok('the guard was issued under state/agent/ (outside the jail)', fs.existsSync(guardPath));
   const guardBody = fs.existsSync(guardPath) ? fs.readFileSync(guardPath, 'utf8') : '';
-  ok('the guard carries the bumped version', /GUARD_VERSION:\s*9/.test(guardBody),
+  ok('the guard carries the bumped version', /GUARD_VERSION:\s*10/.test(guardBody),
     guardBody.match(/GUARD_VERSION:.*/)?.[0] ?? '(no guard)');
   ok('ui/ is in the write dirs', /WRITE_DIRS = \[[^\]]*'ui'/.test(guardBody),
     guardBody.match(/WRITE_DIRS = .*/)?.[0] ?? '(no guard)');

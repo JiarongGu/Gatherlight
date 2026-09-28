@@ -5,15 +5,21 @@ namespace Gatherlight.Server.Platform.Agent.Chat.Services;
 
 /// <summary>
 /// Generates the runtime files the spawned claude needs. Two live under <c>state/</c> — APP STATE,
-/// gitignored, regenerated every boot, and (since <c>state/</c> is carved out of the jail) unreachable
-/// to the agent: <c>state/settings.chat.json</c> (acceptEdits + the PreToolUse scope-guard hook, passed
-/// via --settings on the execute phase) and <c>state/agent/scope-guard.mjs</c> — the agent's SECURITY
-/// jail (reads confined to the data folder minus <c>state/</c>, writes to plans/ household/ .claude/ ui/
-/// except the PROTECTED set, Bash denied git-history/network/inline-eval/shell-launch/crawl/path-escape and
-/// state+protected paths). The guard used to live in the data repo at <c>.claude/hooks/scope-guard.mjs</c>,
-/// where the agent could reach it by Bash; it now lives OUTSIDE the jail and is deleted from the repo on
-/// boot (<c>RemoveLegacyGuard</c>). Regenerated every boot, hardening reaches an old data folder the moment
-/// a newer build boots it. Out-of-boundary work must route through an MCP tool.
+/// gitignored, regenerated every boot: <c>state/settings.chat.json</c> (acceptEdits + the PreToolUse
+/// scope-guard hook, passed via --settings on the execute phase) and <c>state/agent/scope-guard.mjs</c> —
+/// the agent's SECURITY jail (reads confined to the data folder minus <c>state/</c>, writes to plans/
+/// household/ .claude/ ui/ except the PROTECTED set, Bash denied git-history/network/inline-eval/shell-
+/// launch/crawl/path-escape and state+protected paths). The guard used to live in the data repo at
+/// <c>.claude/hooks/scope-guard.mjs</c>; it is deleted from there on boot (<c>RemoveLegacyGuard</c>).
+/// <para><b><c>state/</c> is still INSIDE the data folder</b> — carved out of the guard's CHECKS, not out of
+/// the filesystem. The guard's integrity rests on three legs: Edit/Write/Read cannot reach <c>state/</c>
+/// (solid — every such call passes through the guard); the Bash path-token scan refuses a token naming it
+/// (best effort); and no nested shell (best effort). A constructed token (<c>$PWD/state/agent/…</c>) or a
+/// nested shell slipping past the last two can overwrite the guard and neuter it until the next boot, and
+/// can READ <c>state/</c> (the database, the TLS key) in an execute run where a Bash exists — the declared
+/// residual "code inside an agent-authored script needs an OS sandbox", which was declined.</para>
+/// Regenerated every boot, hardening reaches an old data folder the moment a newer build boots it.
+/// Out-of-boundary work must route through an MCP tool.
 /// <para>Two CONTRACTS ride the same version gate for the same reason — they are protocol, not
 /// knowledge-base content, and the seeder deliberately never overwrites a file the household edited:
 /// <c>.claude/ui-spec.md</c> (the block vocabulary, <c>UI_CONTRACT_VERSION</c>) and
@@ -50,12 +56,12 @@ public sealed class ChatEnvironmentService
     public string ReadOnlySettingsPath => Path.Combine(_platform.StatePath, "settings.chat.readonly.json");
     public string SystemReadOnlySettingsPath => Path.Combine(_platform.StatePath, "settings.system.readonly.json");
     /// <summary>The planner scope guard lives under <c>state/agent/</c> — APP STATE (gitignored, not in the
-    /// data repo's audit trail, not carried by the backup), regenerated every boot like the settings files,
-    /// and — since <c>state/</c> is carved out of the jail (no read, no Bash token) — a location the jailed
-    /// agent it guards can neither read nor overwrite, however a Bash token is spelled. That STRUCTURAL
-    /// placement (not the best-effort Bash path-token scan) is what keeps the guard's integrity; the old
-    /// copy at <c>.claude/hooks/scope-guard.mjs</c> sat inside the writable jail (Edit was PROTECTED, Bash
-    /// was not).</summary>
+    /// data repo's audit trail, not carried by the backup), regenerated every boot like the settings files.
+    /// <c>state/</c> is carved out of the guard's CHECKS (no Edit/Write/Read, no Bash token naming it), not out
+    /// of the filesystem: the guard's integrity rests on those checks — the tool path solidly, the Bash token
+    /// scan and the nested-shell denial only best-effort (see the class summary for the residual). The old copy
+    /// at <c>.claude/hooks/scope-guard.mjs</c> sat in a directory Edit was protected from and Bash was not
+    /// checked for at all.</summary>
     public string ScopeGuardPath => Path.Combine(_platform.StatePath, "agent", "scope-guard.mjs");
     /// <summary>Where an earlier build generated the guard, inside the data repo. Deleted on boot.</summary>
     private string LegacyScopeGuardPath => Path.Combine(_site.ZhikuPath, "hooks", "scope-guard.mjs");
@@ -74,10 +80,11 @@ public sealed class ChatEnvironmentService
         var deny = _manifest.Current.Capabilities.Deny;
 
         // The planner scope guard is APP STATE, not knowledge-base content: it lives under state/agent/
-        // (gitignored, backup-excluded, unreachable to the jailed agent since state/ is carved out) and is
-        // regenerated every boot like the settings files — never version-gated or committed. So hardening
-        // reaches an old data folder the moment a newer build boots it, and the guard's integrity rests on
-        // its PLACEMENT rather than on the best-effort Bash path-token scan. Referenced by ABSOLUTE path.
+        // (gitignored, backup-excluded; state/ is carved out of the guard's own checks) and is regenerated
+        // every boot like the settings files — never version-gated or committed. So hardening reaches an old
+        // data folder the moment a newer build boots it, and a guard neutered mid-session by the declared
+        // residual (a constructed Bash token, a nested shell) is restored at the next boot. Referenced by
+        // ABSOLUTE path.
         Directory.CreateDirectory(Path.GetDirectoryName(ScopeGuardPath)!);
         File.WriteAllText(ScopeGuardPath, RenderScopeGuard());
         var plannerGuardCmd = $"node \\\"{ScopeGuardPath.Replace('\\', '/')}\\\"";
@@ -353,11 +360,17 @@ public sealed class ChatEnvironmentService
         /**
          * PreToolUse scope guard (v3) for Gatherlight headless PLANNER runs — cwd = the data folder.
          * The FILE lives at {data}/state/agent/scope-guard.mjs (app state, gitignored, regenerated every
-         * boot), referenced by ABSOLUTE path from the generated --settings, so the agent — jailed to the
-         * data folder with state/ carved out — cannot read or overwrite its own guard.
+         * boot), referenced by ABSOLUTE path from the generated --settings. state/ is still INSIDE the data
+         * folder: it is carved out of this guard's CHECKS, not out of the filesystem. So the guard's integrity
+         * rests on three legs — (1) Edit/Write/Read/Grep/Glob cannot reach state/ (solid: every such call
+         * passes through this check); (2) the Bash path-token scan refuses a token naming state/ (best
+         * effort); (3) no nested shell (best effort). A constructed token (`$PWD/state/agent/…`) or a nested
+         * shell that slips past (2)/(3) can overwrite this file and neuter it until the next boot, and can
+         * READ state/ (the database, the TLS key) in an execute run where a Bash exists (Git Bash present) —
+         * the declared residual "code inside an agent-authored script needs an OS sandbox", which was declined.
          *
-         * Enforced boundaries (best-effort where noted; the load-bearing closures are: the guard living
-         * OUTSIDE the jail, PowerShell/Monitor removed from every run, and no shell-launch below):
+         * Enforced boundaries (best-effort where noted; also load-bearing: PowerShell/Monitor removed from
+         * every run, and read-only runs have no Bash at all):
          *   WRITE (Edit/Write/MultiEdit/NotebookEdit)  -> under WRITE_DIRS EXCEPT the PROTECTED set, and
          *                                                under ui/ only a flat .json page (WRITE_EXTS)
          *   READ  (Read/Grep/Glob)                     -> inside the data folder, never state/ (token,
@@ -370,7 +383,7 @@ public sealed class ChatEnvironmentService
          * Kept identical to guard/system-scope-guard.mjs except WRITE_DIRS + WRITE_EXTS + PROTECTED +
          * BASH_PROTECTED + READ_DENY; e2e-p24 runs both. GUARD_VERSION lets the server re-issue newer logic.
          */
-        // GUARD_VERSION: 9
+        // GUARD_VERSION: 10
         import path from 'node:path';
 
         const WRITE_DIRS = __WRITE_DIRS__;
@@ -381,8 +394,8 @@ public sealed class ChatEnvironmentService
         // access token, the TLS pfx, the database), site.json (the manifest the guard renders its scope FROM),
         // .git, or the PROTECTED app-managed files — none of which Edit/Write may touch. Deny any path-like
         // Bash token that resolves under this set OR under state/. Best-effort: a token scan is fooled by a
-        // variable, a $(...) or a constructed string, so this is DEFENCE IN DEPTH — the guard now lives OUTSIDE
-        // the jail (state/), so no Bash reaches it however the token is spelled.
+        // variable, a $(...) or a constructed string — DEFENCE IN DEPTH, one of the three legs in the header,
+        // never the guarantee.
         const BASH_PROTECTED = ['.claude/hooks', '.claude/settings.json', '.claude/settings.local.json', '.mcp.json', 'site.json', '.git'];
         // Reads never see state/ (app state — token / TLS key / DB) though it sits inside the jail.
         const READ_DENY = ['state'];
@@ -408,8 +421,8 @@ public sealed class ChatEnvironmentService
         // powershell / cmd / a nested bash never reaches this guard's Bash checks (egress, eval, crawl,
         // path-escape). On Windows the PowerShell tool is default-on, and acceptEdits auto-approves its
         // writes. Deny the launch ITSELF, whatever its arguments (so `bash x.sh`, not only `bash -c`).
-        // BEST-EFFORT defence in depth — the real closures are PowerShell/Monitor removed from every run
-        // and the guard living outside the jail. Matched against each pipeline segment's COMMAND WORD (the
+        // BEST-EFFORT defence in depth — leg (3) in the header; the closure that does not depend on parsing
+        // is PowerShell/Monitor removed from every run. Matched against each pipeline segment's COMMAND WORD (the
         // leading token, past `env`/`command`/`sudo`/`VAR=val` wrappers, path and .exe stripped) so a shell
         // NAME used as an argument (`command -v sh`) is not caught.
         const SHELLS = new Set([
@@ -422,14 +435,47 @@ public sealed class ChatEnvironmentService
           'env', 'command', 'exec', 'builtin', 'nice', 'nohup', 'time', 'xargs', 'sudo', 'doas',
           'stdbuf', 'timeout', 'setsid', 'ionice', 'chrt', 'setarch',
         ]);
+        // A wrapper's own arguments come BEFORE the command it runs (`timeout 5 bash`, `nice -n 10 bash`,
+        // `stdbuf -oL bash`, `setarch x86_64 bash`), so after a wrapper skip its options, the values of the
+        // options that take one, numeric durations/priorities, and — for `setarch` — its one leading
+        // positional. `env -S` / `--split-string` is deliberately NOT a value option: its value IS a command
+        // line, so it is read as the next command word. `command -v` / `-V` only DESCRIBE a command.
+        const WRAPPER_VALUE_OPTS = {
+          timeout: ['-s', '--signal', '-k', '--kill-after'],
+          nice: ['-n', '--adjustment'],
+          ionice: ['-c', '--class', '-n', '--classdata', '-p', '--pid', '-P', '--pgid', '-u', '--uid'],
+          sudo: ['-u', '--user', '-g', '--group', '-C', '--close-from', '-D', '--chdir', '-h', '--host',
+            '-p', '--prompt', '-r', '--role', '-t', '--type', '-U', '--other-user', '-T', '--command-timeout'],
+          doas: ['-u', '-C'],
+          env: ['-u', '--unset', '-C', '--chdir'],
+          exec: ['-a'],
+          time: ['-f', '--format', '-o', '--output'],
+          xargs: ['-a', '--arg-file', '-d', '--delimiter', '-E', '-e', '--eof', '-I', '-i', '--replace',
+            '-L', '-l', '--max-lines', '-n', '--max-args', '-P', '--max-procs', '-s', '--max-chars'],
+          stdbuf: ['-i', '--input', '-o', '--output', '-e', '--error'],
+        };
+        const WRAPPER_POSITIONALS = { setarch: 1 };
+        const NUMERIC_ARG = /^[+-]?\d+(\.\d+)?[smhd]?$/i;   // a duration (`5`, `5s`, `0.5m`) or a priority
         function firstRealWord(seg) {
-          const toks = seg.trim().split(/\s+/).filter(Boolean);
-          for (let i = 0; i < toks.length; i++) {
-            const w = toks[i].replace(/^["']+|["']+$/g, '');
-            if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;                 // VAR=value prefix
+          const toks = seg.trim().split(/\s+/).filter(Boolean).map((t) => t.replace(/^["']+|["']+$/g, ''));
+          let wrapper = null, positionals = 0, takeValue = false;
+          for (const w of toks) {
+            if (!w) continue;
+            if (takeValue) { takeValue = false; continue; }                  // the value of `-n 10`, `-u root`…
+            if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;                // VAR=value prefix
+            if (wrapper !== null) {
+              if (wrapper === 'command' && /^-[vV]$/.test(w)) return '';     // `command -v sh` describes, runs nothing
+              if (w.startsWith('-')) {
+                const flag = w.replace(/=.*/, '');
+                if (!w.includes('=') && (WRAPPER_VALUE_OPTS[wrapper] ?? []).includes(flag)) takeValue = true;
+                continue;                                                    // an option of the wrapper
+              }
+              if (NUMERIC_ARG.test(w)) continue;                            // `timeout 5`, `chrt 10`
+              if (positionals > 0) { positionals--; continue; }             // `setarch x86_64`
+            }
             const base = w.replace(/.*[\/\\]/, '').replace(/\.exe$/i, '').toLowerCase();
-            if (PREFIX_WORDS.has(base)) continue;                             // a wrapper — look past it
-            return base;                                                      // the real command word (or a flag)
+            if (PREFIX_WORDS.has(base)) { wrapper = base; positionals = WRAPPER_POSITIONALS[base] ?? 0; continue; }
+            return base;                                                     // the real command word
           }
           return '';
         }
@@ -505,9 +551,9 @@ public sealed class ChatEnvironmentService
         }
 
         // Best-effort: a refusal reason when a path-like Bash token points outside the jail, into state/, or
-        // at a PROTECTED app-managed path — else null. DEFENCE IN DEPTH (a token scan is fooled by a variable,
-        // a $(...) or a constructed string); the guard lives outside the jail, so its integrity does not rest
-        // on this. The `` ` `` splitter also catches a token inside a backtick substitution.
+        // at a PROTECTED app-managed path — else null. DEFENCE IN DEPTH, leg (2) in the header: a token scan is
+        // fooled by a variable, a $(...) or a constructed string, and such a token can write this guard's file.
+        // The `` ` `` splitter also catches a token inside a backtick substitution.
         function bashDenyReason(command, root) {
           if (HOME.test(command)) return 'a home / profile path';
           // Resolve EVERY non-flag, non-URL token against the root — a bare `site.json` / `.mcp.json` / `state`

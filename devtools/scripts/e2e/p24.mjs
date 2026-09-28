@@ -157,6 +157,15 @@ battery('system', systemGuard, [
   ['bash wsl', 'Bash', { command: 'wsl ls' }, true],
   ['bash rundll32', 'Bash', { command: 'rundll32 x' }, true],
   ['bash regsvr32', 'Bash', { command: 'regsvr32 x' }, true],
+  // v8 (re-review): a wrapper's OWN arguments precede the command it runs — the command word is past them
+  ['bash timeout 5 bash', 'Bash', { command: 'timeout 5 bash x.sh' }, true],
+  ['bash nice -n 10 bash', 'Bash', { command: 'nice -n 10 bash x.sh' }, true],
+  ['bash stdbuf -oL bash', 'Bash', { command: 'stdbuf -oL bash x.sh' }, true],
+  ['bash ionice -c2 bash', 'Bash', { command: 'ionice -c2 bash x.sh' }, true],
+  ['bash chrt 10 bash', 'Bash', { command: 'chrt 10 bash x.sh' }, true],
+  ['bash setarch x86_64 bash', 'Bash', { command: 'setarch x86_64 bash x.sh' }, true],
+  ['bash sudo -u root bash', 'Bash', { command: 'sudo -u root bash x.sh' }, true],
+  ['bash timeout 5 node ok (not a shell)', 'Bash', { command: 'timeout 5 node src/client/scripts/build.mjs' }, false],
   // allow-cases that must NOT be caught by the new rules (positive controls: plain file ops stay in)
   ['bash plain grep ok', 'Bash', { command: 'grep foo src/client/src/App.tsx' }, false],
   ['bash ls ok', 'Bash', { command: 'ls src/client' }, false],
@@ -237,6 +246,20 @@ if (plannerGuard) {
     ['bash wsl', 'Bash', { command: 'wsl ls' }, true],
     ['bash brace sh', 'Bash', { command: '{ sh plans/x.sh; }' }, true],
     ['bash backtick sh', 'Bash', { command: 'echo `sh plans/x.sh`' }, true],
+    // v10 (re-review): a wrapper's OWN arguments precede the command it runs — the command word is past them
+    ['bash timeout 5 bash', 'Bash', { command: 'timeout 5 bash plans/x.sh' }, true],
+    ['bash nice -n 10 bash', 'Bash', { command: 'nice -n 10 bash plans/x.sh' }, true],
+    ['bash stdbuf -oL bash', 'Bash', { command: 'stdbuf -oL bash plans/x.sh' }, true],
+    ['bash ionice -c2 bash', 'Bash', { command: 'ionice -c2 bash plans/x.sh' }, true],
+    ['bash chrt 10 bash', 'Bash', { command: 'chrt 10 bash plans/x.sh' }, true],
+    ['bash setarch x86_64 bash', 'Bash', { command: 'setarch x86_64 bash plans/x.sh' }, true],
+    ['bash env -u FOO bash', 'Bash', { command: 'env -u FOO bash plans/x.sh' }, true],
+    ['bash timeout 5 node ok (not a shell)', 'Bash', { command: 'timeout 5 node plans/x.mjs' }, false],
+    // KNOWN RESIDUAL, pinned as an ALLOW on purpose: a VARIABLE command word (`$x`) is a constructed token,
+    // which a text scan cannot resolve — the declared "code inside an agent-authored script needs an OS
+    // sandbox" residual (dev-conventions, the jail). If this ever starts denying, that is a deliberate
+    // change to the guard's reach: update this case and the rule together, never one without the other.
+    ['bash variable command word (KNOWN RESIDUAL: allowed)', 'Bash', { command: 'x=sh; $x plans/y.sh' }, false],
     ['bash command -v sh ok', 'Bash', { command: 'command -v sh' }, false],
     ['bash ls plans ok', 'Bash', { command: 'ls plans' }, false],
     ['bash mv plan ok', 'Bash', { command: 'mv plans/a.md plans/b.md' }, false],
