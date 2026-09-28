@@ -664,6 +664,13 @@ if (readOnly) {
         { op: 'info-ok', name: 'file_info', args: { path: moveTo } },
         { op: 'move-out-of-scope', name: 'fs_move', args: { from: moveTo, to: 'state/evil.md' } },
         { op: 'move-overwrite-refused', name: 'fs_move', args: { from: moveTo, to: 'plans/visa/2026-08-kyoto/applicant-data.json' } },
+        // Security review (2026-09-28) — SiteWriteScope C2/C3 normalization: a trailing dot, a case-fold
+        // and an alternate-data-stream colon must all reach a CLEAN refusal (the last a 400, not a 500).
+        // Each has its OWN existing source: on the pre-fix code the trailing-dot move SUCCEEDED, and a shared
+        // source would then make the later cases fail for "source missing" — a vacuous confirm-to-fail.
+        { op: 'move-c2-trailing-dot', name: 'fs_move', args: { from: 'household/README.md', to: '.claude/settings.json.' } },
+        { op: 'move-c3-case-fold', name: 'fs_move', args: { from: 'household/people.md', to: '.claude/Settings.json' } },
+        { op: 'move-ads-colon', name: 'fs_move', args: { from: 'plans/visa/2026-08-kyoto/applicant-data.json', to: 'plans/x.md:evil' } },
       ]) : [{ op: 'no-server' }];
       logFsOps('execute', rows);
     } catch (err) { logFsOps('execute', [{ op: 'execute', error: String(err?.message ?? err) }]); }

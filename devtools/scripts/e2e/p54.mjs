@@ -69,6 +69,16 @@ try {
     roSettings.permissions?.defaultMode === 'default' && JSON.stringify(roSettings.hooks ?? {}).includes('scope-guard'),
     roSettingsRaw.slice(0, 300));
 
+  // Security review (2026-09-28) — the plan (read-only) regression: a read-only run pre-approved Bash, so
+  // a plan-phase Bash could read outside the folder / run inline eval / launch a shell. Bash is now removed
+  // OUTRIGHT from a read-only run (UnguardedTools, --disallowed-tools) AND dropped from the allow-list.
+  const planDisallowed = (planArgs.match(/--disallowed-tools\s+(\S+)/)?.[1] ?? '').split(',');
+  ok('plan spawn disallows Bash outright', planDisallowed.includes('Bash'), planDisallowed.join(','));
+  ok('read-only settings allow-list omits Bash',
+    !(roSettings.permissions?.allow ?? []).includes('Bash'), JSON.stringify(roSettings.permissions?.allow));
+  ok('read-only settings top-level disableAllHooks:false (a project settings cannot disable our hook)',
+    roSettings.disableAllHooks === false, roSettingsRaw.slice(0, 120));
+
   await post(`/api/chat/${id}/plan/approve`);
   const diff = await waitPhase(id, 'awaiting-diff-approval');
 
@@ -80,6 +90,21 @@ try {
   ok('execute file_info read size/mtime', row('info-ok') && /bytes/.test(row('info-ok').text ?? ''), row('info-ok')?.text);
   ok('out-of-scope target refused', row('move-out-of-scope') && (row('move-out-of-scope').isError === true || row('move-out-of-scope').status >= 400), JSON.stringify(row('move-out-of-scope')));
   ok('existing target not overwritten', row('move-overwrite-refused') && (row('move-overwrite-refused').isError === true || row('move-overwrite-refused').status === 409), JSON.stringify(row('move-overwrite-refused')));
+
+  // Security review (2026-09-28) — SiteWriteScope C2/C3 normalization: a trailing-dot / case-fold target
+  // still reaches the PROTECTED file, and an alternate-data-stream colon is a CLEAN refusal (not a 500).
+  ok('C2: fs_move to trailing-dot settings refused as protected', row('move-c2-trailing-dot')
+    && row('move-c2-trailing-dot').isError && /受保护/.test(row('move-c2-trailing-dot').text ?? ''),
+    JSON.stringify(row('move-c2-trailing-dot')));
+  ok('C3: fs_move to case-folded .claude/Settings.json refused as protected', row('move-c3-case-fold')
+    && row('move-c3-case-fold').isError && /受保护/.test(row('move-c3-case-fold').text ?? ''),
+    JSON.stringify(row('move-c3-case-fold')));
+  ok('C2: fs_move to an ADS colon path is a clean refusal (not a 500)', row('move-ads-colon')
+    && row('move-ads-colon').isError && /非法字符|越界|短名|设备/.test(row('move-ads-colon').text ?? ''),
+    JSON.stringify(row('move-ads-colon')));
+  ok('the refused C2/C3/ADS moves left their sources in place (and wrote no protected file)',
+    onDisk(dataDir, 'household/README.md') && onDisk(dataDir, 'household/people.md')
+      && onDisk(dataDir, 'plans/visa/2026-08-kyoto/applicant-data.json') && !onDisk(dataDir, '.claude/settings.json'));
 
   // The execute spawn DID pre-approve the write tools. Re-read the args log — the execute spawn was
   // written after the plan-phase read above.

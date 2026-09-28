@@ -2,7 +2,7 @@
 // e2e P37 — site manifest + platform seam (S1). Proves the manifest DRIVES the agent's jail rather
 // than merely existing: the shipped template's site.json (Assets/SiteTemplate, copied by the
 // knowledge-base seeder) wins over SiteManifestStep's on-disk-inference fallback, the generated
-// .claude/hooks/scope-guard.mjs derives WRITE_DIRS from the manifest's declared records, the manifest
+// state/agent/scope-guard.mjs derives WRITE_DIRS from the manifest's declared records, the manifest
 // itself sits outside the agent's write scope (PROTECTED can't be widened by editing the manifest),
 // platform state/ is unreachable through a real HTTP tool call (both the nested and bare-directory
 // forms), and changing records + restarting regenerates the guard to match while leaving PROTECTED
@@ -22,7 +22,8 @@ const PORT_A = 5464;
 const PORT_B = 5465;
 
 const manifestPath = path.join(dataDir, 'site.json');
-const guardPath = path.join(dataDir, '.claude', 'hooks', 'scope-guard.mjs');
+// The planner guard lives under state/agent/ (app state, outside the jail) since the 2026-09-28 review.
+const guardPath = path.join(dataDir, 'state', 'agent', 'scope-guard.mjs');
 const settle = () => new Promise((r) => setTimeout(r, 800));
 
 // Pipe a synthetic PreToolUse payload to the GENERATED guard on disk — the real bytes a boot just

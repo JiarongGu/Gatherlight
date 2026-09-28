@@ -273,7 +273,11 @@ try {
   //
   // Reproduced with a minimal hand-made archive rather than a fixture file, so the test states the
   // condition precisely: a valid backup whose .claude carries an ANCIENT guard and no UI contract.
-  const guardPath = path.join(restoreDir, '.claude', 'hooks', 'scope-guard.mjs');
+  // The guard now lives under state/agent/ (app state, outside the jail and the backup). The reissue on
+  // import writes it fresh AND deletes the ancient copy the archive restored to .claude/hooks/ — so a
+  // backup can no longer plant a weakened guard the agent runs, nor even leave one lying in the jail.
+  const guardPath = path.join(restoreDir, 'state', 'agent', 'scope-guard.mjs');
+  const legacyGuardPath = path.join(restoreDir, '.claude', 'hooks', 'scope-guard.mjs');
   const specPath = path.join(restoreDir, '.claude', 'ui-spec.md');
   const formPath = path.join(restoreDir, '.claude', 'forms', 'japan-visa-itinerary.json');
   const guardVersion = () => (fs.existsSync(guardPath)
@@ -325,6 +329,8 @@ try {
   const guardAfter = guardVersion();
   ok('THE POINT: the scope guard was NOT rolled back by the restore', guardAfter >= currentGuard,
     `guard is v${guardAfter}, app ships v${currentGuard}`);
+  ok('THE POINT: the ancient guard the archive restored to .claude/hooks/ was DELETED (not left in the jail)',
+    !fs.existsSync(legacyGuardPath), `legacy guard still present at ${legacyGuardPath}`);
   ok('the UI contract survives the restore', fs.existsSync(specPath));
   ok('the form map survives the restore', fs.existsSync(formPath));
 

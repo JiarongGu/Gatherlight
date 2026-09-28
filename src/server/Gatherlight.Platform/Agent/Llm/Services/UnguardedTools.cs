@@ -47,10 +47,26 @@ public static class UnguardedTools
     /// <summary>The built-ins removed from every agent run.</summary>
     public static readonly IReadOnlyList<string> Removed = ["PowerShell", "Monitor"];
 
-    /// <summary><paramref name="options"/> with <see cref="Removed"/> added to what it already disallows.</summary>
-    public static ClaudeAgentOptions Apply(ClaudeAgentOptions options) =>
-        options with
+    /// <summary>Removed additionally from a READ-ONLY run (plan / revise / read-only job / playground /
+    /// extract / validate). A plan writes nothing, so its only use for Bash was reads — which the read
+    /// fence already confines to the data folder — while a read-only Bash could still run inline eval or
+    /// launch a shell that escapes the guard. Removing it OUTRIGHT (not just dropping it from the
+    /// allow-list) is the enforcement: some read-only sites pass no settings file at all (extract,
+    /// validate, the migrator), so the allow-list drop alone would not reach them, but every one goes
+    /// through <see cref="AgentRunner"/> keyed on its policy. A read-only run keeps Read/Grep/Glob and the
+    /// read-only MCP tools — everything a plan needs.</summary>
+    private static readonly IReadOnlyList<string> RemovedReadOnly = ["Bash"];
+
+    /// <summary><paramref name="options"/> with <see cref="Removed"/> — and, for a read-only policy,
+    /// <see cref="RemovedReadOnly"/> — added to what it already disallows.</summary>
+    public static ClaudeAgentOptions Apply(ClaudeAgentOptions options)
+    {
+        var remove = options.ToolPolicy == Lyntai.Agents.AgentToolPolicy.ReadOnly
+            ? Removed.Concat(RemovedReadOnly)
+            : Removed;
+        return options with
         {
-            DisallowedTools = [.. options.DisallowedTools, .. Removed.Where(t => !options.DisallowedTools.Contains(t, StringComparer.Ordinal))],
+            DisallowedTools = [.. options.DisallowedTools, .. remove.Where(t => !options.DisallowedTools.Contains(t, StringComparer.Ordinal))],
         };
+    }
 }

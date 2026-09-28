@@ -31,10 +31,19 @@ public interface ISiteWriteScope
 
 public sealed class SiteWriteScope : ISiteWriteScope
 {
-    // Mirrors ChatEnvironmentService.ScopeGuardMjs / guard/system-scope-guard.mjs — kept in step by hand,
-    // both version-gated. The planner guard protects its own hooks + settings so the agent cannot neuter
-    // the guard; these tools honour the same set.
-    private static readonly string[] Protected = [".claude/hooks", ".claude/settings.json", ".claude/settings.local.json"];
+    // Mirrors ChatEnvironmentService.ScopeGuardMjs / guard/system-scope-guard.mjs — kept in step by hand.
+    // The planner guard protects its own hooks + settings + the MCP config so the agent cannot neuter the
+    // guard nor add an unsandboxed server; these tools honour the same set.
+    private static readonly string[] Protected =
+        [".claude/hooks", ".claude/settings.json", ".claude/settings.local.json", ".mcp.json"];
+
+    // Windows device names (CON, NUL, COM1…): a write to one hits a device, not a file. Rejected as a
+    // path segment (by its stem, so CON.txt too) — conservative, and no legitimate record file matches.
+    private static readonly HashSet<string> ReservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
 
     private readonly ISiteContext _site;
     private readonly ISiteManifestStore _manifest;
@@ -53,32 +62,53 @@ public sealed class SiteWriteScope : ISiteWriteScope
     public string? Resolve(string relPath, out string? reason)
     {
         reason = null;
-        var rel = (relPath ?? "").Replace('\\', '/').Trim();
-        while (rel.StartsWith("./", StringComparison.Ordinal)) rel = rel[2..];
-        rel = rel.TrimEnd('/');
-        if (rel.Length == 0) { reason = "路径为空。"; return null; }
-        // Reject any `..` SEGMENT (not just leading) and a rooted path — same as FsOpsService.AssertInScope
-        // and the guard's relTo, before the prefix test can be fooled by `plans/../.claude/x`.
-        if (Path.IsPathRooted(rel) || rel.Split('/').Any(seg => seg == ".."))
+        var raw = (relPath ?? "").Replace('\\', '/').Trim();
+        while (raw.StartsWith("./", StringComparison.Ordinal)) raw = raw[2..];
+        raw = raw.TrimEnd('/');
+        if (raw.Length == 0) { reason = "路径为空。"; return null; }
+        if (Path.IsPathRooted(raw)) { reason = $"路径越界:{relPath}"; return null; }
+
+        // NORMALIZE each segment the way Windows would BEFORE any compare — the compares are prefix tests,
+        // and a trailing dot/space, an alternate data stream (`name:stream`), a device name (CON/NUL/COM1…)
+        // or an 8.3 short name (`~1`) all name a file a raw string compare treats as different from its
+        // PROTECTED form. Rejecting a colon/short-name here also turns `plans/x.md:evil` into a clean refusal
+        // instead of a 500 out of ResolveSitePath. Windows strips trailing dots and spaces per segment, so
+        // `.claude/settings.json.` and `.claude/hooks./guard` resolve to the protected file — fold them.
+        var segs = new List<string>();
+        foreach (var rawSeg in raw.Split('/'))
         {
-            reason = $"路径越界:{relPath}";
-            return null;
+            if (rawSeg.Length == 0) continue;                       // // or trailing /
+            var seg = rawSeg.TrimEnd('.', ' ');
+            if (seg.Length == 0) { reason = $"路径段无效:{relPath}"; return null; }  // only dots/spaces
+            if (seg == ".") continue;
+            if (seg == "..") { reason = $"路径越界:{relPath}"; return null; }
+            if (seg.Contains(':')) { reason = $"路径含非法字符(:):{relPath}"; return null; }   // ADS / drive-rel
+            if (seg.Contains('~')) { reason = $"路径含 8.3 短名(~):{relPath}"; return null; }
+            if (ReservedDeviceNames.Contains(seg.Split('.')[0])) { reason = $"路径含保留设备名:{relPath}"; return null; }
+            segs.Add(seg);
         }
+        if (segs.Count == 0) { reason = "路径为空。"; return null; }
+        var rel = string.Join('/', segs);
+
+        // Case-INSENSITIVE containment (Windows file system): `.claude/HOOKS/guard` and `.claude/Settings.json`
+        // name the protected files. Fold case in every WriteDirs / PROTECTED / ui compare.
+        bool Under(string p) => rel.Equals(p, StringComparison.OrdinalIgnoreCase)
+            || rel.StartsWith(p + "/", StringComparison.OrdinalIgnoreCase);
 
         var dirs = WriteDirs;
-        if (!dirs.Any(d => rel == d || rel.StartsWith(d + "/", StringComparison.Ordinal)))
+        if (!dirs.Any(Under))
         {
             reason = $"只能改写 {string.Join(" / ", dirs)} 里的文件 —— 不允许:\"{rel}\"";
             return null;
         }
-        if (Protected.Any(p => rel == p || rel.StartsWith(p + "/", StringComparison.Ordinal)))
+        if (Protected.Any(Under))
         {
             reason = $"\"{rel}\" 是应用管理的受保护路径(scope guard / settings),不可改动。";
             return null;
         }
         // The UI dir holds pages and nothing else: flat, and a .json page. Mirrors WRITE_EXTS.
         var uiDir = UiDir;
-        if (uiDir.Length > 0 && (rel == uiDir || rel.StartsWith(uiDir + "/", StringComparison.Ordinal)))
+        if (uiDir.Length > 0 && Under(uiDir))
         {
             var rest = rel.Length == uiDir.Length ? "" : rel[(uiDir.Length + 1)..];
             if (rest.Length == 0 || rest.Contains('/'))
@@ -93,10 +123,19 @@ public sealed class SiteWriteScope : ISiteWriteScope
             }
         }
 
-        // ResolveSitePath refuses state/ and any escape past the data root. Existence is the caller's
-        // concern (a move target must not exist; a delete/move source must).
+        // ResolveSitePath refuses state/ and any escape past the data root (GetFullPath-based). Existence is
+        // the caller's concern (a move target must not exist; a delete/move source must).
         var abs = _site.ResolveSitePath(rel);
         if (abs is null) { reason = $"路径越界:{relPath}"; return null; }
+        // Belt and braces: re-check PROTECTED against the path GetFullPath RESOLVED, not only the normalized
+        // input — whatever Windows folds that the segment rules above miss still names the protected file.
+        var resolved = Path.GetRelativePath(_site.RootPath, abs).Replace('\\', '/');
+        if (Protected.Any(p => resolved.Equals(p, StringComparison.OrdinalIgnoreCase)
+                            || resolved.StartsWith(p + "/", StringComparison.OrdinalIgnoreCase)))
+        {
+            reason = $"\"{rel}\" 是应用管理的受保护路径(scope guard / settings),不可改动。";
+            return null;
+        }
         return abs;
     }
 }

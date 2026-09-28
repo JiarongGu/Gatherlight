@@ -115,7 +115,13 @@ public sealed class UnattendedRunService : IUnattendedRunService
             // tools just as much, and an unattended run has nobody to notice they went missing.
             McpServers = AgentMcpWiring.ServersFor(_internalMcp, _tools),
             AllowedTools = _tools.McpAllowedToolNames(writable: !spec.ReadOnly) is { Length: > 0 } names ? names : Array.Empty<string>(),
-            SettingsPath = spec.ReadOnly ? null : (File.Exists(_env.SettingsPath) ? _env.SettingsPath : null),
+            // A read-only job runs in the data folder, so it gets the READ-ONLY settings (the read fence +
+            // the guard hook), not null — the same confinement the chat plan phase gets. Bash is removed
+            // from it regardless (UnguardedTools, keyed on ToolPolicy); this adds the read fence so a
+            // report job cannot read outside the folder either.
+            SettingsPath = spec.ReadOnly
+                ? (File.Exists(_env.ReadOnlySettingsPath) ? _env.ReadOnlySettingsPath : null)
+                : (File.Exists(_env.SettingsPath) ? _env.SettingsPath : null),
         };
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
