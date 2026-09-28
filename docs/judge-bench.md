@@ -8737,3 +8737,224 @@ Sentences that are no longer true (`BuiltInJudgeSource`'s row note, `Description
 - 「判断质量还没有在本应用的测试集上实测过,也还没有和 llama.cpp 那条对比过,所以不推荐」
 - 「还没有对比实测过,所以不推荐」
 - 「还没有和 llama.cpp 上的同一个模型对比实测过,所以不推荐」
+
+## Run 14 — the embedder's D177 segmentation over facts past its window (design)
+
+Written and committed BEFORE the runs; the results section that follows names this commit. The knob (`d5ca78d`), the
+bench and fixture (`2835650`), and the tokenizer sweep and plumbing smokes below came first, because this design quotes
+them.
+
+**Why it is asked.** The quota gate (`IFactIndex.EmbedderReadyAsync` before a back-fill, dev-conventions' workaround (3))
+exists because a fact write whose vector fails still pays its annotation. Lyntai 3.5's
+`GraphMemoryOptions.SkipAnnotationWithoutVector` (its Part 304) ends that — but turned on by itself it would leave
+unannotated for good every fact the embedder REFUSES:
+
+- llama.cpp's EmbeddingGemma refuses any input past its 2,048-token window whole (launch item (7));
+- the classifier keeps such a fact without a vector and never retries it.
+
+Lyntai's D177 segmentation on the `llamacpp-embed` registration (`MaxInputChars` + `Segmentation`) embeds such an input in
+pieces pooled into one length-weighted mean vector, so no input would be refused. **Does an over-window fact then get a
+vector that semantic recall finds — by a paraphrase of what it says PAST the old window — without costing the facts that
+already fit?** Task D follows only if it does.
+
+### The measurement mode
+
+`GATHERLIGHT_EMBED_SEGMENTATION=d177` (`EmbedSegmentation`, `d5ca78d`) sets, on the `llamacpp-embed` registration only:
+
+- **`MaxInputChars` = (window − 2) ÷ 4 = 511** for EmbeddingGemma's declared 2,048. This is the tokenizer's worst case, so
+  no piece can be refused, on this sweep (scratch `devtools/_run14/embed-window-sweep.mjs`):
+  - It used the pinned GGUF's own `/tokenize` (llama.cpp b10549), over every assigned non-control scalar (292,466).
+  - Lyntai COUNTS characters after NFKC, per text element, and SENDS THE ORIGINAL text. So the bound is the most tokens
+    the original of one counted unit costs.
+  - That is **4**: 1,338 scalars, astral ones whose NFKC form is one unit (𝐉, the CJK compatibility supplement's 丽), each
+    four byte tokens.
+  - 43,452 BMP scalars outside the vocabulary cost 3 (rare CJK such as 丌, the ideographic space U+3000). Astral scalars
+    left as surrogate pairs cost 2 per unit, and everything else ≤ 1.5.
+  - llama.cpp adds 2 special tokens to an input.
+- **`Segmentation`**:
+  - Lyntai's default overlap of 0.15: the next piece restarts at a sentence end or space inside the last 15% of the
+    piece before.
+  - **No piece cap.** A cap keeps the first, the last and evenly spaced pieces and drops the rest — text that would never
+    reach the vector.
+- **Stated residuals:**
+  - NFKC COMPOSES (conjoining jamo, a letter and its combining mark), so a decomposed text counts fewer units than it has
+    characters and can pass the bound. llama.cpp then refuses that piece, and the fact falls back to today's behaviour.
+  - The worst case is far from ordinary text. The long fixture's notes read 0.77–0.80 tokens per unit in Chinese,
+    0.63–0.64 in Japanese and 0.20–0.22 in English (the same sweep). So a 511-unit piece holds ~410 tokens of Chinese but
+    ~105 of English, and an English fact is cut into ~4× more pieces than its tokens need. A segmenter counting TOKENS
+    would not pay that; Lyntai's HTTP one counts characters.
+- **Off** (the default, and the `sem` arms) keeps today's behaviour. An input past the window is refused whole; the
+  classifier re-embeds it once, probes, keeps the fact graph-indexed WITHOUT a vector, logs 「the embedder refused the
+  content of fact N … twice」, and never retries it.
+
+### Why a new bench, not an extension
+
+Neither existing bench measures this:
+
+- **`recall-bench`** reads a household's own facts (the data folder) and cannot pair two configurations.
+- **`judge-bench`**'s arms copy ONE seed, written with 语义 off, so no arm would have vectors. Giving them vectors
+  afterwards (a semantic reindex) would take a different path from a household's: a re-embed in place, not the write
+  path's classifier.
+
+So `devtools/scripts/semantic-bench.mjs` (`2835650`) works like this:
+
+- Every arm WRITES the fixture itself, from one settled empty data folder, in fixture order, timing each
+  `remember_fact`. 判断 is off (no annotation, and the claude stub, so no quota).
+- Then it asks every question in judge-bench's own shuffled order (order seed 12345, the same repair), `recall_facts`
+  with limit 8, and records where the target lands.
+- One llama.cpp router serves every arm, with the product's embedder section (`n-gpu-layers = 99`, `embeddings = true`,
+  `batch-size` and `ubatch-size` 2,048 — guarded against `LlamaServerRuntime`).
+- The arms run one at a time, each its own server.
+
+| arm | 语义 | knob |
+|---|---|---|
+| `formula` | off | blank |
+| `sem` | llama.cpp EmbeddingGemma, as shipped (refused past the window) | blank |
+| `sem2` | the same — the A/A twin | blank |
+| `sems` | llama.cpp EmbeddingGemma, D177 segmented | `d177`, which must announce itself |
+
+### The fixtures
+
+- **embed** — `devtools/fixtures/recall-bilingual-embed.json`, written by `devtools/scripts/semantic-bench-fixture.mjs`. It
+  keeps the same 60 facts and 240 questions as `recall-bilingual.json`.
+  - Half are kept as they are ("short", ≤ 101 characters, one piece in either mode). Half become **over-window notes**, on
+    the mixed fixture's alternation (zh 20/20, en 8/8, ja 2/2).
+  - An over-window note is the long fixture's neutral household filler — in passes, each a fresh shuffle, so a filler
+    sentence repeats once per pass — with the fact's mentions of other facts by topic, and the fact's own content LAST.
+  - The filler before the answer reaches 2,972 (zh), 3,663 (ja) or 11,275 (en) characters: 2,300 tokens at the slowest
+    rate the long notes read.
+  - Every answer occurs once in the corpus.
+  - **Measured on the pinned GGUF** (`--measure`):
+
+    | notes | characters | tokens | the answer starts at token |
+    |---|---|---|---|
+    | zh | 2,992–3,020 | 2,362–2,389 | 2,340–2,368 |
+    | en | 11,380–11,442 | 2,359–2,378 | 2,337–2,357 |
+    | ja | 3,699–3,715 | 2,350–2,356 | 2,332–2,338 |
+    | short facts | — | 14–29 | — |
+
+  - So every over-window note is refused whole unsegmented, and every answer lies past token 2,046, the window less its
+    2 specials.
+  - At 511 counted units a piece, a zh note is ~6 pieces, a ja note ~8, an en note ~23. The answer is in the last one.
+- **short** — `recall-bilingual.json` as it is: every fact one piece, so segmentation should change nothing.
+
+### Commands
+
+In order (the scratch driver `devtools/_run14/drive.sh` runs them; each run's output goes to
+`devtools/_semantic-bench-<fixture>/`):
+
+```
+node devtools/scripts/semantic-bench.mjs --capability --resources=devtools/_rr-res --port-base=7870 --llama-port=7894
+node devtools/scripts/semantic-bench.mjs --fixture=embed --resources=devtools/_rr-res --port-base=7880 --llama-port=7895
+node devtools/scripts/semantic-bench.mjs --fixture=short --resources=devtools/_rr-res --port-base=7900 --llama-port=7896
+```
+
+- **Ports** 7870–7879, 7880–7889, 7900–7909 and 7894–7896 (each run's template server takes its base + 9).
+  - None is in a range Windows had reserved that day, and none was listening.
+  - None is reused: the sweep used 7810, the fixture measurement 7820, the smokes 7840–7869 and 7891–7893.
+- **The build.** App HEAD is this design's commit; the server was built from `d5ca78d`'s sources. Fingerprint (Platform /
+  Planner / Server): `4bb5b4a89fbac679` / `8f2784e5c06fc063` / `2427ce2107269c1c`.
+- **Estimated time**: under 30 minutes in all.
+
+### The capability check, first (measuring rule 3)
+
+One fact, 60 distractors: the short fixture's 60 facts, then ONE over-window note — the same zh filler to 2,972
+characters — whose distinctive sentence is its last text, past the window:
+
+> 楼顶的两个蜂箱归三楼的周老师照看,要取蜂蜜得提前一天跟他说好。
+
+No distractor mentions bees (the bench refuses to run otherwise). It is asked, in `sem` and `sems`, by:
+
+- **the question** — an English paraphrase sharing no wording with the note: "Who looks after the beehives up on the
+  roof, and how much notice does he want before we collect the honey?" No trigram, bm25 or lexical-graph match can reach
+  it, so only a vector can;
+- a Chinese paraphrase sharing no three-character sequence with it (reported, not deciding): 「天台上那些蜜蜂由哪位邻居负责?想采蜜要早点打招呼吗?」;
+- three positive controls: the cross-language questions of three short facts (`mkt-east`, `dentist`, `vet`), which a
+  vector should find in both arms.
+
+**Read as:** the capability HOLDS iff, in `sems`, the fact has a vector (its graph node has a `lyntai_vector` row) and no
+refused line, and the English paraphrase puts it on the page of 8. Expected in `sem`: no vector, one refused line, and
+not on the page. If `sem` finds it anyway, the check is not a check, and it is reported as such.
+
+### Measured (embed and short)
+
+- Per arm, the writes: ms per `remember_fact` (short and over-window apart), which facts got a vector (the database),
+  the classifier's refused lines, and claude-cli calls.
+- Per arm, the recall: top-1 and found@8 on `all`, per question set (same, cross, third, mixed), and by target (short,
+  over-window); ms per recall.
+- Paired (McNemar exact, Agresti–Min 95%): `sems` vs `sem` (the question), `sem2` vs `sem` (the A/A), and each 语义 arm
+  vs `formula` (context).
+- The identity check: rows whose target position or whole page differ, `sems` vs `sem` and `sem2` vs `sem`.
+
+### Decision rule
+
+As written by the owner, **verbatim**: **"Task D may enable segmentation plus `SkipAnnotationWithoutVector` and retire the
+gate only if: (a) over-window facts get vectors (the capability); (b) segmented is not significantly worse than
+unsegmented on any question set, and better on the past-the-cut questions; (c) short facts are unaffected. Otherwise the
+gate stays."**
+
+It is read as follows, fixed before the runs. b = `sem` hit & `sems` miss, c = the reverse; paired within one run.
+
+- **(a) The capability.** Both must hold:
+  - the capability check HOLDS (above);
+  - in the embed run, EVERY over-window fact has a vector in `sems` (30 of 30) and none in `sem` (0 of 30), with no
+    refused line in `sems`.
+- **(b) Worse nowhere, better where it matters.** Both halves:
+  - **Worse nowhere.** On the embed run, `sems` is NOT significantly worse than `sem` on found@8 (exact p < 0.05 AND
+    c − b < 0) on any of these, each at 0.05 with no correction:
+    - `all` (240 pairs);
+    - each question set (60 each);
+    - the short targets (120).
+  - **Better past the cut.** `sems` IS significantly better than `sem` on found@8 on the over-window targets (120 pairs,
+    every one a question whose answer sits past the cut): p < 0.05 AND c − b > 0.
+  - Top-1, on the same groups, is reported beside it and flagged if significantly worse; it does not decide.
+- **(c) Short facts unaffected.** On the short run, one of:
+  - `sems` and `sem` give IDENTICAL rows (every target position and whole page, 240 of 240);
+  - or, if they do not, they are equivalent within ±3pp on found@8 and top-1 (`all`), AND `sem2` vs `sem` differs on at
+    least as many rows. That shows the differences are the runtime's noise, since a short fact is one piece and its
+    request is the same in both modes.
+- **Task D qualifies iff (a), (b) and (c) all hold.** Otherwise the gate stays. Nothing in the product changes here: the
+  verdict goes to the owner, and an implementer does Task D.
+
+### Guards, checked per run before the rule is read
+
+A failed guard leaves the run's clauses unread; it is reported, not worked around.
+
+1. **The fixture.** The embed fixture is the generator's bytes (the bench refuses otherwise), and the measurement above
+   holds: every answer is past token 2,046.
+2. **The engine and embedder A/A.** `sem2` vs `sem` is quiet on `all` (p ≥ 0.05, both metrics), in both runs.
+3. **Startup.**
+   - Every 语义 arm reads back `llama-cpp · embeddinggemma-300M-Q8_0`, and `formula` has 语义 off.
+   - `sems` announces `embed segmentation = d177`, and no other arm prints a `[measurement]` line.
+   - There are no startup warnings, and 0 claude-cli calls.
+4. **Writes and recalls.** Every write returned ok, and every question was answered (no error row).
+5. **Vectors.**
+   - embed run: `sem` and `sem2` have 30/30 short and 0/30 over-window, with 30 refused lines each; `sems` has 60/60 and 0
+     refused lines;
+   - short run: every 语义 arm has 60/60 and 0 refused lines.
+6. **The router.** One spawn of the embedder. Its only error lines are the refusals of `sem`'s and `sem2`'s over-window
+   writes; the short run has none.
+7. **One build.** The fingerprint above, before the first run and after the last.
+
+### What applies to the built-in embedder — not measured here
+
+The built-in embedder (`OnnxEmbedder`, 内置 on 语义) runs EmbeddingGemma in process and TRUNCATES an input at 2,048
+tokens; it never refuses one. So an over-window fact gets a vector there today, of its first 2,048 tokens only. The gate's
+concern — a write whose vector fails, annotated anyway — does not arise from length for it, and
+`SkipAnnotationWithoutVector` would never fire on a long fact. What it loses is the text past the cut, which its vector
+never sees. Segmenting it would use `OnnxProviderOptions.MaxTokens` with `Segmentation` — counted in TOKENS, so without
+the character worst case above — and is a separate measurement, not run.
+
+### Plumbing smokes, before this design
+
+- **Embed, `--n=4`** (the first four facts, 16 questions):
+  - `sem` and `sem2` left 2/4 vectors, the two over-window notes refused, 2 refused lines each; `sems` left 4/4 and 0
+    refused lines;
+  - `sems` announced its knob; no arm had a startup warning once the template was settled;
+  - `sem2` vs `sem`: identical rows;
+  - over-window writes took 95–146 ms in `sem` (refused) and 343–493 ms in `sems` (pieces).
+- **Short, `--n=6`**: every 语义 arm left 6/6 vectors; `sems` vs `sem` identical (0 of 24 rows differ), and `sem2` vs
+  `sem` identical.
+- All 75 saved judge-bench runs re-analyse byte-identically. The long and mixed fixtures still match their generators.
+
+The smokes' numbers inform nothing.
