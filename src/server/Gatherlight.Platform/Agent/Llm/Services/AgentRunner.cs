@@ -27,12 +27,14 @@ public sealed class AgentRunner : IAgentRunner
     private readonly IAgentSession _session;
     private readonly ILogger<AgentRunner> _log;
     private readonly IAgentRunScope _runScope;
+    private readonly IProjectConfigSweep _configSweep;
 
-    public AgentRunner(IAgentSession session, ILogger<AgentRunner> log, IAgentRunScope runScope)
+    public AgentRunner(IAgentSession session, ILogger<AgentRunner> log, IAgentRunScope runScope, IProjectConfigSweep configSweep)
     {
         _session = session;
         _log = log;
         _runScope = runScope;
+        _configSweep = configSweep;
     }
 
     public async Task<AgentSessionResult> RunAsync(ClaudeAgentOptions options, string label,
@@ -56,6 +58,13 @@ public sealed class AgentRunner : IAgentRunner
             !string.IsNullOrEmpty(options.SettingsPath),
             !string.IsNullOrEmpty(options.ResumeToken), options.AllowedTools.Count, options.Prompt.Length);
 
+        // The claude CLI loads a project's .claude/settings*.json and .mcp.json from its working directory ON ITS OWN,
+        // so in the data folder none may be there when a run starts, nor survive one that planted it (ProjectConfigSweep).
+        // Before AND after — the after catches what an execute run left behind before its diff gate's validation pass
+        // (an agent run in the data folder too), a Reject or the next run can meet it.
+        var sweepConfig = _configSweep.Covers(options.WorkingDirectory);
+        if (sweepConfig) await SweepConfigAsync(label, emit);
+
         AgentSessionResult result;
         try
         {
@@ -68,7 +77,8 @@ public sealed class AgentRunner : IAgentRunner
             //
             // The run scope is entered for the WHOLE run keyed on its tool policy, so the scoped MCP file tools
             // (fs_move/fs_delete) — called over the loopback endpoint on another request — read one honest answer
-            // to "may this run write". Safe as a shared flag because the agent lease admits one run at a time.
+            // to "may this run write". It COUNTS write runs rather than holding one policy: runs that take no agent
+            // lease (extract over HTTP, the playground, the migrator) overlap an execute run (AgentRunScope).
             using var _scope = _runScope.Enter(options.ToolPolicy);
             result = await _session.RunAsync(options, onEvent: e => Map(e, emit, tracker, options), ct);
         }
@@ -83,6 +93,10 @@ public sealed class AgentRunner : IAgentRunner
             _log.LogError(ex, "[{Label}] agent FAILED after {Ms}ms: {Msg}", label, sw.ElapsedMilliseconds, ex.Message);
             throw;
         }
+        finally
+        {
+            if (sweepConfig) await SweepConfigAsync(label, emit);
+        }
 
         if (result.IsError || string.IsNullOrEmpty(result.FinalText))
             _log.LogWarning("[{Label}] agent produced no usable output: isError={Err} subtype={Sub} in {Ms}ms · diag={Diag}",
@@ -92,6 +106,26 @@ public sealed class AgentRunner : IAgentRunner
                 label, result.FinalText.Length, result.SessionId ?? "(none)", result.Subtype ?? "(none)", sw.ElapsedMilliseconds);
 
         return result;
+    }
+
+    // Uncancellable on purpose: the sweep after a stopped run is exactly the one that must happen. It never throws
+    // (ProjectConfigSweep logs its own failures), and says in the run's own stream what it moved and where to.
+    private async Task SweepConfigAsync(string label, Action<AgentEvent> emit)
+    {
+        IReadOnlyList<string> moved;
+        try { moved = await _configSweep.SweepUntrackedAsync(CancellationToken.None); }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "[{Label}] project-config sweep failed", label);
+            return;
+        }
+        if (moved.Count == 0) return;
+        emit(new AgentEvent
+        {
+            Kind = "notice",
+            Text = $"已把 {string.Join("、", moved)} 移出数据目录(原文件保存在 state/quarantine/ 下):"
+                + "claude 会自己加载这类配置文件,应用从不写它,助手也不允许写。",
+        });
     }
 
     // Bridge one Lyntai stream event to app-owned concerns: SSE wire + edit-tracking + pricing. Fires in

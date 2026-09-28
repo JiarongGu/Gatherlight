@@ -439,6 +439,9 @@ public static class GatherlightApp
             .AddSingleton<Lyntai.Storage.IKeyValueStore, Platform.Ops.Cortex.Services.AppConfigKeyValueStore>()
             // App-side adapter over Lyntai's IAgentSession — the two-gate / jobs / playground run through this.
             .AddSingleton<IAgentRunScope, AgentRunScope>()
+            // Moves the CLI's own project config (.claude/settings*.json, .mcp.json) out of the data folder, around
+            // every run there, at startup and on a backup import — the CLI would load it by itself (round-6 review).
+            .AddSingleton<IProjectConfigSweep, ProjectConfigSweep>()
             .AddSingleton<IAgentRunner, AgentRunner>()
             // Resolves + inspects the claude CLI itself (present? runnable? signed in?). The CLI used to be
             // an ASSUMED machine dependency: absent on a fresh install, it died at spawn and surfaced as a

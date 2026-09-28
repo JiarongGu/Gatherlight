@@ -1,4 +1,5 @@
 using Gatherlight.Server.Platform.Agent.Chat.Services;
+using Gatherlight.Server.Platform.Agent.Llm.Services;
 
 namespace Gatherlight.Server.Platform.Site.Seed.Services;
 
@@ -16,6 +17,8 @@ namespace Gatherlight.Server.Platform.Site.Seed.Services;
 ///
 /// One seam so the answer to "what does the app install into the site?" lives in one place: a file
 /// added to the re-issue is covered on every path that needs it, without anyone remembering to.
+/// It is also where the app REMOVES what must not be in the site: the claude CLI's own project config
+/// (<see cref="IProjectConfigSweep"/>), which the CLI would load on the next agent run by itself.
 /// </summary>
 public interface IAppManagedFiles
 {
@@ -28,16 +31,22 @@ public sealed class AppManagedFiles : IAppManagedFiles
 {
     private readonly IZhikuSeeder _seeder;
     private readonly ChatEnvironmentService _chatEnv;
+    private readonly IProjectConfigSweep _configSweep;
 
-    public AppManagedFiles(IZhikuSeeder seeder, ChatEnvironmentService chatEnv)
+    public AppManagedFiles(IZhikuSeeder seeder, ChatEnvironmentService chatEnv, IProjectConfigSweep configSweep)
     {
         _seeder = seeder;
         _chatEnv = chatEnv;
+        _configSweep = configSweep;
     }
 
     public async Task<IReadOnlyList<string>> ReissueAsync(CancellationToken ct = default)
     {
         await _seeder.SeedAsync();
-        return _chatEnv.EnsureFiles();
+        var written = _chatEnv.EnsureFiles();
+        // Untracked only (a tracked one was committed on purpose; the app never commits one), so this never leaves a
+        // deletion for the caller's commit to pick up. What it moves is logged, with where it went.
+        await _configSweep.SweepUntrackedAsync(ct);
+        return written;
     }
 }
