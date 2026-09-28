@@ -33,14 +33,12 @@ public sealed class LlamaWarmStep : IMigrationStep
     private readonly IPlatformContext _platform;
     private readonly MigrationState _state;
     private readonly IClaudeCliRuntime _claude;
-    private readonly IAppConfigService _appConfig;
     private readonly ILogger<LlamaWarmStep> _log;
 
     public LlamaWarmStep(ILlamaServerRuntime llama, ServerConfigService config, IPlatformContext platform,
-        MigrationState state, IClaudeCliRuntime claude, IAppConfigService appConfig, ILogger<LlamaWarmStep> log)
+        MigrationState state, IClaudeCliRuntime claude, ILogger<LlamaWarmStep> log)
     {
-        _llama = llama; _config = config; _platform = platform; _state = state; _claude = claude;
-        _appConfig = appConfig; _log = log;
+        _llama = llama; _config = config; _platform = platform; _state = state; _claude = claude; _log = log;
     }
 
     public string Id => "llama-warm";
@@ -81,51 +79,12 @@ public sealed class LlamaWarmStep : IMigrationStep
         var judge = MemorySources.ResolveJudge(settings);
         var semantic = MemorySources.ResolveSemantic(settings);
 
-        // A binding whose MODEL is not one of the layer's files now falls back (MemorySources.ResolveJudge/
-        // ResolveSemantic). Say so, in the log as well as the overlay — the overlay is gone once migration ends:
-        // otherwise 判断 is quietly on the CLI and 语义 quietly off, and nothing tells the household why. Before the
-        // fallback existed the warm below said it instead, with 没能载入 — for a layer still wired to the file.
-        // WHY and the fix are the source's clause (WhyNotHere), the same one the bind endpoint refuses with.
-        // Only the model is announced: a missing runtime, or the built-in embedder's missing files, still fall back
-        // without a word here (a residual dev-conventions records).
-        var llamaJudge = MemorySources.FindJudge(MemoryBackends.LlamaCpp);
-        if (MemorySources.SavedIs(settings.Config, MemoryBackends.LlamaCpp) && judge.Id != MemoryBackends.LlamaCpp
-            && settings.Config.JudgeModel is { Length: > 0 } goneJudge && llamaJudge is not null
-            && !llamaJudge.HasModel(settings, goneJudge))
-        {
-            // WHAT THE FALLBACK COSTS, and WHAT MOVES — which depends on what was bound. A local CHAT judge did both
-            // halves on this machine, so this start is the first time the household's facts go to Claude and the
-            // account pays for them. A RERANKER only checked: its tagging was on the CLI all along, so only the
-            // checking moves, and saying 「标注与核对都改由它完成」 would misstate what changed. Asked of the source
-            // (ChecksOnly), the member the bind toast reads. The tagging clause is MemorySources.CliTaggingCost — one
-            // writer, the one the reranker's cost line and bind toast carry. 判断's own switch decides whether any of
-            // it is spent now, so "消耗账号额度" is never said while nothing is being called; with it off, what matters
-            // is what happens when it is switched on, which is both halves on the CLI whatever was bound.
-            var cliTagging = "写入时" + MemorySources.CliTaggingCost;
-            var cost = !MemoryEnrichment.IsOn(_appConfig)
-                ? $"(「判断」现在是关着的,暂时不会调用;打开后标注与核对都由它完成:{cliTagging};检索时每次也调用一次)"
-                : llamaJudge.ChecksOnly(goneJudge)
-                    ? " —— 写入时的主题标注本来就由它完成(" + MemorySources.CliTaggingCost + ");"
-                      + "现在检索时的核对也改由它完成:每次检索一次调用,同样消耗账号额度,候选事实的内容也会发给 Claude"
-                    : $" —— 标注与核对都改由它完成:{cliTagging};检索时每次也调用一次";
-            // …AND WHETHER THE CLI CAN DO ANY OF IT. Everything above says what the CLI takes over; a CLI that is
-            // missing or signed out takes over nothing — both policies are fail-open, so no fact is tagged and no
-            // recall is checked, and nothing else reports it. Read from the CACHED probe (ClaudeRuntimeStep ran it
-            // earlier in this startup) through MemorySources.CliTaggingNow, the reader the bind toast and the
-            // reranker's warning below use; nothing when nobody has probed. Its Why and Fix, not its Text: Text
-            // says 「检索时的核对照常」, true beside a running reranker and false here, where the checking moved to
-            // this same CLI. Said whatever 判断's switch is: off, nothing happens now, and switched on it still will
-            // not until the CLI works — true both ways.
-            var cliNow = MemorySources.CliTaggingNow(_claude.Cached);
-            var cliCannot = cliNow is { Works: false }
-                ? $"注意:{cliNow.Why},在它能用之前,写入的事实不会被标注,检索时也不会核对 —— {cliNow.Fix}"
-                : "";
-            _log.LogWarning("memory judge is bound to llama.cpp model {Model}, which is not one of its models on disk; " +
-                "falling back to the Claude CLI for this start", goneJudge);
-            _state.AddWarning($"「判断」绑定的本机模型用不了:{llamaJudge.WhyNotHere(settings, goneJudge)}。"
-                + $"这次启动「判断」退回 Claude CLI{cost}。处理好之后重启服务才会用回它;也可以在「记忆检索」另选一个。"
-                + cliCannot);
-        }
+        // A binding whose MODEL is not one of the layer's files falls back (MemorySources.ResolveJudge/ResolveSemantic).
+        // For 判断 that is said by JudgeFallbackStep, for every local judge (llama.cpp's and 内置's); 语义's embedder is
+        // llama.cpp's to say, below. Say so, in the log as well as the overlay — the overlay is gone once migration ends:
+        // otherwise 语义 is quietly off and nothing tells the household why. WHY and the fix are the source's clause
+        // (WhyNotHere), the same one the bind endpoint refuses with. Only the model is announced: a missing runtime, or
+        // the built-in embedder's missing files, still fall back without a word here (a residual dev-conventions records).
         var llamaSemantic = MemorySources.FindSemantic(MemoryBackends.LlamaCpp);
         if (string.Equals(settings.Config.SemanticSource, MemoryBackends.LlamaCpp, StringComparison.OrdinalIgnoreCase)
             && semantic?.Id != MemoryBackends.LlamaCpp

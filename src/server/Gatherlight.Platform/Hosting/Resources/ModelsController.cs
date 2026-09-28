@@ -28,15 +28,19 @@ public sealed class ModelsController : ControllerBase
     private readonly ILogger<ModelsController> _log;
     // The reranker judge's pace, when one is running — its skip count moves the 推荐 badge (Recommend). Null otherwise.
     private readonly RerankPace? _pace;
+    // Which judge that pace belongs to: a skip by the 内置 reranker, which IS mMiniLMv2, is no reason to recommend mMiniLMv2.
+    private readonly MemoryJudgeWiring? _judgeWiring;
 
     public ModelsController(ILlamaServerRuntime llama, ServerConfigService config,
-        IPlatformContext platform, ILogger<ModelsController> log, RerankPace? pace = null)
+        IPlatformContext platform, ILogger<ModelsController> log, RerankPace? pace = null,
+        MemoryJudgeWiring? judgeWiring = null)
     {
         _llama = llama;
         _config = config;
         _platform = platform;
         _log = log;
         _pace = pace;
+        _judgeWiring = judgeWiring;
     }
 
     /// <summary>The startup-time facts a source needs to answer where it talks and whether it is ready.
@@ -150,7 +154,7 @@ public sealed class ModelsController : ControllerBase
             // The device state from the last FULL probe, and only while the runtime is installed — null ("not known")
             // otherwise, which keeps today's suggestion and claims nothing about the machine.
             recommendation = Recommend(models, probe.Installed, probe.Installed ? _llama.Gpu : null,
-                _pace?.RecentSkips ?? (0, 0), BgeMeasuredTooSlow(), adopted: probe.Serving && !probe.Ours),
+                SkipsThatAskForTheSmallReranker(), BgeMeasuredTooSlow(), adopted: probe.Serving && !probe.Ours),
             // The sample size travels with the numbers, here as everywhere: "9/10" invites the right
             // question where a bare adjective does not.
             measuredOn = MeasuredOnLabel(),
@@ -161,7 +165,10 @@ public sealed class ModelsController : ControllerBase
     /// model is FOR, then by what you already have.</summary>
     private IReadOnlyList<ModelRowView> Models(MemorySourceSettings mem, bool adopted = false)
     {
-        var rows = new List<ModelRowView>(GgufRows(MemorySources.BoundToLlamaCpp(mem), adopted)) { BuiltInRow(mem) };
+        var rows = new List<ModelRowView>(GgufRows(MemorySources.BoundToLlamaCpp(mem), adopted))
+        {
+            BuiltInRow(mem), BuiltInRerankerRow(mem),
+        };
         return rows
             .OrderBy(r => r.Capability == "embedding" ? 0 : 1)
             .ThenByDescending(r => r.Installed)
@@ -190,6 +197,31 @@ public sealed class ModelsController : ControllerBase
                 c.Measured.RecallTop1, c.Measured.RecallTop3, c.Measured.Queries, c.Measured.MsPerQuery),
             BuiltInSemanticSource.ResourceId, DeviceNote: null);
     }
+
+    /// <summary>The in-process ONNX reranker, as a row like any other — its facts from
+    /// <see cref="BuiltInJudgeSource.Catalog"/>, the single writer the 判断 picker reads too. No measurement: its judging
+    /// has not been measured (<c>docs/judge-bench.md</c> Run 13 is to come), and the 检索质量 column holds the embedders'
+    /// 10-query score, which a reranker has no shape for. No device note: the device measurement is llama.cpp's, and this
+    /// one runs on the CPU in this process.</summary>
+    private ModelRowView BuiltInRerankerRow(MemorySourceSettings mem)
+    {
+        var c = BuiltInJudgeSource.Catalog;
+        // Bound only if 判断 RESOLVES to the built-in backend — which holds only while its one model's files are there — so
+        // a saved binding that fell back never keeps this row's delete button away from files that are not there.
+        var inUse = MemorySources.ResolveJudge(mem).Id == MemoryBackends.BuiltIn ? MemoryLayers.Judge : null;
+        return new ModelRowView(
+            c.Id, c.Name, MemoryBackends.BuiltIn, "reranking",
+            c.SizeBytes ?? 0,
+            InProcessReranker.IsPresent(Services.ResourceProvisioner.ProvisionedRerankModel(_platform.ResourcesPath)),
+            inUse, c.Note ?? "", Measured: null, BuiltInJudgeSource.ResourceId, DeviceNote: null);
+    }
+
+    /// <summary>The running reranker's recent skips, when they may move the badge to mMiniLMv2 — and (0, 0) when the judge
+    /// skipping IS mMiniLMv2 in another runtime (the 内置 reranker): recommending "the smaller reranker" to a household
+    /// already on it would name the model that is skipping, as if it were a different one.</summary>
+    private (int Skipped, int Recalls) SkipsThatAskForTheSmallReranker() =>
+        _pace is null || MemorySources.RunsModel(_judgeWiring?.Model, GgufCatalog.RerankerWithoutGpu)
+            ? (0, 0) : _pace.RecentSkips;
 
     /// <summary>Every GGUF — on disk and fetchable — from one pass.
     ///
@@ -362,7 +394,9 @@ public sealed class ModelsController : ControllerBase
             };
 
         var anEmbedderIsIn = builtInIsIn || (ggufEmbedderIsIn && llamaRuntimeInstalled);
-        var aRerankerIsIn = models.Any(m => m.Installed && m.Capability == "reranking");
+        // A MEASURED reranker: the one-reranker rule rests on "any installed reranker measured better than none", which the
+        // 内置 one has not been (Run 13 is to come) — so an installed copy of it does not end the suggestion of one that was.
+        var aRerankerIsIn = models.Any(m => m.Installed && m.Capability == "reranking" && m.Runtime == MemoryBackends.LlamaCpp);
         var skipped = skips.Skipped > 0;
         var slowBge = bgeTooSlow is not null;
         // A REPAIR outranks the embedder (final review): the skips and BGE measured too slow are this machine refusing the
@@ -606,8 +640,10 @@ public sealed class ModelsController : ControllerBase
         // find less rather than an error naming what was removed. Only our own models reach here — an
         // Ollama model is the household's, managed with Ollama (see Get()).
         var builtIn = string.Equals(body?.Runtime, MemoryBackends.BuiltIn, StringComparison.OrdinalIgnoreCase);
+        // Two in-process models now, told apart by id — each row's own InUse, the badge the table shows.
         var holder = builtIn
-            ? BuiltInRow(mem).InUse
+            ? (string.Equals(model, BuiltInJudgeSource.ModelId, StringComparison.OrdinalIgnoreCase)
+                ? BuiltInRerankerRow(mem).InUse : BuiltInRow(mem).InUse)
             : GgufInUse(model!, MemorySources.BoundToLlamaCpp(mem));
         if (holder is not null)
             return StatusCode(409, new
@@ -628,10 +664,13 @@ public sealed class ModelsController : ControllerBase
     /// removing the directory is the whole operation — there is no cached "installed" to invalidate.</para></summary>
     private IActionResult RemoveBuiltIn(string modelId)
     {
-        if (!string.Equals(modelId, BuiltInSemanticSource.ModelId, StringComparison.OrdinalIgnoreCase))
-            return StatusCode(404, new { error = $"没有找到本机模型 {modelId}。" });
-
-        var dir = Path.Combine(_platform.ResourcesPath, BuiltInSemanticSource.ResourceId);
+        // Only the two in-process models' own directories — never an arbitrary install directory (see above).
+        var dir = string.Equals(modelId, BuiltInSemanticSource.ModelId, StringComparison.OrdinalIgnoreCase)
+            ? Services.ResourceProvisioner.ProvisionedEmbedModel(_platform.ResourcesPath)
+            : string.Equals(modelId, BuiltInJudgeSource.ModelId, StringComparison.OrdinalIgnoreCase)
+                ? Services.ResourceProvisioner.ProvisionedRerankModel(_platform.ResourcesPath)
+                : null;
+        if (dir is null) return StatusCode(404, new { error = $"没有找到本机模型 {modelId}。" });
         try
         {
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);

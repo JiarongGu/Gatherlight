@@ -346,6 +346,22 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         Override("GATHERLIGHT_EMBED_MODEL_BASE_URL") is { } b ? $"{b.TrimEnd('/')}/{path}"
         : $"https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/{EmbedModelCommit}/{path}";
 
+    /// <summary>The 内置 reranker's model, pinned by COMMIT like the embedder's — the model repository's own ONNX
+    /// export (<c>cross-encoder/mmarco-mMiniLMv2-L12-H384-v1</c>, the card says Apache-2.0; its training data, mMARCO, is
+    /// non-commercial, as the GGUF row of the same model says). Its qint8 graph — 118,620,017 bytes, the same sha256 the
+    /// repository publishes as <c>model_qint8_arm64</c>, <c>_avx512</c> and <c>_avx512_vnni</c> — is the export Lyntai's
+    /// D191 was verified with: the model directory its <c>OnnxCrossEncoderLiveTests</c> ran against holds this graph as its
+    /// <c>onnx/model.onnx</c> beside these three files, all four byte-identical (sha256 compared 2026-09-28). The
+    /// tokenizer is the repository's <c>tokenizer.json</c>, which D191's owned SentencePiece tokenizer reads. The fp32
+    /// graph, four times the size (470,883,696 bytes), is not pinned. Pins read 2026-09-28 from the repository at this commit
+    /// (<c>X-Linked-ETag</c> for the two LFS files, a download for the two small ones) and confirmed by provisioning into a
+    /// scratch data folder through this very catalogue (docs/self-managed-llm-runtime.md).</summary>
+    private const string RerankModelCommit = "1427fd652930e4ba29e8149678df786c240d8825";
+
+    private static string RerankModelUrl(string path) =>
+        Override("GATHERLIGHT_RERANK_MODEL_BASE_URL") is { } b ? $"{b.TrimEnd('/')}/{path}"
+        : $"https://huggingface.co/cross-encoder/mmarco-mMiniLMv2-L12-H384-v1/resolve/{RerankModelCommit}/{path}";
+
     public static readonly IReadOnlyList<ResourceSpec> Catalog = new[]
     {
         new ResourceSpec(
@@ -427,6 +443,36 @@ public sealed class ResourceProvisioner : IResourceProvisioner
                     "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c"),
             },
             Category: ResourceCategory.Model),
+        new ResourceSpec(
+            Id: Agent.Llm.Sources.BuiltInJudgeSource.ResourceId,
+            Name: "内置重排模型(mMiniLMv2)",
+            // What it IS, what it moves, what it costs and that it is unmeasured — the row a household reads before
+            // downloading it. The measured comparison with llama.cpp's mMiniLMv2 is Run 13's, still to come; until then
+            // the model row's note (BuiltInJudgeSource.Catalog) says what was measured here and what was not.
+            NeededFor: "「记忆检索 · 判断」的内置重排模型 —— 在应用进程里用 CPU 运行:不需要 llama.cpp,没有常驻服务,"
+                + "约 136 MB 磁盘;它只做检索时的核对,写入事实时的主题标注仍由 Claude CLI 完成(消耗账号额度)。"
+                + "还没有和 llama.cpp 上的同一个模型对比实测过,所以不推荐;仅在判断选用这个「内置」模型时需要",
+            Kind: ResourceKind.Files, InstallDir: Agent.Llm.Sources.BuiltInJudgeSource.ResourceId,
+            // The graph is the marker, as the embedder's is: ProvisionFilesAsync moves the directory in only once every
+            // checksum passed, so the marker existing means the set is complete.
+            ReadyMarker: Agent.Llm.Services.InProcessReranker.ModelFile,
+            ApproxBytes: 135_704_003,
+            Files: new[]
+            {
+                new ResourceFile(Agent.Llm.Services.InProcessReranker.ModelFile,
+                    RerankModelUrl("onnx/model_qint8_avx512_vnni.onnx"),
+                    "1825907d6c1a9001ff78124780bbde20a614a8c3df3b63409cf3c72c6fe5c8b4"),
+                // The SentencePiece pipeline D191 reads — 17 MB, the one file every XLM-R export ships and the one that
+                // states the ids the graph was trained on (the .model protobuf's are shifted by one).
+                new ResourceFile(Agent.Llm.Services.InProcessReranker.TokenizerFile, RerankModelUrl("tokenizer.json"),
+                    "62c24cdc13d4c9952d63718d6c9fa4c287974249e16b7ade6d5a85e7bbb75626"),
+                // The window: 514 positions here, narrowed to 512 by the next file (see InProcessReranker.ModelFile).
+                new ResourceFile(Agent.Llm.Services.InProcessReranker.ConfigFile, RerankModelUrl("config.json"),
+                    "cc2cfe51aa3fd759d21d21acf5dfd6994aa67a3c9210636d22e143699d336c77"),
+                new ResourceFile(Agent.Llm.Services.InProcessReranker.TokenizerConfigFile, RerankModelUrl("tokenizer_config.json"),
+                    "e7fbfbfa6347b4e414c1cee50d142e2c2f9a895dad68b068ae83a8b564c3837e"),
+            },
+            Category: ResourceCategory.Model),
     }
         // ONE SPEC PER CATALOGUED GGUF, generated rather than hand-written, because the catalogue is the
         // thing that changes and two lists for one set is the drift this codebase keeps paying for.
@@ -476,6 +522,11 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// here, so the path exists in exactly one place — same contract as <see cref="ProvisionedNode"/>.</summary>
     public static string ProvisionedEmbedModel(string resourcesPath) =>
         Path.Combine(resourcesPath, "embed-model");
+
+    /// <summary>Where the 内置 reranker's model lands. Read by <c>BuiltInJudgeSource</c> and written here — the same
+    /// contract as <see cref="ProvisionedEmbedModel"/>.</summary>
+    public static string ProvisionedRerankModel(string resourcesPath) =>
+        Path.Combine(resourcesPath, Agent.Llm.Sources.BuiltInJudgeSource.ResourceId);
 
     /// <summary>The installed claude version, or null when it was never provisioned here (a machine-wide
     /// install has no marker of ours — and that is a legitimate, fully working configuration).</summary>

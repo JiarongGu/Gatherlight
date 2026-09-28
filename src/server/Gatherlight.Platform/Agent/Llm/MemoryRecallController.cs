@@ -138,7 +138,9 @@ public sealed class MemoryRecallController : ControllerBase
         {
             // The one writer 资源's badge reads too; with skips it names the small reranker whatever the device probe says.
             var small = GgufCatalog.RecommendedRerankerFor(_llama.Gpu, skippedHere: true);
-            var offerSmall = !string.Equals(_judgeWiring.Model, small, StringComparison.OrdinalIgnoreCase)
+            // "What runs" in EITHER runtime: the 内置 reranker is mMiniLMv2 too, and offering it again beside itself — as
+            // "a smaller reranker, 28% of BGE" — would advise a download of the model that is already skipping.
+            var offerSmall = !MemorySources.RunsModel(_judgeWiring.Model, small)
                 && !Hosting.Resources.Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath)
                     .Contains(small, StringComparer.OrdinalIgnoreCase);
             paceView = new
@@ -207,7 +209,10 @@ public sealed class MemoryRecallController : ControllerBase
                     what = "写入事实时标注主题(让讲同一件事的记录彼此关联);检索时判断哪些结果真正回答了问题,"
                         + "被判断为「答到了」的事实会排到前面,也更容易被后续检索记住。"
                         + "在本应用 240 题的双语测试集上实测(不开语义),各自和同一版本里不开判断时比:"
-                        + "本机重排模型(每次挑 8 条上页)让答案进入前八的次数从 127 题增加到 203–208 题,排第一的多 9–20 题;"
+                        // "llama.cpp 上的", not 「本机」: since round 6 the local rerankers include the in-process 内置 one,
+                        // which is NOT measured (Run 13), so a range quoted for "the local rerankers" would claim it.
+                        + "llama.cpp 上的重排模型(每次挑 8 条上页)让答案进入前八的次数从 127 题增加到 203–208 题,排第一的多 9–20 题"
+                        + "(在应用进程里运行的「内置」重排模型还没有实测过);"
                         + "Claude CLI 判断是在本应用较早的版本上量的,让排第一的答案从那时不开判断的 79 题增加到 130 题。"
                         + "每次检索都要等它一次,这一点是当场就有的。",
                     // COST IS TWO THINGS, and only one of them was stated. The token cost was here from the
@@ -666,10 +671,13 @@ public sealed class MemoryRecallController : ControllerBase
                 // local chat judge is sending facts to Claude for the first time, and this is where they learn it.
                 // The tagging clause is MemorySources.CliTaggingCost — the same one the cost line and the model
                 // note carry, so the three cannot disagree about whether the account is spent.
-                note = source.ChecksOnly(model!)
+                // …and, last, what the SOURCE says a household must know on choosing it (BindCaveat): 内置's reranker says
+                // it is unmeasured, which is why nothing recommends it.
+                note = (source.ChecksOnly(model!)
                     ? $"设置已保存。重启服务后,检索时的核对将由这个模型完成;写入事实时的主题标注由 Claude CLI"
                       + $"({source.AnnotationModel(model!)})完成 —— {MemorySources.CliTaggingCost}。{taggingOff}"
-                    : "设置已保存。重启服务后,标注与核对将由这个后端完成。",
+                    : "设置已保存。重启服务后,标注与核对将由这个后端完成。")
+                    + (source.BindCaveat(model!) is { } caveat ? " " + caveat : ""),
             });
         }
 

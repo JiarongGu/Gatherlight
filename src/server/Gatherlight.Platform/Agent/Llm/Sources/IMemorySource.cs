@@ -150,6 +150,12 @@ public interface IMemoryJudgeSource : IMemorySource
     /// question and must agree.</para></summary>
     bool ChecksOnly(string model) => false;
 
+    /// <summary>What a household must know at the moment it binds <paramref name="model"/>, beyond what the binding
+    /// moves — appended to the bind toast, or null (the default). It exists for an option that is offered and
+    /// NOT recommended: 内置's reranker says there that it has not been measured, because "worse, costlier or unmeasured"
+    /// are reasons to describe an option (dev-conventions), and the toast is where a choice is confirmed.</summary>
+    string? BindCaveat(string model) => null;
+
     /// <summary>The layer's cost line for this source bound to <paramref name="model"/>. It describes the BOUND
     /// arm (dev-conventions: a layer's cost line describes the bound arm), which is why the source owns it: an arm
     /// whose two halves cost different things has to say both.</summary>

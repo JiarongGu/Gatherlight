@@ -35,6 +35,9 @@ public static class MemorySources
         // The SECOND class in both lists, and the runtime the app provisions as of 2026-08-22. Same
         // protocol as the entry above, opposite ownership — see LlamaCppSource.
         new LlamaCppSource(MemoryLayers.Judge),
+        // 内置 — the in-process reranker (round 6). It was the one DECLINED entry, "not built" rather than "cannot";
+        // building it moved it here and emptied JudgeDeclined, one class plus one line.
+        new BuiltInJudgeSource(),
     };
 
     public static readonly IReadOnlyList<IMemorySemanticSource> Semantic = new IMemorySemanticSource[]
@@ -50,16 +53,15 @@ public static class MemorySources
         new BuiltInSemanticSource(),
     };
 
-    /// <summary>Backends 判断 does not run on, with the reason. Listed on the layer anyway — see
-    /// <see cref="DeclinedBackend"/> for why an unavailable option is shown rather than omitted. The one entry
-    /// is NOT impossible, only unbuilt — its reason says so (<see cref="BuiltInCannotJudge"/>).</summary>
-    public static readonly IReadOnlyList<DeclinedBackend> JudgeDeclined = new[]
-    {
-        new DeclinedBackend(MemoryBackends.BuiltIn, "ONNX", BuiltInCannotJudge,
-            // Under 本机模型 alongside llama.cpp, which CAN judge — so the group is usable and this
-            // member stops being a dead choice, it is just the arm of it that does not serve here.
-            MemoryGroups.Managed),
-    };
+    /// <summary>Backends 判断 does not run on, with the reason. EMPTY since round 6, like <see cref="SemanticDeclined"/>.
+    ///
+    /// <para>Its one entry was 内置, and its reason moved twice before the entry went. It said 内置 CANNOT judge because
+    /// judging needs a model that converses — false once a reranker could judge (it verifies, the CLI tags). Then it
+    /// said an in-process reranker was buildable but UNBUILT, first because the ONNX path read WordPiece only (English
+    /// rerankers), then — after Lyntai 3.5's D191 owned a SentencePiece tokenizer — because nobody had built or measured
+    /// it. That was the honest sentence for a gap that was ours, and building <see cref="BuiltInJudgeSource"/> closed it.
+    /// The list stays, because a declined entry is still the right shape for a real impossibility.</para></summary>
+    public static readonly IReadOnlyList<DeclinedBackend> JudgeDeclined = Array.Empty<DeclinedBackend>();
 
     /// <summary>Backends 语义 cannot run on. EMPTY, and that is the point.
     ///
@@ -72,45 +74,21 @@ public static class MemorySources
     /// option nobody had built.</para></summary>
     public static readonly IReadOnlyList<DeclinedBackend> SemanticDeclined = Array.Empty<DeclinedBackend>();
 
-    /// <summary>Why 内置 does not judge — and it is NOT an impossibility any more, which is what this sentence
-    /// has to say.
-    ///
-    /// <para><b>It used to open 「判断需要一个能对话的模型」, and this branch made that false.</b> A reranker judges
-    /// now — it VERIFIES, and tagging stays on the CLI — and Lyntai 3.2.0 ships an in-process ONNX
-    /// cross-encoder (<c>AddOnnxProvider</c> with <c>Produces = Score</c>, its D157). So an in-process verifier
-    /// for 判断 is BUILDABLE, the same shape as the llama.cpp reranker. It was not built, for a measured reason
-    /// recorded in <c>docs/superpowers/specs/2026-09-23-reranker-judge-and-verdict-bench-design.md</c>
-    /// §Constraints: that path read WordPiece tokenizers only, so the one model proven through it
-    /// (ms-marco-MiniLM-L6-v2) is English-only — +3.0 of 9.5 on Lyntai's English LoCoMo (2026-09-15,
-    /// nomic-embed-text, base 83.0%), −5.4 on multi-hop —
-    /// while the multilingual rerankers (LAMAR, BGE, mMiniLMv2) are SentencePiece, which is why they run on llama.cpp.</para>
-    ///
-    /// <para><b>Lyntai 3.5.0 made that reason false too</b> (its D191, 2026-09-26): the ONNX provider now reads a
-    /// SentencePiece tokenizer from a model's <c>tokenizer.json</c>, and Lyntai's <c>docs/model-tasks.md</c> records the
-    /// <c>mmarco-mMiniLMv2</c> reranker — the multilingual one this app already catalogues for llama.cpp — running end to
-    /// end through it. So the gap is no longer the format; it is that nobody has BUILT or MEASURED the option. Building it
-    /// takes <c>Lyntai.Providers.Onnx</c> (not referenced here), an ONNX export of the model, a catalogue row, and a bench
-    /// run against llama.cpp's mMiniLMv2 — loading is not fitting, and "the same model" in two runtimes is a claim until
-    /// it is measured. The owner decided on 2026-09-26 to build it in a later round. Until then it stays declined as
-    /// UNBUILT — dev-conventions' "an option nobody built", never "cannot" — and the sentence says so, says why, and
-    /// names what to use meanwhile: llama.cpp in the same group, where that very model runs today. Tagging would need
-    /// the CLI either way.</para>
-    ///
-    /// <para>Earlier rewrites, still true as rules: it once said a local model meant installing Ollama
-    /// yourself (false since the app provisions llama.cpp, 2026-08-22), and it once called the group 「内置」,
-    /// the word that now names this very arm.</para></summary>
-    // Said as what THIS APP has and has not done. It used to say 「在应用内直接运行…现在已经可行」 — Lyntai's claim,
-    // never verified here, stated as a fact about this app.
-    private const string BuiltInCannotJudge =
-        "「判断」也可以用重排模型来做,但「内置」这条还没做:在应用内直接运行支持中文的重排模型 mMiniLMv2 还没有接入,"
-        + "也还没有和 llama.cpp 上的同一个模型对比实测过。在那之前请用同一组「本机模型」里的 llama.cpp,"
-        + "mMiniLMv2 在那里可以选。无论哪种,写入事实时的主题标注都由 Claude CLI 完成。";
-
     public const string DefaultJudgeSource = "claude-cli";
 
     /// <summary>The CLI arm's default model. Cheap on purpose: this seam runs on every write and every
     /// recall, so it is the app's most frequent model call by a wide margin.</summary>
     public const string DefaultJudgeModel = "haiku";
+
+    /// <summary>Is <paramref name="runningModel"/> — a bound or running judge's model — the catalogued GGUF
+    /// <paramref name="ggufId"/>, in either runtime? By id, or because it is the 内置 reranker, whose export has the same
+    /// weights (<see cref="BuiltInJudgeSource.SameWeightsAs"/>). What "suggest the smaller reranker unless it is what
+    /// runs" has to ask: the 内置 reranker IS mMiniLMv2, so a skip it causes is no reason to offer mMiniLMv2 again.</summary>
+    public static bool RunsModel(string? runningModel, string ggufId) =>
+        runningModel is not null
+        && (Services.ModelId.Matches(runningModel, ggufId)
+            || (string.Equals(runningModel, BuiltInJudgeSource.ModelId, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(BuiltInJudgeSource.SameWeightsAs, ggufId, StringComparison.OrdinalIgnoreCase)));
 
     /// <summary>The Claude CLI judge's measured wait per recall — the FIGURE alone, for a sentence that already
     /// states the configuration (the model notes, which open with the fixture). ONE writer, because every surface

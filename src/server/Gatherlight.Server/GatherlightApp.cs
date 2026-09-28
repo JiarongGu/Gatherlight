@@ -697,6 +697,9 @@ public static class GatherlightApp
             // the router) the layout rebuild re-remembered every fact against a dead embedder — the engine stores
             // a fact whose embed failed WITHOUT its vector — and a real install came up with 6 of 6 facts indexed
             // and 0 vectors (docs/self-managed-llm-runtime.md). Does nothing unless a layer is bound to llama.cpp.
+            // Says so when 判断's saved LOCAL model is not there and this start fell back to the Claude CLI — for any local
+            // judge, llama.cpp's or the in-process 内置 reranker's. After ClaudeRuntimeStep, whose cached probe it reads.
+            .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.JudgeFallbackStep>()
             .AddSingleton<Platform.Hosting.Migration.Services.IMigrationStep, Platform.Hosting.Migration.Steps.LlamaWarmStep>()
             // After RecordIndexStep, and NOT part of it: this one back-fills rather than rebuilds,
             // because a rebuild every boot would erase the decay + link state the index accumulates.
