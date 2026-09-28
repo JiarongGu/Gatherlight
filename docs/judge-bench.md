@@ -8958,3 +8958,162 @@ the character worst case above — and is a separate measurement, not run.
 - All 75 saved judge-bench runs re-analyse byte-identically. The long and mixed fixtures still match their generators.
 
 The smokes' numbers inform nothing.
+
+## Run 14 — the embedder's D177 segmentation over facts past its window (2026-09-28, Lyntai 3.5.1, llama.cpp b10549; claude never called — every server on the stub)
+
+**Commands**, as registered in `0b5a852`, which is every run's app HEAD. The server was built from `d5ca78d`'s sources and
+not rebuilt; its fingerprint `4bb5b4a89fbac679` / `8f2784e5c06fc063` / `2427ce2107269c1c` was the same in every results
+file and after the last run. The scratch driver `devtools/_run14/drive.sh` ran them in order, each exiting 0 on its first
+attempt:
+
+| run | from – to (UTC) | results |
+|---|---|---|
+| capability | 08:43:23 – 08:44:00 | `devtools/_semantic-bench-capability/results-2026-09-28T084324.097Z.json` |
+| embed | 08:44:00 – 08:49:24 | `devtools/_semantic-bench-embed/results-2026-09-28T084400.297Z.json` |
+| short | 08:49:24 – 08:54:25 | `devtools/_semantic-bench-short/results-2026-09-28T084924.436Z.json` |
+
+**Every guard held:**
+
+| guard | capability | embed | short |
+|---|---|---|---|
+| 1. fixture | the short fixture + one note | the generator's bytes; every answer past token 2,046 (measured) | `recall-bilingual.json` |
+| 2. A/A | — | `sem2` vs `sem` identical, 0 of 240 rows differ | identical, 0 of 240 |
+| 3. startup | both arms `llama-cpp · embeddinggemma-300M-Q8_0`; `sems` announced `d177`; 0 warnings; 0 claude-cli calls | the same, and `formula` 语义 off | the same |
+| 4. writes and recalls | every write ok; 0 error rows | the same | the same |
+| 5. vectors | `sem` 60/61 (the note refused, 1 refused line); `sems` 61/61, 0 | `sem`, `sem2`: short 30/30, over-window 0/30, 30 refused lines each; `sems` 60/60, 0 | every 语义 arm 60/60, 0 |
+| 6. router | 1 spawn; 2 error lines (`sem`'s refusal, write and re-check) | 1 spawn; 120 error lines = 30 notes × 2 attempts × 2 arms, all "too large" | 1 spawn; 0 |
+| 7. one build | the fingerprint above | | |
+
+### The capability check: the fact gets a vector, and the paraphrase does not find it
+
+| arm | the note's vector | the English paraphrase | the Chinese paraphrase | the three controls (cross-language questions of short facts) |
+|---|---|---|---|---|
+| `sem` | none (refused, the classifier's line) | not on the page | **first** (lexically — see below) | 6, 6, not on the page |
+| `sems` | **yes** (61/61, no refused line) | **not on the page** | first | 6, 6, not on the page |
+
+- **The capability as registered does NOT hold.** The fact has a vector with the knob on, but the paraphrase that shares
+  no wording with it does not bring it onto the page of 8.
+- **Why, measured afterwards (descriptive).** Scratch `devtools/_run14/diagnose-capability.mjs` read the vectors the `sems`
+  arm STORED and embedded the query and the distinctive sentence alone on the pinned GGUF. It ranked the 61 stored
+  vectors by cosine against the English query:
+  - the note's pooled vector: cosine **0.237**, rank **22 of 61**;
+  - the distinctive sentence alone: cosine **0.624**, which would have ranked **1st**;
+  - the pooled vector against the sentence alone: 0.355;
+  - the nearest five were all other facts (0.27–0.36).
+  - The note is ~6 pieces, five of them filler, pooled by length. So the one piece carrying its meaning moves the pooled
+    vector too little for the query to find it.
+- **The Chinese paraphrase is not a check.** It found the note first in BOTH arms, the vector-less one included, so the
+  lexical graph reaches it: "蜂" alone is enough there. It is reported and decides nothing, as registered.
+
+### The embed fixture — segmented against refused
+
+Lyntai 3.5.1; 60 facts (30 short, 30 over-window), 240 questions. b = `sem` hit & `sems` miss, c = the reverse.
+
+| question group | `formula` top-1 / found@8 | `sem` | `sems` | `sems` vs `sem`, found@8 | top-1 |
+|---|---|---|---|---|---|
+| all (240) | 68 / 108 | 70 / 135 | 73 / 151 | 16/32, p = 0.029, **+6.7pp** [+1.0, +12.2] | 6/9, p = 0.607 |
+| same (60) | 36 / 49 | 30 / 41 | 35 / 58 | 0/17, p < 0.001, +28.3pp | 1/6, p = 0.125 |
+| **cross (60)** | 1 / 2 | 3 / 23 | 2 / 11 | **12/0, p < 0.001, −20.0pp [−29.7, −9.0]** | 1/0, p = 1.000 |
+| third (60) | 0 / 13 | 11 / 31 | 8 / 35 | 0/4, p = 0.125 | 3/0, p = 0.250 |
+| mixed (60) | 31 / 44 | 26 / 40 | 28 / 47 | 4/11, p = 0.118 | 1/3, p = 0.625 |
+| **short targets (120)** | 34 / 49 | 66 / 113 | 60 / 98 | **15/0, p < 0.001, −12.5pp [−18.3, −6.3]** | **6/0, p = 0.031** |
+| **over-window targets (120)** | 34 / 59 | 4 / 22 | 13 / 53 | **1/32, p < 0.001, +25.8pp [+17.2, +33.6]** | 0/9, p = 0.004 |
+
+**The short fixture** (every fact one piece): `sems` and `sem` gave identical rows on all 240 questions, target position and
+whole page (as did `sem2`), each 120 / 220.
+
+### The decision rule, applied
+
+- **(a) does NOT hold.** Half of it holds: every over-window fact got a vector with the knob on (30 of 30, and the
+  capability note), none without it, and no input was refused. The other half does not: the capability check's English
+  paraphrase did not bring its fact onto the page.
+- **(b) does NOT hold.** Segmented IS significantly better on the over-window targets (1/32, p < 0.001, +25.8pp), and on
+  `all`. But it is significantly WORSE:
+  - on the `cross` set (12/0, p < 0.001, −20.0pp);
+  - on the short targets (15/0, p < 0.001, −12.5pp; top-1 6/0, p = 0.031 too).
+  - Both are among the registered blockers.
+- **(c) holds.** Short facts are unaffected: 240 of 240 rows identical.
+- **The gate stays.** Task D does not qualify on this run. Nothing in the product changed; the knob stays a measurement
+  mode.
+
+### Why segmented costs the short facts — descriptive, outside the rule
+
+- **The pooled notes crowd the page.** Average over-window notes on the page of 8:
+
+  | arm | short-target questions | over-window questions |
+  |---|---|---|
+  | `formula` | 6.24 | 6.81 |
+  | `sem` | 1.30 | 1.43 |
+  | `sems` | 3.27 | 3.75 |
+
+- **They crowd out exactly the lost queries.** On the 15 short-target questions `sem` answered and `sems` lost, 5.7 of the
+  8 page slots were over-window notes. 12 of the 15 were `cross` questions: English asking about a Chinese fact, or the
+  reverse, where only a vector reaches the target.
+- **Why the pooled notes win slots.** A pooled vector of five or more pieces of general household text is near EVERY
+  household question. So the over-window notes win semantic seed slots from the one fact that actually answers.
+- **The fixture makes this worst-case.** Its notes draw their filler from one shared pool (repeated per pass), so they
+  are near each other, and near everything, more than real household notes would be. How much of the crowding survives
+  varied real notes is not measured. The capability check shows the other half on one distinctive note: pooling dilutes
+  a meaning carried by one piece.
+
+### Also found — descriptive: 语义 on is worse than 语义 off for a fact WITHOUT a vector
+
+On the over-window targets, `sem` found 22 where `formula` found 59 (37/0, p < 0.001, −30.8pp). This is today's behaviour
+for any fact the embedder refuses.
+
+- Such a fact is reachable only lexically.
+- With 语义 on, the semantic seeds fill the page with vector-bearing facts and push it off: 1.43 over-window notes per page
+  against 6.81 with 语义 off.
+- Segmenting recovers part of it (53 of 120), still below 语义 off.
+
+That is the cost Task D was meant to remove, and it is larger than the design assumed. A vector-less fact is not merely
+"not found semantically": 语义 being on makes it harder to find at all.
+
+### Latency
+
+Per `remember_fact` (判断 off, so the embed is most of it), medians:
+
+| | `sem` (refused, re-checked, probed) | `sems` (pieces) |
+|---|---|---|
+| over-window zh (~6 pieces) | 106 ms | 176 ms (max 499) |
+| over-window en (~23 pieces) | 114.5 ms | 230.5 ms |
+| over-window ja (~8 pieces) | 118 ms | 161 ms |
+| short facts, all arms | 48–66.5 ms | |
+
+- **No input was refused under segmentation.** Unsegmented, every over-window write drew 2 "too large" refusals at the
+  router.
+- **Recall medians:** 286.5 ms (`sem`), 293 (`sems`), 248.5 (`formula`) on the embed fixture. The short fixture reads
+  283–288 ms across the 语义 arms.
+
+### What applies to the built-in embedder — not measured
+
+As registered: `OnnxEmbedder` (内置 on 语义) TRUNCATES an input at 2,048 tokens and never refuses one. So a long fact gets
+a vector there, of its first 2,048 tokens.
+
+- `SkipAnnotationWithoutVector` would never fire on it for length, and the gate's concern does not arise from length.
+- Its answer past the cut is invisible to its vector, as this fixture's would be.
+- This run's second finding applies to it only through that: its long facts have vectors, so they are not pushed off the
+  page for having none. But a truncated vector is of the note's head, and whether that crowds the page as pooled vectors
+  did is unmeasured.
+- Segmenting it (`OnnxProviderOptions.MaxTokens` with `Segmentation`, counted in tokens) would meet the same pooling
+  dilution.
+
+### What it says
+
+- **D177 segmentation, as configured here, gives every over-window fact a vector and refuses nothing**, and it helps those
+  facts' questions (+25.8pp found@8). But it does not make a fact whose meaning sits past the window findable by a
+  paraphrase of that meaning (the capability check), and it costs the short facts beside them (−12.5pp found@8, and
+  −20.0pp on cross-language questions).
+- **By the owner's rule, the gate stays**, and Task D does not follow from this run.
+
+### What it does NOT say
+
+- **Anything about real household notes.** The fixture's shared filler makes pooled notes unusually alike and unusually
+  generic.
+- **Anything about other piece sizes.** The worst-case 511-character piece cuts English into ~23 pieces. Fewer, larger
+  pieces (a token-counting segmenter, or a realistic bound) would pool differently: less dilution per piece, but the same
+  kind of averaging.
+- **Anything about a different pooling** — max-pooling, or indexing each piece as its own vector (which Lyntai does not
+  offer on this path) — or about 判断 on. It was off throughout, so no annotation and no reranker reordered anything.
+- **Whether the vector-less-fact penalty (the section above) holds on the household's own data.** It is measured here on
+  a fixture whose over-window facts are half of the corpus.
