@@ -8371,3 +8371,205 @@ change: its piece lengths (half to all of the budget), its overlap of at most a 
 - **Why D177 is better for mMiniLMv2.** This run removes one candidate explanation (edge placement alone, for found@8) and
   leaves the others untested.
 - **Anything about notes longer than five windows, real household notes, a CPU, or other languages' boundaries.**
+
+## Run 13 — 内置 (in-process mMiniLMv2) against llama.cpp's mMiniLMv2 (design)
+
+Written and committed BEFORE the runs; the results section that follows names this commit. The bench arm (`9ef4a5e`)
+and one plumbing smoke came first, because this design quotes them.
+
+**The question.** Task B1 (`ced657b..de51313`) made `builtin` (内置) a 判断 backend:
+
+- mmarco-mMiniLMv2 scored INSIDE the app's process by Lyntai's ONNX provider on the CPU (`InProcessReranker`);
+- the repository's own qint8 export (`onnx/model_qint8_avx512_vnni.onnx`) with an owned SentencePiece tokenizer;
+- the same `RerankVerification` chain as llama.cpp's rerankers: `RerankInputCap` → `ChunkedScoreProvider` →
+  `RerankAdmission` → pace, the pace seeded by a CPU measurement taken in process at its first use.
+
+llama.cpp runs the same weights as the Q8_0 GGUF, `mmarco-mMiniLMv2-L12-H384-v1-Q8_0`. **Is the in-process model as good
+a judge as llama.cpp's, and on a machine with no usable GPU, is it as fast as llama.cpp there?**
+
+### What is compared
+
+| arm | 判断 | where it scores | pace |
+|---|---|---|---|
+| `formula`, `formula2` | off | — | — |
+| `rrk:mmarco-mMiniLMv2-L12-H384-v1-Q8_0` | llama.cpp, chunked (as shipped) | the shared GPU router, the product's preset (512-token window) | GPU seed; the pace guard applies |
+| `cpu-rrk:mmarco-mMiniLMv2-L12-H384-v1-Q8_0` | the same | its own CPU-only router (`device = none`, `n-gpu-layers = 0`), Run 8's method | GPU seed; exempt, as in Run 8 |
+| `rrbi:mmarco-mMiniLMv2-L12-H384-v1-onnx` | 内置 (`builtin`), chunked | in the app's process, on the CPU | in-process CPU seed; exempt |
+
+- **All three reranker arms read the whole of every candidate through the same chain.** The window is the catalogue's
+  512 for both implementations (`BuiltInJudgeSource.Window` reads the GGUF's declaration). `RerankInputCap` fits the query
+  and NFKC-normalises every candidate for both. The `ChunkedScoreProvider` windows are therefore cut identically from the
+  same text.
+- **What differs between the implementations** is below the chain:
+  - the tokenizer: llama.cpp's SentencePiece vocabulary in the GGUF, against Lyntai's owned SentencePiece over
+    `tokenizer.json`;
+  - the weights' quantisation: ONNX qint8 against GGUF Q8_0;
+  - the arithmetic: ONNX Runtime's CPU kernels, llama.cpp's Vulkan kernels (GPU arm), and llama.cpp's CPU kernels (CPU
+    arm).
+- **The two llama.cpp arms** also measure how far llama.cpp alone moves between two devices, which sizes the noise a
+  cross-implementation difference must be read against.
+
+### The instrument
+
+- **Fixtures and seeds**, as in Runs 10 and 12:
+  - **short**: `recall-bilingual.json` (`9680443e…f555`), Run 1's seed with Claude's tags, `--claude-stub`;
+  - **long**: `recall-bilingual-long.json` (`1f48f1be…4f17`), `devtools/_judge-bench-seed-long/`, 判断 off, no tags.
+  - 240 questions each, order seed 12345. The mixed fixture is not run: its two CPU-paced arms would add about an hour,
+    and the rule reads the short and long fixtures.
+- **判断 as the product runs it**: verification by the reranker only (tagging is on the CLI stub and nothing is written),
+  语义 off, partition, a page of 8, the 60 s deadline. No quota can be spent.
+- **The 内置 files** were fetched through the app's own pinned download: 资源 → `rerank-model` on a scratch data folder,
+  8.1 s. They were copied to `devtools/_rr-res/rerank-model`, and all four sha256 were re-checked against
+  `ResourceProvisioner.cs`'s pins. The bench re-checks them before any arm starts (`builtinMirror`) and copies them into
+  the arm's data folder, where `BuiltInJudgeSource` looks.
+- **Order, one arm at a time** (`--serial-arms`):
+  - the accuracy passes of `formula`, `formula2`, `rrk` and `rrbi`;
+  - then the 12-query latency passes of the same four;
+  - then `cpu-rrk` alone, on its own CPU-only router. Its accuracy pass IS its serial pass (Run 8).
+  - So every arm's accuracy pass ran with no other arm querying, and `rrbi` and `cpu-rrk` ran back to back.
+- **The build.** App HEAD is this design's commit; the server was built at `de51313` (B1's last commit) and not rebuilt.
+  Fingerprint (Platform / Planner / Server): `95ee3552c569b4ae` / `b0debb09370274a7` / `cdbc071362aaaf5b`.
+- **The machine.** Intel Core Ultra 9 185H (22 logical processors), RTX 4080 Laptop GPU, llama.cpp `b10549`. The unrelated
+  llama-server (PID 19080) stays up and is not touched.
+  - Other work runs on this machine: another agent's e2e runs in a separate worktree, and an `ssh-agent` that holds about
+    one core (4.4%) on its own.
+  - The scratch `devtools/_run13/load-sampler.ps1` records, every 20 s, the CPU share of this run's processes and of
+    everything else. Before the runs, "everything else" read 17.6–19.5% of the machine.
+
+### Commands
+
+```
+node devtools/scripts/judge-bench.mjs --reuse-seed --claude-stub --arms=formula,formula2 \
+  --rerankers=mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-arms=rrk \
+  --cpu-rerankers=mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --cpu-rerank-arms=rrk \
+  --builtin-rerankers=mmarco-mMiniLMv2-L12-H384-v1-onnx --rerank-memo --serial-arms \
+  --resources=devtools/_rr-res --port-base=7710 --llama-port=7792 --cpu-llama-port=7793
+node devtools/scripts/judge-bench.mjs --fixture=long --reuse-seed --arms=formula,formula2 \
+  --rerankers=mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --rerank-arms=rrk \
+  --cpu-rerankers=mmarco-mMiniLMv2-L12-H384-v1-Q8_0 --cpu-rerank-arms=rrk \
+  --builtin-rerankers=mmarco-mMiniLMv2-L12-H384-v1-onnx --rerank-memo --serial-arms \
+  --resources=devtools/_rr-res --port-base=7720 --llama-port=7794 --cpu-llama-port=7795
+```
+
+- **Short first, then long**, driven by the scratch `devtools/_run13/drive.sh`. It copies each run's results, rows,
+  router logs, presets and every arm's logs to `devtools/_run13/<short|long>/`, and stops at a non-zero exit.
+- **Ports** 7710–7715, 7720–7725 and 7792–7795; the proxies are ephemeral.
+  - None is in a range Windows had reserved that day, and none was listening; another process holds 7680, which is
+    outside them.
+  - The other worktree's suites use the e2e ports shifted by +600, near 6000–6400.
+  - None is reused: the smoke used 7700–7705 and 7790–7791, the provisioning server 7610.
+- **Estimated time**: about 15 minutes short, and about 2.5 hours long. The two CPU-paced arms on 60 long notes are most
+  of it: Run 8's CPU mMiniLMv2 took 17.5 s per recall.
+
+### Measured
+
+Per run, as the bench prints it:
+
+- the four sets and `all`, per arm: top-1, found@8, MRR, `judged`/`graph`;
+- by position (long);
+- the RUN 13 block:
+  - `rrbi` against `rrk` and against `cpu-rrk`, paired (McNemar exact, Agresti–Min 95% interval), on `all` and per
+    position, with the row-identity check;
+  - `cpu-rrk` against `rrk`;
+  - for each of the three reranker arms: the median, p90 and verdict-only median of every recall of its accuracy pass,
+    its deadline cuts, pace skips and sized calls, and its latency-pass median;
+  - a sign test over the paired recalls, `rrbi` against `cpu-rrk`;
+- the in-process arm's own record:
+  - its server's private bytes and working set before its accuracy pass, after it, and after its latency pass;
+  - the load time and the pace seed, from its log;
+  - its pace, skip and deadline lines, and any in-process scoring failure;
+- the CPU router's record (Run 8): device, threads, tasks, truncation, errors.
+
+### Decision rule
+
+As written by the owner (the plan, with the coordinator's reading), **verbatim**: **"Offered: `builtin` stays bindable
+and described with its numbers only if it is NOT significantly worse than llama.cpp's mMiniLMv2 on found@8 on EITHER
+fixture (paired exact, p < 0.05, against the GPU `rrk` arm; also report it against the CPU `rrk` arm). Otherwise it
+becomes unbindable, with the measured reason in its sentence. Recommended on a machine with no usable GPU: only if it is
+also NOT SLOWER there than llama.cpp's mMiniLMv2 on the CPU — compare serial median latency per recall on the same
+fixtures, same machine, within the run. If recommended, `GgufCatalog.RecommendedRerankerFor`'s no-GPU branch would name
+it."**
+
+It is read as follows, fixed before the runs. b = `rrk` hit & `rrbi` miss, c = the reverse; paired within one run.
+
+- **OFFERED** iff, on the short run AND on the long run, `rrbi` is NOT significantly worse than `rrk` (the GPU arm) on
+  `all` (240 pairs) found@8. Significantly worse means exact McNemar p < 0.05 AND c − b < 0. Two tests, no correction.
+  - **Reported beside it, not deciding**: the same test against `cpu-rrk`; top-1 against both; each long position; and
+    the equivalence reading below.
+  - A significant loss against `cpu-rrk` on found@8 is flagged to the owner, because on a machine with no GPU `cpu-rrk` is
+    the alternative the household would otherwise run.
+- **RECOMMENDED on a machine with no usable GPU** iff OFFERED, AND on each fixture `rrbi` is NOT SLOWER than `cpu-rrk`.
+  - The measure is each arm's median latency per recall over its whole accuracy pass: 240 recalls, each arm alone,
+    every recall counted — a skipped or cut recall is part of the cost measured, as in Run 8.
+  - SLOWER means `rrbi`'s median is higher AND a sign test over the paired recalls (the same question in each arm) finds
+    it significantly slower: p < 0.05, more recalls slower than faster. Anything else is NOT SLOWER.
+  - The verdict-only medians and the latency passes are reported beside it.
+- **The load clause.** The load sampler reports the median CPU share of processes NOT started by this run, over
+  `rrbi`'s accuracy pass and over `cpu-rrk`'s. If the two medians differ by more than 5 points of the machine, the latency
+  clause is not read for that fixture, and neither is the recommendation.
+  - A constant background load, such as the `ssh-agent` above, affects both passes alike and is only reported.
+- **Nothing in the product changes here.** The verdicts go to the owner. An implementer changes the text, and the no-GPU
+  branch of `RecommendedRerankerFor` if the recommendation holds.
+
+### How a difference is read — two implementations, not one
+
+The same weights in two runtimes are not byte-identical: qint8 against Q8_0 quantise differently, the two SentencePiece
+implementations may segment a rare string differently, and the kernels round differently. So:
+
+- **Short facts need not be identical**, and nothing is required to be. The expectation, stated now: every candidate is
+  one window in both, the same text reaches both, and the two score it closely. So the two arms should be **equivalent
+  within ±3pp** (the bench's margin: the 95% interval of the paired net difference inside ±3 points) on found@8 and
+  top-1, on the short fixture.
+  - The long fixture adds the pace and the arms' diverging recall histories, so equivalence is reported there and not
+    expected.
+  - Equivalence decides nothing; the rule is "not significantly worse".
+- **A difference is set against llama.cpp's own spread.** `cpu-rrk` against `rrk` is the same implementation on two
+  devices. If `rrbi`'s difference from `rrk` is of the size `cpu-rrk`'s is, it is read as numeric noise; if larger, as the
+  implementation.
+- **Recall histories diverge.** Once a page differs, the arms reinforce different facts and later gather different
+  candidates (Runs 10 and 12). The in-process arm has no proxy, so the RUN 12 "same notes" split cannot be computed for
+  it. A long-fixture difference that concentrates on the `third` (Japanese) set and on short pages — Run 10's signature —
+  is said to be that dynamic, read from the rows' `returned` and set.
+
+### Guards, checked per run before the rule is read
+
+A failed guard leaves that run's clauses unread; it is reported, not worked around. They are checked by the scratch
+`devtools/_run13/guards13.mjs`.
+
+1. **The instrument.** The fixture is accepted and the seed re-verified. `formula`'s digest is `2e323182c81a` (short) or
+   `976af4663b6e` (long), as in Runs 10–12.
+2. **The engine A/A.** `formula` against `formula2` is quiet on `all` (p ≥ 0.05).
+3. **Startup and warnings.**
+   - `rrk` and `cpu-rrk` read back `llama-cpp · mmarco-mMiniLMv2-L12-H384-v1-Q8_0`; `rrbi` reads back
+     `builtin · mmarco-mMiniLMv2-L12-H384-v1-onnx`.
+   - All three announce `rerank chunking = on`, raise no startup warning, and make 0 claude-cli calls over the run.
+   - The bench prints no WARNING. That includes its CPU-paced rule: every abstention of `cpu-rrk` and `rrbi` must be
+     explained by a deadline-cut or pace-skip line.
+4. **The routers.**
+   - The GPU router spawned the model once with `n_ctx_slot` 512; the largest task fits it; there is no error line and no
+     truncated task.
+   - The CPU router's child ran `--device none --n-gpu-layers 0`, with 0 truncated tasks and 0 error lines.
+5. **Coverage.** `rrk` has `judged` = `graph` in every set. `cpu-rrk` and `rrbi` abstain only where guard 3's rule allows.
+6. **Every request reached a model.** For the GPU arm (memo proxy) and the CPU arm (its record-only proxy), forwarded
+   `/v1/rerank` requests equal the router's proxied lines, and no forward failed.
+7. **The pace did not act on the GPU arm.** 0 pace lines in `rrk`; the bench voids the run otherwise. `cpu-rrk`'s and
+   `rrbi`'s pace lines are results, reported per recall.
+8. **One build.** The fingerprint above, before the first run and after the last.
+9. **The 内置 model ran.** Its files match the pins; its log carries a load line and a pace-seed line; there are 0
+   in-process scoring failures.
+
+### Plumbing smoke, before this design
+
+Short fixture, `--n=4` (16 questions), the five arms above, `--serial-arms`:
+
+- `rrbi` read back `builtin · mmarco-mMiniLMv2-L12-H384-v1-onnx`, judged 16/16, and loaded in 1,151 ms. Its pace seed was
+  89.988 ms per 1,000 pair tokens (8 full windows, 3,207 pair tokens in 339 ms).
+- Its server's private bytes were 50 MB before its accuracy pass and 754 MB after it (working set 114 → 661 MB).
+- `cpu-rrk`'s router ran `--device none --n-gpu-layers 0` with 16 threads.
+- Every reranker arm read found@8 10 and top-1 7.
+- Per-recall medians: `rrbi` 225.5 ms, `rrk` 240.5 ms, `cpu-rrk` 347.5 ms. `rrbi` was faster than `cpu-rrk` on 15 of 16
+  paired recalls.
+- 0 pace lines, no WARNING. The pace guard exempted `cpu-rrk` and `rrbi` and judged the rest.
+- All 72 saved runs re-analyse byte-identically under `9ef4a5e`.
+
+The smoke's numbers inform nothing (16 questions).
