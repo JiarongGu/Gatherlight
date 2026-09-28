@@ -20,8 +20,9 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// 512-token windows in one pass took the process to 2.4 GB private, where passes of 8 over the same 96 windows stayed at
 /// ~570 MB (4: ~440 MB, 16: ~870 MB, 32: ~1.5 GB) — and throughput barely moved with the pass size on that CPU, inside the
 /// run-to-run spread. So a call is split here, into passes of 8 — Lyntai's own minimum — which it then runs as one pass
-/// each. <b>What the household pays is still ~0.7–1.0 GB</b>: in the app the process's private memory went from 59 MB
-/// with 判断 off to 739 MB after the first judged recall and 1,023 MB after recalls of long notes, then stayed. The
+/// each. <b>What the household pays is still ~0.7–1.0 GB, and it is HELD</b>: in the app the process's private memory went
+/// from 59 MB with 判断 off to 739 MB after the first judged recall and 1,023 MB after recalls of long notes, then stayed
+/// until the process ended (docs/judge-bench.md Run 13's server: ~0.76 and ~1.04 GB) — nothing here unloads a session. The
 /// arena's growth depends on the order of pass sizes it has seen, and its options (arena, threads) are ONNX Runtime
 /// session options that Lyntai's provider does not expose — a stated limit, not tuned further here.</item>
 /// <item><b>Longest first.</b> The documents are ordered by their counted tokens (<see cref="RerankPace.Tokens"/>) before
@@ -34,10 +35,17 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// behind that pass. That is the difference from llama-server, which scores an abandoned batch to its end, and why this
 /// scorer's pace is built with <c>abandonedCallsRunOn: false</c> (<see cref="RerankPace"/>).</item>
 /// <item><b>Loaded lazily.</b> 118 MB of weights and a 17 MB tokenizer are not paged in because the container was built:
-/// the first recall pays ~1.1 s, and a household with 判断 switched off never pays it. A load that fails (a file damaged
-/// by hand) is a <see cref="ProviderVerdict.NotConfigured"/> answer — the verifier is fail-open, so that is NoOpinion —
-/// logged at Warning once, never an exception at composition, which is what Lyntai's eager <c>AddOnnxProvider</c> would
-/// make it: a broken model file must not keep the app from starting.</item>
+/// the first judged recall pays the load (1.25–1.37 s measured there; 1.17–1.44 s by hand), and a household with 判断
+/// switched off never pays it. A load that fails (a file damaged by hand, or held by a scanner at that moment) is a
+/// <see cref="ProviderVerdict.NotConfigured"/> answer — the verifier is fail-open, so that is NoOpinion — never an
+/// exception at composition, which is what Lyntai's eager <c>AddOnnxProvider</c> would make it: a broken model file must
+/// not keep the app from starting.</item>
+/// <item><b>…and a failed load is RETRIED</b> (<see cref="RetryAfter"/>): at the first call one verification deadline
+/// after the failure, then two, then four, then every ten — 1, 2, 4 and 10 minutes at the product's deadline, shorter
+/// under the test knob (<see cref="VerificationDeadlinePolicy.Configured"/>). Each failed attempt is logged at Warning with
+/// when the next is; a call between attempts answers NotConfigured at once (Debug). It was a <c>Lazy</c>, which caches a
+/// thrown exception for the life of the process: one failed load left 判断 giving no verdict until a restart, however the
+/// file was then repaired (review, round 6). <c>e2e-p56</c> case D.</item>
 /// </list></para>
 ///
 /// <para>The window it is fed to is the one the catalogue DECLARES for the same model (<see cref="GgufCatalog.DeclaredWindow"/>
@@ -84,9 +92,13 @@ public sealed class InProcessReranker : IScoreProvider, IDisposable
     private readonly string _dir;
     private readonly int? _window;
     private readonly ILogger? _log;
-    private readonly Lazy<OnnxProvider> _model;
     private readonly SemaphoreSlim _turn = new(1, 1);
-    private int _loadFailureSaid;
+    /// <summary>Held while loading, and while reading or clearing <see cref="_provider"/> at disposal — one load at a time.</summary>
+    private readonly object _loadLock = new();
+    private OnnxProvider? _provider;
+    private Exception? _loadFailure;
+    private int _loadFailures;
+    private long _retryAtMs;
     private int _disposed;
 
     /// <param name="dir">The provisioned model directory.</param>
@@ -96,8 +108,12 @@ public sealed class InProcessReranker : IScoreProvider, IDisposable
         _dir = dir;
         _window = window;
         _log = log;
-        _model = new Lazy<OnnxProvider>(Load, LazyThreadSafetyMode.ExecutionAndPublication);
     }
+
+    /// <summary>How long after its <paramref name="failures"/>-th failed load the next is attempted: one verification
+    /// deadline, then two, then four, then ten (the class comment).</summary>
+    public static TimeSpan RetryAfter(int failures) =>
+        VerificationDeadlinePolicy.Configured * (failures switch { <= 1 => 1, 2 => 2, 3 => 4, _ => 10 });
 
     /// <summary>Is every file on disk? Asked before anything binds to this backend — a missing download is a sentence
     /// in the console, not a failure on the first recall.</summary>
@@ -131,19 +147,57 @@ public sealed class InProcessReranker : IScoreProvider, IDisposable
         return provider;
     }
 
-    /// <summary>The loaded provider, or the sentence a failed load answers with — said at Warning once, then at Debug.</summary>
-    private OnnxProvider? Loaded(out string? failure)
+    /// <summary>The loaded provider — loading it now if none is, unless the last load failed less than
+    /// <see cref="RetryAfter"/> ago, which throws that failure again without touching the files. Each attempt that fails is
+    /// logged at Warning, with when the next one is.</summary>
+    private OnnxProvider LoadOrThrow()
+    {
+        if (Volatile.Read(ref _provider) is { } ready) return ready;
+        lock (_loadLock)
+        {
+            if (_provider is { } loaded) return loaded;
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            var now = Environment.TickCount64;
+            if (_loadFailure is { } last && now < _retryAtMs)
+                throw new InvalidOperationException(
+                    $"{ProviderId}: the in-process reranker did not load from {_dir} ({last.Message}); "
+                    + $"the next attempt is in {(_retryAtMs - now) / 1000.0:0.#} s", last);
+            try
+            {
+                var provider = Load();
+                if (_loadFailures > 0)
+                    _log?.LogInformation("{Id}: the in-process reranker loaded after {Failures} failed attempt(s)",
+                        ProviderId, _loadFailures);
+                _loadFailure = null;
+                _loadFailures = 0;
+                Volatile.Write(ref _provider, provider);
+                return provider;
+            }
+            catch (Exception ex)
+            {
+                _loadFailure = ex;
+                _loadFailures++;
+                var wait = RetryAfter(_loadFailures);
+                _retryAtMs = now + (long)wait.TotalMilliseconds;
+                _log?.LogWarning(ex,
+                    "{Id}: the in-process reranker did not load from {Dir} (attempt {Attempt}) — 判断 gives no verdict until it does; the next attempt is at the first recall after {Seconds:0.#} s",
+                    ProviderId, _dir, _loadFailures, wait.TotalSeconds);
+                throw;
+            }
+        }
+    }
+
+    /// <summary>The loaded provider, or null when it is not loaded — the failure already logged by the attempt that made it
+    /// (<see cref="LoadOrThrow"/>); a call between attempts says it again at Debug only.</summary>
+    private OnnxProvider? Loaded()
     {
         try
         {
-            failure = null;
-            return _model.Value;
+            return LoadOrThrow();
         }
         catch (Exception ex)
         {
-            failure = $"{ProviderId}: the in-process reranker did not load from {_dir}: {ex.Message}";
-            if (Interlocked.Exchange(ref _loadFailureSaid, 1) == 0) _log?.LogWarning(ex, "{Failure}", failure);
-            else _log?.LogDebug("{Failure}", failure);
+            _log?.LogDebug("{Failure}", ex.Message);
             return null;
         }
     }
@@ -187,7 +241,7 @@ public sealed class InProcessReranker : IScoreProvider, IDisposable
     /// Synchronous: Lyntai's provider scores on the calling thread.</summary>
     private double[]? Score(ScoreRequest request, CancellationToken ct)
     {
-        if (Loaded(out _) is not { } model) return null;
+        if (Loaded() is not { } model) return null;
         var documents = request.Documents;
         // Longest first, so a pass holding a long window does not pad short facts to its width; ties keep input order.
         var order = Enumerable.Range(0, documents.Count)
@@ -212,7 +266,7 @@ public sealed class InProcessReranker : IScoreProvider, IDisposable
     /// model does not load or a pass fails, so the screen can say why.</summary>
     public double[] ScoreNow(string query, IReadOnlyList<string> documents)
     {
-        _ = _model.Value;   // a load failure throws here, with its own message
+        _ = LoadOrThrow();   // a load failure throws here, with its own message
         _turn.Wait();
         try { return Score(new ScoreRequest(query, documents), CancellationToken.None)!; }
         finally { _turn.Release(); }
@@ -231,7 +285,7 @@ public sealed class InProcessReranker : IScoreProvider, IDisposable
     /// floored to the GPU figure, a third of what long windows cost on this CPU (docs/self-managed-llm-runtime.md,
     /// 2026-09-28). Eight dense windows read 92–106 in a quiet process and 150 at a quiet start of the app — and 394 at a
     /// start where annotation spawns ran beside it: one call at one moment, so contention can only make the first sizing
-    /// more careful. Run on the recall that first uses the pace, under its lock: ~0.3–0.5 s here beside the ~1.0–1.4 s
+    /// more careful. Run on the recall that first uses the pace, under its lock: ~0.3–0.5 s here beside the ~1.2–1.4 s
     /// model load that recall pays anyway.</para></summary>
     public double? MeasurePaceSeed()
     {
@@ -290,7 +344,11 @@ public sealed class InProcessReranker : IScoreProvider, IDisposable
         if (!_turn.Wait(TimeSpan.FromSeconds(10))) return;
         try
         {
-            if (_model.IsValueCreated) _model.Value.Dispose();
+            lock (_loadLock)
+            {
+                _provider?.Dispose();
+                _provider = null;
+            }
         }
         finally
         {

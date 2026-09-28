@@ -29,6 +29,11 @@
 //   C. FALLBACK. A server whose settings bind 内置 while its files are absent comes up with 判断 on the CLI, and the
 //      startup warning says so: which model is not there and what to download, that only the checking moved (the tagging
 //      was on the CLI all along), and that a restart brings it back. The at-work server of B carries no such warning.
+//   D. A FAILED LOAD IS RETRIED. A server bound to 内置 whose graph is damaged (present, so it is wired) gives no verdict
+//      and logs the failed load with when it tries again; the file repaired, a recall inside that wait still loads
+//      nothing, and the first recall after it loads the model and is JUDGED. The load was a Lazy, which cached the
+//      exception for the life of the process (review, round 6). The wait is one verification deadline, shortened here by
+//      the test knob.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -56,6 +61,9 @@ const backwards = Object.fromEntries(SCREEN_ANSWER_CHARS.map((c) => [c, -1]));
 const PORT_BIND = 5620;
 const PORT_WORK = 5621;
 const PORT_GONE = 5622;
+const PORT_RETRY = 5623;
+// Case D's verification deadline — and so its first retry wait (InProcessReranker.RetryAfter: one deadline).
+const RETRY_DEADLINE_SECONDS = 8;
 
 const layerOf = (mem, id) => (mem.layers ?? []).find((l) => l.id === id) ?? {};
 const srcOf = (layer, id) => (layer.groups ?? []).flatMap((g) => (g.sources ?? []).map((s) => ({ ...s, group: g.id })))
@@ -293,6 +301,62 @@ try {
   ok('(control) the at-work server, whose files are there, carries no such warning',
     !(await warnings(workServer.base)).some((x) => /绑定的本机模型用不了/.test(x)),
     JSON.stringify(await warnings(workServer.base)));
+
+  // ---- D. A FAILED LOAD IS RETRIED -------------------------------------------------------------------------------------
+  const retryDir = dataDirFor('p56-retry');
+  makeTestData(retryDir);
+  writeTinyCrossEncoder(modelDir(retryDir), good);
+  // Damaged, not missing: every file is present, so the fallback step keeps 判断 on 内置 and the load is what fails.
+  const graph = path.join(modelDir(retryDir), 'onnx', 'model_qint8_avx512_vnni.onnx');
+  const goodGraph = fs.readFileSync(graph);
+  fs.writeFileSync(graph, 'not an onnx graph');
+  fs.writeFileSync(path.join(retryDir, 'state', 'settings.json'), JSON.stringify({
+    memory: { judgeSource: 'builtin', judgeModel: MODEL },
+  }, null, 2), 'utf8');
+  const retryServer = startServer({
+    dataDir: retryDir, port: PORT_RETRY,
+    env: { GATHERLIGHT_LLAMACPP_URL: fakeUrl, GATHERLIGHT_JUDGE_DEADLINE_SECONDS: String(RETRY_DEADLINE_SECONDS) },
+  });
+  servers.push(retryServer);
+  await waitHealthy(retryServer.base);
+  const r = makeClient(retryServer.base);
+  const retrying = layerOf(await r.getJson('/api/manage/memory'), 'judge');
+  ok('(fixture) its files present but the graph damaged, 判断 is RUNNING on 内置 — the load is what will fail',
+    retrying.activeSource === 'builtin' && retrying.activeModel === MODEL,
+    JSON.stringify({ active: retrying.activeSource, activeModel: retrying.activeModel }));
+  for (const f of [target, ...fillers]) {
+    const w2 = await r.call('remember_fact', { kind: 'household', ...f, source: 'https://example.test/p56', confidence: 0.8 });
+    if (!(w2.status === 200 && w2.result?.ok === true)) fail(`(fixture) fact not stored: ${JSON.stringify(w2.result)}`);
+  }
+  const failedLoads = () => logText(retryDir).split('\n').filter((l) => /builtin-rerank: the in-process reranker did not load from .* \(attempt \d+\)/.test(l));
+  const loadedLines = () => logText(retryDir).split('\n').filter((l) => /builtin-rerank: loaded the in-process reranker in/.test(l));
+  const first = await r.call('recall_facts', { query, limit: 8 });
+  const failedAt = Date.now();
+  ok('the damaged load gives NO verdict — the engine\'s page, the target off it — and nothing reaches the router',
+    first.status === 200 && first.result?.answered !== true && !onPage(first) && !routerHits.some((h) => /\/v1\/rerank/.test(h)),
+    JSON.stringify({ answered: first.result?.answered, topics: (first.result?.facts ?? []).map((f) => f.topic) }));
+  ok('THE POINT: …and the log says the load failed, which attempt, and when the next one is — one deadline later',
+    failedLoads().length === 1
+      && new RegExp(`\\(attempt 1\\) — 判断 gives no verdict until it does; the next attempt is at the first recall after ${RETRY_DEADLINE_SECONDS} s`).test(failedLoads()[0])
+      && loadedLines().length === 0,
+    failedLoads().join(' | ') || '(no failed-load line)');
+  // Repaired — as a re-download or a scanner letting go would leave it — and asked again INSIDE the wait: no new attempt.
+  fs.writeFileSync(graph, goodGraph);
+  const inside = await r.call('recall_facts', { query, limit: 8 });
+  const insideMs = Date.now() - failedAt;
+  ok('(control) a recall inside the wait makes no new attempt — still no verdict, still one failed load, nothing loaded',
+    insideMs < RETRY_DEADLINE_SECONDS * 1000 && inside.status === 200 && inside.result?.answered !== true
+      && failedLoads().length === 1 && loadedLines().length === 0,
+    JSON.stringify({ insideMs, answered: inside.result?.answered, failed: failedLoads().length, loaded: loadedLines().length }));
+  await until(() => Date.now() - failedAt > RETRY_DEADLINE_SECONDS * 1000 + 500, (RETRY_DEADLINE_SECONDS + 5) * 1000);
+  const after = await r.call('recall_facts', { query, limit: 8 });
+  ok('THE POINT: past the wait, the next recall LOADS the repaired model and is JUDGED — the scorer\'s choice on the page',
+    after.status === 200 && after.result?.answered === true && onPage(after) && loadedLines().length === 1,
+    JSON.stringify({ answered: after.result?.answered, loaded: loadedLines().length,
+      topics: (after.result?.facts ?? []).map((f) => f.topic) }));
+  ok('…and the log says it loaded after the failed attempt',
+    /builtin-rerank: the in-process reranker loaded after 1 failed attempt\(s\)/.test(logText(retryDir)),
+    logText(retryDir).split('\n').filter((l) => /builtin-rerank/.test(l)).join(' | '));
 } catch (e) {
   fail(`fatal: ${e?.stack ?? e}`);
   for (const s of servers) console.log(s.log().split('\n').filter((l) => /ERROR|fail|Exception/i.test(l)).slice(-10).join('\n'));
