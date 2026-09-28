@@ -152,9 +152,10 @@ public static class RerankChunking
 /// windows, and re-implementing the policy to avoid that would fork Lyntai's verifier. The provider seam
 /// (<see cref="IScoreProvider"/>: a query and documents in, one score per document out) is exactly one call wide, so a
 /// decorator there changes nothing the policy relies on. It is applied where the verifier is built
-/// (<c>LlamaCppSource.Wiring</c>), to the one provider the verifier names, and registered nowhere else — and when chunking
-/// is on and there is nothing to wrap, building the verifier THROWS (<c>LlamaCppSource.RerankProviders</c>), because the
-/// cap then leaves long candidates uncut and one past the window would fail every call. Routing bookkeeping is unchanged
+/// (<see cref="Sources.RerankVerification.Build"/>, shared by llama.cpp's reranker and the in-process 内置 one), to the one
+/// provider the verifier names, and registered nowhere else — and when chunking is on and there is nothing to wrap,
+/// building the verifier THROWS (<c>RerankVerification.Providers</c>), because the cap then leaves long candidates uncut
+/// and one past the window would fail every call. Routing bookkeeping is unchanged
 /// by the wrapper: the router keys cooldown on the provider id when the pool never built the instance, which is the case
 /// for every DI-registered backend (Lyntai's <c>RegisterProviderLifetime</c>).</para>
 ///
@@ -206,13 +207,16 @@ public static class RerankChunking
 /// WORSE (201 → 171 of 240, 31/1) — mostly, post hoc, through a co-recall link dynamic on the Japanese-worded questions
 /// rather than through how either segmenter scores a note — LAMAR could not tell the two apart, and short facts were
 /// byte-identical. mMiniLMv2 did significantly BETTER under D177 (long 182 → 196, mixed 184 → 198), most where the answer
-/// is late in a note; the likely reason, untested, is D177's sentence-boundary piece placement, so the follow-up worth
-/// measuring is boundary-cut windows in this class, not a switch. What would reopen it is a within-run result under the
-/// same rule in which D177 is better for BGE — worth running once a pace over D177 can learn from what was sent rather than
-/// a bound — or the owner changing the rule. The Lyntai half: Part 289's outcome still names an app-side segmenting
-/// score-provider decorator as the adopter's copy to remove when D177 releases; it has released and this class stays, so
-/// Run 10's answer is owed to Lyntai's side (dev-conventions says so). Lyntai's <c>docs/memory-measurements.md</c> records
-/// our Run 6c as <c>rerank-segmented-adopter-long-notes</c>.</para></summary>
+/// is late in a note. The reason first offered — D177's sentence-boundary piece placement — was then measured
+/// (<c>docs/judge-bench.md</c> Run 12, the <c>boundary</c> mode of <see cref="RerankChunking"/>: this class's windows with
+/// their edges on text boundaries) and did not hold: mMiniLMv2 182 → 188 (3/9, p = 0.146), and on these fixtures neither
+/// placement ever splits an answer, so D177's lead is not explained by where the edges fall — what explains it is open.
+/// What would reopen the switch is a within-run result under the same rule in which D177 is better for BGE — worth running
+/// once a pace over D177 can learn from what was sent rather than a bound — or the owner changing the rule. The Lyntai
+/// half: Part 289's outcome names an app-side segmenting score-provider decorator as the adopter's copy to remove when
+/// D177 releases; Lyntai's <c>TASKS.md</c> Part 329 now records why this one stayed (Run 10), though its placement reading
+/// predates Run 12 (dev-conventions, workaround (6)). Lyntai's <c>docs/memory-measurements.md</c> records our Run 6c as
+/// <c>rerank-segmented-adopter-long-notes</c>.</para></summary>
 public sealed class ChunkedScoreProvider : IScoreProvider
 {
     // Set by RerankAdmission around a recall whose probe would have carried EVERY candidate: that probe IS the one-window

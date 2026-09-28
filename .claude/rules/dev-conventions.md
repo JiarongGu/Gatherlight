@@ -539,7 +539,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost. On the 240-question bilingual fixture (`docs/judge-bench.md`): top-1 80/240, found@8 127/240, ~0.25 s per recall on Lyntai 3.5.1 (Runs 10–11); 79/240, 125/240, ~0.23 s on 3.2 (Runs 1–7) — the base the Claude row pairs with, since the Claude judge was not re-run |
   | **判断 · Claude CLI** | subject handles on every write; judges which candidates answered, and promotes those to the front | **top-1 79 → 130/240 (+21.3pp, p < 0.001, 95% [+15.9, +26.3]pp), each of the four sets significant on its own; found@8 125 → 131, not a finding (p = 0.210)** — `docs/judge-bench.md` Run 1, 2026-09-23, its `contentonly` arm: the judge reading each fact's CONTENT alone, the input that ships since 2026-09-24 (through Lyntai's `ContentChars` since 2026-09-27, workaround (1) — the arm names here are Run 1's: the bench's `content` arm has shown content alone since then, and `contentonly` is gone). Its `content` arm — topic — content, the 1.3.0 input — read top-1 132 (+22.1pp, [+16.6, +27.2]pp) and found@8 133 (p = 0.096), and the two were measured equivalent. Costs **~8.7 s per recall** there (serial median; ~9.5 s for topic — content; 8.7–11.7 s across Run 1's judge arms; **9–17 s** measured earlier on the household's own facts) — a CLI spawn per call. Before the content fix, on the household's own facts: +2 facts in each multilingual probe, 0 same-language |
   | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 127 → 207 (LAMAR) / 208 (BGE) of 240 (+33.3 / +33.8pp, both p < 0.001) — cross-language 6 → 49 / 49 of 60; top-1 80 → 89 / 91 (+3.8pp p = 0.012 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 11, 2026-09-27, Lyntai 3.5.1, all three rerankers in one run (Run 2 on 3.2, 2026-09-23: found@8 208 / 203, cross-language 49 / 48, top-1 86 / 90, from 79 / 125). ~0.45–0.46 s per recall, warm, on one GPU, ≤60 candidates, on facts of at most 101 characters — on 60 long notes of 883–1,241 characters (Run 6c, each read in windows) a recall took 3.2 s on BGE and LAMAR and 1.2 s on mMiniLMv2. **mMiniLMv2** (133 MB, same run, same fixture, 语义 off, page of 8, launched at its declared 512): found@8 127 → 203 (+31.7pp) and top-1 80 → 100 (+8.3pp), both p < 0.001; against the SAME run's BGE (208) no significant difference and not equivalent (8/3, p = 0.227, [−4.9, +0.7]pp), against LAMAR (207) no significant difference either (8/4, p = 0.388) — Run 4's measured loss to LAMAR (9/0, p = 0.004, on 3.2) did not replicate; top-1 above both (4/13, p = 0.049 against BGE; 3/14, p = 0.013 against LAMAR; uncorrected, the first marginal); ~0.34 s per recall against the run's formula 0.25 s (facts of at most 101 characters). Run 4 (3.2, under a 4096 launch) read 199 / 99. LAMAR vs BGE: no finding either way, and EQUIVALENT on found@8 on 3.5.1 (4/3, p = 1.000, [−2.7, +1.9]pp); Run 2's 5–0 lean toward LAMAR (p = 0.063, interval excluding zero) did not replicate; top-1 7/5, p = 0.774. BGE is `RecommendedReranker` by the smaller-file tie-break registered before Run 2, and by nothing else. Lyntai, on ITS English LoCoMo corpus (`docs/memory-measurements.md` there, evidence-hit, n = 200), in ONE run — 2026-09-10, `embeddinggemma-300M` embedder, base 85.5%, a perfect judge +7.0: BGE Q8 +5.5, LAMAR Q8 +5.5, LAMAR Q5 (our file) +6.0. Its 2026-09-15 run read LAMAR Q5 at +9.0 of 9.5 over `nomic-embed-text` (base 83.0%); Lyntai's own rule is that a reranker's delta belongs to the configuration, so quote the base and embedder with it or not at all — the household notes quote neither |
-  | **判断 · 内置 reranker** | VERIFICATION only, by mMiniLMv2 as ONNX IN PROCESS on the CPU (`BuiltInJudgeSource`, round 6); tagging on the Claude CLI | **as good as llama.cpp's mMiniLMv2, and faster than llama.cpp on a CPU** — `docs/judge-bench.md` Run 13, 2026-09-28, Lyntai 3.5.1, one laptop's CPU (Core Ultra 9 185H, ~17–22% busy with other work), each arm's pass alone, the qint8 ONNX export against llama.cpp's Q8_0 GGUF, 语义 off, a page of 8. Short (240 questions): top-1 99 / found@8 203, against llama.cpp on the GPU's 100 / 203 — both EQUIVALENT (found@8 1/1, [−1.4, +1.4]pp). Long (60 notes of ~900–1,200 characters, 240 questions): 81 / 180 against 79 / 182 — no significant difference (found@8 9/7, p = 0.804, [−4.2, +2.5]pp, not equivalent), and equivalent to llama.cpp on the CPU (6/6). Median per recall 467 ms short and 8.1 s long, against llama.cpp on the CPU's 817.5 ms and 20.0 s (faster on 223 and 225 of 240) and on the GPU's 300 ms and 1.2 s. Per set, descriptive only (1 of 16 uncorrected tests): long cross-language 41 against the GPU arm's 47, same-language 50 against 46. Memory ~0.76 GB private after short facts, ~1.04 GB after long notes; load ~1.3 s at the first judged recall; the pace sized 2 of its long recalls, skipped none. So it is OFFERED, and RECOMMENDED where there is no usable GPU (`GgufCatalog.RerankerWithoutGpu`) |
+  | **判断 · 内置 reranker** | VERIFICATION only, by mMiniLMv2 as ONNX IN PROCESS on the CPU (`BuiltInJudgeSource`, round 6); tagging on the Claude CLI | **as good as llama.cpp's mMiniLMv2, and faster than llama.cpp on a CPU** — `docs/judge-bench.md` Run 13, 2026-09-28, Lyntai 3.5.1, one laptop's CPU (Core Ultra 9 185H, ~17–22% busy with other work), each arm's pass alone, the qint8 ONNX export against llama.cpp's Q8_0 GGUF, 语义 off, a page of 8. Short (240 questions): top-1 99 / found@8 203, against llama.cpp on the GPU's 100 / 203 — both EQUIVALENT (found@8 1/1, [−1.4, +1.4]pp). Long (60 notes of ~900–1,200 characters, 240 questions): 81 / 180 against 79 / 182 — no significant difference (found@8 9/7, p = 0.804, [−4.2, +2.5]pp, not equivalent), and equivalent to llama.cpp on the CPU (6/6). Median per recall 467 ms short and 8.1 s long, against llama.cpp on the CPU's 817.5 ms and 20.0 s (faster on 223 and 225 of 240) and on the GPU's 300 ms and 1.2 s. Per set, descriptive only (1 of 16 uncorrected tests): long cross-language 41 against the GPU arm's 47, same-language 50 against 46. Memory ~0.76 GB private after short facts, ~1.04 GB after long notes; load ~1.3 s at the first judged recall; the pace sized 2 of its long recalls, skipped none. So it is OFFERED, and RECOMMENDED where there is no usable GPU — and, since the round-6 review, first on a fresh install, where nothing has said whether there is one (`GgufCatalog.RerankerWithoutGpu`); the memory is held until the process ends |
   | **判断 · llama.cpp chat model** | BOTH halves locally — subject handles on every write, and judges which candidates answered (partition, like the Claude judge); no account quota | Same 240-question fixture, 语义 off, content-only judge input, one chat model per run beside 公式 and BGE — `docs/judge-bench.md` Run 11, 2026-09-27, Lyntai 3.5.1, thinking off by the request field, the 512-token cap, the 16,384 context, as the product runs it. **Gemma 3 1B is WORSE than no judge at ranking first**: top-1 80 → 36 (−18.3pp, p < 0.001); found@8 127 → 123 (−1.7pp, p = 0.424), no significant difference — Run 11b (Run 3 on 3.2, 2026-09-24: 79 → 33 and 125 → 111, both worse; that found@8 loss did not replicate, and one run per version cannot say why it moved); coverage 203/234. **Qwen3 0.6B is BETTER on both**: top-1 80 → 107 (+11.3pp), found@8 127 → 152 (+10.4pp), both p < 0.001 — Run 11a (Run 5b on 3.2: 110 / 148); coverage 218/234. Adds ~0.08 s (Gemma: 338 ms against its run's formula 257) and ~0.14 s (Qwen3: 382 against 245) per recall, serial medians, warm, one GPU. Those figures are over tags the Claude CLI wrote. **Qwen3's OWN tags were measured in Run 7** (2026-09-24, on Lyntai 3.2 and not re-run since, the same fixture and settings as Run 5b, a seed tagged by Qwen3 paired within the run against Claude's tags replayed through the same path): no significant difference — top-1 104 vs 114 (−4.2pp, p = 0.143, 95% [−9.2, +0.9]), found@8 155 vs 152 (+1.3pp, p = 0.736, [−3.6, +6.1]) — and NOT equivalent (neither interval inside ±3pp); still significantly better than no judge over the same tags (+10.8 / +14.6pp, p < 0.001). Its tags COLLAPSE unrelated facts (`parent` on 12; 29 of 78 handle assignments reused only across groups, against Claude's 7 of 65), which a fixture of one-fact questions barely exercises — the model note says so. Gemma's own tags are unmeasured. Qwen3's child and the router took +2,472 MiB of GPU memory at the chat context cap, +5,175 MiB uncapped (launch item (5)) |
   | **语义 · Claude CLI** | stores other wordings of a fact, **≥1 in another language** | capability proven directly: an English question retrieves a Chinese-only fact. Aggregate effect NOT measured — see the rule below on why this tool cannot |
 
@@ -978,20 +978,26 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Outside that set the two differ 5/1. So the rule's result stands, and what it says is narrower than its size: D177 is
   not better for BGE. **mMiniLMv2 did significantly BETTER under D177** — outside the rule, which reads BGE and only
   blocks: long 182 → 196 (10/24, p = 0.024), mixed 184 → 198 (1/15, p < 0.001), concentrated where the answer is past the
-  first window, and not the Japanese-set dynamic. The likely reason, stated and untested, is D177's SENTENCE-BOUNDARY
-  piece placement, which splits an answer sentence less often than our fixed-position windows in mMiniLMv2's
-  250–500-character budget. That is a finding about placement, separable from the pace, so **the follow-up worth
-  measuring is boundary-cut windows INSIDE ours**, not a switch. Nothing in the product changed: `ChunkedScoreProvider`,
+  first window, and not the Japanese-set dynamic. The reason first offered — D177's SENTENCE-BOUNDARY piece placement,
+  splitting an answer sentence less often than our fixed-position windows — was then MEASURED, and did not hold:
+  **`docs/judge-bench.md` Run 12** (2026-09-28, Lyntai 3.5.1, one GPU) ran boundary-cut windows INSIDE ours (the knob's
+  `boundary` mode, below), 97–100% of interior edges on a text boundary against the default's 9–15%, and mMiniLMv2's
+  long-fixture found@8 went 182 → 188 (3/9, p = 0.146) — not the significant gain its rule needed; nothing significantly
+  worse anywhere, short facts sent identically. On these fixtures neither placement ever splits an answer (every answer
+  is shorter than the least overlap), so D177's lead for mMiniLMv2 is NOT explained by where the edges fall, and what
+  does explain it is open. Nothing in the product changed: `ChunkedScoreProvider`,
   `RerankPace` and `RerankAdmission` stay, and `d177` stays a measurement mode, never a default. **What would reopen
   it**: a within-run measurement under the same rule in which D177 is significantly better for BGE — worth running only
   once D177 can also carry a pace that learns from what was SENT (it reports no piece count, and the HTTP reranker no
   usage, so a pace over 3.5.0's per-request `MaxPiecesPerInput` would learn from bounds up to ~2× apart), since a D177
   with no pace has no skip, and Run 8 measured what BGE does on a CPU without one — or the owner changing the rule.
-  **Both halves are recorded, and Lyntai's is now stale**: Part 289's outcome names "an app-side segmenting
-  score-provider decorator" as the adopter's copy to remove when D177 releases — by its role, not its class name, as a
-  library that names no adopter must. It has released and we kept the copy, so the answer — kept, why, and Run 10 — is
-  owed to Lyntai's `TASKS.md` (we are review-only there), or the next reader of that outcome deletes a decorator a
-  measurement kept. Lyntai's `docs/memory-measurements.md` records our Run 6c as `rerank-segmented-adopter-long-notes`.
+  **Both halves are recorded**: Part 289's outcome names "an app-side segmenting score-provider decorator" as the
+  adopter's copy to remove when D177 releases — by its role, not its class name, as a library that names no adopter
+  must — and Lyntai's `TASKS.md` Part 329 (filed 2026-09-27) now carries the answer: kept, why, and Run 10's figures, so
+  the next reader of Part 289 does not delete a decorator a measurement kept. **One reading there predates Run 12**:
+  Part 329 offers the sentence-boundary placement as the plausible reason for mMiniLMv2's gain, which Run 12 then found
+  does not explain it on these fixtures — Lyntai's half to update (we are review-only there). Lyntai's
+  `docs/memory-measurements.md` records our Run 6c as `rerank-segmented-adopter-long-notes`.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
@@ -1170,8 +1176,20 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   figures): as good as llama.cpp's mMiniLMv2, and on a CPU much faster than llama.cpp there — so by the owner's
   registered rule it is offered and RECOMMENDED where there is no usable GPU, every "unmeasured" sentence went, and the
   exclusion went with them: an installed 内置 is a measured reranker like any other (`ModelsController.Recommend`).
-  Proof: `e2e-p56` (the binding, the texts), `e2e-p51` (the no-GPU recommendation), `e2e-p52` case 6h (skips) and
-  `e2e-p53` (BGE measured too slow).
+  Proof: `e2e-p56` (the binding, the texts), `e2e-p51` (the no-GPU and fresh-install recommendations), `e2e-p52` case 6h
+  (skips) and `e2e-p53` (BGE measured too slow).
+  **A failed in-process load is RETRIED, never cached** (review, round 6): `InProcessReranker` loaded through a `Lazy`,
+  which keeps a thrown exception for the life of the process, so one failed load — a damaged file, one held by a scanner
+  at that moment — left 判断 giving no verdict until a restart, however the file was then repaired. It now tries again at
+  the first call one verification deadline after a failure, then two, four, and every ten (1, 2, 4, 10 minutes at the
+  product's deadline; `InProcessReranker.RetryAfter`), each failed attempt logged at Warning with when the next is.
+  `e2e-p56` case D damages the graph, repairs it, and sees a recall inside the wait load nothing and the first one after
+  it judged — confirmed to FAIL both with the retry removed and with the wait removed.
+  **The declined shape is now asserted by NOTHING — a stated gap.** With `MemorySources.JudgeDeclined` and
+  `SemanticDeclined` both empty, no suite reaches the code that renders a declined entry (`bindable:false` with its
+  reason), refuses a bind to one, or lets the picker fall back to it as the group's blocker (`BackendPicker`'s
+  `group.sources.find((x) => !x.bindable)`); `e2e-p56` asserts only that 判断 has none. The next real impossibility
+  added there lands on code no suite has run since the last entry left, so it comes with a suite case of its own.
   A model row saying "you do not need this" is the same error in miniature: state the trade-off, and say
   when it is unmeasured. And a removed capability needs a test asserting the household can still do it —
   both removals above passed every check, because nothing asserted the ability existed (`p51` now does).
@@ -1793,7 +1811,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the skip notice and 资源's badge all name it through `GgufCatalog.ResourceIdForReranker`): `GgufCatalog.RecommendedRerankerFor` — the
   one writer 资源's badge and the 判断 row's suggestions read — picks `RerankerWithoutGpu` when `LlamaServerState.Gpu` is
   FALSE, i.e. `--list-devices` answered with its header and listed no device at all, OR when the pace skipped recent
-  recalls, OR (since 2026-09-26, launch item (6)) when BGE was MEASURED too slow on this machine; otherwise BGE. **The
+  recalls, OR (since 2026-09-26, launch item (6)) when BGE was MEASURED too slow on this machine, OR (since the round-6
+  review, owner decision) when NOTHING has answered — llama.cpp not installed, or its device probe not answered
+  (`GgufCatalog.GpuAnswer.NotAsked`), a fresh install; otherwise — a GPU, or a list naming only another build's devices
+  (`GpuAnswer.OtherDevices`) — BGE, whose reason says what it is recommended there FOR: a long note's answer on the page
+  more often (found@8 201 against llama.cpp's mMiniLMv2 at 182, Runs 6c/12), not speed — on a discrete GPU the fast one is
+  the same mMiniLMv2 on llama.cpp. The fresh case used to be BGE, which sent a CPU-only household to download llama.cpp and
+  BGE before 内置 was named anywhere; its reason says what a discrete GPU would change, so a GPU household can move. "Not
+  asked" and "another build's devices" both read `Gpu == null`, so the runtime also says whether a device list was
+  answered at all (`ILlamaServerRuntime.DeviceListKnown`, `GgufCatalog.GpuAnswerOf`). **The
   device probe alone almost never fires**: the provisioned Vulkan build lists an integrated
   GPU as a device (this machine: `Vulkan1: Intel Arc`), so nearly every x64 laptop reads "GPU". On this laptop's Arc both
   rerankers were then measured SLOWER than its CPU — by the device measurement on the real binary (launch item (6),
@@ -1861,10 +1887,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   probe's line that 6h asserts. The no-GPU
   recommendation: `e2e-p51`, whose stand-in `llama-server.exe` is a copy of Windows' `more.com` printing a planted
   `--list-devices` file from its working directory — no device, then a CUDA device only, then a Vulkan GPU, then
-  unreadable — asserting mMiniLMv2 with its reason on the badge and the 判断 row, still mMiniLMv2 after a model removal
-  invalidates the runtime's state, BGE and no machine claim for the CUDA list, BGE for a GPU and for unknown, and nothing
-  beside an installed BGE; confirmed to FAIL with `RecommendedRerankerFor` returning BGE, with a CUDA-only list read as "no
-  GPU", and with the badge reading the cached state. The bench cannot see the pace in its tables, so judge-bench counts the
+  unreadable — asserting 内置 with its reason on the badge and the 判断 row, still 内置 after a model removal
+  invalidates the runtime's state, BGE for the CUDA list and for a GPU, each with the reason it is recommended there,
+  内置 for no runtime and for a stub that cannot answer (the fresh case), and nothing beside an installed BGE; confirmed to
+  FAIL with `RecommendedRerankerFor` returning BGE, with a CUDA-only list read as "no GPU", with the badge reading the
+  cached state, and with "not asked" read as BGE. `e2e-p56`'s A2 control asserts the fresh case too: 内置 removed, the
+  badge names it again. The bench cannot see the pace in its tables, so judge-bench counts the
   pace's Information lines in every arm's log and VOIDS a run in which they fired, and refuses a VOID run as a `--baseline`
   (`docs/judge-bench.md`, "The bench and the pace").
   `GATHERLIGHT_RERANK_CHUNKING=off` (`RerankChunking`) is KEPT as a measurement knob so the bench can reproduce the cut
@@ -1876,8 +1904,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (`RerankChunking.LyntaiSegmentation`): under a declared window (mMiniLMv2) a 506-character pair bound, the query at most
   half; without one (BGE, LAMAR) a 4,090-character bound, the query at most 2,045 and each document piece at most 1,000;
   overlap 0.25, at most 5 pieces. Set only in `d177`, so `off` still reproduces the cut and `on` is never segmented
-  twice. It is announced at startup like the other two values (`rerank chunking = d177`), and judge-bench's `rrd` arm
-  pins it. Run 10 kept ours over it — workaround (6) has the result. **Two traps met measuring it**: llama.cpp's
+  twice. It is announced at startup whenever the knob is set, like every value (`rerank chunking = d177`), and
+  judge-bench's `rrd` arm pins it. Run 10 kept ours over it — workaround (6) has the result. **Its fourth value,
+  `boundary`, is a measurement mode too** (for `docs/judge-bench.md` Run 12), never a default: OUR windows — the same
+  `ChunkedScoreProvider`, budget, window count, overlap floor, pace, admission and skip, so `RerankChunking.On` is true
+  in it — with each window's interior edges moved, within a slack, onto the nearest text boundary
+  (`RerankInputCap.WindowSpans`, read through `RerankChunking.AtBoundaries`); a candidate that fits one window, and a
+  call sized down to one window each, are sent exactly as under `on`. Run 12 found no significant gain (workaround (6)),
+  so it stays a knob; `RerankChunking`'s comment has the run. **Two traps met measuring it**: llama.cpp's
   scores drift in the third decimal between identical calls, so an A/B that must be byte-identical needs identical
   requests to get identical replies (the bench's `--rerank-memo`); and that memo's proxy, on Node's default keep-alive
   agent, lost one request in each run (of ~780 and ~1,500) before the router saw it — each an abstention that voided

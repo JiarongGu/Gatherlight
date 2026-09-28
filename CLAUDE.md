@@ -96,10 +96,13 @@ built (round 6): `BuiltInJudgeSource`**, the in-process mMiniLMv2 (the model rep
 pace, the admission). **Measured by `docs/judge-bench.md` Run 13** (2026-09-28, Lyntai 3.5.1, one laptop's CPU, the
 240-question and the long fixture, qint8 ONNX against llama.cpp's Q8_0): found@8 203 against 203 on short facts
 (equivalent), 180 against 182 on long notes (no significant difference); per recall 0.47 s and 8.1 s against llama.cpp
-on the CPU's 0.82 s and 20.0 s — but llama.cpp on a discrete GPU is faster still (0.30 s, 1.2 s); ~0.7–1.0 GB of memory
-while it scores, ~1.3 s to load. So **`GgufCatalog.RerankerWithoutGpu` is 内置**: no usable GPU, recent skips, or BGE
-measured too slow here recommend it (and 判断 then needs no llama.cpp); a usable GPU keeps BGE on llama.cpp. Nothing is
-declined on either layer now.
+on the CPU's 0.82 s and 20.0 s — but the same model on llama.cpp on a discrete GPU is faster still (0.30 s, 1.2 s);
+~0.76–1.04 GB of memory held from its first load until the process ends, ~1.3 s to load. So
+**`GgufCatalog.RerankerWithoutGpu` is 内置**, and it comes FIRST on a fresh install: no answer yet on whether there is a
+GPU (llama.cpp not installed or not probed), no usable GPU, recent skips, or BGE measured too slow here recommend it (and
+判断 then needs no llama.cpp); a GPU llama.cpp can see recommends BGE on llama.cpp — for found@8 on long notes (201 against
+mMiniLMv2's 182), not for speed. Nothing is declined on either layer now, so the declined path is asserted by nothing
+(a stated gap, in the rules).
 
 **判断 can run on a llama.cpp RERANKER** (2026-09-23, `docs/judge-bench.md` Run 2). It VERIFIES locally and
 never annotates, so tagging stays on the Claude CLI and the live route `llm.route.memory` is the CLI's model on the
