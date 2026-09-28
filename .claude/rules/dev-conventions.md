@@ -838,8 +838,15 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   the quota reason would go. **But it cannot simply be switched on:** it skips the annotation of EVERY write owed a
   vector that got none — including one the classifier then KEEPS as a refused input and never retries, which would stay
   without subjects for good (it is an engine option, with no per-write override). So the option stays off and the gate
-  stays, until the option can come with either a pass that re-annotates the kept vector-less facts (not built) or an
-  embedder that cannot refuse a fact for its length (Lyntai's input segmentation on `llamacpp-embed`, unmeasured). The
+  stays, until the option can come with a pass that re-annotates the kept vector-less facts (not built). **The other
+  way out was MEASURED and does not qualify** (`docs/judge-bench.md` Run 14, 2026-09-28, `GATHERLIGHT_EMBED_SEGMENTATION=d177`,
+  off by default): Lyntai's input segmentation on `llamacpp-embed` does give an over-window fact a vector, but a pooled
+  mean of ~6 mostly-filler pieces dilutes the one piece that carries the meaning (the capability check's paraphrase did
+  not find its fact: cosine 0.237, rank 22 of 61, against 0.624 for that sentence alone), and the pooled notes crowd the
+  page (short targets 15/0 and the cross-language set 12/0 against segmentation, both p < 0.001), so its rule failed on
+  two of three clauses. Run 14 also measured what the gate protects today: **with 语义 on, a fact that has NO vector is
+  pushed off the page** — 22 of 60 over-window targets on the page against 59 with 语义 off (37/0, p < 0.001) — which is
+  the cost of every fact the embedder refuses, larger than this design assumed. The
   classifier keeps its probe either way — it answers a different question. The startup warning would then need another
   source — a start with nothing pending makes no write, so there is nothing to observe; `LlamaWarmStep` warns for a
   llama.cpp model that fails to warm, and nothing warns for the built-in embedder. **A write kept WITHOUT ITS SUBJECTS
