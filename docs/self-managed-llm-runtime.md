@@ -873,3 +873,82 @@ asserts the measurement children's inherited names; the router spawn itself is n
 always adopted).
 
 A scratch run, not committed: the router was ended by PID as a process tree.
+
+### 2026-09-28 — 内置 on 判断: the in-process mMiniLMv2, by hand on the real export
+
+Round 6 builds `builtin` as a 判断 backend: mmarco-mMiniLMv2 scored IN PROCESS by Lyntai's ONNX provider with its owned
+SentencePiece tokenizer (Lyntai D191), tagging on the Claude CLI (`BuiltInJudgeSource` over `InProcessReranker`). This
+records what only the real export can show; its judging quality is `judge-bench.md` Run 13's, still to come.
+
+**What is pinned** (资源's `rerank-model`, `ResourceProvisioner`): `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` at commit
+`1427fd652930e4ba29e8149678df786c240d8825` (the card says Apache-2.0), four files, 135,704,003 bytes in all:
+
+| file | bytes | sha256 |
+|---|---|---|
+| `onnx/model_qint8_avx512_vnni.onnx` | 118,620,017 | `1825907d6c1a9001ff78124780bbde20a614a8c3df3b63409cf3c72c6fe5c8b4` |
+| `tokenizer.json` | 17,082,660 | `62c24cdc13d4c9952d63718d6c9fa4c287974249e16b7ade6d5a85e7bbb75626` |
+| `config.json` | 891 | `cc2cfe51aa3fd759d21d21acf5dfd6994aa67a3c9210636d22e143699d336c77` |
+| `tokenizer_config.json` | 435 | `e7fbfbfa6347b4e414c1cee50d142e2c2f9a895dad68b068ae83a8b564c3837e` |
+
+The graph is the repository's qint8 export — the same bytes it publishes as `model_qint8_arm64`, `_avx512` and
+`_avx512_vnni` — and it is the export D191 was verified with: the model directory Lyntai's `OnnxCrossEncoderLiveTests` ran
+against holds these four files, byte-identical (sha256 compared), the graph under the name `onnx/model.onnx`. The LFS pins
+are the repository's `X-Linked-ETag` at that commit; the two small files were hashed from a download. **Confirmed through
+the app's own provisioning**: a scratch data folder's 资源 fetched all four (with the built-in embedder, in parallel) in
+~24 s and the provisioner's sha256 checks passed.
+
+**ONNX Runtime moved 1.29.0 → 1.30.0.** `Lyntai.Providers.Onnx` 3.5.1 references only the MANAGED half, at
+`Microsoft.ML.OnnxRuntime.Managed` ≥ 1.30.0; the app's native `Microsoft.ML.OnnxRuntime` 1.29.0 would have resolved the
+managed half to 1.30.0 beside a 1.29.0 native library, with no NuGet warning (a higher transitive version is no downgrade).
+Bumped to match. The built-in EMBEDDER re-measured on 1.30 with `dev.mjs embed-bench builtin`: 8/10 top-1, 10/10 top-3,
+33 ms/query — against the 8/10, 10/10, 28 ms recorded on 1.29 (2026-08-22).
+
+**It loads, and passes the screen on its own weights.** Laptop CPU (Intel Core Ultra 9 185H), Server GC as the app runs:
+
+- load: 1,169 and 1,435 ms at the first judged recall of two app starts; ~1.0 s (load plus the screen) in an isolated
+  process. Lyntai reads the export's window as 514 positions narrowed by `tokenizer_config.json` to **512** — the
+  window the catalogue declares for the same model's GGUF, which the verifier fits pairs to.
+- **the bind screen** (`RerankScreen`): answer **8.9394**, distractor **−2.7389**, identical over every run; the bind in
+  the app (a fresh load plus the screen) took 1,406 ms and saved the binding.
+
+**Memory — larger than the model, and path-dependent.** The app's own figures (Windows private bytes, working set in
+brackets): **59 MB** (121) after recalls with 判断 switched off; **739 MB** (650) after the first judged recall — the load,
+the pace seed and one recall of short facts; **1,023 MB** (827) after ten recalls over eight notes of ~1,000 characters,
+unchanged over five more. So ~0.7–1.0 GB, which the model row says. In an isolated process the loaded provider is
+~288 MB, and ONNX Runtime's CPU arena then keeps what its largest pass needed: Lyntai runs a call as ONE pass of
+max(8, documents) rows, and 48 full windows in one pass took the process to 2.4 GB; the same 96 windows in passes of 4, 8,
+16 and 32 documents ended at 441, 574, 872 and 1,467 MB. `InProcessReranker` therefore scores in passes of 8 (Lyntai's
+own minimum). The arena's final size depends on the order of pass sizes it has seen (full-width passes first ended higher
+than the same passes after small ones), and its options are ONNX Runtime session options that Lyntai's provider does not
+expose — a stated limit. Throughput barely depended on the pass size on this CPU: 96 full windows at 4 and at 8 read 131
+and 119 ms per 1,000 pair tokens in one pair of runs and 222 and 236 in another, inside the machine's own spread.
+
+**CPU latency** (medians of 7, three isolated processes, a quiet machine; pair tokens as `RerankPace` counts them, the
+whole call timed with no overhead taken off):
+
+| call | pair tokens | median ms | ms per 1,000 pair tokens |
+|---|---|---|---|
+| 8 short facts (bilingual, 14–59 characters) | 227 | 32–39 | 140–173 |
+| one note of 1,220 characters, chunked (`ChunkedScoreProvider`: 3 windows of 494) | 1,230 | 170–200 | 138–163 |
+
+In the app: a warm recall of 12 short facts 27–209 ms; a recall over eight notes of ~1,000 characters 1.7–2.2 s quiet and
+up to 3.3 s beside other work; the first judged recall after a start 3.0–3.9 s (the load and the pace seed). It scores on
+ONNX Runtime's default intra-op thread pool, i.e. across the machine's cores.
+
+**Where the pace starts** (`InProcessReranker.MeasurePaceSeed`): eight full windows of dense Chinese, timed at the pace's
+first use in the pace's own unit and under its floor (`RerankDeviceVerdict.NeverFasterThanTheGpuFigure`, 50.2 ms per 1,000):
+92–106 ms per 1,000 in isolated processes, 149.7 at a quiet app start, **393.7** at a start whose first recall followed a
+dozen fact writes (their annotation spawns ran beside it). One call at one moment, so contention can only make the first
+sizing more careful, and the pace learns from the calls after it. The device measurement's four-document batch was the
+first choice and is the wrong shape here: 738 pair tokens took 69–85 ms, of which the pace's 50 ms call allowance is most,
+so it read 26–47 ms per 1,000 and would have floored to the GPU figure — a third of what long windows cost on this CPU.
+
+**Not measured**: its judging (Run 13); any other CPU; a GPU (the in-process path is ONNX Runtime's CPU provider);
+concurrency with the built-in embedder in the same process. `e2e-p56` drives everything else — the binding and its
+refusals, the screen refusing a backwards scorer, routing (tagging on the CLI stub, verification in process, nothing at a
+llama.cpp router) and the startup fallback — over a tiny but REAL export (`devtools/scripts/e2e/_tiny-cross-encoder.mjs`:
+an ONNX graph and a Unigram `tokenizer.json` whose scores the suite chooses), run by the real ONNX Runtime and Lyntai's
+real provider and tokenizer.
+
+Scratch runs, not committed: a data folder provisioned through the app, and a bench console referencing
+`Gatherlight.Platform`; every server was ended by PID as a process tree.

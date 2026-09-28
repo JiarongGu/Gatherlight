@@ -533,6 +533,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   | **公式** | graph decay + rank fusion + FTS trigram | the floor; always on, no cost. On the 240-question bilingual fixture (`docs/judge-bench.md`): top-1 80/240, found@8 127/240, ~0.25 s per recall on Lyntai 3.5.1 (Runs 10–11); 79/240, 125/240, ~0.23 s on 3.2 (Runs 1–7) — the base the Claude row pairs with, since the Claude judge was not re-run |
   | **判断 · Claude CLI** | subject handles on every write; judges which candidates answered, and promotes those to the front | **top-1 79 → 130/240 (+21.3pp, p < 0.001, 95% [+15.9, +26.3]pp), each of the four sets significant on its own; found@8 125 → 131, not a finding (p = 0.210)** — `docs/judge-bench.md` Run 1, 2026-09-23, its `contentonly` arm: the judge reading each fact's CONTENT alone, the input that ships since 2026-09-24 (through Lyntai's `ContentChars` since 2026-09-27, workaround (1) — the arm names here are Run 1's: the bench's `content` arm has shown content alone since then, and `contentonly` is gone). Its `content` arm — topic — content, the 1.3.0 input — read top-1 132 (+22.1pp, [+16.6, +27.2]pp) and found@8 133 (p = 0.096), and the two were measured equivalent. Costs **~8.7 s per recall** there (serial median; ~9.5 s for topic — content; 8.7–11.7 s across Run 1's judge arms; **9–17 s** measured earlier on the household's own facts) — a CLI spawn per call. Before the content fix, on the household's own facts: +2 facts in each multilingual probe, 0 same-language |
   | **判断 · reranker** | VERIFICATION only, by a llama.cpp cross-encoder; tagging still on the Claude CLI | **found@8 127 → 207 (LAMAR) / 208 (BGE) of 240 (+33.3 / +33.8pp, both p < 0.001) — cross-language 6 → 49 / 49 of 60; top-1 80 → 89 / 91 (+3.8pp p = 0.012 / +4.6pp p = 0.013)** — `docs/judge-bench.md` Run 11, 2026-09-27, Lyntai 3.5.1, all three rerankers in one run (Run 2 on 3.2, 2026-09-23: found@8 208 / 203, cross-language 49 / 48, top-1 86 / 90, from 79 / 125). ~0.45–0.46 s per recall, warm, on one GPU, ≤60 candidates, on facts of at most 101 characters — on 60 long notes of 883–1,241 characters (Run 6c, each read in windows) a recall took 3.2 s on BGE and LAMAR and 1.2 s on mMiniLMv2. **mMiniLMv2** (133 MB, same run, same fixture, 语义 off, page of 8, launched at its declared 512): found@8 127 → 203 (+31.7pp) and top-1 80 → 100 (+8.3pp), both p < 0.001; against the SAME run's BGE (208) no significant difference and not equivalent (8/3, p = 0.227, [−4.9, +0.7]pp), against LAMAR (207) no significant difference either (8/4, p = 0.388) — Run 4's measured loss to LAMAR (9/0, p = 0.004, on 3.2) did not replicate; top-1 above both (4/13, p = 0.049 against BGE; 3/14, p = 0.013 against LAMAR; uncorrected, the first marginal); ~0.34 s per recall against the run's formula 0.25 s (facts of at most 101 characters). Run 4 (3.2, under a 4096 launch) read 199 / 99. LAMAR vs BGE: no finding either way, and EQUIVALENT on found@8 on 3.5.1 (4/3, p = 1.000, [−2.7, +1.9]pp); Run 2's 5–0 lean toward LAMAR (p = 0.063, interval excluding zero) did not replicate; top-1 7/5, p = 0.774. BGE is `RecommendedReranker` by the smaller-file tie-break registered before Run 2, and by nothing else. Lyntai, on ITS English LoCoMo corpus (`docs/memory-measurements.md` there, evidence-hit, n = 200), in ONE run — 2026-09-10, `embeddinggemma-300M` embedder, base 85.5%, a perfect judge +7.0: BGE Q8 +5.5, LAMAR Q8 +5.5, LAMAR Q5 (our file) +6.0. Its 2026-09-15 run read LAMAR Q5 at +9.0 of 9.5 over `nomic-embed-text` (base 83.0%); Lyntai's own rule is that a reranker's delta belongs to the configuration, so quote the base and embedder with it or not at all — the household notes quote neither |
+  | **判断 · 内置 reranker** | VERIFICATION only, by mMiniLMv2 as ONNX IN PROCESS on the CPU (`BuiltInJudgeSource`, round 6); tagging on the Claude CLI | **not measured on the fixture** — `docs/judge-bench.md` Run 13 is to pair it with llama.cpp's mMiniLMv2 within one run, and until then it is offered, described as unmeasured, and never recommended. By hand on the real export (`docs/self-managed-llm-runtime.md`, 2026-09-28, one laptop CPU): it loads in ~1.2–1.4 s, puts the screen's answer first (8.9394 against −2.7389), and costs ~0.7–1.0 GB of the app's private memory while it scores |
   | **判断 · llama.cpp chat model** | BOTH halves locally — subject handles on every write, and judges which candidates answered (partition, like the Claude judge); no account quota | Same 240-question fixture, 语义 off, content-only judge input, one chat model per run beside 公式 and BGE — `docs/judge-bench.md` Run 11, 2026-09-27, Lyntai 3.5.1, thinking off by the request field, the 512-token cap, the 16,384 context, as the product runs it. **Gemma 3 1B is WORSE than no judge at ranking first**: top-1 80 → 36 (−18.3pp, p < 0.001); found@8 127 → 123 (−1.7pp, p = 0.424), no significant difference — Run 11b (Run 3 on 3.2, 2026-09-24: 79 → 33 and 125 → 111, both worse; that found@8 loss did not replicate, and one run per version cannot say why it moved); coverage 203/234. **Qwen3 0.6B is BETTER on both**: top-1 80 → 107 (+11.3pp), found@8 127 → 152 (+10.4pp), both p < 0.001 — Run 11a (Run 5b on 3.2: 110 / 148); coverage 218/234. Adds ~0.08 s (Gemma: 338 ms against its run's formula 257) and ~0.14 s (Qwen3: 382 against 245) per recall, serial medians, warm, one GPU. Those figures are over tags the Claude CLI wrote. **Qwen3's OWN tags were measured in Run 7** (2026-09-24, on Lyntai 3.2 and not re-run since, the same fixture and settings as Run 5b, a seed tagged by Qwen3 paired within the run against Claude's tags replayed through the same path): no significant difference — top-1 104 vs 114 (−4.2pp, p = 0.143, 95% [−9.2, +0.9]), found@8 155 vs 152 (+1.3pp, p = 0.736, [−3.6, +6.1]) — and NOT equivalent (neither interval inside ±3pp); still significantly better than no judge over the same tags (+10.8 / +14.6pp, p < 0.001). Its tags COLLAPSE unrelated facts (`parent` on 12; 29 of 78 handle assignments reused only across groups, against Claude's 7 of 65), which a fixture of one-fact questions barely exercises — the model note says so. Gemma's own tags are unmeasured. Qwen3's child and the router took +2,472 MiB of GPU memory at the chat context cap, +5,175 MiB uncapped (launch item (5)) |
   | **语义 · Claude CLI** | stores other wordings of a fact, **≥1 in another language** | capability proven directly: an English question retrieves a Chinese-only fact. Aggregate effect NOT measured — see the rule below on why this tool cannot |
 
@@ -1141,11 +1142,19 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   Lyntai's own model notes record the multilingual `mmarco-mMiniLMv2` reranker — the one we catalogue for llama.cpp —
   running end to end through it (its D191, 2026-09-26). So the gap is now wholly ours: the option is not BUILT (it needs
   `Lyntai.Providers.Onnx`, an ONNX export, a catalogue row) and not MEASURED against llama.cpp's mMiniLMv2, and the
-  owner decided on 2026-09-26 to build it in a later round. It stays unbindable, and its reason
-  (`MemorySources.BuiltInCannotJudge`) says "not built yet, not yet measured against llama.cpp's mMiniLMv2, use llama.cpp
-  meanwhile" rather than "cannot" — the honest sentence for a gap that is ours. Twice now a stated reason for an
-  unbuilt option was overtaken by the library while the option stayed unbuilt; a reason names what it rests on so
-  the next release can be checked against it.
+  owner decided on 2026-09-26 to build it in a later round. Until then it stayed unbindable, its declined reason saying
+  "not built yet, not yet measured against llama.cpp's mMiniLMv2, use llama.cpp meanwhile" rather than "cannot" — the
+  honest sentence for a gap that was ours. Twice a stated reason for an unbuilt option was overtaken by the library
+  while the option stayed unbuilt; a reason names what it rests on so the next release can be checked against it.
+  **Round 6 built it** (`BuiltInJudgeSource`, 2026-09-28): the model repository's own qint8 ONNX export — the one D191
+  was verified with — scored in process by `InProcessReranker` over `Lyntai.Providers.Onnx`, behind the SAME chain as
+  llama.cpp's reranker (`RerankVerification`, see the reranker bullets). That emptied `MemorySources.JudgeDeclined`; the
+  declined shape stays for the next real impossibility. And it shows the rule's second half: **built is not measured**.
+  It is the same checkpoint as llama.cpp's mMiniLMv2 in another quantisation, tokenizer and runtime, so its quality is a
+  claim until `docs/judge-bench.md` Run 13 pairs the two — which is why it is BINDABLE (after the screen) and
+  DESCRIBED as unmeasured in its row, cost line, toast and group sentence, and why nothing RECOMMENDS it: 资源's badge
+  never names it, and an installed copy does not end the suggestion of a measured reranker (`ModelsController.Recommend`
+  reads only llama.cpp's rerankers for that). Proof: `e2e-p56`.
   A model row saying "you do not need this" is the same error in miniature: state the trade-off, and say
   when it is unmeasured. And a removed capability needs a test asserting the household can still do it —
   both removals above passed every check, because nothing asserted the ability existed (`p51` now does).
@@ -1662,7 +1671,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   have given it. Measured on 60 notes of 883–1,241 characters (240 questions, no tags, no embedder, a page of 8): an
   answer at a note's END reached the page 4 times in 60 on mMiniLMv2, against 29 with no judge; past 1,000
   characters, 3 of 60 on BGE and LAMAR against 30. `ChunkedScoreProvider` decorates the reranker's own score provider
-  (applied where `LlamaCppSource.Wiring` builds the verifier, registered nowhere): each document is split by
+  (applied where `RerankVerification.Build` builds the verifier — for both reranker judges, llama.cpp's and 内置's —
+  registered nowhere): each document is split by
   `RerankInputCap.Windows` into windows of the SAME budget the bound uses (`RerankInputCap.PerCandidate`, NFKC under a
   declared window) — at most 5, overlapping by a quarter, the last at the tail; unread stretches appear only past FIVE
   window-lengths, 1 − 5 × window ÷ length of the text — all windows go in ONE call, and each document keeps its MAX window score, so
@@ -1734,6 +1744,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   fits, the SAME recall sends it ("re-measured this machine", also a pace line). A probe that would carry every candidate
   IS the one-window call, so that recall goes through Lyntai as usual with its call timed as the probe, and its answer is
   the verdict; it logs the re-measure line too. A truly slow machine pays ~5 s per interval, never the minute per recall.
+  **…except for the in-process 内置 scorer**, which STOPS an abandoned call at its next pass (`InProcessReranker`), so its
+  pace presumes nothing busy after a cut (`RerankPace`'s `abandonedCallsRunOn: false`); the call queued behind that last
+  pass waits a pass for it, stated rather than modelled. Everything else below holds for it, the in-flight rule included.
   **An abandoned call is not free, and what queues behind it is not believed.** llama-server scores a cancelled batch to
   the end (a 1-document call after a 15 s abort took 181.9 s), so after a cut the next recall was cut 218 of 222 times,
   and the QUEUE drove the estimate: a 1-note, 801-token call cut behind two abandoned batches set it through `AtLeast` to
@@ -1857,7 +1870,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   note whose only rewarded text is in its TAIL window, among 11 candidates for a page of 8, is on the page only when
   that window's score is credited to it — confirmed to fail under the cut, a first-window mapping and a mapping off by
   one window. The fake scores it 9.0 against the fillers' 3.2 so no tie is relied on (Lyntai's score ranking is a
-  stable sort, so a tie would test the engine's order instead). When chunking is ON and `LlamaCppSource.RerankProviders`
+  stable sort, so a tie would test the engine's order instead). When chunking is ON and `RerankVerification.Providers`
   finds nothing to wrap, building the verifier THROWS — the cap no longer cuts, so a silent miss would send long
   candidates whole; not drivable in e2e (it needs the registration and the wrapper to disagree), a stated gap.
   **The limit is PER MODEL, and it comes from the model's catalogue row** (2026-09-24). mMiniLMv2
@@ -1979,8 +1992,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   asks `HasModel` of the NEW model too, so what bind accepts the resolver keeps — a model the router listed from
   llama.cpp's own cache used to bind and then fall back at the next restart. WHY a model is not there is the
   source's clause, `WhyNotHere` (wrong kind; not there and 资源 can fetch it; not there and only the household
-  can put it there), shared by the bind refusal and the startup warning. What `LlamaWarmStep` announces is exactly a gone or
-  wrong MODEL — with what the CLI fallback costs, and for 语义 the restart and rebuild that bring it back.
+  can put it there), shared by the bind refusal and the startup warning. What the startup announces is exactly a gone or
+  wrong MODEL — with what the CLI fallback costs, and for 语义 the restart and rebuild that bring it back. For 判断 that is
+  `JudgeFallbackStep` (round 6), asked of whichever source the settings NAME — llama.cpp's model or 内置's reranker files
+  — where it had been a block in `LlamaWarmStep` reading the llama.cpp source by id; 语义's embedder is still
+  `LlamaWarmStep`'s to announce. The text did not change, so `e2e-p52` cases 10 and 10c pin it as before, and `e2e-p56`
+  case C pins the 内置 branch (its files gone: only the checking moves, the tagging was on the CLI all along).
   **And whether the CLI it falls back to can do ANY of it.** The warning said what the CLI takes over and never
   whether it could: a missing or signed-out CLI tags nothing and checks nothing, fail-open, so the sentence
   promised work that was not happening. It now reads the cached probe through `MemorySources.CliTaggingNow` —
@@ -1993,7 +2010,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   is switched OFF is asserted by nothing — the switch lives in
   `app_config`, so a fixture would have to set it in the database before the boot that falls back.
   **Residuals, stated rather than fixed:** a missing llama.cpp RUNTIME and the
-  built-in embedder's missing FILES still fall back silently at startup; and a hand-deleted file under a RUNNING
+  built-in embedder's missing FILES still fall back silently at startup; the 内置 reranker's files present but DAMAGED
+  pass `HasModel`, so there is no fallback — its lazy load fails at the first recall, logged at Warning once, and the
+  judge verifies nothing (fail-open, a `NotConfigured` answer); and a hand-deleted file under a RUNNING
   embedder leaves 语义 wired for the rest of that run while the panel, which resolves, says it is off, and the
   rebuild refuses with 「尚未启用」. Only a hand deletion reaches that — 资源 refuses to delete a bound model.
 - **ONE control writes the judge's model.** `DefaultModelByConsumer["memory"]` and cortex's live
@@ -2041,6 +2060,36 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `llm.model.memory` — right after it copies `settings.json` in: after the restart the restored binding is the
   only answer, and before it the running wiring's own default answers, which belongs to the running client —
   consistent either way. Proof: `e2e-p47`.
+- **TWO RERANKER JUDGES, ONE CHAIN** (round 6). 判断 checks with a reranker two ways: llama.cpp's (`LlamaCppSource`, a
+  `/v1/rerank` endpoint) and 内置's (`BuiltInJudgeSource`, the in-process ONNX mMiniLMv2). Everything past the model is
+  ONE writer, `RerankVerification`: `Build` makes the verifier — `RerankInputCap` fitting each pair to the model's
+  declared window, `ChunkedScoreProvider` reading a long candidate in windows, `RerankAdmission` skipping what the machine
+  cannot judge in time, `ScoringVerificationPolicy` endorsing a page (`RerankVerification.EndorseCount`) — and `AddPace`
+  registers the one `RerankPace`. A source supplies its provider id, its window and where its pace starts, and nothing
+  else; `JudgeWiring.Reranker` is the factory both call, and the screen is `RerankScreen` for both (llama.cpp scores it
+  over HTTP, 内置 in process). It was llama.cpp's private code until the second source arrived, and COPYING it was the
+  alternative: every link is fail-open, so a copy that drifted would make one judge quietly worse with every check green.
+  **The in-process scorer adds what only it needs** (`InProcessReranker`, measured on the real export,
+  `docs/self-managed-llm-runtime.md` 2026-09-28): passes of 8 documents, longest first, because Lyntai's provider runs a
+  whole call as ONE pass and ONNX Runtime's CPU arena keeps what its largest pass needed (48 full windows in one pass took
+  a process to 2.4 GB private); each call off the calling thread behind a one-slot gate, the token checked between passes,
+  because Lyntai's provider runs on the calling thread and checks the token only at entry — so a deadline could never end
+  it; loaded LAZILY, a load failure a `NotConfigured` answer logged once, because Lyntai's eager `AddOnnxProvider` would
+  turn a damaged file into an app that does not start. Its pace is built with `abandonedCallsRunOn: false` — an abandoned
+  call stops at its next pass, so a cut presumes nothing busy (see the pace bullet) — and STARTS from this machine's CPU,
+  timed in process at the pace's first use (`InProcessReranker.MeasurePaceSeed`: eight full windows of dense Chinese,
+  the pace's unit, the same floor as llama.cpp's device seed, `RerankDeviceVerdict.NeverFasterThanTheGpuFigure`) — never
+  the llama.cpp device meter, which has nothing to measure there. The seed is one call timed at one moment: a start under
+  contention read 394 ms per 1,000 pair tokens where a quiet one read 150, which only makes the first sizing more careful.
+  **Its window is a SHARED DECLARATION**: `BuiltInJudgeSource.Window` is `GgufCatalog.DeclaredWindow` of the same model's
+  GGUF row (512) — the same checkpoint and tokenizer vocabulary, so `RerankInputCap`'s NFKC character bound holds — and
+  the export's own window, which Lyntai reads from its files (514 positions narrowed by `tokenizer_config.json` to 512),
+  is checked against it at load. Proof: `e2e-p56`, over a tiny but real export (`_tiny-cross-encoder.mjs`: a real ONNX
+  graph and a real Unigram `tokenizer.json`, the scores chosen by the suite), which runs the real ONNX Runtime and
+  Lyntai's real provider and tokenizer. **Real-binary only, stated**: that the pinned 136 MB export loads and passes the
+  screen on its own weights, its memory and its CPU speed — by hand, in the runtime doc; and the skip-offer rule (a
+  judge skipping that IS mMiniLMv2 in-process is not offered mMiniLMv2 again, `MemorySources.RunsModel`), which needs a
+  scorer too slow to fit and was verified by reading.
 - **A reranker verifies; it never annotates.** A cross-encoder scores (query, document) pairs and never
   generates, so it can do the half of 判断 that checks a recall and none of the half that tags a write — the
   subject handles need a model that writes. A reranker binding is therefore TWO backends, and `JudgeWiring`
@@ -2072,7 +2121,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   household read about this binding was the reassuring one. `p52` case 5 pins it in all three.
   **A reranker is SCREENED before it may bind**, because "it returned scores" is not "it ranks": Lyntai's own
   rerank screen found a converted GGUF that loads, scores and ranks BACKWARDS, and a fail-open verifier turns
-  that into recall that quietly gets worse. The pair (`ScreenQuery`, `ScreenDocuments`) is built so that every
+  that into recall that quietly gets worse. The pair (`RerankScreen.Query`, `RerankScreen.Documents`, shared by both reranker judges) is built so that every
   cheap way to pass fails: the answer is SECOND in input order, so a model echoing input order fails, and the
   distractor shares MORE of the query than the answer does (distinct characters 1.000 against 0.667, bigrams
   7 of 8 against 5), so ranking by overlap puts the distractor first. **The first pair was passable by

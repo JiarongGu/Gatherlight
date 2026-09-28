@@ -47,7 +47,7 @@ household), which is what the picker shows — and the third one is *no model*:
 | group | backends | what it costs |
 |---|---|---|
 | **Claude CLI** | `claude-cli` | an account, nothing local. 判断 annotates + verifies; 语义 REPHRASES — Claude has no embeddings endpoint, so it stores other wordings of each fact (`knowledge.aka`, in the trigram index), **at least one in another language**, and a differently-worded or differently-*languaged* question matches one. Quota + a CLI spawn per call |
-| **本机模型** | `llama-cpp` · `builtin` | disk, no address; no quota EXCEPT a reranker on 判断, whose tagging still runs on the Claude CLI (see below). `llama-cpp` is the runtime we download and start (both layers); `builtin` is EmbeddingGemma-300M as ONNX in our own process (语义 only, 222 MB, measured first — `docs/builtin-model-runner.md`). Models come from 资源, sha256-pinned and ranked |
+| **本机模型** | `llama-cpp` · `builtin` | disk, no address; no quota EXCEPT a reranker on 判断, whose tagging still runs on the Claude CLI (see below). `llama-cpp` is the runtime we download and start (both layers); `builtin` is ONNX in our own process, both layers: EmbeddingGemma-300M on 语义 (222 MB, measured first — `docs/builtin-model-runner.md`) and, since round 6, the mMiniLMv2 reranker on 判断 (136 MB, on the CPU, **unmeasured** — offered and described, never recommended, until `docs/judge-bench.md` Run 13). Models come from 资源, sha256-pinned and ranked |
 | **不用模型** | *none* | nothing. Choosing it turns the layer off and leaves 公式 doing the work |
 
 **不用模型 holds no backends, and that is its meaning.** "Off" used to be a separate 停用 button, which made
@@ -80,12 +80,14 @@ chose — and switched 语义 off, both invisibly.
 **"Worse" and "costlier" are reasons to DESCRIBE an option, not to remove it** — and *cannot* has to mean
 cannot. Broken twice here (语义's missing Claude arm; Ollama's deleted pull/delete), both times by reasoning
 that sounded like engineering judgement; `.claude/rules/dev-conventions.md` carries the rule and both
-failures. A declined entry saying *cannot* is only for a real impossibility. `builtin` on 判断 is NOT one: it is an
-option nobody built, and its entry says "not built yet". Its first reason — the in-process cross-encoder path read WordPiece only, so its one model was
-English-only (the design spec's §Constraints) — went false with Lyntai 3.5.0, whose ONNX provider reads SentencePiece
-and runs the multilingual `mmarco-mMiniLMv2` end to end (its D191). What remains is ours: it is not built and not
-measured against llama.cpp's mMiniLMv2, and the owner decided (2026-09-26) to build it in a later round; until then
-the multilingual rerankers run through llama.cpp, and the declined entry says exactly that.
+failures. A declined entry saying *cannot* is only for a real impossibility. `builtin` on 判断 was the worked example
+of the other case — an option nobody BUILT, whose declined entry said so: first because the in-process cross-encoder path
+read WordPiece only (English-only rerankers, the design spec's §Constraints), then — once Lyntai 3.5.0's D191 read
+SentencePiece and ran the multilingual `mmarco-mMiniLMv2` end to end — because nobody had built or measured it. **It is
+built (round 6): `BuiltInJudgeSource`**, the in-process mMiniLMv2 (the model repository's own qint8 ONNX, sha256-pinned in
+资源), screened like every reranker and sharing llama.cpp's reranker chain (`RerankVerification`: the fit, the windows, the
+pace, the admission). It is offered and described as UNMEASURED and never recommended until Run 13 compares it with
+llama.cpp's mMiniLMv2 within one run; nothing is declined on either layer now.
 
 **判断 can run on a llama.cpp RERANKER** (2026-09-23, `docs/judge-bench.md` Run 2). It VERIFIES locally and
 never annotates, so tagging stays on the Claude CLI and the live route `llm.route.memory` is the CLI's model on the
