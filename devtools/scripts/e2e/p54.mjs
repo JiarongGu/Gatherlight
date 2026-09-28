@@ -64,11 +64,12 @@ const srv = startServer({
 const { j, post, waitPhase } = makeClient(srv.base);
 
 const readLog = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
-const quarantined = (rel) => {
-  // state/quarantine/<stamp>/<rel> — the sweep keeps what it moved, so a household's own file is recoverable.
-  const q = path.join(dataDir, 'state', 'quarantine');
-  try { return fs.readdirSync(q).some((stamp) => fs.existsSync(path.join(q, stamp, rel))); } catch { return false; }
-};
+const quarantineDir = path.join(dataDir, 'state', 'quarantine');
+const stamps = () => { try { return fs.readdirSync(quarantineDir); } catch { return []; } };
+// state/quarantine/<stamp>/<rel> — the sweep keeps what it moved, so a household's own file is recoverable. `since`
+// names the stamps that already existed, so a later sweep is not credited with what an earlier one kept.
+const quarantined = (rel, since = []) =>
+  stamps().some((stamp) => !since.includes(stamp) && fs.existsSync(path.join(quarantineDir, stamp, rel)));
 
 try {
   await waitHealthy(srv.base);
@@ -231,6 +232,7 @@ try {
   // The stub writes .claude/settings.json, settings.local.json and .mcp.json directly (as a slipped Bash token
   // could) plus one plan edit. The tracker knows none of the three, so Reject's restore could never reach them;
   // and a validate pass — an agent run in the data folder — would have loaded their hooks before the gate.
+  const stampsBeforePlant = stamps();
   const plant = await post('/api/chat', { message: 'FSPLANTTEST 写一个计划文件' });
   ok('plant chat start 200', plant.status === 200 && !!plant.body.id);
   await waitPhase(plant.body.id, 'awaiting-plan-approval');
@@ -239,7 +241,8 @@ try {
   const PLANTED = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json'];
   ok('C1: at the diff gate, none of the planted config files is in the data folder',
     PLANTED.every((rel) => !onDisk(dataDir, rel)), PLANTED.filter((rel) => onDisk(dataDir, rel)).join(', '));
-  ok('C1: each was kept in state/quarantine', PLANTED.every(quarantined), PLANTED.filter((r) => !quarantined(r)).join(', '));
+  ok('C1: each was kept in state/quarantine, by a sweep after this run (not the one at boot)',
+    PLANTED.every((r) => quarantined(r, stampsBeforePlant)), PLANTED.filter((r) => !quarantined(r, stampsBeforePlant)).join(', '));
   const plantPaths = (plantDiff.review?.files ?? []).map((f) => f.path);
   ok('C1: the review shows the plan edit and none of the config files',
     plantPaths.includes('plans/trips/plant-review.md') && !plantPaths.some((p) => PLANTED.includes(p)), JSON.stringify(plantPaths));

@@ -391,7 +391,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   either (`p47` asserts both). The UI contract and the form maps still ride this seam. **The re-issue also REMOVES**: it
   moves any untracked `.claude/settings*.json` / `.mcp.json` out of the data folder (`ProjectConfigSweep`, the jail
   bullets under *Data folder discipline*), and a backup import strips them from the restored tree even when the archive's
-  own history tracks them — the claude CLI would load them on the next agent run by itself.
+  own history tracks them — the claude CLI would load them on the next agent run by itself. `p47`'s old row "the scope
+  guard was NOT rolled back" could no longer fail once the guard moved to `state/agent/` (no archive reaches it); it is a
+  sanity row now, and the point it asserts instead is that the restored install's generated settings still run the
+  `state/agent` guard, never the archive's `.claude/hooks` copy — confirmed to FAIL with the hook pointed there.
 - **A zip cannot carry an empty directory, and a PACKED git repo has them.** `git gc` moves every ref
   into `packed-refs` and deletes the loose `refs/heads/<branch>`, leaving `refs/` empty. The export
   enumerates FILES, so `refs/` simply is not in the archive, and git then refuses to recognise the
@@ -2754,7 +2757,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   (Lyntai `TASKS.md` Part 332); when it can, the data-folder runs load only the user scope and the sweep becomes defence
   in depth or goes. Proof: `e2e-p54` (next bullet) and `e2e-p47` (a committed `.claude/settings.json` and an untracked
   `settings.local.json` in the source backup: neither is in the restored folder, the committed one is no longer tracked,
-  both are quarantined) — each confirmed to FAIL on the code before the review's fixes.
+  both are quarantined) — each confirmed to FAIL on the code before the review's fixes, and again on a build of its own
+  (2026-09-28) with ONE half removed: no sweep after a run (every planted file still there at the gate and after Reject),
+  and no strip on import (the committed one restored, still tracked).
 - **The agent MOVES, RENAMES and DELETES files through scoped MCP tools, never a shell** (`fs_move` · `fs_delete` ·
   `file_info`, `Platform/Capabilities/Tools/Services/Tools/FileOpsTools`). A tool beats a shell for this: its scope is
   the guard's own write scope (`ISiteWriteScope`, rendered from the site manifest — one source of truth with the guard),
@@ -2794,7 +2799,11 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   fixes, 23 assertions, each for its own reason: the folder moves and the `.claude` moves SUCCEEDED (the escape
   reproduced — `.claude` replaced by a folder holding `settings.json`), the tilde refused, the junction move written
   outside, the overlapping `fs_move` refused with the plan-phase sentence, the at-rest HTTP `fs_move` moved the file, and
-  every planted config file still there after Reject.
+  every planted config file still there after Reject. And each fix confirmed to FAIL alone, on one mutation build
+  (2026-09-28): the CONTAINS check removed — the three `.claude` rows fail, refused by the root rule instead (the
+  defence in depth held, and the assertion names which rule refused); the missing-tail skip removed — the move into a
+  new folder is refused as a symlink escape; the one-policy run scope restored — the overlapping `fs_move` is refused
+  (the at-rest HTTP call then stays refused by `Surfaces` alone).
 - **A guarded Bash is GUARANTEED where the household wants one — offered, never forced.** With PowerShell and Monitor
   removed, a household with no Git Bash has no shell; the file tools are the substitute, and 资源 OFFERS PortableGit as a
   Git Bash the app can guard. MinGit — what the data repo runs on — ships NO `bash.exe` and cannot back the CLI's Bash
@@ -2819,7 +2828,8 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   PATH, so it holds on any machine): with our PortableGit installed, NO variable is set and the row says Git for Windows
   is already there — the discovered branch, driven by nothing until the round-6 review. The row names no
   `PowerShell`/`判断` in A. Each case reads the PLAN spawn's own line (it used to take the last line of any kind, the
-  filter it applied being true of every line). Confirmed to FAIL (the adopt) without the `ApplyGitBash` call.
+  filter it applied being true of every line). Confirmed to FAIL (the adopt) without the `ApplyGitBash` call, and case C
+  with the discovered branch skipped (2026-09-28: the app then handed the spawn its own `bash.exe`).
 - **Egress is audited, not closed — and both planes are audited the same.** The agent reaches the
   network two ways: the CLI's built-in `WebFetch` and the registry's `scrape`. Neither can be shut for
   a planner whose job is reading arbitrary travel sites, and denying `WebFetch` alone only moves the
