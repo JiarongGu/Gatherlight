@@ -18,14 +18,17 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Sources;
 /// round 6) to build it. dev-conventions' rule held throughout: "cannot" is only for a real impossibility, never for an
 /// option nobody built.</para>
 ///
-/// <para><b>Offered, described, and NOT recommended — because it is not measured.</b> It is the same checkpoint llama.cpp
-/// serves as <see cref="GgufCatalog.RerankerWithoutGpu"/>, but a different quantisation (ONNX qint8 against GGUF Q8_0), a
-/// different tokenizer implementation and a different runtime, so its quality is a claim until
-/// <c>docs/judge-bench.md</c> Run 13 compares the two within one run. Every sentence it owns says so, and nothing
-/// recommends it: 资源's badge never names it and an installed copy does not end the suggestion of a measured reranker
-/// (<c>ModelsController.Recommend</c>). It stays bindable — worse or costlier would be reasons to describe it, and
-/// unmeasured is a reason to say so — but only after the same screen every reranker passes
-/// (<see cref="RerankScreen"/>).</para>
+/// <para><b>Offered, and RECOMMENDED where there is no usable GPU — by measurement.</b> It is the same checkpoint llama.cpp
+/// serves as <see cref="GgufCatalog.SmallReranker"/>, in another quantisation (ONNX qint8 against GGUF Q8_0), tokenizer
+/// implementation and runtime, so "the same model" was a claim until <c>docs/judge-bench.md</c> Run 13 (2026-09-28, Lyntai
+/// 3.5.1, one laptop's CPU) paired the two within one run: on the 240-question fixture found@8 203 against 203 (equivalent)
+/// and top-1 99 against 100 (equivalent); on the long fixture 180 against 182 and 81 against 79, no significant difference;
+/// and per recall 0.47 against 0.82 s and 8.1 against 20.0 s against llama.cpp on the CPU (faster on 223 and 225 of 240).
+/// Until then it was offered as unmeasured and nothing recommended it. Now <see cref="GgufCatalog.RerankerWithoutGpu"/> IS
+/// it: the no-GPU, skip-driven and BGE-measured-too-slow suggestions name it, one writer
+/// (<see cref="GgufCatalog.RecommendedRerankerFor"/>). Where a usable GPU exists, BGE on llama.cpp stays recommended, and
+/// the text says why: on a discrete GPU llama.cpp is faster than this (0.30 against 0.47 s, 1.2 against 8.1 s). It binds
+/// only after the same screen every reranker passes (<see cref="RerankScreen"/>).</para>
 ///
 /// <para><b>Everything past the model is shared with llama.cpp's reranker</b> (<see cref="RerankVerification"/>): the
 /// fit to the model's declared window, the windows, the pace, the admission and the skip, the page it endorses. The
@@ -42,9 +45,9 @@ public sealed class BuiltInJudgeSource : IMemoryJudgeSource
     /// runtimes are two models to bind, delete and measure.</summary>
     public const string ModelId = "mmarco-mMiniLMv2-L12-H384-v1-onnx";
 
-    /// <summary>The catalogued GGUF this export has the SAME WEIGHTS as — so "is the small reranker what runs?" can be
-    /// answered across runtimes (<see cref="MemorySources.RunsModel"/>) without a branch on a backend id.</summary>
-    public const string SameWeightsAs = GgufCatalog.RerankerWithoutGpu;
+    /// <summary>The catalogued GGUF this export has the SAME WEIGHTS as — whose row declares the window the pairs are fitted
+    /// to (<see cref="Window"/>).</summary>
+    public const string SameWeightsAs = GgufCatalog.SmallReranker;
 
     /// <summary>The window pairs are fitted to: the catalogue's DECLARATION for the same model — one writer of the
     /// number, the one llama.cpp's preset and fit read (<see cref="GgufCatalog.DeclaredWindow"/>). The same tokenizer
@@ -52,30 +55,50 @@ public sealed class BuiltInJudgeSource : IMemoryJudgeSource
     /// export's own window (512) is checked against it at load (<see cref="InProcessReranker"/>).</summary>
     public static int? Window => GgufCatalog.DeclaredWindow(SameWeightsAs);
 
-    /// <summary>What this model IS, whether or not it is on disk — 资源's row and the picker read the same facts.</summary>
+    /// <summary>What it did against llama.cpp on a CPU, in one clause, for the sentences that RECOMMEND it — the 判断 row's skip
+    /// notice and 资源's badge reason — pointing at the row for the configuration. One writer, so the recommendation and the
+    /// row cannot quote it differently. docs/judge-bench.md Run 13: medians per recall, the 240-question fixture and the long
+    /// fixture, on one laptop's CPU.</summary>
+    public const string CpuComparison =
+        "它就是 mMiniLMv2,在应用进程里用 CPU 运行,不需要 llama.cpp;在一台笔记本的 CPU 上实测,它判断得和 llama.cpp 上的"
+        + "同一个模型一样好,每次检索却快得多(短事实约 0.47 秒对 0.82 秒,长笔记约 8.1 秒对 20 秒;实测和设置见它那一行的说明)";
+
+    /// <summary>What this model IS, whether or not it is on disk — 资源's row and the picker read the same facts.
+    ///
+    /// <para>Every figure is docs/judge-bench.md Run 13's (2026-09-28): Lyntai 3.5.1; one laptop's CPU (Intel Core Ultra 9
+    /// 185H), ~17–22% of it busy with other work; the 240-question bilingual fixture and the long fixture (60 notes of
+    /// ~900–1,200 characters), 语义 off, a page of 8 endorsed; each arm's accuracy pass alone; the qint8 ONNX export
+    /// against llama.cpp's Q8_0 GGUF of the same model. Top-1 / found@8: short 99 / 203 against the GPU arm's 100 / 203
+    /// (both equivalent), long 81 / 180 against 79 / 182 (no significant difference; 9/7 on found@8, p = 0.804). Median per
+    /// recall: 467 ms short and 8,061.5 ms long, against llama.cpp on the CPU's 817.5 and 19,958.5 and on the GPU's 300 and
+    /// 1,229.5. The per-set figures are descriptive only (one of 16 uncorrected tests), so they are said as such: on the long
+    /// fixture's cross-language set 41 against the GPU arm's 47, on the same-language set 50 against 46. Memory ~0.76 GB
+    /// private after short facts and ~1.04 GB after long notes (B1's 0.7–1.0 GB, just past its upper end); the load 1.25–1.37
+    /// s at the first judged recall.</para></summary>
     public static readonly ModelOption Catalog = new(
         ModelId, "mMiniLMv2(内置 · 判断 · 重排)", Installed: true,
         SizeBytes: 135_704_003,
-        // The speed and memory are docs/self-managed-llm-runtime.md §2026-09-28, one laptop's CPU, by hand on the real
-        // export: 138–173 ms per 1,000 pair tokens for 8 short pairs and for one long note in 3 windows (quiet runs), a
-        // recall of 8 notes of ~1,000 characters 1.7–2.2 s in the app, and the app's private memory 59 MB with 判断 off
-        // against 739 MB after the first judged recall and 1,023 MB after long-note recalls. No quality figure: none exists.
-        Note: "判断用的重排模型,在应用进程里用 CPU 运行:不需要 llama.cpp,没有常驻服务,文件约 136 MB;"
-            + "打分时应用会多占约 0.7–1.0 GB 内存。检索时的判断在本机完成;写入事实时的主题标注由 Claude CLI 完成("
-            + MemorySources.CliTaggingCost + ")。"
-            + "它和 llama.cpp 上的 mMiniLMv2 是同一个模型(这里是模型仓库自己导出的 ONNX 8 位版本),"
-            + "但判断质量还没有在本应用的测试集上实测过,也还没有和 llama.cpp 那条对比过,所以不推荐。"
-            + "速度只在一台笔记本的 CPU 上量过(Intel Core Ultra 9 185H):每 1,000 个词元约 0.14–0.17 秒,"
-            + "8 条约 1,000 字的长笔记一次检索约 2 秒;较长的事实同样分段读,机器太慢时应用会少读几段或跳过这次判断。"
+        Note: "判断用的重排模型,在应用进程里用 CPU 运行:不需要 llama.cpp,没有常驻服务,也没有端口,文件约 136 MB;"
+            + "打分时应用会多占约 0.7–1.0 GB 内存,第一次判断时先载入约 1.3 秒。检索时的判断在本机完成;写入事实时的主题标注由"
+            + " Claude CLI 完成(" + MemorySources.CliTaggingCost + ")。"
+            + "它和 llama.cpp 上的 mMiniLMv2 是同一个模型:这里是模型仓库自己导出的 ONNX 8 位版本,那边是 Q8_0 的 GGUF。"
+            + "本应用双语测试集 240 道提问、不开语义、每次由它挑 8 条上页,在一台笔记本的 CPU 上实测(Intel Core Ultra 9 185H,"
+            + "Lyntai 3.5.1):首位命中 99/240,前八命中 203/240,同一轮 llama.cpp 在显卡上是 100/240 与 203/240,可以算一样好;"
+            + "60 条约 900–1,200 字的长笔记上是 81/240 与 180/240,对 79/240 与 182/240,没有测出显著差别"
+            + "(按提问语言拆开只作描述:跨语言的少带进 6 题,同语言的多 4 题)。"
+            + "每次检索约 0.47 秒(短事实)与 8.1 秒(长笔记),比 llama.cpp 只用 CPU 时快得多(0.82 秒与 20 秒),"
+            + "比 llama.cpp 在一块独立显卡上慢(0.30 秒与 1.2 秒)。"
+            + "所以 llama.cpp 用不了任何显卡、检索因为机器太慢跳过了判断、或 BGE 在这台机器上实测太慢时,应用推荐它;"
+            + "有显卡时推荐的仍是 llama.cpp 上的 BGE。"
             + "许可:模型卡写的是 Apache-2.0,但训练它用的 MS MARCO 数据只许非商业使用。");
 
     public string Id => MemoryBackends.BuiltIn;
     public string Name => "ONNX";
 
     public string Description =>
-        "适合:想在本机核对检索结果,又不想另外装运行时 —— 在应用进程里用 CPU 运行 mMiniLMv2 重排模型,"
+        "适合:这台机器用不了显卡,或者不想另外装运行时 —— 在应用进程里用 CPU 运行 mMiniLMv2 重排模型,"
         + "不需要 llama.cpp,没有常驻服务,也没有端口,约 136 MB。它只做核对:写入事实时的主题标注仍由 Claude CLI 完成,"
-        + "消耗账号额度。和 llama.cpp 那条的 mMiniLMv2 是同一个模型,但还没有对比实测过,所以不推荐。";
+        + "消耗账号额度。实测它判断得和 llama.cpp 那条的 mMiniLMv2 一样好,只用 CPU 时快得多;有独立显卡时,llama.cpp 在显卡上更快。";
 
     /// <summary>Where the provisioned model lives — derived from the settings, as every source in the static catalog
     /// does (see <see cref="MemorySources"/>).</summary>
@@ -144,10 +167,11 @@ public sealed class BuiltInJudgeSource : IMemoryJudgeSource
         + "写入事实时的主题标注由 Claude CLI 完成 —— " + MemorySources.CliTaggingCost + ";"
         + "没有已登录的 CLI 时只是不标注,检索时的判断照常。";
 
-    /// <summary>What the household must know on binding it: unmeasured, so not recommended.</summary>
+    /// <summary>What the household must know on binding it: what it costs, and where something else is faster. It said
+    /// "unmeasured, so not recommended" until docs/judge-bench.md Run 13 measured it (2026-09-28).</summary>
     public string? BindCaveat(string model) =>
-        "它和 llama.cpp 上的 mMiniLMv2 是同一个模型,但判断质量还没有实测过、也还没有和那条对比过,所以应用不推荐它;"
-        + "它在 CPU 上运行,长事实多的检索会慢一些。";
+        "它在 CPU 上运行:打分时应用会多占约 0.7–1.0 GB 内存,长笔记多的检索每次要几秒;"
+        + "有独立显卡的机器上,llama.cpp 的重排模型在显卡上快得多。";
 
     public Task<SourceStatus> StatusAsync(MemorySourceContext ctx, CancellationToken ct = default) =>
         Task.FromResult(IsConfigured(ctx.Settings)

@@ -138,17 +138,18 @@ public sealed class MemoryRecallController : ControllerBase
         {
             // The one writer 资源's badge reads too; with skips it names the small reranker whatever the device probe says.
             var small = GgufCatalog.RecommendedRerankerFor(_llama.Gpu, skippedHere: true);
-            // "What runs" in EITHER runtime: the 内置 reranker is mMiniLMv2 too, and offering it again beside itself — as
-            // "a smaller reranker, 28% of BGE" — would advise a download of the model that is already skipping.
-            var offerSmall = !MemorySources.RunsModel(_judgeWiring.Model, small)
-                && !Hosting.Resources.Services.ResourceProvisioner.InstalledGgufIds(_platform.ResourcesPath)
-                    .Contains(small, StringComparer.OrdinalIgnoreCase);
+            // Three answers, each true (GgufCatalog.SkipNotice): 内置 IS what skips — nothing faster to offer, and the row
+            // says so and what is left; it is downloaded and not what runs — choose it; or download it. A GGUF mMiniLMv2
+            // skipping is offered 内置 too: the same model, measured faster on a CPU (docs/judge-bench.md Run 13).
+            var advice = _judgeWiring.Model is { } running && ModelId.Matches(running, small) ? GgufCatalog.SkipAdvice.None
+                : Hosting.Resources.Services.ResourceProvisioner.RerankerInstalled(_platform.ResourcesPath, small)
+                    ? GgufCatalog.SkipAdvice.Switch : GgufCatalog.SkipAdvice.Download;
             paceView = new
             {
                 skipped = skips.Skipped, recalls = skips.Recalls,
-                text = GgufCatalog.SkipNotice(skips.Skipped, skips.Recalls, offerSmall),
+                text = GgufCatalog.SkipNotice(skips.Skipped, skips.Recalls, advice, _llama.Gpu),
                 // A RESOURCE id, as a source's own suggestion is — the 资源 row that downloads it.
-                suggest = offerSmall ? GgufCatalog.ResourceIdFor(small) : null,
+                suggest = advice == GgufCatalog.SkipAdvice.Download ? GgufCatalog.ResourceIdForReranker(small) : null,
             };
         }
 
@@ -209,10 +210,11 @@ public sealed class MemoryRecallController : ControllerBase
                     what = "写入事实时标注主题(让讲同一件事的记录彼此关联);检索时判断哪些结果真正回答了问题,"
                         + "被判断为「答到了」的事实会排到前面,也更容易被后续检索记住。"
                         + "在本应用 240 题的双语测试集上实测(不开语义),各自和同一版本里不开判断时比:"
-                        // "llama.cpp 上的", not 「本机」: since round 6 the local rerankers include the in-process 内置 one,
-                        // which is NOT measured (Run 13), so a range quoted for "the local rerankers" would claim it.
-                        + "llama.cpp 上的重排模型(每次挑 8 条上页)让答案进入前八的次数从 127 题增加到 203–208 题,排第一的多 9–20 题"
-                        + "(在应用进程里运行的「内置」重排模型还没有实测过);"
+                        // The range covers EVERY local reranker the picker offers, the in-process 内置 one included: its
+                        // 203 / 99 (docs/judge-bench.md Run 13, against the same no-judge 127 / 80 on the same engine) lies
+                        // inside the others' 203–208 / 89–100 (Run 11). It said 「llama.cpp 上的…(「内置」…还没有实测过)」
+                        // between 内置's arrival and its measurement.
+                        + "本机重排模型(每次挑 8 条上页)让答案进入前八的次数从 127 题增加到 203–208 题,排第一的多 9–20 题;"
                         + "Claude CLI 判断是在本应用较早的版本上量的,让排第一的答案从那时不开判断的 79 题增加到 130 题。"
                         + "每次检索都要等它一次,这一点是当场就有的。",
                     // COST IS TWO THINGS, and only one of them was stated. The token cost was here from the

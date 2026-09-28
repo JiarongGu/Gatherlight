@@ -241,15 +241,15 @@ public static class MemoryGroups
             // others (the 4B, a household's own file) were not measured. 「Qwen3 0.6B 比不开判断好」 holds for the fully
             // local configuration too: over its OWN tags it beat no judge over the same tags on both metrics (Run 7) —
             // what its tags cost against Claude's is in its model note, not here.
-            // Round 6 put the in-process 内置 reranker in this group, which made 「重排模型:应用提供的都在同一测试集上实测过」
-            // false of one member: the llama.cpp rerankers were measured, the 内置 one is not yet (Run 13). So the clause
-            // names which were, and says the other was not.
+            // Round 6 put the in-process 内置 reranker in this group; between its arrival and docs/judge-bench.md Run 13 the
+            // clause said the llama.cpp rerankers were measured and 内置 was not. Run 13 measured it on the same fixture, so
+            // 「应用提供的都…实测过」 is true of every member again, and the clause says what 内置 did.
             "由应用下载、启动和管理的模型(llama.cpp,或在应用进程里运行的「内置」),占磁盘、不用填地址,模型在「资源 · Resources」面板下载。"
              + "对话模型:判断整个在本机完成,不消耗账号额度。在本应用的双语测试集上,Qwen3 0.6B 比不开判断好,"
              + "但把答案带进前八的次数远不如重排模型;Gemma 3 1B 在排第一这一项上比不开判断更差;"
              + "Qwen3.5 0.8B 和 Gemma 3 270M 也测过,没有收录;其他对话模型没有实测过。"
-             + "重排模型:llama.cpp 上应用提供的都在同一测试集上实测过;「内置」的 mMiniLMv2 在应用进程里用 CPU 运行,"
-             + "判断质量还没有实测过。两种都只有检索时的核对在本机 —— "
+             + "重排模型:应用提供的都在同一测试集上实测过(「内置」的 mMiniLMv2 在应用进程里用 CPU 运行,"
+             + "判断得和 llama.cpp 上的同一个模型一样好),只有检索时的核对在本机 —— "
              // The tagging clause is MemorySources.CliTaggingCost, like the toast, cost line and model note.
              + $"写入事实时的主题标注由 Claude CLI 完成 —— {MemorySources.CliTaggingCost}。",
         Managed => "由应用下载、启动和管理的模型,两种跑法:llama.cpp 起一个常驻服务,或者「内置」—— "

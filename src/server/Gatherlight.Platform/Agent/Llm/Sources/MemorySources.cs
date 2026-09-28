@@ -80,16 +80,6 @@ public static class MemorySources
     /// recall, so it is the app's most frequent model call by a wide margin.</summary>
     public const string DefaultJudgeModel = "haiku";
 
-    /// <summary>Is <paramref name="runningModel"/> — a bound or running judge's model — the catalogued GGUF
-    /// <paramref name="ggufId"/>, in either runtime? By id, or because it is the 内置 reranker, whose export has the same
-    /// weights (<see cref="BuiltInJudgeSource.SameWeightsAs"/>). What "suggest the smaller reranker unless it is what
-    /// runs" has to ask: the 内置 reranker IS mMiniLMv2, so a skip it causes is no reason to offer mMiniLMv2 again.</summary>
-    public static bool RunsModel(string? runningModel, string ggufId) =>
-        runningModel is not null
-        && (Services.ModelId.Matches(runningModel, ggufId)
-            || (string.Equals(runningModel, BuiltInJudgeSource.ModelId, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(BuiltInJudgeSource.SameWeightsAs, ggufId, StringComparison.OrdinalIgnoreCase)));
-
     /// <summary>The Claude CLI judge's measured wait per recall — the FIGURE alone, for a sentence that already
     /// states the configuration (the model notes, which open with the fixture). ONE writer, because every surface
     /// that weighs a local judge against this one quotes it: the CLI row's description and cost line, the llama.cpp

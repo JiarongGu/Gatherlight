@@ -337,6 +337,7 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
                 "llama-cpp");
 
         if (ModelsOnDisk(s).Count == 0)
+        {
             // NAME the resource to download, both layers. `Suggest` is what lets the panel point at a row
             // instead of at itself, and it has to be the resource id the provisioner actually knows — a
             // stale literal here would render a button that fetches nothing.
@@ -345,18 +346,28 @@ public sealed class LlamaCppSource : IMemoryJudgeSource, IMemorySemanticSource
             // judge worse than no judge (on Lyntai 3.5.1, Run 11: still worse on top-1); the button beside this sentence
             // fetches the local default the owner kept. (Qwen3 0.6B, a chat judge, also measured better than none in Runs
             // 5b and 11; it is offered, not suggested.)
-            // WHICH reranker is the same one writer 资源's badge reads (GgufCatalog.RecommendedRerankerFor): mMiniLMv2
-            // where the last full probe found no GPU (docs/judge-bench.md Run 8), BGE otherwise — read from the runtime's
-            // memo of the binary's device list (ILlamaServerRuntime.Gpu), because a panel must not await a process and an
-            // invalidation must not flip it; unknown keeps BGE. No skip signal here: with no judge model there is no pace.
+            // WHICH reranker is the same one writer 资源's badge reads (GgufCatalog.RecommendedRerankerFor): 内置 — the
+            // in-process mMiniLMv2, docs/judge-bench.md Run 13 — where the last full probe found no GPU, BGE otherwise —
+            // read from the runtime's memo of the binary's device list (ILlamaServerRuntime.Gpu), because a panel must not
+            // await a process and an invalidation must not flip it; unknown keeps BGE. No skip signal here: with no judge
+            // model there is no pace. On a machine with no GPU the one recommendation for 判断 is NOT a llama.cpp model, so
+            // this row says so and its button fetches 内置 — the badge, this row and 资源 agree, and the household is not
+            // sent to download a GGUF llama.cpp would run slower than the app itself does.
+            var reranker = GgufCatalog.RecommendedRerankerFor(ctx.Llama.Gpu);
+            var inProcess = reranker == GgufCatalog.RerankerWithoutGpu;
             return new SourceStatus(false,
                 _layer == MemoryLayers.Semantic
                     ? "运行时已就绪,但还没有嵌入模型 —— 在「资源 · Resources」面板下载一个。"
                     // Either kind can judge: a chat model does both halves, a reranker the checking.
-                    : "运行时已就绪,但还没有对话模型或重排模型 —— 在「资源 · Resources」面板下载一个。",
-                GgufCatalog.ResourceIdFor(_layer == MemoryLayers.Semantic
-                    ? GgufCatalog.RecommendedEmbedder
-                    : GgufCatalog.RecommendedRerankerFor(ctx.Llama.Gpu)));
+                    : "运行时已就绪,但还没有对话模型或重排模型 —— 在「资源 · Resources」面板下载一个。"
+                      + (inProcess
+                          ? "这台机器上 llama.cpp 用不了任何显卡,「判断」推荐的是在应用进程里运行的「内置」重排模型"
+                            + "(在「本机模型」里选它,不需要 llama.cpp)。"
+                          : ""),
+                _layer == MemoryLayers.Semantic
+                    ? GgufCatalog.ResourceIdFor(GgufCatalog.RecommendedEmbedder)
+                    : GgufCatalog.ResourceIdForReranker(reranker));
+        }
 
         // Present and has a model: ready to BIND. Whether the process happens to be up right now is not the
         // household's problem — starting it is ours.

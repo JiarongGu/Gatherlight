@@ -446,12 +446,13 @@ public sealed class ResourceProvisioner : IResourceProvisioner
         new ResourceSpec(
             Id: Agent.Llm.Sources.BuiltInJudgeSource.ResourceId,
             Name: "内置重排模型(mMiniLMv2)",
-            // What it IS, what it moves, what it costs and that it is unmeasured — the row a household reads before
-            // downloading it. The measured comparison with llama.cpp's mMiniLMv2 is Run 13's, still to come; until then
-            // the model row's note (BuiltInJudgeSource.Catalog) says what was measured here and what was not.
+            // What it IS, what it moves, what it costs and why it is recommended where it is — the row a household reads
+            // before downloading it; the figures, with their configuration, are the model row's note
+            // (BuiltInJudgeSource.Catalog, docs/judge-bench.md Run 13). It said 「还没有…对比实测过,所以不推荐」 until then.
             NeededFor: "「记忆检索 · 判断」的内置重排模型 —— 在应用进程里用 CPU 运行:不需要 llama.cpp,没有常驻服务,"
-                + "约 136 MB 磁盘;它只做检索时的核对,写入事实时的主题标注仍由 Claude CLI 完成(消耗账号额度)。"
-                + "还没有和 llama.cpp 上的同一个模型对比实测过,所以不推荐;仅在判断选用这个「内置」模型时需要",
+                + "约 136 MB 磁盘,打分时多占约 0.7–1.0 GB 内存;它只做检索时的核对,写入事实时的主题标注仍由 Claude CLI 完成"
+                + "(消耗账号额度)。实测它判断得和 llama.cpp 上的同一个模型一样好,只用 CPU 时快得多,"
+                + "所以 llama.cpp 用不了任何显卡的机器上推荐它;仅在判断选用这个「内置」模型时需要",
             Kind: ResourceKind.Files, InstallDir: Agent.Llm.Sources.BuiltInJudgeSource.ResourceId,
             // The graph is the marker, as the embedder's is: ProvisionFilesAsync moves the directory in only once every
             // checksum passed, so the marker existing means the set is complete.
@@ -522,6 +523,13 @@ public sealed class ResourceProvisioner : IResourceProvisioner
     /// here, so the path exists in exactly one place — same contract as <see cref="ProvisionedNode"/>.</summary>
     public static string ProvisionedEmbedModel(string resourcesPath) =>
         Path.Combine(resourcesPath, "embed-model");
+
+    /// <summary>Is the reranker <paramref name="modelId"/> on disk — the 内置 one's files, or a GGUF in the models folder?
+    /// The one check "is the recommended reranker already here", whichever runtime it is for.</summary>
+    public static bool RerankerInstalled(string resourcesPath, string modelId) =>
+        string.Equals(modelId, Agent.Llm.Sources.BuiltInJudgeSource.ModelId, StringComparison.OrdinalIgnoreCase)
+            ? Agent.Llm.Services.InProcessReranker.IsPresent(ProvisionedRerankModel(resourcesPath))
+            : InstalledGgufIds(resourcesPath).Contains(modelId, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Where the 内置 reranker's model lands. Read by <c>BuiltInJudgeSource</c> and written here — the same
     /// contract as <see cref="ProvisionedEmbedModel"/>.</summary>

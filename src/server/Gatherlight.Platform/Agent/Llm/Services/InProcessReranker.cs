@@ -8,8 +8,9 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// The 内置 reranker: <c>cross-encoder/mmarco-mMiniLMv2-L12-H384-v1</c> as ONNX, scored IN PROCESS on the CPU by Lyntai's
 /// ONNX provider (<c>Lyntai.Providers.Onnx</c>, its D124/D157) with its OWNED SentencePiece tokenizer read from the
 /// model's <c>tokenizer.json</c> (its D191). No llama.cpp, no second process, no port. The same checkpoint llama.cpp
-/// serves as <see cref="GgufCatalog.RerankerWithoutGpu"/> — a different quantisation (ONNX qint8 against GGUF Q8_0) and a
-/// different tokenizer implementation, so "the same model" is a claim until <c>docs/judge-bench.md</c> Run 13 measures it.
+/// serves as <see cref="GgufCatalog.SmallReranker"/> — a different quantisation (ONNX qint8 against GGUF Q8_0) and a
+/// different tokenizer implementation, measured against it by <c>docs/judge-bench.md</c> Run 13 (2026-09-28): the same
+/// judging within the run's power, and on one laptop's CPU faster than llama.cpp there.
 ///
 /// <para><b>What it adds to Lyntai's provider, each for a reason measured on the real export</b>
 /// (<c>docs/self-managed-llm-runtime.md</c>, 2026-09-28):
@@ -40,7 +41,7 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// </list></para>
 ///
 /// <para>The window it is fed to is the one the catalogue DECLARES for the same model (<see cref="GgufCatalog.DeclaredWindow"/>
-/// of <see cref="GgufCatalog.RerankerWithoutGpu"/>, 512), through the same <see cref="RerankInputCap"/> and
+/// of <see cref="GgufCatalog.SmallReranker"/>, 512), through the same <see cref="RerankInputCap"/> and
 /// <see cref="ChunkedScoreProvider"/> as llama.cpp's — so every pair already fits. The export's own window, which Lyntai
 /// reads from its files (514 positions narrowed to <c>tokenizer_config.json</c>'s 512), is checked against it at load, and
 /// a smaller one is logged: Lyntai would then truncate a document's tail rather than refuse, silently.</para>

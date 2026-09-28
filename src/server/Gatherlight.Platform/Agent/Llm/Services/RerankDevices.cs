@@ -580,7 +580,7 @@ public static class RerankDeviceNotes
         var predicted = $"默认一次检索最多给判断看的 {RerankDeviceVerdict.ReferenceCandidates} 条候选、每条都是长事实只读一段"
             + $"(约 {ReferenceChars(m).ToString("N0", CultureInfo.InvariantCulture)} 字)时{(lowerBound ? "至少要" : "约要")} "
             + $"{Seconds((long)predictedMs)} 秒,超过应用送出这样一次判断的 {Seconds((long)limitMs)} 秒上限,"
-            + "这样的检索会跳过判断(事实短时花的时间少得多)—— 所以推荐这个更小的重排模型。";
+            + "这样的检索会跳过判断(事实短时花的时间少得多)—— 所以推荐在应用进程里运行的「内置」mMiniLMv2:";
         if (lowerBound || m.Fastest is not { } best)
             return $"BGE 在这台机器上实测过:{batch},没有一个设备在限定时间内打完"
                 + $"({string.Join(";", m.Excluded.Select(r => ExcludedClause(r, adopted)))});照这个下限推算," + predicted;

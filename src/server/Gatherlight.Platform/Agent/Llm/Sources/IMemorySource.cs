@@ -151,9 +151,10 @@ public interface IMemoryJudgeSource : IMemorySource
     bool ChecksOnly(string model) => false;
 
     /// <summary>What a household must know at the moment it binds <paramref name="model"/>, beyond what the binding
-    /// moves — appended to the bind toast, or null (the default). It exists for an option that is offered and
-    /// NOT recommended: 内置's reranker says there that it has not been measured, because "worse, costlier or unmeasured"
-    /// are reasons to describe an option (dev-conventions), and the toast is where a choice is confirmed.</summary>
+    /// moves — appended to the bind toast, or null (the default): what an option COSTS or where something else does better,
+    /// because "worse or costlier" are reasons to describe an option (dev-conventions), and the toast is where a choice is
+    /// confirmed. 内置's reranker says its memory and that llama.cpp on a discrete GPU is faster; until docs/judge-bench.md
+    /// Run 13 measured it, it said it was unmeasured and not recommended.</summary>
     string? BindCaveat(string model) => null;
 
     /// <summary>The layer's cost line for this source bound to <paramref name="model"/>. It describes the BOUND
