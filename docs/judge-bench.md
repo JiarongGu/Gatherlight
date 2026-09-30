@@ -9550,3 +9550,193 @@ Each arm wrote the fixture from an empty data folder, then asked the 240 questio
 - **Why.** The quantisation (q4 against Q8_0), the tokenizer and the kernels were not separated. A q8 or fp32 ONNX export
   was not run.
 - **Anything about notes past the window** (Run 14's embed fixture), mixed long and short notes, or 判断 on.
+
+## Run 16 — 语义's 内置 embedder at higher precision: int8 and fp32 ONNX exports against llama.cpp on the CPU (design)
+
+Written and committed BEFORE the bench code and before any run, smoke included; the results section that follows names
+this commit.
+
+**Why it is asked.** Run 15 found 内置 — EmbeddingGemma-300M as the **q4** ONNX export — as good as llama.cpp's Q8_0 GGUF on
+short facts and significantly WORSE on long notes (found@8 125 against 155 of 240, 33/3, p < 0.001, the loss on the Chinese
+notes), so 语义 keeps the GGUF first even where 判断 recommends 内置 and a household would otherwise need no llama.cpp at
+all. Run 15 did not separate the causes — quantisation (q4 against Q8_0), tokenizer, kernels — and said so. The same
+repository publishes the same model at higher precision. **If a higher-precision export closes the long-note gap, does
+the rule Run 15 applied now hold?** And if even fp32 loses, quantisation is not the cause.
+
+**The owner (2026-10-01):** measure the **int8** and the **fp32** export. If int8 passes the rule it ships; if only fp32
+passes, stop and bring the numbers — a 1.23 GB export is the owner's trade to make, not the rule's.
+
+### The exports
+
+All at onnx-community/embeddinggemma-300m-ONNX commit `5090578d9565bb06545b4552f76e6bc2c93e4a66`, the commit the q4 pin
+already names. The sha256 below are the repository's own LFS object ids at that commit; its q4 ids match
+`ResourceProvisioner`'s pins, which is the check that these are the right ids.
+
+| export | graph + external weights | size | sha256 (graph · weights) |
+|---|---|---|---|
+| q4 (shipped, `semb`) | `onnx/model_q4.onnx` + `_data` | 197 MB | `ad1dfee8…` · `599962c3…` (the pins) |
+| **int8** (`semb8`) | `onnx/model_quantized.onnx` + `_data` | 309 MB | `172efde319fe1542dc41f31be6154910b05b78f7a861c265c4600eec906bd6d8` · `705626e28e4c23c82ade34566b4197d97f534c12275fa406dfb71e9937d388c0` |
+| **fp32** (`semb32`) | `onnx/model.onnx` + `_data` | 1.23 GB | `ea91fd315a7c152d427d231746f0f811a1ac93beaba656abfdf2b24e091265e4` · `ef835ae565d8695236652475903078e8ed794c7c35faf1164d78ec3238e8a88d` |
+
+- **Not run: fp16** (617 MB) and the `q4f16` / `no_gather_q4` variants. ONNX Runtime's fast CPU paths are fp32 and int8,
+  so an fp16 graph on this CPU measures conversion more than precision; the two q4 variants change nothing about
+  precision.
+- The tokenizer (`tokenizer.model`, the pinned file) is the same for every export.
+
+### The instrument: semantic-bench, as in Run 15
+
+Everything Run 15 registered about the bench holds: one arm at a time from one settled empty data folder, writes through
+`remember_fact`, judge-bench's question order, McNemar exact, Agresti–Min, the ±3pp equivalence margin, a fresh router per
+llama.cpp arm. What the commit after this one adds, and nothing else:
+
+- **A measurement knob, `GATHERLIGHT_EMBED_ONNX_EXPORT`** (`int8` | `fp32`; unset = the shipped q4), read by
+  `OnnxEmbedder` for WHICH GRAPH FILE it loads — and only that. The tokenizer, the export's own `sentence_embedding` head,
+  normalisation, raw text with no task prompt and the 2,048-token truncation are unchanged. It is announced at startup like
+  every knob, with the file it resolved to (`[measurement] builtin embed export = …`). Never a default; the product keeps q4.
+- **The arms `semb8` and `semb32`**: 内置 with the knob set. Each arm's `state/resources/embed-model` holds ONLY its export's
+  two files and the tokenizer — no q4 file — so it cannot have loaded another export.
+- **The two exports' files** under `devtools/_rr-res/embed-model/`, downloaded from the commit above and checked against the
+  sha256 above before any arm (the bench refuses otherwise), as it checks q4 against `ResourceProvisioner`'s pins.
+- **A RUN 16 block** in the analysis: the rule's clauses for each candidate, and the pairs below.
+- The existing arms do not change, and Run 15's two saved results must re-analyse identically under it (checked before the
+  runs).
+
+### What is compared
+
+判断 is OFF in every arm: no annotation, no verification, claude never called (every server on the stub). `recall_facts`,
+limit 8, as shipped.
+
+| arm | 语义 | where it embeds |
+|---|---|---|
+| `formula` | off | — |
+| `sem` | llama.cpp · `embeddinggemma-300M-Q8_0` | the GPU, its own fresh router (the product's section) |
+| `sem2` | the same — the A/A twin | the GPU, its own fresh router |
+| `cpu-sem` | the same GGUF | the CPU only: `n-gpu-layers = 0` AND `device = none` (Run 15's) |
+| `semb` | 内置 · q4 (shipped) | the CPU, in the app's process — **Run 15's replication**, deciding nothing |
+| `semb8` | 内置 · **int8** (knob) | the CPU, in the app's process |
+| `semb32` | 内置 · **fp32** (knob) | the CPU, in the app's process |
+
+**What differs between them.** `semb`, `semb8` and `semb32` share the tokenizer, ONNX Runtime and the transport, so their
+differences are the quantisation alone. Against `cpu-sem` each still differs in tokenizer and kernels, as in Run 15.
+
+### The fixtures and the order
+
+- **short** — `recall-bilingual.json` (`9680443e…f555`); **long** — `recall-bilingual-long.json` (`1f48f1be…4f17`, the
+  generator's bytes), exactly as Run 15. Every long note fits the 2,048-token window (Run 15's guard 6: largest task 883).
+- **Order** — short: `formula, sem, sem2, cpu-sem, semb, semb8, semb32`; long: `formula, sem, sem2, semb32, semb8, semb,
+  cpu-sem`. The four CPU arms run back to back and reverse between the fixtures, so none always runs first or last among
+  them. Each arm is alone on the machine for its whole pass.
+
+### Measured
+
+As Run 15, per arm: top-1 and found@8 on `all`, per question set, and (long) per position; each recall's and each write's
+time (median, p90); vectors per fact and refused lines; the server's memory after startup, after the writes and after the
+recalls (and the router child's for the llama.cpp arms); the machine and the load (the scratch load sampler, every 20 s).
+
+**Paired** (McNemar exact, Agresti–Min 95%, equivalence within ±3pp), on `all`:
+
+- the rule: `semb8` vs `cpu-sem`, `semb32` vs `cpu-sem`;
+- the quantisation alone: `semb8` vs `semb`, `semb32` vs `semb`, `semb32` vs `semb8`;
+- the GPU reference: `semb8` vs `sem`, `semb32` vs `sem`;
+- the replication: `semb` vs `cpu-sem` (Run 15's rule pair);
+- llama.cpp's own spread: `cpu-sem` vs `sem`; the A/A: `sem2` vs `sem`; each 语义 arm vs `formula` (context).
+
+**Recall time**, as Run 15: each arm's median over its whole recall pass (240 calls), and a sign test over the paired
+recalls against `cpu-sem` for each 内置 arm.
+
+**Descriptive, deciding nothing** (Run 15 read these after its verdict; here they are registered): the cosine between the
+vector each 内置 arm stored for a fact and the one `cpu-sem` stored for the same text (median and range, by fixture and
+language), and the mean pairwise cosine of each arm's long Chinese notes.
+
+### Decision rule
+
+Run 15's, as written by the owner, **verbatim**: **"recommend 内置 FIRST for 语义 where 判断 already recommends 内置 for the
+machine's GPU answer (NotAsked and NoGpu — `GgufCatalog.RecommendedRerankerFor`'s cases, not the skip/slow-BGE repairs,
+which are 判断's own) if and only if, against llama.cpp on the CPU, 内置 is not significantly worse on found@8 on EITHER
+fixture (α 0.05) AND its median per-recall latency is not higher on either fixture. Otherwise the order stays. Machines
+where llama.cpp sees a GPU keep the GGUF first regardless (the GPU arm is a reference; say where 内置 stands against it).
+Top-1, the per-set figures and memory are reported and never decide."**
+
+It is read for each CANDIDATE — `semb8` (int8) and `semb32` (fp32) — as "内置", exactly as Run 15 read it for q4:
+
+- **The accuracy clause.** On the short run AND on the long run, the candidate is NOT significantly worse than `cpu-sem` on
+  `all` (240 pairs) found@8: significantly worse means exact McNemar p < 0.05 AND c − b < 0 (b = `cpu-sem` hit & candidate
+  miss, c = the reverse).
+- **The latency clause.** On each fixture the candidate's median per-recall time is NOT HIGHER than `cpu-sem`'s, HIGHER
+  meaning its median is higher AND a sign test over the paired recalls finds it significantly slower (p < 0.05, more
+  recalls slower than faster). The plain comparison of the medians is printed beside it.
+- **The load clause.** The median CPU share of processes NOT started by this run, over the candidate's recall pass and over
+  `cpu-sem`'s: more than 5 points apart, and that fixture's latency clause is not read for that candidate — and neither is
+  the candidate's verdict.
+- **A candidate HOLDS** iff the accuracy clause holds on both fixtures AND the latency clause holds (and could be read) on
+  both.
+
+**What follows (the owner's choice, 2026-10-01):**
+
+- **`semb8` holds** → the **int8** export ships as 内置's embedder, and 语义's suggestion names 内置 first where the GPU answer
+  is `NotAsked` or `NoGpu`, whatever `semb32` did. The product change is designed after the run, not here: the pinned
+  export, the resource's files and checksums, and what an install that holds the q4 export's vectors needs (another
+  export's vectors of the same text are not the same — Run 15 read a cosine of ~0.8 between q4 and Q8_0 — so they are
+  owed again, as for a model change).
+- **`semb8` does not hold, `semb32` holds** → STOP. Nothing ships; the owner decides with the numbers (the fp32 export is a
+  1.23 GB download and its weights are held in the app's process).
+- **Neither holds** → the order stays, and the results say what the quantisation arms show about Run 15's cause.
+- **Unchanged either way**: a GPU keeps the GGUF first (`Gpu`, `OtherDevices`); 判断's repairs stay 判断's own.
+- **`semb` (q4) decides nothing.** It replicates Run 15's pair on this build. If it now holds, that is recorded as Run 15
+  not replicating, and the owner is asked what it means for the pin.
+- **Two candidates, no correction.** The rule asks for NO significant loss, which a second candidate makes easier to pass by
+  chance; that is stated beside the verdict, as the price of measuring both in one run.
+
+### How a difference is read
+
+As Run 15 ("two implementations, two quantisations": rows are not expected to be identical; a difference is set against
+llama.cpp's own spread; equivalence decides nothing; recall histories diverge). And:
+
+- **Within 内置, a difference is the quantisation.** If `semb32` matches `cpu-sem` on long notes where `semb` lost,
+  quantisation explains Run 15's loss; if `semb32` still loses, the tokenizer or the kernels do, and a larger export will not
+  close the gap.
+- **The larger exports' cost is reported, never decides**: write time, recall time's p90, the server's memory, and the
+  download size.
+
+### Guards, checked per run before the rule is read
+
+A failed guard leaves that run's clauses unread; the run is re-run, never read. Run 15's eight, adapted:
+
+1. **The instrument.** Each fixture's sha256; the long fixture is its generator's bytes. `formula`'s short rows are compared
+   with Run 15's `formula` short rows and the result reported (not a guard: Lyntai moved from 3.5.1 to 3.5.3 since).
+2. **The A/A.** `sem2` vs `sem` quiet on `all` (p ≥ 0.05, both metrics), in both runs.
+3. **Startup.**
+   - `sem`, `sem2`, `cpu-sem` read back `llama-cpp · embeddinggemma-300M-Q8_0`; `semb`, `semb8`, `semb32` read back
+     `builtin · embeddinggemma-300m-onnx`; `formula` has 语义 off.
+   - `semb8` and `semb32` each print exactly their knob's `[measurement]` line, naming `onnx/model_quantized.onnx` and
+     `onnx/model.onnx`; every other arm prints none. Each 内置 arm logs 内置's load line; none names a llama.cpp address.
+   - `semb8`'s and `semb32`'s `embed-model` hold no `model_q4` file.
+   - No migration warning; 0 claude-cli calls; every arm's log INFO only (0 WARN, 0 ERROR).
+4. **Writes and recalls.** Every write returned ok; every question answered (no error row).
+5. **Vectors.** Every 语义 arm has a vector for 60 of 60 facts and 0 refused lines, in both runs.
+6. **The routers.** As Run 15: one spawn, 0 error lines, exactly 60 + 240 proxied during the passes, the device flags per
+   arm, every task `truncated = 0` and the largest under 2,048 tokens.
+7. **One build.** The server's fingerprint is the same in both results files and after the last run.
+8. **The 内置 files.** q4 matches `ResourceProvisioner`'s pins; int8 and fp32 match the sha256 above (the bench refuses
+   otherwise).
+
+### Commands
+
+```
+node devtools/scripts/semantic-bench.mjs --fixture=short --arms=formula,sem,sem2,cpu-sem,semb,semb8,semb32 \
+  --resources=devtools/_rr-res --port-base=26930 --llama-port=26980
+node devtools/scripts/semantic-bench.mjs --fixture=long --arms=formula,sem,sem2,semb32,semb8,semb,cpu-sem \
+  --resources=devtools/_rr-res --port-base=26950 --llama-port=26990
+```
+
+- **Ports.** Arm i on the port base + i, the settled template on the base + 9, arm i's router on the llama port + i: so
+  26930–26939, 26950–26959, 26980–26986 and 26990–26996. All lie OUTSIDE this machine's dynamic tcp range (1024–15000,
+  where Windows reserves blocks and lends ephemeral ports — the e2e finding of 2026-10-01), none is a WHATWG bad port, and
+  none was listening. The owner's own llama-server (port 8090) and every process this run did not start are left alone.
+- **A plumbing smoke first**, after the bench commit: `--n=4` on both fixtures, ports 26910–26919 and 26970–26976. Its
+  numbers inform nothing. If it shows the design cannot be run as written, an amendment is committed before the runs.
+- **The build.** The server is built from the bench commit (the knob is product code, off unless set) and not rebuilt
+  between the runs.
+- **The machine.** Intel Core Ultra 9 185H (16 cores, 22 logical processors), RTX 4080 Laptop GPU; llama.cpp `b10549`;
+  ONNX Runtime 1.30.0; Lyntai 3.5.3; Node v24.19.0.
+- **Estimated time**: about 20 minutes short and 45 long (the fp32 export's long-note writes dominate).
