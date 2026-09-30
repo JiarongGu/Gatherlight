@@ -12,8 +12,7 @@
 
 ## In progress
 
-- [ ] **Round 7** (`docs/superpowers/plans/2026-09-29-round-7.md`): Task F, the e2e flakes (branch
-  `round-7-e2e`), then Task B, a higher-precision 内置 embedder (Run 16).
+(none)
 
 ## Backlog
 
@@ -27,6 +26,11 @@
   (`embeddinggemma-300M-Q8_0`, `embeddinggemma-300m-onnx`) and nothing reads it; and the models panel's
   footnote dates its rows from these Ollama-era measurements. `IsWellFormedId` is still the model-id check
   the bind endpoints and `LiveRoutes` use, so it moves rather than goes.
+- [ ] **Test 内置's input framing against llama.cpp's** — `docs/judge-bench.md` Run 16's untested lead. Precision
+  recovered only part of the long-note gap (fp32 still loses 25/7), and fp32 against a Q8_0 GGUF of the same weights
+  reads a vector cosine of 0.86–0.95 where two devices of one implementation read 0.999+. `OnnxEmbedder` adds a
+  beginning-of-sentence token and no end-of-sentence token; llama.cpp adds both. A knob and one semantic-bench run on the
+  long fixture would say whether that is the rest of the gap.
 - [ ] **内置 for 判断's TAGGING half** — an in-process chat model (GGUF via LLamaSharp; see
   `docs/builtin-model-runner.md` for why not ONNX Runtime GenAI). 判断's checking half runs in process since
   round 6 (`BuiltInJudgeSource`, a reranker); tagging still needs the Claude CLI or a llama.cpp chat GGUF.

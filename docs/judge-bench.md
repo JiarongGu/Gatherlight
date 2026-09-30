@@ -9740,3 +9740,152 @@ node devtools/scripts/semantic-bench.mjs --fixture=long --arms=formula,sem,sem2,
 - **The machine.** Intel Core Ultra 9 185H (16 cores, 22 logical processors), RTX 4080 Laptop GPU; llama.cpp `b10549`;
   ONNX Runtime 1.30.0; Lyntai 3.5.3; Node v24.19.0.
 - **Estimated time**: about 20 minutes short and 45 long (the fp32 export's long-note writes dominate).
+
+## Run 16 — 语义's 内置 embedder at higher precision (2026-09-30, Lyntai 3.5.3, llama.cpp b10549, ONNX Runtime 1.30.0; claude never called — every server on the stub)
+
+**Commands**, exactly as registered in `27bc7fc`; the bench and the knob are `8191da6`, which is both runs' app HEAD. The
+server was built from `8191da6` before the smoke and not rebuilt. The scratch driver `devtools/_run16/drive.sh` ran both,
+each exiting 0 on its first attempt:
+
+| run | from – to (UTC) | results |
+|---|---|---|
+| short | 17:27:51 – 17:46:47 | `results-2026-09-30T172751.929Z.json` |
+| long | 17:46:53 – 18:08:37 | `results-2026-09-30T174653.735Z.json` |
+
+- **The plumbing smoke** ran first, as registered (`--n=4` on both fixtures). It ran as written, so no amendment was
+  needed. Its numbers inform nothing.
+- **Every saved semantic-bench result** (Runs 14 and 15, 10 files) re-analyses byte-identically under `8191da6`.
+- **Evidence** is under `devtools/_run16/<short|long>/`; the load record is `devtools/_run16/load.log`, the checker's
+  output `devtools/_run16/guards.txt`, the descriptive cosines `devtools/_run16/diagnose.txt`.
+
+**Every structural guard held in both runs** (scratch `devtools/_run16/guards16.mjs`, 53 checks):
+
+| guard | short | long |
+|---|---|---|
+| 1. instrument | fixture `9680443e…` | `1f48f1be…`, the generator's bytes |
+| (1, reported) | `formula`'s rows identical to Run 15's short `formula` rows: 0 of 240 differ in position or page | — |
+| 2. A/A | `sem2` vs `sem` identical, 0 of 240 rows differ | the same |
+| 3. startup | every arm read back its binding; `semb8` and `semb32` announced their knob (the bench refuses otherwise) and held only their own export and the tokenizer (`semb` only q4's); 内置's load line in each 内置 arm, no `LlamaServerRuntime` line; no migration warning; 0 claude-cli calls; every log INFO only | the same |
+| 4. writes and recalls | 60 writes ok and 240 recalls, 0 error rows, every arm | the same |
+| 5. vectors | every 语义 arm 60/60, 0 refused lines | the same |
+| 6. routers | one spawn each, 0 error lines, 2 requests at startup then exactly 60 during the writes and 240 during the recalls; `cpu-sem` `--device none --n-gpu-layers 0`, `sem`/`sem2` `--n-gpu-layers 99`; 16 threads; largest task 40 tokens, 0 truncated | the same; largest task 883 tokens, 0 truncated |
+| 7. one build | `9b3c5f88de1f1250` / `791f5dc180d1297e` / `6a3c4c974ae2e868` in both results files and after the last run | |
+| 8. the 内置 files | q4 matches `ResourceProvisioner`'s pins; int8 and fp32 match the design's sha256 | |
+
+**The load clause** (median CPU share of processes this run did not start, over each recall pass; limit 5 points):
+
+| fixture | `semb8` | `semb32` | `semb` (reported) | `cpu-sem` |
+|---|---|---|---|---|
+| short | 22.3% → 4.8 apart, **read** | 21.8% → 5.2 apart, **not read** | 19.8% → 7.2 apart | 27.0% |
+| long | 17.0% → 1.9 apart, **read** | 21.5% → 6.4 apart, **not read** | 18.5% → 3.4 apart | 15.1% |
+
+- Each recall pass is 1.3–2 minutes, so each median rests on 3–6 samples.
+
+### The headline
+
+| fixture | arm | top-1 / found@8 | recall median (p90), ms | write median (p90), ms | server private after recalls |
+|---|---|---|---|---|---|
+| short | `formula` (语义 off) | 79 / 124 | 242 (268) | 29 (34) | 93 MB |
+| short | llama.cpp, GPU (`sem`) | 120 / 220 | 271 (301) | 62 (79) | 105 MB |
+| short | llama.cpp, CPU (`cpu-sem`) | 121 / 218 | 358.5 (569) | 130.5 (332) | 105 MB |
+| short | 内置 q4 (`semb`) | 119 / 223 | 399.5 (595) | 254.5 (815) | 241 MB |
+| short | **内置 int8 (`semb8`)** | **117 / 224** | **526.5 (658)** | 318.5 (446) | 1,308 MB |
+| short | **内置 fp32 (`semb32`)** | **117 / 222** | **322.5 (423)** | 238 (430) | 571 MB |
+| long | `formula` | 68 / 104 | 238 (263) | 28.5 (35) | 104 MB |
+| long | llama.cpp, GPU (`sem`) | 83 / 154 | 353.5 (521) | 131.5 (167) | 97 MB |
+| long | llama.cpp, CPU (`cpu-sem`) | 84 / 155 | 323 (371) | 1,123.5 (1,492) | 123 MB |
+| long | 内置 q4 (`semb`) | 59 / 125 | 328 (380) | 1,297.5 (1,669) | 373 MB |
+| long | **内置 int8 (`semb8`)** | **64 / 135** | **455.5 (532)** | 1,470 (8,268) | 1,338 MB |
+| long | **内置 fp32 (`semb32`)** | **62 / 137** | **376.5 (475)** | 916 (1,488) | 743 MB |
+
+(`sem2`, the A/A twin, is row for row `sem`'s on both fixtures.) The llama.cpp arms' server holds no model; its child
+holds the weights beside it, as Run 15 recorded.
+
+**Paired, on `all`** (b = the right-hand arm's hit & the left-hand arm's miss, c = the reverse; 240 pairs each):
+
+| fixture | pair | found@8 | top-1 |
+|---|---|---|---|
+| short | **int8 vs llama.cpp CPU** | **3/9, p = 0.146, +2.5pp [−0.4, +5.4]** | 5/1, p = 0.219, −1.7pp |
+| short | **fp32 vs llama.cpp CPU** | **3/7, p = 0.344, +1.7pp [−1.0, +4.3]** | 5/1, p = 0.219, −1.7pp |
+| short | q4 vs llama.cpp CPU (replication) | 2/7, p = 0.180, +2.1pp — Run 15's figures exactly | 4/2, p = 0.688 |
+| long | **int8 vs llama.cpp CPU** | **26/6, p < 0.001, −8.3pp [−12.8, −3.7]** | 26/6, p < 0.001, −8.3pp |
+| long | **fp32 vs llama.cpp CPU** | **25/7, p = 0.002, −7.5pp [−12.0, −2.9]** | 28/6, p < 0.001, −9.2pp |
+| long | q4 vs llama.cpp CPU (replication) | 33/3, p < 0.001, −12.5pp [−17.1, −7.7] — Run 15's figures exactly | 31/6 |
+| long | int8 vs llama.cpp GPU | 25/6, p < 0.001, −7.9pp | 26/7, p = 0.001 |
+| long | fp32 vs llama.cpp GPU | 24/7, p = 0.003, −7.1pp | 28/7, p < 0.001 |
+
+- On short facts both candidates are not significantly different from either llama.cpp arm, and far above `formula`
+  (found@8 +41.7pp and +40.8pp). On long notes they are above `formula` on found@8 (+12.9pp, +13.8pp, p < 0.001), not on
+  top-1.
+
+### The decision rule, applied
+
+- **`semb8` (int8) does NOT hold.** Its load clause was read on both fixtures, and it fails both halves of the rule:
+  - accuracy: not significantly worse on short (3/9, p = 0.146), **significantly worse on long** (26/6, p < 0.001);
+  - latency: **HIGHER on both** — 526.5 against 358.5 ms (slower on 210 of 240 recalls, p < 0.001) and 455.5 against
+    323 ms (slower on 235, p < 0.001).
+- **`semb32` (fp32) does NOT hold.** Its accuracy clause fails on the long fixture (25/7, p = 0.002), which settles it
+  whatever its latency would read. Its latency clause was not read on either fixture (the load clause: 5.2 and 6.4 points
+  apart). For the record only: its medians were 322.5 against 358.5 ms (short, faster on 154 of 240) and 376.5 against
+  323 ms (long, slower on 194).
+- **Neither holds: the order stays, and nothing ships.** 语义's suggestion keeps the llama.cpp GGUF first for every GPU
+  answer, `NotAsked` and `NoGpu` included. The q4 export stays pinned; `GATHERLIGHT_EMBED_ONNX_EXPORT` stays a measurement
+  knob.
+- **The replication.** `semb` reproduced Run 15's pair on both fixtures to the figure (2/7 and 33/3), on Lyntai 3.5.3
+  where Run 15 ran 3.5.1, and `formula`'s short rows are identical to Run 15's.
+
+### What the quantisation arms show
+
+- **Quantisation explains PART of Run 15's loss.** On long notes, found@8:
+  - int8 against q4: 135 against 125 (4/14, p = 0.031);
+  - fp32 against q4: 137 against 125 (2/14, p = 0.004);
+  - fp32 against int8: equivalent (1/3, p = 0.625, inside ±3pp).
+- **It does not explain the rest.** Both higher-precision exports still lose to llama.cpp's Q8_0 by ~18–20 of 240 on
+  long notes, and fp32 is no better than int8. So, as the design read it in advance, the remaining gap is the tokenizer or
+  the kernels (or anything else below 语义's seam that the two implementations do differently), and a larger export will
+  not close it.
+- On short facts the three exports are equivalent to one another on both metrics.
+
+**Descriptive, deciding nothing** (`devtools/_run16/diagnose.txt`) — the cosine between the vector each 内置 arm stored for
+a fact and the one llama.cpp on the CPU stored for the same text, median (range):
+
+| arm | short | long |
+|---|---|---|
+| q4 | 0.818 (0.733–0.874) | 0.848 (0.820–0.875) |
+| int8 | 0.842 (0.765–0.895) | 0.890 (0.853–0.929) |
+| fp32 | 0.858 (0.772–0.913) | 0.915 (0.869–0.954) |
+| llama.cpp GPU (reference) | 1.000 (0.999–1.000) | 1.000 |
+
+- Precision moves 内置's vectors TOWARDS llama.cpp's, but fp32 against a Q8_0 GGUF of the same weights still reads
+  0.86–0.95, where two devices of one implementation read 0.999+. Q8_0 is close to lossless, so most of that distance is
+  not quantisation.
+- The long Chinese notes' mean pairwise cosine: llama.cpp 0.887; q4 0.931, int8 0.924, fp32 0.918 — precision spreads the
+  vectors apart, but not to llama.cpp's spacing.
+- **An untested lead, not a finding:** the two implementations do not frame the input alike. `OnnxEmbedder` adds a
+  beginning-of-sentence token and NO end-of-sentence token (its comment: "what the model was exported expecting";
+  `docs/builtin-model-runner.md` records no measurement of that choice); llama.cpp adds both
+  (`EmbedSegmentation.SpecialTokens`, measured on EmbeddingGemma). Whether that accounts for the distance is not measured
+  here.
+
+### Time and memory
+
+- **int8 is the slowest 内置 export on this CPU**: per recall 526.5 and 455.5 ms against q4's 399.5 and 328 and fp32's
+  322.5 and 376.5; its long-note writes have a p90 of 8.3 s; and its server holds ~1.3 GB private from its first load,
+  more than fp32's 0.57–0.74 GB. Why ONNX Runtime runs this export's int8 graph that way was not looked into.
+- **fp32** is about as fast per recall as llama.cpp on the CPU (faster on short facts, slower on long notes, neither pair
+  read under the load clause), writes long notes faster than q4 (916 against 1,297.5 ms), and holds 0.57–0.74 GB.
+- **q4**, the shipped export, remains the smallest (0.24–0.37 GB) at the accuracy Run 15 recorded.
+
+### What it says
+
+- **No ONNX export of EmbeddingGemma from this repository passes the rule.** 语义 keeps the GGUF first on every machine.
+- **Precision recovers some of the long-note loss (+10 to +12 of 240 over q4), not most of it**, and fp32 buys nothing over
+  int8.
+
+### What it does NOT say
+
+- **Why the rest of the gap exists.** The tokenizer, the input framing and the kernels were not separated; the
+  special-token difference above is the cheapest next thing to test.
+- **Anything about another CPU, or real household notes** — one laptop, 17–27% of it busy with other work; the fixture's
+  long notes share one pool of filler (Runs 14–15).
+- **fp32's latency.** The load clause left it unread on both fixtures.

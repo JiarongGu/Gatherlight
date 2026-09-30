@@ -11,7 +11,9 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// Only the GRAPH FILE changes: the tokenizer, the export's own <c>sentence_embedding</c> head, normalisation, raw text with
 /// no task prompt and the 2,048-token truncation are the product's for every export. Run 15 found the q4 export
 /// significantly worse than llama.cpp's Q8_0 GGUF on long notes without separating the quantisation from the tokenizer and
-/// the kernels; this is what lets one run hold the other two fixed.</para>
+/// the kernels; this is what lets one run hold the other two fixed. Run 16 (2026-09-30) read it: int8 and fp32 each
+/// recovered part of the long-note loss over q4 and still lost to llama.cpp significantly, so q4 stays pinned and this
+/// stays a knob.</para>
 ///
 /// <para>Nothing provisions the other exports: 资源 downloads q4 alone, so the knob finds the files only where a bench put
 /// them, and <see cref="OnnxEmbedder.IsPresent"/> answers for the resolved file — a knob pointing at a file that is not
