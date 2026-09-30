@@ -7,7 +7,7 @@ import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeC
 const dataDir = dataDirFor('p6');
 const { ok, fail, done } = makeReporter('p6');
 makeTestData(dataDir);
-const srv = startServer({ dataDir, port: 5396 });
+const srv = startServer({ dataDir, port: 25396 });
 const { call } = makeClient(srv.base);
 
 try {

@@ -58,10 +58,10 @@ const MARKER = '鑫';
 const good = Object.fromEntries([...SCREEN_ANSWER_CHARS.map((c) => [c, 1]), [MARKER, 5]]);
 const backwards = Object.fromEntries(SCREEN_ANSWER_CHARS.map((c) => [c, -1]));
 
-const PORT_BIND = 5620;
-const PORT_WORK = 5621;
-const PORT_GONE = 5622;
-const PORT_RETRY = 5623;
+const PORT_BIND = 25620;
+const PORT_WORK = 25621;
+const PORT_GONE = 25622;
+const PORT_RETRY = 25623;
 // Case D's verification deadline — and so its first retry wait (InProcessReranker.RetryAfter: one deadline).
 const RETRY_DEADLINE_SECONDS = 8;
 

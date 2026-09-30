@@ -3052,18 +3052,38 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   dynamically RESERVES tcp ranges** (Hyper-V/WSL/Docker; `netsh interface ipv4 show excludedportrange
   protocol=tcp`), and on 2026-08-23 those ranges moved mid-session to cover 5321–5420 and 5487–5586 —
   29 of the suites' ports. The same fleet had passed 51/51 an hour earlier on the same numbers, which is
-  the tell that it is machine state and not the tree. Renumbering the suites is churn for a transient
-  condition and the new band can be reserved next reboot; the fix is that `dev.mjs e2e` now prints the
-  fixture's last `[ERROR]` line beside a failure, because that log is CLOBBERED by the next run of the
-  suite and this is the only moment it is still true. If it recurs: check the excluded ranges first.
-  **And when moving ports out of a reserved range, avoid the WHATWG fetch "bad ports"** (6000, 6566, 6665–6669, 6697,
+  the tell that it is machine state and not the tree. `dev.mjs e2e` prints the fixture's last `[ERROR]` line
+  beside a failure, because that log is CLOBBERED by the next run of the suite and this is the only moment it
+  is still true. **This used to say renumbering was churn "because the new band can be reserved next reboot" —
+  true only of a band INSIDE the dynamic range, which is where every reservation comes from.** This machine's
+  dynamic tcp range is 1024–15000 (`netsh interface ipv4 show dynamicport tcp`; the Windows default is
+  49152–65535), and all 5xxx suite ports sat inside it: every reservation seen (2026-08-23, 2026-09-23 and
+  2026-10-01's 5458–5557, which held 20 suites for a whole session) and every EPHEMERAL port lent to an outbound
+  connection come from it, and p17 had measured one of those holding a suite port. **Since 2026-10-01 the suites
+  use 25xxx** (each renumbered 5xxx → 25xxx, relative layout kept), outside both dynamic ranges, and the local port
+  shifter that ran reserved suites from copies is retired. The preflight still warns for a reservation (an
+  ADMINISTERED one can land anywhere) and warns when a machine's dynamic range covers a suite's port.
+  **And when moving ports, avoid the WHATWG fetch "bad ports"** (6000, 6566, 6665–6669, 6697,
   10080 among them): Node's `fetch` refuses them client-side (`fetch failed` / `bad port`), so `waitHealthy` polls a
   server that IS up until its 180 s ceiling and reports `fatal: timeout`. It cost a wrong "environmental" verdict on
-  `p16` (2026-09-28): a +600 shift mapped its 5400 to 6000; +700/+900 pass. **A suite's ports are 5xxx LITERALS**: the
-  runner keeps suites port-disjoint, and checks them against the reserved ranges before a run, by scanning each file for
-  `\b5\d{3}\b` — a port outside that is invisible to both. `p54`/`p55` used 6194–6196 until the round-6 review and now
-  use 5623–5626; the scanner was deliberately not widened (every other suite follows the rule, and a computed or 6xxx
-  port is the exception to remove, not to support).
+  `p16` (2026-09-28): a +600 shift mapped its 5400 to 6000; +700/+900 pass. **A suite's ports are 25xxx LITERALS**: the
+  runner keeps suites port-disjoint, and checks them against the reserved and dynamic ranges before a run, by scanning
+  each file for `\b25\d{3}\b` — a port outside that is invisible to both. A 5xxx number that is not a port (p12's phone
+  numbers, p9's amounts) no longer reads as one. `p54`/`p55` used 6194–6196 until the round-6 review; a computed port
+  is the exception to remove, not to support.
+- **A suite RESTARTING a server takes a fresh port per boot and waits for the old one to be GONE** — never a fixed
+  sleep on the same port. `p44` restarted on one port after a 1.5 s "settle" and failed only in a loaded fleet (6 of 6
+  alone); it now boots on three and, between boots, waits for `dotnet run` to exit and the old port to refuse a
+  connection, since the next boot opens the same database and data repo.
+- **THE SUITES RUN ON THE MACHINE'S `node`, and a node fault reads as a flaky suite.** Measured 2026-10-01: Node
+  v24.15.0 on Windows aborts (0xC0000409, no message) in the socket-connect path — 16 of 9,000 short-lived processes
+  making ten localhost connections each, and 30 of 5,700 runs of the claude stub's judge-tools probe, which surfaced as
+  `e2e-p36`'s "scored 5 of 6" (a scorer spawn gone missing). v24.13.1, v24.19.0 (the product's pin,
+  `ResourceProvisioner.NodeVersion`), v22.15.0 and v26.5.1 ran 2,700–3,600 of the same processes each with none,
+  interleaved in one window. The shipped app is unaffected: its capabilities and node leaf tools run on the pinned node.
+  `dev.mjs e2e` warns when `process.version` is not the pin. It is not the fault the stub's `node:http` rule (its own
+  comment) was written for: that one printed libuv's `UV_HANDLE_CLOSING` assertion at `process.exit`, after `fetch`;
+  this one prints nothing and kills the process mid-request, on `node:http` and on raw `net` alike.
 - **A UI HARNESS MUST RETRY THE ACTION, not only poll the result.** `desktop-e2e` polled for the view
   after clicking a tab ONCE — and a click dispatched before React has wired the handler is swallowed
   silently, so no amount of waiting produces the view. That flapped run to run and reads as "the Cortex

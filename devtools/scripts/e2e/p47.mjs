@@ -24,8 +24,8 @@ const { ok, fail, done } = makeReporter('p47');
 makeTestData(dataDir);
 makeTestData(restoreDir);
 
-const PORT = 5494;
-const RESTORE_PORT = 5496;
+const PORT = 25494;
+const RESTORE_PORT = 25496;
 const settle = () => new Promise((r) => setTimeout(r, 1500));
 
 // Speak to the agent's own loopback channel — the endpoint the spawned CLI is handed, not the

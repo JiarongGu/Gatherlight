@@ -24,7 +24,7 @@ fs.writeFileSync(path.join(dataDir, 'plans', 'trips', '2026-08-kyoto.md'), [
 fs.mkdirSync(path.join(dataDir, 'plans', 'daily'), { recursive: true });
 fs.writeFileSync(path.join(dataDir, 'plans', 'daily', '2026-08-01.md'), '# 2026-08-01 — 周六\n\n- 验证\n');
 
-const srv = startServer({ dataDir, port: 5398 });
+const srv = startServer({ dataDir, port: 25398 });
 const base = srv.base;
 
 const text = async (p) => {

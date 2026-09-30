@@ -7,7 +7,7 @@ import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeC
 const dataDir = dataDirFor('p22');
 const { ok, fail, done } = makeReporter('p22');
 makeTestData(dataDir);
-const srv = startServer({ dataDir, port: 5471, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const srv = startServer({ dataDir, port: 25471, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const { call } = makeClient(srv.base);
 
 const lib = async (q) => (await (await fetch(`${srv.base}/api/library?q=${encodeURIComponent(q)}&limit=50`)).json()).items;

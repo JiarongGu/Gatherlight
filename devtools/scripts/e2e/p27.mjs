@@ -10,7 +10,7 @@ import path from 'node:path';
 const dataDir = dataDirFor('p27');
 const { ok, fail, done } = makeReporter('p27');
 makeTestData(dataDir);
-const srv = startServer({ dataDir, port: 5397, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const srv = startServer({ dataDir, port: 25397, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const { post, getJson } = makeClient(srv.base);
 
 const REL = '.claude/rules/money-format.md';

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p32');
-const PORT = 5433;
+const PORT = 25433;
 const { ok, fail, done } = makeReporter('p32');
 
 makeTestData(dataDir);

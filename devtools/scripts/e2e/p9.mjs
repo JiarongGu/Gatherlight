@@ -21,7 +21,7 @@ fs.writeFileSync(path.join(dataDir, 'plans', 'budgets', '2026-08-kyoto.md'), [
   '',
 ].join('\n'));
 
-const srv = startServer({ dataDir, port: 5399 });
+const srv = startServer({ dataDir, port: 25399 });
 const { j, call } = makeClient(srv.base);
 
 try {

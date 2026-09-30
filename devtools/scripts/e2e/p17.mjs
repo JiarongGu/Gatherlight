@@ -12,21 +12,23 @@ import net from 'node:net';
 import { dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p17');
-const PA = 5401, PB = 5402, PC = 5403;
+const PA = 25401, PB = 25402, PC = 25403;
 
 // Cases C and D bind the WILDCARD address, and a wildcard bind fails if ANY socket on the box holds
 // that port on ANY interface — including an unrelated program's outbound connection that happened to
-// be assigned it as a local port. Measured: netstat showed `192.168.50.175:5404 -> …:443 CLOSE_WAIT`
-// owned by another process, so 0.0.0.0:5404 was refused while 127.0.0.1:5404 bound fine. The server
-// was right to fail; the TEST was wrong to assume a fixed wildcard port is free. So probe for one.
+// be assigned it as a local port. Measured when the suites used 5xxx ports: netstat showed
+// `192.168.50.175:5404 -> …:443 CLOSE_WAIT` owned by another process, so 0.0.0.0:5404 was refused while
+// 127.0.0.1:5404 bound fine. The server was right to fail; the TEST was wrong to assume a fixed wildcard
+// port is free. The 25xxx band sits outside every dynamic (ephemeral) range this has run on, which is where
+// that local port came from, but a wildcard bind is still refused by anything that LISTENS there — so probe.
 const wildcardFree = (port) => new Promise((resolve) => {
   const s = net.createServer();
   s.once('error', () => resolve(false));
   s.listen(port, '0.0.0.0', () => s.close(() => resolve(true)));
 });
-// The range is NOT clear of other suites, whatever this said before (that their ports begin further up): 5404–5433
-// holds p18 (5404–5406), p52 (5411–5427, 5430), p28 (5428), p29 (5429), p31 (5431–5432) and p32 (5433). The runner
-// keeps suites port-disjoint by scanning each file for literal 5xxx — comments included — and cannot see a port
+// The range is NOT clear of other suites, whatever this said before (that their ports begin further up): 25404–25433
+// holds p18 (25404–25406), p52 (25411–25427, 25430), p28 (25428), p29 (25429), p31 (25431–25432) and p32 (25433). The runner
+// keeps suites port-disjoint by scanning each file for literal 25xxx — comments included — and cannot see a port
 // chosen at runtime. So the list above is load-bearing, not decoration: naming those ports puts them in this file's
 // footprint, and the runner therefore never runs those suites beside this one. The probe still skips a port anything
 // else holds when it probes. A suite that takes a port in this range must be added to the list.
@@ -34,7 +36,7 @@ const pickWildcardPort = async (from, span = 30) => {
   for (let p = from; p < from + span; p++) if (await wildcardFree(p)) return p;
   throw new Error(`no wildcard-bindable port free in ${from}..${from + span - 1}`);
 };
-const PD = await pickWildcardPort(5404);
+const PD = await pickWildcardPort(25404);
 const TOKEN = 'e2e-secret-42';
 
 const { ok, fail, done } = makeReporter('p17');

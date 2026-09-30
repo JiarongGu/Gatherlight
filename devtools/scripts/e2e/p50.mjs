@@ -27,12 +27,12 @@ import { dataDirFor, makeReporter, startServer, until, makeClient } from './_e2e
 
 const { ok, fail, done } = makeReporter('p50');
 
-// Free ports — p49 took the range up to 5505.
-const PORT_MISSING = 5506;
-const PORT_SIGNED_OUT = 5507;
-const PORT_SIGNED_IN = 5508;
-const PORT_PROVISION = 5509;
-const PORT_LOGIN = 5511;
+// Free ports — p49 took the range up to 25505.
+const PORT_MISSING = 25506;
+const PORT_SIGNED_OUT = 25507;
+const PORT_SIGNED_IN = 25508;
+const PORT_PROVISION = 25509;
+const PORT_LOGIN = 25511;
 
 const RAW_WIN32 = /系统找不到指定的文件|An error occurred trying to start process/;
 const GENERIC = /CLI 报告错误/;

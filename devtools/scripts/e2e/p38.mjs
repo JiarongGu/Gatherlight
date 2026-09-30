@@ -19,13 +19,13 @@ const { ok, fail, done } = makeReporter('p38');
 makeTestData(dataDir);
 
 // Free ports — not used by any other suite (checked against every `startServer({ port: ... })` /
-// `const PORT = ...` in devtools/scripts/e2e/*.mjs; p37 is the closest neighbour at 5464/5465).
-const PORT_NOT_ENABLED = 5466;
-const PORT_ENABLED = 5467;
-const PORT_NET_TRUE = 5468;
-const PORT_DENY = 5469;
+// `const PORT = ...` in devtools/scripts/e2e/*.mjs; p37 is the closest neighbour at 25464/25465).
+const PORT_NOT_ENABLED = 25466;
+const PORT_ENABLED = 25467;
+const PORT_NET_TRUE = 25468;
+const PORT_DENY = 25469;
 // Case 2b's (an inherited NODE_OPTIONS) — beside the others, and free in every suite.
-const PORT_INHERITED_NODE_OPTIONS = 5470;
+const PORT_INHERITED_NODE_OPTIONS = 25470;
 
 const toolDir = path.join(dataDir, 'tools', 'cap_escape');
 const manifestPath = path.join(dataDir, 'site.json');

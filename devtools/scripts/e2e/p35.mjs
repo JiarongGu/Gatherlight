@@ -9,7 +9,7 @@ const { ok, fail, done } = makeReporter('p35');
 if (process.platform !== 'win32') skipSuite('p35', 'Windows-only (.cmd shell-shim launch)');
 
 const dataDir = dataDirFor('p35');
-const PORT = 5436;
+const PORT = 25436;
 const cmdPath = path.join(repo, 'devtools', 'scripts', 'mcp-stub.cmd');
 
 makeTestData(dataDir);

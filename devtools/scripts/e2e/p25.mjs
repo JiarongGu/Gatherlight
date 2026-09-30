@@ -9,7 +9,7 @@ import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeC
 const dataDir = dataDirFor('p25');
 const { ok, fail, done } = makeReporter('p25');
 makeTestData(dataDir);
-const srv = startServer({ dataDir, port: 5395, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const srv = startServer({ dataDir, port: 25395, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const { post, waitPhase } = makeClient(srv.base);
 
 try {

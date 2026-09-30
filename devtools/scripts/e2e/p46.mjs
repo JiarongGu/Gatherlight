@@ -22,9 +22,9 @@ makeTestData(dataDir);
 // it cost several investigations. Under a parallel fleet it failed nearly every run and passed solo.
 //
 // What this suite is actually about is the DATA FOLDER surviving a restart; which port the replacement
-// binds is incidental to that, so alternating costs the test nothing. The runner reads 5xxx literals to
+// binds is incidental to that, so alternating costs the test nothing. The runner reads 25xxx literals to
 // schedule port-disjoint suites, so naming both here keeps that correct too.
-const PORTS = [5492, 5493];
+const PORTS = [25492, 25493];
 let boot = 0;
 const portFor = () => PORTS[boot++ % PORTS.length];
 

@@ -198,6 +198,8 @@ const mcpServerFromArgs = () => {
 // node:http, NOT fetch: undici's connection pool leaves async handles alive, and the process.exit(0)
 // below then trips libuv's "handle already closing" assertion on Windows — which the server sees as a
 // CRASHED cli call (exit -1073740791) and the judge silently returns null. `agent: false` = no pool.
+// (A crash with the same exit code that prints NOTHING and ends the process mid-request is a different fault:
+// Node v24.15.0's connect path on Windows, measured 2026-10-01 — `dev.mjs e2e` warns when the suites run on it.)
 const httpPost = (url, headers, body) => new Promise((resolve, reject) => {
   const u = new URL(url);
   const req = http.request({

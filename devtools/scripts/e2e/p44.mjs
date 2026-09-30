@@ -8,6 +8,7 @@
 // relax verification for THIS suite's client only (never runner-wide). Same reasoning as p18.
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import {
   dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until,
@@ -17,16 +18,35 @@ const dataDir = dataDirFor('p44');
 const { ok, fail, done } = makeReporter('p44');
 makeTestData(dataDir);
 
-// Free port — suites use up to 5486 (p43); this one is clear.
-const PORT = 5488;
+// ONE PORT PER BOOT. This suite boots three servers in turn on one data folder, and it used to restart on the same
+// port after a fixed 1.5 s "settle" — failing only in a loaded fleet (6 of 6 alone), as an abort or `fetch failed`.
+// A fresh port per boot takes the port out of the question; what the next boot still needs is the previous server
+// GONE, since it holds the same database and data repo — so `stopped` waits for that instead of a guess.
+// Free ports — suites use up to 25486 (p43); these are clear.
+const PORT = 25488;
+const PORT_TLS = 25487;
+const PORT_GATED = 25489;
 
 const settingsPath = path.join(dataDir, 'state', 'settings.json');
 const writeSettings = (security) => {
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify({ security }, null, 2), 'utf8');
 };
-// Kestrel needs a moment to release the public port between boots on Windows.
-const settle = () => new Promise((r) => setTimeout(r, 1500));
+// Stop a server and wait until it is gone: `dotnet run` exits, then its port refuses a connection (the app it
+// launched can outlive it by a moment).
+const refused = (port) => new Promise((resolve) => {
+  const s = net.connect(port, '127.0.0.1');
+  s.once('connect', () => { s.destroy(); resolve(false); });
+  s.once('error', () => resolve(true));
+});
+const stopped = async (srv, port) => {
+  const proc = srv.server;
+  const exited = proc.exitCode !== null || proc.signalCode !== null
+    ? Promise.resolve() : new Promise((r) => proc.once('exit', r));
+  srv.stop();
+  await exited;
+  await until(() => refused(port), 30000);
+};
 // Ready = listening AND the startup migration has lifted the 503 gate, or /api/manage/* is refused.
 const waitReady = (url, headers = {}) => until(async () => {
   const r = await fetch(url, { headers });
@@ -88,30 +108,28 @@ try {
     /MCP_SERVERS:[^\n]*planner-tools/.test(plan), plan.slice(0, 160));
   await post(`/api/chat/${id}/cancel`);
 
-  server.stop();
-  await settle();
+  await stopped(server, PORT);
 
   // --- 2. TLS on — the first configuration that broke -----------------------------------------
   writeSettings({ tls: { enabled: true } });
-  server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
-  await waitReady(`https://127.0.0.1:${PORT}/api/health`);
-  const tlsCh = await (await fetch(`https://127.0.0.1:${PORT}/api/manage/agent-mcp`)).json();
+  server = startServer({ dataDir, port: PORT_TLS, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+  await waitReady(`https://127.0.0.1:${PORT_TLS}/api/health`);
+  const tlsCh = await (await fetch(`https://127.0.0.1:${PORT_TLS}/api/manage/agent-mcp`)).json();
   const withTls = await toolNames(tlsCh.port, 'http', tlsCh.token);
   ok('TLS on: the agent channel still lists tools', withTls.names.length > 0, JSON.stringify(withTls));
   ok('TLS on: the channel is plain http, not https', (tlsCh.url ?? '').startsWith('http://'), tlsCh.url ?? '');
-  server.stop();
-  await settle();
+  await stopped(server, PORT_TLS);
 
   // --- 3. trustLoopback off — the second ------------------------------------------------------
   writeSettings({ accessToken: 'p44-token', trustLoopback: false });
-  server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
-  await waitReady(`http://127.0.0.1:${PORT}/api/health`, { 'X-Gatherlight-Token': 'p44-token' });
-  const gatedCh = await (await fetch(`http://127.0.0.1:${PORT}/api/manage/agent-mcp`,
+  server = startServer({ dataDir, port: PORT_GATED, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+  await waitReady(`http://127.0.0.1:${PORT_GATED}/api/health`, { 'X-Gatherlight-Token': 'p44-token' });
+  const gatedCh = await (await fetch(`http://127.0.0.1:${PORT_GATED}/api/manage/agent-mcp`,
     { headers: { 'X-Gatherlight-Token': 'p44-token' } })).json();
   const withGate = await toolNames(gatedCh.port, 'http', gatedCh.token);
   ok('trustLoopback off: the agent channel still lists tools', withGate.names.length > 0, JSON.stringify(withGate));
   // The public /mcp stays gated exactly as before — the channel does not weaken it.
-  const publicMcp = await fetch(`http://127.0.0.1:${PORT}/mcp`, { method: 'POST' });
+  const publicMcp = await fetch(`http://127.0.0.1:${PORT_GATED}/mcp`, { method: 'POST' });
   ok('the PUBLIC /mcp is still gated', publicMcp.status === 401, String(publicMcp.status));
 } catch (e) {
   fail(e?.stack || String(e));

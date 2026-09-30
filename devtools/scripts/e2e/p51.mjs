@@ -31,12 +31,12 @@ import http from 'node:http';
 import { dataDirFor, makeReporter, startServer, until, makeClient, claudeStubCmd } from './_e2e-common.mjs';
 
 const { ok, fail, done } = makeReporter('p51');
-const PORT = 5510;
+const PORT = 25510;
 // Case I's second server. A LITERAL, never `PORT + 1`: the runner keeps suites port-disjoint by scanning each file for
-// 5xxx literals and cannot see a computed port — `PORT + 1` was p50's PORT_LOGIN, so the two could run at once and
+// 25xxx literals and cannot see a computed port — `PORT + 1` was p50's PORT_LOGIN, so the two could run at once and
 // collide. Outside every Windows-excluded tcp range of 2026-09-27 and outside p17's wildcard probe window. (No other
 // port is written out in this comment on purpose: the scan reads comments too.)
-const PORT_LEGACY = 5380;
+const PORT_LEGACY = 25380;
 
 const dir = dataDirFor('p51');
 fs.rmSync(dir, { recursive: true, force: true });

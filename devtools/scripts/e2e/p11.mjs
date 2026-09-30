@@ -6,7 +6,7 @@ import http from 'node:http';
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, skipUnlessChromium } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p11');
-const FIXTURE_PORT = 5388;
+const FIXTURE_PORT = 25388;
 const { ok, fail, done } = makeReporter('p11');
 
 makeTestData(dataDir);
@@ -47,7 +47,7 @@ await new Promise((r) => fixture.listen(FIXTURE_PORT, r));
 const fixtureBase = `http://127.0.0.1:${FIXTURE_PORT}`;
 
 const srv = startServer({
-  dataDir, port: 5389,
+  dataDir, port: 25389,
   env: {
     GATHERLIGHT_BASE_FLIGHTAWARE: fixtureBase,
     GATHERLIGHT_BASE_FLIGHTSTATS: fixtureBase,

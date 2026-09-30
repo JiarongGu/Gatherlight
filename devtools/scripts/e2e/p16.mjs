@@ -38,18 +38,18 @@ makeTestData(dataDir);
 // never lists it.
 const argsLog = path.join(dataDir, 'state', 'stub-args.jsonl');
 const srv = startServer({
-  dataDir, port: 5398,
+  dataDir, port: 25398,
   env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ARGS_LOG: argsLog },
 });
 // The M cases' servers: M1 reboots this suite's own folder, M2–M6 a second one (booted once to create its database).
 // Each boot on a port of its own — reusing one inside a suite is its own trap. The gaps no other suite's literal port
 // fills in the suites' own block, outside p17's runtime wildcard probe and every Windows-excluded range seen on
 // 2026-09-26. (A block just past the excluded range was tried first; a VS Code process on this machine listens in it.
-// No port is spelled out here: the runner reads every 5xxx literal in a file, comments included, as its footprint.)
+// No port is spelled out here: the runner reads every 25xxx literal in a file, comments included, as its footprint.)
 const migDir = dataDirFor('p16-migrate');
 makeTestData(migDir);
 const migArgsLog = path.join(migDir, 'state', 'stub-args.jsonl');
-const M1_PORT = 5400, MIG_PRE_PORT = 5444, M2_PORT = 5445, M3_PORT = 5449, M4_PORT = 5453, M5_PORT = 5454, M6_PORT = 5457;
+const M1_PORT = 25400, MIG_PRE_PORT = 25444, M2_PORT = 25445, M3_PORT = 25449, M4_PORT = 25453, M5_PORT = 25454, M6_PORT = 25457;
 const extra = [];
 const { j, post, put, del, waitPhase } = makeClient(srv.base);
 

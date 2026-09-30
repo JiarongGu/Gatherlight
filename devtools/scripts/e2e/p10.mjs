@@ -66,7 +66,7 @@ fs.writeFileSync(path.join(up, 'pic.bmp'), bmp(8, 8));
 const injectLog = path.join(repo, 'devtools', '_e2e-p10-node-inject.jsonl');
 fs.rmSync(injectLog, { force: true });
 const leafInjections = () => nodeInjections(injectLog).filter((e) => !isStubNode(e));
-const srv = startServer({ dataDir, port: 5390, env: nodeInjection(injectLog) });
+const srv = startServer({ dataDir, port: 25390, env: nodeInjection(injectLog) });
 const { call } = makeClient(srv.base);
 
 try {
@@ -237,7 +237,7 @@ try {
 
   // A fresh injection log for this phase, so what it asserts is THIS phase's nodes, not the source shape's.
   fs.rmSync(injectLog, { force: true });
-  srv2 = startServer({ dataDir, port: 5391, env: nodeInjection(injectLog) });
+  srv2 = startServer({ dataDir, port: 25391, env: nodeInjection(injectLog) });
   const c2 = makeClient(srv2.base);
   await waitHealthy(srv2.base);
   const bInspect = await c2.call('pdf_inspect', { path: 'uploads/form.pdf' });

@@ -21,8 +21,8 @@ const { ok, fail, done } = makeReporter('p40');
 makeTestData(dataDir);
 
 // Free port — not used by any other suite (checked against every `startServer({ port: ... })` /
-// `const PORT = ...` in devtools/scripts/e2e/*.mjs; e2e-p39 is the closest neighbour at 5478).
-const PORT = 5480;
+// `const PORT = ...` in devtools/scripts/e2e/*.mjs; e2e-p39 is the closest neighbour at 25478).
+const PORT = 25480;
 
 const toolsRoot = path.join(dataDir, 'tools');
 const manifestPath = path.join(dataDir, 'site.json');

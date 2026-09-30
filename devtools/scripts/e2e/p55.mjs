@@ -36,10 +36,10 @@ const envLogA = `${dirA}-env.jsonl`;
 try { fs.rmSync(envLogA); } catch {}
 const provisionedBash = path.join(dirA, 'state', 'resources', 'git-bash', 'bin', 'bash.exe');
 
-// 5xxx literals: the runner keeps suites port-disjoint, and checks Windows' reserved ranges, by scanning each file for
-// 5xxx literals — the 6195/6196 this suite first used were invisible to both.
+// 25xxx literals: the runner keeps suites port-disjoint, and checks Windows' reserved ranges, by scanning each file for
+// 25xxx literals (5xxx until 2026-10-01) — the 6195/6196 this suite first used were invisible to both.
 const srvA = startServer({
-  dataDir: dirA, port: 5624,
+  dataDir: dirA, port: 25624,
   env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ENV_LOG: envLogA, GATHERLIGHT_ASSUME_NO_GIT_BASH: '1' },
 });
 const A = makeClient(srvA.base);
@@ -97,7 +97,7 @@ fs.mkdirSync(path.dirname(householdBash), { recursive: true });
 fs.writeFileSync(householdBash, '@household bash\n');
 
 const srvB = startServer({
-  dataDir: dirB, port: 5625,
+  dataDir: dirB, port: 25625,
   env: {
     GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ENV_LOG: envLogB,
     GATHERLIGHT_ASSUME_NO_GIT_BASH: '1', CLAUDE_CODE_GIT_BASH_PATH: householdBash,
@@ -142,7 +142,7 @@ fs.writeFileSync(path.join(fakeGit, 'bin', 'bash.exe'), '@fake bash — never ru
 const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
 
 const srvC = startServer({
-  dataDir: dirC, port: 5626,
+  dataDir: dirC, port: 25626,
   env: {
     GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ENV_LOG: envLogC,
     [pathKey]: `${process.env[pathKey] ?? ''};${path.join(fakeGit, 'cmd')}`,

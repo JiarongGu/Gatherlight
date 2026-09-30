@@ -9,8 +9,8 @@ import { spawn } from 'node:child_process';
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, until, repo } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p31');
-const PORT = 5431;
-const HTTP_STUB_PORT = 5432;
+const PORT = 25431;
+const HTTP_STUB_PORT = 25432;
 const stubPath = path.join(repo, 'devtools', 'scripts', 'mcp-stub-server.mjs');
 const { ok, fail, done } = makeReporter('p31');
 

@@ -10,7 +10,7 @@ import { repo, dataDirFor, makeReporter, makeTestData, startServer, waitHealthy,
 const dataDir = dataDirFor('p5');
 const { ok, fail, done } = makeReporter('p5');
 makeTestData(dataDir);
-const srv = startServer({ dataDir, port: 5395 });
+const srv = startServer({ dataDir, port: 25395 });
 const { j, call } = makeClient(srv.base);
 
 const listNames = async () => ((await j('/api/tools')).body?.tools ?? []).map((t) => t.name);

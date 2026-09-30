@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p3');
-const PORT = 5393;
+const PORT = 25393;
 const { ok, fail, done } = makeReporter('p3');
 makeTestData(dataDir);
 const srv = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });

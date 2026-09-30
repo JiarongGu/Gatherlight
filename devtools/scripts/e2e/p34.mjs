@@ -7,7 +7,7 @@ import path from 'node:path';
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, claudeStubCmd, repo, until } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p34');
-const PORT = 5435;
+const PORT = 25435;
 const stubPath = path.join(repo, 'devtools', 'scripts', 'mcp-stub-server.mjs');
 const { ok, fail, done } = makeReporter('p34');
 

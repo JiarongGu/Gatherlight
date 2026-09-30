@@ -8,7 +8,7 @@ import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeC
 const dataDir = dataDirFor('p21');
 const { ok, fail, done } = makeReporter('p21');
 makeTestData(dataDir);
-const srv = startServer({ dataDir, port: 5461, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const srv = startServer({ dataDir, port: 25461, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const { j, post, waitPhase } = makeClient(srv.base);
 
 const scoreOf = (scores, id) => scores.find((s) => s.scorerId === id);

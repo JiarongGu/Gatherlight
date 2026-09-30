@@ -392,38 +392,73 @@ switch (cmd) {
       if (b.status !== 0) { console.error('e2e: build failed — aborting'); process.exitCode = b.status ?? 1; break; }
     }
 
-    // A suite's "port footprint" = every 5xxx literal in its source (server + fixture ports).
-    // Over-inclusive on purpose: a stray non-port 5xxx only makes scheduling more conservative,
-    // never causes a collision. Suites that share a port (e.g. p7/p15 both 5397) just won't run
+    // A suite's "port footprint" = every 25xxx literal in its source (server + fixture ports).
+    // Over-inclusive on purpose: a stray non-port 25xxx only makes scheduling more conservative,
+    // never causes a collision. Suites that share a port (e.g. p7/p15 both 25397) just won't run
     // at the same time — so parallel scheduling stays correct without touching any suite.
+    // The ports were 5xxx until 2026-10-01, inside this machine's DYNAMIC range (1024–15000), which is where Windows
+    // both reserves blocks for Hyper-V/WSL and hands out ephemeral ports for outbound connections — so a reservation
+    // could take a band of suites for a whole session, and any program's outbound connection could hold a suite's port
+    // (p17 measured one). 25xxx sits outside that range and the Windows default (49152–65535), and holds none of the
+    // WHATWG bad ports Node's fetch refuses (6000, 6566, 6665–6669, 6697, 10080 among them).
     const footprint = (suite) =>
-      new Set([...fs.readFileSync(path.join(scriptsDir, `${suite}.mjs`), 'utf8').matchAll(/\b5\d{3}\b/g)].map((m) => m[0]));
+      new Set([...fs.readFileSync(path.join(scriptsDir, `${suite}.mjs`), 'utf8').matchAll(/\b25\d{3}\b/g)].map((m) => m[0]));
     const ports = new Map(suites.map((s) => [s, footprint(s)]));
 
-    // PREFLIGHT: which of these suites' ports Windows has RESERVED right now. Hyper-V/WSL/Docker reserve tcp ranges
-    // dynamically and move them (between reboots, even mid-session), and a server whose port is reserved never binds:
-    // its suite reports only `fatal: timeout` after the harness's full patience, which reads like a hang in the code
-    // under test. So say it up front, by suite and port. A WARNING, never a failure — the reservation is machine state,
-    // not the tree — and silent when netsh is absent or answers something unexpected.
+    // PREFLIGHT, all WARNINGS and never failures — machine state, not the tree — and each silent when its probe
+    // cannot run or answers something unexpected.
+    //
+    // (1) Ports inside the DYNAMIC range, or RESERVED right now. Hyper-V/WSL/Docker reserve tcp ranges from the dynamic
+    // range and move them (between reboots, even mid-session), and a server whose port is reserved never binds: its
+    // suite reports only `fatal: timeout` after the harness's full patience, which reads like a hang in the code under
+    // test. A port inside the dynamic range is not reserved yet but can be, or be held by an outbound connection.
     if (process.platform === 'win32') {
       try {
-        const r = spawnSync('netsh', ['interface', 'ipv4', 'show', 'excludedportrange', 'protocol=tcp'], { encoding: 'utf8' });
-        const ranges = (r.status === 0 ? r.stdout : '').split('\n')
+        const netsh = (...show) => {
+          const r = spawnSync('netsh', ['interface', 'ipv4', 'show', ...show], { encoding: 'utf8' });
+          return r.status === 0 ? r.stdout : '';
+        };
+        const ranges = netsh('excludedportrange', 'protocol=tcp').split('\n')
           .map((l) => l.match(/^\s*(\d+)\s+(\d+)\b/)).filter(Boolean).map((m) => [Number(m[1]), Number(m[2])]);
-        const blocked = suites
-          .map((s) => [s, [...ports.get(s)].map(Number).filter((p) => ranges.some(([lo, hi]) => p >= lo && p <= hi)).sort((a, b) => a - b)])
+        const dyn = netsh('dynamicport', 'tcp');
+        const dStart = Number(dyn.match(/Start Port\s*:\s*(\d+)/)?.[1]), dCount = Number(dyn.match(/Number of Ports\s*:\s*(\d+)/)?.[1]);
+        const dynamic = Number.isFinite(dStart) && Number.isFinite(dCount) ? [dStart, dStart + dCount - 1] : null;
+        const inRanges = (rs) => suites
+          .map((s) => [s, [...ports.get(s)].map(Number).filter((p) => rs.some(([lo, hi]) => p >= lo && p <= hi)).sort((a, b) => a - b)])
           .filter(([, ps]) => ps.length > 0);
+        const blocked = inRanges(ranges);
         if (blocked.length) {
           const hit = ranges.filter(([lo, hi]) => blocked.some(([, ps]) => ps.some((p) => p >= lo && p <= hi)));
           console.log(`e2e: WARNING — Windows has RESERVED tcp ports these suites bind (excluded ranges ${hit.map(([lo, hi]) => `${lo}–${hi}`).join(', ')}):`);
           for (const [s, ps] of blocked) console.log(`    ${s}: ${ps.join(', ')}`);
-          console.log('  Their servers cannot bind (WSAEACCES) and will report `fatal: timeout`. Run them SHIFTED — a copy of each'
-            + ' suite with those 5xxx literals moved out of the range (a local devtools/_run-shifted.mjs <lo> <hi> <shift>'
-            + ' <suites>, if you keep that scratch) — or once the reservation moves (`netsh interface ipv4 show'
-            + ' excludedportrange protocol=tcp`).');
+          console.log('  Their servers cannot bind (WSAEACCES) and will report `fatal: timeout`. An ADMINISTERED exclusion'
+            + ' (marked * by `netsh interface ipv4 show excludedportrange protocol=tcp`) stays until removed; any other one'
+            + ' moves at the next reboot.');
         }
+        const exposed = dynamic ? inRanges([dynamic]) : [];
+        if (exposed.length)
+          console.log(`e2e: WARNING — this machine's DYNAMIC tcp range (${dynamic[0]}–${dynamic[1]}) covers the ports of`
+            + ` ${exposed.length} suite(s) (${exposed.map(([s]) => s).join(', ')}): Windows can reserve them or lend them to an`
+            + ' outbound connection, and a suite then fails as a timeout or `fetch failed`. The suites use 25xxx to stay'
+            + ' outside every dynamic range; `netsh interface ipv4 show dynamicport tcp` shows this one.');
       } catch { /* a preflight that cannot run says nothing; the run goes ahead */ }
     }
+
+    // (2) The NODE the suites and the claude stub run on. They run on whatever `node` is on PATH, not on the node the
+    // product pins (ResourceProvisioner.NodeVersion) — and a node fault reads as a flaky suite. Measured 2026-10-01:
+    // v24.15.0 on Windows aborted (0xC0000409) 16 of 9,000 short-lived processes making ten localhost connections each,
+    // and 30 of 5,700 runs of the stub's judge-tools probe — which surfaced as e2e-p36's "scored 5 of 6" — while
+    // v24.13.1, v24.19.0, v22.15.0 and v26.5.1 each ran 2,700–3,600 of the first with none.
+    try {
+      const provCs = fs.readFileSync(path.join(repo, 'src/server/Gatherlight.Platform/Hosting/Resources/Services/ResourceProvisioner.cs'), 'utf8');
+      const pinned = (provCs.match(/NodeVersion\s*=\s*"([^"]+)"/) || [])[1];
+      if (pinned && process.version !== pinned)
+        console.log(`e2e: WARNING — the suites run on Node ${process.version}; the product pins ${pinned}`
+          + ` (ResourceProvisioner.NodeVersion).${process.version === 'v24.15.0'
+            ? ' v24.15.0 is MEASURED faulty here: about 1 process in 560 making localhost connections aborts with 0xC0000409,'
+              + ' which a suite reports as a missing result or `fetch failed`.'
+            : ''} Switch to the pinned version (e.g. \`nvm use ${pinned.slice(1)}\`) for results that mean what they say.`);
+    } catch { /* no pin to compare against says nothing */ }
 
     // Run a suite as a child. Always pipe stdout/stderr (so we can read the suite's own PASS/FAIL
     // line); serial → also echo live (parallel buffers + dumps on finish, since interleaved logs from

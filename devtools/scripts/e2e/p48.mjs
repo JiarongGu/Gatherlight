@@ -37,12 +37,12 @@ const { ok, fail, done } = makeReporter('p48');
 makeTestData(dataDir);
 makeTestData(restoreDir);
 
-const PORT = 5498;
-const RESTORE_PORT = 5499;
-const UPGRADE_PORT = 5497;
-const VECTOR_MOVE_PORT = 5495;
-const BACKFILL_PORT = 5512;
-const RACE_PORT = 5513;
+const PORT = 25498;
+const RESTORE_PORT = 25499;
+const UPGRADE_PORT = 25497;
+const VECTOR_MOVE_PORT = 25495;
+const BACKFILL_PORT = 25512;
+const RACE_PORT = 25513;
 
 /** A fact whose content carries this marker is never annotated by the stub while the server runs with
  *  GATHERLIGHT_STUB_HANG_ANNOTATION set to it — case 9's failing re-index. */
@@ -57,7 +57,7 @@ const SLOW = 'zzslowindex';
 const HANG_ONCE = 'zzhangonce';
 
 /** Case 12: the rephrasing arm's counts, on a folder of its own — booted on a working stub, then on a signed-out one. */
-const PHRASE_PORTS = [5611, 5612];
+const PHRASE_PORTS = [25611, 25612];
 
 let server = null;
 let restoreServer = null;

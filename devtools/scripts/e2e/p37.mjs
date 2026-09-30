@@ -18,8 +18,8 @@ makeTestData(dataDir);
 
 // Free ports — not used by any other suite (checked against every `startServer({ port: ... })` /
 // `const PORT = ...` in devtools/scripts/e2e/*.mjs).
-const PORT_A = 5464;
-const PORT_B = 5465;
+const PORT_A = 25464;
+const PORT_B = 25465;
 
 const manifestPath = path.join(dataDir, 'site.json');
 // The planner guard lives under state/agent/ (app state, outside the jail) since the 2026-09-28 review.

@@ -29,7 +29,7 @@ git('config', 'user.name', 'e2e'); git('config', 'user.email', 'e2e@localhost');
 git('config', 'core.autocrlf', 'false');
 git('add', '-A'); git('commit', '-q', '-m', 'fixture seed');
 
-const srv = startServer({ dataDir, port: 5397, env: { GATHERLIGHT_CODE_ROOT: codeDir, GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const srv = startServer({ dataDir, port: 25397, env: { GATHERLIGHT_CODE_ROOT: codeDir, GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const { j, post, waitPhase } = makeClient(srv.base);
 const codeLog = () => git('log', '--oneline').trim().split('\n').filter(Boolean);
 

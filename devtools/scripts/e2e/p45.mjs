@@ -13,7 +13,7 @@ const dataDir = dataDirFor('p45');
 const { ok, fail, done } = makeReporter('p45');
 makeTestData(dataDir);
 
-const PORT = 5490;
+const PORT = 25490;
 const server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const base = server.base ?? `http://127.0.0.1:${PORT}`;
 const { j, post } = makeClient(base);

@@ -18,7 +18,7 @@ import { repo, dataDirFor, makeReporter, makeTestData, startServer, until, waitH
 const dataA = dataDirFor('p14a');
 const dataB = dataDirFor('p14b');
 const bundlePath = path.join(repo, 'devtools', '_e2e-p14-bundle.json');
-const PA = 5395, PB = 5396;
+const PA = 25395, PB = 25396;
 
 const { ok, fail, done } = makeReporter('p14');
 

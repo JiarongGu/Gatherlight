@@ -16,7 +16,7 @@ const installDir = path.join(repo, 'devtools', '_e2e-p30-install');
 // — exercising RemoteZip.StripSingleRoot exactly like the production bundle.
 const src = path.join(repo, 'devtools', '_e2e-p30-src', 'Gatherlight');
 const zipPath = path.join(repo, 'devtools', '_e2e-p30-update.zip');
-const PORT = 5455, FAKE = 5456;
+const PORT = 25455, FAKE = 25456;
 const { ok, fail, done } = makeReporter('p30');
 const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
 

@@ -9,8 +9,8 @@ import { dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy
 
 const dataDir = dataDirFor('p13');
 const { ok, fail, done } = makeReporter('p13');
-const PORT = 5393;
-const IMG_PORT = 5394;
+const PORT = 25393;
+const IMG_PORT = 25394;
 
 makeTestData(dataDir);
 

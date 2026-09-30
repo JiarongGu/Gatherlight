@@ -122,9 +122,9 @@ const dataDir = dataDirFor('p52');
 const { ok, fail, done } = makeReporter('p52');
 makeTestData(dataDir);
 
-const PORT = 5412;
+const PORT = 25412;
 // Case 4 restarts onto the data folder; a second port, because reusing one inside a suite is its own trap.
-const RESTART_PORT = 5413;
+const RESTART_PORT = 25413;
 // Where the claude stub records each call's argv (case 4) — in this suite's own data folder.
 const argsLog = path.join(dataDir, 'stub-args.jsonl');
 const JUDGE_MODEL = 'zzroute-chat';
@@ -149,30 +149,30 @@ const LATE_EMBED = 'zzlate-embed';
 // Case 7: two servers bound at boot to a reranker the router does NOT list — so the startup warm fails and the
 // warning has to say what happens to tagging — one with a signed-OUT CLI, one signed in as the control.
 const TAGGING_RERANK = 'zztagging-rerank';
-const SIGNED_OUT_PORT = 5415;
-const SIGNED_IN_PORT = 5416;
+const SIGNED_OUT_PORT = 25415;
+const SIGNED_IN_PORT = 25416;
 // Case 9: one data folder booted eight times — up, up again (9a's back-fill), down, partly down (9b), up, down for every
 // fact (9d), up, and up once more as an upgrade (9e) — each on a port of its own.
-const REBUILD_PORTS = [5417, 5418, 5419];
-const BACKFILL_PORT = 5442;
-const PARTIAL_PORT = 5443;
+const REBUILD_PORTS = [25417, 25418, 25419];
+const BACKFILL_PORT = 25442;
+const PARTIAL_PORT = 25443;
 // Case 9d: a rebuild that indexes nothing, and the start after it; case 9e: the one-off revisit of long facts.
-const ZERO_PORTS = [5600, 5601];
-const UPGRADE_PORT = 5411;
+const ZERO_PORTS = [25600, 25601];
+const UPGRADE_PORT = 25411;
 // Case 10: a folder whose settings name GGUFs that are no longer on disk.
-const GONE_PORT = 5420;
+const GONE_PORT = 25420;
 // Case 10c: a folder whose settings name a gone RERANKER, booted against a signed-out CLI.
-const GONE_OUT_PORT = 5421;
+const GONE_OUT_PORT = 25421;
 // Case 11: one folder booted five times — the reindex and the pass cut short (11a, 11b), the start that finishes it, a
 // start the embedder goes down during (11c), the one after, and the restart after a model change (11d) — each on a port
 // of its own.
-const REEMBED_PORTS = [5602, 5603, 5604, 5605, 5606];
+const REEMBED_PORTS = [25602, 25603, 25604, 25605, 25606];
 // Case 11d: the embedding model a bind changes to. "embed" in the name types it an embedder.
 const NEW_EMBED_MODEL = 'zzroute2-embed';
 
 // Case 6: a SECOND server that boots already bound to the reranker, in a data folder of its own. Its own
-// port too — never 5412/5413, which cases 1–5 used.
-const RERANK_PORT = 5414;
+// port too — never 25412/25413, which cases 1–5 used.
+const RERANK_PORT = 25414;
 const rerankDir = dataDirFor('p52-rerank');
 const rerankArgsLog = path.join(rerankDir, 'stub-args.jsonl');
 
@@ -207,8 +207,8 @@ fs.rmSync(rerankArgsLog, { force: true });
 // row declares none. Planted flat by id, like every stand-in here.
 const WINDOWED_RERANK = 'mmarco-mMiniLMv2-L12-H384-v1-Q8_0';
 const UNWINDOWED_RERANK = 'bge-reranker-v2-m3-Q5_K_M';
-const WINDOWED_PORT = 5422;
-const UNWINDOWED_PORT = 5423;
+const WINDOWED_PORT = 25422;
+const UNWINDOWED_PORT = 25423;
 const plantBoundReranker = (suffix, model) => {
   const dir = dataDirFor(`p52-${suffix}`);
   makeTestData(dir);
@@ -227,20 +227,20 @@ const unwindowedDir = plantBoundReranker('unwindowed', UNWINDOWED_RERANK);
 // Case 6e: a server bound to a reranker the fake answers SLOWLY, so the app's pace estimate has something to learn.
 // "rerank" in the name types it a reranker; no catalogue row, so its windows are 1,000 characters.
 const SLOW_RERANK = 'zzslow-rerank';
-const PACE_PORT = 5424;
+const PACE_PORT = 25424;
 const paceDir = plantBoundReranker('pace', SLOW_RERANK);
 // Cases 6f and 6g: the same slow reranker on servers of their own, so each pace starts from the seed.
-const CUTOFF_PORT = 5425;
+const CUTOFF_PORT = 25425;
 const cutoffDir = plantBoundReranker('cutoff', SLOW_RERANK);
-const SCRIPT_PORT = 5426;
+const SCRIPT_PORT = 25426;
 const scriptDir = plantBoundReranker('script', SLOW_RERANK);
 // Case 6h: the same slow reranker, slower than one window per candidate can fit, on a server of its own. The GGUF
 // embedder is planted beside it (not bound) so 资源's 推荐 badge has moved past the embedder to the reranker question.
-const SKIP_PORT = 5427;
+const SKIP_PORT = 25427;
 const skipDir = plantBoundReranker('skip', SLOW_RERANK);
 fs.writeFileSync(path.join(skipDir, 'state', 'resources', 'gguf', 'embeddinggemma-300M-Q8_0.gguf'), '');
 // Case 6i: the same slow reranker on a server of its own, stalled ONCE past the deadline on an otherwise fast fake.
-const STALL_PORT = 5430;
+const STALL_PORT = 25430;
 const stallDir = plantBoundReranker('stall', SLOW_RERANK);
 
 const plantTaggingFixture = (suffix) => {

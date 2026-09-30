@@ -11,8 +11,8 @@ const { ok, fail, done } = makeReporter('p43');
 makeTestData(dataDir);
 
 // Free port — checked against every startServer({ port }) in devtools/scripts/e2e/*.mjs
-// (p41 is the closest neighbour at 5482).
-const PORT = 5484;
+// (p41 is the closest neighbour at 25482).
+const PORT = 25484;
 
 let server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const base = server.base ?? `http://127.0.0.1:${PORT}`;

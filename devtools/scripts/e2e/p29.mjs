@@ -8,7 +8,7 @@ const dataDir = dataDirFor('p29');
 const { ok, fail, done } = makeReporter('p29');
 makeTestData(dataDir);
 const baseEnv = { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd };
-const PORT = 5429;
+const PORT = 25429;
 const base = `http://127.0.0.1:${PORT}`;
 const health = async () => { try { const r = await fetch(`${base}/api/health`); return { ok: r.ok, j: await r.json().catch(() => ({})) }; } catch { return { ok: false, j: {} }; } };
 const status = async () => { const r = await fetch(`${base}/api/migration/status`); return r.json(); };

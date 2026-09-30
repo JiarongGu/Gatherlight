@@ -11,7 +11,7 @@ import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeC
 const dataDir = dataDirFor('p26');
 const { ok, fail, done } = makeReporter('p26');
 makeTestData(dataDir);
-const srv = startServer({ dataDir, port: 5396, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
+const srv = startServer({ dataDir, port: 25396, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const { j, post, put, del, getJson, call } = makeClient(srv.base);
 
 const future = '2026-12-01T09:00:00Z';
@@ -108,7 +108,7 @@ try {
   //     at boot, a migration held open 20 s — no run while it is open, one run once it has finished.
   const jobDir = dataDirFor('p26-migrating');
   makeTestData(jobDir);
-  const JOB_PORTS = [5614, 5615];
+  const JOB_PORTS = [25614, 25615];
   let boot = startServer({ dataDir: jobDir, port: JOB_PORTS[0], env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
   try {
     await waitHealthy(boot.base);

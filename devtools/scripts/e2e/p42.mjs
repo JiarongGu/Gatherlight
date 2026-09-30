@@ -13,8 +13,8 @@ const dataDir = dataDirFor('p42');
 const { ok, fail, done } = makeReporter('p42');
 makeTestData(dataDir);
 
-// Free port — suites use up to 5484 (p43); this one is clear.
-const PORT = 5486;
+// Free port — suites use up to 25484 (p43); this one is clear.
+const PORT = 25486;
 
 const server = startServer({ dataDir, port: PORT, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd } });
 const base = server.base ?? `http://127.0.0.1:${PORT}`;

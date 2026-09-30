@@ -21,8 +21,8 @@ makeTestData(dataDir);
 
 // Free port — not used by any other suite (checked against every `startServer({ port: ... })` /
 // `const PORT = ...` in devtools/scripts/e2e/*.mjs; p36/p37/p38 are the closest neighbours at
-// 5473 / 5464-65 / 5466-69).
-const PORT = 5478;
+// 25473 / 25464-65 / 25466-69).
+const PORT = 25478;
 
 const draftsRoot = path.join(dataDir, '.claude', 'tool-drafts');
 const manifestPath = path.join(dataDir, 'site.json');

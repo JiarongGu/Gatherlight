@@ -13,7 +13,7 @@ import { repo, dataDirFor, makeReporter, makeTestData, startServer, waitHealthy,
 const dataDir = dataDirFor('p20');
 const installDir = path.join(repo, 'devtools', '_e2e-p20-install');
 const scratch = path.join(repo, 'devtools', '_e2e-p20-src');
-const PORT = 5452, FAKE = 5451;
+const PORT = 25452, FAKE = 25451;
 
 const { ok, fail, done } = makeReporter('p20');
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');

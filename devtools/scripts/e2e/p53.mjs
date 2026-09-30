@@ -84,15 +84,15 @@ import { execFileSync } from 'node:child_process';
 import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeClient, until, repo } from './_e2e-common.mjs';
 
 const { ok, fail, done } = makeReporter('p53');
-const PORT = 5437;
-const PACE_PORT = 5438;
-const CONTROL_PORT = 5439;
-const PACE2_PORT = 5440;
-const CONTROL2_PORT = 5441;
-const JOB_PORT = 5446;
-const SLOWEST_PORT = 5447;
-const BOUND_PORT = 5448;
-const BOUND2_PORT = 5450;
+const PORT = 25437;
+const PACE_PORT = 25438;
+const CONTROL_PORT = 25439;
+const PACE2_PORT = 25440;
+const CONTROL2_PORT = 25441;
+const JOB_PORT = 25446;
+const SLOWEST_PORT = 25447;
+const BOUND_PORT = 25448;
+const BOUND2_PORT = 25450;
 
 const BGE = 'bge-reranker-v2-m3-Q5_K_M';
 const LAMAR = 'LAMAR-600m.Q5_K_M';

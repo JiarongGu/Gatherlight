@@ -15,7 +15,7 @@ import { dataDirFor, makeReporter, makeTestData, startServer, until, waitHealthy
 
 const dataDir = dataDirFor('p18');
 const pfxPath = path.join(dataDir, 'state', 'gatherlight-tls.pfx');
-const P1 = 5404, P2 = 5405, P3 = 5406;
+const P1 = 25404, P2 = 25405, P3 = 25406;
 const TOKEN = 'tls-secret-9';
 
 const { ok, fail, done } = makeReporter('p18');

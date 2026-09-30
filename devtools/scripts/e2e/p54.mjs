@@ -31,9 +31,9 @@ import { dataDirFor, makeReporter, makeTestData, startServer, waitHealthy, makeC
 
 const dataDir = dataDirFor('p54');
 const { ok, fail, done } = makeReporter('p54');
-// A 5xxx literal on purpose: the runner keeps suites port-disjoint by scanning each file for 5xxx literals, and
+// A 25xxx literal on purpose: the runner keeps suites port-disjoint by scanning each file for 25xxx literals, and
 // checks them against Windows' reserved ranges before a run. The 6194 this suite first used was invisible to both.
-const PORT = 5623;
+const PORT = 25623;
 // Outside the data folder: a junction under plans/ points here, so a write through it would land outside the jail.
 const outside = `${dataDir}-outside`;
 fs.rmSync(outside, { recursive: true, force: true });

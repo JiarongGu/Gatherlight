@@ -37,21 +37,21 @@ import { dataDirFor, makeReporter, repo, startServer, until, makeClient } from '
 
 const { ok, fail, done } = makeReporter('p49');
 
-// Free ports — not used by any other suite (5499 was the previous high-water mark).
-const PORT_NO_NET = 5501;
-const PORT_TAMPERED = 5502;
-const PORT_PROVISIONED = 5503;
-const PORT_ON_PATH = 5504;
-const PORT_REAL = 5505;
+// Free ports — not used by any other suite (25499 was the previous high-water mark).
+const PORT_NO_NET = 25501;
+const PORT_TAMPERED = 25502;
+const PORT_PROVISIONED = 25503;
+const PORT_ON_PATH = 25504;
+const PORT_REAL = 25505;
 // Case F's. Outside every Windows-excluded tcp range of 2026-09-27 (one of which holds the five above, so this suite
 // runs shifted there) and outside p17's wildcard probe window, where a port of ours would have to join p17's list. (No
 // range is written out here on purpose: the runner's port scan reads comments too.)
-const PORT_INHERITED_GIT = 5381;
+const PORT_INHERITED_GIT = 25381;
 // Case G's, beside it for the same reasons.
-const PORT_INHERITED_CLI = 5382;
+const PORT_INHERITED_CLI = 25382;
 // Nothing binds this one, ever — it is the "there is no network" fixture: a download URL that cannot
 // connect. Kept out of the range above so a future suite doesn't take it and quietly make cases pass.
-const DEAD_URL = 'http://127.0.0.1:5599/MinGit.zip';
+const DEAD_URL = 'http://127.0.0.1:25599/MinGit.zip';
 
 // A machine with no git: every PATH entry that carries one, removed. This is the whole fixture — the
 // failure was never about the data folder, only about what the host happens to have installed.

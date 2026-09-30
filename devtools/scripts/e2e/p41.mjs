@@ -13,8 +13,8 @@ const { ok, fail, done } = makeReporter('p41');
 makeTestData(dataDir);
 
 // Free port — checked against every startServer({ port }) in devtools/scripts/e2e/*.mjs
-// (p40 is the closest neighbour at 5480).
-const PORT = 5482;
+// (p40 is the closest neighbour at 25480).
+const PORT = 25482;
 
 const uiDir = path.join(dataDir, 'ui');
 fs.mkdirSync(uiDir, { recursive: true });

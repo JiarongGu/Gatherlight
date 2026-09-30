@@ -23,7 +23,7 @@ const dataDir = dataDirFor('p36');
 const { ok, fail, done } = makeReporter('p36');
 makeTestData(dataDir);
 const argsLog = path.join(dataDir, 'state', 'stub-args.jsonl');
-const srv = startServer({ dataDir, port: 5473,
+const srv = startServer({ dataDir, port: 25473,
   env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ARGS_LOG: argsLog } });
 const { j, post, call, waitPhase } = makeClient(srv.base);
 const spawns = () => (fs.existsSync(argsLog) ? fs.readFileSync(argsLog, 'utf8') : '')

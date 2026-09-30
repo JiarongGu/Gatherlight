@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import { repo, dataDirFor, makeReporter, startServer, waitHealthy, makeClient, claudeStubCmd, gitLog } from './_e2e-common.mjs';
 
 const dataDir = dataDirFor('p4');
-const PORT = 5394;
+const PORT = 25394;
 const base = `http://127.0.0.1:${PORT}`;
 const binTemplate = path.join(repo, 'src', 'server', 'Gatherlight.Server', 'bin', 'Debug', 'net10.0', 'Assets', 'SiteTemplate');
 

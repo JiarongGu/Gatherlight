@@ -11,7 +11,7 @@ const dataDir = dataDirFor('p23');
 const { ok, fail, done } = makeReporter('p23');
 makeTestData(dataDir);
 const argsLog = path.join(dataDir, 'state', 'stub-args.jsonl');
-const srv = startServer({ dataDir, port: 5472, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ARGS_LOG: argsLog } });
+const srv = startServer({ dataDir, port: 25472, env: { GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_ARGS_LOG: argsLog } });
 const { j } = makeClient(srv.base);
 
 try {
