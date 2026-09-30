@@ -1225,14 +1225,16 @@ the cwd is the planted one above, loaded with `--setting-sources project`, so th
 
 The earlier file is dropped whole, not merged per key. So every scorer ran with neither the fence nor the blanks, while
 the text around this change said it had both; the adoption's final review found it by reading the binary's argv parser,
-and this table confirms it. `MergedSettingsMcpConnector` now hands the scorer one file holding both (the app's value wins
-on a scalar, the allow-list joins its permissions), and `e2e-p36` asserts what a scorer applies. The directory itself is Lyntai's
+and this table confirms it. `MergedSettingsMcpConnector` then handed the scorer one file holding both (the app's value wins
+on a scalar, the allow-list joins its permissions); since Lyntai 3.5.3 (its D190, 2026-10-01) the backend does that merge
+itself and the wrapper is deleted. `e2e-p36` asserts what a scorer applies either way. The directory itself is Lyntai's
 now, owned by the process, so nothing is planted there to begin with; it scopes settings only — a `CLAUDE.md` is read
 from every PARENT of the cwd (Lyntai's measurement, its Part 339), which the empty source list keeps out.
 
 **What the app does with it**: every consumer's one-shot call (`ProviderConsumers.Default` — the scorers, the memory
 judge, 语义's rephrasing) gets `UnguardedTools.OneShot` (PowerShell, Monitor, Bash), `state/settings.oneshot.json`
-(the blanks, `disableSkillShellExecution`, the read fence, no hook — for a scorer, merged into its tool host's file), no
+(the blanks, `disableSkillShellExecution`, the read fence, no hook — for a scorer, merged into its tool host's file, by
+Lyntai since 3.5.3), no
 setting source and `--strict-mcp-config`; every
 agent run gets `ClaudeCliRuntime.SettingSources` (the project) and strict MCP as its OWN options, where through 3.5.1
 the command variable carried them as prefix arguments; the two agent runs from a neutral cwd (`extract`, the

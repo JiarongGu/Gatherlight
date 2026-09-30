@@ -56,6 +56,9 @@ const ALLOWED = new Map([
   ['.claude/rules/dev-conventions.md::JudgeScopedModelRoutingStore',
     'DELETED by the Lyntai 3.4 bump when D176 routes made it redundant; the closed workaround (2) names it to '
     + 'say what the routes replaced and why it could go'],
+  ['.claude/rules/dev-conventions.md::MergedSettingsMcpConnector',
+    'DELETED by the Lyntai 3.5.3 bump when the backend began merging a consumer\'s settings file into the tool host\'s '
+    + '(its D190); the API-key bullet names it to say what the library replaced and what differs'],
   ['docs/DEPLOYMENT.md::IncludeNativeLibrariesForSelfExtract',
     'an MSBuild property quoted while explaining why the shipped host is framework-dependent and does '
     + 'NOT use it'],

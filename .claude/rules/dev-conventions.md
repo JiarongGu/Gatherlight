@@ -2651,11 +2651,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   allow-list file after it, a planted project key helper the one-shot file blanks RAN; reversed, it did not). Lyntai's
   judge-tools connector appends its own file — only its tools' allow-list — after the one-shot one, so the one consumer
   that grades agent-written text applied neither the fence nor the blanks; the final review of the adoption caught it,
-  after every sentence here said it had them. `MergedSettingsMcpConnector` wraps the connector and hands one file holding
-  both (the app's value wins on a scalar; the allow-list joins the app's permissions) — a workaround for a Lyntai gap, our
-  `TASKS.md` Part 342, deleted when the library merges them itself. `e2e-p36` asserts what a scorer APPLIES (the stub
-  records the last `--settings` file's content) and that its tools stay pre-approved, confirmed to FAIL with the wrapper
-  removed. **Still out of reach**: the MANAGED scope (it outranks the command line — an administrator's); names
+  after every sentence here said it had them. Through 3.5.2 `MergedSettingsMcpConnector` wrapped the connector and handed
+  one file holding both — a workaround for a Lyntai gap, our `TASKS.md` Part 342. **Lyntai 3.5.3 closed it** (its D190,
+  the request archived as its Part 343) and the bump DELETED the wrapper (2026-10-01): the backend merges the consumer's
+  settings file INTO the host's per-call file — objects key by key, lists joined, the consumer's value winning a clash, the
+  wrapper's rule too — and hands that one. One difference: Lyntai reads the one-shot settings from the FILE at each call,
+  where the wrapper merged the app's JSON from memory, so with no file written (the startup Error above) a scorer now fails
+  at its start like every other one-shot call rather than being the one call that still carried the settings. `e2e-p36`
+  asserts what a scorer APPLIES (the stub records the last `--settings` file's content) and that its tools stay
+  pre-approved — confirmed to FAIL on 3.5.2 with the wrapper removed (2026-09-30, and again at the bump: the scorer applied
+  `{"permissions":{"allow":["mcp__lyntai__*"]}}` alone), and green on 3.5.3 without it. **Still out of reach**: the MANAGED scope (it outranks the command line — an administrator's); names
   matched only by the `ANTHROPIC_*_BASE_URL` pattern beyond the listed ones (read only under a provider selector, every
   one of which is blanked); and an active federation profile in the default Anthropic configuration directory. Proof:
   `e2e-p54` — each of the five generated settings files blanks the helper and every name, and leaves

@@ -413,11 +413,11 @@ public static class GatherlightApp
                 // has is refused when the provisioner is built, so a rename cannot quietly host fewer.
                 // e2e-p36 asserts both halves from the stub's argv.
                 //
-                // The connector hands a scorer a SECOND --settings (its tools' allow-list) after the one-shot file
-                // above, and the CLI applies only the last — so it is wrapped to hand one file holding both
-                // (MergedSettingsMcpConnector; a workaround for a Lyntai gap, its TASKS.md Part 342).
-                .AddMcpToolHost(new MergedSettingsMcpConnector(
-                    new Lyntai.Providers.ClaudeCli.ClaudeCliMcpConnector(), ChatEnvironmentService.OneShotSettingsJson()), o =>
+                // The connector hands a scorer its OWN --settings (its tools' allow-list), and the CLI applies only
+                // the last — so since Lyntai 3.5.3 (D190, our request in its TASKS.md Part 342, archived as Part 343)
+                // the backend merges the one-shot file above INTO that per-call file and hands the one. Through 3.5.2
+                // the app wrapped this connector to do it (MergedSettingsMcpConnector, deleted with the bump).
+                .AddMcpToolHost(new Lyntai.Providers.ClaudeCli.ClaudeCliMcpConnector(), o =>
                 {
                     o.ToolsByConsumer[Lyntai.Inference.ProviderConsumers.Default] = [];
                     o.ToolsByConsumer[Platform.Agent.Llm.Services.LiveRoutes.Scorer] =

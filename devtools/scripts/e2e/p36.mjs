@@ -107,7 +107,8 @@ try {
   // (ClaudeCompletionOptions.SettingsPath: the blanked key paths, disableSkillShellExecution, the read fence) — and a
   // scorer is then handed the judge-tools host's OWN --settings after it (its tools' allow-list). The CLI applies only
   // the LAST --settings (measured, claude 2.1.285), so the host's file silently replaced the app's: the one consumer that
-  // grades agent-written text ran with no fence and no blanks. The host's file now carries both (MergedSettingsMcpConnector).
+  // grades agent-written text ran with no fence and no blanks. The host's file now carries both — merged by Lyntai since
+  // 3.5.3 (its D190); through 3.5.2 the app's own wrapper did it, and this row fails on 3.5.2 without that wrapper.
   // The stub records the file it would APPLY (claude-stub.mjs, effectiveSettings).
   const effective = scorers.map((x) => x.settings ?? {});
   const unmerged = effective.filter((s) => !(s.disableSkillShellExecution === true && s.apiKeyHelper === ''

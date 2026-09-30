@@ -73,15 +73,15 @@
          Packages are split by DEPENDENCY FOOTPRINT, not vendor: Providers.Basic (renamed from
          Providers.Default in 3.2) holds the CLI and HTTP backends and needs nothing beyond Core. The `Lyntai`
          metapackage is deliberately NOT used: it would pull backends this app never spawns. -->
-    <PackageReference Include="Lyntai.Core" Version="3.5.2" />
-    <PackageReference Include="Lyntai.Providers.Basic" Version="3.5.2" />
+    <PackageReference Include="Lyntai.Core" Version="3.5.3" />
+    <PackageReference Include="Lyntai.Providers.Basic" Version="3.5.3" />
     <!-- The in-process transformer backend (D124/D157/D191): the built-in reranker judge — mmarco-mMiniLMv2 as ONNX, its
          SentencePiece tokenizer read from tokenizer.json by Lyntai's own tokenizer (D191). Managed half only; the native CPU
          backend is Microsoft.ML.OnnxRuntime above. -->
-    <PackageReference Include="Lyntai.Providers.Onnx" Version="3.5.2" />
+    <PackageReference Include="Lyntai.Providers.Onnx" Version="3.5.3" />
     <!-- Lyntai's SQLite storage backs the scoring store (lyntai_score_result: upsert + aggregate + export),
          landed in the same gatherlight.db (lyntai_-prefixed, coexists with the app's own tables). -->
-    <PackageReference Include="Lyntai.Storage.Sqlite" Version="3.5.2" />
+    <PackageReference Include="Lyntai.Storage.Sqlite" Version="3.5.3" />
     <!-- The ephemeral loopback MCP host Lyntai stands up per one-shot ITextClient call. It reaches ONLY
          the ClaudeCliProvider path, and since 3.4 (D190, McpToolHostOptions.ToolsByConsumer in
          GatherlightApp) only the calls tagged `scorer` — the two LLM-judge scorers — giving them the
@@ -90,7 +90,7 @@
          from this server's loopback-only /mcp channel (AgentMcpWiring). The host runs on HttpListener, not
          Kestrel — no ASP.NET framework reference. Lyntai.Tools.Mcp.Hosting folded into this package in 3.2;
          the namespace is unchanged. -->
-    <PackageReference Include="Lyntai.Tools.Mcp" Version="3.5.2" />
+    <PackageReference Include="Lyntai.Tools.Mcp" Version="3.5.3" />
   </ItemGroup>
 
 </Project>
