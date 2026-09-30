@@ -76,14 +76,16 @@ public sealed class OnnxEmbedder : IVectorProvider, IDisposable
     }
 
     /// <summary>Is the model actually on disk? Asked before anything is bound to this backend, so a missing
-    /// download is a sentence in the console rather than an exception on the first fact written.</summary>
+    /// download is a sentence in the console rather than an exception on the first fact written. It asks for the graph
+    /// this process LOADS — <see cref="ModelFile"/>, unless the Run 16 measurement knob chose another export
+    /// (<see cref="EmbedExport"/>).</summary>
     public static bool IsPresent(string modelDir) =>
-        File.Exists(Path.Combine(modelDir, ModelFile.Replace('/', Path.DirectorySeparatorChar)))
+        File.Exists(Path.Combine(modelDir, EmbedExport.ModelFile.Replace('/', Path.DirectorySeparatorChar)))
         && File.Exists(Path.Combine(modelDir, TokenizerFile));
 
     private (InferenceSession, SentencePieceTokenizer) Load()
     {
-        var onnx = Path.Combine(_dir, ModelFile.Replace('/', Path.DirectorySeparatorChar));
+        var onnx = Path.Combine(_dir, EmbedExport.ModelFile.Replace('/', Path.DirectorySeparatorChar));
         var sp = Path.Combine(_dir, TokenizerFile);
         if (!File.Exists(onnx) || !File.Exists(sp))
             throw new InvalidOperationException(

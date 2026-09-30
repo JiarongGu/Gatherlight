@@ -19,7 +19,10 @@
 //   semb    — 语义 on 内置 (Run 15): `builtin` · embeddinggemma-300m-onnx, the in-process ONNX EmbeddingGemma
 //             (OnnxEmbedder), from `<resources>/embed-model` (ResourceProvisioner's pinned files, re-checked here and
 //             copied into the arm's state/resources/embed-model). No llama.cpp is planted, no address set, no router runs.
-// Every arm pins the knob (blank or d177) and must announce exactly what it pinned.
+//   semb8   — semb with GATHERLIGHT_EMBED_ONNX_EXPORT=int8 (EmbedExport, Run 16): the same repository's int8 export
+//             (onnx/model_quantized.onnx), pinned below; the arm's embed-model holds ONLY that export and the tokenizer.
+//   semb32  — the same with fp32 (onnx/model.onnx).
+// Every arm pins both knobs (blank, d177, int8 or fp32) and must announce exactly what it pinned.
 //
 // ROUTERS. Run 14 ran every llama.cpp arm on ONE shared router (`--shared-router` reproduces that). Since Run 15 each
 // llama.cpp arm gets its OWN fresh router, started before the arm and stopped after it, on `--llama-port` + the arm's
@@ -37,6 +40,7 @@
 //       [--port-base=7830] [--llama-port=7890] [--n=<first n facts>] [--order-seed=12345] [--shared-router]
 //   node devtools/scripts/semantic-bench.mjs --capability --resources=devtools/_rr-res
 //   node devtools/scripts/semantic-bench.mjs --fixture=long --arms=formula,sem,sem2,semb,cpu-sem --resources=devtools/_rr-res
+//   node devtools/scripts/semantic-bench.mjs --fixture=short --arms=formula,sem,sem2,cpu-sem,semb,semb8,semb32 --resources=devtools/_rr-res
 // Output: devtools/_semantic-bench-<fixture>/ (arm folders, rows-*.jsonl, results-*.json, each router's preset and log).
 // Every process it starts is ended by PID as a tree.
 import fs from 'node:fs';
@@ -68,7 +72,8 @@ const EMBEDDER = 'embeddinggemma-300M-Q8_0';
 const WORK = path.join(repo, 'devtools', `_semantic-bench-${FIXTURE_NAME}`);
 const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
 const KNOB = 'GATHERLIGHT_EMBED_SEGMENTATION';
-const PINNED = { GATHERLIGHT_VERDICT_COMBINATION: '', GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '', GATHERLIGHT_RERANK_CHUNKING: '', [KNOB]: '' };
+const EXPORT_KNOB = 'GATHERLIGHT_EMBED_ONNX_EXPORT';
+const PINNED = { GATHERLIGHT_VERDICT_COMBINATION: '', GATHERLIGHT_JUDGE_DEADLINE_SECONDS: '', GATHERLIGHT_RERANK_CHUNKING: '', [KNOB]: '', [EXPORT_KNOB]: '' };
 const ARM_KINDS = {
   formula: { label: '公式 · 语义 off', semantic: false, env: {} },
   sem: { label: '语义 · llama.cpp EmbeddingGemma · refused past the window (as shipped)', semantic: true, env: {} },
@@ -76,6 +81,10 @@ const ARM_KINDS = {
   sems: { label: '语义 · llama.cpp EmbeddingGemma · D177 segmented', semantic: true, env: { [KNOB]: 'd177' }, knob: /\[measurement\] embed segmentation = d177 \(/ },
   'cpu-sem': { label: '语义 · llama.cpp EmbeddingGemma · CPU only (n-gpu-layers = 0, device = none)', semantic: true, cpu: true, env: {} },
   semb: { label: '语义 · 内置 · in-process ONNX EmbeddingGemma (CPU)', semantic: true, builtin: true, env: {} },
+  semb8: { label: '语义 · 内置 · the int8 ONNX export (Run 16)', semantic: true, builtin: true, export: 'int8', env: { [EXPORT_KNOB]: 'int8' },
+    knob: /\[measurement\] builtin embed export = int8 → onnx\/model_quantized\.onnx \(/ },
+  semb32: { label: '语义 · 内置 · the fp32 ONNX export (Run 16)', semantic: true, builtin: true, export: 'fp32', env: { [EXPORT_KNOB]: 'fp32' },
+    knob: /\[measurement\] builtin embed export = fp32 → onnx\/model\.onnx \(/ },
 };
 for (const a of ARMS) if (!ARM_KINDS[a]) die(`unknown arm ${a} — one of ${Object.keys(ARM_KINDS).join(', ')}`);
 if (new Set(ARMS).size !== ARMS.length) die(`--arms names an arm twice (${ARMS.join(', ')})`);
@@ -114,6 +123,22 @@ if (BUILTIN_BACKEND !== 'builtin' || BUILTIN_MODEL !== 'embeddinggemma-300m-onnx
   || !/public const string ModelFile = "onnx\/model_q4\.onnx";/.test(onnxEmbedder) || !/public const string TokenizerFile = "tokenizer\.model";/.test(onnxEmbedder))
   die(`the built-in embedder's ids or pinned files moved (backend ${BUILTIN_BACKEND}, model ${BUILTIN_MODEL}, dir ${BUILTIN_DIR}, `
     + `files ${BUILTIN_FILES.map((f) => f.path).join(', ')}) — this bench restates them`);
+// Run 16's exports: the files EmbedExport resolves each knob value to (read back from the C#), pinned by the sha256 the design
+// registered — the repository's own LFS ids at the commit the q4 pin names. The tokenizer is the pinned one for every export.
+const embedExport = cs('Gatherlight.Platform/Agent/Llm/Services/EmbedExport.cs');
+if (!embedExport.includes(`public const string KnobName = "${EXPORT_KNOB}";`) || !/"int8" => "onnx\/model_quantized\.onnx"/.test(embedExport)
+  || !/"fp32" => "onnx\/model\.onnx"/.test(embedExport) || !/IsPresent[\s\S]{0,400}EmbedExport\.ModelFile/.test(onnxEmbedder)
+  || !/Load\(\)[\s\S]{0,200}EmbedExport\.ModelFile/.test(onnxEmbedder))
+  die('EmbedExport no longer maps int8/fp32 to the files this bench pins, or OnnxEmbedder no longer loads what it resolves');
+const EXPORT_FILES = {
+  int8: [{ path: 'onnx/model_quantized.onnx', sha: '172efde319fe1542dc41f31be6154910b05b78f7a861c265c4600eec906bd6d8' },
+    { path: 'onnx/model_quantized.onnx_data', sha: '705626e28e4c23c82ade34566b4197d97f534c12275fa406dfb71e9937d388c0' }],
+  fp32: [{ path: 'onnx/model.onnx', sha: 'ea91fd315a7c152d427d231746f0f811a1ac93beaba656abfdf2b24e091265e4' },
+    { path: 'onnx/model.onnx_data', sha: 'ef835ae565d8695236652475903078e8ed794c7c35faf1164d78ec3238e8a88d' }],
+};
+const filesOf = (kind) => (kind.export ? [...EXPORT_FILES[kind.export], BUILTIN_FILES.find((f) => f.path === 'tokenizer.model')] : BUILTIN_FILES);
+const listFiles = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { recursive: true, withFileTypes: true })
+  .filter((e) => e.isFile()).map((e) => path.relative(dir, path.join(e.parentPath ?? e.path, e.name)).split(path.sep).join('/')).sort() : []);
 const BUILTIN_LOAD = /内置 embedder loaded in (\d+) ms/;
 if (!onnxEmbedder.includes('"内置 embedder loaded in {Ms} ms from {Dir}"')) die('OnnxEmbedder no longer logs its load line as this bench reads it');
 
@@ -264,10 +289,10 @@ async function main() {
   }
   // 内置's files (Run 15): ResourceProvisioner's pins, re-checked before any arm starts.
   const builtinSrc = path.join(RESOURCES, BUILTIN_DIR);
-  if (ARMS.some((a) => ARM_KINDS[a].builtin))
-    for (const f of BUILTIN_FILES) {
+  const toCheck = [...new Map(ARMS.filter((a) => ARM_KINDS[a].builtin).flatMap((a) => filesOf(ARM_KINDS[a])).map((f) => [f.path, f])).values()];
+  for (const f of toCheck) {
       const file = path.join(builtinSrc, ...f.path.split('/'));
-      if (!fs.existsSync(file)) die(`${rel(file)} is missing — provision ${BUILTIN_DIR} through the app first`);
+      if (!fs.existsSync(file)) die(`${rel(file)} is missing — provision ${BUILTIN_DIR} through the app first (Run 16's exports: download them from the pinned commit)`);
       const sha = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
       if (sha !== f.sha) die(`${rel(file)} is not the pinned file (sha256 ${sha.slice(0, 12)}… ≠ ${f.sha.slice(0, 12)}…)`);
     }
@@ -328,7 +353,7 @@ async function main() {
       const res = path.join(dir, 'state', 'resources');
       if (kind.builtin) {
         // 内置: the pinned files where BuiltInSemanticSource looks; NO llama.cpp and no address — a machine without it.
-        for (const f of BUILTIN_FILES) {
+        for (const f of filesOf(kind)) {
           const to = path.join(res, BUILTIN_DIR, ...f.path.split('/'));
           fs.mkdirSync(path.dirname(to), { recursive: true });
           fs.copyFileSync(path.join(builtinSrc, ...f.path.split('/')), to);
@@ -348,7 +373,8 @@ async function main() {
     const port = PORT_BASE + i;
     const srv = startServer({ dataDir: dir, port, env });
     started.push(srv.server.pid);
-    const arm = { key, label: kind.label, dir, port, semantic: kind.semantic, knob: kind.env[KNOB] ?? '', backend: kind.semantic ? expectSource : null, cpu: !!kind.cpu };
+    const arm = { key, label: kind.label, dir, port, semantic: kind.semantic, knob: kind.env[KNOB] ?? '', backend: kind.semantic ? expectSource : null, cpu: !!kind.cpu,
+      ...(kind.builtin ? { export: kind.export ?? 'q4', embedModelFiles: listFiles(path.join(dir, 'state', 'resources', BUILTIN_DIR)) } : {}) };
     const routerText = () => (rt ? fs.readFileSync(rt.log, 'utf8') : '');
     try {
       await waitHealthy(srv.base);
@@ -445,7 +471,8 @@ async function main() {
   const results = { at: new Date().toISOString(), fixture: FIXTURE_NAME, fixtureFile: rel(FIXTURE_FILE), fixtureHash: FIXTURE_HASH, facts: facts.length,
     orderSeed: ORDER_SEED, limit: LIMIT, serverBinary: binary, appHead: git(repo, 'rev-parse', '--short', 'HEAD').trim(), embedder: EMBEDDER, window: WINDOW,
     ...(routerSummary ? { router: routerSummary } : { routers: 'per arm' }),
-    ...(ARMS.some((a) => ARM_KINDS[a].builtin) ? { builtin: { model: BUILTIN_MODEL, files: BUILTIN_FILES } } : {}),
+    ...(ARMS.some((a) => ARM_KINDS[a].builtin) ? { builtin: { model: BUILTIN_MODEL, files: BUILTIN_FILES,
+      ...(ARMS.some((a) => ARM_KINDS[a].export) ? { exports: EXPORT_FILES } : {}) } } : {}),
     arms: arms.map(({ dir, ...a }) => ({ ...a, dir: rel(dir) })) };
   const file = path.join(WORK, `results-${stamp}.json`);
   fs.writeFileSync(file, JSON.stringify(results, null, 2));
@@ -476,7 +503,8 @@ function report(r) {
   for (const [g, where] of groups) console.log(`  ${g.padEnd(20)} ` + r.arms.map((a) => { const s = stat(a.rows.filter(where)); return `${a.key} ${s.top1}/${s.found} of ${s.n}${s.err ? ` (${s.err} err)` : ''}`; }).join(' · '));
   // Run 14's pairs first, in Run 14's order (a saved Run 14 run prints exactly what it printed); Run 15's after them.
   const pairsOf = [['sems', 'sem'], ['sem2', 'sem'], ['sem', 'formula'], ['sems', 'formula'],
-    ['semb', 'cpu-sem'], ['semb', 'sem'], ['cpu-sem', 'sem'], ['cpu-sem', 'formula'], ['semb', 'formula']].filter(([x, y]) => by[x] && by[y]);
+    ['semb', 'cpu-sem'], ['semb', 'sem'], ['cpu-sem', 'sem'], ['cpu-sem', 'formula'], ['semb', 'formula'],
+    ...RUN16_PAIRS].filter(([x, y]) => by[x] && by[y]);
   console.log(`\n== paired (b = right-hand hit & left-hand miss, c = the reverse; McNemar exact; Agresti–Min 95%) ==`);
   r.paired = {};
   for (const [x, y] of pairsOf) {
@@ -498,7 +526,8 @@ function report(r) {
   }
   if (!r.router) {
     // Run 15: rows whose target position or whole page differ, per pair — the implementations' spread against llama.cpp's own.
-    const ids = [['sem2', 'sem'], ['cpu-sem', 'sem'], ['semb', 'cpu-sem'], ['semb', 'sem']].filter(([x, y]) => by[x] && by[y]);
+    const ids = [['sem2', 'sem'], ['cpu-sem', 'sem'], ['semb', 'cpu-sem'], ['semb', 'sem'],
+      ['semb8', 'cpu-sem'], ['semb32', 'cpu-sem'], ['semb8', 'semb'], ['semb32', 'semb'], ['semb32', 'semb8']].filter(([x, y]) => by[x] && by[y]);
     if (ids.length) {
       r.identity15 = Object.fromEntries(ids.map(([x, y]) => {
         const d = differ(by[x], by[y]);
@@ -509,7 +538,52 @@ function report(r) {
   }
   console.log(`\n== time per recall (median ms) ==  ${r.arms.map((a) => `${a.key} ${med(a.rows.map((x) => x.ms))}`).join(' · ')}`);
   if (r.router) console.log(`router: ${r.router.spawns} spawn(s), ${r.router.errorLines} error line(s), ${r.router.tooLarge} too-large line(s)`);
-  else report15(r, by);
+  else { report15(r, by); report16(r, by); }
+}
+
+/** A sign test over the paired recalls' times: how many of x's recalls were slower than y's same question. */
+function signTest(x, y) {
+  const B = new Map(y.rows.filter((q) => !q.error).map((q) => [q.seq, q]));
+  let slower = 0, faster = 0, tied = 0;
+  for (const q of x.rows.filter((z) => !z.error)) { const o = B.get(q.seq); if (!o) continue; if (q.ms > o.ms) slower++; else if (q.ms < o.ms) faster++; else tied++; }
+  const p = mcnemarP(slower, faster);
+  return { slower, faster, tied, p, significantlySlower: p < 0.05 && slower > faster };
+}
+
+// Run 16's pairs (docs/judge-bench.md, its design): the rule, the quantisation alone, the GPU reference, and context.
+const RUN16_PAIRS = [['semb8', 'cpu-sem'], ['semb32', 'cpu-sem'], ['semb8', 'semb'], ['semb32', 'semb'], ['semb32', 'semb8'],
+  ['semb8', 'sem'], ['semb32', 'sem'], ['semb8', 'formula'], ['semb32', 'formula']];
+
+/** Run 16's block: Run 15's two clauses read for each CANDIDATE export (semb8, semb32) against cpu-sem, the quantisation
+ *  pairs within 内置, and each candidate's cost. The load clause is read from the scratch load sampler, outside the bench. */
+function report16(r, by) {
+  const cpu = by['cpu-sem'];
+  const candidates = ['semb8', 'semb32'].filter((k) => by[k]);
+  if (!cpu || !candidates.length) return;
+  const mb = (m) => (m && m.privateBytes ? `${(m.privateBytes / 1048576).toFixed(0)} MB` : '—');
+  r.run16 = {};
+  console.log(`\n== RUN 16 — Run 15's clauses for each candidate export on this fixture (b = cpu-sem hit & candidate miss) ==`);
+  for (const k of candidates) {
+    const a = by[k];
+    const acc = r.paired[`${k} vs cpu-sem`].all.found;
+    const worse = acc.p < 0.05 && acc.c - acc.b < 0;
+    const mK = med(a.rows.filter((q) => !q.error).map((q) => q.ms)), mCpu = med(cpu.rows.filter((q) => !q.error).map((q) => q.ms));
+    const st = signTest(a, cpu);
+    const higher = mK > mCpu && st.significantlySlower;
+    r.run16[k] = { export: a.export, accuracy: { ...acc, significantlyWorse: worse }, latency: { candidate: mK, cpuSem: mCpu, ...st, higher, plainHigher: mK > mCpu } };
+    console.log(`  ${k} (${a.export}): accuracy vs cpu-sem found@8 ${acc.b}/${acc.c}, p ${pv(acc.p)}, ${acc.netPp >= 0 ? '+' : ''}${acc.netPp.toFixed(1)}pp`
+      + ` [${acc.interval95Pp.map((v) => v.toFixed(1)).join(', ')}]${acc.equivalent ? ' (equivalent)' : ''} → significantly worse: ${worse ? 'YES' : 'no'}`);
+    console.log(`  ${' '.repeat(k.length)}          latency: median ${mK} ms against cpu-sem ${mCpu} ms; slower on ${st.slower}, faster on ${st.faster}, tied ${st.tied}`
+      + ` (sign test p ${pv(st.p)}) → HIGHER: ${higher ? 'YES' : 'no'}; the plain medians alone: ${mK > mCpu ? 'higher' : 'not higher'}`);
+    console.log(`  ${' '.repeat(k.length)}          cost: write median ${med(a.writes.map((w) => w.ms))} ms (p90 ${pct(a.writes.map((w) => w.ms), 0.9)}),`
+      + ` recall p90 ${pct(a.rows.filter((q) => !q.error).map((q) => q.ms), 0.9)} ms, server after recalls ${mb(a.memory?.afterRecalls)};`
+      + ` embed-model files ${(a.embedModelFiles ?? []).join(', ')}`);
+  }
+  console.log(`  the quantisation alone (within 内置):`);
+  for (const [x, y] of [['semb8', 'semb'], ['semb32', 'semb'], ['semb32', 'semb8']]) {
+    const p = r.paired[`${x} vs ${y}`]?.all;
+    if (p) console.log(`    ${`${x} vs ${y}`.padEnd(16)} found@8 ${p.found.b}/${p.found.c} p ${pv(p.found.p)}${p.found.equivalent ? ' equivalent' : ''} · top-1 ${p.top1.b}/${p.top1.c} p ${pv(p.top1.p)}${p.top1.equivalent ? ' equivalent' : ''}`);
+  }
 }
 
 /** Run 15's block: the rule's two clauses, its reference comparisons, and every guard the bench itself can read. */
@@ -533,13 +607,6 @@ function report15(r, by) {
     }
     console.log(`           passes: writes ${a.passes?.writes?.from} – ${a.passes?.writes?.to}; recalls ${a.passes?.recalls?.from} – ${a.passes?.recalls?.to}`);
   }
-  const signTest = (x, y) => {
-    const B = new Map(y.rows.filter((q) => !q.error).map((q) => [q.seq, q]));
-    let slower = 0, faster = 0, tied = 0;
-    for (const q of x.rows.filter((z) => !z.error)) { const o = B.get(q.seq); if (!o) continue; if (q.ms > o.ms) slower++; else if (q.ms < o.ms) faster++; else tied++; }
-    const p = mcnemarP(slower, faster);
-    return { slower, faster, tied, p, significantlySlower: p < 0.05 && slower > faster };
-  };
   const bi = by.semb, cpu = by['cpu-sem'], gpu = by.sem;
   if (!bi || !cpu) return;
   r.run15 = {};

@@ -146,6 +146,11 @@ public static class GatherlightApp
         if (!string.IsNullOrWhiteSpace(embedSegRaw))
             Console.WriteLine($"[measurement] embed segmentation = {Platform.Agent.Llm.Services.EmbedSegmentation.Name} "
                 + $"({Platform.Agent.Llm.Services.EmbedSegmentation.KnobName}={embedSegRaw})");
+        // Run 16's measurement knob: which ONNX export the 内置 embedder loads (EmbedExport), with the file it resolved to.
+        var embedExportRaw = Platform.Agent.Llm.Services.EmbedExport.Raw;
+        if (!string.IsNullOrWhiteSpace(embedExportRaw))
+            Console.WriteLine($"[measurement] builtin embed export = {Platform.Agent.Llm.Services.EmbedExport.Name} → "
+                + $"{Platform.Agent.Llm.Services.EmbedExport.ModelFile} ({Platform.Agent.Llm.Services.EmbedExport.KnobName}={embedExportRaw})");
 
         builder.Services
             .AddSingleton(options)
