@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Gatherlight.Server.Platform.Hosting.Resources.Services;
 using Gatherlight.Server.Platform.Kernel.Services;
+using Lyntai.Inference.Cli;
 
 namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 
@@ -121,7 +122,8 @@ public interface IClaudeCliRuntime
 /// changes the answer — resolving once in the constructor is the exact trap that left a freshly installed
 /// git invisible to a retry.</para>
 ///
-/// <para>The seam into Lyntai is <c>CLAUDE_CMD</c>, not a constructor argument, and that is deliberate:
+/// <para>The seam into Lyntai is an environment variable — <c>LYNTAI_PROVIDER_CMD</c>, the one it reads first, with
+/// <c>CLAUDE_CMD</c> set beside it for the provisioned copy — not a constructor argument, and that is deliberate:
 /// <c>ClaudeAgentSession</c> resolves its command INSIDE the run (per spawn), while
 /// <c>AddClaudeCliAgentSession(command)</c> captures its argument once at DI registration. Only the env
 /// var can carry an answer that changed after startup — which is the whole point of a mid-life install.</para>
@@ -139,17 +141,22 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
     /// <summary>The env seams an operator or a test may set, in Lyntai's precedence order. One that set any of
     /// these has chosen the CLI deliberately, and <see cref="Apply"/> must not overrule that choice — the e2e stub
     /// is exactly this case, and clobbering it would silently test a real claude. <c>LYNTAI_PROVIDER_CMD</c> is read
-    /// as it was at LAUNCH (<see cref="LaunchedProviderCommand"/>): since round 6 the app itself writes it, to carry
-    /// <see cref="IsolationArgs"/>, so its live value is ours.</summary>
+    /// as it was at LAUNCH (<see cref="LaunchedProviderCommand"/>): since round 6 the app itself writes it — the command
+    /// <see cref="Locate"/> resolved — so its live value is ours.</summary>
     private static readonly string[] Overrides = { "CLAUDE_CMD", "GATHERLIGHT_CLAUDE_CMD" };
 
-    /// <summary>Every claude CLI run Lyntai starts — the agent session and the one-shot provider alike — is told to
-    /// read NO configuration of the household's: <c>--setting-sources project</c> drops the USER scope (the machine
-    /// account's own settings, hooks, permissions, skills, plugins, env and apiKeyHelper in "machine" login mode) and
-    /// the LOCAL scope (<c>.claude/settings.local.json</c>, where Claude Code saves a permission the household
-    /// approves interactively, and <c>CLAUDE.local.md</c>); <c>--strict-mcp-config</c> drops a project
-    /// <c>.mcp.json</c> (and claude.ai connectors), leaving only the servers the app passes with <c>--mcp-config</c>.
-    /// The app's own <c>--settings</c> file — the scope guard's hook included — still applies.
+    /// <summary>The setting sources every agent run loads unless its site chose otherwise: the PROJECT alone (see
+    /// <see cref="IsolationArgs"/>). A run from a neutral directory, and every one-shot call, loads none
+    /// (<see cref="NeutralDirectory"/>).</summary>
+    public static readonly IReadOnlyList<string> SettingSources = ["project"];
+
+    /// <summary>Every agent run the app starts reads NO configuration of the household's: <c>--setting-sources
+    /// project</c> drops the USER scope (the machine account's own settings, hooks, permissions, skills, plugins, env and
+    /// apiKeyHelper in "machine" login mode) and the LOCAL scope (<c>.claude/settings.local.json</c>, where Claude Code
+    /// saves a permission the household approves interactively, and <c>CLAUDE.local.md</c>); <c>--strict-mcp-config</c>
+    /// drops a project <c>.mcp.json</c> (and claude.ai connectors), leaving only the servers the app passes with
+    /// <c>--mcp-config</c>. The app's own <c>--settings</c> file — the scope guard's hook included — still applies. The
+    /// one-shot calls (scorers, memory judge, rephrasing) load no source at all, from a directory with nothing in it.
     /// <para><b>The PROJECT scope stays, and it has to</b>: it is what loads the site's knowledge base — the data
     /// folder's <c>CLAUDE.md</c>, <c>.claude/rules</c>, skills, agents and commands. So a project
     /// <c>.claude/settings.json</c> is still READ by the app's runs; the agent cannot write it (PROTECTED), and
@@ -158,37 +165,55 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
     /// <c>env</c> — is blanked by the app's own <c>--settings</c>, which outrank it per key
     /// (<c>ChatEnvironmentService.BuildChatSettings</c>). All of it measured on CLI 2.1.283 at 0 tokens
     /// (<c>docs/self-managed-llm-runtime.md</c>, 2026-09-28 and 2026-09-29).</para>
-    /// <para><b>Why through the command.</b> Lyntai's <c>ClaudeAgentOptions</c> has no seam for an extra flag (Lyntai
-    /// <c>TASKS.md</c> Part 332). Its command variables are tokenised into an executable plus PREFIX arguments, which
-    /// both the agent session and the one-shot provider put ahead of their own — so the app writes
-    /// <c>LYNTAI_PROVIDER_CMD</c>, the variable Lyntai reads first, as the resolved command plus these flags. The app's
-    /// own spawns use <see cref="Locate"/>, which never carries them: the <c>auth status</c> probe adds them itself, so it
-    /// reports the account a run will use; <c>logout</c> and the login window do not, since they act on the session.
-    /// When Part 332 lands, the flags move onto the options and this composition goes.</para></summary>
-    public static readonly IReadOnlyList<string> IsolationArgs = ["--setting-sources", "project", "--strict-mcp-config"];
+    /// <para><b>How they reach a run.</b> Since Lyntai 3.5.2 they are the run's own options —
+    /// <c>ClaudeAgentOptions.SettingSources</c> (<see cref="SettingSources"/>) and <c>StrictMcpConfig</c>, set for every
+    /// agent run in <see cref="AgentRunner"/>, the one door — and the one-shot provider's per consumer
+    /// (<c>ClaudeCompletionOptions</c>, set in <c>GatherlightApp</c>), where the calls load NO source at all. Through 3.5.1
+    /// neither path had the seam (Lyntai <c>TASKS.md</c> Part 332, released as its Part 337), so the app wrote them into
+    /// <c>LYNTAI_PROVIDER_CMD</c> as PREFIX arguments of the command; that composition is gone, and a value a 1.4 process
+    /// left for a relaunch has the old suffix stripped (<see cref="StripLegacySuffix"/>). This list is what the app's OWN
+    /// spawn of the CLI adds: the <c>auth status</c> probe carries it, so it reports the account a run will use;
+    /// <c>logout</c> and the login window do not, since they act on the session.</para></summary>
+    public static readonly IReadOnlyList<string> IsolationArgs =
+        ["--setting-sources", string.Join(',', SettingSources), "--strict-mcp-config"];
 
-    private static readonly string IsolationSuffix = " " + string.Join(' ', IsolationArgs);
+    /// <summary>The directory a claude run is spawned from when it must load nothing of any folder's: the one Lyntai's
+    /// one-shot calls use (<c>CliProviderEngine.NeutralWorkingDirectory</c>, its D196 — a directory this PROCESS owns
+    /// under temp, with an unguessable name, removed at exit), created if missing. It used to be the account's shared temp
+    /// folder, whose project <c>.claude/settings.json</c> — hooks and a key helper included — any program the user runs
+    /// could plant, and every claude spawned there loaded it. It scopes SETTINGS only: a <c>CLAUDE.md</c> is read from every
+    /// PARENT of the working directory too, so a run from here also loads no setting source.</summary>
+    public static string NeutralDirectory()
+    {
+        Directory.CreateDirectory(CliProviderEngine.NeutralWorkingDirectory);
+        return CliProviderEngine.NeutralWorkingDirectory;
+    }
 
-    /// <summary><c>LYNTAI_PROVIDER_CMD</c> as the process was launched with it (our own suffix stripped, so a relaunch
-    /// that inherited the composed value does not compose it twice). Captured on first touch of this type, which
-    /// <c>GatherlightApp.Build</c> makes before anything writes the variable (<see cref="PinProviderCommand"/>).</summary>
-    private static readonly string? LaunchedProviderCommand = StripIsolation(Environment.GetEnvironmentVariable("LYNTAI_PROVIDER_CMD"));
+    // What 1.4 appended to LYNTAI_PROVIDER_CMD (its IsolationArgs, as prefix arguments). A literal: it is what an older
+    // build wrote, whatever this one's flags become.
+    private const string LegacySuffix = " --setting-sources project --strict-mcp-config";
 
-    private static string? StripIsolation(string? command)
+    /// <summary><c>LYNTAI_PROVIDER_CMD</c> as the process was launched with it, the suffix a 1.4 process composed into it
+    /// stripped — the flags are the runs' options now, and a relaunch that inherited the composed value would otherwise
+    /// hand every run both copies. Captured on first touch of this type, which <c>GatherlightApp.Build</c> makes before
+    /// anything writes the variable (<see cref="PinProviderCommand"/>).</summary>
+    private static readonly string? LaunchedProviderCommand = StripLegacySuffix(Environment.GetEnvironmentVariable("LYNTAI_PROVIDER_CMD"));
+
+    private static string? StripLegacySuffix(string? command)
     {
         if (string.IsNullOrWhiteSpace(command)) return null;
         var c = command.Trim();
-        while (c.EndsWith(IsolationSuffix, StringComparison.Ordinal)) c = c[..^IsolationSuffix.Length].TrimEnd();
+        while (c.EndsWith(LegacySuffix, StringComparison.Ordinal)) c = c[..^LegacySuffix.Length].TrimEnd();
         return c.Length == 0 ? null : c;
     }
 
-    /// <summary>The command line Lyntai runs: <paramref name="command"/> (quoted when it is a bare path holding a
-    /// space) plus <see cref="IsolationArgs"/>, exactly once.</summary>
+    /// <summary>The command line Lyntai runs: <paramref name="command"/>, quoted when it is a bare path holding a
+    /// space.</summary>
     public static string ProviderCommand(string command, bool isPath)
     {
-        var c = StripIsolation(command) ?? PathFallback;
+        var c = StripLegacySuffix(command) ?? PathFallback;
         if (isPath && c.Contains(' ') && !c.StartsWith('"')) c = $"\"{c}\"";
-        return c + IsolationSuffix;
+        return c;
     }
 
     /// <summary>Called once at startup, before anything can spawn a CLI: the variable Lyntai reads first is set from
@@ -319,8 +344,8 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         // household running their own claude still needs a Git Bash the CLI will use.
         ApplyGitBash();
 
-        // What Lyntai runs is what Locate() resolves, plus the isolation flags — set on EVERY Apply, before the
-        // override return, so an override (the e2e stub) carries them too.
+        // What Lyntai runs is what Locate() resolves — set on EVERY Apply, before the override return, so the variable
+        // Lyntai reads first never keeps a launched value this process has already resolved past (a composed 1.4 one).
         var located = Locate() ?? PathFallback;
         var isPath = ExplicitOverride(_platform.ResourcesPath) is null && !string.Equals(located, PathFallback, StringComparison.Ordinal);
         var providerCommand = ProviderCommand(located, isPath);
@@ -622,8 +647,11 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         ResourceProvisioner.InstalledClaudeVersion(_platform.ResourcesPath);
 
     /// <summary>Spawn the CLI the way Lyntai does — ArgumentList only (never a shell), BOM-less UTF-8 both
-    /// directions, from a NEUTRAL cwd so the data folder's CLAUDE.md and knowledge base are not loaded for
-    /// what is a one-line status query. Returns ok=false when the process could not be started at all.</summary>
+    /// directions, from the SAME neutral cwd its one-shot calls use (<see cref="NeutralDirectory"/>), so neither the
+    /// data folder's knowledge base nor a project settings file some program planted in the shared temp folder is
+    /// loaded for what is a one-line status query — the probe carries <c>--setting-sources project</c>, and from the
+    /// shared temp folder it read that folder's <c>.claude/settings.json</c>, key helper included. Returns ok=false when
+    /// the process could not be started at all.</summary>
     private async Task<(bool Ok, string Stdout, string Stderr)> RunAsync(
         string? exe, string[] args, CancellationToken ct)
     {
@@ -637,7 +665,6 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
         var psi = new ProcessStartInfo
         {
             FileName = file,
-            WorkingDirectory = System.IO.Path.GetTempPath(),
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             StandardOutputEncoding = Utf8NoBom,
@@ -650,6 +677,8 @@ public sealed class ClaudeCliRuntime : IClaudeCliRuntime
 
         try
         {
+            // Inside the try: a directory that cannot be created is a probe that could not start, never a throw.
+            psi.WorkingDirectory = NeutralDirectory();
             using var p = Process.Start(psi);
             if (p is null) return (false, "", "");
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);

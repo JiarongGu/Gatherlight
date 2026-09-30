@@ -115,10 +115,20 @@ const recordLoads = (kind) => {
   catch { /* a log that cannot be written must not change what the stub answers */ }
 };
 recordLoads(spawnKind);
+// THE SETTINGS THIS SPAWN WOULD APPLY, recorded beside its args (e2e-p36). The CLI applies only the LAST `--settings`
+// it is handed (measured, claude 2.1.285 — docs/self-managed-llm-runtime.md 2026-09-30), and a scorer spawn is handed two:
+// the app's one-shot file, then the judge-tools host's. The files are temp files deleted when the call ends, so only the
+// spawn itself can read what the effective one said.
+const effectiveSettings = (() => {
+  const at = args.lastIndexOf('--settings');
+  if (at < 0) return null;
+  const v = String(args[at + 1] ?? '');
+  try { return JSON.parse(v.trimStart().startsWith('{') ? v : fs.readFileSync(v, 'utf8')); } catch { return { unreadable: v }; }
+})();
 if (process.env.GATHERLIGHT_STUB_ARGS_LOG) {
   try {
     fs.appendFileSync(process.env.GATHERLIGHT_STUB_ARGS_LOG,
-      JSON.stringify({ args, kind: spawnKind, tail: prompt.slice(-600) }) + '\n', 'utf8');
+      JSON.stringify({ args, kind: spawnKind, tail: prompt.slice(-600), settings: effectiveSettings }) + '\n', 'utf8');
   } catch { /* a log that cannot be written must not change what the stub answers */ }
 }
 

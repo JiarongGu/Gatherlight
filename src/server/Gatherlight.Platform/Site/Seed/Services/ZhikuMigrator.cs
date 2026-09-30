@@ -253,7 +253,10 @@ public sealed class ZhikuMigrator : IZhikuMigrator
         var res = await _agent.RunAsync(new ClaudeAgentOptions
         {
             Prompt = await _harness.KbMergePrompt(path, userContent, templateContent),
-            WorkingDirectory = Path.GetTempPath(),   // neutral: the merge is self-contained in the prompt
+            // Neutral: the merge is self-contained in the prompt. The process's own directory and no setting source,
+            // so nothing of any folder's loads (ClaudeCliRuntime.NeutralDirectory).
+            WorkingDirectory = ClaudeCliRuntime.NeutralDirectory(),
+            SettingSources = [],
             ToolPolicy = AgentToolPolicy.ReadOnly,
             Model = model,
             TimeoutSeconds = 1800,

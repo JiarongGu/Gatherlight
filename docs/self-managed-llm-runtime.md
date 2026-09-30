@@ -1165,3 +1165,76 @@ playground, which run in the data folder and passed no settings at all, now pass
 skill's CONTENT was rejected: the agent can write `.claude/skills/` and invoke what it wrote in the same run — a scan
 before the run misses a skill written during it, and a check on Edit/Write misses one a Bash command writes (the
 best-effort leg) — while the setting holds whoever wrote the skill and whenever.
+
+### 2026-09-30 — the ONE-SHOT calls, configured at last (Lyntai 3.5.2): no shell, the app's settings, no source, their own directory
+
+Lyntai 3.5.2 released the four requests the round-6 work filed (its `TASKS.md` Parts 330–333, archived there as Parts
+334–341): a per-consumer seam for the one-shot claude path (`ClaudeCliBackend.CompletionByConsumer` →
+`ClaudeCompletionOptions`: `DisallowedTools`, `SettingsPath`, `SettingSources`, `StrictMcpConfig`), the same two scope
+options on `ClaudeAgentOptions`, and a completion working directory the PROCESS owns (`CliProviderEngine
+.NeutralWorkingDirectory`, `lyntai-cli-<hex>` under temp, removed at exit) instead of the account's shared temp folder.
+The question for the real CLI was whether the argv the app now hands every one-shot call runs, and what it keeps out.
+
+**Method, 0 tokens**, as on 2026-09-29: claude **2.1.285**, the machine's own login (read only), a scratch cwd under
+`devtools/` (gitignored), `hi` on stdin, a `UserPromptSubmit` hook that exits 2 added to the `--settings` file (with no
+setting source, a project file's hook would not load). Every run answered 「UserPromptSubmit operation blocked by hook」
+with 0 input and 0 output tokens, cost 0.
+
+```
+claude -p --output-format stream-json --verbose --disallowed-tools AskUserQuestion,PowerShell,Monitor,Bash \
+  --settings <file> --setting-sources "" --strict-mcp-config --model haiku
+```
+
+**What it keeps out**, from the init event, against the same call with no `--setting-sources` and no extra denials:
+
+| | tools: Bash / PowerShell / Monitor | MCP servers | skills beyond the CLI's bundled ones |
+|---|---|---|---|
+| the default sources | yes / yes / yes | the user scope's server + the claude.ai connectors (4) | the account's plugin skills (9) |
+| the one-shot argv | no / no / no | none | none |
+
+`apiKeySource` read `none` in both (the login is not a setting source). An EMPTY `--setting-sources` value is accepted
+(Lyntai measured the same on 2.1.285, its Part 337). **A missing `--settings` file fails the CLI outright**: 「Error:
+Settings file not found: …」, exit 1 — which is why the app writes `state/settings.oneshot.json` in
+`GatherlightApp.Build`, before the provider is registered, not at the knowledge-base step with the agent runs' four.
+
+**A planted project settings file**, the residual the shared temp folder was: a cwd whose `.claude/settings.json` holds
+an `apiKeyHelper` that writes a marker and prints a fake key. The `--settings` file is the one a p54 fixture boot
+generated, verbatim, plus only the blocking hook:
+
+| `--settings` | `--setting-sources` | `apiKeySource` | the planted helper ran |
+|---|---|---|---|
+| the generated one-shot file | `""` (what the app sends) | `none` | no |
+| the blocking hook alone (control) | `project` | **`apiKeyHelper`** | **yes** |
+| the generated one-shot file | `project` | `none` | no |
+
+So a one-shot call is covered twice: no source is loaded from its directory at all, and the file's own blanks
+(`"apiKeyHelper": ""`, every off-subscription name `""`) would outrank one if it were — PROVIDED that file is the one the
+CLI applies, which for a scorer it was not (next).
+
+**Two `--settings` on one argv: only the LAST applies.** A scorer's argv carries the one-shot file and then, appended
+by Lyntai's judge-tools connector, a file holding only its tools' allow-list (`permissions.allow: mcp__<server>__*`).
+File A below is the generated one-shot file plus the blocking hook; file B is an allow-list file plus the blocking hook;
+the cwd is the planted one above, loaded with `--setting-sources project`, so the helper runs unless A applies:
+
+| `--settings` | `apiKeySource` | the planted helper ran |
+|---|---|---|
+| A | `none` | no |
+| B (control) | **`apiKeyHelper`** | **yes** |
+| A, then B — the scorer's argv | **`apiKeyHelper`** | **yes** |
+| B, then A | `none` | no |
+
+The earlier file is dropped whole, not merged per key. So every scorer ran with neither the fence nor the blanks, while
+the text around this change said it had both; the adoption's final review found it by reading the binary's argv parser,
+and this table confirms it. `MergedSettingsMcpConnector` now hands the scorer one file holding both (the app's value wins
+on a scalar, the allow-list joins its permissions), and `e2e-p36` asserts what a scorer applies. The directory itself is Lyntai's
+now, owned by the process, so nothing is planted there to begin with; it scopes settings only — a `CLAUDE.md` is read
+from every PARENT of the cwd (Lyntai's measurement, its Part 339), which the empty source list keeps out.
+
+**What the app does with it**: every consumer's one-shot call (`ProviderConsumers.Default` — the scorers, the memory
+judge, 语义's rephrasing) gets `UnguardedTools.OneShot` (PowerShell, Monitor, Bash), `state/settings.oneshot.json`
+(the blanks, `disableSkillShellExecution`, the read fence, no hook — for a scorer, merged into its tool host's file), no
+setting source and `--strict-mcp-config`; every
+agent run gets `ClaudeCliRuntime.SettingSources` (the project) and strict MCP as its OWN options, where through 3.5.1
+the command variable carried them as prefix arguments; the two agent runs from a neutral cwd (`extract`, the
+knowledge-base migrator) and the `auth status` probe run from the process's own directory (`ClaudeCliRuntime
+.NeutralDirectory`), the two runs with no source. Asserted in `e2e-p49` case G4, `e2e-p54` and `e2e-p36`.

@@ -199,8 +199,14 @@ public static class RerankChunking
 /// call by <see cref="RerankPace"/> without segmenting it itself; and Part 306's <c>InputSegmentation.MaxDocumentPiece</c>
 /// bounds a document's pieces apart from the query, which can express this class's rule for a model declaring no window
 /// (1,000 characters whatever the query) — read only where a window is set, so such a model needs <c>MaxInputChars</c>
-/// set generously beside it. What 3.5.0 still does not give such a decorator is what was SENT: D177 counts no pieces for
-/// its caller, and the HTTP reranker returns no usage, so the pace would learn from a bound rather than a count.
+/// set generously beside it. What 3.5.0 still did not give such a decorator is what was SENT: D177 counts no pieces for
+/// its caller, and the HTTP reranker returned no usage, so the pace would learn from a bound rather than a count. Since
+/// 3.5.2 the HTTP reranker DOES report the tokens the server counted (<c>ScoreResponse.Usage</c> from
+/// <c>usage.prompt_tokens</c>, Lyntai D163 — our request, its Part 329, released as its Part 340), counting every piece
+/// sent, so a pace over D177 could now learn from a count; D177 still reports no per-input piece count. This class passes
+/// that usage through untouched and does not read it: <see cref="RerankPace"/> sizes a call BEFORE sending it, so it
+/// needs its own estimate anyway, and its rules and every threshold were calibrated in that estimate's unit — a server
+/// count after the fact would put two units into one rate.
 /// <b>Run 10 kept this class</b> (<c>docs/judge-bench.md</c> Run 10, 2026-09-27, Lyntai 3.5.1): the owner's rule was to
 /// switch only if D177 were significantly BETTER for BGE on the long fixture's found@8, worse for no reranker at any
 /// position or on the mixed fixture's short targets, and byte-identical on short facts. For BGE it was significantly
@@ -212,7 +218,8 @@ public static class RerankChunking
 /// their edges on text boundaries) and did not hold: mMiniLMv2 182 → 188 (3/9, p = 0.146), and on these fixtures neither
 /// placement ever splits an answer, so D177's lead is not explained by where the edges fall — what explains it is open.
 /// What would reopen the switch is a within-run result under the same rule in which D177 is better for BGE — worth running
-/// once a pace over D177 can learn from what was sent rather than a bound — or the owner changing the rule. The Lyntai
+/// once a pace over D177 can learn from what was sent rather than a bound, which since 3.5.2's rerank usage it can (the
+/// measurement, and a pace built on that count, are what remain) — or the owner changing the rule. The Lyntai
 /// half: Part 289's outcome names an app-side segmenting score-provider decorator as the adopter's copy to remove when
 /// D177 releases; Lyntai's <c>TASKS.md</c> Part 329 now records why this one stayed (Run 10), though its placement reading
 /// predates Run 12 (dev-conventions, workaround (6)). Lyntai's <c>docs/memory-measurements.md</c> records our Run 6c as

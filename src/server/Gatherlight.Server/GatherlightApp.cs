@@ -44,8 +44,9 @@ public static class GatherlightApp
         var stubCmd = Environment.GetEnvironmentVariable("GATHERLIGHT_CLAUDE_CMD");
         if (!string.IsNullOrEmpty(stubCmd) && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CLAUDE_CMD")))
             Environment.SetEnvironmentVariable("CLAUDE_CMD", stubCmd);
-        // Every claude run Lyntai starts reads none of the household's own CLI config (ClaudeCliRuntime.IsolationArgs):
-        // pinned here, before anything can spawn one; ClaudeCliRuntime.Apply refines it once the provisioned copy is known.
+        // The command every claude run Lyntai starts is spawned with, pinned here before anything can spawn one (an
+        // override, else PATH's claude); ClaudeCliRuntime.Apply refines it once the provisioned copy is known. What the
+        // runs READ is their own options now: AgentRunner's setting sources, and the one-shot backend's below.
         Platform.Agent.Llm.Services.ClaudeCliRuntime.PinProviderCommand();
 
         var builder = WebApplication.CreateBuilder(args ?? Array.Empty<string>());
@@ -82,6 +83,9 @@ public static class GatherlightApp
         config ??= new ServerConfigService(options);
         var logsDir = Path.Combine(Path.GetFullPath(options.DataPath), "state", "logs");
         var dbPath = Path.Combine(Path.GetFullPath(options.DataPath), "state", "gatherlight.db"); // = IPlatformContext.DatabasePath (for Lyntai's store)
+        // The settings file every one-shot claude call is handed (the provider registration below), written NOW: a
+        // --settings naming a file that does not exist fails the CLI outright, and nothing below may spawn before it.
+        var oneShotSettings = ChatEnvironmentService.WriteOneShotSettings(Path.GetDirectoryName(dbPath)!, out var oneShotProblem);
         var logLevel = ResolveLogLevel(config.Current.LogLevel);
         var fwLevel = logLevel > LogLevel.Warning ? logLevel : LogLevel.Warning;
         builder.Logging.AddProvider(new Platform.Kernel.Logging.FileLoggerProvider(logsDir, logLevel));
@@ -186,7 +190,26 @@ public static class GatherlightApp
             .AddLyntai(b =>
             {
                 b
-                .AddClaudeCliProvider()
+                // Every ONE-SHOT claude call — the scorers, the memory judge's annotation and verification, 语义's
+                // rephrasing — spawned alike, whatever its consumer ("default" is the fallback for each; Lyntai 3.5.2,
+                // D190, our requests in its TASKS.md Parts 330, 332 and 333): the agent runs' unguarded shells removed and
+                // Bash with them, the one-shot settings file (the blanked key paths, disableSkillShellExecution, the read
+                // fence — written above, before anything can spawn one, since a --settings naming a missing file fails
+                // the CLI), NO setting source (a CLAUDE.md is read from every parent of the cwd, so only this keeps one
+                // out) and no project .mcp.json. The cwd is Lyntai's own, a directory this process owns (its D196).
+                .AddClaudeCliProvider(new Lyntai.Providers.ClaudeCli.ClaudeCliBackend
+                {
+                    CompletionByConsumer = new Dictionary<string, Lyntai.Providers.ClaudeCli.ClaudeCompletionOptions>
+                    {
+                        [Lyntai.Inference.ProviderConsumers.Default] = new()
+                        {
+                            DisallowedTools = UnguardedTools.OneShot,
+                            SettingsPath = oneShotSettings,
+                            SettingSources = [],
+                            StrictMcpConfig = true,
+                        },
+                    },
+                })
                 // The interactive two-gate + jobs + playground drive the CLI's own agent loop through
                 // Lyntai's IAgentSession (registered here). Long agentic runs need a budget bigger than the
                 // 2-min provider default: lift the ceiling so a per-call TimeoutSeconds up to 2h is honored
@@ -389,7 +412,12 @@ public static class GatherlightApp
                 // -read tools they never use. The names are the tools' own constants; one no registered ITool
                 // has is refused when the provisioner is built, so a rename cannot quietly host fewer.
                 // e2e-p36 asserts both halves from the stub's argv.
-                .AddMcpToolHost(new Lyntai.Providers.ClaudeCli.ClaudeCliMcpConnector(), o =>
+                //
+                // The connector hands a scorer a SECOND --settings (its tools' allow-list) after the one-shot file
+                // above, and the CLI applies only the last — so it is wrapped to hand one file holding both
+                // (MergedSettingsMcpConnector; a workaround for a Lyntai gap, its TASKS.md Part 342).
+                .AddMcpToolHost(new MergedSettingsMcpConnector(
+                    new Lyntai.Providers.ClaudeCli.ClaudeCliMcpConnector(), ChatEnvironmentService.OneShotSettingsJson()), o =>
                 {
                     o.ToolsByConsumer[Lyntai.Inference.ProviderConsumers.Default] = [];
                     o.ToolsByConsumer[Platform.Agent.Llm.Services.LiveRoutes.Scorer] =
@@ -782,6 +810,9 @@ public static class GatherlightApp
             app.Logger.LogInformation(
                 "Child environment: {Names} kept for the app's own use and withheld from every process it starts",
                 string.Join(", ", forgotten.AppSecrets));
+        if (oneShotProblem is not null)
+            app.Logger.LogError("Claude CLI: could not write the one-shot calls' settings file {Path}: {Problem}",
+                oneShotSettings, oneShotProblem);
 
         // Loud, once-at-startup warning when the LAN opt-in is exposing the app unauthenticated.
         if (openBind && options.AllowLanWithoutToken)

@@ -41,8 +41,14 @@ public sealed class AgentRunner : IAgentRunner
         Action<AgentEvent>? onEvent = null, EditTracker? tracker = null, CancellationToken ct = default)
     {
         // Every agent run, whichever site built it: the CLI built-ins the scope guard cannot see are removed here, the one
-        // door they all go through (UnguardedTools).
-        options = UnguardedTools.Apply(options);
+        // door they all go through (UnguardedTools). And it reads none of the household's own CLI config — the project
+        // source alone, unless the site chose its sources (a run from a neutral directory loads none), and no project
+        // .mcp.json. Lyntai's own options since 3.5.2 (its Part 337); through 3.5.1 the command variable carried them.
+        options = UnguardedTools.Apply(options) with
+        {
+            SettingSources = options.SettingSources ?? ClaudeCliRuntime.SettingSources,
+            StrictMcpConfig = true,
+        };
         var emit = onEvent ?? (_ => { });
         var sw = Stopwatch.StartNew();
         // The one line that makes every LLM call traceable — consumer, cwd, model, policy, flags, prompt
@@ -58,7 +64,7 @@ public sealed class AgentRunner : IAgentRunner
             !string.IsNullOrEmpty(options.SettingsPath),
             !string.IsNullOrEmpty(options.ResumeToken), options.AllowedTools.Count, options.Prompt.Length);
 
-        // The run reads none of the household's own CLI config (ClaudeCliRuntime.IsolationArgs), but the CLI's project
+        // The run reads none of the household's own CLI config (the setting sources above), but the CLI's project
         // files in the data folder are still the household's — their interactive claude reads all three — and a hook
         // planted in .claude/settings.json would run in the app's next run too. So a run in the data folder is
         // snapshotted, and whatever it CREATED or CHANGED among them is undone when it ends, however it ends; a file it

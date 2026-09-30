@@ -16,14 +16,22 @@ namespace Gatherlight.Server.Platform.Kernel.Services;
 /// (<see cref="ParentSessionVariables"/>), whatever would take the claude CLI off the subscription login
 /// (<see cref="OffSubscriptionVariables"/>), whatever could add the agent a tool past the scope guard
 /// (<see cref="AgentToolVariables"/>) and the app's own secrets (<see cref="AppSecretVariables"/>, which the app
-/// itself reads through <see cref="Launched"/>). No child the app starts has any use for them, and three spawns cannot be
-/// reached per call: Lyntai's CLI runs go through its sealed <c>ProcessRunner</c>, whose <c>environment</c> argument can
-/// only SET variables (a BYO <c>IProcessRunner</c> would be the seam, but Lyntai then reports every CLI as available without looking —
-/// <c>CliProviderEngine.IsAvailable</c> is optimistic for any runner that is not its own — so a missing CLI would stop
-/// being skipped by the router); <c>ClaudeCliRuntime.StartLogin</c> uses ShellExecute, which carries no environment of
-/// its own; and Playwright's driver builds its <c>ProcessStartInfo</c> inside the library. All three inherit this
-/// process's environment, so that is where the forgetting happens. It is also where the app already talks to Lyntai's
-/// CLI spawns: <c>ClaudeCliRuntime.Apply</c> sets <c>CLAUDE_CMD</c> and <c>CLAUDE_CONFIG_DIR</c> here.</item>
+/// itself reads through <see cref="Launched"/>). No child the app starts has any use for them, and two spawns cannot be
+/// reached per call: <c>ClaudeCliRuntime.StartLogin</c> uses ShellExecute, which carries no environment of its own (it is
+/// the one spawn that WANTS a console window of its own, and only ShellExecute gives one from a process that has a console),
+/// and Playwright's driver builds its <c>ProcessStartInfo</c> inside the library. Both inherit this process's environment,
+/// so that is where the forgetting happens. It is also where the app already talks to Lyntai's CLI spawns:
+/// <c>ClaudeCliRuntime.Apply</c> sets <c>CLAUDE_CMD</c> and <c>CLAUDE_CONFIG_DIR</c> here.
+/// <para><b>Lyntai's CLI runs COULD now be narrowed per spawn, and are not, on purpose.</b> Through 3.5.1 its sealed
+/// <c>ProcessRunner</c> could only SET a variable, and a BYO runner lost the availability probe; 3.5.2 closed both (a null
+/// value REMOVES an inherited variable, and <c>IProcessRunner.CommandExists</c> answers the probe — our request, Lyntai
+/// <c>TASKS.md</c> Part 331, released as its Parts 334 and 335). The claude-CLI policy (<see cref="OffSubscriptionVariables"/>,
+/// <see cref="AgentToolVariables"/>) still stays process-wide, because one claude spawn has no environment seam at all: the
+/// login window, where an inherited endpoint would reach the very flow that signs the household in. Moved to the spawns
+/// that can take it, the policy would have two writers and one hole. What would end that: the login started by
+/// <c>CreateProcess</c> with a new console and an environment block of its own; then the policy moves to the claude spawns
+/// (Lyntai's registrations' <c>environment</c>, with a null per name, and this runtime's probe and logout), and an external
+/// MCP server gets back an inherited Anthropic key it may want.</para></item>
 /// <item><b>A class that needs less is narrowed at its own spawn</b>: git (<see cref="ForGit"/>), node running code we
 /// ship (<see cref="ForPlatformNode"/>), the capability sandbox (<see cref="ForSandbox"/>) and llama.cpp
 /// (<see cref="ForLlamaServer"/>).</item>
@@ -159,9 +167,9 @@ public static class ChildEnvironment
     /// OWN settings files (the machine's <c>~/.claude/settings.json</c> in machine login mode, managed settings), and an
     /// active federation profile in the default Anthropic configuration directory. Those are the CLI's configuration,
     /// read by the CLI itself.</para>
-    /// <para>Stripped from the whole PROCESS, because Lyntai's CLI runs have no per-spawn seam (the class comment). So an
-    /// external MCP server loses them too: one that calls the Anthropic API itself takes its key from the server's own
-    /// configured environment, which is applied after the inherited one.</para></summary>
+    /// <para>Stripped from the whole PROCESS, because the claude login window has no per-spawn seam (the class comment).
+    /// So an external MCP server loses them too: one that calls the Anthropic API itself takes its key from the server's
+    /// own configured environment, which is applied after the inherited one.</para></summary>
     public static readonly IReadOnlyList<string> OffSubscriptionVariables =
     [
         "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AWS_API_KEY", "ANTHROPIC_FOUNDRY_API_KEY",

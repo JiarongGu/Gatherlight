@@ -7,8 +7,8 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// <c>.claude/settings.json</c>, <c>.claude/settings.local.json</c>, <c>.mcp.json</c> — and touches nothing else.
 ///
 /// <para><b>What reads these files, since round 6.</b> The app's own runs do not read the LOCAL settings or
-/// <c>.mcp.json</c> at all (<see cref="ClaudeCliRuntime.IsolationArgs"/>: <c>--setting-sources project
-/// --strict-mcp-config</c>); they still read the PROJECT <c>.claude/settings.json</c>, because the project scope is
+/// <c>.mcp.json</c> at all (<see cref="ClaudeCliRuntime.SettingSources"/> and <c>StrictMcpConfig</c> on every agent run:
+/// <c>--setting-sources project --strict-mcp-config</c>); they still read the PROJECT <c>.claude/settings.json</c>, because the project scope is
 /// also what loads the site's knowledge base. The household's own INTERACTIVE <c>claude</c> in the data folder reads
 /// all three — that is where Claude Code saves the permissions they approve. So these are the household's files,
 /// and an earlier version of this class that moved them out of the folder around every run took the household's

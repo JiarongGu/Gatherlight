@@ -36,11 +36,12 @@ namespace Gatherlight.Server.Platform.Agent.Llm.Services;
 /// code-intelligence plugin is installed; and <c>SendUserFile</c>, <c>RemoteTrigger</c>, <c>CronCreate</c> and
 /// <c>ReadMcpResourceTool</c> reach the household's own account, session or MCP servers, not a path past the jail.</para>
 ///
-/// <para><b>Not covered here</b>: Lyntai's ONE-SHOT calls (the scorers, the memory judge, 语义's rephrasing) do not go
-/// through <see cref="AgentRunner"/>. Their argv is Lyntai's internal <c>ClaudeArgs</c>, which disallows only
-/// <c>AskUserQuestion</c>, from a neutral working directory with no settings file; the app has no seam to narrow it.
-/// There, as in any <c>-p</c> run with no permission host, what needs approval is refused, and read-only commands and
-/// permission-free tools remain.</para>
+/// <para><b>The one-shot calls</b> (the scorers, the memory judge, 语义's rephrasing) do not go through
+/// <see cref="AgentRunner"/>: they are Lyntai's <c>ClaudeCliProvider</c>, whose argv disallowed only
+/// <c>AskUserQuestion</c> until Lyntai 3.5.2 gave it a per-consumer seam (<c>ClaudeCliBackend.CompletionByConsumer</c>,
+/// its D190; our request, its <c>TASKS.md</c> Part 330). <c>GatherlightApp</c> now hands every consumer
+/// <see cref="OneShot"/>: the same two, and Bash, as a read-only run loses it — a one-shot call reads the prompt it is
+/// handed and answers it, and never needed a shell.</para>
 /// </summary>
 public static class UnguardedTools
 {
@@ -51,11 +52,15 @@ public static class UnguardedTools
     /// extract / validate). A plan writes nothing, so its only use for Bash was reads — which the read
     /// fence already confines to the data folder — while a read-only Bash could still run inline eval or
     /// launch a shell that escapes the guard. Removing it OUTRIGHT (not just dropping it from the
-    /// allow-list) is the enforcement: some read-only sites pass no settings file at all (extract,
-    /// validate, the migrator), so the allow-list drop alone would not reach them, but every one goes
+    /// allow-list) is the enforcement: some read-only sites pass no settings file at all (extract and
+    /// the migrator), so the allow-list drop alone would not reach them, but every one goes
     /// through <see cref="AgentRunner"/> keyed on its policy. A read-only run keeps Read/Grep/Glob and the
     /// read-only MCP tools — everything a plan needs.</summary>
     private static readonly IReadOnlyList<string> RemovedReadOnly = ["Bash"];
+
+    /// <summary>The built-ins removed from every ONE-SHOT call: what a read-only agent run loses — <see cref="Removed"/>
+    /// and Bash. Lyntai adds <c>AskUserQuestion</c> itself, always.</summary>
+    public static readonly IReadOnlyList<string> OneShot = [.. Removed, .. RemovedReadOnly];
 
     /// <summary><paramref name="options"/> with <see cref="Removed"/> — and, for a read-only policy,
     /// <see cref="RemovedReadOnly"/> — added to what it already disallows.</summary>

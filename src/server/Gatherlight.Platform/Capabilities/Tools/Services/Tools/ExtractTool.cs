@@ -60,7 +60,11 @@ public sealed class ExtractTool : IGatherlightTool
         var res = await _agent.RunAsync(new ClaudeAgentOptions
         {
             Prompt = await _harness.ProcessFilePrompt(absPath, instruction),
-            WorkingDirectory = Path.GetTempPath(), // neutral: no CLAUDE.md / knowledge-base load
+            // Neutral: no knowledge base, and nothing of any folder's — the process's own directory, not the shared temp
+            // folder whose planted project settings (hooks, a key helper) it used to load, and NO setting source, since
+            // a CLAUDE.md is read from every parent of the cwd too (ClaudeCliRuntime.NeutralDirectory).
+            WorkingDirectory = ClaudeCliRuntime.NeutralDirectory(),
+            SettingSources = [],
             ToolPolicy = AgentToolPolicy.ReadOnly, // Read allowed; Edit/Write denied
             Model = _appConfig.Get("llm.model.extract") ?? "sonnet",
             TimeoutSeconds = 600,

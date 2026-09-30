@@ -66,6 +66,10 @@ const srv = startServer({
   dataDir, port: PORT,
   env: {
     GATHERLIGHT_CLAUDE_CMD: claudeStubCmd, GATHERLIGHT_STUB_FSOPS_LOG: fsopsLog, GATHERLIGHT_STUB_ARGS_LOG: argsLog,
+    // Launched as a 1.4 process RELAUNCHES the app: with LYNTAI_PROVIDER_CMD as 1.4 composed it — the command plus the
+    // isolation flags as prefix arguments. Since Lyntai 3.5.2 the flags are the runs' own options, so the launched value
+    // must lose that suffix (ClaudeCliRuntime.StripLegacySuffix), or every run gets them twice (the "exactly once" row).
+    LYNTAI_PROVIDER_CMD: `${claudeStubCmd} --setting-sources project --strict-mcp-config`,
     GATHERLIGHT_STUB_LOADS_LOG: loadsLog,
     GATHERLIGHT_STUB_OVERLAP_MARK: overlapMark, GATHERLIGHT_STUB_HTTP_BASE: `http://127.0.0.1:${PORT}`,
   },
@@ -83,7 +87,8 @@ const quarantined = (rel, since = [], text = undefined) =>
     && (text === undefined || fs.readFileSync(path.join(quarantineDir, stamp, rel), 'utf8') === text));
 const readText = (rel) => { try { return fs.readFileSync(path.join(dataDir, rel), 'utf8'); } catch { return null; } };
 const untouched = () => Object.entries(householdConfig).filter(([rel, text]) => readText(rel) !== text).map(([rel]) => rel);
-// Every claude run Lyntai starts carries the isolation flags (ClaudeCliRuntime.IsolationArgs), wherever they sit.
+// Every agent run in the data folder carries the isolation flags (its options: ClaudeCliRuntime.SettingSources and strict
+// MCP), wherever they sit. One-shot calls and neutral-directory runs load no source instead.
 const isolated = (args = []) => args.includes('--strict-mcp-config') && args[args.indexOf('--setting-sources') + 1] === 'project';
 // The PowerShell process holding settings.local.json in the held-file case, killed in `finally` so a throwing wait
 // cannot leave it holding the file into the next run.
@@ -155,7 +160,11 @@ try {
   //  · the off-subscription names blanked, and apiKeyHelper blanked: the runs read the data folder's PROJECT
   //    .claude/settings.json, whose apiKeyHelper RAN and supplied a key, and whose env key was used; these settings
   //    outrank it per key, and an empty value is an absent one to the CLI (measured, docs/self-managed-llm-runtime.md).
-  const SETTINGS_FILES = ['settings.chat.json', 'settings.chat.readonly.json', 'settings.system.json', 'settings.system.readonly.json'];
+  //  Since Lyntai 3.5.2 a FIFTH file carries both: settings.oneshot.json, which every ONE-SHOT call (the scorers, the
+  //  memory judge, 语义's rephrasing) is handed per consumer (ClaudeCompletionOptions.SettingsPath) — until then that
+  //  path took no settings file at all (Lyntai TASKS.md Part 333).
+  const SETTINGS_FILES = ['settings.chat.json', 'settings.chat.readonly.json', 'settings.system.json', 'settings.system.readonly.json',
+    'settings.oneshot.json'];
   const settingsOf = (f) => { try { return JSON.parse(fs.readFileSync(`${dataDir}/state/${f}`, 'utf8')); } catch { return null; } };
   const BLANKED = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'ANTHROPIC_BASE_URL'];
   for (const f of SETTINGS_FILES) {
@@ -168,6 +177,12 @@ try {
     // Positive control: the subscription's own token is NOT blanked — a household on `claude setup-token` would be signed out.
     ok(`${f}: …and CLAUDE_CODE_OAUTH_TOKEN is left alone`, !!s && !('CLAUDE_CODE_OAUTH_TOKEN' in (s.env ?? {})), JSON.stringify(s?.env ?? {}).slice(0, 200));
   }
+  // The one-shot file is not an agent run's: it fences reads to the call's own (empty, process-owned) working directory,
+  // pre-approves nothing and registers no hook — a judge reads a prompt and answers it, and needs no file of the disk's.
+  const oneShot = settingsOf('settings.oneshot.json');
+  ok('settings.oneshot.json: reads fenced to the working directory, nothing pre-approved, no hook',
+    oneShot?.permissions?.blockReadsOutsideWorkingDirectories === true && !('allow' in (oneShot?.permissions ?? {}))
+      && !('hooks' in (oneShot ?? {})), JSON.stringify(oneShot).slice(0, 300));
 
   await post(`/api/chat/${id}/plan/approve`);
   const diff = await waitPhase(id, 'awaiting-diff-approval');
@@ -245,9 +260,32 @@ try {
   ok('C1: the household\'s settings.local.json and .mcp.json survive a plan and an execute run unchanged',
     untouched().length === 0, untouched().join(', '));
   const spawnArgs = readLog(argsLog);
-  ok('C1: every claude run the app started carries --setting-sources project --strict-mcp-config',
-    spawnArgs.length >= 2 && spawnArgs.every((sp) => isolated(sp.args)),
-    spawnArgs.filter((sp) => !isolated(sp.args)).map((sp) => `${sp.kind}: ${sp.args.slice(0, 6).join(' ')}`).join(' | '));
+  const folderRuns = spawnArgs.filter((sp) => sp.kind === 'plan' || sp.kind === 'execute');
+  ok('C1: every claude run the app started in the data folder carries --setting-sources project --strict-mcp-config',
+    folderRuns.length >= 2 && folderRuns.every((sp) => isolated(sp.args)),
+    folderRuns.filter((sp) => !isolated(sp.args)).map((sp) => `${sp.kind}: ${sp.args.slice(0, 6).join(' ')}`).join(' | '));
+  // The overlapping read-only run is `extract`, which runs from a NEUTRAL directory, not the data folder. It used to be
+  // the shared temp folder, whose project .claude/settings.json — hooks included — any program could plant and the run
+  // loaded under --setting-sources project; since Lyntai 3.5.2 it runs from the directory the process owns
+  // (CliProviderEngine.NeutralWorkingDirectory) and loads NO source, since a CLAUDE.md walks up from any directory.
+  const neutralRuns = spawnArgs.filter((sp) => sp.kind === 'other');
+  const neutralLoads = readLog(loadsLog).filter((l) => l.kind === 'other');
+  const sharedTemp = path.resolve(process.env.TMP || process.env.TEMP || '.').toLowerCase();
+  ok('C1: the neutral run (extract) loads NO setting source and no project .mcp.json',
+    neutralRuns.length > 0 && neutralRuns.every((sp) => sp.args[sp.args.indexOf('--setting-sources') + 1] === ''
+      && sp.args.includes('--strict-mcp-config')),
+    neutralRuns.map((sp) => sp.args.join(' ').slice(0, 200)).join(' | ') || '(no extract spawn)');
+  ok('C1: …from a directory the process owns under temp, never the shared temp folder itself',
+    neutralLoads.length > 0 && neutralLoads.every((l) => path.resolve(l.cwd).toLowerCase() !== sharedTemp
+      && path.dirname(path.resolve(l.cwd)).toLowerCase() === sharedTemp),
+    JSON.stringify(neutralLoads.map((l) => l.cwd)) + ` shared=${sharedTemp}`);
+  // …ONCE each. Through Lyntai 3.5.1 the flags rode the command variable as prefix arguments; since 3.5.2 they are the
+  // run's own options (ClaudeAgentOptions.SettingSources / StrictMcpConfig), and a command still composing them would
+  // hand every run both copies.
+  const twice = spawnArgs.filter((sp) => sp.args.filter((a) => a === '--setting-sources').length !== 1
+    || sp.args.filter((a) => a === '--strict-mcp-config').length !== 1);
+  ok('C1: …exactly once each, from the run\'s options — never also from the command', spawnArgs.length >= 2 && twice.length === 0,
+    twice.map((sp) => `${sp.kind}: ${sp.args.join(' ').slice(0, 200)}`).join(' | '));
   const runLoads = readLog(loadsLog).filter((l) => l.kind === 'plan' || l.kind === 'execute');
   ok('C1 (control): the plan and execute runs still load the site\'s knowledge base (the project scope)',
     runLoads.length >= 2 && runLoads.every((l) => l.loaded.includes('CLAUDE.md')), JSON.stringify(runLoads.map((l) => l.loaded)));

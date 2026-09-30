@@ -23,11 +23,15 @@
 //                                            the subscription login (CLAUDE_CODE_OAUTH_TOKEN) does; no value is logged
 //      …and the switches that add a tool past the guard (G3) → none arrives, native file search does; and every agent
 //                                            run, plan and execute, removes PowerShell and Monitor (--disallowed-tools)
+//      …and a ONE-SHOT call (G4, Lyntai 3.5.2) → removes PowerShell, Monitor and Bash, takes the one-shot settings, loads
+//                                            no setting source, and runs — with the startup probe — from a directory the
+//                                            process owns, never the shared temp folder
 import { execFileSync } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { dataDirFor, makeReporter, repo, startServer, until, makeClient } from './_e2e-common.mjs';
 
@@ -516,6 +520,40 @@ try {
     ok('THE POINT (G3): every agent run — plan and execute — removes PowerShell and Monitor from the CLI (--disallowed-tools)',
       agentSpawns.length > 0 && unfenced.length === 0,
       unfenced.slice(0, 2).map((e) => `${e.kind}: ${disallowedOf(e.args).join(',') || '(no --disallowed-tools)'}`).join(' | '));
+
+    // ---- G4 · the ONE-SHOT path, since Lyntai 3.5.2 --------------------------------------------------------------------
+    // The scorers, the memory judge and 语义's rephrasing are Lyntai's one-shot calls (ClaudeCliProvider), which through
+    // 3.5.1 had no seam for any of this: they ran with the CLI's default tools but AskUserQuestion, no settings file, and
+    // from the account's SHARED temp folder, whose project .claude/settings.json any program could plant (Lyntai TASKS.md
+    // Parts 330 and 333). Now each call is configured per consumer (ClaudeCliBackend.CompletionByConsumer): the agent runs'
+    // shell removals and Bash too (a judge reads a prompt and answers it), the one-shot settings file (the blanked key
+    // paths, disableSkillShellExecution, the read fence), NO setting source (a CLAUDE.md walks up from any cwd, so only
+    // this keeps one out) and no project .mcp.json — from a directory the process owns (Lyntai D196). The startup probe
+    // runs from that directory too.
+    // The LAST occurrence: the CLI applies only the last --settings it is handed (docs/self-managed-llm-runtime.md 2026-09-30).
+    const valueOf = (args, flag) => { const i = args.lastIndexOf(flag); return i >= 0 ? String(args[i + 1] ?? '') : null; };
+    const oneShots = readArgsLog().filter((e) => e.kind === 'annotation');
+    ok('(fixture G4) the args log holds the fact write\'s one-shot annotation call', oneShots.length > 0, JSON.stringify(readArgsLog().map((e) => e.kind)));
+    const unfencedOneShot = oneShots.filter((e) => !['AskUserQuestion', 'PowerShell', 'Monitor', 'Bash'].every((t) => disallowedOf(e.args).includes(t)));
+    ok('THE POINT (G4): the one-shot call removes PowerShell, Monitor AND Bash — beside AskUserQuestion, which it always did',
+      oneShots.length > 0 && unfencedOneShot.length === 0,
+      unfencedOneShot.slice(0, 2).map((e) => disallowedOf(e.args).join(',') || '(no --disallowed-tools)').join(' | '));
+    const unsettled = oneShots.filter((e) => !/[\\/]state[\\/]settings\.oneshot\.json$/.test(valueOf(e.args, '--settings') ?? ''));
+    ok('(G4) …is handed the one-shot settings file (state/settings.oneshot.json)', oneShots.length > 0 && unsettled.length === 0,
+      unsettled.slice(0, 2).map((e) => valueOf(e.args, '--settings') ?? '(no --settings)').join(' | '));
+    const sourced = oneShots.filter((e) => valueOf(e.args, '--setting-sources') !== '' || !e.args.includes('--strict-mcp-config'));
+    ok('(G4) …loads NO setting source (--setting-sources "") and no project .mcp.json (--strict-mcp-config)',
+      oneShots.length > 0 && sourced.length === 0,
+      sourced.slice(0, 2).map((e) => `sources=${JSON.stringify(valueOf(e.args, '--setting-sources'))} strict=${e.args.includes('--strict-mcp-config')}`).join(' | '));
+    const sharedTemp = norm(process.env.TMP || process.env.TEMP || os.tmpdir());
+    const neutralSpawns = readEnvLog().filter((s) => s.kind === 'annotation' || s.kind === 'auth-status');
+    const inShared = neutralSpawns.filter((s) => norm(s.cwd) === sharedTemp || norm(path.dirname(s.cwd)) !== sharedTemp
+      || !/^lyntai-cli-[0-9a-f]{16}$/.test(path.basename(s.cwd)));
+    ok('(G4) …and it and the startup probe run from a directory the process owns UNDER temp — never the shared temp folder itself',
+      ['annotation', 'auth-status'].every((k) => neutralSpawns.some((s) => s.kind === k)) && inShared.length === 0,
+      JSON.stringify(neutralSpawns.map((s) => [s.kind, s.cwd]).slice(0, 4)) + ` shared=${sharedTemp}`);
+    ok('(G4) …the SAME directory for both — Lyntai\'s, which the probe shares (ClaudeCliRuntime.NeutralDirectory)',
+      new Set(neutralSpawns.map((s) => norm(s.cwd))).size === 1, JSON.stringify([...new Set(neutralSpawns.map((s) => s.cwd))]));
     srv.stop(); srv = undefined;
     await new Promise((r) => setTimeout(r, 1500));
     const changedG = (() => {

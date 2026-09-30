@@ -274,9 +274,9 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `.cmd`/`.exe` (the first `where` hit can be an extensionless bash shim Windows can't run).
   `ArgumentList` only — never a shell (newlines + metacharacters in prompts). Prompts over
   stdin. BOM-less UTF-8 both directions. `Kill(entireProcessTree: true)` on abort.
-- Cheap utility calls (extract, validation) run with a **neutral cwd** so the data folder's
-  CLAUDE.md/knowledge base isn't loaded per call; the interactive chat runs cwd = data root
-  **by design** (the planner gate is the product).
+- Cheap utility calls (`extract`, the one-shot scorers and memory judge) run with a **neutral cwd** so the data
+  folder's CLAUDE.md/knowledge base isn't loaded per call; the interactive chat runs cwd = data root
+  **by design** (the planner gate is the product), and so does the validation pass (`ClaudeValidateService`).
 - **The CLI is a PROVISIONED resource, not an assumption** (`Agent/Llm/Services/ClaudeCliRuntime`).
   `Locate()` resolves an explicit override → the copy provisioned into `{data}/state/resources/claude`
   → a bundled `libs/claude` → PATH, and **re-resolves per call** until it finds a real file: DI builds
@@ -286,18 +286,36 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   argument is captured once at DI registration, while `ClaudeAgentSession` calls
   `CliCommand.Resolve` *inside the run* (`ClaudeCommand.Resolve` through 3.2, with the same precedence), so
   only the env var can carry a CLI installed after startup. Since round 6 the variable is `LYNTAI_PROVIDER_CMD`, the
-  one Lyntai reads first: the command `Locate()` resolved (quoted when a path holds a space) PLUS
-  `ClaudeCliRuntime.IsolationArgs` — `--setting-sources project --strict-mcp-config` — which Lyntai tokenises into
-  prefix arguments that both the agent session and the one-shot provider put ahead of their own, so every claude run it
-  starts reads none of the household's own CLI config (*Data folder discipline*, the jail's item (7)). It is pinned at
+  one Lyntai reads first: the command `Locate()` resolved (quoted when a path holds a space). Through Lyntai 3.5.1 it
+  also carried the isolation flags as PREFIX arguments, because neither claude path had a seam for them (Lyntai
+  `TASKS.md` Part 332); since 3.5.2 they are the runs' own options — `ClaudeAgentOptions.SettingSources` /
+  `StrictMcpConfig`, set for every agent run in `AgentRunner` (`ClaudeCliRuntime.SettingSources`, the project alone), and
+  the one-shot backend's per consumer (no source at all, below and the jail's item (7)) — and the command is the command.
+  A value a 1.4 process composed, inherited by a relaunch, has the old suffix stripped (`StripLegacySuffix`), or every run
+  would get the flags twice (`e2e-p54` boots with a composed 1.4 value and asserts each flag once — confirmed to FAIL
+  with the strip disabled, and with the suffix put back on the command, 2026-09-30). It is pinned at
   the top of `GatherlightApp.Build` (`PinProviderCommand`), before anything can spawn one, and rewritten by every
-  `Apply()`; a value the process was LAUNCHED with is an operator's override and is kept, with the flags appended once —
-  unless it names the app's OWN provisioned or bundled copy, which a relaunched app inherits. `CLAUDE_CMD` likewise: the app
+  `Apply()`; a value the process was LAUNCHED with is an operator's override and is kept — unless it names the app's OWN
+  provisioned or bundled copy, which a relaunched app inherits. `CLAUDE_CMD` likewise: the app
   writes it for the provisioned copy, and read back as a choice it froze the command after the first probe, unquoted, so
   a data folder whose path holds a space split the executable in two (not driven by a suite).
   `CLAUDE_CMD` is still set for the provisioned copy, and read by nothing while the first variable answers. The app's own
-  spawns — `auth status`, `logout`, the login window — run `Locate()`'s command without the flags.
+  spawns — `auth status`, `logout`, the login window — run `Locate()`'s command; the probe adds `ClaudeCliRuntime.IsolationArgs`
+  itself (the agent runs' flags), and all three but the login window run from the process's own neutral directory.
   `Apply()` therefore runs on every probe, not just at boot, and never overrules an existing override.
+- **A run that must load nothing of any folder's runs from the PROCESS'S OWN directory, with no setting source**
+  (Lyntai 3.5.2, D196, our `TASKS.md` Part 333). The one-shot calls and the two neutral-cwd agent runs (`extract`, the
+  knowledge-base migrator), and the `auth status` probe, used to run from the account's SHARED temp folder — whose
+  project `.claude/settings.json` any program the user runs could plant, hooks and a key helper included, and every
+  claude started there loaded it (the probe and the agent runs under `--setting-sources project`, the one-shot calls
+  likewise). Now each runs from `CliProviderEngine.NeutralWorkingDirectory` — a `lyntai-cli-<hex>` directory this
+  process owns under temp, removed at exit — through `ClaudeCliRuntime.NeutralDirectory()`, which creates it (Lyntai
+  creates it per spawn only for its own). That directory scopes SETTINGS only: the CLI reads a `CLAUDE.md` from every
+  PARENT of its cwd, so those runs also load NO setting source (`SettingSources = []`); the probe keeps the agent runs'
+  `project`, since it reports the account they use and `auth status` reads no `CLAUDE.md`. Proof: `e2e-p49` case G4 (the
+  one-shot call and the probe, in the same `lyntai-cli-<hex>` directory) and `e2e-p54` (`extract`), each failing on the
+  build before. The migrator's two lines are asserted by nothing — no suite runs a knowledge-base merge — a stated gap;
+  they are `extract`'s two lines.
 - **Installed is not usable: probe, don't pattern-match.** A downloaded CLI is not a signed-in one, so
   `claude auth status --json` is the probe (`{loggedIn,email,subscriptionType}`, exit 1 when signed
   out) and it distinguishes *missing* from *signed out* from *a real failure* — three problems with
@@ -981,9 +999,14 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `ScoreRequest.MaxPiecesPerInput` narrows the registration's cap for one call, so a decorator can now size a D177 call
   by the pace without segmenting it itself; Part 306's `InputSegmentation.MaxDocumentPiece` bounds a document's pieces
   apart from the query, which can express our rule for a model declaring no window (read only where a window is set,
-  so it needs `MaxInputChars` set generously beside it). What such a decorator still cannot see is what was SENT — D177
-  counts no pieces for its caller and the HTTP reranker returns no usage — so its pace would learn from a bound, not a
-  count. **Run 10 settled it: KEEP OURS** (`docs/judge-bench.md` Run 10, 2026-09-27, Lyntai 3.5.1, one GPU). The
+  so it needs `MaxInputChars` set generously beside it). What such a decorator could not see through 3.5.1 was what was
+  SENT — D177 counts no pieces for its caller, and the HTTP reranker returned no usage — so its pace would learn from a
+  bound, not a count. **Since 3.5.2 the HTTP reranker reports the tokens the server counted** (`ScoreResponse.Usage` from
+  `usage.prompt_tokens`, every piece sent; Lyntai D163, our Part 329's second item, released as its Part 340), so a pace
+  over D177 could learn from a count; D177 still reports no per-input piece count. Ours passes that usage through and does
+  not read it (ruling, 2026-09-30): `RerankPace` sizes a call BEFORE it is sent, so it needs its own estimate anyway, and
+  every rule and threshold of it was calibrated in that estimate's unit (`RerankPace.Tokens`) — a server count after the
+  fact would put two units into one rate. **Run 10 settled it: KEEP OURS** (`docs/judge-bench.md` Run 10, 2026-09-27, Lyntai 3.5.1, one GPU). The
   owner's rule, fixed before the runs: switch only if, for the recommended BGE, D177 is significantly BETTER on the long
   fixture's found@8, AND no reranker is significantly worse under D177 at any position or on the mixed fixture's
   short-target questions, AND short facts are byte-identical; otherwise keep ours — switching also costs the pace its
@@ -1007,14 +1030,16 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   its piece COUNT — untested; `boundary` stays a knob (`GATHERLIGHT_RERANK_CHUNKING=boundary`), never the default. Nothing in the product changed: `ChunkedScoreProvider`,
   `RerankPace` and `RerankAdmission` stay, and `d177` stays a measurement mode, never a default. **What would reopen
   it**: a within-run measurement under the same rule in which D177 is significantly better for BGE — worth running only
-  once D177 can also carry a pace that learns from what was SENT (it reports no piece count, and the HTTP reranker no
-  usage, so a pace over 3.5.0's per-request `MaxPiecesPerInput` would learn from bounds up to ~2× apart), since a D177
-  with no pace has no skip, and Run 8 measured what BGE does on a CPU without one — or the owner changing the rule.
-  **Both halves are recorded, and Lyntai's is now stale**: Part 289's outcome names "an app-side segmenting
-  score-provider decorator" as the adopter's copy to remove when D177 releases — by its role, not its class name, as a
-  library that names no adopter must. It has released and we kept the copy, so the answer — kept, why, and Run 10 — is
-  filed in Lyntai's `TASKS.md` as Part 329 (we are review-only there; left uncommitted for its owner), amended with Run
-  12's refutation of the placement reading, or the next reader of that outcome deletes a decorator a measurement kept. Lyntai's `docs/memory-measurements.md` records our Run 6c as `rerank-segmented-adopter-long-notes`.
+  once D177 can also carry a pace that learns from what was SENT, since a D177 with no pace has no skip, and Run 8
+  measured what BGE does on a CPU without one — or the owner changing the rule. The first half of that condition is met
+  since 3.5.2's rerank usage (above: a pace over the per-request `MaxPiecesPerInput` no longer has to learn from bounds up
+  to ~2× apart); building that pace and the measurement are what remain.
+  **Both halves are recorded**: Part 289's outcome names "an app-side segmenting score-provider decorator" as the
+  adopter's copy to remove when D177 releases — by its role, not its class name, as a library that names no adopter must.
+  It has released and we kept the copy, so the answer — kept, why, Run 10, and Run 12's refutation of the placement
+  reading — went to Lyntai as our Part 329, and Lyntai recorded it (released 3.5.2, its `docs/task-archive.md` Part 341):
+  `docs/memory-measurements.md` there carries `rerank-d177-vs-adopter-segmentation` (`ships=no`) beside our Run 6c's
+  `rerank-segmented-adopter-long-notes`, so the next reader of Part 289's outcome finds why the decorator stayed.
 - **SUBJECT HANDLES ARE SEARCHABLE, and they were bought long before they were.** With 判断 on, every write
   is annotated and its subjects — stable handles naming what the fact is ABOUT, "配偶", "deploy-key" — are
   recorded. Two things read them, both at WRITE time: linking two facts, and prompting the annotator to
@@ -2543,13 +2568,12 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   likewise). The session markers were in the environment of every Bash command a Claude Code session ran here
   (2026-09-28), and the installed CLI names each: so every dev and fixture server started from one announced its agent
   to the CLI as a child of the developer's session, with that session's messaging pipe. Why the PROCESS and not the
-  spawn: Lyntai's CLI runs (agent session and one-shot provider alike) go through its sealed `ProcessRunner`, whose
-  `environment` argument can only SET; a BYO `IProcessRunner` is Lyntai's documented seam, but
-  `CliProviderEngine.IsAvailable` is optimistic for any runner that is not its own, so a missing CLI would stop being
-  skipped by the router and become a failed call instead — and the process environment is already the app's seam into
-  those spawns (`ClaudeCliRuntime.Apply` sets `CLAUDE_CMD`/`CLAUDE_CONFIG_DIR` there). The ShellExecute login and
-  Playwright's driver (which builds its `ProcessStartInfo` inside the library) inherit the process's too. **(2) A class
-  that needs less is narrowed at its own spawn:**
+  spawn: two spawns have no environment seam at all — the ShellExecute login window, and Playwright's driver (which
+  builds its `ProcessStartInfo` inside the library) — and the process environment is already the app's seam into
+  Lyntai's CLI spawns (`ClaudeCliRuntime.Apply` sets `CLAUDE_CMD`/`CLAUDE_CONFIG_DIR` there). Lyntai's own spawns had no
+  way to REMOVE a variable either until 3.5.2 (a null value in `environment` now does, and a BYO runner answers the
+  availability probe, `IProcessRunner.CommandExists`); why the claude-CLI policy stays process-wide anyway is the
+  "stays process-wide" paragraph below the table. **(2) A class that needs less is narrowed at its own spawn:**
 
   | class | sites | narrowed to | why |
   |---|---|---|---|
@@ -2601,7 +2625,7 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   A Warning names what was ignored, once (「Claude CLI: ignored …」). **What an environment strip CANNOT reach is the
   CLI's own configuration**: an `env` block or `apiKeyHelper` in a settings file the CLI reads. The USER scope's —
   the machine's `~/.claude/settings.json` in machine login mode — are not read at all since round 6
-  (`ClaudeCliRuntime.IsolationArgs`, the jail's item (7); measured: the helper did not run, `apiKeySource` read `none`,
+  (`ClaudeCliRuntime.SettingSources`, the jail's item (7); measured: the helper did not run, `apiKeySource` read `none`,
   its `env` reached no child). The PROJECT `.claude/settings.json` still is (it loads the knowledge base), and there
   **the app's own `--settings` blank both** (the re-review, 2026-09-29): `"apiKeyHelper": ""` and every
   `OffSubscriptionVariables` name as `""` in `env`, rendered from the same list (`ChatEnvironmentService.BuildChatSettings`).
@@ -2612,20 +2636,36 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   stayed `none`, the helper did not run, the fake got no request, and `auth status` still read claude.ai, firstParty,
   signed in — while an unrelated project `env` name still arrived. `forceLoginMethod: "claudeai"` does not do it (the
   helper still ran). The household's file is never touched. Every run in the data folder carries these settings — chat,
-  jobs, and since the re-review the validation pass and the playground, which passed none. **Still out of reach**: the
-  MANAGED scope (it outranks the command line — an administrator's); names matched only by the `ANTHROPIC_*_BASE_URL`
-  pattern beyond the listed ones (read only under a provider selector, every one of which is blanked); a
-  `.claude/settings.json` or `CLAUDE.md` in the one-shot calls' neutral working directory — Lyntai's own choice,
-  its engine's neutral cwd: the account's SHARED temp folder, which any program the user runs can
-  write, and whose project scope those calls load carrying none of this app's settings (the completion path takes no
-  settings file); Lyntai `TASKS.md` Part 333 files both halves — a settings file for that path, and a working directory
-  the library owns — and when it ships the adopter passes these same settings to its one-shot calls;
-  and an active federation profile in the default Anthropic configuration directory. Proof: `e2e-p54` — each of the
-  four generated settings files blanks the helper and every name, and leaves `CLAUDE_CODE_OAUTH_TOKEN` alone (the
-  positive control); `e2e-p16` V1 and `e2e-p23` — the validation and playground spawns pass the read-only file; `e2e-p50`
-  case G — the probe's argv carries both flags ahead of `auth status`, the login window's neither. Each confirmed to
-  FAIL with its own half removed (2026-09-29): 4 rows, 1, 1, 1. And since the strip is process-wide, an external MCP
-  server that calls the Anthropic API itself takes its key from its own configured `env`, applied after the inherited one.
+  jobs, and since the re-review the validation pass and the playground, which passed none. **The one-shot calls carry
+  them too since Lyntai 3.5.2** (its D190; our `TASKS.md` Part 333, released as its Parts 338 and 339):
+  `state/settings.oneshot.json` (`ChatEnvironmentService.WriteOneShotSettings`) — the same blanks and
+  `disableSkillShellExecution`, plus the read fence and no hook — handed to every consumer through
+  `ClaudeCompletionOptions.SettingsPath`, the call loading NO setting source from the process's own directory (the
+  neutral-directory bullet under *LLM / process spawning*). It is written in `GatherlightApp.Build`, before the provider is
+  registered, not at the knowledge-base step with the other four: a `--settings` naming a missing file fails the CLI
+  outright (「Settings file not found」, exit 1, claude 2.1.285), and a one-shot call can come first. A file already
+  holding the content is left alone, and a write that fails is an Error in the startup log, never a start that fails.
+  Until then those calls loaded, carrying none of this, the project scope of the account's SHARED temp folder, which any
+  program the user runs can write. **A SCORER is handed TWO `--settings`, and the CLI applies only the LAST** (measured at
+  0 tokens, claude 2.1.285, `docs/self-managed-llm-runtime.md` 2026-09-30: with the one-shot file first and an
+  allow-list file after it, a planted project key helper the one-shot file blanks RAN; reversed, it did not). Lyntai's
+  judge-tools connector appends its own file — only its tools' allow-list — after the one-shot one, so the one consumer
+  that grades agent-written text applied neither the fence nor the blanks; the final review of the adoption caught it,
+  after every sentence here said it had them. `MergedSettingsMcpConnector` wraps the connector and hands one file holding
+  both (the app's value wins on a scalar; the allow-list joins the app's permissions) — a workaround for a Lyntai gap, our
+  `TASKS.md` Part 342, deleted when the library merges them itself. `e2e-p36` asserts what a scorer APPLIES (the stub
+  records the last `--settings` file's content) and that its tools stay pre-approved, confirmed to FAIL with the wrapper
+  removed. **Still out of reach**: the MANAGED scope (it outranks the command line — an administrator's); names
+  matched only by the `ANTHROPIC_*_BASE_URL` pattern beyond the listed ones (read only under a provider selector, every
+  one of which is blanked); and an active federation profile in the default Anthropic configuration directory. Proof:
+  `e2e-p54` — each of the five generated settings files blanks the helper and every name, and leaves
+  `CLAUDE_CODE_OAUTH_TOKEN` alone (the positive control); `e2e-p16` V1 and `e2e-p23` — the validation and playground
+  spawns pass the read-only file; `e2e-p49` case G4 — the one-shot call passes the one-shot file; `e2e-p36` — a scorer
+  applies it; `e2e-p50` case G — the
+  probe's argv carries both flags ahead of `auth status`, the login window's neither. Each confirmed to FAIL with its own
+  half removed (2026-09-29): 4 rows, 1, 1, 1; the one-shot rows on the 3.5.2 bump before the adoption (2026-09-30). And
+  since the strip is process-wide, an external MCP server that calls the Anthropic API itself takes its key from its own
+  configured `env`, applied after the inherited one.
   **The app's own secrets are withheld from every child**: `GATHERLIGHT_ACCESS_TOKEN` and
   `GATHERLIGHT_TLS_CERT_PASSWORD`, the two secret-bearing `GATHERLIGHT_*` the server reads (the rest are URLs, paths,
   ports, flags and test knobs — kept; the stub and the measurement fake read their own). The agent's Bash could print
@@ -2648,9 +2688,18 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   process forgets its launcher's context again at startup. **Not driven, stated**: the relaunch belongs to the desktop
   host, outside the fleet — `desktop-e2e` cannot restart the host without losing its own CDP connection, and no suite
   starts the host at all; `ForRelaunch` reads the same remembered values as `Launched`, whose readers are asserted.
-  **A workaround for a Lyntai gap, recorded on both sides**: the process-level strip exists because Lyntai's spawn seam
-  can only SET a variable (`ProcessRunner`'s `environment`) and a BYO runner loses the availability probe — Lyntai
-  `TASKS.md` Part 331; when a spawn can remove a variable, the CLI policy moves to the spawn.
+  **The strip STAYS process-wide although Lyntai's spawns could now take it — a decision, not a gap.** It was recorded
+  as a workaround: Lyntai's spawn seam could only SET a variable (`ProcessRunner`'s `environment`) and a BYO runner lost
+  the availability probe (our `TASKS.md` Part 331), and the note said that when a spawn could remove a variable, the CLI
+  policy would move to the spawn. Lyntai 3.5.2 closed both halves (its Parts 334 and 335: a null value REMOVES an
+  inherited variable; `IProcessRunner.CommandExists` answers the probe). The move was NOT made (2026-09-30), because that
+  note missed one claude spawn: the login window (`StartLogin`), started by ShellExecute — the only way a process that
+  has a console of its own gives a child a NEW one — which takes no environment block. Moved to the spawns that can take
+  it, the policy would have two writers, and the flow that signs the household in would inherit an endpoint override.
+  What would end it: the login started by `CreateProcess` with a new console and its own environment block; then the
+  policy moves to the claude spawns (a null per name in Lyntai's registrations' `environment`, and the probe's and
+  logout's own), and an external MCP server gets back an inherited Anthropic key it may want. `ChildEnvironment`'s class
+  comment says the same.
   **The CLI's feature switches, as a jail question** (the security review, 2026-09-28; `AgentToolVariables`). Each
   non-account `CLAUDE_CODE_USE_*` the binary names was checked for whether it adds or replaces a tool, or changes how
   file access is mediated: `_POWERSHELL_TOOL` STRIPPED (it turns on a shell tool the guard's matcher does not list —
@@ -2714,16 +2763,21 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   now also pass `ReadOnlySettingsPath` (fence + guard) since they run in the data folder, and so — since the round-6
   re-review — do the validation pass and the playground, which run there too and passed no settings at all (so they
   also missed the key-path blanks and `disableSkillShellExecution`, item (8)); `extract` and the migrator keep "no Bash"
-  only (a neutral cwd — an unfenced read is a stated residual there). `e2e-p54` asserts the
+  only (a neutral cwd, loading no setting source since Lyntai 3.5.2 — an unfenced read is a stated residual there, since
+  `extract` reads the upload it was given by path). `e2e-p54` asserts the
   plan spawn carries the read-only settings AND disallows Bash AND the allow-list omits it, confirmed to FAIL with the
-  plan run's SettingsPath removed. **Still: Lyntai's one-shot calls**
-  (scorers, the memory judge, rephrasing) run with the CLI's default tool set minus `AskUserQuestion` from a neutral cwd
-  (`ClaudeArgs`), with no seam for the app to narrow them — read-only commands and permission-free tools are available
-  there, nothing that needs approval is; closing that is Lyntai's `TASKS.md` Part 330 (the reciprocal of the D190
-  per-consumer tool host), and when it ships the adopter ADDS the same `PowerShell`/`Monitor` removal to its one-shot
-  calls — it deletes nothing: `UnguardedTools` already uses the AGENT path's own seam (`ClaudeAgentOptions.DisallowedTools`)
-  and stays, since Part 330 covers the one-shot path only. Proof: `e2e-p49` case G3 reads the stub's argv: the plan and the execute run each name `PowerShell` and `Monitor`
-  in `--disallowed-tools`; confirmed to FAIL with the `AgentRunner` line removed.
+  plan run's SettingsPath removed. **Lyntai's one-shot calls** (scorers, the memory judge, rephrasing) ran with the CLI's
+  default tool set minus `AskUserQuestion`, with no seam for the app to narrow them, until Lyntai 3.5.2 gave that path a
+  per-consumer one (`ClaudeCliBackend.CompletionByConsumer`, its D190 — our `TASKS.md` Part 330, released as its Part
+  336). `GatherlightApp` now hands every consumer `UnguardedTools.OneShot` — `PowerShell`, `Monitor` and Bash, what a
+  read-only run loses, since a one-shot call answers the prompt it is handed and never needed a shell — beside the
+  `AskUserQuestion` Lyntai always adds. It deleted nothing: `UnguardedTools.Apply` uses the AGENT path's own seam
+  (`ClaudeAgentOptions.DisallowedTools`) and stays. Measured at 0 tokens on claude 2.1.285 (`docs/self-managed-llm-runtime.md`
+  2026-09-30): under the one-shot argv the init event lists no Bash, PowerShell or Monitor, and no MCP server, where the
+  same call with the default sources listed all three, the user's MCP server and the claude.ai connectors. Proof:
+  `e2e-p49` case G3 reads the stub's argv: the plan and the execute run each name `PowerShell` and `Monitor`
+  in `--disallowed-tools`; confirmed to FAIL with the `AgentRunner` line removed; case G4, the one-shot annotation call
+  names all three, confirmed to FAIL on the bump before the adoption.
 - **Bash cannot launch ANOTHER shell or interpreter** (since `GUARD_VERSION` 10 planner / 8 system, hardened by the
   2026-09-28 security review and its re-review). A built-in the matcher does not see is one door past the guard; launching `powershell` / `pwsh` /
   `cmd` / `wscript` / `cscript` / `mshta` / a nested `bash`|`sh` / `source` / `.` / `wsl` / `rundll32` / `regsvr32` — or
@@ -2819,9 +2873,10 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   `.mcp.json` from its working directory by itself, and the data folder is also where the household runs `claude`
   interactively — Claude Code saves a permission they approve into `settings.local.json` — so the app's runs READ the
   household's config: a `Bash(rm:*)` they approved for themselves applied to the app's agent too, and their `.mcp.json`
-  servers were started for it. **Every claude run Lyntai starts** — agent and one-shot alike — is therefore handed
-  `--setting-sources project --strict-mcp-config` (`ClaudeCliRuntime.IsolationArgs`, carried in `LYNTAI_PROVIDER_CMD`,
-  *LLM / process spawning*). Measured on CLI 2.1.283 at 0 tokens (`docs/self-managed-llm-runtime.md`, 2026-09-28): the
+  servers were started for it. **Every agent run** is therefore handed `--setting-sources project --strict-mcp-config`
+  (`ClaudeCliRuntime.SettingSources` and `StrictMcpConfig` on its options, set in `AgentRunner`; *LLM / process
+  spawning*), and every one-shot call, and each agent run from a neutral directory, loads NO source and no `.mcp.json`
+  (the neutral-directory bullet there). Measured on CLI 2.1.283 at 0 tokens (`docs/self-managed-llm-runtime.md`, 2026-09-28): the
   LOCAL scope (`settings.local.json`'s hooks and permissions, `CLAUDE.local.md`), the USER scope (the account's own
   settings, hooks, skills, `CLAUDE.md`) and a project `.mcp.json` server are not loaded, while the app's own
   `--settings` (hooks and deny rules — the scope guard's file) and `--mcp-config` still are. **The PROJECT scope has to
@@ -2859,19 +2914,22 @@ The load-bearing patterns for working on Gatherlight's code. These mirror the si
   import-only strip removed the household's file without closing anything. The data repo still IGNORES all three
   (`GitCliService`'s required ignores): per-machine CLI config that can carry secrets (an `env` block, an MCP server's
   tokens), which a bulk `add -A` — a fresh repo's initial import, a restore commit — would otherwise put in the audit
-  trail; a backup still carries them, since it copies folders. **A workaround for a Lyntai gap**, recorded on both
-  sides: `ClaudeAgentOptions` has no seam for a CLI flag (Lyntai `TASKS.md` Part 332), so the flags ride the command
-  variable's prefix arguments; when a per-run seam ships, they move onto the options and `ProviderCommand` goes.
+  trail; a backup still carries them, since it copies folders. **A workaround for a Lyntai gap, CLOSED**: through Lyntai
+  3.5.1 `ClaudeAgentOptions` had no seam for a CLI flag (our `TASKS.md` Part 332), so the flags rode the command
+  variable's prefix arguments; 3.5.2 shipped `SettingSources`/`StrictMcpConfig` on both claude paths (its Part 337), the
+  flags moved onto the options, and `ProviderCommand` is the command alone again.
   Proof: `e2e-p54` — the household's `settings.local.json` (a `Bash(rm:*)` allow and a `SessionStart` hook) and
-  `.mcp.json` exactly as they were after boot and after a plan and an execute run, nothing quarantined; every spawn's
-  argv carries both flags; and the stub, recording what the measured CLI would LOAD under that argv (`recordLoads`),
+  `.mcp.json` exactly as they were after boot and after a plan and an execute run, nothing quarantined; every data-folder
+  spawn's argv carries both flags, exactly once (a command still composing them would double them — confirmed to FAIL
+  with the suffix put back, 2026-09-30), and the neutral `extract` run loads no source from the process's own directory;
+  and the stub, recording what the measured CLI would LOAD under that argv (`recordLoads`),
   shows the knowledge base loaded (the control) and neither the local file nor the `.mcp.json` server; then a run that
   CREATES `.claude/settings.json` and REWRITES the other two: at the diff gate the created one gone, the two rewritten
   ones holding the household's bytes, each run version in the quarantine, the notice in the stream, and the same after
   Reject. `e2e-p47`: a committed `settings.json` and an untracked `settings.local.json` come back from the backup byte
   for byte, the committed one still tracked, nothing quarantined. **Confirmed to FAIL** (2026-09-28): on the sweep version,
   p54 7 rows (both files gone at boot and after the runs, the flags absent, the rewritten ones not restored, no notice)
-  and p47 3; with `IsolationArgs` emptied, p54's flag row and both "not loaded" rows, the loads naming
+  and p47 3; with the flags emptied (then `IsolationArgs`, since 3.5.2 the options), p54's flag row and both "not loaded" rows, the loads naming
   `.claude/settings.local.json` and `.mcp.json:e2e-household-srv`; with the backstop's undo removed, p54's 5 undo rows.
   **Not drivable, stated**: that the real CLI honours the flags is the 0-token probe's, not a suite's (the stub runs no
   hook and starts no server); and the scope guard's own `PreToolUse` hook firing under the flags needs a model-issued

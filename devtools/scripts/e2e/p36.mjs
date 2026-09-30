@@ -102,6 +102,22 @@ try {
     ok(`(fixture) at least one ${kind} spawn happened`, xs.length >= 1, summary);
     ok(`THE POINT: no ${kind} spawn is handed an --mcp-config`, xs.length >= 1 && !xs.some(hosted), summary);
   }
+
+  // THE SETTINGS A SCORER RUNS UNDER (Lyntai 3.5.2). Every one-shot call is handed the app's one-shot settings
+  // (ClaudeCompletionOptions.SettingsPath: the blanked key paths, disableSkillShellExecution, the read fence) — and a
+  // scorer is then handed the judge-tools host's OWN --settings after it (its tools' allow-list). The CLI applies only
+  // the LAST --settings (measured, claude 2.1.285), so the host's file silently replaced the app's: the one consumer that
+  // grades agent-written text ran with no fence and no blanks. The host's file now carries both (MergedSettingsMcpConnector).
+  // The stub records the file it would APPLY (claude-stub.mjs, effectiveSettings).
+  const effective = scorers.map((x) => x.settings ?? {});
+  const unmerged = effective.filter((s) => !(s.disableSkillShellExecution === true && s.apiKeyHelper === ''
+    && s.env?.ANTHROPIC_API_KEY === '' && s.permissions?.blockReadsOutsideWorkingDirectories === true));
+  ok('THE POINT: every scorer spawn APPLIES the app\'s one-shot settings — the last --settings carries the blanks and the fence',
+    scorers.length >= 2 && unmerged.length === 0, JSON.stringify(unmerged.slice(0, 1)).slice(0, 300));
+  const unapproved = scorers.filter((x) => !(x.settings?.permissions?.allow ?? []).some((a) => /^mcp__.+__\*$/.test(a))
+    || !x.args.some((a) => /^mcp__.+__\*$/.test(a)));
+  ok('…while its judge tools stay pre-approved — in the applied settings and in --allowedTools (the positive control)',
+    scorers.length >= 2 && unapproved.length === 0, JSON.stringify(scorers.map((x) => x.settings?.permissions?.allow)).slice(0, 300));
 } catch (err) {
   fail('e2e-p36 fatal: ' + err.message);
   console.error(srv.log().slice(-3000));
